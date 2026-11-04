@@ -82,6 +82,17 @@ fn file_note_ready(model: &Model) -> bool {
     !model.history_loading && model.file_history.ready() && model.file_history.file_note().is_some()
 }
 
+fn viewed_inherited(model: &Model) -> bool {
+    if model.file_preview.is_some() {
+        model.file_history.current_inherited()
+    } else {
+        model
+            .selected
+            .as_ref()
+            .is_some_and(Entry::inherited_content)
+    }
+}
+
 fn branch_options(model: &Model) -> Vec<SelectOption> {
     let current = model.file_history.current_branch().filter(|current| {
         !model
@@ -90,29 +101,51 @@ fn branch_options(model: &Model) -> Vec<SelectOption> {
             .iter()
             .any(|branch| branch.id() == current.id())
     });
-    model
+    let mut options = model
         .file_history
         .branches()
         .iter()
         .chain(current)
+        .chain(model.file_preview.as_ref().filter(|preview| {
+            !model
+                .file_history
+                .branches()
+                .iter()
+                .chain(model.file_history.current_branch())
+                .any(|branch| branch.id() == preview.id())
+        }))
         .map(|branch| {
-            let mut option = SelectOption::new(
+            SelectOption::new(
                 branch.id(),
                 if branch.writable() {
                     branch_name(branch)
                 } else {
                     format!("{} · {}", branch_name(branch), t("只读", "Read only"))
                 },
-            );
-            option.disabled = !branch.writable();
-            option
+            )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let selected = selected_branch(model);
+    if !selected.is_empty() && !options.iter().any(|option| option.value == selected) {
+        let mut option = SelectOption::new(
+            selected.clone(),
+            format!(
+                "{} · {selected}",
+                t(
+                    "已选分支（不在本页）",
+                    "Selected branch (outside this page)"
+                )
+            ),
+        );
+        option.disabled = true;
+        options.push(option);
+    }
+    options
 }
 fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
     let is_file = selection.kind == storage_contract::NamespaceEntryKind::File;
     let folder_path = selection.path.clone();
-    let folder_select_path = folder_path.clone();
+    let folder_select_path = StoredValue::new(folder_path.clone());
     let selection = StoredValue::new(selection);
     let entry = Memo::new(move |_| {
         state.with(|s| selection.with_value(|selection| selection.entry(s).cloned()))
@@ -122,7 +155,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
     let rename_branch = Memo::new(move |_| state.with(|s| selected_file_branch_record(&s.files)));
     let disabled = Signal::derive(move || {
         state.with(|s| {
-            !actions::history_write_allowed(s)
+            !actions::history_navigation_ready(s)
                 || actions::history_aux_loading(s)
                 || branch_options(&s.files).is_empty()
         })
@@ -150,14 +183,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                     .is_some_and(Entry::visible_content)
         })
     });
-    let inherited = Signal::derive(move || {
-        state.with(|s| {
-            s.files
-                .selected
-                .as_ref()
-                .is_some_and(Entry::inherited_content)
-        })
-    });
+    let inherited = Signal::derive(move || state.with(|s| viewed_inherited(&s.files)));
     let current_branch_disabled = Signal::derive(move || {
         mutation_disabled.get()
             || !content_ready.get()
@@ -178,12 +204,14 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
             </div></div>
             {backup::view(state)}
             <dl class="zxs-file-properties"><div><dt class="zxs-row">{t("位置","Location")}</dt><dd class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|join_path(&state.with(|s|s.files.slot.clone()),entry.path())).unwrap_or_default())}</dd></div><div><dt class="zxs-row">{t("类型","Type")}</dt><dd class="zxs-row">{if is_file{t("文件","File")}else{t("文件夹","Folder")}}</dd></div></dl>
-            {(!is_file).then(move ||view!{<Show when=move ||can_modify.get()><section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录分支","Folder branches")}</h3><p class="zxs-row">{t("目录分支记录此目录及子目录的文件分支组合，不创建目录私有的文件分支。修改只在当前分支追加子树节点；切换恢复所选组合，未写入的文件继续显示父版本，目录外文件保持不变。","A folder branch records the shared file branch combination in this folder and its subfolders. Changes append subtree nodes within the current branch. Switching restores the selected combination; unwritten files inherit their parent versions and files outside the folder are unchanged.")}</p><div class="zxs-file-toolbar zxs-flow">{branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::Directory{path:folder_path.clone(),select:false},mutation_disabled)}{branch::control(state,t("切换目录分支","Switch folder branch"),branch::Target::Directory{path:folder_select_path.clone(),select:true},mutation_disabled)}</div><p class="zxs-row">{t("目录分支合并待确认，暂不提供操作。","Folder branch merging awaits confirmation.")}</p></section></Show>})}
+            {(!is_file).then(move ||view!{<Show when=move ||can_modify.get()><section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录分支","Folder branches")}</h3><p class="zxs-row">{t("目录分支记录此目录及子目录的文件分支组合，不创建目录私有的文件分支。修改只在当前分支追加子树节点；切换只浏览所选组合；设为默认后才更新默认读取和 SMB，目录外文件保持不变。","A folder branch records the shared file branch combination in this folder and its subfolders. Changes append subtree nodes within the current branch. Switching only browses the selected combination. Setting it as default updates default reads and SMB; files outside the folder are unchanged.")}</p><div class="zxs-file-toolbar zxs-flow">{branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::Directory{path:folder_path.clone()},mutation_disabled)}<button class="zxs-button" on:click=move |_|actions::go_directory(state,folder_select_path.get_value())>{t("浏览目录分支","Browse folder branch")}</button></div><p class="zxs-row">{t("目录分支合并待确认，暂不提供操作。","Folder branch merging awaits confirmation.")}</p></section></Show>})}
             {is_file.then(move ||view! {
                 <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件备注","File note")}</h3><Show when=move ||can_modify.get() fallback=move ||view!{<p class="zxs-row">{move ||state.with(|s|s.files.file_history.file_note().unwrap_or_default().to_owned())}</p>}>{inline::control(state,t("编辑文件备注","Edit file note"),None,inline::Target::FileNote,note_disabled)}</Show></section>
                 <Show when=move ||inherited.get()><p class="zxs-row" role="status">{t("此分支尚未写入，正在显示父版本的元数据；通过 SMB 写入后才保存本分支自己的版本。","This unwritten branch displays its parent version’s metadata. Writing through SMB creates this branch’s own version.")}</p></Show>
-                <section class="zxs-entry-section zxs-file-branches zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件分支","File branches")}</h3><p class="zxs-row">{t("创建时只登记分支并引用父节点，不创建占位文件或复制正文。首次写入后形成自己的版本；切换只更新当前目录的文件引用。","Creating a branch only registers a reference to its parent node, without placeholders or copied content. The first write creates its own version; switching updates only this folder’s file reference.")}</p>
-                    <div class="zxs-file-toolbar zxs-flow"><Select label=t("当前分支","Current branch") options=options value=value disabled=disabled placeholder=t("请选择本页分支","Choose a branch on this page") on_change=Callback::new(move |branch:String|actions::select_branch(state,branch))/>
+                <section class="zxs-entry-section zxs-file-branches zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件分支","File branches")}</h3><p class="zxs-row">{t("创建时只登记分支并引用父节点，不创建占位文件或复制正文。首次写入后形成自己的版本；切换只浏览历史，设为默认后才更新当前目录的文件引用。","Creating a branch only registers a reference to its parent node, without placeholders or copied content. The first write creates its own version. Switching only browses history; setting the default updates this folder’s file reference.")}</p>
+                    <div class="zxs-file-toolbar zxs-flow"><Select label=t("浏览文件分支","Browse file branch") options=options value=value disabled=disabled placeholder=t("请选择本页分支","Choose a branch on this page") on_change=Callback::new(move |branch:String|actions::select_branch(state,branch))/>
+                        <button class="zxs-button" data-zxs-set-file-default="true" disabled=move ||state.with(|s|!actions::default_write_allowed(s)||s.files.file_preview.as_ref().is_none_or(|branch|!branch.writable()||branch.head().is_none())||s.files.directory_preview.is_some()||s.files.history_loading||!s.files.file_history.ready()||selected_entry_read_only(&s.files)) on:click=move |_|actions::set_default_file_branch(state)>{t("设为默认分支","Set as default branch")}</button>
+                        <Show when=move ||state.with(|s|s.files.file_preview.is_some())><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|actions::return_to_default_file(state)>{t("返回默认视图","Return to default view")}</button></Show>
                         <Show when=move ||can_modify.get()>
                         {move ||rename_branch.get().map(|(file,branch_id,name)|inline::control(state,t("重命名文件分支","Rename file branch"),Some("rename"),inline::Target::RenameFileBranch{file,branch_id,name},disabled))}
                         </Show>

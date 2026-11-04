@@ -976,6 +976,7 @@ impl Backend for RecordingBackend {
             slot_id: request.slot_id().into(),
             path: request.path().into(),
             backup: false,
+            preview: false,
             entries: vec![],
             selected_entry: None,
             context: None,
@@ -1823,10 +1824,10 @@ impl Fixture {
                 backend.namespace_batch(identity,crate::NamespaceBatch {slot_id:"P01".into(),request:storage_contract::DirectoryNamespaceBatch {kind:storage_contract::DirectoryBatchKind::Delete,items:vec![]},operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"namespace_batch"));json!({"returned_by":"namespace_batch"})})
             }),
             ("select_file_branch", {
-                backend.select_file_branch(identity,crate::SelectFileBranch {file_id:"file".into(),branch_id:"branch".into(),location:None,operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"select_file_branch"));json!({"returned_by":"select_file_branch"})})
+                backend.select_file_branch(identity,crate::SelectFileBranch { default_baseline: None,file_id:"file".into(),branch_id:"branch".into(),location:None,operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"select_file_branch"));json!({"returned_by":"select_file_branch"})})
             }),
             ("select_file_branch", {
-                backend.select_file_branch(identity,crate::SelectFileBranch {file_id:"file".into(),branch_id:"branch".into(),location:Some(crate::FileSelectionLocation {repository_id:"repository".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap()}),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"select_file_branch"));json!({"returned_by":"select_file_branch"})})
+                backend.select_file_branch(identity,crate::SelectFileBranch { default_baseline: None,file_id:"file".into(),branch_id:"branch".into(),location:Some(crate::FileSelectionLocation {repository_id:"repository".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap()}),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"select_file_branch"));json!({"returned_by":"select_file_branch"})})
             }),
             ("rename_file_branch", {
                 backend.rename_file_branch(identity,crate::RenameFileBranch {file_id:"file".into(),branch_id:"branch".into(),name:storage_contract::BranchName::parse("Café").unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"rename_file_branch"));json!({"returned_by":"rename_file_branch"})})
@@ -1865,6 +1866,8 @@ impl Fixture {
                     .select_default_directory_branch(
                         identity,
                         crate::SelectDefaultDirectoryBranch {
+                        expected_tree_id: "fixture-tree".into(),
+                        expected_head: "fixture-head".into(),
                             repository_id: "repository".into(),
                             directory_branch_id: "directory".into(),
                             operation_id,

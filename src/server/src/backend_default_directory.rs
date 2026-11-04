@@ -11,6 +11,8 @@ pub struct RenameDirectoryBranch {
 pub struct SelectDefaultDirectoryBranch {
     pub repository_id: String,
     pub directory_branch_id: String,
+    pub expected_tree_id: String,
+    pub expected_head: String,
     pub operation_id: storage_contract::OperationId,
 }
 

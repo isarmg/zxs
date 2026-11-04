@@ -60,32 +60,19 @@ pub(crate) fn directory_branch(
     state: RwSignal<State>,
     path: String,
     name: String,
-    select: bool,
 ) -> Option<String> {
     if !state.with_untracked(write_allowed) {
         return None;
     }
     let operation_id = crate::ui::file_operation_id(state)?;
     state.update(|s| {
-        s.notices.operation_success(if select {
-            t(
-                "已恢复此目录的文件分支组合，目录外文件保持不变。",
-                "Restored this folder’s file branch combination; files outside the folder were left unchanged.",
-            )
-        } else {
-            t(
-                "目录分支组合已登记，尚未切换。",
-                "The folder branch combination was registered without switching to it.",
-            )
-        });
+        s.notices.operation_success(t(
+            "目录分支组合已登记，尚未切换。",
+            "The folder branch combination was registered without switching to it.",
+        ));
     });
     let slot = state.with_untracked(|s| s.files.slot.clone());
-    let action = if select {
-        "directory-select"
-    } else {
-        "directory-branches"
-    };
-    let endpoint = format!("{}/{action}", disk_path(&slot));
+    let endpoint = format!("{}/directory-branches", disk_path(&slot));
     let epoch = state.with_untracked(|s| s.session_epoch);
     state.update(|s| s.files.mutation_pending = true);
     let submitted = operation_id.clone();
@@ -113,20 +100,71 @@ pub(crate) fn directory_branch(
 }
 
 pub(crate) fn select_default_branch(state: RwSignal<State>, branch_id: String) {
-    let repository = state.with_untracked(|s| s.files.repository_id.clone());
-    if repository.is_empty() || branch_id.is_empty() {
+    let request = state.with_untracked(|s| {
+        if !super::default_write_allowed(s) || !s.files.loaded {
+            return None;
+        }
+        let preview = s.files.directory_preview.as_ref()?;
+        if !preview.at_directory(&s.files.directory) || preview.branch.id() != branch_id {
+            return None;
+        }
+        Some((
+            s.files.repository_id.clone(),
+            preview.branch.head_tree_id().to_owned(),
+            s.files.namespace_head.clone(),
+        ))
+    });
+    let Some((repository, tree, head)) = request else {
         return;
-    }
-    let _ = record_mutation(
+    };
+    publish_default(
         state,
         "PUT",
         format!(
             "/api/repositories/{}/default-branch",
             api::segment(&repository)
         ),
-        json!({"directory_branch_id":branch_id}),
+        json!({"directory_branch_id":branch_id,"expected_tree_id":tree,"expected_head":head}),
     );
 }
+
+fn publish_default(
+    state: RwSignal<State>,
+    method: &'static str,
+    endpoint: String,
+    mut body: Value,
+) {
+    if !state.with_untracked(super::default_write_allowed) {
+        return;
+    }
+    let Some(id) = crate::ui::file_operation_id(state) else {
+        return;
+    };
+    body["operation_id"] = id.clone().into();
+    let epoch = state.with_untracked(|s| s.session_epoch);
+    state.update(|s| {
+        s.files.default_operation = Some(id.clone());
+        s.files.mutation_pending = true;
+        s.notices.operation_success(t(
+            "已设为默认分支，默认读取和 SMB 视图已更新。",
+            "Default branch saved. Default reads and the SMB view are updated.",
+        ));
+    });
+    spawn_local(async move {
+        let result = api::request(method, &endpoint, Some(body)).await;
+        if !current_session(state, epoch) {
+            return;
+        }
+        match result {
+            Ok(value) => {
+                record_receipt(state, &id, value);
+            }
+            Err(error) => record_failure(state, epoch, &id, error),
+        }
+        state.update(|s| s.files.mutation_pending = false);
+    });
+}
+
 pub(crate) fn rename_directory_branch(
     state: RwSignal<State>,
     repository: String,
@@ -328,18 +366,75 @@ pub(crate) fn create_branch(
     }
     file_mutation(state, &file, "branches", body)
 }
+/// File branch selection changes the inspected history node only.
 pub(crate) fn select_branch(state: RwSignal<State>, branch: String) {
-    let file = state.with_untracked(|s| {
+    let target = state.with_untracked(|s| {
+        if !super::history_navigation_ready(s) || super::history_aux_loading(s) {
+            return None;
+        }
         s.files
+            .file_history
+            .branches()
+            .iter()
+            .chain(s.files.file_history.current_branch())
+            .find(|item| item.id() == branch)
+            .cloned()
+    });
+    let Some(target) = target else {
+        return;
+    };
+    let head = target.head().map(str::to_owned);
+    state.update(|s| {
+        s.files.file_history.browse_branch(&target);
+        s.files.file_preview = Some(target);
+    });
+    if let Some(head) = head {
+        super::anchor_history_node(state, head);
+    }
+}
+
+pub(crate) fn set_default_file_branch(state: RwSignal<State>) {
+    let request = state.with_untracked(|s| {
+        if !super::default_write_allowed(s)
+            || !s.files.file_history.ready()
+            || s.files.history_loading
+            || s.files.directory_preview.is_some()
+        {
+            return None;
+        }
+        let choice = s
+            .files
+            .file_preview
+            .as_ref()
+            .filter(|choice| choice.writable())?;
+        let node = choice.head()?;
+        let entry = s
+            .files
             .selected
             .as_ref()
-            .map(|entry| entry.file_id().to_owned())
-            .unwrap_or_default()
+            .filter(|entry| !entry.read_only())?;
+        let (repository, path) = entry.context()?;
+        Some((
+            entry.file_id().to_owned(),
+            choice.id().to_owned(),
+            repository.to_owned(),
+            path.to_owned(),
+            node.to_owned(),
+            s.files.namespace_head.clone(),
+        ))
     });
-    if file.is_empty() {
+    let Some((file, branch, repository, path, node, head)) = request else {
         return;
-    }
-    let _ = file_mutation(state, &file, "select", json!({"branch_id":branch}));
+    };
+    publish_default(
+        state,
+        "PUT",
+        format!(
+            "/api/file-manager/files/{}/default-branch",
+            api::segment(&file)
+        ),
+        json!({"branch_id":branch,"repository_id":repository,"path":path,"expected_node_id":node,"expected_head":head}),
+    );
 }
 fn file_mutation(
     state: RwSignal<State>,

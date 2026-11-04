@@ -11,17 +11,27 @@ use json_codec::{Value, json};
 pub(crate) fn public_routes() -> Router<AppState> {
     Router::new()
         .route("/api/setup/status", get(status))
+        .route("/api/setup/recovery-status", get(recovery_status))
         .route("/api/setup/initialize", post(initialize))
-        .route("/api/setup/preset-preview", post(preset_preview))
-        .route("/api/setup/initialize-preset", post(initialize_preset))
-        .route(
-            "/api/setup/complete-initialization",
-            post(complete_initialization),
-        )
         .route("/api/setup/restore-system", post(bootstrap_restore))
 }
 pub(crate) fn protected_routes() -> Router<AppState> {
     Router::new()
+        .route("/api/admin/storage/status", get(storage_status))
+        .route(
+            "/api/admin/storage/discovery-root",
+            get(discovery_root).put(set_discovery_root),
+        )
+        .route("/api/admin/storage/directories", get(storage_directories))
+        .route(
+            "/api/admin/storage/directories/inspect",
+            post(inspect_storage_directory),
+        )
+        .route("/api/admin/storage/activate", post(activate))
+        .route(
+            "/api/admin/storage/complete-activation",
+            post(complete_activation),
+        )
         .route("/api/management/offline-check", post(offline_check))
         .route("/api/management/restore-system", post(restore))
         .route("/api/management/recovery-preview", post(recovery_preview))
@@ -100,7 +110,12 @@ async fn dispatch(
         })
         .await
 }
-async fn body(request: Request) -> Result<Value, ApiError> {
+// Two 4096-byte host paths may each require six JSON bytes per source byte.
+const MAX_DIRECTORY_BODY_BYTES: usize = 64 * 1024;
+// 32 selections bind four host paths apiece, plus bounded observed identities.
+const MAX_ACTIVATION_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+async fn body(request: Request, limit: usize) -> Result<Value, ApiError> {
     if !request
         .headers()
         .get(http_routing::http::header::CONTENT_TYPE)
@@ -119,7 +134,7 @@ async fn body(request: Request) -> Result<Value, ApiError> {
     }
     let bytes = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        http_boundary::read_body(request, super::MAX_SETUP_BODY_BYTES),
+        http_boundary::read_body(request, limit),
     )
     .await
     .map_err(|source| {
@@ -132,10 +147,35 @@ async fn body(request: Request) -> Result<Value, ApiError> {
     })??;
     storage_contract::strict_json(&bytes).map_err(ApiError::invalid_source)
 }
+fn first_account_request(
+    state: &AppState,
+    request: &Request,
+    changing: bool,
+) -> Result<(), ApiError> {
+    crate::http_auth::setup_admission(state, request)?;
+    if request.uri().query().is_some() {
+        return Err(ApiError::invalid("first setup accepts no query parameters"));
+    }
+    authentication::require_same_origin_fetch_metadata(&crate::http_auth::header_values(
+        request.headers(),
+        authentication::SEC_FETCH_SITE_HEADER,
+    ))
+    .map_err(|source| ApiError::forbidden().with_source(source))?;
+    crate::http_auth::same_origin(request.headers(), &state.config, changing)
+}
 async fn status(State(state): State<AppState>, request: Request) -> Result<Json<Value>, ApiError> {
+    first_account_request(&state, &request, false)?;
+    dispatch(state, "status", json!({}), None, None)
+        .await
+        .map(Json)
+}
+async fn recovery_status(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
     let token = bootstrap_request(&state, &request, false)?;
     let csrf_token = csrf(&token);
-    let mut value = dispatch(state, "status", json!({}), Some(token), None).await?;
+    let mut value = dispatch(state, "recovery_status", json!({}), Some(token), None).await?;
     value
         .as_object_mut()
         .ok_or_else(|| {
@@ -154,7 +194,7 @@ async fn public_mutation(
     action: &'static str,
 ) -> Result<Json<Value>, ApiError> {
     let token = bootstrap_request(&state, &request, true)?;
-    let input = body(request).await?;
+    let input = body(request, super::MAX_SETUP_BODY_BYTES).await?;
     dispatch(state, action, input, Some(token), None)
         .await
         .map(Json)
@@ -163,25 +203,11 @@ async fn initialize(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
-    public_mutation(state, request, "initialize").await
-}
-async fn preset_preview(
-    State(state): State<AppState>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    public_mutation(state, request, "preset_preview").await
-}
-async fn initialize_preset(
-    State(state): State<AppState>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    public_mutation(state, request, "initialize_preset").await
-}
-async fn complete_initialization(
-    State(state): State<AppState>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    public_mutation(state, request, "complete_initialization").await
+    first_account_request(&state, &request, true)?;
+    let input = body(request, super::MAX_SETUP_BODY_BYTES).await?;
+    dispatch(state, "initialize", input, None, None)
+        .await
+        .map(Json)
 }
 async fn bootstrap_restore(
     State(state): State<AppState>,
@@ -201,10 +227,114 @@ async fn protected_mutation(
         .ok_or_else(ApiError::unauthorized)?;
     crate::http_auth::recovery_admission(&state, &request)?;
     // The ordinary authorize middleware has checked the session and CSRF.
-    let input = body(request).await?;
+    let limit = match action {
+        "activate" => MAX_ACTIVATION_BODY_BYTES,
+        "set_discovery_root" => MAX_DIRECTORY_BODY_BYTES,
+        _ => super::MAX_SETUP_BODY_BYTES,
+    };
+    let input = body(request, limit).await?;
     dispatch(state, action, input, None, Some(identity))
         .await
         .map(Json)
+}
+async fn storage_status(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    if request.uri().query().is_some() {
+        return Err(ApiError::invalid(
+            "storage status accepts no query parameters",
+        ));
+    }
+    dispatch(state, "storage_status", json!({}), None, Some(identity))
+        .await
+        .map(Json)
+}
+async fn discovery_root(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    if request.uri().query().is_some() {
+        return Err(ApiError::invalid(
+            "discovery root accepts no query parameters",
+        ));
+    }
+    dispatch(state, "discovery_root", json!({}), None, Some(identity))
+        .await
+        .map(Json)
+}
+async fn set_discovery_root(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "set_discovery_root").await
+}
+#[derive(data_serialization::Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct DirectoryQuery {
+    path: String,
+}
+async fn storage_directories(
+    State(state): State<AppState>,
+    crate::http_boundary::ApiQuery(query): crate::http_boundary::ApiQuery<DirectoryQuery>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    dispatch(
+        state,
+        "storage_directories",
+        json!({"path":query.path}),
+        None,
+        Some(identity),
+    )
+    .await
+    .map(Json)
+}
+async fn inspect_storage_directory(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    let input = body(request, MAX_DIRECTORY_BODY_BYTES).await?;
+    dispatch(
+        state,
+        "inspect_storage_directory",
+        input,
+        None,
+        Some(identity),
+    )
+    .await
+    .map(Json)
+}
+async fn activate(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "activate").await
+}
+async fn complete_activation(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "complete_activation").await
 }
 async fn offline_check(
     State(state): State<AppState>,

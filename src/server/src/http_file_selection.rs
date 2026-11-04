@@ -64,6 +64,7 @@ fn parse(mut body: Map<String, Value>) -> Result<SelectFileBranch, ApiError> {
         })
         .transpose()?;
     Ok(SelectFileBranch {
+        default_baseline: None,
         file_id,
         branch_id,
         location,
@@ -75,6 +76,43 @@ pub(crate) async fn select(
     Extension(identity): Extension<Identity>,
     ApiPath(file): ApiPath<String>,
     request: Request,
+) -> Result<Json<Value>, ApiError> {
+    submit(state, identity, file, request, false).await
+}
+pub(crate) async fn set_default(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(file): ApiPath<String>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    submit(state, identity, file, request, true).await
+}
+fn parse_default(mut body: Map<String, Value>) -> Result<SelectFileBranch, ApiError> {
+    let expected_node_id = string(body.remove("expected_node_id"), "expected_node_id")?;
+    let expected_head = string(body.remove("expected_head"), "expected_head")?;
+    if expected_node_id.len() > 256 || expected_head.len() > 256 {
+        return Err(ApiError::invalid(
+            "default selection identities exceed 256 bytes",
+        ));
+    }
+    let mut command = parse(body)?;
+    if command.location.is_none() {
+        return Err(ApiError::invalid(
+            "setting a file default requires repository_id and path",
+        ));
+    }
+    command.default_baseline = Some(crate::backend_file_selection::FileDefaultBaseline {
+        expected_node_id,
+        expected_head,
+    });
+    Ok(command)
+}
+async fn submit(
+    state: AppState,
+    identity: Identity,
+    file: String,
+    request: Request,
+    set_default: bool,
 ) -> Result<Json<Value>, ApiError> {
     let Value::Object(body) = crate::with_id(crate::json_body(request).await?, "file_id", file)?
     else {
@@ -88,7 +126,14 @@ pub(crate) async fn select(
     crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
         .run(move |backend| {
             backend
-                .select_file_branch(&identity, parse(body)?)
+                .select_file_branch(
+                    &identity,
+                    if set_default {
+                        parse_default(body)?
+                    } else {
+                        parse(body)?
+                    },
+                )
                 .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await

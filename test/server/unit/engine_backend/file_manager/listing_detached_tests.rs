@@ -534,3 +534,172 @@ fn listing_projection_shares_only_its_five_required_tables() {
         &*state.directory_selections
     ));
 }
+
+fn preview_fixture() -> (Fixture, String, String, Value) {
+    let fixture = fixture();
+    let (_, backend, _, _, _, repo) = &fixture;
+    let mut engine = backend.engine.lock().unwrap();
+    let branch = engine
+        .create_directory_branches(
+            &repo.repository_id,
+            Some(&name_policy::LookupPath::parse("Café").unwrap()),
+            &storage_contract::BranchName::parse("frozen").unwrap(),
+            "owner",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap()
+        .result["directory_branch_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let tree = engine.state().directory_branches[&branch]
+        .head_tree_id
+        .clone();
+    let frozen = json_codec::to_value(&engine.state().directory_branches[&branch]).unwrap();
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Delete,
+                "Café/child.txt",
+                None,
+            )
+            .unwrap(),
+            "owner",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    drop(engine);
+    (fixture, branch, tree, frozen)
+}
+
+#[test]
+fn branch_preview_lists_frozen_files_without_changing_namespace_or_receipts() {
+    let ((_root, backend, _auth, _token, identity, repo), branch, tree, frozen) = preview_fixture();
+    let before = storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap();
+    let page = read(
+        backend.as_ref(),
+        &identity,
+        request(
+            "Files/CAFÉ",
+            &[
+                ("directory_branch_id", &branch),
+                ("expected_tree_id", &tree),
+                ("limit", "1"),
+            ],
+        ),
+    )
+    .unwrap();
+    assert_eq!(page["preview"], true);
+    assert_eq!(page["writable"], false);
+    assert_eq!(page["entries"][0]["name"], "child.txt");
+    assert_eq!(page["entries"][0]["read_only"], true);
+    assert_eq!(
+        page["entries"][0]["version_id"],
+        frozen["entries"][0]["version_id"]
+    );
+    assert_eq!(page["context"]["repository_id"], repo.repository_id);
+    let cursor = page["next_cursor"].as_str().unwrap();
+    let second = read(
+        backend.as_ref(),
+        &identity,
+        request(
+            "Files/CAFÉ",
+            &[
+                ("directory_branch_id", &branch),
+                ("expected_tree_id", &tree),
+                ("limit", "1"),
+                ("cursor", cursor),
+            ],
+        ),
+    )
+    .unwrap();
+    assert_eq!(second["entries"][0]["name"], "z.txt");
+    assert!(
+        read(
+            backend.as_ref(),
+            &identity,
+            request("Files/CAFÉ", &[("limit", "1"), ("cursor", cursor)])
+        )
+        .is_err()
+    );
+    assert!(
+        read(
+            backend.as_ref(),
+            &identity,
+            request(
+                "Files",
+                &[
+                    ("directory_branch_id", &branch),
+                    ("expected_tree_id", &tree)
+                ]
+            )
+        )
+        .is_err()
+    );
+    assert_eq!(
+        before,
+        storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap()
+    );
+    let default = read(backend.as_ref(), &identity, request("Files/Café", &[])).unwrap();
+    assert_eq!(default["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(default["entries"][0]["name"], "z.txt");
+}
+
+#[test]
+fn preview_rechecks_auth_and_exact_tree_after_detached_scan() {
+    let ((_root, backend, mut auth, token, identity, repo), branch, tree, _) = preview_fixture();
+    let parsed = request(
+        "Files/Café",
+        &[
+            ("directory_branch_id", &branch),
+            ("expected_tree_id", &tree),
+        ],
+    );
+    let captured = capture(&backend.engine.lock().unwrap(), parsed).unwrap();
+    let ListingRead::Primary(captured) = captured else {
+        panic!("expected primary preview")
+    };
+    let selected = captured.select().unwrap();
+    backend
+        .engine
+        .lock()
+        .unwrap()
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Delete,
+                "Café/z.txt",
+                None,
+            )
+            .unwrap(),
+            "owner",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        selected
+            .project(&backend.engine.lock().unwrap())
+            .err()
+            .unwrap()
+            .code,
+        storage_contract::ErrorCode::ListingChanged
+    );
+    auth.logout(&token).unwrap();
+    assert_eq!(
+        read(
+            backend.as_ref(),
+            &identity,
+            request(
+                "Files/Café",
+                &[
+                    ("directory_branch_id", &branch),
+                    ("expected_tree_id", &tree)
+                ]
+            )
+        )
+        .unwrap_err()
+        .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+}

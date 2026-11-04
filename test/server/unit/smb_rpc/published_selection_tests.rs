@@ -80,6 +80,7 @@ fn select_same_version_draft(shared: &Shared, branch: &str, path: &str) -> Entry
         .select_file_branch(
             identity,
             crate::SelectFileBranch {
+                default_baseline: None,
                 file_id: entry.file_id.clone(),
                 branch_id: created["result"]["branch_id"].as_str().unwrap().into(),
                 location: None,

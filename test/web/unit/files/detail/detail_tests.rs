@@ -1,6 +1,6 @@
 use super::*;
 use crate::files::test_entries::{entry, update};
-use json_codec::json;
+use json_codec::{Value, json};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -47,7 +47,7 @@ fn branch_options_keep_page_order_without_duplicating_the_current_summary() {
     let options = branch_options(&model);
     assert_eq!(options.len(), 2);
     assert_eq!(options[0].value, "other");
-    assert!(options[0].disabled);
+    assert!(!options[0].disabled, "read-only branches remain browsable");
     assert_eq!(options[1].value, "current");
     assert!(!options[1].disabled);
 }
@@ -68,6 +68,33 @@ fn selected_state() -> State {
         "version_id":"v1", "node_id":"v1", "selected_branch_id":"main", "note":"old"
     })));
     state
+}
+
+#[test]
+fn inherited_notice_follows_the_browsed_branch_instead_of_the_default_entry() {
+    for default_inherited in [false, true] {
+        let mut model = selected_state().files;
+        update(
+            model.selected.as_mut().unwrap(),
+            json!({
+                "materialized": !default_inherited, "inherited": default_inherited,
+                "own_version_id": if default_inherited { Value::Null } else { json!("v1") },
+                "source_version_id": if default_inherited { json!("v1") } else { Value::Null }
+            }),
+        );
+        assert_eq!(viewed_inherited(&model), default_inherited);
+        for preview_inherited in [false, true] {
+            let branch = crate::files::history::tests::branch(json!({
+                "branch_id":"preview", "node_id":"preview-node", "pending":preview_inherited
+            }));
+            model.file_history = crate::files::history::tests::history(json!({}));
+            model.file_history.browse_branch(&branch);
+            model.file_preview = Some(branch);
+            assert_eq!(viewed_inherited(&model), preview_inherited);
+        }
+        model.file_preview = None;
+        assert_eq!(viewed_inherited(&model), default_inherited);
+    }
 }
 
 #[test]
@@ -233,4 +260,24 @@ fn retained_detail_actions_use_current_payload_and_write_permission() {
     );
     state.files.mutation_pending = true;
     assert!(selection.mutation_entry(&state).is_none());
+}
+
+#[test]
+fn frozen_selected_branch_outside_the_page_is_visible_without_a_false_head() {
+    use crate::files::history::tests::branch_wire;
+    let model = Model {
+        selected: Some(crate::files::test_entries::preview_entry(
+            json!({"selected_branch_id":"frozen"}),
+        )),
+        file_history: crate::files::history::tests::history(json!({
+            "selected_branch_id":"live",
+            "branches":[branch_wire(json!({"branch_id":"live","current":true}))],
+        })),
+        ..Default::default()
+    };
+    assert_eq!(selected_branch(&model), "frozen");
+    let options = branch_options(&model);
+    assert_eq!(options.len(), 2);
+    assert_eq!(options[1].value, "frozen");
+    assert!(options[1].disabled);
 }

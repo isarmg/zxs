@@ -151,6 +151,34 @@ fn validate_content_view(value: &Value) -> Result {
 
 fn semantics(name: &str, value: &Value) -> Result {
     match name {
+        "StorageDiscoveryRootSettings" => {
+            let _: storage_contract::storage_directories::DiscoveryRootSettings =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageSetDiscoveryRootRequest" => {
+            let _: storage_contract::storage_directories::SetDiscoveryRootRequest =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageDirectoryIdentity" => {
+            let _: storage_contract::storage_directories::DirectoryIdentity =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageMountIdentity" => {
+            let _: storage_contract::storage_directories::MountIdentity =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageCandidateSelection" => {
+            let _: storage_contract::storage_directories::CandidateSelection =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageDirectoryListing" => {
+            let _: storage_contract::storage_directories::DirectoryListing =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageDirectoryInspectRequest" => {
+            let _: storage_contract::storage_directories::InspectRequest =
+                json_codec::from_value(value.clone())?;
+        }
         "SmbAccountStatus" => {
             let _: storage_contract::smb_account::SmbAccountStatus =
                 json_codec::from_value(value.clone())?;
@@ -463,6 +491,37 @@ fn openapi(api: &Value) -> Result {
         Ok(())
     }
     references(api, api)?;
+    for removed in [
+        "preset-preview",
+        "initialize-preset",
+        "complete-initialization",
+    ] {
+        require(
+            api["paths"].get(&format!("/api/setup/{removed}")).is_none(),
+            "removed public storage initialization route was republished",
+        )?;
+    }
+    require(
+        api["paths"]["/api/setup/initialize"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"]["$ref"]
+            == "#/components/schemas/ManagementInitializeRequest",
+        "first account setup must accept only management credentials",
+    )?;
+    for (suffix, method) in [
+        ("status", "get"),
+        ("directories", "get"),
+        ("directories/inspect", "post"),
+        ("activate", "post"),
+        ("complete-activation", "post"),
+    ] {
+        let operation = &api["paths"][format!("/api/admin/storage/{suffix}")][method];
+        require(operation.is_object(), "missing authenticated storage route")?;
+        require(
+            operation.get("security").is_none(),
+            "storage management must inherit administrator session authentication",
+        )?;
+    }
+
     let path_names = regex::Regex::new(r"\{([^{}]+)\}")?;
     let mut operation_ids = BTreeSet::new();
     for (path, item) in object(&api["paths"])? {

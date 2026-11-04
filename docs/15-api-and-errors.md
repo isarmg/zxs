@@ -45,6 +45,15 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 | 接口 | 用途 |
 | --- | --- |
+| `GET /api/setup/status` | 公开最小 state，不返回目录或授权材料 |
+| `GET /api/setup/recovery-status` | 仅灾备 bootstrap 授权状态与 CSRF |
+| `POST /api/setup/initialize` | 无密钥一次性创建管理员，保留同源／Fetch Metadata／JSON／限流；请求 username/password，返回 initialized=true、storage_pending=true |
+| `GET /api/admin/storage/status` | 当前管理员查询 pending/active/recovery_required/unavailable、disk_ids、completion_available、allow_development |
+| `GET/PUT /api/admin/storage/discovery-root` | 持久发现根，默认 /zxs/data/disks；PUT要求expected_discovery_root原值 |
+| `GET /api/admin/storage/directories?path=…` | 仅浏览发现根内真实目录，返回当前目录与挂载身份、可浏览子项、截断及非 UTF-8 跳过计数 |
+| `POST /api/admin/storage/directories/inspect` | 请求 mount_path/root_path，检查已存在的空私有目录并返回绑定身份的 CandidateSelection |
+| `POST /api/admin/storage/activate` | 首次激活：selections 与 production/development 模式；不提供已初始化池的热增盘 |
+| `POST /api/admin/storage/complete-activation` | 空对象，仅补全服务端证明可恢复的原激活意图；不重选目录或重置管理员 |
 | `POST /api/auth/login` | 唯一管理员登录；请求 username/password，返回 token/csrf_token/principal/expires_at |
 | `GET /api/auth/me` | 当前有效会话；返回 principal/csrf_token |
 | `POST /api/auth/logout` | 持久撤销当前会话；返回 logged_out |
@@ -58,7 +67,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/file-manager/disks/{slot}/namespace-batch` | 显式源分支→目标分支映射；移动、复制、删除、重命名整批检查并发布 |
 | `GET /api/repositories/{repo}/directory-branches?path={path}` | 只读查询冻结分支和条目；省略 path 返回所有作用域，不切换默认分支 |
 | `POST /api/repositories/{repo}/directory-branches` | 只读查询捕获分支及已选直接子项的精确身份/路径事实；不创建操作，不修改状态 |
-| `GET/PUT /api/repositories/{repo}/default-branch` | 查询或选择 Web/SMB 共享默认根目录分支 |
+| `GET/PUT /api/repositories/{repo}/default-branch` | 查询默认根目录分支；PUT 以 expected_tree_id/expected_head 显式发布根目录或子目录默认组合 |
 | `PATCH /api/repositories/{repo}/directory-branches/{id}` | 修改分支标签，身份、子树和内容不变 |
 | `POST /api/file-manager/disks/{slot}/write-sessions` | 取得该盘目录当前文件分支的写会话；随后通过通用工作区接口上传 |
 | `POST /api/file-manager/disks/{slot}/directory-branches` | `{path,name,operation_id}`：登记命名目录分支，直接引用父子树；不提前创建文件分支、不复制正文、不创建占位文件、不自动选择 |
@@ -67,6 +76,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/file-manager/files/{file}/branches` | 从选定版本登记公共文件分支；可传 source_node_id 固定路径节点来源，不复制正文或新增节点 |
 | `PATCH /api/file-manager/files/{file}/nodes/{node}` | 设置路径、标签或合并节点的独立备注，最多128 UTF-8字节；空字符串清空，不改正文备注或新增节点 |
 | `PATCH /api/file-manager/files/{file}/branches/{branch}` | 修改公共文件分支标签，最多128 UTF-8字节；同文件内规范化名称唯一，不增加版本或目录子树 |
+| `PUT /api/file-manager/files/{file}/default-branch` | 显式设置已浏览文件分支为当前逻辑路径默认；必须提供 repository_id/path、expected_node_id/expected_head 和 operation_id |
 | `POST /api/file-manager/files/{file}/select` | 选择此文件的分支；传入 repository_id/path 时只改变该逻辑别名，不改变其他路径 |
 | `POST /api/file-manager/files/{file}/metadata` | 设置或清空文件容器备注，最多 128 UTF-8 字节，禁止换行及控制字符 |
 | `POST /api/file-manager/versions/{version}/metadata` | 设置或清空版本备注，最多 128 UTF-8 字节，禁止换行及控制字符 |
@@ -141,6 +151,10 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 普通 workspace commit 只针对明确当前分支，SMB 的目标由共享默认根目录分支及其冻结子目录组成决定；历史节点保存通过 historical-save-plans 登记新分支，仅实际 staged 的文件产生 FULL 版本，不能沿用普通提交直接覆盖主分支。普通内容提交最多一个父提交，不能由用户任填父列表；这不限制统一文件节点图的多父 `parent_node_ids`。旧 `MergeLink` 不改写提交、正文或HEAD，新文件分支合并按独立请求推进参与引用并保存来源，原正文证明不变。树拆分使用独立结构迁移接口，不能把 rebase/强制重置作为隐藏入口。
 
+管理初始化不建立零成员池；`storage_pending:true` 只表示管理员已创建、存储尚未配置。目录选择分别携带挂载路径和实际存储根，可使用挂载点内嵌套目录；必须既存、空、0700 且属于服务账号，不执行挂载、格式化或权限修改。身份在使用时重新校验，选择 DTO 不代替授权。
+
+首次激活／补全回执为 `{activated:true,restart_required:bool,recovering:bool}`，后两者恰一为真。客户端断开不取消已接管的有界激活任务；未知结果先查询状态，仅凭 `completion_available` 补全原意图。公开预设初始化及旧初始化补全路由已移除；恢复系统接口不变。既有池热增盘／移除仍未实现，不能把首次激活或旧不支持的 `POST /api/admin/disks` 宣称为在线扩容。
+
 <a id="s15-03"></a>
 
 ## 15.3 提交请求示例
@@ -178,7 +192,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 查询提取器拒绝的缺失字段、重复字段或非法参数值返回 400 `INVALID_REQUEST`；未知路由返回 404 `NOT_FOUND`，`/api` 与 `/api/` 命名空间不能落入同名静态文件。已知路由使用不支持的方法返回 405 `METHOD_NOT_ALLOWED` 并保留 `Allow`。这些错误不绕过原有认证与权限检查。
 
-有界 JSON 请求体超限返回 413 `PAYLOAD_TOO_LARGE`，包括未提供或不可信 `Content-Length` 的流式输入；登录、修改密码和一般业务 JSON 的上限分别为 8 KiB、16 KiB 和 1 MiB。登录与改密额度容纳合法密码的 JSON Unicode 转义膨胀，解码后的密码规则不变。未超限但发生读取错误的请求体返回 400 `INVALID_REQUEST`。普通 JSON 请求体（包括登录和改密）须在 30 秒内读完，期限到达返回 408 `REQUEST_TIMEOUT`；初始化/恢复 JSON 另有更严格的十秒外层期限。文件上传继续使用独立的流式长度、空闲/总期限及暂存准入规则，不套用 JSON 请求体上限或普通请求体期限。
+有界 JSON 请求体超限返回 413 `PAYLOAD_TOO_LARGE`，包括未提供或不可信 `Content-Length` 的流式输入；登录、修改密码和一般业务 JSON 的上限分别为 8 KiB、16 KiB 和 1 MiB。登录与改密额度容纳合法密码的 JSON Unicode 转义膨胀，解码后的密码规则不变。未超限但发生读取错误的请求体返回 400 `INVALID_REQUEST`。普通 JSON 请求体（包括登录和改密）须在 30 秒内读完，期限到达返回 408 `REQUEST_TIMEOUT`；初始化/恢复 JSON 另有更严格的十秒外层期限。首次账户和恢复为16 KiB，目录检查／发现根修改为64 KiB，首次存储激活为4 MiB，覆盖32项目录身份及路径JSON转义。文件上传继续使用独立的流式长度、空闲/总期限及暂存准入规则，不套用 JSON 请求体上限或普通请求体期限。
 
 阻塞请求任务异常退出或取消属于 500 `INTERNAL_ERROR`，不能误报为客户端输入错误或将 panic、内部路径等细节发给客户端；原有受控业务错误及监测服务的 503 语义保持不变。`retryable` 表示错误类别允许重试，不承诺原操作未执行；变更请求仍须按相同 `operation_id` 查询或重试。内容响应头已发送后发生的校验或读取失败只能中断响应流，不能再改写 HTTP 状态或伪装成 JSON 错误封套；HEAD 也不发送错误响应体。
 
@@ -386,3 +400,9 @@ HTTP 状态描述本次调用，operation 的终态描述原业务请求，二�
 服务器以共享的封闭 `ErrorCode` 对内部错误别名与公开 HTTP 状态作穷尽匹配，并测试别名唯一性、目标状态登记、重试语义和 500 诊断遮蔽。`RESOURCE_LIMIT → RESOURCE_LIMIT_EXCEEDED` 等转换是边界适配，不意味着每个内部错误码都会原样成为公开响应。既有 400 与各类 NotFound 的 404 策略由枚举分支显式保留，不再依靠未登记码默认 400 或字符串后缀推断；新增 `ErrorCode` 必须明确别名和状态策略，否则穷尽匹配不能通过编译。该约束限于此类型化映射，不代表所有错误来源及调用路径已完成审阅，详见[类型化错误边界](architecture/error-types.md)。
 
 HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始大小写和字节。重复 Authorization、空令牌及额外空白字段仍被拒绝，不改变 Cookie/CSRF 或原生 SMB 凭据策略。
+
+### Web 浏览分支与默认发布
+
+文件列表的分支切换只发起 GET 读取，不产生 operation_id、不改变默认命名空间或 SMB。目录预览使用 entries 的 `directory_branch_id` 与 `expected_tree_id` 成对查询，返回 `preview: true`、`writable: false`；游标绑定预览身份，历史读取使用冻结节点而不是当前路径选择。离开预览目录范围或切换硬盘结束预览。
+
+右侧“设为默认分支”才发起上述显式 PUT。请求固定当前命名空间 head 及已浏览树／节点，拒绝过期视图；成功后回到默认视图。拒绝保留预览，不确定结果保留原 operation_id 并查询回执，不能生成另一请求掩盖发布状态。预览不授予重命名、删除、写入或批量修改权限。已有低层 select 接口仍是明确的持久化选择命令，不是 Web 浏览接口。

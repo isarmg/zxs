@@ -62,3 +62,68 @@ fn offline_fixture_preserves_real_management_authority_with_a_corrupt_pool() {
     drop(auth);
     backend.drain_management().unwrap();
 }
+
+#[test]
+fn account_setup_fixture_has_no_disk_candidates_or_pool_configuration() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = SetupFixture::new(root.path(), "account-only-fixture").unwrap();
+    assert!(!fixture.pool.join("config.json").exists());
+    assert!(!fixture.root.join("storage-parent").exists());
+    for path in [&fixture.root, &fixture.pool, &fixture.management] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    assert!(!fixture.management.join("bootstrap.key").exists());
+}
+
+#[test]
+fn browser_storage_fixture_selects_only_an_empty_private_child() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = SetupFixture::new(root.path(), "nested-directory-fixture").unwrap();
+    let storage = fixture.storage_directory().unwrap();
+    assert_eq!(
+        storage,
+        fixture.root.join("storage-parent/selected-storage")
+    );
+    assert!(fs::read_dir(&storage).unwrap().next().is_none());
+    assert_eq!(
+        fs::metadata(&storage).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::read(storage.parent().unwrap().join("outside-selection.txt")).unwrap(),
+        b"outside selected storage\n"
+    );
+    assert!(!fixture.pool.join("config.json").exists());
+}
+
+#[test]
+fn completion_fixture_has_real_activation_proof_and_existing_account() {
+    // Inspection intentionally rejects tmpfs. Keep this test on the repository's
+    // filesystem instead of weakening the production candidate validation.
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let fixture = SetupFixture::new(root.path(), "activation-completion-fixture").unwrap();
+    let storage = prepare_interruption(&fixture, "fixture-only-long-password").unwrap();
+    assert_single_storage(&fixture, &storage).unwrap();
+    assert!(fixture.pool.join("management-authority.json").exists());
+    assert!(fixture.management.join("management-auth.json").exists());
+    assert!(fixture.pool.join("storage-activation-intent.json").exists());
+    assert!(fixture.pool.join("storage-activation-ready.json").exists());
+    assert!(
+        !fixture
+            .pool
+            .join("storage-activation-complete.json")
+            .exists()
+    );
+    let service = storage_server::setup_recovery::SetupRecovery::new(
+        fixture.pool.clone(),
+        fixture.management.clone(),
+        std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(service.storage_status().completion_available);
+}

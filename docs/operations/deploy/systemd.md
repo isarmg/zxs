@@ -38,7 +38,7 @@
 ```ini
 [Service]
 ExecStart=
-ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400 --setup-disk P01=/zxs/data/disks/P01 --smb-socket /zxs/run/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
+ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400 --smb-socket /zxs/run/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
 ```
 
 示例的 `0` 只适用于确认桥接在 Samba 可信 root 进程身份下连接的部署。该连接时机必须在目标 Samba 验证，不能放宽 socket 权限来适应未认证的进程。`/zxs/run` 及 socket 分别维持 `0700`、`0600`，`zxs-owner` 通过 Samba 独立凭据认证后绑定到唯一 ZXS 管理员；不接受 `Samba=ZXS` 映射、重复账户配置、匿名、guest 或 force-user 会话。Samba 配置须同时限制 `valid users` 并关闭所有 guest 路径，见[共享样例](../../../deploy/samba/smb.conf.example)。共享仓库拆分、恢复后必须显式重新绑定，不能自动接入迁移后的历史域。
@@ -67,14 +67,14 @@ SMB spool 与 socket 目录分离，守护进程固定使用 `--management-root/
 
 ## 保留工作区证据的运行期额度
 
-已有池可按[容量规范](../../19-capacity-and-performance.md#runtime-retained-workspace-limits)追加四项本机上限参数。必须保留原有完整 `ExecStart` 的路径、监听、初始化白名单及其他选项，不要只复制额度参数覆盖整条命令。更改后正常停服并重启，确认容量接口显示预期有效值；这些参数不修改池配置锚，也不是自动缓存扩容。系统盘恢复或更换启动方式时同样需要带上所需参数。
+已有池可按[容量规范](../../19-capacity-and-performance.md#runtime-retained-workspace-limits)追加四项本机上限参数。必须保留原有完整 `ExecStart` 的路径、监听、恢复映射及其他选项，不要只复制额度参数覆盖整条命令。更改后正常停服并重启，确认容量接口显示预期有效值；这些参数不修改池配置锚，也不是自动缓存扩容。系统盘恢复或更换启动方式时同样需要带上所需参数。
 
 ## 受保护的首次 Web 初始化
 
-样例通过一个 `--setup-disk ID=PATH` 显式列出可用于初始化的磁盘，浏览器只能提交这些 ID，不能指定任意服务器路径。普通生产目录无需额外确认开关；`--allow-development-setup` 仍仅用于开发模拟，不用它绕过目录权限、身份或完整性检查。初始化之前由部署者在管理目录私下配置 `bootstrap.key`：服务账户所有、普通单链接文件、0600、恰好 64 个十六进制字节且无换行；按 mtime 30 分钟有效。密钥不应放入命令行、日志或环境变量，Web 提交还需精确 Origin 和 CSRF 校验。数据盘失败或缺少密钥不会自动创建管理员或新池。
+首次 Web 设置只创建系统盘上的管理员账户，无需密钥或候选磁盘；无账户时任何可访问 Web 的人可首先设好账户，应限制初始网络可达范围。登录后默认仅发现 `/zxs/data/disks` 内目录，可设置其他已有发现根，但仍受此单元的路径/UID权限限制。服务无 root、无挂载能力，不会自动请求授权、挂载或修改权限。
 
-`--setup-disk` 与 `--setup-config` 的 ID 均为 1—64 个 ASCII 字母、数字、下划线或连字符，不是中文显示名或文件名；点号、空白及路径分隔符不允许。非法 ID 在启动参数检查时明确报错，不会启动后才从 Web 候选中消失。`PATH` 仍须为绝对路径；有效 ID 对应的盘或预设文件暂时不可用，不会因此阻止管理 HTTP 启动。
+登录后在系统管理页浏览已挂载文件系统，分别设置挂载目录和实际存储目录，允许选择挂载盘中的私有空子目录。服务以现有 UID 与 systemd 可写范围执行校验，不挂载、格式化、创建数据根或自动修改权限；目录不可写时明确拒绝。首次设置完成不代表存储已经激活。`--allow-development-setup` 只允许开发模拟，不绕过路径、身份与完整性检查。
 
-高级初始拓扑可通过本机审查的私有配置文件预置：在服务参数中追加 `--setup-config layout=/zxs/config/layout.json`，同时为配置内的每个磁盘声明 `--setup-disk`。配置文件由服务 UID 拥有、0400/0600、普通单链接文件；不得把凭据放进此配置。Web 只选择不透明方案 ID，不接受任意路径或 JSON。仅授权提交选定方案时读取文件，预置缺失/损坏不阻止 HTTP 启动。草稿生成与安全离线编辑见[救援配置子域](../../components/rescue.md)。
+`--setup-disk` 的 ID 映射仅保留既有离线恢复用途，不是新存储选择的前提。旧 Web 预设初始化路由已删除，当前 Web 不应用 `--setup-config` 草稿。草稿生成与安全离线编辑见[救援配置子域](../../components/rescue.md)。
 
-最低配置仅需系统盘加一个存储盘，不强制配置后续备份级别。单存储盘没有冗余，故障可能造成数据丢失；系统盘管理凭据与静态 Web 仍可用于诊断，不能据此宣称数据可恢复。要启用可选多盘链，在启动参数与 `ReadWritePaths=` 中逐个登记额外盘；物理独立性由用户保证，已有多成员池不能以丢盘为由自动降级仲裁。
+最低配置仅需系统盘加一个存储盘，不强制配置后续备份级别。单存储盘没有冗余，故障可能造成数据丢失；系统盘管理凭据与静态 Web 仍可用于诊断，不能据此宣称数据可恢复。要首次启用可选多盘链，在 Web 逐项选择已有目录，并确认这些目录落在服务现有可写范围；扩大 `ReadWritePaths=` 或改变权限仍需管理员另行授权；物理独立性由用户保证，已有多成员池不能以丢盘为由自动降级仲裁。

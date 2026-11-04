@@ -13,11 +13,12 @@ pub(crate) use history::{
 };
 
 pub(crate) use browse::{
-    change_page, go_directory, go_root, load_disks, load_entries, open_disk, search, select_entry,
+    change_page, go_directory, go_root, load_disks, load_entries, open_disk,
+    preview_directory_branch, return_to_default, return_to_default_file, search, select_entry,
 };
 pub(crate) use mutation::{
     create_branch, directory_branch, namespace, rename_directory_branch, rename_file_branch,
-    select_branch, select_default_branch, update_node_note, update_note,
+    select_branch, select_default_branch, set_default_file_branch, update_node_note, update_note,
 };
 pub(crate) use operation::{poll, record_operation, record_receipt};
 
@@ -45,9 +46,16 @@ pub(crate) fn history_navigation_ready(state: &State) -> bool {
 /// Shared by write actions and their controls. Check before generating IDs,
 /// creating drafts, or scheduling any browser/network work.
 pub(crate) fn write_allowed(state: &State) -> bool {
+    state.files.directory_preview.is_none()
+        && state.files.file_preview.is_none()
+        && default_write_allowed(state)
+        && state.files.writable
+}
+
+pub(crate) fn default_write_allowed(state: &State) -> bool {
     state.session_active()
         && state.management.storage.writable()
-        && state.files.writable
+        && (state.files.writable || state.files.directory_preview.is_some())
         && !state.files.loading
         && !pending(state)
 }

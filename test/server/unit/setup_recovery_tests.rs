@@ -1,4 +1,5 @@
 use super::*;
+use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 struct Fixture {
@@ -59,14 +60,11 @@ fn admin() -> Identity {
 }
 
 #[test]
-fn never_treats_old_disk_or_lost_config_as_empty() {
+fn account_status_does_not_claim_selected_disks_are_empty() {
     let f = fixture();
     assert_eq!(f.service.status().state, InstallationState::Empty);
     fs::write(f.service.disks["one"].join("disk.json"), b"old identity").unwrap();
-    assert_eq!(
-        f.service.status().state,
-        InstallationState::RecoveryRequired
-    );
+    assert_eq!(f.service.status().state, InstallationState::Empty);
     let result = f
         .service
         .initialize(&permit(&f.service), request(), |_, _, _| {
@@ -82,7 +80,7 @@ fn never_treats_old_disk_or_lost_config_as_empty() {
 fn missing_disk_does_not_become_new_directory() {
     let f = fixture();
     fs::remove_dir(&f.service.disks["one"]).unwrap();
-    assert_eq!(f.service.status().state, InstallationState::Unavailable);
+    assert_eq!(f.service.status().state, InstallationState::Empty);
     assert!(
         f.service
             .initialize(&permit(&f.service), request(), |_, _, _| panic!())
@@ -453,7 +451,7 @@ fn unavailable_unrelated_member_does_not_block_survivor_checks_or_restore_select
 }
 
 #[test]
-fn unavailable_descriptor_fences_new_setup_without_poisoning_other_selections() {
+fn unavailable_descriptor_does_not_block_account_status_or_other_selections() {
     let f = fixture();
     fs::remove_dir(&f.service.disks["three"]).unwrap();
     let service = SetupRecovery::new(
@@ -463,7 +461,7 @@ fn unavailable_descriptor_fences_new_setup_without_poisoning_other_selections() 
     )
     .unwrap()
     .allow_development_mode();
-    assert_eq!(service.status().state, InstallationState::Unavailable);
+    assert_eq!(service.status().state, InstallationState::Empty);
     assert!(service.selected(&["one".into()]).is_ok());
     assert!(
         service
@@ -875,7 +873,7 @@ fn production_setup_accepts_a_managed_directory_and_retains_selection_fences() {
     assert_eq!(f.service.status().state, InstallationState::Existing);
     let f = fixture_with_disks(&["one"]);
     fs::remove_dir(&f.service.disks["one"]).unwrap();
-    assert_eq!(f.service.status().state, InstallationState::Unavailable);
+    assert_eq!(f.service.status().state, InstallationState::Empty);
     assert!(!f.service.disks["one"].exists());
 }
 
@@ -1416,4 +1414,31 @@ fn production_preset_and_interrupted_completion_accept_shared_filesystem_roots()
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn control_record_publication_failure_preserves_evidence_and_storage_error_source() {
+    let f = fixture();
+    f.service
+        .write_control(
+            "publication-test.json",
+            &json_codec::json!({"preserved":true}),
+        )
+        .unwrap();
+    let before = fs::read(f.service.data_root.join("publication-test.json")).unwrap();
+    let error = f
+        .service
+        .write_control(
+            "publication-test.json",
+            &json_codec::json!({"preserved":false}),
+        )
+        .unwrap_err();
+    assert_eq!(error.status, ::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error.code, storage_contract::ErrorCode::IoError);
+    assert!(!error.retryable);
+    assert!(error.source.is_some());
+    assert_eq!(
+        fs::read(f.service.data_root.join("publication-test.json")).unwrap(),
+        before
+    );
 }

@@ -677,6 +677,106 @@ impl Engine {
         )
     }
 
+    pub fn set_file_default(
+        &mut self,
+        request: FileDefaultSelection<'_>,
+    ) -> Result<OperationResult> {
+        self.mutate(
+            "file.default.set",
+            request.principal,
+            request.operation_id,
+            json!({
+                "file_id": request.file_id,
+                "branch_id": request.branch_id,
+                "repository_id": request.repository_id,
+                "path": request.path.as_str(),
+                "expected_node_id": request.expected_node_id,
+                "expected_head": request.expected_head,
+            }),
+            |engine, state, _| {
+                let repo = state
+                    .repositories
+                    .get(request.repository_id)
+                    .ok_or_else(|| {
+                        Error::new(
+                            storage_contract::ErrorCode::RepositoryNotFound,
+                            "repository missing",
+                        )
+                    })?;
+                let main = &state.branches[&repo.main_branch_id];
+                if main.head_commit_id != request.expected_head {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::ListingChanged,
+                        "default namespace changed; refresh before setting the default",
+                    ));
+                }
+                let current = &state.commits[&main.head_commit_id];
+                if !find_unordered_key(&current.entries, request.path.key()).is_some_and(|entry| {
+                    entry.kind == NamespaceEntryKind::File && entry.file_id == request.file_id
+                }) {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::FileNotFound,
+                        "file/path identity differs",
+                    ));
+                }
+                let branch = state
+                    .branches
+                    .get(request.branch_id)
+                    .filter(|branch| {
+                        branch.file_id.as_deref() == Some(request.file_id)
+                            && branch.history_tree_id == repo.history_tree_id
+                    })
+                    .ok_or_else(|| {
+                        Error::new(
+                            storage_contract::ErrorCode::FileBranchNotFound,
+                            "file branch missing",
+                        )
+                    })?;
+                if branch.state != BranchState::Active {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::BranchNotActive,
+                        "default requires an active file branch",
+                    ));
+                }
+                let entry = state.commits[&branch.head_commit_id]
+                    .entries
+                    .iter()
+                    .find(|entry| entry.file_id == request.file_id)
+                    .ok_or_else(|| {
+                        Error::new(
+                            storage_contract::ErrorCode::StateInvalid,
+                            "file branch entry missing",
+                        )
+                    })?;
+                let node = branch.file_node_id.as_deref().unwrap_or(&entry.version_id);
+                if node != request.expected_node_id {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::ListingChanged,
+                        "viewed file branch changed; refresh before setting the default",
+                    ));
+                }
+                if !branch.pending_file_versions.contains_key(request.file_id) {
+                    engine.valid_replica(&entry.version_id)?;
+                }
+                let history = branch.history_tree_id.clone();
+                let commit = publish_selected_file_at(
+                    state,
+                    request.branch_id,
+                    Some(request.path),
+                    request.principal,
+                    request.operation_id,
+                )?;
+                Ok(json!({
+                    "file_id": request.file_id,
+                    "branch_id": request.branch_id,
+                    "commit_id": commit,
+                    "history_tree_id": history,
+                    "path": request.path.as_str(),
+                }))
+            },
+        )
+    }
+
     pub fn select_file_branch_at(
         &mut self,
         repository: &str,

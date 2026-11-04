@@ -574,11 +574,14 @@ impl Backend for Probe {
         bootstrap: Option<&str>,
         identity: Option<&Identity>,
     ) -> Result<Value, ApiError> {
-        if identity.is_none() {
+        if action == "status" {
+            return Ok(json!({"state":self.service.management_status()}));
+        }
+        if identity.is_none() && action != "initialize" {
             self.service
                 .authorize_bootstrap(bootstrap.ok_or_else(ApiError::unauthorized)?)?;
         }
-        if action == "status" {
+        if action == "recovery_status" {
             return Ok(json_codec::to_value(self.service.status())
                 .expect("invariant: setup status serialization succeeds"));
         }
@@ -699,12 +702,12 @@ async fn proxy_admin_token(app: &Router) -> String {
     value["token"].as_str().unwrap().to_owned()
 }
 #[tokio::test]
-async fn setup_http_requires_capability_csrf_origin_and_no_secret_query() {
+async fn recovery_http_requires_capability_csrf_origin_and_no_secret_query() {
     let (_temp, app, probe) = app();
     let missing = app
         .clone()
         .oneshot(
-            request("GET", "/api/setup/status", "")
+            request("GET", "/api/setup/recovery-status", "")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -714,7 +717,7 @@ async fn setup_http_requires_capability_csrf_origin_and_no_secret_query() {
     let query = app
         .clone()
         .oneshot(
-            request("GET", "/api/setup/status?bootstrap=secret", "")
+            request("GET", "/api/setup/recovery-status?bootstrap=secret", "")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -725,7 +728,7 @@ async fn setup_http_requires_capability_csrf_origin_and_no_secret_query() {
     let missing_csrf = app
         .clone()
         .oneshot(
-            request("POST", "/api/setup/initialize", "{}")
+            request("POST", "/api/setup/restore-system", "{}")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::from("{}"))
                 .unwrap(),
@@ -738,7 +741,7 @@ async fn setup_http_requires_capability_csrf_origin_and_no_secret_query() {
         .oneshot(
             HttpRequest::builder()
                 .method("POST")
-                .uri("/api/setup/initialize")
+                .uri("/api/setup/restore-system")
                 .header("host", "127.0.0.1:7400")
                 .header("origin", "https://evil.invalid")
                 .header("x-zxs-bootstrap", TOKEN)
@@ -753,7 +756,7 @@ async fn setup_http_requires_capability_csrf_origin_and_no_secret_query() {
     let duplicate = app
         .clone()
         .oneshot(
-            request("GET", "/api/setup/status", "")
+            request("GET", "/api/setup/recovery-status", "")
                 .header("x-zxs-bootstrap", TOKEN)
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::empty())
@@ -765,12 +768,12 @@ async fn setup_http_requires_capability_csrf_origin_and_no_secret_query() {
     assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
 }
 #[tokio::test]
-async fn setup_http_bounds_body_and_returns_csrf_only_after_authorization() {
+async fn recovery_http_bounds_body_and_returns_csrf_only_after_authorization() {
     let (_temp, app, probe) = app();
     let status = app
         .clone()
         .oneshot(
-            request("GET", "/api/setup/status", "")
+            request("GET", "/api/setup/recovery-status", "")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -787,7 +790,7 @@ async fn setup_http_bounds_body_and_returns_csrf_only_after_authorization() {
     let overflow = app
         .clone()
         .oneshot(
-            request("POST", "/api/setup/initialize", &large)
+            request("POST", "/api/setup/restore-system", &large)
                 .header("x-zxs-bootstrap", TOKEN)
                 .header("x-csrf-token", csrf(TOKEN))
                 .body(Body::from(large))
@@ -799,7 +802,7 @@ async fn setup_http_bounds_body_and_returns_csrf_only_after_authorization() {
     let success = app
         .clone()
         .oneshot(
-            request("POST", "/api/setup/initialize", "{}")
+            request("POST", "/api/setup/restore-system", "{}")
                 .header("x-zxs-bootstrap", TOKEN)
                 .header("x-csrf-token", csrf(TOKEN))
                 .body(Body::from("{}"))
@@ -813,7 +816,7 @@ async fn setup_http_bounds_body_and_returns_csrf_only_after_authorization() {
     let revoked = app
         .clone()
         .oneshot(
-            request("GET", "/api/setup/status", "")
+            request("GET", "/api/setup/recovery-status", "")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -823,13 +826,13 @@ async fn setup_http_bounds_body_and_returns_csrf_only_after_authorization() {
     assert!(!revoked.status().is_success());
 }
 #[tokio::test]
-async fn setup_http_rate_limits_before_backend_work() {
+async fn recovery_http_rate_limits_before_backend_work() {
     let (_temp, app, probe) = app();
     for _ in 0..10 {
         let response = app
             .clone()
             .oneshot(
-                request("GET", "/api/setup/status", "")
+                request("GET", "/api/setup/recovery-status", "")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -840,7 +843,7 @@ async fn setup_http_rate_limits_before_backend_work() {
     let limited = app
         .clone()
         .oneshot(
-            request("GET", "/api/setup/status", "")
+            request("GET", "/api/setup/recovery-status", "")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -861,7 +864,7 @@ async fn invalid_bootstrap_attempts_do_not_poison_other_sources_or_protected_rec
     {
         let source = format!("192.0.2.{}", index + 1);
         for _ in 0..10 {
-            let mut call = proxy_request("GET", "/api/setup/status", &source);
+            let mut call = proxy_request("GET", "/api/setup/recovery-status", &source);
             match invalid {
                 "missing" => {}
                 "malformed" => {
@@ -895,7 +898,7 @@ async fn invalid_bootstrap_attempts_do_not_poison_other_sources_or_protected_rec
         let same_source = app
             .clone()
             .oneshot(
-                proxy_request("GET", "/api/setup/status", &source)
+                proxy_request("GET", "/api/setup/recovery-status", &source)
                     .header("x-zxs-bootstrap", TOKEN)
                     .body(Body::empty())
                     .unwrap(),
@@ -907,7 +910,7 @@ async fn invalid_bootstrap_attempts_do_not_poison_other_sources_or_protected_rec
         let other_source = app
             .clone()
             .oneshot(
-                proxy_request("GET", "/api/setup/status", "192.0.2.100")
+                proxy_request("GET", "/api/setup/recovery-status", "192.0.2.100")
                     .header("x-zxs-bootstrap", TOKEN)
                     .body(Body::empty())
                     .unwrap(),
@@ -962,7 +965,7 @@ async fn protected_recovery_keeps_its_own_global_rate_budget() {
     assert_eq!(probe.mutations.load(Ordering::SeqCst), 10);
     let bootstrap = app
         .oneshot(
-            proxy_request("GET", "/api/setup/status", "192.0.2.100")
+            proxy_request("GET", "/api/setup/recovery-status", "192.0.2.100")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -980,7 +983,7 @@ async fn public_setup_key_capacity_cannot_exhaust_login_or_recovery_admission() 
         let response = app
             .clone()
             .oneshot(
-                proxy_request("GET", "/api/setup/status", &ip)
+                proxy_request("GET", "/api/setup/recovery-status", &ip)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -991,7 +994,7 @@ async fn public_setup_key_capacity_cannot_exhaust_login_or_recovery_admission() 
     let full = app
         .clone()
         .oneshot(
-            proxy_request("GET", "/api/setup/status", "198.51.100.1")
+            proxy_request("GET", "/api/setup/recovery-status", "198.51.100.1")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -1017,7 +1020,7 @@ async fn public_setup_key_capacity_cannot_exhaust_login_or_recovery_admission() 
 async fn auxiliary_failure_preserves_bootstrap_authorization_and_setup_routes() {
     let (_temp, app, probe) = app_with_auxiliary_failure(true);
     for authorized in [false, true] {
-        let mut call = request("GET", "/api/setup/status", "");
+        let mut call = request("GET", "/api/setup/recovery-status", "");
         if authorized {
             call = call.header("x-zxs-bootstrap", TOKEN);
         }
@@ -1037,7 +1040,7 @@ async fn auxiliary_failure_preserves_bootstrap_authorization_and_setup_routes() 
     }
     for csrf_provided in [false, true] {
         let mut call =
-            request("POST", "/api/setup/initialize", "{}").header("x-zxs-bootstrap", TOKEN);
+            request("POST", "/api/setup/restore-system", "{}").header("x-zxs-bootstrap", TOKEN);
         if csrf_provided {
             call = call.header("x-csrf-token", csrf(TOKEN));
         }
@@ -1075,7 +1078,7 @@ async fn direct_remote_http_setup_and_login_preserve_credentials_and_csrf() {
     let missing = app
         .clone()
         .oneshot(
-            remote_request("GET", "/api/setup/status")
+            remote_request("GET", "/api/setup/recovery-status")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1085,7 +1088,7 @@ async fn direct_remote_http_setup_and_login_preserve_credentials_and_csrf() {
     let status = app
         .clone()
         .oneshot(
-            remote_request("GET", "/api/setup/status")
+            remote_request("GET", "/api/setup/recovery-status")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -1099,7 +1102,7 @@ async fn direct_remote_http_setup_and_login_preserve_credentials_and_csrf() {
     let missing_csrf = app
         .clone()
         .oneshot(
-            remote_request("POST", "/api/setup/initialize")
+            remote_request("POST", "/api/setup/restore-system")
                 .header("x-zxs-bootstrap", TOKEN)
                 .body(Body::from("{}"))
                 .unwrap(),
@@ -1257,21 +1260,21 @@ async fn bootstrap_fetch_and_csrf_duplicates_are_rejected_before_mutation() {
     for (method, path, duplicate, first, second) in [
         (
             "GET",
-            "/api/setup/status",
+            "/api/setup/recovery-status",
             "sec-fetch-site",
             "same-origin",
             "cross-site",
         ),
         (
             "POST",
-            "/api/setup/initialize",
+            "/api/setup/restore-system",
             "sec-fetch-site",
             "same-origin",
             "cross-site",
         ),
         (
             "POST",
-            "/api/setup/initialize",
+            "/api/setup/restore-system",
             "x-csrf-token",
             csrf(TOKEN).as_str(),
             csrf(TOKEN).as_str(),
@@ -1295,4 +1298,226 @@ async fn bootstrap_fetch_and_csrf_duplicates_are_rejected_before_mutation() {
         ));
     }
     assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn public_account_routes_need_no_key_and_disclose_no_recovery_fields() {
+    let (_temp, app, probe) = app();
+    std::fs::remove_file(probe.service.management_root.join("bootstrap.key")).unwrap();
+    let status = app
+        .clone()
+        .oneshot(
+            request("GET", "/api/setup/status", "")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    assert_eq!(status.headers()["cache-control"], "no-store");
+    let value: Value =
+        json_codec::from_slice(&to_bytes(status.into_body(), 65536).await.unwrap()).unwrap();
+    assert_eq!(value, json!({"state":"empty"}));
+    let response = app
+        .clone()
+        .oneshot(
+            request("POST", "/api/setup/initialize", "{}")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), 1);
+    let recovery = app
+        .oneshot(
+            request("GET", "/api/setup/recovery-status", "")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovery.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn public_account_origin_fetch_json_and_body_limits_precede_backend_mutation() {
+    for rejected in [
+        "missing-origin",
+        "cross-origin",
+        "duplicate-origin",
+        "cross-fetch",
+        "duplicate-fetch",
+        "query",
+        "content-type",
+        "body-limit",
+    ] {
+        let (_temp, app, probe) = app();
+        let path = if rejected == "query" {
+            "/api/setup/initialize?path=/outside"
+        } else {
+            "/api/setup/initialize"
+        };
+        let mut call = HttpRequest::builder()
+            .method("POST")
+            .uri(path)
+            .header("host", "127.0.0.1:7400");
+        if rejected != "missing-origin" {
+            call = call.header(
+                "origin",
+                if rejected == "cross-origin" {
+                    "https://evil.invalid"
+                } else {
+                    "http://127.0.0.1:7400"
+                },
+            );
+        }
+        if rejected == "duplicate-origin" {
+            call = call.header("origin", "http://127.0.0.1:7400");
+        }
+        if matches!(rejected, "cross-fetch" | "duplicate-fetch") {
+            call = call.header("sec-fetch-site", "cross-site");
+        }
+        if rejected == "duplicate-fetch" {
+            call = call.header("sec-fetch-site", "same-origin");
+        }
+        call = call.header(
+            "content-type",
+            if rejected == "content-type" {
+                "text/plain"
+            } else {
+                "application/json"
+            },
+        );
+        let body = if rejected == "body-limit" {
+            "x".repeat(super::super::MAX_SETUP_BODY_BYTES + 1)
+        } else {
+            "{}".into()
+        };
+        let response = app
+            .oneshot(call.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            match rejected {
+                "query" => StatusCode::BAD_REQUEST,
+                "content-type" => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "body-limit" => StatusCode::PAYLOAD_TOO_LARGE,
+                _ => StatusCode::FORBIDDEN,
+            },
+            "{rejected}"
+        );
+        assert_eq!(probe.mutations.load(Ordering::SeqCst), 0, "{rejected}");
+    }
+}
+
+#[tokio::test]
+async fn public_account_queries_share_bounded_source_admission_before_mutation() {
+    let (_temp, app, probe) = app();
+    for _ in 0..10 {
+        assert_eq!(
+            app.clone()
+                .oneshot(
+                    request("GET", "/api/setup/status", "")
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let response = app
+        .oneshot(
+            request("POST", "/api/setup/initialize", "{}")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn authenticated_storage_request_budgets_accept_full_candidates_and_reject_overflow() {
+    let (_temp, app, probe) = configured_app(false, true);
+    let token = proxy_admin_token(&app).await;
+    let vectors: Value =
+        json_codec::from_str(include_str!("../../../../docs/contracts/vectors.json")).unwrap();
+    let candidate = vectors["positive"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|vector| vector["schema"] == "StorageCandidateSelection")
+        .unwrap()["value"]
+        .clone();
+    let ordinary = json!({"selections":vec![candidate.clone();32],"mode":"production"});
+    let ordinary_bytes = json_codec::to_vec(&ordinary).unwrap();
+    assert!(ordinary_bytes.len() > super::super::MAX_SETUP_BODY_BYTES);
+    assert!(ordinary_bytes.len() < MAX_ACTIVATION_BODY_BYTES);
+    let _: super::super::StorageActivationRequest = json_codec::from_value(ordinary).unwrap();
+    // Exercise maximum JSON escaping, not only ordinary short fixture paths.
+    let path = format!("/{}", "\u{1}".repeat(4095));
+    let mut long = candidate;
+    for key in ["discovery_root", "mount_path", "root_path"] {
+        long[key] = json!(path);
+    }
+    long["mount_identity"]["filesystem_root"] = json!(path);
+    let long_body =
+        json_codec::to_vec(&json!({"selections":vec![long;32],"mode":"production"})).unwrap();
+    assert!(long_body.len() < MAX_ACTIVATION_BODY_BYTES);
+    for (method, path, source, mut body, limit) in [
+        (
+            "POST",
+            "/api/admin/storage/activate",
+            "192.0.2.1",
+            long_body,
+            MAX_ACTIVATION_BODY_BYTES,
+        ),
+        (
+            "POST",
+            "/api/admin/storage/directories/inspect",
+            "192.0.2.2",
+            json_codec::to_vec(&json!({"mount_path":path,"root_path":path})).unwrap(),
+            MAX_DIRECTORY_BODY_BYTES,
+        ),
+        (
+            "PUT",
+            "/api/admin/storage/discovery-root",
+            "192.0.2.3",
+            json_codec::to_vec(&json!({"expected_discovery_root":path,"discovery_root":path}))
+                .unwrap(),
+            MAX_DIRECTORY_BODY_BYTES,
+        ),
+    ] {
+        assert!(body.len() <= limit);
+        body.resize(limit, b' ');
+        let accepted = app
+            .clone()
+            .oneshot(
+                proxy_request(method, path, source)
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK, "{path}");
+        body.push(b' ');
+        let rejected = app
+            .clone()
+            .oneshot(
+                proxy_request(method, path, source)
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+    }
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), 3);
 }

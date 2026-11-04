@@ -29,6 +29,15 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         reload_scope = crate::files::batch::settle_operation(&mut s.files, &id, status);
         crate::files::review::settle(&mut s.files, &id, status);
         s.notices.record_operation(s.session_epoch, &id, status);
+        if s.files.default_operation.as_deref() == Some(&id) {
+            if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
+                s.files.directory_preview = None;
+                s.files.file_preview = None;
+            }
+            if status != SaveStatus::Unknown {
+                s.files.default_operation = None;
+            }
+        }
     });
     if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         reload_entries(state);

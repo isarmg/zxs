@@ -75,6 +75,10 @@ fn navigation_resets_only_location_owned_state() {
             directory_branches_supported: true,
             repository_id: "repository".into(),
             repository_path: "old".into(),
+            namespace_head: "head".into(),
+            directory_preview: None,
+            file_preview: None,
+            default_operation: None,
             default_branch_scope: true,
             loaded: true,
             loading: true,
@@ -442,12 +446,11 @@ fn generated_public_file_branch_names_are_editable_only_after_loading_a_real_rec
     assert_eq!(selected_file_branch_record(&model).unwrap().2, "用户改名");
 }
 #[test]
-fn root_default_selection_uses_real_directory_ids_and_subfolders_keep_names() {
+fn branch_browsing_uses_stable_ids_in_root_and_subfolders() {
     let branch = branch(
         json_codec::json!({"directory_branch_id":"directory-a","name":"auto-generated","current":true,"materialized":false}),
     );
-    assert_eq!(directory_branch_value(&branch, true), "directory-a");
-    assert_eq!(directory_branch_value(&branch, false), "auto-generated");
+    assert_eq!(directory_branch_value(&branch), "directory-a");
     assert_eq!(
         directory_branch_name(&branch),
         "auto-generated",
@@ -749,4 +752,29 @@ fn server_offline_disk_vector_preserves_known_zero_and_unavailable_rows() {
             storage_contract::ErrorCode::IoError
         ))
     );
+}
+
+#[test]
+fn directory_preview_follows_only_descendants_and_never_crosses_disks() {
+    let preview = DirectoryPreview {
+        branch: branch(json!({"directory_branch_id":"draft","path":"Café"})),
+        path: "Files/Café".into(),
+    };
+    let mut model = Model {
+        slot: "P01".into(),
+        directory: "Files/Café".into(),
+        directory_preview: Some(preview.clone()),
+        ..Default::default()
+    };
+    model.navigate(Navigation::Directory("Files/CAFÉ/sub".into()));
+    assert!(model.directory_preview.is_some());
+    assert!(viewed_directory_branch(&model).is_none());
+    assert!(!model.writable);
+    model.navigate(Navigation::Directory("Files/Café".into()));
+    assert_eq!(viewed_directory_branch(&model).unwrap().id(), "draft");
+    model.navigate(Navigation::Directory("Files".into()));
+    assert!(model.directory_preview.is_none());
+    model.directory_preview = Some(preview);
+    model.navigate(Navigation::Disk("P02".into()));
+    assert!(model.directory_preview.is_none());
 }

@@ -45,6 +45,7 @@ struct DirectoryCapture {
     within: String,
     within_key: String,
     commit: Arc<storage_contract::Commit>,
+    preview: Option<storage_engine::DirectoryBranchPreview>,
 }
 
 struct ListingScope {
@@ -78,17 +79,28 @@ pub(in crate::engine_backend) fn capture(
 ) -> Result<ListingRead, ApiError> {
     let slot_id = input.slot_id().to_owned();
     let path = input.path().to_owned();
+    let preview = input
+        .preview()
+        .map(|(branch, tree)| (branch.to_owned(), tree.to_owned()));
     // Preserve cursor/query/snapshot error precedence before disk and path checks.
     let request = PageRequest::parse(engine, input)?;
     if disk(engine, &slot_id)?.level != 1 {
+        if preview.is_some() {
+            return Err(ApiError::invalid(
+                "backup directories cannot preview primary branches",
+            ));
+        }
         return backup_namespace::BackupListingRead::capture(engine, &slot_id, &path, request)
             .map(Box::new)
             .map(ListingRead::Backup);
     }
     let directory = match resolve_read(engine, &slot_id, &path) {
-        Ok((repository, within)) => Some(DirectoryCapture::capture(engine, repository, within)?),
+        Ok((repository, within)) => Some(DirectoryCapture::capture(
+            engine, repository, within, preview,
+        )?),
         Err(error)
             if path.is_empty()
+                && preview.is_none()
                 && matches!(
                     error.status,
                     ::http::StatusCode::FORBIDDEN | ::http::StatusCode::NOT_FOUND
@@ -110,15 +122,43 @@ pub(in crate::engine_backend) fn capture(
 }
 
 impl DirectoryCapture {
-    fn capture(engine: &Engine, repository: Repository, within: &str) -> Result<Self, ApiError> {
+    fn capture(
+        engine: &Engine,
+        repository: Repository,
+        within: &str,
+        preview: Option<(String, String)>,
+    ) -> Result<Self, ApiError> {
+        let preview = preview
+            .map(|(branch, tree)| {
+                engine
+                    .preview_directory_branch(&repository.repository_id, &branch, &tree)
+                    .map_err(error)
+            })
+            .transpose()?;
         let namespace = engine
             .namespace_tree(&repository.main_branch_id)
             .map_err(error)?;
-        let within_key = name_policy::path_key(within);
+        let source_path = preview
+            .as_ref()
+            .map(|preview| preview.source_path(within))
+            .transpose()
+            .map_err(error)?;
+        let within_key = name_policy::path_key(source_path.as_deref().unwrap_or(within));
         if !within.is_empty()
-            && !namespace
-                .get_key(&within_key)
-                .is_some_and(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
+            && !preview.as_ref().map_or_else(
+                || {
+                    namespace.get_key(&within_key).is_some_and(|entry| {
+                        entry.kind == storage_contract::NamespaceEntryKind::Directory
+                    })
+                },
+                |preview| {
+                    within_key == name_policy::path_key(&preview.branch().path)
+                        || preview.branch().entries.iter().any(|entry| {
+                            entry.lookup_key() == within_key
+                                && entry.kind == storage_contract::NamespaceEntryKind::Directory
+                        })
+                },
+            )
         {
             return Err(ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -137,6 +177,7 @@ impl DirectoryCapture {
             within: within.into(),
             within_key,
             commit,
+            preview,
         })
     }
 }
@@ -166,13 +207,17 @@ impl PrimaryListing {
         let mut directory_branches = Vec::new();
         if let Some(directory) = &scope.directory {
             let repo = &directory.repository;
+            if let Some(preview) = &directory.preview {
+                directory_branches_supported = name_policy::path_key(preview.path())
+                    == name_policy::path_key(&directory.within);
+            }
             if directory_branches_supported {
                 directory_branches = super::super::directory_scopes::matching_tables(
                     &state.branches,
                     &state.commits,
                     &state.directory_branches,
                     repo,
-                    Some(&directory.within_key),
+                    Some(&name_policy::path_key(&directory.within)),
                 )
                 .into_iter()
                 .map(|branch| {
@@ -191,7 +236,13 @@ impl PrimaryListing {
             };
             // Scan the retained flat namespace, keeping at most limit + 1
             // candidates plus the independently requested selected entry.
-            for (index, entry) in directory.commit.entries.iter().enumerate() {
+            let entries = directory
+                .preview
+                .as_ref()
+                .map_or(directory.commit.entries.as_slice(), |preview| {
+                    preview.branch().entries.as_slice()
+                });
+            for (index, entry) in entries.iter().enumerate() {
                 let Some(relative) = entry.lookup_key().strip_prefix(&prefix) else {
                     continue;
                 };
@@ -201,6 +252,13 @@ impl PrimaryListing {
                 if relative.contains('/') {
                     continue;
                 }
+                let rebased = directory
+                    .preview
+                    .as_ref()
+                    .map(|preview| preview.entry(index))
+                    .transpose()
+                    .map_err(error)?;
+                let entry = rebased.as_ref().unwrap_or(entry);
                 let display = if repo.file_manager_root {
                     entry.path().to_owned()
                 } else {
@@ -268,6 +326,15 @@ impl SelectedListing {
         if let Some(directory) = &self.scope.directory {
             unchanged_repository(engine, &directory.repository)?;
             unchanged_namespace(engine, &directory.repository, &directory.commit)?;
+            if let Some(preview) = &directory.preview {
+                engine
+                    .preview_directory_branch(
+                        &directory.repository.repository_id,
+                        &preview.branch().directory_branch_id,
+                        &preview.branch().head_tree_id,
+                    )
+                    .map_err(error)?;
+            }
         }
         for candidate in self.page.values.iter().chain(self.page.selected.iter()) {
             if let Candidate::Repository(id) = candidate {
@@ -308,7 +375,17 @@ impl SelectedListing {
                 } else {
                     &repo.name
                 };
-                listed_current_entry(engine, repo, *index, prefix)
+                if let Some(preview) = &self
+                    .scope
+                    .directory
+                    .as_ref()
+                    .expect("invariant: candidate has directory")
+                    .preview
+                {
+                    listed_preview_entry(engine, repo, preview, *index, prefix)
+                } else {
+                    listed_current_entry(engine, repo, *index, prefix)
+                }
             }
         };
         let entries = self
@@ -344,10 +421,16 @@ impl SelectedListing {
             .directory
             .as_ref()
             .is_some_and(|directory| directory.within.is_empty());
+        let preview = self
+            .scope
+            .directory
+            .as_ref()
+            .is_some_and(|directory| directory.preview.is_some());
         crate::ListingSnapshot {
             slot_id: self.scope.slot_id,
             path: self.scope.path,
             backup: false,
+            preview,
             entries: page.entries,
             selected_entry: page.selected_entry,
             context,

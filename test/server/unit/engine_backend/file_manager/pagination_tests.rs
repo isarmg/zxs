@@ -372,6 +372,7 @@ fn borrowed_request_fingerprint_preserves_json_map_bytes_and_digest() {
                         lowercase_unicode: std::char::UNICODE_VERSION,
                         order: "directory-lowercase-normalized-name-path-identity",
                         path: input.path.as_ref().map(|path| path.key()).unwrap_or(""),
+                        preview: &input.preview,
                         query: &input.query,
                         slot: &input.slot_id,
                         unicode: name_policy::UNICODE_VERSION,

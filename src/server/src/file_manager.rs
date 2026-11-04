@@ -64,6 +64,10 @@ pub(crate) fn routes() -> Router<AppState> {
             patch(http_rename_file_branch::rename),
         )
         .route(
+            "/api/file-manager/files/{file}/default-branch",
+            http_routing::routing::put(http_file_selection::set_default),
+        )
+        .route(
             "/api/file-manager/files/{file}/select",
             post(http_file_selection::select),
         )

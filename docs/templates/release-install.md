@@ -79,7 +79,7 @@ chmod 755 "server-$VERSION/zxs"
 
 ```ini
 WorkingDirectory=/zxs
-ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400 --setup-disk P01=/zxs/data/disks/P01
+ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400
 ReadWritePaths=/zxs/data /zxs/config /zxs/log /zxs/run /zxs/tmp /zxs/cache /zxs/home
 ```
 
@@ -87,7 +87,7 @@ ReadWritePaths=/zxs/data /zxs/config /zxs/log /zxs/run /zxs/tmp /zxs/cache /zxs/
 
 Samba 的空导出目录采用 root 所有、`0555` 的 `/zxs/smb-export`，独立于所有 `0700` 私有目录；根 `/zxs` 为 `0755` 允许认证 Samba 用户遍历。系统服务注册文件、apt Samba、系统运行库和 VFS 模块仍使用发行版要求的系统目录；systemd 自身状态日志属于操作系统记录，ZXS 应用输出则写入上述日志文件。
 
-模板保留专用账户、只读系统目录和精确可写目录约束。安装者审阅完整单元及实际盘位后，再安装到系统单元目录、启用并启动；本安装材料不自动执行这些主机操作。正式启动前按附带部署说明安全预置 `bootstrap.key` 并完成 Web 初始化。
+模板保留专用账户、只读系统目录和精确可写目录约束。安装者审阅完整单元及实际盘位后，再安装到系统单元目录、启用并启动；本安装材料不自动执行这些主机操作。正式启动时限制初始 Web 的可达范围，并首先设置唯一管理员账户；首次设置无需授权密钥。
 
 ## 系统 Samba 与模块
 

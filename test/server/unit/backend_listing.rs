@@ -138,3 +138,33 @@ fn current_directory_has_context_and_empty_note_but_no_file_content_fields() {
         "repository_id":"repo","repository_path":"file","container":false,"selected_branch_id":null,"note":""})
     );
 }
+
+#[test]
+fn preview_query_requires_both_bounded_branch_and_tree_identities() {
+    assert!(query(&[]).unwrap().preview().is_none());
+    assert_eq!(
+        query(&[
+            ("directory_branch_id", "branch"),
+            ("expected_tree_id", "tree")
+        ])
+        .unwrap()
+        .preview(),
+        Some(("branch", "tree"))
+    );
+    for pairs in [
+        vec![("directory_branch_id", "branch")],
+        vec![("expected_tree_id", "tree")],
+        vec![("directory_branch_id", ""), ("expected_tree_id", "tree")],
+        vec![("directory_branch_id", "branch"), ("expected_tree_id", "")],
+    ] {
+        assert!(query(&pairs).is_err());
+    }
+    for key in ["directory_branch_id", "expected_tree_id"] {
+        let mut pairs = BTreeMap::from([
+            ("directory_branch_id".into(), "branch".into()),
+            ("expected_tree_id".into(), "tree".into()),
+        ]);
+        pairs.insert(key.into(), "x".repeat(257));
+        assert!(ReadListing::parse("P01".into(), pairs).is_err());
+    }
+}

@@ -140,10 +140,19 @@ fn typed_default_selection_retains_receipt_digest_and_admission_order() {
         )
         .unwrap();
     let selected = engine.state().directory_selections[&repo.repository_id].clone();
+    let expected_tree = engine.state().directory_branches[&selected]
+        .head_tree_id
+        .clone();
+    let expected_head = engine.state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     let operation = storage_contract::OperationId::generate().unwrap();
     let command =
         |repository: &str, branch: &str, operation_id| crate::SelectDefaultDirectoryBranch {
+            expected_tree_id: expected_tree.clone(),
+            expected_head: expected_head.clone(),
             repository_id: repository.into(),
             directory_branch_id: branch.into(),
             operation_id,
@@ -168,16 +177,18 @@ fn typed_default_selection_retains_receipt_digest_and_admission_order() {
             .engine
             .lock()
             .unwrap()
-            .select_default_directory_branch(
-                &repo.repository_id,
-                &selected,
-                &identity.principal,
-                operation
-            )
+            .set_directory_default(storage_engine::DirectoryDefaultSelection {
+                repository_id: &repo.repository_id,
+                directory_branch_id: &selected,
+                expected_tree_id: &expected_tree,
+                expected_head: &expected_head,
+                principal: &identity.principal,
+                operation_id: operation,
+            })
             .unwrap(),
         result
     );
-    let expected=storage_contract::object_hash("request",&json!({"kind":"directory.default.select","principal":identity.principal,"body":{"repository_id":repo.repository_id,"directory_branch_id":selected}})).unwrap();
+    let expected=storage_contract::object_hash("request",&json!({"kind":"directory.default.set","principal":identity.principal,"body":{"repository_id":repo.repository_id,"directory_branch_id":selected,"expected_tree_id":expected_tree,"expected_head":expected_head}})).unwrap();
     assert_eq!(result.request_digest, expected);
     // A changed digest wins over the missing branch's dynamic scope failure.
     assert_eq!(
@@ -202,7 +213,7 @@ fn typed_default_selection_retains_receipt_digest_and_admission_order() {
             )
             .unwrap_err()
             .code,
-        storage_contract::ErrorCode::DirectoryBranchScope
+        storage_contract::ErrorCode::DirectoryBranchNotFound
     );
     let missing = backend
         .select_default_directory_branch(

@@ -558,3 +558,12 @@ remain shared; this is not per-history bounded ownership or a new index.
 现有 HTTP 后端原本已在返回最终页面前销毁读状态，发送并不持这些表；此次收益是
 全局选择完成至回锁复查之间的提前释放。仓库身份记录仍随仓库数增长，扫描本身仍
 依赖全部可用历史版本。本次不宣称权威 State 冷热分离或已测得整体 RSS／吞吐改善。
+
+
+### 分支浏览与显式默认发布
+
+Web 目录浏览使用 entries 的成对 `directory_branch_id` / `expected_tree_id`，不调用原有持久化 select。捕获只共享 DirectoryBranch 表与当前 Commit；排序按原有 limit + 1 候选保留，回锁仍验证当前身份、listing snapshot、Repository、Commit 指针身份及预览树。返回项引用冻结 file_context 和 node/version，`preview: true` 且 `writable: false`；历史读取不把预览路径当成当前路径写入依据。游标摘要固定预览 ID，目录改名按稳定目录身份重定位，跨目录或硬盘导航撤销浏览状态。
+
+显式 PUT 默认选择使用 `directory.default.set` 或 `file.default.set`，分别将 tree/node 与当前主命名空间 head 纳入永久幂等摘要。现有 `mutate` 在动态基线检查前解析精确回放，现有发布及世代规则不变；不是新增存储格式或恢复迁移。文件默认选择还验证当前 path/file 身份、同域活动分支以及原有非 pending 正文可用性。旧低层 select API 仍是明确持久化命令。
+
+目录预览本身无日志、同步、operation_id 或正文复制；默认设置沿用既有事务同步预算，不减少发布阶段。新增 UI 预览状态不是写能力，常规写入口同时拒绝目录和文件预览；仅单独默认动作拥有所需基线。Unknown 保留原 ID 和预览，成功回执才结束预览并刷新默认视图，Rejected 保留预览。

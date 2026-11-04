@@ -1,7 +1,10 @@
 //! Held filesystem resources, separate from serializable configuration and writer locks.
 use super::*;
 use platform_io::fs_safety::linux::DirectoryEntries;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 /// A path is an address below this held root, never a request to reopen the root.
 pub(crate) struct DiskRoot {
@@ -18,6 +21,23 @@ impl DiskRoot {
         let path = private.path().to_path_buf();
         let directory = OpenAt2Root::from_private_directory(private, MountPolicy::SameMount)
             .map_err(fs_error)?;
+        Ok(Self { path, directory })
+    }
+
+    pub(crate) fn from_directory(path: PathBuf, directory: File) -> Result<Self> {
+        let private =
+            PrivateDirectory::from_directory(directory, path.clone()).map_err(fs_error)?;
+        let directory = OpenAt2Root::from_private_directory(private, MountPolicy::SameMount)
+            .map_err(fs_error)?;
+        // Validate every named ancestor without using that reopened resource as
+        // the destination. All writes retain the caller's original descriptor.
+        let named = Self::open(&path)?;
+        if directory.identity() != named.directory.identity() {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "selected storage directory changed before initialization",
+            ));
+        }
         Ok(Self { path, directory })
     }
 
@@ -344,6 +364,66 @@ impl DiskResources {
             }
             let handle = DiskHandle::open(config, disk, sealed)?;
             disks.insert(disk.disk_id.clone(), Arc::new(handle));
+        }
+        Ok(Self { disks })
+    }
+
+    pub(crate) fn initialize_held(
+        config: &ValidatedConfig,
+        directories: Vec<File>,
+    ) -> Result<Self> {
+        if directories.len() != config.disks.len() {
+            return Err(Error::new(
+                ErrorCode::ConfigInvalid,
+                "held storage directory count differs from configuration",
+            ));
+        }
+        let mut disks = BTreeMap::new();
+        let mut identities = BTreeSet::new();
+        for (disk, directory) in config.disks.iter().zip(directories) {
+            let root = DiskRoot::from_directory(disk.root.clone(), directory)?;
+            let identity = root.directory.identity();
+            if !identities.insert((identity.device, identity.inode)) {
+                return Err(Error::new(
+                    ErrorCode::ConfigInvalid,
+                    "selected directories name the same held storage root",
+                ));
+            }
+            if root.entries(&disk.root)?.next().transpose()?.is_some() {
+                return Err(Error::new(
+                    ErrorCode::DiskAlreadyEnrolled,
+                    "storage activation requires an empty held directory; existing contents are preserved",
+                ));
+            }
+            let seal = identity_at(config, disk, root.directory.directory())?;
+            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
+        }
+        Ok(Self { disks })
+    }
+
+    pub(crate) fn recover_held(config: &ValidatedConfig, directories: Vec<File>) -> Result<Self> {
+        if directories.len() != config.disks.len() {
+            return Err(Error::new(
+                ErrorCode::ConfigInvalid,
+                "held recovery directory count differs from configuration",
+            ));
+        }
+        let mut disks = BTreeMap::new();
+        let mut identities = BTreeSet::new();
+        for (disk, directory) in config.disks.iter().zip(directories) {
+            let root = DiskRoot::from_directory(disk.root.clone(), directory)?;
+            let identity = root.directory.identity();
+            if !identities.insert((identity.device, identity.inode)) {
+                return Err(Error::new(
+                    ErrorCode::ConfigInvalid,
+                    "selected recovery directories name the same held storage root",
+                ));
+            }
+            let seal = identity_at(config, disk, root.directory.directory())?;
+            let stored =
+                decode_seal(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
+            validate_stored_seal(&stored, &seal)?;
+            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
         }
         Ok(Self { disks })
     }

@@ -304,10 +304,9 @@ Web“系统状态”的“持久工作区证据配额”及 `GET /api/workspace
 若实际清单或其生命周期预留超过单清单 64 MiB 上限，必须在持久化或发布前拒绝，
 不会把预留截断到 64 MiB 来掩盖提交后的回执超限；提高总配额也不能绕过单清单格式限制。
 
-持久基线的配置入口是未初始化草稿：由 `zxs-rescue configuration template` 生成，
-在初始化前审查修改上述资源字段，再通过守护进程的本机 `--setup-config ID=/absolute/private-config.json`
-预置及受保护首次初始化选择使用。配置由核心校验，文件权限和磁盘白名单仍须符合
-[救援工具的草稿说明](components/rescue.md#uninitialized-configuration-drafts)。这不是 Web 在线资源配置页。
+`zxs-rescue configuration template` 可生成未初始化草稿供审查上述持久基线字段，
+但当前 Web 首次存储激活不应用高级 Config 草稿，旧本机预设初始化入口已移除。
+草稿边界见[救援工具说明](components/rescue.md#uninitialized-configuration-drafts)。这不是 Web 在线资源配置页。
 已有池的系统目录及各元数据成员均持有配置锚；不得手工改写 `config.json` 或磁盘配置锚来调额，
 也不得删除清单释放名额。运行期的本机调额使用下面的显式启动参数，保留持久基线与全部证据。
 

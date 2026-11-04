@@ -75,3 +75,14 @@ pub(super) fn validate_location(
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/business/file_requests/tests.rs"]
 mod tests;
+
+pub struct FileDefaultSelection<'a> {
+    pub file_id: &'a str,
+    pub branch_id: &'a str,
+    pub repository_id: &'a str,
+    pub path: &'a name_policy::PortablePath,
+    pub expected_node_id: &'a str,
+    pub expected_head: &'a str,
+    pub principal: &'a str,
+    pub operation_id: OperationId,
+}

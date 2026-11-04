@@ -706,3 +706,39 @@ fn file_navigation_discards_success_and_late_feedback_but_preserves_receipts() {
         });
     }
 }
+
+#[test]
+fn choosing_a_directory_branch_only_changes_the_local_read_view() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            ..Default::default()
+        });
+        state.update(|s| {
+            // No selected disk means the follow-on GET is not dispatched on the
+            // native runner; a mutation/ID generation here would invoke WASM.
+            s.files.directory = "docs".into();
+            s.files.writable = true;
+            s.files.loaded = true;
+            s.files.namespace_head = "unchanged-head".into();
+            s.files.directory_branches = vec![crate::files::test_entries::branch(
+                json_codec::json!({"directory_branch_id":"draft","path":"docs"}),
+            )];
+        });
+        let generation = state.with_untracked(|s| s.files.generation);
+        preview_directory_branch(state, "draft".into());
+        state.with_untracked(|s| {
+            assert_eq!(
+                s.files.directory_preview.as_ref().unwrap().branch.id(),
+                "draft"
+            );
+            assert_eq!(s.files.namespace_head, "unchanged-head");
+            assert_eq!(s.files.generation, generation + 1);
+            assert!(!s.files.writable && !s.files.loaded);
+            assert!(!s.files.mutation_pending);
+            assert!(s.files.operations.is_empty() && s.files.default_operation.is_none());
+        });
+        return_to_default(state);
+        assert!(state.with_untracked(|s| s.files.directory_preview.is_none()));
+    });
+}

@@ -410,6 +410,7 @@ impl Backend for TestBackend {
             slot_id: request.slot_id().into(),
             path: request.path().into(),
             backup: false,
+            preview: false,
             entries: vec![],
             selected_entry: None,
             context: None,

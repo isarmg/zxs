@@ -340,3 +340,131 @@ fn admitted_config_serialization_matches_fixed_raw_config_bytes() {
     let decoded: ValidatedConfig = decode_strict(wire.as_bytes()).unwrap();
     assert_eq!(json_codec::to_vec(&decoded).unwrap(), wire.as_bytes());
 }
+
+#[test]
+fn held_initialization_uses_selected_private_subdirectories_and_reopens() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let path = root.path().join("mount/deep/storage");
+    private_dir(&system).unwrap();
+    private_dir(&path).unwrap();
+    let directory = std::fs::File::open(&path).unwrap();
+    let config = ValidatedConfig::try_from(Config::development([path.clone()]).unwrap()).unwrap();
+    let engine = Engine::initialize_held(&system, config, vec![directory]).unwrap();
+    assert_eq!(engine.config().disks[0].root, path);
+    drop(engine);
+    assert_eq!(Engine::open(&system).unwrap().config().disks.len(), 1);
+}
+
+#[test]
+fn held_initialization_rejects_replaced_named_directory_without_writes() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let path = root.path().join("storage");
+    private_dir(&system).unwrap();
+    private_dir(&path).unwrap();
+    let directory = std::fs::File::open(&path).unwrap();
+    let config = ValidatedConfig::try_from(Config::development([path.clone()]).unwrap()).unwrap();
+    let original = root.path().join("original");
+    std::fs::rename(&path, &original).unwrap();
+    private_dir(&path).unwrap();
+    assert!(Engine::initialize_held(&system, config, vec![directory]).is_err());
+    assert_eq!(std::fs::read_dir(path).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(original).unwrap().count(), 0);
+    assert!(!system.join("config.json").exists());
+}
+
+#[test]
+fn held_initialization_rejects_nonempty_directory_before_any_disk_write() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let first = root.path().join("first");
+    let second = root.path().join("second");
+    for path in [&system, &first, &second] {
+        private_dir(path).unwrap();
+    }
+    std::fs::write(second.join("keep"), b"existing data").unwrap();
+    let config =
+        ValidatedConfig::try_from(Config::development([first.clone(), second.clone()]).unwrap())
+            .unwrap();
+    let directories = vec![
+        std::fs::File::open(&first).unwrap(),
+        std::fs::File::open(&second).unwrap(),
+    ];
+    assert!(Engine::initialize_held(&system, config, directories).is_err());
+    assert_eq!(std::fs::read_dir(first).unwrap().count(), 0);
+    assert_eq!(
+        std::fs::read(second.join("keep")).unwrap(),
+        b"existing data"
+    );
+    assert!(!system.join("config.json").exists());
+}
+
+#[test]
+fn held_initialization_rejects_symlink_ancestor_without_touching_selected_root() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let actual = root.path().join("actual/storage");
+    private_dir(&system).unwrap();
+    private_dir(&actual).unwrap();
+    std::os::unix::fs::symlink(root.path().join("actual"), root.path().join("alias")).unwrap();
+    let directory = std::fs::File::open(&actual).unwrap();
+    let config = ValidatedConfig::try_from(
+        Config::development([root.path().join("alias/storage")]).unwrap(),
+    )
+    .unwrap();
+    assert!(Engine::initialize_held(&system, config, vec![directory]).is_err());
+    assert_eq!(std::fs::read_dir(actual).unwrap().count(), 0);
+    assert!(!system.join("config.json").exists());
+}
+
+#[test]
+fn held_recovery_rejects_path_replacement_before_any_recovery_write() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let path = root.path().join("storage");
+    let config = Config::development([path.clone()]).unwrap();
+    drop(Engine::initialize(&system, config).unwrap());
+    let directory = std::fs::File::open(&path).unwrap();
+    let original = root.path().join("original");
+    std::fs::rename(&path, &original).unwrap();
+    private_dir(&path).unwrap();
+    std::fs::write(path.join("preserve"), b"replacement directory").unwrap();
+    let original_log =
+        std::fs::read(original.join("metadata/application-log/journal.bin")).unwrap();
+    assert!(Engine::open_for_recovery_held(&system, None, vec![directory]).is_err());
+    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read(path.join("preserve")).unwrap(),
+        b"replacement directory"
+    );
+    assert_eq!(
+        std::fs::read(original.join("metadata/application-log/journal.bin")).unwrap(),
+        original_log
+    );
+}
+
+#[test]
+fn held_recovery_reads_original_identity_and_preserves_published_state() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let path = root.path().join("storage");
+    let mut engine =
+        Engine::initialize(&system, Config::development([path.clone()]).unwrap()).unwrap();
+    engine
+        .persist_auth_state(
+            json_codec::json!({"control":"retained"}),
+            "system",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let sequence = engine.state().sequence;
+    drop(engine);
+    let directory = std::fs::File::open(&path).unwrap();
+    let engine = Engine::open_for_recovery_held(&system, None, vec![directory]).unwrap();
+    assert_eq!(engine.state().sequence, sequence);
+    assert_eq!(
+        engine.auth_state(),
+        Some(json_codec::json!({"control":"retained"}))
+    );
+}

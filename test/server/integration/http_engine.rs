@@ -16,6 +16,8 @@ use storage_server::{
 };
 #[path = "http_engine/backup_namespace.rs"]
 mod backup_namespace;
+#[path = "http_engine/branch_preview.rs"]
+mod branch_preview;
 #[path = "http_engine/daily_management.rs"]
 mod daily_management;
 #[path = "http_engine/disk_registration.rs"]
@@ -2981,6 +2983,34 @@ async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire(
     capture_wire("damaged-published-save-operation.json", &wire);
 }
 
+async fn manager_default_request(
+    app: &Router,
+    token: &str,
+    repository: &str,
+    branch: &str,
+    operation: &str,
+) -> Value {
+    let scope = manager_scope(app, token, repository, branch).await;
+    let defaults = success(
+        app,
+        token,
+        "GET",
+        &format!("/api/repositories/{repository}/default-branch"),
+        None,
+    )
+    .await;
+    let namespace = defaults["namespace_branch_id"].as_str().unwrap();
+    let tree = success(
+        app,
+        token,
+        "GET",
+        &format!("/api/branches/{namespace}/tree"),
+        None,
+    )
+    .await;
+    json!({"directory_branch_id":branch,"expected_tree_id":scope["head_tree_id"],"expected_head":tree["commit_id"],"operation_id":operation})
+}
+
 #[tokio::test]
 async fn default_directory_branch_is_shared_authorized_and_persistent() {
     let root = tempfile::tempdir().unwrap();
@@ -3054,38 +3084,19 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         namespace
     );
     let selection_operation = new_id("op").unwrap();
-    let selected = success(
-        &app,
-        &session,
-        "PUT",
-        &api,
-        Some(json!({
-            "directory_branch_id":frozen,"operation_id":selection_operation
-        })),
-    )
-    .await;
+    let selection_request =
+        manager_default_request(&app, &session, &repository, &frozen, &selection_operation).await;
+    let selected = success(&app, &session, "PUT", &api, Some(selection_request.clone())).await;
     assert_eq!(selected["result"]["directory_branch_id"], frozen);
-    let replay = success(
-        &app,
-        &session,
-        "PUT",
-        &api,
-        Some(json!({"directory_branch_id":frozen,"operation_id":selection_operation})),
-    )
-    .await;
+    let replay = success(&app, &session, "PUT", &api, Some(selection_request.clone())).await;
     // Mutation replay returns the permanent outcome, not a fabricated health
     // observation with a new timestamp.
     assert!(selected.get("current_health").is_none());
     assert!(replay.get("current_health").is_none());
     assert_eq!(replay, selected);
-    let changed = send(
-        &app,
-        Some(&session),
-        "PUT",
-        &api,
-        Some(json!({"directory_branch_id":"missing-directory","operation_id":selection_operation})),
-    )
-    .await;
+    let mut changed_request = selection_request.clone();
+    changed_request["directory_branch_id"] = "missing-directory".into();
+    let changed = send(&app, Some(&session), "PUT", &api, Some(changed_request)).await;
     assert_eq!(changed.0, StatusCode::CONFLICT);
     assert_eq!(changed.1["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
     for body in [
@@ -3139,9 +3150,10 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         &session,
         "PUT",
         &api,
-        Some(json!({
-            "directory_branch_id":frozen,"operation_id":new_id("op").unwrap()
-        })),
+        Some(
+            manager_default_request(&app, &session, &repository, &frozen, &new_id("op").unwrap())
+                .await,
+        ),
     )
     .await;
     assert_eq!(repeated["result"]["no_change"], true);
@@ -3195,15 +3207,24 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
     .await;
     let nested_id =
         nested["directory_branches"].as_array().unwrap()[0]["directory_branch_id"].clone();
-    let wrong_scope = send(
+    let scoped_default = success(
         &app,
-        Some(&session),
+        &session,
         "PUT",
         &api,
-        Some(json!({"directory_branch_id":nested_id,"operation_id":new_id("op").unwrap()})),
+        Some(
+            manager_default_request(
+                &app,
+                &session,
+                &repository,
+                nested_id.as_str().unwrap(),
+                &new_id("op").unwrap(),
+            )
+            .await,
+        ),
     )
     .await;
-    assert_eq!(wrong_scope.1["error"]["code"], "DIRECTORY_BRANCH_SCOPE");
+    assert_eq!(scoped_default["result"]["directory_branch_id"], nested_id);
 
     // Saving another file from a frozen composition must not rewind a
     // shared branch whose newer HEAD belongs to a different directory view.
@@ -3243,7 +3264,10 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         &session,
         "PUT",
         &api,
-        Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op").unwrap()})),
+        Some(
+            manager_default_request(&app, &session, &repository, &frozen, &new_id("op").unwrap())
+                .await,
+        ),
     )
     .await;
 
@@ -3266,7 +3290,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
     let audit = success(&app, &session, "GET", "/api/file-manager/history", None).await;
     for action in [
         "directory.branches.create",
-        "directory.default.select",
+        "directory.default.set",
         "directory.branch.rename",
     ] {
         assert!(
@@ -5719,7 +5743,7 @@ async fn disk_write_session_tracks_inherited_selection_and_merged_aliases() {
         &token,
         "PUT",
         &format!("/api/repositories/{repo}/default-branch"),
-        Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op").unwrap()})),
+        Some(manager_default_request(&app, &token, repo, &frozen, &new_id("op").unwrap()).await),
     )
     .await;
     let route = "/api/file-manager/disks/P01/write-sessions";

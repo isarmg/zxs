@@ -135,212 +135,93 @@ pub(super) fn setup(
     root: &Path,
     password: &str,
 ) -> Result<()> {
-    use std::io::Read;
-    use std::os::unix::fs::DirBuilderExt;
-    let fresh = root.join("fresh-web-setup");
-    fs::DirBuilder::new().mode(0o700).create(&fresh)?;
-    let pool = fresh.join("pool");
-    let management = fresh.join("management");
-    fs::DirBuilder::new().mode(0o700).create(&management)?;
-    let mut bytes = [0u8; 32];
-    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    let key: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(management.join("bootstrap.key"))?
-        .write_all(key.as_bytes())?;
-    let server_port = port()?;
-    let origin = format!("http://127.0.0.1:{server_port}");
-    let mut command = Command::new(daemon);
-    command
-        .arg("--root")
-        .arg(&pool)
-        .arg("--management-root")
-        .arg(&management)
-        .args(["--listen", &format!("127.0.0.1:{server_port}")])
-        .arg("--allow-development-setup");
-    super::server_web(&mut command, web, &fresh);
-    let id = "fixture-primary";
-    let disk = fresh.join(id);
-    fs::DirBuilder::new().mode(0o700).create(&disk)?;
-    command
-        .arg("--setup-disk")
-        .arg(format!("{id}={}", disk.display()));
-    let server = super::server_launcher::launch(&mut command, &fresh.join("server.log"))?;
+    let fixture = SetupFixture::new(root, "fresh-web-setup")?;
+    let server = fixture.launch(daemon, web, "server.log")?;
+    let storage = fixture.root.join("storage-parent/selected-storage");
     server.finish(|| {
-    wait_for("fresh setup listener", || {
-        if http(server_port, "GET", "/", None)?.0 == 200 {
-            Ok(())
-        } else {
-            Err("setup listener not ready".into())
-        }
-    })?;
-    browser.command("DELETE", "/cookie", None)?;
-    browser.command("POST", "/url", Some(json!({"url":origin})))?;
-    browser.css("input[autocomplete='current-password']")?;
-    browser.click(&browser.css("details > summary")?)?;
-    browser.keys(&browser.css("[data-setup-key]")?, &key)?;
-    browser.click(&browser.button("Authorize and check disks", "验证授权并检查磁盘")?)?;
-    browser.css("[data-setup-disk]")?;
-    browser.keys(&browser.css("[data-setup-user]")?, "fresh-admin")?;
-    reauthorize_identity(browser, "fresh-admin")?;
-    let disks = browser.command(
-        "POST",
-        "/elements",
-        Some(json!({"using":"css selector","value":"[data-setup-disk]"})),
-    )?;
-    if disks.as_array().map(Vec::len) != Some(1) {
-        return Err("single-disk setup must expose exactly one authorized storage disk".into());
-    }
-    for disk in disks.as_array().ok_or("missing setup disk selectors")? {
-        browser.click(
-            disk[super::ELEMENT]
-                .as_str()
-                .ok_or("missing setup disk element")?,
+        fixture.open(browser)?;
+        browser.keys(&browser.css("[data-setup-user]")?, "fresh-admin")?;
+        reauthorize_identity(browser, "fresh-admin")?;
+        credentials_and_confirm(browser, "fresh-admin", password)?;
+        browser.click(&browser.button("Complete first-time setup", "完成首次设置")?)?;
+        fixture.wait_state("unconfigured")?;
+        fixture.no_storage()?;
+        cleared_secrets(browser, password)?;
+        sign_in(browser, "fresh-admin", password)?;
+        browser.click(&browser.button("Status", "状态")?)?;
+        browser.css(".zxs-monitor-page [data-metric='cpu']")?;
+        browser.css(".zxs-monitor-page [data-metric='memory']")?;
+        // Provision only a disposable test-owned child after account creation.
+        // No --setup-disk/preset or mount-root restriction is used by this daemon.
+        let storage = fixture.storage_directory()?;
+        with_cleanup(
+            || {
+                browser.script(STORAGE_PROBE)?;
+                select_storage(browser, &storage)?;
+                browser.click(&browser.css("[data-storage-activate]")?)?;
+                fixture.wait_state("ready")?;
+                storage_active(browser)?;
+                assert_activation_posts(browser, &["/api/admin/storage/activate"])?;
+                assert_single_storage(&fixture, &storage)?;
+                Ok(())
+            },
+            || restore_storage_probe(browser),
         )?;
-    }
-    if browser.script("return document.body.textContent.includes('no disk redundancy') || document.body.textContent.includes('没有磁盘冗余')")? != true {
-        return Err("single-disk setup must explicitly warn about no redundancy".into());
-    }
-    browser.click(&browser.css("[data-setup-development]")?)?;
-    browser.keys(&browser.css("[data-setup-password]")?, password)?;
-    browser.click(&browser.css("[data-setup-confirm]")?)?;
-    browser.click(&browser.button("Initialize new installation", "初始化新安装")?)?;
-    wait_for("setup accepted and hot storage reopen", || {
-        let (status, bytes) = http(server_port, "GET", "/api/management/status", None)?;
-        let value: json_codec::Value = json_codec::from_slice(&bytes)?;
-        if status == 200
-            && value["authentication"] == "ready"
-            && value["storage"]["state"] == "ready"
-        {
-            Ok(())
-        } else {
-            Err("setup is not yet ready".into())
-        }
+        browser.click(&browser.button("Files", "文件")?)?;
+        browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?;
+        sign_out(browser)?;
+        Ok(())
     })?;
-    wait_for("setup secrets cleared after submission", || {
-        if browser.script("return document.querySelector('[data-setup-key]').value === '' && (!document.querySelector('[data-setup-password]') || document.querySelector('[data-setup-password]').value === '')")? == true { Ok(()) } else { Err("setup input still retains a secret".into()) }
-    })?;
-    let persisted = browser.script("return location.href + JSON.stringify(Object.entries(localStorage)) + JSON.stringify(Object.entries(sessionStorage))")?;
-    let persisted = persisted.as_str().unwrap_or_default();
-    if persisted.contains(&key) || persisted.contains(password) {
-        return Err("setup secret persisted in browser storage or URL".into());
-    }
-    browser.keys(
-        &browser.css(".authentication-card input[autocomplete='username']")?,
-        "fresh-admin",
-    )?;
-    browser.keys(
-        &browser.css("input[autocomplete='current-password']")?,
-        password,
-    )?;
-    browser.click(&browser.button("Sign in", "登录")?)?;
-    browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?;
-    browser.click(&browser.button("Sign out", "退出")?)?;
-    browser.css("input[autocomplete='current-password']")?;
-    let config: storage_engine::Config =
-        json_codec::from_slice(&fs::read(pool.join("config.json"))?)?;
-    if config.disks.len() != 1
-        || config.disks[0].level != 1
-        || config.disks[0].upstream_slot_id.is_some()
-    {
-        return Err("single-disk wizard invented backup levels".into());
-    }
-    Ok(())
-    })?;
-    let disk = fresh.join("fixture-primary");
-    fs::rename(&disk, fresh.join("fixture-primary-offline"))?;
-    let restarted =
-        super::server_launcher::launch(&mut command, &fresh.join("missing-disk-server.log"))?;
+    // A disappearing selected child must remain missing on restart. Its parent
+    // and mount still exist, so accepting the mount alone would be a real defect.
+    fs::rename(&storage, storage.with_file_name("selected-storage-offline"))?;
+    let restarted = fixture.launch(daemon, web, "missing-directory-server.log")?;
     restarted.finish(|| {
-    wait_for("single missing disk leaves management online", || {
-        let (status, bytes) = http(server_port, "GET", "/api/management/status", None)?;
-        let value: json_codec::Value = json_codec::from_slice(&bytes)?;
-        if status == 200
-            && value["authentication"] == "ready"
-            && value["storage"]["state"] == "unavailable"
-            && value["storage"]["recovering"] == false
-        {
-            Ok(())
-        } else {
-            Err("single-disk management restart not ready".into())
+        fixture.wait_state("unavailable")?;
+        fixture.visit(browser)?;
+        sign_in(browser, "fresh-admin", password)?;
+        wait_for("missing selected directory warning", || {
+            if browser.script("return document.body.textContent.includes('Data storage is unavailable') || document.body.textContent.includes('数据存储不可用')")? == true {
+                Ok(())
+            } else {
+                Err("missing-directory warning absent".into())
+            }
+        })?;
+        browser.click(&browser.button("Status", "状态")?)?;
+        browser.css(".zxs-monitor-page [data-metric='cpu']")?;
+        browser.css(".zxs-monitor-page [data-metric='memory']")?;
+        if storage.exists() {
+            return Err("missing selected storage directory was silently recreated".into());
         }
+        sign_out(browser)
     })?;
-    browser.command("POST", "/url", Some(json!({"url":origin})))?;
-    browser.keys(
-        &browser.css(".authentication-card input[autocomplete='username']")?,
-        "fresh-admin",
-    )?;
-    browser.keys(
-        &browser.css("input[autocomplete='current-password']")?,
-        password,
-    )?;
-    browser.click(&browser.button("Sign in", "登录")?)?;
-    browser.button("Sign out", "退出")?;
-    wait_for("single-disk failure warning visible after login", || {
-        if browser.script("return document.body.textContent.includes('Data storage is unavailable') || document.body.textContent.includes('数据存储不可用')")? == true { Ok(()) } else { Err("single-disk failure warning absent".into()) }
-    })?;
-    browser.click(&browser.button("Status", "状态")?)?;
-    browser.css(".zxs-monitor-page [data-metric='cpu']")?;
-    browser.css(".zxs-monitor-page [data-metric='memory']")?;
-    if disk.exists() {
-        return Err("missing storage disk was silently recreated".into());
-    }
-    browser.click(&browser.button("Sign out", "退出")?)?;
-    browser.css("input[autocomplete='current-password']")?;
     println!(
-        "PASS protected single-disk Web setup: no backup levels, explicit no-redundancy warning, key + CSRF, hot ready reopen, administrator login, no persisted secrets; missing only disk preserves browser login and monitoring without recreating storage"
+        "PASS no-disk account setup, administrator monitoring, real nested-directory browse/inspection/activation, exact configured root, and missing-directory restart without recreation"
     );
     lost_initialize_response(browser, daemon, web, root, password)?;
-    preset_setup(browser, daemon, web, root, password)?;
-    complete_setup(browser, daemon, web, root, password)
-    })
+    complete_activation(browser, daemon, web, root, password)
 }
 
 struct SetupFixture {
     root: std::path::PathBuf,
     pool: std::path::PathBuf,
     management: std::path::PathBuf,
-    disks: std::collections::BTreeMap<String, std::path::PathBuf>,
-    key: String,
     port: u16,
 }
 impl SetupFixture {
-    fn new(root: &Path, label: &str, count: usize) -> Result<Self> {
-        use std::{io::Read, os::unix::fs::DirBuilderExt};
+    fn new(root: &Path, label: &str) -> Result<Self> {
+        use std::os::unix::fs::DirBuilderExt;
         let root = root.join(label);
         fs::DirBuilder::new().mode(0o700).create(&root)?;
-        // Direct service fixtures, unlike daemon startup, must provision the
-        // empty data root before SetupRecovery validates its directory.
         fs::DirBuilder::new()
             .mode(0o700)
             .create(root.join("pool"))?;
         let management = root.join("management");
         fs::DirBuilder::new().mode(0o700).create(&management)?;
-        let mut entropy = [0u8; 32];
-        fs::File::open("/dev/urandom")?.read_exact(&mut entropy)?;
-        let key: String = entropy.iter().map(|b| format!("{b:02x}")).collect();
-        OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(management.join("bootstrap.key"))?
-            .write_all(key.as_bytes())?;
-        let mut disks = std::collections::BTreeMap::new();
-        for index in 0..count {
-            let id = format!("candidate-{index}");
-            let path = root.join(&id);
-            fs::DirBuilder::new().mode(0o700).create(&path)?;
-            disks.insert(id, path);
-        }
         Ok(Self {
             pool: root.join("pool"),
             root,
             management,
-            disks,
-            key,
             port: port()?,
         })
     }
@@ -348,7 +229,7 @@ impl SetupFixture {
         &self,
         daemon: &Path,
         web: Option<&Path>,
-        preset: Option<&Path>,
+        log: &str,
     ) -> Result<super::server_launcher::ServerProcess> {
         let mut command = Command::new(daemon);
         command
@@ -359,18 +240,8 @@ impl SetupFixture {
             .args(["--listen", &format!("127.0.0.1:{}", self.port)])
             .arg("--allow-development-setup");
         super::server_web(&mut command, web, &self.root);
-        for (id, path) in &self.disks {
-            command
-                .arg("--setup-disk")
-                .arg(format!("{id}={}", path.display()));
-        }
-        if let Some(preset) = preset {
-            command
-                .arg("--setup-config")
-                .arg(format!("four-disk-preset={}", preset.display()));
-        }
-        let server = super::server_launcher::launch(&mut command, &self.root.join("server.log"))?;
-        let ready = wait_for("protected setup fixture listener", || {
+        let server = super::server_launcher::launch(&mut command, &self.root.join(log))?;
+        let ready = wait_for("protected management fixture listener", || {
             if http(self.port, "GET", "/", None)?.0 == 200 {
                 Ok(())
             } else {
@@ -382,7 +253,7 @@ impl SetupFixture {
         }
         Ok(server)
     }
-    fn open(&self, browser: &Browser) -> Result<()> {
+    fn visit(&self, browser: &Browser) -> Result<()> {
         browser.command("DELETE", "/cookie", None)?;
         browser.command(
             "POST",
@@ -390,44 +261,70 @@ impl SetupFixture {
             Some(json!({"url":format!("http://127.0.0.1:{}",self.port)})),
         )?;
         browser.css("input[autocomplete='current-password']")?;
-        browser.click(&browser.css("details > summary")?)?;
+        Ok(())
+    }
+    fn open(&self, browser: &Browser) -> Result<()> {
+        self.visit(browser)?;
         self.authorize(browser)
     }
     fn authorize(&self, browser: &Browser) -> Result<()> {
-        browser.keys(&browser.css("[data-setup-key]")?, &self.key)?;
-        browser.click(&browser.button("Authorize and check disks", "验证授权并检查磁盘")?)?;
+        browser.click(&browser.button("Check setup status", "检查设置状态")?)?;
         Ok(())
     }
-    fn ready(&self) -> Result<()> {
-        wait_for("real storage initialization ready", || {
+    fn wait_state(&self, expected: &str) -> Result<()> {
+        wait_for("real management and storage lifecycle state", || {
             let (status, bytes) = http(self.port, "GET", "/api/management/status", None)?;
             let value: json_codec::Value = json_codec::from_slice(&bytes)?;
             if status == 200
                 && value["authentication"] == "ready"
-                && value["storage"]["state"] == "ready"
+                && value["storage"]["state"] == expected
+                && value["storage"]["recovering"] == false
             {
                 Ok(())
             } else {
-                Err("initialization still pending".into())
+                Err(format!("expected {expected}, actual management status: {value}").into())
             }
         })
     }
+    fn no_storage(&self) -> Result<()> {
+        if !self.management.join("management-auth.json").is_file()
+            || !self.pool.join("management-authority.json").is_file()
+            || self.pool.join("config.json").exists()
+            || self.pool.join("workspaces").exists()
+            || self.root.join("storage-parent").exists()
+        {
+            return Err(
+                "account-only setup created storage or omitted durable management authority".into(),
+            );
+        }
+        Ok(())
+    }
+    fn storage_directory(&self) -> Result<std::path::PathBuf> {
+        use std::os::unix::fs::DirBuilderExt;
+        let parent = self.root.join("storage-parent");
+        fs::DirBuilder::new().mode(0o700).create(&parent)?;
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(parent.join("outside-selection.txt"))?
+            .write_all(b"outside selected storage\n")?;
+        let storage = parent.join("selected-storage");
+        fs::DirBuilder::new().mode(0o700).create(&storage)?;
+        Ok(storage)
+    }
 }
-// Reauthorization unmounts and remounts the real setup form. Its visible
-// identity must remain exactly the model value that will create the account.
+
 fn reauthorize_identity(browser: &Browser, username: &str) -> Result<()> {
     for _ in 0..2 {
         browser.click(&browser.css("[data-setup-confirm]")?)?;
         browser.script("window.__setupIdentityBeforeAuthorization = document.querySelector('[data-setup-user]'); return true")?;
-        browser.click(&browser.button("Authorize and check disks", "验证授权并检查磁盘")?)?;
+        browser.click(&browser.button("Check setup status", "检查设置状态")?)?;
         browser.css("[data-setup-user]")?;
         let expected = json_codec::to_string(username)?;
         wait_for("reauthorized setup identity matches submission", || {
-            if browser.script(&format!("return document.querySelector('[data-setup-user]') !== window.__setupIdentityBeforeAuthorization && document.querySelector('[data-setup-user]')?.value === {expected} && !document.querySelector('[data-setup-confirm]').checked"))? == true {
-                Ok(())
-            } else {
-                Err("reauthorization changed the displayed administrator identity".into())
-            }
+            if browser.script(&format!("return document.querySelector('[data-setup-user]') !== window.__setupIdentityBeforeAuthorization && document.querySelector('[data-setup-user]')?.value === {expected} && !document.querySelector('[data-setup-confirm]').checked"))? == true { Ok(()) }
+            else { Err("reauthorization changed displayed administrator identity".into()) }
         })?;
         browser.script("delete window.__setupIdentityBeforeAuthorization; return true")?;
     }
@@ -441,7 +338,21 @@ fn credentials_and_confirm(browser: &Browser, username: &str, password: &str) ->
     browser.click(&browser.css("[data-setup-confirm]")?)?;
     Ok(())
 }
-fn login_setup(browser: &Browser, username: &str, password: &str, count: usize) -> Result<()> {
+fn cleared_secrets(browser: &Browser, password: &str) -> Result<()> {
+    wait_for("submitted setup secrets cleared", || {
+        if browser.script("const key=document.querySelector('[data-setup-key]'); const password=document.querySelector('[data-setup-password]'); return !key && (!password || password.value === '')")? == true { Ok(()) }
+        else { Err("setup input retains a submitted secret".into()) }
+    })?;
+    let persisted = browser.script("return location.href + JSON.stringify(Object.entries(localStorage)) + JSON.stringify(Object.entries(sessionStorage))")?;
+    let persisted = persisted
+        .as_str()
+        .ok_or("browser persistence probe returned non-string")?;
+    if persisted.contains(password) {
+        return Err("setup secret persisted in browser storage or URL".into());
+    }
+    Ok(())
+}
+fn sign_in(browser: &Browser, username: &str, password: &str) -> Result<()> {
     browser.keys(
         &browser.css(".authentication-card input[autocomplete='username']")?,
         username,
@@ -451,91 +362,210 @@ fn login_setup(browser: &Browser, username: &str, password: &str, count: usize) 
         password,
     )?;
     browser.click(&browser.button("Sign in", "登录")?)?;
-    wait_for("preserved initialized disk count", || {
-        let result = browser
-            .script("return document.querySelectorAll('.zxs-disk-entry:not([disabled])').length")?;
-        if result.as_u64() == Some(count as u64) {
-            Ok(())
-        } else {
-            Err("initialized disk count differs".into())
-        }
-    })?;
+    browser.button("Sign out", "退出")?;
+    Ok(())
+}
+fn sign_out(browser: &Browser) -> Result<()> {
+    if browser.script("return window.__zxsSmokeErrors")? != json!([]) {
+        return Err("uncaught browser error during management lifecycle".into());
+    }
     browser.click(&browser.button("Sign out", "退出")?)?;
     browser.css("input[autocomplete='current-password']")?;
     Ok(())
 }
 
-const LOST_INITIALIZE_PROBE: &str = r#"
-const originalFetch = window.fetch;
-const form = document.querySelector('[data-setup-key]')?.closest('form');
-if (!form?.isConnected || window.__zxsLostInitialize)
-  throw new Error('Lost initialization probe requires one live setup form');
-const state = window.__zxsLostInitialize = {
-  form, setupPosts:[], initialization:null, statusReads:[], logins:[],
-  dropped:false, submitStimuli:0, stimuliSettled:true, frame:null,
-  restore:() => {
-    if (state.frame !== null) cancelAnimationFrame(state.frame);
-    window.fetch = originalFetch;
-    delete window.__zxsLostInitialize;
-  }
+// Observe real reads and mutations. The optional fault discards only a genuine
+// successful activation response, then holds real status responses until the
+// unknown-state assertions finish. No successful response/body is fabricated.
+const STORAGE_PROBE: &str = r#"
+if (window.__zxsStorageProbe) throw new Error('Storage probe already installed');
+const original = window.fetch;
+const state = window.__zxsStorageProbe = {
+  listings:[], inspections:[], posts:[], statusReads:[], activation:null,
+  loseActivation:false, dropped:false, holdStatus:false, waiters:[],
+  submitStimuli:0, stimuliSettled:true, frame:null,
+  release:() => { state.holdStatus=false; for (const resolve of state.waiters.splice(0)) resolve(); },
+  restore:() => { state.release(); if(state.frame !== null)cancelAnimationFrame(state.frame); window.fetch=original; delete window.__zxsStorageProbe; }
 };
 window.fetch = async function(...args) {
-  const request = args[0];
-  const url = new URL(typeof request === 'string' ? request : request.url, location.href);
-  const method = (args[1]?.method || request.method || 'GET').toUpperCase();
-  // Count attempted sends, including a duplicate that the real server rejects.
-  if (url.origin === location.origin && url.pathname.startsWith('/api/setup/') && method === 'POST')
-    state.setupPosts.push(url.pathname);
-  const response = await Reflect.apply(originalFetch, this, args);
-  if (url.origin !== location.origin) return response;
-  if (url.pathname === '/api/setup/initialize' && method === 'POST' && !state.dropped) {
-    const body = await response.clone().json();
-    state.initialization = {status:response.status, initialized:body.initialized === true};
-    if (response.ok && body.initialized === true) {
-      state.dropped = true;
-      // Keep the actual successful Response from the production WASM.
-      throw new TypeError('Browser smoke: initialize response lost after successful initialization');
+  const input=args[0], url=new URL(typeof input === 'string' ? input : input.url, location.href);
+  const method=(args[1]?.method || input.method || 'GET').toUpperCase();
+  const own=url.origin === location.origin, path=url.pathname;
+  if (own && method === 'POST' && ['/api/admin/storage/activate','/api/admin/storage/complete-activation'].includes(path)) state.posts.push(path);
+  const response=await Reflect.apply(original,this,args);
+  if (!own) return response;
+  if (path === '/api/admin/storage/directories' && method === 'GET')
+    state.listings.push({status:response.status, body:await response.clone().json()});
+  if (path === '/api/admin/storage/directories/inspect' && method === 'POST')
+    state.inspections.push({status:response.status, body:await response.clone().json()});
+  if (path === '/api/admin/storage/activate' && method === 'POST' && state.loseActivation && !state.dropped) {
+    const body=await response.clone().json();
+    state.activation={status:response.status, body};
+    if (response.ok && body.activated === true) {
+      state.dropped=true; state.holdStatus=true;
+      throw new TypeError('Browser smoke: activation response lost after successful activation');
     }
-  } else if (url.pathname === '/api/setup/status' && method === 'GET') {
-    const body = await response.clone().json();
-    state.statusReads.push({status:response.status,
-      state:typeof body.state === 'string' ? body.state : null,
-      completionAvailable:typeof body.completion_available === 'boolean' ? body.completion_available : null});
-  } else if (url.pathname === '/api/auth/login' && method === 'POST') {
-    const body = await response.clone().json();
-    state.logins.push({status:response.status,
-      principal:typeof body.principal === 'string' ? body.principal : null});
+  }
+  if (path === '/api/admin/storage/status' && method === 'GET') {
+    state.statusReads.push({status:response.status, body:await response.clone().json()});
+    if (state.holdStatus) await new Promise(resolve => state.waiters.push(resolve));
   }
   return response;
 };
 return true;
 "#;
-
-fn lost_initialize_state(browser: &Browser) -> Result<json_codec::Value> {
-    browser.script(
-        r#"
-const state = window.__zxsLostInitialize;
-if (!state) throw new Error('Lost initialization probe is missing');
-const key = document.querySelector('[data-setup-key]');
-const form = key?.closest('form');
-const password = form?.querySelector('[data-setup-password]');
-const text = form?.textContent || '';
-return {sameForm:form === state.form && state.form.isConnected,
-  unknown:Array.from(form?.querySelectorAll('p[role="alert"]') || [])
-    .some(alert => /Outcome unknown\. Repeated initialization is disabled|结果未知，已禁用重复初始化/.test(alert.textContent)),
-  transportError:text.includes('TypeError') && text.includes('Browser smoke: initialize response lost after successful initialization'),
-  existing:/An installation already exists; initialization is blocked|已存在安装；禁止初始化/.test(text),
-  keyCleared:!!key && key.value === '', passwordCleared:!password || password.value === '',
-  settled:!!key && !key.disabled,
-  noInitialization:!!form && !form.querySelector('button[type="submit"], [data-setup-disk], [data-setup-completion]'),
-  reloadBlocked:document.querySelector('[data-language-toggle]')?.disabled === true,
-  dropped:state.dropped, initialization:state.initialization, setupPosts:state.setupPosts,
-  statusReads:state.statusReads, logins:state.logins,
-  submitStimuli:state.submitStimuli, stimuliSettled:state.stimuliSettled};
-"#,
-    )
+fn restore_storage_probe(browser: &Browser) -> Result<()> {
+    browser.script("if(window.__zxsStorageProbe)window.__zxsStorageProbe.restore();return true")?;
+    Ok(())
+}
+fn select_storage(browser: &Browser, storage: &Path) -> Result<()> {
+    let parent = storage
+        .parent()
+        .ok_or("fixture storage has no parent")?
+        .to_str()
+        .ok_or("non-UTF8 fixture parent")?;
+    let path = storage.to_str().ok_or("non-UTF8 fixture storage")?;
+    browser.click(&browser.button("Administration", "系统管理")?)?;
+    browser.css(".zxs-storage-activation [data-storage-field='browse']:not([disabled])")?;
+    let discovery = browser.css("[data-storage-discovery-root]:not([disabled])")?;
+    browser.command(
+        "POST",
+        &format!("/element/{discovery}/clear"),
+        Some(json!({})),
+    )?;
+    browser.keys(&discovery, parent)?;
+    browser.click(&browser.css("[data-storage-save-discovery-root]:not([disabled])")?)?;
+    let expected_root = json_codec::to_string(parent)?;
+    wait_for("custom discovery root persisted", || {
+        if browser.script(&format!("return document.querySelector('[data-storage-field=browse]')?.value === {expected_root} && !document.querySelector('[data-storage-field=browse]')?.disabled"))? == true {Ok(())}
+        else {Err("custom discovery root not yet loaded".into())}
+    })?;
+    let browse = browser.css("[data-storage-field='browse']")?;
+    browser.command("POST", &format!("/element/{browse}/clear"), Some(json!({})))?;
+    browser.keys(&browse, parent)?;
+    browser.click(&browser.button("Browse", "浏览")?)?;
+    let expected_parent = json_codec::to_string(parent)?;
+    wait_for("real parent directory listing", || {
+        if browser.script(&format!("const r=window.__zxsStorageProbe.listings.at(-1);return r?.status === 200 && r.body.path === {expected_parent} && r.body.entries.some(e=>e.name === 'selected-storage' && e.can_browse)"))? == true { Ok(()) }
+        else { Err("server did not list the real nested storage directory".into()) }
+    })?;
+    browser.click(&browser.button("selected-storage", "selected-storage")?)?;
+    let expected = json_codec::to_string(path)?;
+    wait_for("real child directory listing", || {
+        if browser.script(&format!("const r=window.__zxsStorageProbe.listings.at(-1);return r?.status === 200 && r.body.path === {expected} && r.body.entries.length === 0 && r.body.truncated === false"))? == true { Ok(()) }
+        else { Err("child directory listing not yet available".into()) }
+    })?;
+    browser.click(&browser.button("Use this directory", "使用此目录")?)?;
+    wait_for("mount and selected child remain distinct", || {
+        if browser.script(&format!("const r=window.__zxsStorageProbe.listings.at(-1).body;return document.querySelector('[data-storage-field=mount]').value === r.mount_path && document.querySelector('[data-storage-field=root]').value === {expected} && r.mount_path !== {expected}"))? == true { Ok(()) }
+        else { Err("directory selection lost the actual mount/child distinction".into()) }
+    })?;
+    browser.click(&browser.css("[data-storage-inspect]")?)?;
+    browser.css("[data-storage-add-selection]:not([disabled])")?;
+    let inspected=browser.script("const s=window.__zxsStorageProbe;return {inspection:s.inspections.at(-1), listing:s.listings.at(-1).body}")?;
+    if inspected["inspection"]["status"] != 200
+        || inspected["inspection"]["body"]["root_path"] != path
+        || inspected["inspection"]["body"]["mount_path"] != inspected["listing"]["mount_path"]
+        || !inspected["inspection"]["body"]["selection_id"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("directory_") && s.len() == 74)
+    {
+        return Err(
+            format!("real directory inspection did not bind selected child: {inspected}").into(),
+        );
+    }
+    browser.click(&browser.css("[data-storage-add-selection]")?)?;
+    if browser.script("const t=document.querySelector('.zxs-storage-activation').textContent;return t.includes('One directory holds one copy') || t.includes('单目录只有一份副本')")? != true {
+        return Err("single-directory redundancy warning is missing".into());
+    }
+    browser.click(&browser.css("[data-storage-development]")?)?;
+    browser.click(&browser.css("[data-storage-confirm]")?)?;
+    browser.css("[data-storage-activate]:not([disabled])")?;
+    Ok(())
+}
+fn storage_active(browser: &Browser) -> Result<()> {
+    wait_for("actual activation status settles the Web view", || {
+        if browser.script("const p=window.__zxsStorageProbe;const t=document.querySelector('.zxs-storage-activation')?.textContent || '';return p.statusReads.some(r=>r.status === 200 && r.body.state === 'active') && (t.includes('The storage pool is active.') || t.includes('存储池已激活。')) && !document.querySelector('[data-storage-activate]') && !document.querySelector('[data-language-toggle]')?.disabled")? == true { Ok(()) }
+        else { Err("activation has not settled from real server status".into()) }
+    })
+}
+fn assert_activation_posts(browser: &Browser, expected: &[&str]) -> Result<()> {
+    let posts = browser.script("return window.__zxsStorageProbe.posts")?;
+    if posts != json_codec::to_value(expected)? {
+        return Err(format!("unexpected storage mutation sends: {posts}").into());
+    }
+    Ok(())
+}
+fn assert_single_storage(fixture: &SetupFixture, storage: &Path) -> Result<()> {
+    let config: storage_engine::Config =
+        json_codec::from_slice(&fs::read(fixture.pool.join("config.json"))?)?;
+    if config.disks.len() != 1
+        || config.disks[0].level != 1
+        || config.disks[0].upstream_slot_id.is_some()
+        || config.disks[0].root != storage
+    {
+        return Err("activation changed selected root or invented backup levels".into());
+    }
+    if fs::read(
+        storage
+            .parent()
+            .ok_or("fixture storage has no parent")?
+            .join("outside-selection.txt"),
+    )? != b"outside selected storage\n"
+    {
+        return Err("activation changed data outside selected storage".into());
+    }
+    Ok(())
 }
 
+const LOST_INITIALIZE_PROBE: &str = r#"
+const originalFetch=window.fetch;
+const form=document.querySelector('[data-first-account-form]');
+if (!form?.isConnected || window.__zxsLostInitialize) throw new Error('Lost initialization probe requires one live setup form');
+const state=window.__zxsLostInitialize={
+  form,setupPosts:[],initialization:null,statusReads:[],logins:[],dropped:false,
+  submitStimuli:0,stimuliSettled:true,frame:null,
+  restore:()=>{if(state.frame !== null)cancelAnimationFrame(state.frame);window.fetch=originalFetch;delete window.__zxsLostInitialize;}
+};
+window.fetch=async function(...args){
+  const request=args[0],url=new URL(typeof request === 'string' ? request : request.url,location.href);
+  const method=(args[1]?.method || request.method || 'GET').toUpperCase();
+  if(url.origin === location.origin && url.pathname.startsWith('/api/setup/') && method === 'POST')state.setupPosts.push(url.pathname);
+  const response=await Reflect.apply(originalFetch,this,args);
+  if(url.origin !== location.origin)return response;
+  if(url.pathname === '/api/setup/initialize' && method === 'POST' && !state.dropped){
+    const body=await response.clone().json();
+    state.initialization={status:response.status,initialized:body.initialized === true,storagePending:body.storage_pending === true};
+    if(response.ok && body.initialized === true && body.storage_pending === true){
+      state.dropped=true;
+      throw new TypeError('Browser smoke: initialize response lost after successful initialization');
+    }
+  } else if(url.pathname === '/api/setup/status' && method === 'GET'){
+    const body=await response.clone().json();state.statusReads.push({status:response.status,state:body.state});
+  } else if(url.pathname === '/api/auth/login' && method === 'POST'){
+    const body=await response.clone().json();state.logins.push({status:response.status,principal:body.principal});
+  }
+  return response;
+};
+return true;
+"#;
+fn lost_initialize_state(browser: &Browser) -> Result<json_codec::Value> {
+    browser.script(r#"
+const state=window.__zxsLostInitialize;
+if(!state)throw new Error('Lost initialization probe is missing');
+const key=document.querySelector('[data-setup-key]'),form=document.querySelector('[data-first-account-form]'),password=form?.querySelector('[data-setup-password]'),text=form?.textContent || '';
+return {sameForm:form === state.form && state.form.isConnected,
+  unknown:Array.from(form?.querySelectorAll('p[role=alert]') || []).some(e=>/Outcome unknown\. Repeated initialization is blocked|结果未知，已禁止重复初始化/.test(e.textContent)),
+  complete:/The administrator account is ready|管理员账户已建立/.test(text),
+  transportError:text.includes('Browser smoke: initialize response lost after successful initialization'),
+  keyAbsent:!key,passwordCleared:!password || password.value === '',
+  settled:!!form && !form.querySelector('[data-setup-check]')?.disabled,
+  noInitialization:!!form && !form.querySelector('button[type=submit], [data-setup-disk], [data-setup-completion]'),
+  reloadBlocked:document.querySelector('[data-language-toggle]')?.disabled === true,
+  dropped:state.dropped,initialization:state.initialization,setupPosts:state.setupPosts,statusReads:state.statusReads,logins:state.logins,
+  submitStimuli:state.submitStimuli,stimuliSettled:state.stimuliSettled};
+"#)
+}
 fn unknown_initialize_fence(browser: &Browser) -> Result<json_codec::Value> {
     let state = lost_initialize_state(browser)?;
     if state["sameForm"] != true
@@ -544,47 +574,32 @@ fn unknown_initialize_fence(browser: &Browser) -> Result<json_codec::Value> {
         || state["noInitialization"] != true
         || state["reloadBlocked"] != true
         || state["dropped"] != true
-        || state["initialization"] != json!({"status":200,"initialized":true})
+        || state["initialization"] != json!({"status":200,"initialized":true,"storagePending":true})
         || state["setupPosts"] != json!(["/api/setup/initialize"])
     {
-        return Err(format!("lost initialization escaped its unknown form fence: {state}").into());
+        return Err(format!("lost initialization escaped its unknown fence: {state}").into());
     }
     Ok(state)
 }
-
 fn repeat_unknown_initialize(browser: &Browser, expected_stimuli: u64) -> Result<()> {
-    browser.script(
-        r#"
-const state = window.__zxsLostInitialize;
-const form = document.querySelector('[data-setup-key]')?.closest('form');
-const language = document.querySelector('[data-language-toggle]');
-if (!state || form !== state.form || !form.isConnected || !language?.disabled)
-  throw new Error('Repeated setup submit lost its live unknown form or reload fence');
-for (let index = 0; index < 3; index++) {
-  form.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true}));
-  state.submitStimuli++;
+    browser.script(r#"
+const state=window.__zxsLostInitialize,form=document.querySelector('[data-first-account-form]'),language=document.querySelector('[data-language-toggle]');
+if(!state || form !== state.form || !form.isConnected || !language?.disabled)throw new Error('Unknown setup form lost its fence');
+for(let i=0;i<3;i++){form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));state.submitStimuli++;}
+language.dispatchEvent(new MouseEvent('click',{bubbles:true}));state.stimuliSettled=false;
+state.frame=requestAnimationFrame(()=>{state.frame=null;state.stimuliSettled=true;});return true;
+"#)?;
+    wait_for("repeated unknown account submissions stay fenced", || {
+        let state = unknown_initialize_fence(browser)?;
+        if state["stimuliSettled"] == true
+            && state["submitStimuli"].as_u64() == Some(expected_stimuli)
+        {
+            Ok(())
+        } else {
+            Err(format!("unknown account stimulus pending: {state}").into())
+        }
+    })
 }
-language.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-state.stimuliSettled = false;
-state.frame = requestAnimationFrame(() => { state.frame = null; state.stimuliSettled = true; });
-return true;
-"#,
-    )?;
-    wait_for(
-        "repeated live unknown setup submissions stay fenced",
-        || {
-            let state = unknown_initialize_fence(browser)?;
-            if state["stimuliSettled"] == true
-                && state["submitStimuli"].as_u64() == Some(expected_stimuli)
-            {
-                Ok(())
-            } else {
-                Err(format!("unknown setup submission stimulus is pending: {state}").into())
-            }
-        },
-    )
-}
-
 fn lost_initialize_response(
     browser: &Browser,
     daemon: &Path,
@@ -592,345 +607,260 @@ fn lost_initialize_response(
     root: &Path,
     password: &str,
 ) -> Result<()> {
-    let fixture = SetupFixture::new(root, "lost-initialize-response", 1)?;
-    let server = fixture.launch(daemon, web, None)?;
+    let fixture = SetupFixture::new(root, "lost-initialize-response")?;
+    let server = fixture.launch(daemon, web, "server.log")?;
     server.finish(|| {
-    fixture.open(browser)?;
-    browser.click(&browser.css("[data-setup-disk]")?)?;
-    browser.click(&browser.css("[data-setup-development]")?)?;
-    credentials_and_confirm(browser, "lost-response-admin", password)?;
-    // Initial authorization/status and wizard review precede the probe. This
-    // wizard has no preset-preview; every subsequent setup POST is counted.
+        fixture.open(browser)?;
+        credentials_and_confirm(browser,"lost-response-admin",password)?;
+        with_cleanup(|| {
+            browser.script(LOST_INITIALIZE_PROBE)?;
+            browser.click(&browser.button("Complete first-time setup","完成首次设置")?)?;
+            wait_for("successful account response loss becomes unknown", || {
+                let state=unknown_initialize_fence(browser)?;
+                if state["transportError"]==true && state["keyAbsent"]==true && state["passwordCleared"]==true {Ok(())}
+                else {Err(format!("account response loss not yet visible: {state}").into())}
+            })?;
+            fixture.wait_state("unconfigured")?;
+            fixture.no_storage()?;
+            let authority=fs::read(fixture.pool.join("management-authority.json"))?;
+            let account=fs::read(fixture.management.join("management-auth.json"))?;
+            repeat_unknown_initialize(browser,3)?;
+            browser.click(&browser.button("Clear setup inputs","清除设置输入")?)?;
+            let cleared=unknown_initialize_fence(browser)?;
+            if cleared["keyAbsent"]!=true || cleared["passwordCleared"]!=true {
+                return Err("clear setup inputs retained credentials".into());
+            }
+            repeat_unknown_initialize(browser,6)?;
+            fixture.authorize(browser)?;
+            wait_for("independent management-ready evidence settles account creation", || {
+                let state=lost_initialize_state(browser)?;
+                if state["statusReads"]==json!([{"status":200,"state":"management_ready"}])
+                    && state["complete"]==true && state["unknown"]==false && state["reloadBlocked"]==false
+                    && state["noInitialization"]==true && state["keyAbsent"]==true && state["passwordCleared"]==true
+                    && state["setupPosts"]==json!(["/api/setup/initialize"]) {Ok(())}
+                else {Err(format!("account authority not independently confirmed: {state}").into())}
+            })?;
+            cleared_secrets(browser,password)?;
+            if fs::read(fixture.management.join("management-auth.json"))?!=account
+                || fs::read(fixture.pool.join("management-authority.json"))?!=authority {
+                return Err("account result recheck replaced installed authority".into());
+            }
+            sign_in(browser,"lost-response-admin",password)?;
+            let recovered=browser.script("return {posts:window.__zxsLostInitialize.setupPosts,logins:window.__zxsLostInitialize.logins}")?;
+            if recovered["posts"]!=json!(["/api/setup/initialize"])
+                || recovered["logins"]!=json!([{"status":200,"principal":"lost-response-admin"}]) {
+                return Err(format!("original account recovery sent unexpected requests: {recovered}").into());
+            }
+            Ok(())
+        },|| {
+            browser.script("if(window.__zxsLostInitialize)window.__zxsLostInitialize.restore();return true")?;
+            Ok(())
+        })?;
+        // The original account now activates its first nested storage directory.
+        let storage=fixture.storage_directory()?;
+        with_cleanup(|| {
+            browser.script(STORAGE_PROBE)?;
+            select_storage(browser,&storage)?;
+            browser.script("window.__zxsStorageProbe.loseActivation=true;return true")?;
+            browser.click(&browser.css("[data-storage-activate]")?)?;
+            wait_for("successful activation response loss stays unknown",|| {
+                let state=unknown_activation_state(browser)?;
+                if state["unknown"]==true && state["disabled"]==true && state["reloadBlocked"]==true
+                    && state["dropped"]==true && state["actualSuccess"]==true && state["heldStatus"]==true {Ok(())}
+                else {Err(format!("activation unknown fence not ready: {state}").into())}
+            })?;
+            fixture.wait_state("ready")?;
+            let config=fs::read(fixture.pool.join("config.json"))?;
+            let authority=fs::read(fixture.pool.join("management-authority.json"))?;
+            browser.script(r#"
+const state=window.__zxsStorageProbe,button=document.querySelector('[data-storage-activate]'),language=document.querySelector('[data-language-toggle]');
+if(!button?.disabled || !language?.disabled)throw new Error('Unknown activation lost submission or reload fence');
+for(let i=0;i<3;i++){button.dispatchEvent(new MouseEvent('click',{bubbles:true}));state.submitStimuli++;}
+language.dispatchEvent(new MouseEvent('click',{bubbles:true}));state.stimuliSettled=false;
+state.frame=requestAnimationFrame(()=>{state.frame=null;state.stimuliSettled=true;});return true;
+"#)?;
+            wait_for("unknown activation rejects repeated submit stimuli",|| {
+                let state=unknown_activation_state(browser)?;
+                assert_activation_posts(browser,&["/api/admin/storage/activate"])?;
+                if state["unknown"]==true && state["disabled"]==true && state["reloadBlocked"]==true
+                    && state["submitStimuli"]==3 && state["stimuliSettled"]==true {Ok(())}
+                else {Err(format!("activation replay fence not settled: {state}").into())}
+            })?;
+            // Navigation must not erase the submitted operation or its fence.
+            browser.click(&browser.button("Status","状态")?)?;
+            browser.css(".zxs-monitor-page [data-metric='cpu']")?;
+            browser.click(&browser.button("Administration","系统管理")?)?;
+            wait_for("activation unknown state survives page navigation",|| {
+                let state=unknown_activation_state(browser)?;
+                if state["unknown"]==true && state["disabled"]==true && state["reloadBlocked"]==true {Ok(())}
+                else {Err(format!("navigation lost activation fence: {state}").into())}
+            })?;
+            browser.script("window.__zxsStorageProbe.release();return true")?;
+            storage_active(browser)?;
+            assert_activation_posts(browser,&["/api/admin/storage/activate"])?;
+            if fs::read(fixture.pool.join("config.json"))?!=config
+                || fs::read(fixture.pool.join("management-authority.json"))?!=authority {
+                return Err("activation result recovery changed pool configuration or authority".into());
+            }
+            assert_single_storage(&fixture,&storage)?;
+            Ok(())
+        },||restore_storage_probe(browser))?;
+        sign_out(browser)?;
+        println!("PASS real account and activation response loss: one POST per mutation, repeated submission/reload fences, account-authority recheck, activation fence across navigation, and real active-status recovery");
+        Ok(())
+    })
+}
+fn unknown_activation_state(browser: &Browser) -> Result<json_codec::Value> {
+    browser.script(r#"
+const s=window.__zxsStorageProbe,text=document.querySelector('.zxs-storage-activation')?.textContent || '';
+if(!s)throw new Error('Storage probe missing');
+return {unknown:/Activation outcome is unknown; resubmission is blocked|激活结果未知，禁止重新提交/.test(text),
+  disabled:document.querySelector('[data-storage-activate]')?.disabled === true,
+  reloadBlocked:document.querySelector('[data-language-toggle]')?.disabled === true,
+  dropped:s.dropped,actualSuccess:s.activation?.status === 200 && s.activation.body.activated === true,
+  heldStatus:s.waiters.length > 0,submitStimuli:s.submitStimuli,stimuliSettled:s.stimuliSettled};
+"#)
+}
+
+fn complete_activation(
+    browser: &Browser,
+    daemon: &Path,
+    web: Option<&Path>,
+    root: &Path,
+    password: &str,
+) -> Result<()> {
+    let fixture = SetupFixture::new(root, "interrupted-storage-activation")?;
+    let storage = prepare_interruption(&fixture, password)?;
+    let config = fs::read(fixture.pool.join("config.json"))?;
+    let authority = fs::read(fixture.pool.join("management-authority.json"))?;
+    let server = fixture.launch(daemon, web, "server.log")?;
+    server.finish(|| {
+        fixture.wait_state("recovery_required")?;
+        fixture.visit(browser)?;
+        sign_in(browser,"completion-admin",password)?;
+        with_cleanup(|| {
+            browser.script(STORAGE_PROBE)?;
+            browser.click(&browser.button("Administration","系统管理")?)?;
+            browser.css("[data-storage-complete]")?;
+            if browser.script("return document.querySelector('[data-storage-activate], [data-setup-user]') !== null")? == true {
+                return Err("interrupted activation offered new storage/account initialization".into());
+            }
+            browser.click(&browser.css("[data-storage-complete]")?)?;
+            fixture.wait_state("ready")?;
+            storage_active(browser)?;
+            assert_activation_posts(browser,&["/api/admin/storage/complete-activation"])?;
+            if fs::read(fixture.pool.join("config.json"))?!=config
+                || fs::read(fixture.pool.join("management-authority.json"))?!=authority {
+                return Err("bounded activation completion changed existing configuration or authority".into());
+            }
+            assert_single_storage(&fixture,&storage)?;
+            Ok(())
+        },||restore_storage_probe(browser))?;
+        sign_out(browser)?;
+        sign_in(browser,"completion-admin",password)?;
+        browser.click(&browser.button("Files","文件")?)?;
+        browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?;
+        sign_out(browser)?;
+        println!("PASS real durable interrupted activation: existing-account login, server-verified original completion, unchanged configuration/authority and usable storage; no debug endpoint");
+        Ok(())
+    })
+}
+
+// This callback fails only after real storage genesis and its proof are durable,
+// before credential-replica installation. The daemon has no debug/failure route.
+fn prepare_interruption(fixture: &SetupFixture, password: &str) -> Result<std::path::PathBuf> {
+    use std::sync::{Arc, Mutex};
+    use storage_server::{
+        Backend,
+        setup_recovery::{SetupRecovery, StorageActivationRequest},
+    };
+    let (backend, auth) = storage_server::management::open_service_with_disks(
+        &fixture.pool,
+        &fixture.management,
+        std::collections::BTreeMap::new(),
+        true,
+    )?;
+    let auth = Arc::new(Mutex::new(auth));
+    backend.start_management(auth.clone());
+    let mut prepared = None;
     with_cleanup(
         || {
-            browser.script(LOST_INITIALIZE_PROBE)?;
-            browser.click(&browser.button("Initialize new installation", "初始化新安装")?)?;
-            wait_for(
-                "real successful initialization response becomes unknown",
-                || {
-                    let state = unknown_initialize_fence(browser)?;
-                    if state["transportError"] == true
-                        && state["keyCleared"] == true
-                        && state["passwordCleared"] == true
-                    {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "lost initialization has not reached its cleared error view: {state}"
-                        )
-                        .into())
-                    }
-                },
+            wait_for("account fixture storage discovery", || {
+                if !backend.management_status().recovering() {
+                    Ok(())
+                } else {
+                    Err("fixture discovery pending".into())
+                }
+            })?;
+            backend.setup_operation(
+                "initialize",
+                json!({"username":"completion-admin","password":password}),
+                None,
+                None,
             )?;
-            fixture.ready()?;
-            let config = fs::read(fixture.pool.join("config.json"))?;
-            let authority = fs::read(fixture.pool.join("management-authority.json"))?;
-            repeat_unknown_initialize(browser, 3)?;
-            browser.click(&browser.button("Clear setup inputs", "清除设置输入")?)?;
-            let cleared = unknown_initialize_fence(browser)?;
-            if cleared["keyCleared"] != true || cleared["passwordCleared"] != true {
-                return Err(
-                    format!("clearing unknown setup retained secret inputs: {cleared}").into(),
-                );
-            }
-            fixture.authorize(browser)?;
-            wait_for(
-                "original authorization confirms existing installation without completion",
-                || {
-                    let state = unknown_initialize_fence(browser)?;
-                    if state["statusReads"]
-                        == json!([{"status":200,"state":"existing","completionAvailable":false}])
-                        && state["existing"] == true
-                    {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "unknown setup has not accepted its real existing status: {state}"
-                        )
-                        .into())
-                    }
-                },
-            )?;
-            repeat_unknown_initialize(browser, 6)?;
-            login_setup(browser, "lost-response-admin", password, 1)?;
-            let recovered = lost_initialize_state(browser)?;
-            if recovered["setupPosts"] != json!(["/api/setup/initialize"])
-                || recovered["logins"] != json!([{"status":200,"principal":"lost-response-admin"}])
-                || recovered["unknown"] != true
-                || recovered["reloadBlocked"] != true
-                || recovered["keyCleared"] != true
-                || recovered["passwordCleared"] != true
-            {
-                return Err(format!(
-                    "original setup identity recovery escaped its fence: {recovered}"
-                )
-                .into());
-            }
-            if fs::read(fixture.pool.join("config.json"))? != config
-                || fs::read(fixture.pool.join("management-authority.json"))? != authority
-            {
-                return Err(
-                    "lost-response recovery changed the installed pool or authority".into(),
-                );
-            }
+            let session = auth.lock().unwrap().login("completion-admin", password)?;
+            let identity = auth.lock().unwrap().authenticate(&session.token)?;
+            prepared = Some((session, identity));
             Ok(())
         },
-        || {
-            browser.script(
-                "if(window.__zxsLostInitialize)window.__zxsLostInitialize.restore();return true",
-            )?;
-            Ok(())
-        },
+        || Ok(backend.drain_management()?),
     )?;
-    println!(
-        "PASS real successful initialization response loss: unknown form and reload fences, one setup POST, existing-status recheck and original administrator recovery"
-    );
-    Ok(())
-    })
-}
-
-fn select_preset(browser: &Browser, expected_limit: usize) -> Result<()> {
-    browser.click(&browser.button("Use local configuration preset", "使用本地预置方案")?)?;
-    // Scrolling the trigger into view can close its popover. Reacquire and
-    // reopen the control on each attempt instead of retrying a hidden option.
-    // Keep real WebDriver pointer clicks: do not select through script state.
-    wait_for("visible four-disk preset selection", || {
-        if browser.script("return document.querySelector('details [role=combobox] .zxs-select-value')?.textContent === 'four-disk-preset'")? == true {
-            return Ok(());
-        }
-        if browser.script("return document.querySelector('details [role=combobox]')?.getAttribute('aria-expanded') === 'true'")? != true {
-            let trigger = browser.css("details [role='combobox']")?;
-            browser.command("POST", &format!("/element/{trigger}/click"), Some(json!({})))?;
-        }
-        let option = browser.element(
-            "xpath",
-            "//*[@role='option' and normalize-space(.)='four-disk-preset']",
-        )?;
-        browser.command("POST", &format!("/element/{option}/click"), Some(json!({})))?;
-        Err("waiting for preset selection to render".into())
-    })?;
-    browser.click(&browser.button("Review preset summary", "查看预置方案摘要")?)?;
-    wait_for("real sanitized preset preview", || {
-        let value=browser.script("const e=document.querySelector('[data-setup-preset-summary]'); return e ? JSON.parse(e.textContent) : null")?;
-        if value["max_workspaces"].as_u64() == Some(expected_limit as u64)
-            && value["disks"].as_array().is_some_and(|disks| {
-                disks.len() == 4
-                    && disks
-                        .iter()
-                        .all(|disk| disk.get("root").is_none() && disk["candidate_id"].is_string())
-            })
-        {
-            Ok(())
-        } else {
-            Err("preset preview absent or lost parameters / exposed roots".into())
-        }
-    })
-}
-fn write_preset(fixture: &SetupFixture) -> Result<(storage_engine::Config, std::path::PathBuf)> {
-    let mut config = storage_engine::Config::development([
-        fixture.disks["candidate-0"].clone(),
-        fixture.disks["candidate-1"].clone(),
-        fixture.disks["candidate-2"].clone(),
-    ])
-    .unwrap();
-    let mut fourth = config.disks[2].clone();
-    fourth.slot_id = "D01".into();
-    fourth.level = 4;
-    fourth.upstream_slot_id = Some("C01".into());
-    fourth.disk_id = storage_engine::new_id("disk").unwrap();
-    fourth.root = fixture.disks["candidate-3"].clone();
-    fourth.metadata_member = false;
-    config.disks.push(fourth);
-    config.max_workspaces = 17;
-    let preset = fixture.root.join("private-config.json");
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&preset)?
-        .write_all(&json_codec::to_vec(&config)?)?;
-    Ok((config, preset))
-}
-fn preset_setup(
-    browser: &Browser,
-    daemon: &Path,
-    web: Option<&Path>,
-    root: &Path,
-    password: &str,
-) -> Result<()> {
-    let fixture = SetupFixture::new(root, "preset-web-setup", 4)?;
-    let (mut config, preset) = write_preset(&fixture)?;
-    let server = fixture.launch(daemon, web, Some(&preset))?;
-    server.finish(|| {
-    fixture.open(browser)?;
-    select_preset(browser, 17)?;
-    // Modify a local preset only after the real preview response. The browser
-    // still holds the old digest and must not silently apply these new values.
-    config.max_workspaces = 19;
-    fs::write(&preset, json_codec::to_vec(&config)?)?;
-    browser.script("window.__presetRejected = null; const original=window.fetch; window.fetch=async function(...args) {const response=await Reflect.apply(original,this,args); const input=args[0]; if(new URL(typeof input==='string'?input:input.url,location.href).pathname==='/api/setup/initialize-preset'){window.__presetRejected=response.status; window.fetch=original;} return response;}; return true")?;
-    credentials_and_confirm(browser, "preset-admin", password)?;
-    browser.click(&browser.button("Initialize new installation", "初始化新安装")?)?;
-    wait_for("changed preset rejected by real HTTP", || {
-        if browser.script("return window.__presetRejected")? == 409 {
-            Ok(())
-        } else {
-            Err("expected preset digest conflict".into())
-        }
-    })?;
-    wait_for("changed preset actionable error", || {
-        if browser.script("return document.body.textContent.includes('SETUP_PRESET_CHANGED')")?
-            == true
-        {
-            Ok(())
-        } else {
-            Err("digest rejection missing from UI".into())
-        }
-    })?;
-    if fixture.pool.join("config.json").exists()
-        || fixture.management.join("management-auth.json").exists()
-    {
-        return Err("rejected preset initialized storage or authentication".into());
-    }
-    fixture.authorize(browser)?;
-    select_preset(browser, 19)?;
-    credentials_and_confirm(browser, "preset-admin", password)?;
-    browser.click(&browser.button("Initialize new installation", "初始化新安装")?)?;
-    fixture.ready()?;
-    let actual: json_codec::Value =
-        json_codec::from_slice(&fs::read(fixture.pool.join("config.json"))?)?;
-    if actual != json_codec::to_value(&config)? {
-        return Err("preset initialization rewrote reviewed configuration".into());
-    }
-    login_setup(browser, "preset-admin", password, 4)?;
-    println!(
-        "PASS real four-disk preset preview, changed-digest HTTP409 rejection, explicit re-review, exact configuration preservation and administrator login"
-    );
-    Ok(())
-    })
-}
-fn complete_setup(
-    browser: &Browser,
-    daemon: &Path,
-    web: Option<&Path>,
-    root: &Path,
-    password: &str,
-) -> Result<()> {
-    let fixture = SetupFixture::new(root, "interrupted-web-setup", 3)?;
-    prepare_interruption(&fixture, password)?;
-    let original_config = fs::read(fixture.pool.join("config.json"))?;
-    let server = fixture.launch(daemon, web, None)?;
-    server.finish(|| {
-    fixture.open(browser)?;
-    browser.click(&browser.button("Complete interrupted initialization", "完成中断的初始化")?)?;
-    browser.keys(&browser.css("[data-setup-user]")?, "completion-admin")?;
-    reauthorize_identity(browser, "completion-admin")?;
-    browser.click(&browser.button("Complete interrupted initialization", "完成中断的初始化")?)?;
-    browser.keys(&browser.css("[data-setup-password]")?, password)?;
-    browser.click(&browser.css("[data-setup-confirm]")?)?;
-    browser.click(&browser.button("Confirm initialization completion", "确认补全初始化")?)?;
-    fixture.ready()?;
-    if fs::read(fixture.pool.join("config.json"))? != original_config {
-        return Err("bounded completion rewrote the initialized pool".into());
-    }
-    login_setup(browser, "completion-admin", password, 3)?;
-    println!(
-        "PASS real durable pre-authority interruption fixture, explicit protected Web completion, unchanged pool and administrator login; no product debug endpoint"
-    );
-    Ok(())
-    })
-}
-
-// The only injected failure is a test-owned service callback, before any
-// authentication authority is published. No daemon debug route is involved.
-fn prepare_interruption(fixture: &SetupFixture, password: &str) -> Result<()> {
-    use storage_server::setup_recovery::{SetupRecovery, SetupRequest};
+    // Cleanup joins the observer even if account creation failed.
+    let (session, identity) = prepared.ok_or("completed fixture omitted authenticated identity")?;
+    drop(backend);
+    fixture.no_storage()?;
+    let storage = fixture.storage_directory()?;
+    let path = storage.to_str().ok_or("non-UTF8 fixture directory")?;
+    let discovery = storage
+        .parent()
+        .ok_or("fixture storage needs parent")?
+        .to_str()
+        .ok_or("non-UTF8 discovery root")?;
+    let listing = storage_server::storage_directories::browse_within(discovery, path)?;
+    let selection = storage_server::storage_directories::inspect_within(
+        discovery,
+        &json_codec::from_value(json!({"mount_path":listing.mount_path,"root_path":path}))?,
+        &[fixture.pool.clone(), fixture.management.clone()],
+    )?;
     let service = SetupRecovery::new(
         fixture.pool.clone(),
         fixture.management.clone(),
-        fixture.disks.clone(),
+        std::collections::BTreeMap::new(),
     )?
     .allow_development_mode();
-    let permit = service.authorize_bootstrap(&fixture.key)?;
-    let result = service.initialize(
-        &permit,
-        SetupRequest {
-            disk_ids: vec![
-                "candidate-0".into(),
-                "candidate-1".into(),
-                "candidate-2".into(),
-            ],
+    service.set_discovery_root(
+        &identity,
+        json_codec::from_value(
+            json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
+        )?,
+        |_| Ok(()),
+    )?;
+    let result = service.activate(
+        &identity,
+        StorageActivationRequest {
+            selections: vec![selection],
             mode: storage_engine::Mode::Development,
-            username: "completion-admin".into(),
-            password: password.into(),
         },
-        |_engine, _, _| {
+        |_| {
+            auth.lock()
+                .unwrap()
+                .authenticate(&session.token)
+                .map(|_| ())
+        },
+        |_engine| {
             Err(storage_server::ApiError::new(
                 http::StatusCode::INTERNAL_SERVER_ERROR,
                 storage_engine::ErrorCode::InjectedFailure,
-                "fixture failure before authority publication",
+                "fixture interruption before credential replica installation",
             ))
         },
     );
     if !matches!(result,Err(error) if error.code==storage_engine::ErrorCode::InjectedFailure)
-        || !service.status().completion_available
+        || !service.storage_status().completion_available
     {
-        return Err("interrupted setup fixture lacks genuine bound completion proof".into());
+        return Err("interrupted storage fixture lacks genuine bound activation proof".into());
     }
-    drop(service);
-    Ok(())
-}
-
-#[test]
-fn completion_fixture_has_service_proof_without_published_authority() {
-    let root = tempfile::tempdir().unwrap();
-    let fixture = SetupFixture::new(root.path(), "completion-fixture-unit", 3).unwrap();
-    prepare_interruption(&fixture, "fixture-only-long-password").unwrap();
-    assert!(fixture.pool.join("config.json").exists());
-    assert!(!fixture.pool.join("management-authority.json").exists());
-    assert!(!fixture.management.join("management-auth.json").exists());
-}
-
-#[test]
-fn browser_preset_fixture_has_valid_topology_and_sanitized_preview() {
-    use storage_server::setup_recovery::{PresetPreviewRequest, SetupRecovery};
-    let root = tempfile::tempdir().unwrap();
-    let fixture = SetupFixture::new(root.path(), "preset-fixture-unit", 4).unwrap();
-    let (config, preset) = write_preset(&fixture).unwrap();
-    let service = SetupRecovery::new(
-        fixture.pool.clone(),
-        fixture.management.clone(),
-        fixture.disks.clone(),
-    )
-    .unwrap()
-    .allow_development_mode()
-    .with_presets(std::collections::BTreeMap::from([(
-        "four-disk-preset".into(),
-        preset,
-    )]));
-    let permit = service.authorize_bootstrap(&fixture.key).unwrap();
-    let preview = service
-        .preview_preset(
-            &permit,
-            PresetPreviewRequest {
-                preset_id: "four-disk-preset".into(),
-            },
-        )
-        .unwrap();
-    let summary = &preview["configuration"];
-    assert_eq!(summary["max_workspaces"], 17);
-    assert_eq!(summary["disks"].as_array().unwrap().len(), 4);
-    assert_eq!(summary["disks"][3]["candidate_id"], "candidate-3");
-    assert_eq!(config.disks[3].upstream_slot_id.as_deref(), Some("C01"));
-    assert!(!summary.to_string().contains(fixture.root.to_str().unwrap()));
-    assert!(
-        summary["disks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|disk| disk.get("root").is_none())
-    );
-    assert!(!fixture.pool.join("config.json").exists());
+    Ok(storage)
 }
 
 #[cfg(test)]

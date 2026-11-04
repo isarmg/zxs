@@ -3,6 +3,7 @@ mod disks;
 mod messages;
 mod request;
 mod response;
+mod storage;
 use crate::{
     api,
     ui::{State, current_session, fail},
@@ -11,9 +12,19 @@ use messages::Message;
 use web_interface::{prelude::*, tasks::spawn_local};
 
 pub use disks::DecodeError as DiskDetailsError;
-pub(crate) use disks::{
-    can_load as can_load_disks, load as load_disks, refreshing as disks_refreshing,
-};
+pub use storage::ResponseError as StorageManagementError;
+pub(crate) fn poll_storage_activation(state: RwSignal<State>) {
+    storage::poll(state);
+}
+pub(crate) fn can_load_disks(state: &State) -> bool {
+    storage::can_load(state) && disks::can_load(state)
+}
+pub(crate) fn disks_refreshing(state: &State) -> bool {
+    storage::refreshing(state) || disks::refreshing(state)
+}
+pub(crate) fn load_disks(state: RwSignal<State>) {
+    storage::load(state);
+}
 use request::{Kind, QueryKind};
 pub(crate) use response::ResponseError;
 use response::{Contract, ValidatedAdminResponse, ValidatedPlan};
@@ -69,6 +80,7 @@ impl UncertainOperation {
 #[derive(Clone)]
 pub(crate) struct Model {
     disks: disks::Model,
+    storage: storage::Model,
     fields: request::Fields,
     kind: Kind,
     busy: bool,
@@ -82,6 +94,7 @@ impl Default for Model {
     fn default() -> Self {
         Self {
             disks: disks::Model::default(),
+            storage: storage::Model::default(),
             fields: request::Fields::new(),
             kind: Kind::Inspect,
             busy: false,
@@ -95,7 +108,10 @@ impl Default for Model {
 }
 impl Model {
     pub(crate) fn reload_blocked(&self) -> bool {
-        self.busy || self.uncertain_operation.is_some() || self.disks.saving()
+        self.busy
+            || self.uncertain_operation.is_some()
+            || self.disks.saving()
+            || self.storage.reload_blocked()
     }
 
     /// A reviewed plan belongs to the inputs that produced or selected it.
@@ -306,6 +322,7 @@ fn query(state: RwSignal<State>, kind: QueryKind) {
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {<section class="zxs-content-stack zxs-stack">
     {crate::management::recovery(state)}
+    {storage::view(state)}
     {disks::view(state)}
     <section class="zxs-flow" aria-label=Message::Title.text()>
     <h2>{Message::Title.text()}</h2>

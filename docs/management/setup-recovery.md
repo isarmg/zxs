@@ -1,6 +1,6 @@
 <a id="protected-setup-and-offline-management-boundary"></a>
 
-# 受保护初始化与离线管理边界
+# 首次账户与受保护存储管理边界
 
 `storage_server::setup_recovery::SetupRecovery` 是显式首次初始化与隔离恢复的同步服务边界。受管理运行时合并其公开/受保护 HTTP 路由组，并将操作与后端打开、重试、安装串行化。
 
@@ -8,33 +8,34 @@
 
 ## 本地部署输入
 
-系统目录、管理目录，以及不透明磁盘 ID 到既有绝对磁盘目录的允许列表属于可信本地配置。HTTP 请求不能提供文件系统路径。不存在的目录不会被创建：缺失挂载表示磁盘不可用，不是新盘。不可用的允许成员仍作为状态描述保留，不阻止检查或从选定幸存成员恢复。首次初始化仍要求完整配置允许列表全部可用且为空。生产初始化接受已有受控存储目录，不要求活动挂载点、Btrfs 或物理设备独立性；共享底层故障域由用户保证，不新增确认开关。开发模拟仍需可信部署配置显式启用；目录 device/inode 和严格 seal 身份会绑定并复查，旧 seal 不迁移、不重置。
+系统目录与管理目录属于可信本地配置，服务可创建这些系统状态目录；这不创建或初始化任何数据盘。首次设置只创建管理员账户，不读取候选盘是否为空、是否挂载。登录后管理员通过只读目录浏览选择当前已挂载文件系统，发现范围只限默认 `/zxs/data/disks` 或管理员持久设置的其他根内目录，根本身只作列表容器，不可选为存储。分别设置 `mount_path` 与实际 `root_path`，后者可以是任意层级的合法空子目录，无需部署者预先登记候选白名单。路径每个分量禁止符号链接，所选根须为服务账户所有的私有 0700 空目录，且不与系统、管理或其他选定根重叠。目录检查与提交重新绑定挂载及目录身份，核心仍核验 seal。服务不分区、格式化、挂载、不改权限，也不把多个同设备目录声称为独立磁盘。`--setup-disk` 的允许 ID 仅保留既有离线恢复用途。
 
-首次初始化前，本地管理员须配置 `management_root/bootstrap.key`：精确 64 个十六进制 ASCII 字符、无换行、0600 权限、普通文件、一个硬链接、非符号链接。服务不生成或记录 bootstrap 密钥，回环访问本身不是授权。适配器只通过 `X-ZXS-Bootstrap` 传递它，不能放入 URL、浏览器持久存储或日志。此能力与唯一管理员的日常会话不同。
+首次账户设置不需要密钥；无账户且无历史权威时，任何可访问 Web 的人可创建唯一管理员。必须在安装阶段控制网络可达范围。只有明确的灾备恢复，本地管理员才须配置 `management_root/bootstrap.key`：精确 64 个十六进制 ASCII 字符、无换行、0600 权限、普通文件、一个硬链接、非符号链接。服务不生成或记录 bootstrap 密钥，回环访问本身不是授权。适配器只通过 `X-ZXS-Bootstrap` 传递它，不能放入 URL、浏览器持久存储或日志。此能力与唯一管理员的日常会话不同。
 
-密钥绑定配置的系统与管理目录；删除或修改密钥会撤销既有内存许可。密钥在文件修改时间后 30 分钟过期，内存许可另在十分钟后过期。bootstrap 恢复不能绕过既有管理凭据，包括损坏凭据文件。不提供默认账户、缺少认证时重置凭据、磁盘格式化或匿名远程管理。
+密钥绑定配置的系统与管理目录；删除或修改密钥会撤销既有内存许可。密钥在文件修改时间后 30 分钟过期，内存许可另在十分钟后过期。bootstrap 恢复不能绕过既有管理凭据，包括损坏凭据文件。不提供默认账户、已有或损坏凭据的匿名重置、磁盘格式化或匿名存储管理。
 
 <a id="dtos-and-adapter-obligations"></a>
 
 ## DTO 与适配器义务
 
-- `SetupStatus`：状态 `empty`、`existing`、`recovery_required`、`unavailable`，不透明磁盘 ID 及 `local_authorization_required`；同时说明可信部署是否显式启用开发模拟。公开状态仅包含粗粒度状态，授权后才提供候选磁盘。
-- `SetupRequest`：`disk_ids` 为 1—32 个不同的允许 ID，另有 `mode`（`production` / `development`）、`username`、`password`。一个存储盘足够，附加备份层可选。凭据有意不实现 Debug 或 Serialize。
+- `SetupStatus`：状态 `empty`、`management_ready`、`existing`、`recovery_required`、`unavailable`；公开首次状态只返回 `state`；独立 `recovery-status` 在 bootstrap 授权后返回恢复字段与 `csrf_token`。`management_ready` 表示系统管理权威已建立、尚未激活存储，不代表零成员池。
+- 首次初始化请求只含 `username`、`password`，拒绝 `disk_ids`、`mode`、预设或配置字段；成功响应为 `initialized: true, storage_pending: true`。凭据不进入诊断或浏览器持久存储。
+- `StorageActivationRequest`：`selections` 为 1—32 项已检查的目录身份，另有 `mode`。只接受当前管理员会话，开发模式必须由可信本地配置启用。第一项为 P01 主存储，后续按顺序形成逐级备份链，所有项都是元数据成员；正常写入全部成员在线，系统恢复要求原成员严格多数。
 - `RestoreRequest`：1—32 个不同允许 ID；bootstrap 恢复要求 `accept_stale_credentials: true`。选定幸存者必须满足原配置成员法定数，不能按可达盘重算法定数。管理盘丢失后旧密码/授权可能过时，所有恢复会话必须清除。
 - `RecoveryPreviewRequest`：`operation_id`、`reason`。
 - `RecoveryCommitRequest`：`recovery_id`、`digest`、`accept_permanent_loss`。
 
-全部请求 DTO 拒绝未知字段。HTTP 适配器要求解码请求体最大 16 KiB、十秒期限、普通精确 origin / CSRF 保护、请求准入/速率限制（含 bootstrap 尝试），管理员操作须使用当前系统管理员新鲜认证。旧凭据快照不能作为离线准入。管理阻塞任务使用独立有界信号量，防止数据工作耗尽管理容量；整个阻塞操作期间持有运行时生命周期门，而非只持有到提交请求。健康的 `/api/admin/check` 不应再经离线检查器重复执行。此边界不暴露离线导出路径或文件正文。
+全部请求 DTO 拒绝未知字段。HTTP 适配器要求首次账户与恢复请求体最大 16 KiB，目录检查／发现根修改为 64 KiB，首次激活为 4 MiB（覆盖 32 项、四条 4096 字节路径及 JSON 转义），所有请求保留十秒期限、首次设置要求精确 Origin、Fetch Metadata 与 JSON；已有管理员操作使用普通 CSRF 保护、请求准入/速率限制（含 bootstrap 尝试），管理员操作须使用当前系统管理员新鲜认证。旧凭据快照不能作为离线准入。管理阻塞任务使用独立有界信号量，防止数据工作耗尽管理容量；整个阻塞操作期间持有运行时生命周期门，而非只持有到提交请求。健康的 `/api/admin/check` 不应再经离线检查器重复执行。此边界不暴露离线导出路径或文件正文。
 
 <a id="initialization-and-interrupted-setup"></a>
 
 ## 初始化与中断
 
-新安装要求所有配置磁盘目录为空、无配置、无新旧管理凭据、无权威标记、无先前初始化意图。未知目录内容是已有数据，不是清空授权。凭据无效必须在写存储前拒绝。
+账户初始化以独立的 `setup.lock` 一次性准入，不占用存储恢复门，也不排空已有池。它在系统目录持久保存管理初始化意图，先以 create-new 创建凭据，再发布系统管理权威并安装当前认证，不调用 `Engine::initialize`。已存在配置、凭据、权威或旧池证据不能当作新安装；凭据已创建但权威发布中断时不允许匿名覆盖账户，服务重启仅补建该现有账户的权威。既有权威但凭据缺失仍保持恢复要求。
 
-初始化取得进程级排他 `setup.lock`、验证核心配置，并在登记任何磁盘前持久写入 `setup-intent.json`。核心另获取正常系统/磁盘写锁。多盘初始化不能靠重命名单个系统文件实现原子性，因此中断留下持久围栏；不静默清理、回滚磁盘身份或按全新安装重试。
+首次存储激活取得排他生命周期门与 `setup.lock`，重新校验当前管理员、精确目录选择及持有描述符，先保存独立激活意图，再建立至少一个元数据成员的真实池。不会构造零成员配置，也不接受任意 Config JSON。初始账户沿用现有系统权威，只将其灾备快照复制到新池。
 
-可信安装回调必须在建立 `AuthStore::initialize_management` 前持久发布管理权威标记，再按受管理运行时协议复制初始快照；不得调用旧引擎权威 `open_auth`、`protect_auth`。仅回调成功后报告成功，随后由运行时安排串行后端重开。响应说明恢复待完成或需要重启。成功后也保留意图证据，防止日后配置丢失被视为首次安装。
+只有持久完成证明成立后才报告激活成功并安排后端打开。后台启动先检查激活准入，即使 `config.json` 已写但激活未完成，也不能提前接收业务数据。多目录创建中断保留原意图与证据，不清理身份或按新池重试。浏览器关闭不取消服务已接管的工作；不确定结果先查状态。明确恢复/重启状态的成功响应不是后台存储已可读写的保证。
 
 <a id="recovery"></a>
 
@@ -50,27 +51,28 @@
 
 ## HTTP 端点
 
-`GET /api/setup/status` 验证 `X-ZXS-Bootstrap` 并返回授权状态与 `csrf_token`。`POST /api/setup/initialize`、`POST /api/setup/restore-system` 要求相同 bootstrap 头、状态返回的 `X-CSRF-Token`、精确同源校验及 JSON。初始化路由拒绝查询字符串；bootstrap 不能代替 CSRF。
+`GET /api/setup/status` 公开返回最小 `{state}`；`POST /api/setup/initialize` 无授权密钥，仅接收账户密码，保留同源、Fetch Metadata、JSON、来源限流与锁内一次性准入。`GET /api/setup/recovery-status` 仍要求 `X-ZXS-Bootstrap` 并提供灾备 `csrf_token`；`POST /api/setup/restore-system` 使用该 bootstrap 头与 `X-CSRF-Token`。首次设置与灾备授权是独立边界。
 
-认证管理员端点为 `POST /api/management/offline-check`、`/api/management/restore-system`、`/api/management/recovery-preview`、`/api/management/recovery-commit`，保留正常当前会话、CSRF、origin 检查。运行时结果原样返回；传输结果未知时 UI 不自动重发变更。
+登录后的存储管理端点：
+
+- `GET/PUT /api/admin/storage/discovery-root` 读取或以 `expected_discovery_root` 原值比较保存发现根；默认 `/zxs/data/disks`。拒绝未完成激活时更改范围；不会迁移已激活目录。
+- `GET /api/admin/storage/status` 返回 `pending`、`active`、`recovery_required` 或 `unavailable`、原意图补全是否可用及开发模式策略。
+- `GET /api/admin/storage/directories?path=…` 有界浏览真实目录；`POST /api/admin/storage/directories/inspect` 只读检查挂载目录与存储子目录并返回身份绑定。检查通过不等于已添加。
+- `POST /api/admin/storage/activate` 提交已确认目录选择；`POST /api/admin/storage/complete-activation` 只接受空对象、仅完成服务器已证明的原激活。成功响应 `activated: true`，`recovering` 与 `restart_required` 恰有一项为真。
+
+认证离线端点仍为 `POST /api/management/offline-check`、`/api/management/restore-system`、`/api/management/recovery-preview`、`/api/management/recovery-commit`，保留当前会话、CSRF 与 origin 检查。
 
 <a id="precisely-bounded-interrupted-initialization-completion"></a>
 
-## 精确受限的中断初始化补全
+## 原激活补全与结果未知
 
-`POST /api/setup/complete-initialization` 只接受 `username`、`password`，沿用本地 bootstrap、CSRF、origin、大小和准入检查。授权状态报告 `completion_available`，不能从凭据缺失推断。原初始化先写私有意图，绑定完整配置、池身份、选定磁盘 ID 与原 bootstrap 授权；只有存储初始化成功后，才在进入权威/凭据安装前持久记录精确原始磁盘树。
-
-补全要求两条记录匹配、原本地密钥、配置/磁盘内容不变、当前挂载/模式检查、空工作区，以及核心原始初态无认证快照。不接受旧未绑定意图或任意既有池。既有权威标记或任何凭据文件（含损坏文件）均要求显式恢复，不能替换。它仅覆盖有证明的“存储完成、权威尚未发布”窗口；ready 之前的部分磁盘登记不支持自动续做，也不能仅凭 pool ID 认领现场；权威发布后、主凭据建立前崩溃仍失败关闭，不宣称所有中断都能自动补全。
+补全绑定原意图、配置和选定目录证据，只使用当前已有管理账户，不接收新路径或密码。已完成证明存在时重复查询/补全不得再次建立池或替换凭据；目录身份、内容或权威证据变化时明确拒绝并保留现场。不能仅从缺失配置或网络超时推断可重试。实际可补全阶段以服务验证的 `completion_available` 为准，不宣称所有初始化中断均可自动续做。
 
 <a id="locally-provisioned-configuration-presets"></a>
 
-## 本地预设配置
+## 已移除的旧首次存储入口
 
-部署可将不透明 preset ID 映射到本地绝对配置文件。登记不读取文件，不可用预设不能阻止管理监听。只有显式选择且 bootstrap 授权的动作才打开文件：不跟随末级符号链接、普通单链接文件、有效用户所有、0400/0600 权限、最多 64 MiB，与本地草稿边界一致。非法 ID 不作为 Web 候选；HTTP 从不接受配置路径或配置 JSON。
-
-`POST /api/setup/preset-preview` 接受 `preset_id`，返回 `preset_id`、`config_digest` 及验证后的配置，将所有盘根替换为不透明 `candidate_id`，保留拓扑、资源上限及其他 Config 参数供审阅。`POST /api/setup/initialize-preset` 要求 `preset_id`、已审阅 `config_digest`、`username`、`password`。本地预设变化需重新预览，不能静默改变已确认安装。
-
-每个选定预设盘根必须映射到本地允许盘。核心配置、全安装空状态、当前盘身份、生产挂载/独立性、开发显式启用、bootstrap 时效/撤销、串行化和持久初始化证明均不变。同一初始化事务保留全部验证 Config 参数，包含附加非元数据成员；不将预设挤入默认单盘或丢弃可选备份。精确权威前补全流程同样适用于按原绑定配置中断的预设初始化。
+公开 `preset-preview`、`initialize-preset`、`complete-initialization` 路由已删除，首次设置没有选盘或预设分支，不保留旧请求格式兼容。`zxs-rescue configuration` 仍可生成未初始化草稿，但当前 Web 不应用任意 Config 或本机预设；不能用草稿修改已激活池。已激活池在线增删成员仍待实现，见[设计边界](../design/online-disk-management.md)。
 
 <a id="rejected-or-interrupted-storage-recovery"></a>
 

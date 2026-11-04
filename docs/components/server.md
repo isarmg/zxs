@@ -30,7 +30,7 @@ spool、管理及初始化恢复直接使用 Unix 权限与链接检查，不保
 
 ## 启动
 
-从项目根目录构建 `CARGO_TARGET_DIR=target/native cargo build --locked --offline -p storage-server -p storage-rescue`。下面是已有池或诊断模式的最小启动样例；首次安装须在启动前按下节配置 `--setup-disk` 白名单并预置引导密钥，再按[受保护 Web 引导](../getting-started.md)完成初始化。只运行下面的命令不会提供可选初始化磁盘：
+从项目根目录构建 `CARGO_TARGET_DIR=target/native cargo build --locked --offline -p storage-server -p storage-rescue`。下面是已有池或诊断模式的最小启动样例。首次安装预置引导密钥并创建管理员，登录后再选择挂载文件系统和实际存储目录；创建管理员不依赖数据盘白名单：
 
 ```sh
 target/native/debug/zxs --root /srv/zxs/system \
@@ -51,17 +51,17 @@ HTTP 默认监听 `0.0.0.0:7400`，可通过 `--listen` 指定其他 IPv4 或 IP
 
 启用 SMB 时，其完整工作副本、未确认操作证据和预算记录固定保存在 `--management-root/smb-spool`，与可清理的 `--smb-socket` 运行目录分离。管理目录必须位于持久系统盘；spool 不可用只停止 SMB 桥接，不阻止管理 HTTP。旧 socket 旁的 spool 不自动迁移，部署与升级边界见 [SMB 本机 RPC](smb.md#smb-local-rpc)。
 
-本机管理员可重复设置 `--setup-disk ID=/absolute/existing/root` 批准初始化磁盘，或使用 `--setup-config ID=/absolute/private-file` 提供配置预设。浏览器只能选择批准的 ID，并审查绑定摘要，不能提交任意系统路径或 Config JSON。预设文件须由服务账号拥有、为单链接普通文件且权限为 0400/0600，所有磁盘仍须在白名单中。
+首次 `POST /api/setup/initialize` 只接收管理员 `username/password`，建立系统盘管理权威，返回 `initialized:true,storage_pending:true`，不创建零成员 Engine。首次账户无需授权密钥；仅在无账户且无历史权威时公开准入，并在锁内保证唯一创建。已有或损坏权威不能匿名重置。灾备恢复保留独立 bootstrap 授权。
 
-初始化需要管理目录中预置的私有 `bootstrap.key`：权限 0600、恰好 64 个十六进制字节、无换行，从 mtime 起 30 分钟有效。daemon 不自动生成或日志输出引导密钥。仅本地开发测试可显式设置 `--allow-development-setup` 使用目录模拟盘；生产默认拒绝，模拟盘不证明设备独立性或断电安全。
+登录后，管理员使用 `/api/admin/storage/status`、`/directories`、`/directories/inspect` 查询首次存储状态和真实挂载目录；通过 `/activate` 提交已检查的选择，使用 `/complete-activation` 补全有持久证明的原意图。挂载路径与实际存储根分别保存，允许挂载点内的嵌套子目录。根须已存在、为空、由服务账号拥有且权限为 0700；操作不挂载、格式化或 chmod。仅本地开发测试可显式设置 `--allow-development-setup` 使用目录模拟盘，模拟盘不证明设备独立性或断电安全。
 
-初始管理员与存储初始化绑定同一 setup intent；只允许补全可证明发生在权威建立前的中断，不提供通用密码重置。缺少可信权威快照且无绑定 setup intent 的孤立旧池，或已有权威标记但凭据缺失/损坏时，均不得自动创建管理员。
+激活由有界服务任务持有，不因 HTTP 客户端断开而取消。结果未知先查询状态；补全只恢复原绑定意图，不重选目录或重置管理员。已有池热增盘／移除仍不支持，`POST /api/admin/disks` 不因此成为可用增盘入口。后续方案及上线前验收见[在线磁盘成员管理提案（未实现）](../design/online-disk-management.md)。
 
-日常管理接口及页面对应见[管理参考](daily-management-coverage.md)，离线恢复及配置草稿见[救援工具](rescue.md)。
+`--setup-disk` 白名单仍服务既有离线恢复用途，`POST /api/setup/restore-system` 保持原授权与凭据恢复语义。公开 `preset-preview`、`initialize-preset`、`complete-initialization` 路由已移除，不提供旧初始化格式兼容。缺少可信权威或凭据损坏不得推断为新安装，也不得自动创建管理员。
 
 ## 唯一管理员认证
 
-首次受保护初始化只创建一个管理员，用户名仍可自选并按共享规则规范化。系统没有账户列表、新增、删除、禁用、角色或仓库授权操作。管理员身份不能代替存储就绪、主分支、只读别名、容量与发布检查。
+首次一次性设置只创建一个管理员，用户名仍可自选并按共享规则规范化。系统没有账户列表、新增、删除、禁用、角色或仓库授权操作。管理员身份不能代替存储就绪、主分支、只读别名、容量与发布检查。
 
 `POST /api/auth/login` 接受严格的 `{username,password}`，返回 `token`、`csrf_token`、`principal` 与十进制字符串 `expires_at`，同时设置 HttpOnly、SameSite=Strict 的 `zxs_session` cookie；生产 HTTPS 模式带 Secure。会话默认 12 小时有效，最多 64 个，达到上限返回 429。密码采用 Argon2id，持久状态只保存会话 token 摘要。每个来源 IP 每 60 秒最多尝试登录 10 次，轮换用户名不增加额度；密码验证保持独立有界并发。
 
@@ -116,7 +116,7 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 
 ## 已实现的路由
 
-除公开探针、登录及独立 bootstrap 入口外，业务路由都需要当前唯一管理员认证；操作还须满足存储准入与业务约束。
+除公开探针、登录、一次性账户设置及独立灾备 bootstrap 入口外，业务路由都需要当前唯一管理员认证；操作还须满足存储准入与业务约束。
 
 | 路由 | 方法与作用 |
 | --- | --- |

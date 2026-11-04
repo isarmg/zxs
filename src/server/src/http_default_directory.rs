@@ -10,7 +10,14 @@ use json_codec::{Map, Value};
 
 fn parse(mut body: Map<String, Value>) -> Result<SelectDefaultDirectoryBranch, ApiError> {
     if let Some(key) = body.keys().find(|key| {
-        !["repository_id", "directory_branch_id", "operation_id"].contains(&key.as_str())
+        ![
+            "repository_id",
+            "directory_branch_id",
+            "expected_tree_id",
+            "expected_head",
+            "operation_id",
+        ]
+        .contains(&key.as_str())
     }) {
         return Err(ApiError::invalid(format!("unknown field {key}")));
     }
@@ -26,9 +33,19 @@ fn parse(mut body: Map<String, Value>) -> Result<SelectDefaultDirectoryBranch, A
     let operation_id = field("operation_id")?
         .parse::<storage_contract::OperationId>()
         .map_err(contract_input)?;
+    let expected_tree_id = field("expected_tree_id")?;
+    let expected_head = field("expected_head")?;
+    if directory_branch_id.len() > 256 || expected_tree_id.len() > 256 || expected_head.len() > 256
+    {
+        return Err(ApiError::invalid(
+            "default selection identities exceed 256 bytes",
+        ));
+    }
     Ok(SelectDefaultDirectoryBranch {
         repository_id,
         directory_branch_id,
+        expected_tree_id,
+        expected_head,
         operation_id,
     })
 }

@@ -6110,6 +6110,430 @@
       ],
       "additionalProperties": false,
       "description": "本机 Samba 改密客户端成功退出后返回；不保证已建立的 SMB 连接立即失效，不撤销 Web 会话。"
+    },
+    "StorageHostPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000]+)*)?$",
+      "x-maxUtf8Bytes": 4096,
+      "description": "真实宿主绝对 UTF-8 路径，最多4096字节；服务端另拒绝 . / .. 组件，符号链接及身份不匹配。不是业务文件 PortablePath。"
+    },
+    "StorageDirectoryIdentity": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "inode": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "ctime_seconds": {
+          "type": "string"
+        },
+        "ctime_nanoseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "device",
+        "inode",
+        "ctime_seconds",
+        "ctime_nanoseconds"
+      ],
+      "additionalProperties": false
+    },
+    "StorageMountIdentity": {
+      "type": "object",
+      "properties": {
+        "mount_id": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "device_major": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "device_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "root_inode": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "filesystem": {
+          "type": "string"
+        },
+        "filesystem_root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mount_id",
+        "device_major",
+        "device_minor",
+        "root_inode",
+        "filesystem",
+        "filesystem_root"
+      ],
+      "additionalProperties": false
+    },
+    "StorageDirectoryInspectRequest": {
+      "type": "object",
+      "properties": {
+        "mount_path": {
+          "$ref": "#/$defs/StorageHostPath"
+        },
+        "root_path": {
+          "$ref": "#/$defs/StorageHostPath"
+        }
+      },
+      "required": [
+        "mount_path",
+        "root_path"
+      ],
+      "additionalProperties": false
+    },
+    "StorageCandidateSelection": {
+      "type": "object",
+      "properties": {
+        "selection_id": {
+          "type": "string",
+          "pattern": "^directory_[0-9a-f]{64}$"
+        },
+        "mount_path": {
+          "$ref": "#/$defs/StorageHostPath"
+        },
+        "root_path": {
+          "$ref": "#/$defs/StorageHostPath"
+        },
+        "mount_identity": {
+          "$ref": "#/$defs/StorageMountIdentity"
+        },
+        "root_identity": {
+          "$ref": "#/$defs/StorageDirectoryIdentity"
+        },
+        "discovery_root": {
+          "$ref": "#/$defs/StorageHostPath"
+        },
+        "discovery_identity": {
+          "$ref": "#/$defs/StorageDirectoryIdentity"
+        }
+      },
+      "required": [
+        "selection_id",
+        "mount_path",
+        "root_path",
+        "mount_identity",
+        "root_identity",
+        "discovery_root",
+        "discovery_identity"
+      ],
+      "additionalProperties": false
+    },
+    "StorageDirectoryEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/StorageHostPath"
+        },
+        "can_browse": {
+          "type": "boolean"
+        },
+        "problem": {
+          "enum": [
+            null,
+            "symbolic_link",
+            "permission_denied",
+            "unavailable"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "can_browse",
+        "problem"
+      ],
+      "additionalProperties": false
+    },
+    "StorageDirectoryListing": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/StorageHostPath"
+        },
+        "mount_path": {
+          "$ref": "#/$defs/StorageHostPath"
+        },
+        "mount_identity": {
+          "$ref": "#/$defs/StorageMountIdentity"
+        },
+        "identity": {
+          "$ref": "#/$defs/StorageDirectoryIdentity"
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/StorageDirectoryEntry"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "skipped_non_utf8": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "path",
+        "mount_path",
+        "mount_identity",
+        "identity",
+        "entries",
+        "truncated",
+        "skipped_non_utf8"
+      ],
+      "additionalProperties": false
+    },
+    "ManagementInitializeRequest": {
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "password"
+      ],
+      "additionalProperties": false
+    },
+    "ManagementInitializeResponse": {
+      "type": "object",
+      "properties": {
+        "initialized": {
+          "const": true
+        },
+        "storage_pending": {
+          "const": true
+        }
+      },
+      "required": [
+        "initialized",
+        "storage_pending"
+      ],
+      "additionalProperties": false
+    },
+    "StorageActivationStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "pending",
+            "active",
+            "recovery_required",
+            "unavailable"
+          ]
+        },
+        "disk_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "completion_available": {
+          "type": "boolean"
+        },
+        "allow_development": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state",
+        "disk_ids",
+        "completion_available",
+        "allow_development"
+      ],
+      "additionalProperties": false
+    },
+    "StorageActivationRequest": {
+      "type": "object",
+      "properties": {
+        "selections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/StorageCandidateSelection"
+          }
+        },
+        "mode": {
+          "enum": [
+            "production",
+            "development"
+          ]
+        }
+      },
+      "required": [
+        "selections",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "StorageActivationCompletionRequest": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "StorageActivationResponse": {
+      "type": "object",
+      "properties": {
+        "activated": {
+          "const": true
+        },
+        "restart_required": {
+          "type": "boolean"
+        },
+        "recovering": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "activated",
+        "restart_required",
+        "recovering"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "restart_required": {
+              "const": true
+            },
+            "recovering": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "restart_required": {
+              "const": false
+            },
+            "recovering": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "ManagementSetupStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "empty",
+            "management_ready",
+            "existing",
+            "recovery_required",
+            "unavailable"
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "ManagementRecoveryStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "empty",
+            "management_ready",
+            "existing",
+            "recovery_required",
+            "unavailable"
+          ]
+        },
+        "disk_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "local_authorization_required": {
+          "type": "boolean"
+        },
+        "allow_development": {
+          "type": "boolean"
+        },
+        "completion_available": {
+          "type": "boolean"
+        },
+        "config_presets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "csrf_token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "disk_ids",
+        "local_authorization_required",
+        "allow_development",
+        "completion_available",
+        "config_presets",
+        "csrf_token"
+      ],
+      "additionalProperties": false
+    },
+    "StorageDiscoveryRootSettings": {
+      "type": "object",
+      "properties": {
+        "discovery_root": {
+          "$ref": "#/$defs/StorageHostPath"
+        }
+      },
+      "required": [
+        "discovery_root"
+      ],
+      "additionalProperties": false
+    },
+    "StorageSetDiscoveryRootRequest": {
+      "type": "object",
+      "properties": {
+        "expected_discovery_root": {
+          "$ref": "#/$defs/StorageHostPath"
+        },
+        "discovery_root": {
+          "$ref": "#/$defs/StorageHostPath"
+        }
+      },
+      "required": [
+        "expected_discovery_root",
+        "discovery_root"
+      ],
+      "additionalProperties": false
     }
   }
 }

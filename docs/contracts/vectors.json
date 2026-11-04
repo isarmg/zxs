@@ -3474,6 +3474,183 @@
       "value": {
         "changed": true
       }
+    },
+    {
+      "name": "management-only-initialization",
+      "schema": "ManagementInitializeResponse",
+      "layer": "schema",
+      "value": {
+        "initialized": true,
+        "storage_pending": true
+      }
+    },
+    {
+      "name": "storage-nested-selection",
+      "schema": "StorageCandidateSelection",
+      "layer": "schema",
+      "value": {
+        "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mount_path": "/mnt/disk",
+        "root_path": "/mnt/disk/nested/storage",
+        "mount_identity": {
+          "mount_id": "10",
+          "device_major": 8,
+          "device_minor": 1,
+          "root_inode": "2",
+          "filesystem": "ext4",
+          "filesystem_root": "/"
+        },
+        "root_identity": {
+          "device": "2049",
+          "inode": "9007199254740993",
+          "ctime_seconds": "1793750000",
+          "ctime_nanoseconds": 12
+        },
+        "discovery_root": "/mnt/disk",
+        "discovery_identity": {
+          "device": "2049",
+          "inode": "2",
+          "ctime_seconds": "1793750000",
+          "ctime_nanoseconds": 12
+        }
+      }
+    },
+    {
+      "name": "storage-listing",
+      "schema": "StorageDirectoryListing",
+      "layer": "schema",
+      "value": {
+        "path": "/mnt/disk/nested",
+        "mount_path": "/mnt/disk",
+        "mount_identity": {
+          "mount_id": "10",
+          "device_major": 8,
+          "device_minor": 1,
+          "root_inode": "2",
+          "filesystem": "ext4",
+          "filesystem_root": "/"
+        },
+        "identity": {
+          "device": "2049",
+          "inode": "9007199254740993",
+          "ctime_seconds": "1793750000",
+          "ctime_nanoseconds": 12
+        },
+        "entries": [
+          {
+            "name": "storage",
+            "path": "/mnt/disk/nested/storage",
+            "can_browse": true,
+            "problem": null
+          },
+          {
+            "name": "link",
+            "path": "/mnt/disk/nested/link",
+            "can_browse": false,
+            "problem": "symbolic_link"
+          }
+        ],
+        "truncated": false,
+        "skipped_non_utf8": 0
+      }
+    },
+    {
+      "name": "storage-activation-pending",
+      "schema": "StorageActivationStatus",
+      "layer": "schema",
+      "value": {
+        "state": "pending",
+        "disk_ids": [],
+        "completion_available": false,
+        "allow_development": false
+      }
+    },
+    {
+      "name": "storage-activate",
+      "schema": "StorageActivationRequest",
+      "layer": "schema",
+      "value": {
+        "selections": [
+          {
+            "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mount_path": "/mnt/disk",
+            "root_path": "/mnt/disk/nested/storage",
+            "mount_identity": {
+              "mount_id": "10",
+              "device_major": 8,
+              "device_minor": 1,
+              "root_inode": "2",
+              "filesystem": "ext4",
+              "filesystem_root": "/"
+            },
+            "root_identity": {
+              "device": "2049",
+              "inode": "9007199254740993",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            },
+            "discovery_root": "/mnt/disk",
+            "discovery_identity": {
+              "device": "2049",
+              "inode": "2",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            }
+          }
+        ],
+        "mode": "production"
+      }
+    },
+    {
+      "name": "storage-complete-empty",
+      "schema": "StorageActivationCompletionRequest",
+      "layer": "schema",
+      "value": {}
+    },
+    {
+      "name": "storage-recovering",
+      "schema": "StorageActivationResponse",
+      "layer": "schema",
+      "value": {
+        "activated": true,
+        "restart_required": false,
+        "recovering": true
+      }
+    },
+    {
+      "name": "storage-restart",
+      "schema": "StorageActivationResponse",
+      "layer": "schema",
+      "value": {
+        "activated": true,
+        "restart_required": true,
+        "recovering": false
+      }
+    },
+    {
+      "name": "management-ready-no-disks",
+      "schema": "ManagementSetupStatus",
+      "layer": "schema",
+      "value": {
+        "state": "management_ready"
+      }
+    },
+    {
+      "name": "storage-default-discovery-root",
+      "schema": "StorageDiscoveryRootSettings",
+      "layer": "schema",
+      "value": {
+        "discovery_root": "/zxs/data/disks"
+      }
+    },
+    {
+      "name": "storage-set-discovery-root",
+      "schema": "StorageSetDiscoveryRootRequest",
+      "layer": "schema",
+      "value": {
+        "expected_discovery_root": "/zxs/data/disks",
+        "discovery_root": "/srv/storage"
+      }
     }
   ],
   "negative": [
@@ -14358,6 +14535,218 @@
         "changed": false
       },
       "layer": "schema"
+    },
+    {
+      "name": "management-reject-disks",
+      "schema": "ManagementInitializeRequest",
+      "layer": "schema",
+      "value": {
+        "username": "admin",
+        "password": "example-only",
+        "disk_ids": []
+      }
+    },
+    {
+      "name": "management-reject-mode",
+      "schema": "ManagementInitializeRequest",
+      "layer": "schema",
+      "value": {
+        "username": "admin",
+        "password": "example-only",
+        "mode": "production"
+      }
+    },
+    {
+      "name": "management-old-success",
+      "schema": "ManagementInitializeResponse",
+      "layer": "schema",
+      "value": {
+        "initialized": true,
+        "restart_required": false,
+        "recovering": true
+      }
+    },
+    {
+      "name": "storage-both-recovery-flags",
+      "schema": "StorageActivationResponse",
+      "layer": "schema",
+      "value": {
+        "activated": true,
+        "restart_required": true,
+        "recovering": true
+      }
+    },
+    {
+      "name": "storage-neither-recovery-flag",
+      "schema": "StorageActivationResponse",
+      "layer": "schema",
+      "value": {
+        "activated": true,
+        "restart_required": false,
+        "recovering": false
+      }
+    },
+    {
+      "name": "storage-no-selections",
+      "schema": "StorageActivationRequest",
+      "layer": "schema",
+      "value": {
+        "selections": [],
+        "mode": "production"
+      }
+    },
+    {
+      "name": "storage-complete-reject-new-selection",
+      "schema": "StorageActivationCompletionRequest",
+      "layer": "schema",
+      "value": {
+        "selections": [
+          {
+            "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "mount_path": "/mnt/disk",
+            "root_path": "/mnt/disk/nested/storage",
+            "mount_identity": {
+              "mount_id": "10",
+              "device_major": 8,
+              "device_minor": 1,
+              "root_inode": "2",
+              "filesystem": "ext4",
+              "filesystem_root": "/"
+            },
+            "root_identity": {
+              "device": "2049",
+              "inode": "9007199254740993",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            },
+            "discovery_root": "/mnt/disk",
+            "discovery_identity": {
+              "device": "2049",
+              "inode": "2",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "storage-mount-numeric-u64",
+      "schema": "StorageMountIdentity",
+      "layer": "schema",
+      "value": {
+        "mount_id": 10,
+        "device_major": 8,
+        "device_minor": 1,
+        "root_inode": "2",
+        "filesystem": "ext4",
+        "filesystem_root": "/"
+      }
+    },
+    {
+      "name": "storage-identity-missing-ctime",
+      "schema": "StorageDirectoryIdentity",
+      "layer": "schema",
+      "value": {
+        "device": "2049",
+        "inode": "42"
+      }
+    },
+    {
+      "name": "storage-entry-unknown-problem",
+      "schema": "StorageDirectoryEntry",
+      "layer": "schema",
+      "value": {
+        "name": "x",
+        "path": "/mnt/x",
+        "can_browse": false,
+        "problem": "other"
+      }
+    },
+    {
+      "name": "storage-selection-unknown-field",
+      "schema": "StorageCandidateSelection",
+      "layer": "schema",
+      "value": {
+        "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mount_path": "/mnt/disk",
+        "root_path": "/mnt/disk/nested/storage",
+        "mount_identity": {
+          "mount_id": "10",
+          "device_major": 8,
+          "device_minor": 1,
+          "root_inode": "2",
+          "filesystem": "ext4",
+          "filesystem_root": "/"
+        },
+        "root_identity": {
+          "device": "2049",
+          "inode": "9007199254740993",
+          "ctime_seconds": "1793750000",
+          "ctime_nanoseconds": 12
+        },
+        "format": true,
+        "discovery_root": "/mnt/disk",
+        "discovery_identity": {
+          "device": "2049",
+          "inode": "2",
+          "ctime_seconds": "1793750000",
+          "ctime_nanoseconds": 12
+        }
+      }
+    },
+    {
+      "name": "storage-relative-path",
+      "schema": "StorageDirectoryInspectRequest",
+      "layer": "schema",
+      "value": {
+        "mount_path": "mnt/disk",
+        "root_path": "/mnt/disk/storage"
+      }
+    },
+    {
+      "name": "storage-path-parent",
+      "schema": "StorageDirectoryInspectRequest",
+      "layer": "schema",
+      "value": {
+        "mount_path": "/mnt",
+        "root_path": "/mnt/../storage"
+      }
+    },
+    {
+      "name": "storage-path-dot",
+      "schema": "StorageDirectoryInspectRequest",
+      "layer": "schema",
+      "value": {
+        "mount_path": "/mnt",
+        "root_path": "/mnt/./storage"
+      }
+    },
+    {
+      "name": "storage-path-double-slash",
+      "schema": "StorageDirectoryInspectRequest",
+      "layer": "schema",
+      "value": {
+        "mount_path": "/mnt",
+        "root_path": "/mnt//storage"
+      }
+    },
+    {
+      "name": "storage-set-root-missing-expectation",
+      "schema": "StorageSetDiscoveryRootRequest",
+      "layer": "schema",
+      "value": {
+        "discovery_root": "/srv/storage"
+      }
+    },
+    {
+      "name": "setup-status-rejects-bootstrap-fields",
+      "schema": "ManagementSetupStatus",
+      "layer": "schema",
+      "value": {
+        "state": "empty",
+        "csrf_token": "secret"
+      }
     }
   ],
   "canonical": [

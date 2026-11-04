@@ -30,6 +30,8 @@ pub(crate) enum ApiErrorSource {
     #[error("{0}")]
     Filesystem(#[from] platform_io::fs_safety::Error),
     #[error("{0}")]
+    StorageDirectory(#[from] crate::storage_directories::Error),
+    #[error("{0}")]
     Authentication(#[from] authentication::Error),
     #[error("{0}")]
     Integer(#[from] std::num::ParseIntError),

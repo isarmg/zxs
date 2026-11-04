@@ -173,9 +173,7 @@ pub fn open_service_with_options(
         limits.validate().map_err(ApiError::invalid_source)?;
     }
     // These are system state directories, never data-disk mountpoints.
-    if !setup_disks.is_empty() || !setup_configs.is_empty() {
-        create_private_directory(data_root)?;
-    }
+    create_private_directory(data_root)?;
     create_private_directory(management_root)?;
     let mut auth = AuthStore::open_management(management_root).unwrap_or_else(|error| {
         tracing::warn!(code = %error.code, error = %StartupDiagnostic(&error), "management credentials require recovery");
@@ -447,6 +445,19 @@ impl Inner {
         let backend = if let Some(backend) = existing {
             backend
         } else {
+            let setup = crate::setup_recovery::SetupRecovery::new(
+                self.data_root.clone(),
+                self.management_root.clone(),
+                BTreeMap::new(),
+            )?
+            .with_workspace_limits(self.retained_workspace_limits)?;
+            setup.activation_admitted()?;
+            if setup.storage_status().state
+                == crate::setup_recovery::StorageActivationState::Pending
+            {
+                self.set(None, StorageState::Unconfigured);
+                return Ok(());
+            }
             let engine = match storage_engine::Engine::open_with_workspace_limits(
                 &self.data_root,
                 self.retained_workspace_limits,
@@ -1375,7 +1386,7 @@ impl Backend for ManagementBackend {
         identity: Option<&Identity>,
     ) -> Result<Value, ApiError> {
         self.inner.ensure_running()?;
-        use crate::setup_recovery::{PresetPreviewRequest, SetupRecovery};
+        use crate::setup_recovery::SetupRecovery;
         // Authenticate against system-disk state before touching any data path.
         let auth = crate::lock(&self.inner.auth)
             .clone()
@@ -1397,13 +1408,24 @@ impl Backend for ManagementBackend {
                 BTreeMap::new(),
             )?
             .authorize_bootstrap(token)?;
-        } else if identity.is_none() {
+        } else if identity.is_none() && !matches!(action, "status" | "initialize") {
             return Err(ApiError::unauthorized());
         }
         let mut setup = SetupRecovery::new(
             self.inner.data_root.clone(),
             self.inner.management_root.clone(),
-            self.inner.setup_disks.clone(),
+            if matches!(
+                action,
+                "recovery_status"
+                    | "restore_system"
+                    | "offline_check"
+                    | "recovery_preview"
+                    | "recovery_commit"
+            ) {
+                self.inner.setup_disks.clone()
+            } else {
+                BTreeMap::new()
+            },
         )?
         .with_presets(self.inner.setup_configs.clone())
         .with_workspace_limits(self.inner.retained_workspace_limits)?;
@@ -1414,14 +1436,107 @@ impl Backend for ManagementBackend {
             .map(|token| setup.authorize_bootstrap(token))
             .transpose()?;
         if action == "status" {
-            return Ok(json_codec::to_value(setup.status())
-                .expect("invariant: setup status serialization succeeds"));
+            let mut state = setup.management_status();
+            if state == crate::setup_recovery::InstallationState::ManagementReady
+                && !crate::lock(&auth).is_available()
+            {
+                state = crate::setup_recovery::InstallationState::RecoveryRequired;
+            }
+            return Ok(json!({"state":state}));
         }
-        if action == "preset_preview" {
-            let request: PresetPreviewRequest =
+        if action == "recovery_status" {
+            return Ok(json_codec::to_value(setup.status())
+                .expect("invariant: recovery status serializes"));
+        }
+        if action == "storage_status" {
+            identity.as_ref().ok_or_else(ApiError::unauthorized)?;
+            return Ok(json_codec::to_value(setup.storage_status())
+                .expect("invariant: storage activation status serialization succeeds"));
+        }
+        if action == "discovery_root" {
+            identity.as_ref().ok_or_else(ApiError::unauthorized)?;
+            return Ok(json_codec::to_value(setup.discovery_root()?)
+                .expect("invariant: discovery settings serialize"));
+        }
+        if action == "set_discovery_root" {
+            let request: storage_contract::storage_directories::SetDiscoveryRootRequest =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
             return setup
-                .preview_preset(permit.as_ref().ok_or_else(ApiError::unauthorized)?, request);
+                .set_discovery_root(
+                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                    request,
+                    |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
+                )
+                .map(|value| {
+                    json_codec::to_value(value).expect("invariant: discovery settings serialize")
+                });
+        }
+        if action == "storage_directories" {
+            identity.as_ref().ok_or_else(ApiError::unauthorized)?;
+            #[derive(data_serialization::Deserialize)]
+            #[serialization(deny_unknown_fields)]
+            struct Request {
+                path: String,
+            }
+            let request: Request =
+                json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            return crate::storage_directories::browse_within(
+                &setup.discovery_root()?.discovery_root,
+                &request.path,
+            )
+            .map_err(ApiError::from)
+            .map(|value| {
+                json_codec::to_value(value).expect("invariant: directory listing serializes")
+            });
+        }
+        if action == "inspect_storage_directory" {
+            identity.as_ref().ok_or_else(ApiError::unauthorized)?;
+            let request: storage_contract::storage_directories::InspectRequest =
+                json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            if setup.storage_status().state
+                != crate::setup_recovery::StorageActivationState::Pending
+            {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::StorageActive,
+                    "new storage selection requires a management-only installation",
+                ));
+            }
+            return crate::storage_directories::inspect_within(
+                &setup.discovery_root()?.discovery_root,
+                &request,
+                &[
+                    self.inner.data_root.clone(),
+                    self.inner.management_root.clone(),
+                ],
+            )
+            .map_err(ApiError::from)
+            .map(|value| {
+                json_codec::to_value(value).expect("invariant: directory selection serializes")
+            });
+        }
+        if action == "initialize" {
+            let request = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            // setup.lock and create-new own the one-time account transition.
+            // Anonymous rejected setup must not claim the storage recovery gate
+            // or consume a wakeup belonging to an authenticated credential change.
+            return setup
+                .initialize_management(request, |username, password| {
+                    let new_auth = AuthStore::initialize_management(
+                        &self.inner.management_root,
+                        username,
+                        password,
+                    )?;
+                    claim_authority(&self.inner.data_root)?;
+                    crate::lock(&auth).replace_authority(new_auth);
+                    // Finish the in-memory transition before releasing setup.lock,
+                    // so a later activation cannot be overwritten by late setup.
+                    // Pair with worker exit to refresh any pre-account observation.
+                    let _worker = crate::lock(&self.inner.recovery_worker);
+                    self.inner.set(None, StorageState::Unconfigured);
+                    self.inner.generation.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .map(|_| json!({"initialized":true,"storage_pending":true}));
         }
         // Keep typed admission before lifecycle changes; later execution owns
         // these same DTOs, not a second decode of the original JSON.
@@ -1457,33 +1572,32 @@ impl Backend for ManagementBackend {
                 state.status = StorageState::RecoveryRequired;
             }
         }
-        let install = |engine: storage_engine::Engine, username: &str, password: &str| {
-            claim_authority(&self.inner.data_root)?;
-            let new_auth =
-                AuthStore::initialize_management(&self.inner.management_root, username, password)?;
-            let mut snapshot = new_auth.snapshot()?;
+        let revalidate =
+            |identity: &Identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ());
+        let install_storage = |engine: storage_engine::Engine| {
+            let current = identity.as_ref().ok_or_else(ApiError::unauthorized)?;
+            let current_auth = crate::lock(&auth);
+            current_auth.revalidate_identity(current)?;
+            let mut snapshot = current_auth.snapshot()?;
             snapshot["sessions"] = json!({});
-            crate::lock(&auth).replace_authority(new_auth);
             EngineBackend::new(engine).replicate_auth(snapshot)
         };
         let result = match command {
-            SetupCommand::Initialize(request) => {
-                let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
-                setup
-                    .initialize(permit, request, install)
-                    .map(|_| json!({"initialized":true,"restart_required":false,"recovering":true}))
-            }
-            SetupCommand::InitializePreset(request) => {
-                let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
-                setup
-                    .initialize_preset(permit, request, install)
-                    .map(|_| json!({"initialized":true,"restart_required":false,"recovering":true}))
-            }
-            SetupCommand::CompleteInitialization(request) => {
-                let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
-                setup.complete_initialization(permit,request,install)
-                    .map(|_|json!({"initialized":true,"completed":true,"restart_required":false,"recovering":true}))
-            }
+            SetupCommand::Activate(request) => setup
+                .activate(
+                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                    request,
+                    revalidate,
+                    install_storage,
+                )
+                .map(|_| json!({"activated":true,"restart_required":false,"recovering":true})),
+            SetupCommand::CompleteActivation => setup
+                .complete_activation(
+                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                    revalidate,
+                    install_storage,
+                )
+                .map(|_| json!({"activated":true,"restart_required":false,"recovering":true})),
             SetupCommand::RestoreSystem(request) => {
                 let restore = |engine: storage_engine::Engine| {
                     if let Some(identity) = &identity {
@@ -1735,6 +1849,10 @@ impl Backend for ManagementBackend {
 #[cfg(test)]
 #[path = "../../web/src/setup/response.rs"]
 mod web_setup_response;
+
+#[cfg(test)]
+#[path = "../../web/src/admin/storage/response.rs"]
+mod web_activation_response;
 
 #[cfg(test)]
 #[path = "../../../test/server/unit/management/disk_cards.rs"]

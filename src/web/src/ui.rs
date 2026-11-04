@@ -222,7 +222,7 @@ pub fn app() -> impl IntoView {
         });
     });
     let login: ChildrenFn = ToChildren::to_children(
-        move || view! { {management::summary(state)} {move ||state.with(|s|s.session_failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})} <LoginPage pending=login_pending.into() remote_failure=login_failure.into() on_submit=on_login/> {crate::setup::view(setup_state)} },
+        move || view! { {management::summary(state)} {move ||state.with(|s|s.session_failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})} {crate::setup::view(setup_state)} <LoginPage pending=login_pending.into() remote_failure=login_failure.into() on_submit=on_login/> },
     );
     view! {
         <AppShell product="zxs" session=session.into() pending_logout=logout_pending.into() on_logout=Callback::new(move |_|logout(state)) on_account=Callback::new(move |_|navigate(state,Page::Account)) on_restore=Callback::new(move |_|restore_session(state)) login=login>

@@ -65,6 +65,7 @@ pub struct ReadListing {
     pub(crate) query: String,
     pub(crate) cursor: Option<ListingCursor>,
     pub(crate) selected: Option<(String, String)>,
+    pub(crate) preview: Option<(String, String)>,
 }
 impl ReadListing {
     pub fn parse(slot_id: String, mut values: BTreeMap<String, String>) -> Result<Self, ApiError> {
@@ -84,11 +85,32 @@ impl ReadListing {
                 "cursor",
                 "selected_path",
                 "selected_entry_id",
+                "directory_branch_id",
+                "expected_tree_id",
             ]
             .contains(&key.as_str())
         }) {
             return Err(ApiError::invalid(format!("unknown field {key}")));
         }
+        let preview = match (
+            values.remove("directory_branch_id"),
+            values.remove("expected_tree_id"),
+        ) {
+            (None, None) => None,
+            (Some(branch), Some(tree))
+                if !branch.is_empty()
+                    && branch.len() <= 256
+                    && !tree.is_empty()
+                    && tree.len() <= 256 =>
+            {
+                Some((branch, tree))
+            }
+            _ => {
+                return Err(ApiError::invalid(
+                    "directory_branch_id and expected_tree_id must be supplied together as bounded identities",
+                ));
+            }
+        };
         let limit = values
             .remove("limit")
             .map(|value| value.parse::<usize>().map_err(ApiError::invalid_source))
@@ -144,6 +166,7 @@ impl ReadListing {
             query: query.to_lowercase(),
             cursor,
             selected,
+            preview,
         })
     }
     pub fn limit(&self) -> usize {
@@ -159,6 +182,12 @@ impl ReadListing {
         self.selected
             .as_ref()
             .map(|(path, id)| (path.as_str(), id.as_str()))
+    }
+    /// The exact directory branch and tree requested for read-only browsing.
+    pub fn preview(&self) -> Option<(&str, &str)> {
+        self.preview
+            .as_ref()
+            .map(|(branch, tree)| (branch.as_str(), tree.as_str()))
     }
     pub fn slot_id(&self) -> &str {
         &self.slot_id
@@ -192,6 +221,7 @@ pub struct ListingSnapshot {
     pub slot_id: String,
     pub path: String,
     pub backup: bool,
+    pub preview: bool,
     pub entries: Vec<ListingEntry>,
     pub selected_entry: Option<ListingEntry>,
     pub context: Option<ListingContext>,
@@ -247,6 +277,8 @@ pub(crate) struct ListingResponse {
     #[serialization(skip_serializing_if = "is_false")]
     backup: bool,
     writable: bool,
+    #[serialization(skip_serializing_if = "is_false")]
+    preview: bool,
     entries: Vec<ListingEntryResponse>,
     selected_entry: Option<ListingEntryResponse>,
     context: Option<ListingContext>,
@@ -347,6 +379,7 @@ impl From<ListingSnapshot> for ListingResponse {
             slot_id,
             path,
             backup,
+            preview,
             entries,
             selected_entry,
             context,
@@ -363,7 +396,8 @@ impl From<ListingSnapshot> for ListingResponse {
             slot_id,
             path,
             backup,
-            writable: !backup,
+            writable: !backup && !preview,
+            preview,
             entries: entries.into_iter().map(Into::into).collect(),
             selected_entry: selected_entry.map(Into::into),
             context,

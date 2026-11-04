@@ -1,4 +1,4 @@
-use super::web_setup_response;
+use super::web_activation_response;
 use super::*;
 use std::{sync::mpsc, time::Duration};
 
@@ -13,24 +13,17 @@ fn completed_setup_preserves_success_when_shutdown_fences_reenqueue() {
     )
     .unwrap();
     backend.stop_management();
-    for action in [
-        web_setup_response::Action::Wizard,
-        web_setup_response::Action::Preset,
-        web_setup_response::Action::Complete,
-    ] {
-        let mut response = json!({"initialized":true,"recovering":true,"restart_required":false});
-        if action == web_setup_response::Action::Complete {
-            response["completed"] = json!(true);
-        }
-        let completed = backend.inner.resume_after_setup(response).unwrap();
-        assert_eq!(completed["initialized"], true);
-        assert_eq!(completed["recovering"], false);
-        assert_eq!(completed["restart_required"], true);
-        assert_eq!(
-            web_setup_response::validate(action, completed).unwrap(),
-            web_setup_response::Success::RestartRequired
-        );
-    }
+    let completed = backend
+        .inner
+        .resume_after_setup(json!({"activated":true,"recovering":true,"restart_required":false}))
+        .unwrap();
+    assert_eq!(completed["activated"], true);
+    assert_eq!(completed["recovering"], false);
+    assert_eq!(completed["restart_required"], true);
+    assert_eq!(
+        web_activation_response::activation(completed).unwrap(),
+        web_activation_response::Success::RestartRequired
+    );
     assert!(backend.inner.recovery_worker.lock().unwrap().is_none());
 }
 
@@ -45,14 +38,14 @@ fn completed_setup_preserves_success_when_retry_already_won_enqueue() {
     backend.inner.recovering.store(true, Ordering::SeqCst);
     let completed = backend
         .inner
-        .resume_after_setup(json!({"initialized":true,"recovering":true,"restart_required":false}))
+        .resume_after_setup(json!({"activated":true,"recovering":true,"restart_required":false}))
         .unwrap();
-    assert_eq!(completed["initialized"], true);
+    assert_eq!(completed["activated"], true);
     assert_eq!(completed["recovering"], true);
     assert_eq!(completed["restart_required"], false);
     assert_eq!(
-        web_setup_response::validate(web_setup_response::Action::Wizard, completed).unwrap(),
-        web_setup_response::Success::Recovering
+        web_activation_response::activation(completed).unwrap(),
+        web_activation_response::Success::Recovering
     );
     backend.inner.recovering.store(false, Ordering::SeqCst);
 }

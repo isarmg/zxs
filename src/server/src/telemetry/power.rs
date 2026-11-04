@@ -119,6 +119,7 @@ fn energy_delta(previous: &Energy, current: &Energy) -> Option<u64> {
 }
 
 // Optional sysfs probes may disappear between samples; keep the cause observable.
+#[cfg(any(feature = "core", test))]
 fn sensor_value<T>(result: std::io::Result<T>) -> Option<T> {
     match result {
         Ok(value) => Some(value),

@@ -12,48 +12,18 @@ cargo build --locked --offline --target-dir target/native -p storage-server -p s
 target/native/debug/zxs --root "$PWD/runtime/pool" \
   --management-root "$PWD/runtime/management" --listen 0.0.0.0:7400 \
   --web-dir /absolute/path/to/verified-web-output \
-  --setup-disk "P01=$PWD/runtime/disks/P01" --allow-development-setup
+  --allow-development-setup
 ```
 
-最低配置为系统盘加一个存储盘，二级、三级、四级及后续备份均可不配置。运行前准备一个现有、私有的测试存储目录和管理目录，并替换 Web 输出路径。操作员在管理目录安全预置 `bootstrap.key`：服务 UID 所有、普通单链接文件、0600、恰好64个十六进制 ASCII 字节且无换行，mtime起30分钟有效。不要将密钥写进命令行、日志或版本库。打开 Web 的首次初始化页，输入引导密钥，选择至少一个批准的存储盘 ID，并设置首次管理员；引导授权不保存在浏览器持久存储中。缺少有效授权时拒绝初始化，不自动生成管理员或数据池。
+首次打开 Web，先设置唯一管理员用户名和密码，再登录。首次设置无需授权密钥，也无需选盘；没有管理员时，任何能够访问此 Web 的人都可完成这一操作，因此部署者应限制初始网络可达范围并及时设好账户。已建立或损坏的管理权威都不能通过首次设置重置。
 
-### 安全预置开发引导密钥
+登录后在系统管理设置“存储发现目录”，默认 `/zxs/data/disks`，也可指定其他已存在目录。仅浏览其内部目录，支持合法的多层子目录，不扫描整个系统。分别核对真实挂载路径与实际空存储子目录，检查后确认首盘激活。存储子目录须为服务账户所有的 0700 空目录；服务不会挂载、格式化、创建存储目录或修改权限。systemd 示例的可写范围仍限制在 `/zxs` 下的显式目录，其他发现根必须已被部署权限允许。
 
-下面是供操作员审查后执行的 Linux 示例，不是启动服务时自动生成凭据的步骤。先准备服务 UID 所有、无符号链接的私有管理目录；以同一 UID 执行，路径与上面的 `--management-root` 一致。示例拒绝覆盖已有密钥，不输出密钥，也不使用 shell 变量、参数或管道传递密钥；不要在录屏、调试跟踪或日志采集会话中读取密钥。
+只有显式灾备恢复继续使用本地 bootstrap 授权，细节见[初始化与恢复](management/setup-recovery.md)。不要删除已有凭据、权威或激活证据来重新执行首次设置。
 
-```sh
-python3 - <<'PYBOOTSTRAP'
-import os
-import secrets
-import stat
-from pathlib import Path
+单盘池只保存一份数据，没有磁盘冗余；该盘损坏可能导致数据永久丢失。新建仓库默认目标份数为 1（包含主盘），不要把“目标已满足”理解为有备份。首次激活的多目录选择按顺序建立逐级备份链，全部作为元数据成员；已有多成员池不会因丢盘自动缩减成员或降低发布证明要求。
 
-root = Path.cwd() / "runtime/management"
-metadata = root.lstat()
-if (root.resolve() != root or not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o700):
-    raise SystemExit("管理目录须为当前服务 UID 所有、无符号链接的 0700 目录")
-fd = os.open(root / "bootstrap.key",
-             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-with os.fdopen(fd, "wb") as output:
-    os.fchmod(output.fileno(), 0o600)
-    output.write(secrets.token_hex(32).encode("ascii"))
-    output.flush()
-    os.fsync(output.fileno())
-directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-try:
-    os.fsync(directory)
-finally:
-    os.close(directory)
-PYBOOTSTRAP
-```
-
-随后由操作员通过可信的本机私密查看方式将密钥填入首次初始化页；不要粘贴到聊天、URL、工单或共享终端。30 分钟有效期按文件修改时间计算；已有密钥或未完成初始化时先查[初始化恢复](management/setup-recovery.md)，不删除旧授权或恢复证据来重跑示例。此示例只说明密钥格式与文件权限，不初始化任何盘，也不替代生产部署的 UID、目录和设备审核。
-
-单盘池只保存一份数据，没有磁盘冗余；该盘损坏可能导致数据永久丢失。新建仓库默认目标份数为 1（包含主盘），不要把“目标已满足”理解为有备份。可选多盘向导按选择顺序建立备份链，高级预置可以指定自定义多盘布局；已有多成员池不会因丢盘自动缩减成员或降低发布证明要求。
-
-`--allow-development-setup` 仍只标记开发模拟；普通生产存储目录不需该开关，也不要求 Btrfs、独立挂载点或物理设备独立性。用户自行保证底层故障域，程序保留目录 device/inode、seal、权限和完整性检查。高级初始配置由本机 `--setup-config ID=/absolute/private-config.json` 预置，再在 Web 选择；浏览器不能传任意路径或配置 JSON。
+`--allow-development-setup` 仍只标记开发模拟；普通生产存储目录不需该开关，也不要求 Btrfs、独立挂载点或物理设备独立性。用户自行保证底层故障域，程序保留目录 device/inode、seal、权限和完整性检查。登录后可在持久发现根内浏览并选择现有挂载文件系统中的合法空子目录，不要求逐个登记候选白名单。服务不自动挂载、格式化或改权限；当前 Web 不提供高级 Config 草稿应用入口。
 
 服务运行时通过 Web 管理、SMB 访问文件。直接启动 `zxs`，不使用 `serve` 子命令。离线救援见[救援说明](components/rescue.md)，需要打开池的救援操作先停服。默认监听 `0.0.0.0:7400`，不禁止非回环地址；浏览器以服务器实际 IP 或主机名访问。网络可达范围和传输保护由部署者保证，HTTP 会明文传输凭据与数据；需要 HTTPS 时配置反向代理和正确的 `--external-origin`。仅供本机开发时可显式指定 `--listen 127.0.0.1:7400`。系统盘管理凭据与数据成员分离，缺失或损坏的数据池不阻止管理 HTTP 启动。
 

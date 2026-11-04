@@ -485,3 +485,31 @@ fn metadata_refresh_preserves_the_window_key_but_explicit_replacement_advances_i
     assert_eq!(history.window_key(), first_key + 1);
     assert_eq!(history.nodes().len(), 1);
 }
+
+#[test]
+fn directory_preview_keeps_the_frozen_branch_when_global_default_differs() {
+    let frozen_branch = format!("br_{:032x}", 1);
+    let live_branch = format!("br_{:032x}", 2);
+    let frozen_node = format!("ver_{:032x}", 1);
+    let entry = crate::files::test_entries::preview_entry(json!({
+        "node_id":frozen_node, "version_id":frozen_node, "selected_branch_id":frozen_branch,
+        "file_id":format!("file_{:032x}", 1), "repository_id":format!("repo_{:032x}", 1),
+        "path":"folder/file.txt", "repository_path":"folder/file.txt", "read_only":true,
+    }));
+    let mut page = admitted_node_page("live default");
+    let HistoryWindowPage::Nodes { identity, .. } = &mut page else {
+        unreachable!()
+    };
+    identity.context.selected_branch_id = Some(live_branch.parse().unwrap());
+    let mut history = FileHistory::default();
+    history.install_nodes(page, &entry, true).unwrap();
+    assert_eq!(history.selected(), Some(frozen_branch.as_str()));
+    assert_eq!(history.current_node_id(), Some(frozen_node.as_str()));
+    assert_eq!(history.current_version_id(), Some(frozen_node.as_str()));
+    let model = crate::files::Model {
+        selected: Some(entry),
+        file_history: history.into(),
+        ..Default::default()
+    };
+    assert_eq!(crate::files::model::selected_branch(&model), frozen_branch);
+}

@@ -1023,8 +1023,13 @@ fn workspace_body(method: &str, path: &str) -> Value {
         json!({"repository_id":"repository","path_prefix":"Folder","target_copies":3,"expected_generation":"0","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "PUT" && path.starts_with("/api/primary-placement-rules/") {
         json!({"repository_id":"repository","path_prefix":"Folder","primary_slot_id":"P01","expected_generation":"0","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "PUT"
+        && path.starts_with("/api/file-manager/files/")
+        && path.ends_with("/default-branch")
+    {
+        json!({"branch_id":"branch","repository_id":"repository","path":"file.txt","expected_node_id":"node","expected_head":"head","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "PUT" && path.ends_with("/default-branch") {
-        json!({"directory_branch_id":"directory","operation_id":"op_00000000000000000000000000000000"})
+        json!({"directory_branch_id":"directory","expected_tree_id":"tree","expected_head":"head","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "PUT" && path.ends_with("/smb-binding") {
         json!({"branch_id":"branch","enabled":false,"expected_history_generation":"1","operation_id":"op_00000000000000000000000000000000"})
     } else if path.ends_with("/merge-links") {
@@ -1191,6 +1196,7 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
         "/api/repositories/repository/directory-branches?summary=true&path=",
     ),
     ("PUT", "/api/repositories/repository/default-branch"),
+    ("PUT", "/api/file-manager/files/file/default-branch"),
     ("GET", "/api/admin/disks"),
     ("GET", "/api/file-manager/disks"),
     ("GET", "/api/file-manager/disks/P01/entries"),

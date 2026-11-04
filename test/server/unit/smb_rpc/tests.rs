@@ -962,6 +962,7 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
         .select_file_branch(
             identity,
             crate::SelectFileBranch {
+                default_baseline: None,
                 file_id: file.clone(),
                 branch_id: created["result"]["branch_id"].as_str().unwrap().into(),
                 location: None,
@@ -1004,11 +1005,36 @@ fn directory_fixture(shared: &Shared) -> (String, String, String) {
 }
 
 fn select_directory(shared: &Shared, repository: &str, directory: &str) {
+    let identity = identity(shared);
+    let defaults = shared
+        .backend
+        .default_directory_branch(&identity, repository)
+        .unwrap();
+    let tree = defaults
+        .directory_branches
+        .iter()
+        .find(|branch| branch.directory_branch_id == directory)
+        .unwrap()
+        .head_tree_id
+        .clone();
+    let head = shared
+        .backend
+        .tree_snapshot(
+            &identity,
+            crate::ReadTree {
+                branch: &defaults.namespace_branch_id,
+                commit: None,
+            },
+        )
+        .unwrap()
+        .commit_id;
     shared
         .backend
         .select_default_directory_branch(
-            &identity(shared),
+            &identity,
             crate::SelectDefaultDirectoryBranch {
+                expected_tree_id: tree,
+                expected_head: head,
                 repository_id: repository.into(),
                 directory_branch_id: directory.into(),
                 operation_id: storage_contract::OperationId::generate().unwrap(),

@@ -31,7 +31,8 @@ mod repair;
 mod state_projection;
 mod wire;
 pub use business::{
-    FileBranchMergeRequest, FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest,
+    DirectoryBranchPreview, DirectoryDefaultSelection, FileBranchMergeRequest,
+    FileDefaultSelection, FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest,
     NamespaceTree, PreparedUpload, UploadPreparation, validate_branch_name,
 };
 pub use degraded_recovery::RecoveryPlan;

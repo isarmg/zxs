@@ -882,6 +882,7 @@ enum Request {
     NamespaceBatch,
     SelectFileBranch,
     SelectFileBranchAt,
+    SetFileDefault,
     RenameFileBranch,
     DiskDirectoryCreate,
     DiskDirectorySelect,
@@ -994,6 +995,7 @@ impl Request {
                 .select_file_branch(
                     identity,
                     crate::SelectFileBranch {
+                        default_baseline: None,
                         file_id: "missing".into(),
                         branch_id: "missing".into(),
                         location: None,
@@ -1001,10 +1003,16 @@ impl Request {
                     },
                 )
                 .map(|_| ()),
-            Self::SelectFileBranchAt => backend
+            Self::SelectFileBranchAt | Self::SetFileDefault => backend
                 .select_file_branch(
                     identity,
                     crate::SelectFileBranch {
+                        default_baseline: matches!(self, Self::SetFileDefault).then(|| {
+                            crate::backend_file_selection::FileDefaultBaseline {
+                                expected_node_id: "node".into(),
+                                expected_head: "head".into(),
+                            }
+                        }),
                         file_id: "missing".into(),
                         branch_id: "missing".into(),
                         location: Some(crate::FileSelectionLocation {
@@ -1415,6 +1423,8 @@ impl Request {
                 .map(|_| ()),
             Self::SelectDefaultDirectoryBranch => {
                 let request = crate::SelectDefaultDirectoryBranch {
+                    expected_tree_id: "fixture-tree".into(),
+                    expected_head: "fixture-head".into(),
                     repository_id: "missing-repository".into(),
                     directory_branch_id: "missing-directory".into(),
                     operation_id: storage_contract::OperationId::generate().unwrap(),
@@ -1701,6 +1711,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::NamespaceBatch,
                 Request::SelectFileBranch,
                 Request::SelectFileBranchAt,
+                Request::SetFileDefault,
                 Request::FileNote,
                 Request::VersionNote,
                 Request::NodeNote,
@@ -2026,6 +2037,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::NamespaceBatch,
         Request::SelectFileBranch,
         Request::SelectFileBranchAt,
+        Request::SetFileDefault,
         Request::RenameFileBranch,
         Request::DiskDirectoryCreate,
         Request::DiskDirectorySelect,

@@ -480,6 +480,28 @@ fn inherited_current_markers_do_not_change_real_version_identity_or_ancestry() {
 }
 
 #[test]
+fn branch_preview_does_not_mark_the_default_entries_inherited_node() {
+    let mut model = Model {
+        selected: Some(crate::files::test_entries::entry(json_codec::json!({
+            "node_id":"default-node", "version_id":"default-body", "materialized":false,
+            "inherited":true, "own_version_id":null, "source_version_id":"default-body"
+        }))),
+        file_history: crate::files::history::tests::history(json_codec::json!({})),
+        ..Default::default()
+    };
+    assert!(inherited_current(&model, "default-node"));
+    for pending in [false, true] {
+        let branch = crate::files::history::tests::branch(json_codec::json!({
+            "branch_id":"preview", "node_id":"preview-node", "pending":pending
+        }));
+        model.file_history.browse_branch(&branch);
+        model.file_preview = Some(branch);
+        assert!(!inherited_current(&model, "default-node"));
+        assert_eq!(inherited_current(&model, "preview-node"), pending);
+    }
+}
+
+#[test]
 fn shared_window_index_preserves_note_refresh_keys_and_replaces_old_positions() {
     Owner::new().with(|| {
         let count = 64;

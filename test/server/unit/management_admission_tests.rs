@@ -74,7 +74,8 @@ fn startup_credential_json_diagnostics_redact_both_decoder_boundaries() {
         );
         assert!(!output.contains(SECRET), "{output}");
         assert!(!output.contains("password_hash"), "{output}");
-        assert!(!data.exists());
+        assert!(data.is_dir());
+        assert_eq!(fs::read_dir(&data).unwrap().count(), 0);
     }
 }
 
@@ -179,18 +180,8 @@ fn authority_marker_stays_private_and_rejects_public_or_aliased_files() {
 fn commands() -> Vec<(&'static str, Value, bool)> {
     vec![
         (
-            "initialize",
-            json!({"disk_ids":["disk"],"mode":"development","username":"admin","password":SECRET}),
-            true,
-        ),
-        (
-            "initialize_preset",
-            json!({"preset_id":"preset","config_digest":"digest","username":"admin","password":SECRET}),
-            true,
-        ),
-        (
-            "complete_initialization",
-            json!({"username":"admin","password":SECRET}),
+            "activate",
+            json!({"selections":[],"mode":"development"}),
             true,
         ),
         ("restore_system", json!({"disk_ids":["disk"]}), true),
@@ -214,25 +205,12 @@ fn admitted_setup_commands_keep_owned_fields_and_resume_policy() {
         let command = SetupCommand::parse(action, input).unwrap();
         assert_eq!(command.resumes_storage(), resumes, "{action}");
         match command {
-            SetupCommand::Initialize(request) => {
-                assert_eq!(action, "initialize");
-                assert_eq!(request.disk_ids, ["disk"]);
+            SetupCommand::Activate(request) => {
+                assert_eq!(action, "activate");
+                assert!(request.selections.is_empty());
                 assert_eq!(request.mode, storage_engine::Mode::Development);
-                assert_eq!(request.username, "admin");
-                assert_eq!(request.password, SECRET);
             }
-            SetupCommand::InitializePreset(request) => {
-                assert_eq!(action, "initialize_preset");
-                assert_eq!(request.preset_id, "preset");
-                assert_eq!(request.config_digest, "digest");
-                assert_eq!(request.username, "admin");
-                assert_eq!(request.password, SECRET);
-            }
-            SetupCommand::CompleteInitialization(request) => {
-                assert_eq!(action, "complete_initialization");
-                assert_eq!(request.username, "admin");
-                assert_eq!(request.password, SECRET);
-            }
+            SetupCommand::CompleteActivation => panic!("completion is separately tested"),
             SetupCommand::RestoreSystem(request) => {
                 assert_eq!(action, "restore_system");
                 assert_eq!(request.disk_ids, ["disk"]);
@@ -311,4 +289,29 @@ fn setup_dto_errors_and_unknown_actions_keep_auth_and_lifecycle_precedence() {
     assert!(!data.join("config.json").exists());
     assert!(backend.inner.state.lock().unwrap().backend.is_none());
     backend.inner.recovering.store(false, Ordering::SeqCst);
+}
+
+#[test]
+fn complete_activation_is_an_empty_command_and_bootstrap_disk_commands_are_removed() {
+    assert!(matches!(
+        SetupCommand::parse("complete_activation", json!({})).unwrap(),
+        SetupCommand::CompleteActivation
+    ));
+    for body in [
+        json!(null),
+        json!({"selections":[]}),
+        json!({"username":"admin"}),
+    ] {
+        assert!(SetupCommand::parse("complete_activation", body).is_err());
+    }
+    for action in ["initialize_preset", "complete_initialization"] {
+        assert!(SetupCommand::parse(action, json!({})).is_err());
+    }
+    assert!(
+        SetupCommand::parse(
+            "initialize",
+            json!({"username":"admin","password":SECRET,"disk_ids":[]})
+        )
+        .is_err()
+    );
 }

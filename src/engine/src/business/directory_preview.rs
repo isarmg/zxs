@@ -1,0 +1,182 @@
+//! Read-only browsing of a frozen directory composition. No publication, IDs,
+//! operation receipt or persistent selection is created by this projection.
+use super::*;
+
+pub struct DirectoryBranchPreview {
+    branches: storage_contract::TrackedMap<DirectoryBranch>,
+    branch_id: String,
+    path: String,
+}
+impl DirectoryBranchPreview {
+    pub fn branch(&self) -> &DirectoryBranch {
+        &self.branches[&self.branch_id]
+    }
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    pub fn source_path(&self, path: &str) -> Result<String> {
+        let key = name_policy::path_key(path);
+        let scope = name_policy::path_key(&self.path);
+        if key == scope {
+            return Ok(self.branch().path.clone());
+        }
+        let suffix = if scope.is_empty() {
+            path
+        } else {
+            key.strip_prefix(&format!("{scope}/")).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::DirectoryBranchScope,
+                    "preview path is outside its directory",
+                )
+            })?;
+            path.splitn(self.path.split('/').count() + 1, '/')
+                .last()
+                .expect("invariant: admitted descendant has a suffix")
+        };
+        Ok(if self.branch().path.is_empty() {
+            suffix.into()
+        } else {
+            format!("{}/{suffix}", self.branch().path)
+        })
+    }
+    pub fn entry(&self, index: usize) -> Result<Entry> {
+        let entry = &self.branch().entries[index];
+        let path = super::directory::rebase_path(entry.path(), &self.branch().path, &self.path)?;
+        let mut entry = entry.clone();
+        entry.path = name_policy::PortablePath::parse(&path)?;
+        Ok(entry)
+    }
+    pub fn file_context(&self, index: usize) -> Result<Option<&FileContext>> {
+        let entry = &self.branch().entries[index];
+        if entry.kind == NamespaceEntryKind::Directory {
+            return Ok(None);
+        }
+        self.branch()
+            .file_contexts
+            .get(entry.lookup_key())
+            .map(Some)
+            .ok_or_else(|| Error::new(ErrorCode::StateInvalid, "preview file context missing"))
+    }
+}
+impl Engine {
+    pub fn preview_directory_branch(
+        &self,
+        repository: &str,
+        branch_id: &str,
+        expected_tree: &str,
+    ) -> Result<DirectoryBranchPreview> {
+        let repo = self
+            .state
+            .repositories
+            .get(repository)
+            .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "repository missing"))?;
+        let branch = self
+            .state
+            .directory_branches
+            .get(branch_id)
+            .filter(|branch| branch.repository_id == repository)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::DirectoryBranchNotFound,
+                    "directory branch missing",
+                )
+            })?;
+        if branch.head_tree_id != expected_tree {
+            return Err(Error::new(
+                ErrorCode::ListingChanged,
+                "directory branch changed; refresh before browsing",
+            ));
+        }
+        let path = if branch.directory_id == repository {
+            String::new()
+        } else {
+            self.list_tree_ref(&repo.main_branch_id)?
+                .iter()
+                .find(|entry| {
+                    entry.kind == NamespaceEntryKind::Directory
+                        && entry.entry_id == branch.directory_id
+                })
+                .ok_or_else(|| {
+                    Error::new(ErrorCode::DirectoryNotFound, "directory no longer exists")
+                })?
+                .path()
+                .to_owned()
+        };
+        Ok(DirectoryBranchPreview {
+            branches: self.state.directory_branches.clone(),
+            branch_id: branch_id.into(),
+            path,
+        })
+    }
+}
+
+/// A default publication names both the exact viewed composition and the
+/// namespace that will be replaced. Exact operation replay is resolved first.
+pub struct DirectoryDefaultSelection<'a> {
+    pub repository_id: &'a str,
+    pub directory_branch_id: &'a str,
+    pub expected_tree_id: &'a str,
+    pub expected_head: &'a str,
+    pub principal: &'a str,
+    pub operation_id: OperationId,
+}
+impl Engine {
+    pub fn set_directory_default(
+        &mut self,
+        request: DirectoryDefaultSelection<'_>,
+    ) -> Result<OperationResult> {
+        self.mutate(
+            "directory.default.set",
+            request.principal,
+            request.operation_id,
+            json_codec::json!({
+                "repository_id": request.repository_id,
+                "directory_branch_id": request.directory_branch_id,
+                "expected_tree_id": request.expected_tree_id,
+                "expected_head": request.expected_head,
+            }),
+            |engine, state, _| {
+                let repo = state
+                    .repositories
+                    .get(request.repository_id)
+                    .ok_or_else(|| {
+                        Error::new(ErrorCode::RepositoryNotFound, "repository missing")
+                    })?;
+                if state.branches[&repo.main_branch_id].head_commit_id != request.expected_head {
+                    return Err(Error::new(
+                        ErrorCode::ListingChanged,
+                        "default namespace changed; refresh before setting the default",
+                    ));
+                }
+                let branch = state
+                    .directory_branches
+                    .get(request.directory_branch_id)
+                    .filter(|branch| branch.repository_id == request.repository_id)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::DirectoryBranchNotFound,
+                            "directory branch missing",
+                        )
+                    })?;
+                if branch.head_tree_id != request.expected_tree_id {
+                    return Err(Error::new(
+                        ErrorCode::ListingChanged,
+                        "viewed directory branch changed; refresh before setting the default",
+                    ));
+                }
+                super::directory::select_change(
+                    state,
+                    request.repository_id,
+                    request.directory_branch_id,
+                    request.principal,
+                    request.operation_id,
+                    engine.config.max_entries,
+                )
+            },
+        )
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/directory_preview_tests.rs"]
+mod tests;

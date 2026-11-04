@@ -50,6 +50,7 @@ pub(crate) fn install(state: RwSignal<State>) {
             .unwrap_or_default();
         if demand.management {
             crate::management::load(state);
+            crate::admin::poll_storage_activation(state);
         }
         if demand.telemetry {
             crate::monitor::load(state);

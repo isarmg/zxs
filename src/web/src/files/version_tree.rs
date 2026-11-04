@@ -63,10 +63,11 @@ fn newer_first(a: &Version, b: &Version) -> std::cmp::Ordering {
 fn inherited_current(model: &Model, version: &str) -> bool {
     (model.file_history.current_inherited()
         && model.file_history.current_node_id() == Some(version))
-        || model
-            .selected
-            .as_ref()
-            .is_some_and(|entry| entry.inherited_content() && entry.node_id() == Some(version))
+        || (model.file_preview.is_none()
+            && model
+                .selected
+                .as_ref()
+                .is_some_and(|entry| entry.inherited_content() && entry.node_id() == Some(version)))
 }
 
 /// Iterative Kosaraju traversal: each adjacency is visited once in each

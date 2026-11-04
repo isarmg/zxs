@@ -23,7 +23,7 @@ fn business_mutations_require_an_active_session_before_browser_work() {
             // sign-out admission closes, even while credentials are kept
             // for a failed revocation retry.
             let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());
-            let _ = directory_branch(state, "folder".into(), "draft".into(), false);
+            let _ = directory_branch(state, "folder".into(), "draft".into());
             let _ = update_note(state, None, "note".into());
             select_branch(state, "other".into());
             let _ = record_mutation(state, "PATCH", "/api/test".into(), json!({}));
@@ -54,7 +54,7 @@ fn refreshed_or_navigating_directories_block_writes_at_the_action_boundary() {
         });
         // These must return before generating IDs or spawning browser work.
         let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());
-        let _ = directory_branch(state, "folder".into(), "draft".into(), false);
+        let _ = directory_branch(state, "folder".into(), "draft".into());
         let _ = update_note(state, None, "note".into());
         select_branch(state, "other".into());
         assert!(!state.with_untracked(|s| s.files.mutation_pending));
@@ -150,5 +150,56 @@ fn blocked_actions_do_not_clone_unrelated_state_snapshots() {
         crate::files::tags::start(state);
         crate::files::batch::start(state, crate::files::batch::Kind::Delete, None);
         crate::snapshot::CLONES.with(|count| assert_eq!(count.get(), 0));
+    });
+}
+
+#[test]
+fn preview_is_not_general_mutation_authority() {
+    use crate::files::model::DirectoryPreview;
+    let mut state = State {
+        authenticated: true,
+        ..Default::default()
+    };
+    state.files.writable = true;
+    state.files.loaded = true;
+    state.files.directory_preview = Some(DirectoryPreview {
+        branch: crate::files::test_entries::branch(json!({"directory_branch_id":"draft"})),
+        path: String::new(),
+    });
+    assert!(!super::super::write_allowed(&state));
+    assert!(!super::super::history_write_allowed(&state));
+    state.files.directory_preview = None;
+    state.files.file_preview = Some(crate::files::history::tests::branch(
+        json!({"branch_id":"draft"}),
+    ));
+    assert!(!super::super::write_allowed(&state));
+    assert!(!super::super::history_write_allowed(&state));
+}
+
+#[test]
+fn selecting_an_empty_file_branch_is_browsing_without_a_publication() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            ..Default::default()
+        });
+        state.update(|s| {
+            // Empty branches have no history anchor to fetch. Any old select
+            // mutation would generate a browser ID and fail on this runner.
+            s.files.file_history = crate::files::history::tests::history(json!({
+                "selected_branch_id":"default",
+                "branches":[crate::files::history::tests::branch_wire(json!({
+                    "branch_id":"empty", "node_id":null, "version_id":null,
+                    "materialized":false, "own_version_id":null,
+                }))],
+            }));
+        });
+        select_branch(state, "empty".into());
+        state.with_untracked(|s| {
+            assert_eq!(s.files.file_preview.as_ref().unwrap().id(), "empty");
+            assert_eq!(s.files.file_history.selected(), Some("default"));
+            assert!(!s.files.mutation_pending);
+            assert!(s.files.operations.is_empty() && s.files.default_operation.is_none());
+        });
     });
 }

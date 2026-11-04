@@ -1255,7 +1255,7 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             "PUT",
             "/api/repositories/repository/default-branch",
             Some(
-                json!({"directory_branch_id":"directory","operation_id":"op_00000000000000000000000000000000"}),
+                json!({"directory_branch_id":"directory","expected_tree_id":"tree","expected_head":"head","operation_id":"op_00000000000000000000000000000000"}),
             ),
         ),
         ("GET", "/api/admin/disks", None),

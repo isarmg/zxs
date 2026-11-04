@@ -51,6 +51,8 @@ thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credenti
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("{0}")]
+    StorageManagement(#[source] crate::admin::StorageManagementError),
     #[error("invalid SMB account response: {0}")]
     SmbAccount(#[source] json_codec::Error),
     #[error("invalid workspace capacity: {0}")]
@@ -212,14 +214,14 @@ struct Fetched {
 }
 
 async fn fetch(method: &str, path: &str, body: Option<Value>) -> Result<Fetched, Error> {
-    fetch_authorized(method, path, body, None, None).await
+    fetch_authorized(method, path, body, false, None).await
 }
 
 async fn fetch_authorized(
     method: &str,
     path: &str,
     body: Option<Value>,
-    bootstrap: Option<(&str, Option<&str>)>,
+    public_setup: bool,
     cancellation: Option<ReadCancellation>,
 ) -> Result<Fetched, Error> {
     validate_path(path)?;
@@ -243,29 +245,15 @@ async fn fetch_authorized(
         .headers()
         .set("Content-Type", "application/json")
         .map_err(js_error)?;
-    if let Some((key, csrf)) = bootstrap {
-        request
-            .headers()
-            .set("X-ZXS-Bootstrap", key)
-            .map_err(js_error)?;
-        if let Some(csrf) = csrf {
-            request
-                .headers()
-                .set("X-CSRF-Token", csrf)
-                .map_err(js_error)?;
-        }
-    }
     let credential_generation = CREDENTIALS.with(|saved| {
         let credentials = saved.borrow();
-        if bootstrap.is_none()
-            && let Some(token) = credentials.token.as_ref()
-        {
+        if !public_setup && let Some(token) = credentials.token.as_ref() {
             request
                 .headers()
                 .set("Authorization", &format!("Bearer {token}"))
                 .map_err(js_error)?;
         }
-        if bootstrap.is_none()
+        if !public_setup
             && !matches!(method, "GET" | "HEAD")
             && let Some(token) = credentials.csrf.as_ref()
         {
@@ -290,7 +278,7 @@ async fn fetch_authorized(
     Ok(Fetched {
         response: result?.dyn_into().map_err(js_error)?,
         credential_generation,
-        revoke_on_unauthorized: bootstrap.is_none(),
+        revoke_on_unauthorized: !public_setup,
         _timeout: timer,
         abort,
     })
@@ -420,36 +408,25 @@ pub(crate) async fn cancellable_request(
     body: Option<Value>,
     cancellation: ReadCancellation,
 ) -> Result<Value, Error> {
-    decode(fetch_authorized(method, path, body, None, Some(cancellation)).await?).await
+    decode(fetch_authorized(method, path, body, false, Some(cancellation)).await?).await
 }
 
-/// A bootstrap secret is scoped to the explicit same-origin setup endpoints and never saved.
+/// Public one-time account setup; no reusable bootstrap capability is accepted.
 pub(crate) async fn setup_request(
     method: &str,
     path: &str,
     body: Option<Value>,
-    key: &str,
-    csrf: Option<&str>,
 ) -> Result<Value, Error> {
     if !matches!(
         (method, path),
-        ("GET", "/api/setup/status")
-            | ("POST", "/api/setup/initialize")
-            | ("POST", "/api/setup/initialize-preset")
-            | ("POST", "/api/setup/complete-initialization")
-            | ("POST", "/api/setup/preset-preview")
-    ) || key.len() != 64
-        || !key.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+        ("GET", "/api/setup/status") | ("POST", "/api/setup/initialize")
+    ) {
         return Err(error(
             storage_contract::ErrorCode::InvalidSetupRequest,
-            t(
-                "请输入服务器本地提供的 64 位授权密钥。",
-                "Enter the 64-character authorization key provided locally on the server.",
-            ),
+            t("无效的首次设置请求。", "Invalid first-time setup request."),
         ));
     }
-    decode(fetch_authorized(method, path, body, Some((key, csrf)), None).await?).await
+    decode(fetch_authorized(method, path, body, true, None).await?).await
 }
 
 /// Public session identity. Authentication secrets never enter the UI model.

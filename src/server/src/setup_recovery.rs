@@ -1,18 +1,22 @@
 //! Offline management operations. HTTP adapters must retain their normal origin,
 //! CSRF, request-size and admission limits and hold the runtime lifecycle lock.
-//! Disk paths and bootstrap authorization are local deployment inputs, never
-//! request-provided paths. Missing configuration is not proof of an empty pool.
+//! First-account creation is public only on a proven empty system. Storage
+//! activation accepts identity-bound selections within the configured discovery
+//! root; disaster recovery retains separate local bootstrap authorization.
 use crate::{ApiError, auth::Identity};
 use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    io::Read,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits, ValidatedConfig};
 
+mod activation;
+mod discovery;
+pub use activation::{StorageActivationRequest, StorageActivationState, StorageActivationStatus};
 mod http;
 pub(crate) use http::{protected_routes, public_routes};
 
@@ -33,6 +37,7 @@ pub fn valid_local_setup_id(id: &str) -> bool {
 #[serialization(rename_all = "snake_case")]
 pub enum InstallationState {
     Empty,
+    ManagementReady,
     Existing,
     RecoveryRequired,
     Unavailable,
@@ -254,41 +259,10 @@ impl SetupRecovery {
         self
     }
 
-    /// This is deliberately conservative. Files, unreadable mounts and partial
-    /// setup intent block initialization instead of being treated as an empty pool.
+    /// System installation state does not probe or require storage candidates.
+    /// Persisted pool/authority evidence still prohibits account reinitialization.
     pub fn status(&self) -> SetupStatus {
-        let state = if self
-            .data_root
-            .join("config.json")
-            .symlink_metadata()
-            .is_ok()
-        {
-            InstallationState::Existing
-        } else if self
-            .data_root
-            .join("setup-intent.json")
-            .symlink_metadata()
-            .is_ok()
-            || self
-                .data_root
-                .join("management-authority.json")
-                .symlink_metadata()
-                .is_ok()
-            || self
-                .management_root
-                .join("management-auth.json")
-                .symlink_metadata()
-                .is_ok()
-            || self.data_root.join("auth.json").symlink_metadata().is_ok()
-        {
-            InstallationState::RecoveryRequired
-        } else {
-            match self.empty_installation() {
-                Ok(true) => InstallationState::Empty,
-                Ok(false) => InstallationState::RecoveryRequired,
-                Err(_) => InstallationState::Unavailable,
-            }
-        };
+        let state = self.management_status();
         SetupStatus {
             state,
             disk_ids: self.disks.keys().cloned().collect(),
@@ -305,38 +279,26 @@ impl SetupRecovery {
     }
 
     fn empty_installation(&self) -> Result<bool, ApiError> {
-        if self.disks.is_empty() {
-            return Ok(false);
-        }
-        match fs::read_dir(&self.data_root) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = entry.map_err(ApiError::io)?;
-                    let name = entry.file_name();
-                    if entry.path() == self.management_root
-                        && checked_directory(&entry.path())? == self.management_root
-                    {
-                        continue;
-                    }
-                    if name != "setup.lock" {
-                        return Ok(false);
-                    }
-                }
+        self.empty_system_directory(&["setup.lock"])
+    }
+
+    fn empty_system_directory(&self, allowed: &[&str]) -> Result<bool, ApiError> {
+        for entry in fs::read_dir(&self.data_root).map_err(ApiError::io)? {
+            let entry = entry.map_err(ApiError::io)?;
+            if entry.path() == self.management_root
+                && checked_directory(&entry.path())? == self.management_root
+            {
+                continue;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(ApiError::io(e)),
-        }
-        for (id, path) in &self.disks {
-            let expected = self.identities.get(id).ok_or_else(|| {
-                ApiError::new(
-                    ::http::StatusCode::SERVICE_UNAVAILABLE,
-                    storage_contract::ErrorCode::DiskUnavailable,
-                    "a configured disk is unavailable",
-                )
-            })?;
-            if checked_directory(path)? != *path || directory_identity(path)? != *expected {
+            if !allowed.iter().any(|name| entry.file_name() == *name) {
                 return Ok(false);
             }
+        }
+        Ok(true)
+    }
+
+    fn require_empty_disks(&self, paths: &[PathBuf]) -> Result<(), ApiError> {
+        for path in paths {
             if fs::read_dir(path)
                 .map_err(ApiError::io)?
                 .next()
@@ -344,10 +306,13 @@ impl SetupRecovery {
                 .map_err(ApiError::io)?
                 .is_some()
             {
-                return Ok(false);
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::RecoveryRequired,
+                    "selected storage directory is not empty; existing data is preserved",
+                ));
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// The token must arrive in a request header, never a URL. Provision exactly
@@ -517,6 +482,7 @@ impl SetupRecovery {
             ));
         }
         let paths = self.selected(&request.disk_ids)?;
+        self.require_empty_disks(&paths)?;
         if request.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
         }
@@ -643,6 +609,7 @@ impl SetupRecovery {
             ));
         }
         let (config, ids) = self.preset(&request.preset_id)?;
+        self.require_empty_disks(&self.selected(&ids)?)?;
         if request.config_digest != value_digest(&config)? {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::SetupPresetChanged,
@@ -659,21 +626,53 @@ impl SetupRecovery {
         )
     }
 
+    /// A previous create/rename may be visible after its directory barrier
+    /// failed. Re-admit the exact bytes only after file and held-parent sync.
+    fn read_durable_control<T: data_serialization::de::DeserializeOwned>(
+        &self,
+        name: &str,
+    ) -> Result<T, ApiError> {
+        use platform_io::fs_safety::{EntryName, PrivateDirectory, linux::open_private_regular};
+        let directory =
+            PrivateDirectory::open_existing(&self.data_root).map_err(control_publication_error)?;
+        let name = EntryName::new(name).map_err(ApiError::invalid_source)?;
+        let mut file =
+            open_private_regular(&directory, &name).map_err(control_publication_error)?;
+        let metadata = file.metadata().map_err(ApiError::io)?;
+        if metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o7777 != 0o600
+        {
+            return Err(ApiError::invalid(
+                "setup control record must be service-owned mode 0600",
+            ));
+        }
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut file)
+            .take(MAX_LOCAL_CONFIG_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(ApiError::io)?;
+        if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
+            return Err(ApiError::invalid("setup control record exceeds limit"));
+        }
+        let value = storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)?;
+        file.sync_all()
+            .map_err(|error| control_publication_error(error.into()))?;
+        directory.sync().map_err(control_publication_error)?;
+        Ok(value)
+    }
+
     fn write_control<T: Serialize>(&self, name: &str, value: &T) -> Result<(), ApiError> {
         let bytes =
             json_codec::to_vec(value).expect("invariant: internal JSON serialization succeeds");
         if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
             return Err(ApiError::invalid("setup control record exceeds limit"));
         }
-        let path = self.data_root.join(name);
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true).mode(0o600);
-        let mut file = options.open(path).map_err(ApiError::io)?;
-        file.write_all(&bytes).map_err(ApiError::io)?;
-        file.sync_all().map_err(ApiError::io)?;
-        File::open(&self.data_root)
-            .and_then(|f| f.sync_all())
-            .map_err(ApiError::io)
+        let directory = platform_io::fs_safety::PrivateDirectory::open_existing(&self.data_root)
+            .map_err(control_publication_error)?;
+        let name =
+            platform_io::fs_safety::EntryName::new(name).map_err(ApiError::invalid_source)?;
+        platform_io::fs_safety::AtomicFile::create(&directory, &name, &bytes)
+            .map_err(control_publication_error)
     }
 
     fn write_ready(&self, intent: &SetupIntent) -> Result<(), ApiError> {
@@ -979,6 +978,17 @@ impl SetupRecovery {
         tests::after_restore();
         restore(engine)
     }
+}
+
+fn control_publication_error(source: platform_io::fs_safety::Error) -> ApiError {
+    let mut error = ApiError::new(
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+        storage_contract::ErrorCode::IoError,
+        "setup control evidence could not be durably published; inspect the current status",
+    )
+    .with_source(source);
+    error.retryable = false;
+    error
 }
 
 fn checked_directory(path: &Path) -> Result<PathBuf, ApiError> {

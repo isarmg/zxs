@@ -298,6 +298,70 @@ fn listed_current_entry(
         historical_only: None,
     })
 }
+/// Frozen browsing never consults the mutable current-file selection for body
+/// ownership, and it never grants a write context for the previewed entry.
+fn listed_preview_entry(
+    engine: &Engine,
+    repo: &Repository,
+    preview: &storage_engine::DirectoryBranchPreview,
+    index: usize,
+    prefix: &str,
+) -> Result<crate::ListingEntry, ApiError> {
+    let entry = preview.entry(index).map_err(error)?;
+    let context = preview.file_context(index).map_err(error)?;
+    let version = match entry.kind {
+        storage_contract::NamespaceEntryKind::Directory => {
+            crate::ListingVersion::Directory(String::new())
+        }
+        storage_contract::NamespaceEntryKind::File => crate::ListingVersion::File {
+            content: super::branch::capture_content(
+                engine.state(),
+                Some(&entry.version_id),
+                context
+                    .filter(|context| context.inherited_from.is_some())
+                    .map(|_| entry.version_id.as_str()),
+            ),
+            backup_version: None,
+        },
+    };
+    Ok(crate::ListingEntry {
+        entry_id: entry.entry_id.clone(),
+        name: entry.name().into(),
+        path: if prefix.is_empty() {
+            entry.path().into()
+        } else {
+            format!("{prefix}/{}", entry.path())
+        },
+        kind: entry.kind,
+        size: entry.size,
+        file_id: entry.file_id.clone(),
+        version,
+        location: Some(crate::ListingLocation {
+            repository_id: repo.repository_id.clone(),
+            repository_path: Some(entry.path().into()),
+            container: entry.kind == storage_contract::NamespaceEntryKind::File,
+            selected_branch_id: context.map(|context| context.branch_id.clone()),
+        }),
+        note: Some(
+            engine
+                .state()
+                .file_notes
+                .get(&entry.file_id)
+                .cloned()
+                .unwrap_or_default(),
+        ),
+        node_id: context.map(|context| {
+            context
+                .node_id
+                .clone()
+                .unwrap_or_else(|| entry.version_id.clone())
+        }),
+        read_only: context.map(|_| true),
+        backup: false,
+        historical_only: None,
+    })
+}
+
 fn directory(name: &str, display: &str, id: &str) -> crate::ListingEntry {
     crate::ListingEntry {
         entry_id: id.into(),

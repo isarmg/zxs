@@ -11,7 +11,7 @@ const PAYLOADS: [&str; 2] = ["first real version\n", "second real version: æµ‹è¯
 /// Use the same explicit authority publication as production setup. A pool
 /// credential snapshot alone is deliberately insufficient for daemon startup.
 pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &str) -> Result<()> {
-    use super::{File, OpenOptions, OpenOptionsExt, Write, fs, wait_for};
+    use super::{fs, wait_for};
     use std::{
         collections::BTreeMap,
         os::unix::fs::DirBuilderExt,
@@ -24,23 +24,22 @@ pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &st
     let management = pool.join("management");
     fs::DirBuilder::new().mode(0o700).create(&pool)?;
     fs::DirBuilder::new().mode(0o700).create(&management)?;
-    let mut entropy = [0u8; 32];
-    File::open("/dev/urandom")?.read_exact(&mut entropy)?;
-    let key: String = entropy.iter().map(|b| format!("{b:02x}")).collect();
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(management.join("bootstrap.key"))?
-        .write_all(key.as_bytes())?;
+    let discovery = root.join("disks");
+    fs::DirBuilder::new().mode(0o700).create(&discovery)?;
     let mut disks = BTreeMap::new();
     for slot in ["P01", "B01", "C01"] {
-        let path = root.join(slot);
+        let path = discovery.join(slot);
         fs::DirBuilder::new().mode(0o700).create(&path)?;
         disks.insert(slot.to_owned(), path);
     }
-    let (backend, auth) =
-        storage_server::management::open_service_with_disks(&pool, &management, disks, true)?;
+    let (backend, auth) = storage_server::management::open_service_with_options(
+        &pool,
+        &management,
+        storage_server::management::ManagementOptions {
+            allow_development_setup: true,
+            ..Default::default()
+        },
+    )?;
     let auth = Arc::new(Mutex::new(auth));
     backend.start_management(auth.clone());
     wait_for("fixture initial storage discovery", || {
@@ -52,10 +51,43 @@ pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &st
     })?;
     backend.setup_operation(
         "initialize",
-        json_codec::json!({"disk_ids":["P01","B01","C01"],"mode":"development",
-            "username":PRINCIPAL,"password":password}),
-        Some(&key),
+        json_codec::json!({"username":PRINCIPAL,"password":password}),
         None,
+        None,
+    )?;
+    let identity = {
+        let mut auth = auth.lock().unwrap();
+        let login = auth.login(PRINCIPAL, password)?;
+        auth.authenticate(&login.token)?
+    };
+    backend.setup_operation(
+        "set_discovery_root",
+        json_codec::json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
+        None,
+        Some(&identity),
+    )?;
+    let mut selections = Vec::new();
+    // Preserve the declared primary/backup order; BTreeMap's sort is not topology.
+    for slot in ["P01", "B01", "C01"] {
+        let root_path = disks[slot].to_str().ok_or("fixture root is not UTF-8")?;
+        let listing = storage_server::storage_directories::browse_within(
+            discovery.to_str().ok_or("non-UTF8 discovery root")?,
+            root_path,
+        )?;
+        selections.push(storage_server::storage_directories::inspect_within(
+            discovery.to_str().ok_or("non-UTF8 discovery root")?,
+            &storage_engine::storage_directories::InspectRequest {
+                mount_path: listing.mount_path,
+                root_path: root_path.into(),
+            },
+            &[pool.clone(), management.clone()],
+        )?);
+    }
+    backend.setup_operation(
+        "activate",
+        json_codec::json!({"selections":selections,"mode":"development"}),
+        None,
+        Some(&identity),
     )?;
     wait_for("fixture explicit management initialization", || {
         let status = backend.management_status();

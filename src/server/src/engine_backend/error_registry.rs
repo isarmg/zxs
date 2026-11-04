@@ -77,6 +77,7 @@ pub(super) const PUBLIC_STATUS: &[(ErrorCode, ::http::StatusCode)] = &[
     (ErrorCode::PreparationStale, ::http::StatusCode::CONFLICT),
     (ErrorCode::HeadConflict, ::http::StatusCode::CONFLICT),
     (ErrorCode::HistoryChanged, ::http::StatusCode::CONFLICT),
+    (ErrorCode::ListingChanged, ::http::StatusCode::CONFLICT),
     (ErrorCode::BranchNotActive, ::http::StatusCode::CONFLICT),
     (ErrorCode::Fenced, ::http::StatusCode::CONFLICT),
     (ErrorCode::LeaseExpired, ::http::StatusCode::CONFLICT),
@@ -478,7 +479,6 @@ pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
         | ErrorCode::InDoubt
         | ErrorCode::IsDirectory
         | ErrorCode::ItemPathMismatch
-        | ErrorCode::ListingChanged
         | ErrorCode::LogFork
         | ErrorCode::LogFormatUnsupported
         | ErrorCode::MainBranchRequired
@@ -599,6 +599,7 @@ pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
         | ErrorCode::HistoryChanged
         | ErrorCode::IdempotencyKeyReused
         | ErrorCode::LeaseExpired
+        | ErrorCode::ListingChanged
         | ErrorCode::NamespaceConflict
         | ErrorCode::NameCollision
         | ErrorCode::PlanClosed

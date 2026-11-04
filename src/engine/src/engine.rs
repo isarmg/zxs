@@ -359,6 +359,48 @@ impl Engine {
         }
         let config = config.with_disk_roots(roots)?;
         let disk_resources = Arc::new(DiskResources::open(&config, false)?);
+        Self::initialize_resources(root, config, disk_resources)
+    }
+
+    /// Initialize exactly the selected, already-open empty storage directories.
+    /// The handles are consumed and retained for all writes; their paths are
+    /// diagnostic/configuration bindings, never reopened as write destinations.
+    /// No storage directory is created, formatted, emptied or chmodded here.
+    ///
+    /// # Errors
+    /// Rejects a changed path binding, non-private or nonempty directory, wrong
+    /// handle count, existing pool, or any lock/persistence failure.
+    pub fn initialize_held(
+        root: &Path,
+        config: ValidatedConfig,
+        directories: Vec<File>,
+    ) -> Result<Self> {
+        let root = existing_private_dir(root)?.path().to_path_buf();
+        if root.join("config.json").try_exists()? {
+            return Err(Error::new(
+                ErrorCode::AlreadyInitialized,
+                "configuration already exists; use open/recovery",
+            ));
+        }
+        if config
+            .disks
+            .iter()
+            .any(|disk| disk.root.starts_with(&root) || root.starts_with(&disk.root))
+        {
+            return Err(Error::new(
+                ErrorCode::ConfigInvalid,
+                "storage and system directories must not overlap",
+            ));
+        }
+        let disk_resources = Arc::new(DiskResources::initialize_held(&config, directories)?);
+        Self::initialize_resources(root, config, disk_resources)
+    }
+
+    fn initialize_resources(
+        root: PathBuf,
+        config: ValidatedConfig,
+        disk_resources: Arc<DiskResources>,
+    ) -> Result<Self> {
         let locks = acquire_locks(&root, &disk_resources)?;
         for d in &config.disks {
             let disk = disk_resources.get(d)?;
@@ -455,6 +497,27 @@ impl Engine {
         Self::open_mode(root, RecoveryMode::PreservePending, workspace_limits)
     }
 
+    /// Recover using exactly the pre-admitted storage directory handles. No
+    /// writable journal is opened before those handles and their seals have
+    /// been validated; path replacement cannot redirect recovery writes.
+    pub fn open_for_recovery_held(
+        root: &Path,
+        workspace_limits: Option<RetainedWorkspaceLimits>,
+        directories: Vec<File>,
+    ) -> Result<Self> {
+        let root = existing_private_dir(root)?.path().to_path_buf();
+        let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
+            .with_workspace_limits(workspace_limits)?;
+        let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
+        let mut engine = Self::prepare_recovery_resources(root, config, resources)?;
+        let mut prepared = engine.prepare_recovery()?;
+        engine.preflight_workspace_receipts(&mut prepared)?;
+        engine.recover_prepared(RecoveryMode::PreservePending, prepared)?;
+        engine.load_workspaces()?;
+        engine.rebuild_index()?;
+        Ok(engine)
+    }
+
     fn open_mode(
         root: &Path,
         mode: RecoveryMode,
@@ -477,6 +540,14 @@ impl Engine {
     /// opened until both preflights have accepted the retained evidence.
     fn prepare_workspace_recovery(root: PathBuf, config: ValidatedConfig) -> Result<Self> {
         let disk_resources = Arc::new(DiskResources::open(&config, true)?);
+        Self::prepare_recovery_resources(root, config, disk_resources)
+    }
+
+    fn prepare_recovery_resources(
+        root: PathBuf,
+        config: ValidatedConfig,
+        disk_resources: Arc<DiskResources>,
+    ) -> Result<Self> {
         let locks = acquire_locks(&root, &disk_resources)?;
         let engine = Self {
             root,

@@ -14,12 +14,24 @@
 #define ZXS_STAGING_PREFIX ".state-atomic-"
 #endif
 
+static int injection_active(const char *root) {
+    const char *explicit_marker = getenv("ZXS_ATOMIC_TRIGGER");
+    char marker[4096];
+    if (explicit_marker) return access(explicit_marker, F_OK) == 0;
+    snprintf(marker, sizeof(marker), "%s/.inject", root);
+    return access(marker, F_OK) == 0;
+}
+
+static int recovery_enabled(void) {
+    const char *marker = getenv("ZXS_ATOMIC_RECOVERY_TRIGGER");
+    return marker && access(marker, F_OK) == 0;
+}
+
 static int kind(int fd) {
     const char *root = getenv("ZXS_ATOMIC_ROOT");
     if (!root) return 0;
-    char marker[4096], descriptor[64], path[4096];
-    snprintf(marker, sizeof(marker), "%s/.inject", root);
-    if (access(marker, F_OK)) return 0;
+    char descriptor[64], path[4096];
+    if (!injection_active(root)) return 0;
     snprintf(descriptor, sizeof(descriptor), "/proc/self/fd/%d", fd);
     ssize_t size = readlink(descriptor, path, sizeof(path) - 1);
     if (size < 0) return 0;
@@ -28,6 +40,10 @@ static int kind(int fd) {
     if (fstat(fd, &metadata)) return 0;
     if (S_ISDIR(metadata.st_mode) && !strcmp(path, root)) return 2;
     size_t length = strlen(root);
+    const char *destination = getenv("ZXS_ATOMIC_DESTINATION");
+    if (getenv("ZXS_ATOMIC_READ_DESTINATION") && destination
+        && S_ISREG(metadata.st_mode) && !strncmp(path, root, length)
+        && path[length] == '/' && !strcmp(path + length + 1, destination)) return 3;
     return S_ISREG(metadata.st_mode) && !strncmp(path, root, length)
         && path[length] == '/' &&
         (!strncmp(path + length + 1, ZXS_STAGING_PREFIX, strlen(ZXS_STAGING_PREFIX))
@@ -56,12 +72,18 @@ int fsync(int fd) {
             if (!stat(destination, &published) && source.st_ino == published.st_ino
                 && source.st_dev == published.st_dev) abort();
             record("file-sync");
+        } else if (target == 3) {
+            /* Recovery must synchronize the exact already-published inode. */
+            if (stat(destination, &published) || source.st_ino != published.st_ino
+                || source.st_dev != published.st_dev) abort();
+            record("published-file-sync");
         } else {
             if (stat(destination, &published) || !S_ISREG(published.st_mode)) abort();
             record("directory-sync");
         }
-        if ((target == 1 && !strcmp(stage, "file-sync")) ||
-            (target == 2 && !strcmp(stage, "directory-sync"))) {
+        if (!recovery_enabled() && ((target == 1 && !strcmp(stage, "file-sync")) ||
+            (target == 2 && !strcmp(stage, "directory-sync")) ||
+            (target == 3 && !strcmp(stage, "published-file-sync")))) {
             errno = EIO;
             return -1;
         }
@@ -97,9 +119,8 @@ static int rename_target(int olddirfd, const char *oldpath, int newdirfd, const 
     const char *root = getenv("ZXS_ATOMIC_ROOT");
     const char *stage = getenv("ZXS_ATOMIC_STAGE");
     if (!root || !stage || (strcmp(stage, "rename-before") && strcmp(stage, "rename-after") && strcmp(stage, "create-race"))) return 0;
-    char marker[4096], descriptor[64], path[4096];
-    snprintf(marker, sizeof(marker), "%s/.inject", root);
-    if (access(marker, F_OK) || (strncmp(oldpath, ZXS_STAGING_PREFIX, strlen(ZXS_STAGING_PREFIX))
+    char descriptor[64], path[4096];
+    if (!injection_active(root) || (strncmp(oldpath, ZXS_STAGING_PREFIX, strlen(ZXS_STAGING_PREFIX))
         && strncmp(oldpath, ".zxs-payload-", 13) && strcmp(oldpath, "source"))) return 0;
     const char *destination = getenv("ZXS_ATOMIC_DESTINATION");
     if (strcmp(newpath, destination ? destination : "destination")) return 0;

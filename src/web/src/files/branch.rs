@@ -5,7 +5,7 @@ use web_interface::{html, i18n::t, prelude::*};
 #[derive(Clone)]
 pub(super) enum Target {
     CurrentDirectory,
-    Directory { path: String, select: bool },
+    Directory { path: String },
     CurrentFileVersion,
     HistoryNode(String),
 }
@@ -22,11 +22,9 @@ impl Target {
         match self {
             Self::CurrentDirectory => {
                 let path = state.with_untracked(|s| s.files.directory.clone());
-                actions::directory_branch(state, path, name, false)
+                actions::directory_branch(state, path, name)
             }
-            Self::Directory { path, select } => {
-                actions::directory_branch(state, path, name, select)
-            }
+            Self::Directory { path } => actions::directory_branch(state, path, name),
             Self::CurrentFileVersion | Self::HistoryNode(_) => {
                 let (version, node) = state.with_untracked(|s| file_source(&s.files, &self))?;
                 actions::create_branch(state, version, node, name)

@@ -3,7 +3,12 @@ pub struct FileSelectionLocation {
     pub repository_id: String,
     pub path: name_policy::PortablePath,
 }
+pub struct FileDefaultBaseline {
+    pub expected_node_id: String,
+    pub expected_head: String,
+}
 pub struct SelectFileBranch {
+    pub default_baseline: Option<FileDefaultBaseline>,
     pub file_id: String,
     pub branch_id: String,
     pub location: Option<FileSelectionLocation>,

@@ -143,6 +143,57 @@ pub(crate) fn search(state: RwSignal<State>, query: String) {
     });
 }
 
+/// Choosing a branch is a read. Only the separate default action publishes it.
+pub(crate) fn preview_directory_branch(state: RwSignal<State>, id: String) {
+    let branch = state.with_untracked(|s| {
+        if !s.session_active() || s.files.loading || super::pending(s) {
+            return None;
+        }
+        s.files
+            .directory_branches
+            .iter()
+            .find(|branch| branch.id() == id)
+            .cloned()
+    });
+    let Some(branch) = branch else {
+        return;
+    };
+    state.update(|s| {
+        s.notices.leave();
+        s.files.directory_preview = Some(crate::files::model::DirectoryPreview {
+            branch,
+            path: s.files.directory.clone(),
+        });
+        s.files.cancel_listing();
+        s.files.reset_page();
+        s.files.clear_selection();
+        s.files.entries = Default::default();
+        s.files.loaded = false;
+        s.files.writable = false;
+    });
+    load_entries(state);
+}
+pub(crate) fn return_to_default_file(state: RwSignal<State>) {
+    if !state.with_untracked(|s| s.session_active() && !super::pending(s)) {
+        return;
+    }
+    state.update(|s| s.files.file_preview = None);
+    load_file_history(state);
+}
+
+pub(crate) fn return_to_default(state: RwSignal<State>) {
+    if !state.with_untracked(|s| s.session_active() && !super::pending(s)) {
+        return;
+    }
+    state.update(|s| {
+        s.files.directory_preview = None;
+        s.files.file_preview = None;
+        s.files.clear_selection();
+        s.files.reset_page();
+    });
+    load_entries(state);
+}
+
 pub(crate) fn change_page(state: RwSignal<State>, next: bool) {
     let cursor = state.with_untracked(|s| {
         if s.files.loading || super::pending(s) {
@@ -214,9 +265,17 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
     else {
         return;
     };
+    let preview = state.with_untracked(|s| s.files.directory_preview.clone());
     let directory_key = DirectoryKey::navigation(&directory);
     spawn_local(async move {
         let mut endpoint = page_endpoint(&slot, &directory, &query, cursor.as_deref());
+        if let Some(preview) = &preview {
+            endpoint.push_str(&format!(
+                "&directory_branch_id={}&expected_tree_id={}",
+                api::segment(preview.branch.id()),
+                api::segment(preview.branch.head_tree_id())
+            ));
+        }
         if let Some(selected) = &selected {
             endpoint.push_str(&format!(
                 "&selected_path={}&selected_entry_id={}",
@@ -227,13 +286,20 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
         let result = api::cancellable_get(&endpoint, cancellation)
             .await
             .and_then(|value| {
-                Page::parse(
+                let page = Page::parse(
                     value,
                     &slot,
                     &directory_key,
                     super::super::page::PAGE_SIZE,
                     selected.as_ref(),
-                )
+                )?;
+                if page.preview() != preview.is_some() {
+                    return Err(crate::files::page::DecodeError::Relation(
+                        "listing preview differs from the requested view",
+                    )
+                    .into());
+                }
+                Ok(page)
             });
         if !accept_read_response(state, epoch, &result)
             || !current_listing(state, epoch, &slot, &directory, generation)
@@ -247,10 +313,12 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
                 s.files.reset_page();
                 s.files.entries = Default::default();
                 s.files.loaded = false;
-                s.set_file_notice(t(
+                let preview_changed = s.files.directory_preview.take().is_some();
+                if preview_changed { s.files.clear_selection(); }
+                s.set_file_notice(if preview_changed { t("浏览分支已改变，已返回默认视图；请重新选择分支。", "The browsed branch changed. Returned to the default view; choose the branch again.") } else { t(
                     "目录已改变，已返回第一页。",
                     "The folder changed. Returned to the first page.",
-                ));
+                ) });
             });
             request_page(state, true);
             return;
@@ -290,12 +358,17 @@ fn apply_page(state: &mut State, page: Page, requested: Option<&Entry>) {
     state.files.previous_cursor = page.previous;
     state.files.total_entries = page.total;
     state.files.directory_branches = page.branches;
-    (state.files.repository_id, state.files.repository_path) = page
+    (
+        state.files.repository_id,
+        state.files.repository_path,
+        state.files.namespace_head,
+    ) = page
         .context
         .map(|context| {
             (
                 context.repository_id().to_owned(),
                 context.repository_path().to_owned(),
+                context.base_head().to_owned(),
             )
         })
         .unwrap_or_default();

@@ -104,6 +104,10 @@ pub(crate) struct Model {
     pub directory_branches_supported: bool,
     pub repository_id: String,
     pub repository_path: String,
+    pub namespace_head: String,
+    pub directory_preview: Option<DirectoryPreview>,
+    pub file_preview: Option<FileBranch>,
+    pub default_operation: Option<String>,
     pub default_branch_scope: bool,
     pub loaded: bool,
     pub loading: bool,
@@ -128,12 +132,37 @@ pub(crate) struct Model {
     pub mutation_pending: bool,
     pub query: String,
 }
+#[derive(Clone, Debug)]
+pub(crate) struct DirectoryPreview {
+    pub branch: DirectoryBranch,
+    pub path: String,
+}
+impl DirectoryPreview {
+    pub(crate) fn at_directory(&self, path: &str) -> bool {
+        name_policy::path_key(&self.path) == name_policy::path_key(path)
+    }
+    fn contains(&self, path: &str) -> bool {
+        let scope = name_policy::path_key(&self.path);
+        let path = name_policy::path_key(path);
+        scope.is_empty() || path == scope || path.starts_with(&format!("{scope}/"))
+    }
+}
 impl Model {
     /// Reset location-owned state without discarding disk reads or operation
     /// recovery. Session admission and starting the next read belong to actions.
     pub(crate) fn navigate(&mut self, destination: Navigation) {
         self.cancel_listing();
         self.reset_page();
+        let preserve_preview = match &destination {
+            Navigation::Directory(path) => self
+                .directory_preview
+                .as_ref()
+                .is_some_and(|preview| preview.contains(path)),
+            Navigation::Root | Navigation::Disk(_) => false,
+        };
+        if !preserve_preview {
+            self.directory_preview = None;
+        }
         match destination {
             Navigation::Root => {
                 self.slot.clear();
@@ -160,6 +189,7 @@ impl Model {
         self.directory_branches_supported = false;
         self.repository_id.clear();
         self.repository_path.clear();
+        self.namespace_head.clear();
         self.default_branch_scope = false;
         self.clear_selection();
         self.batch = None;
@@ -198,6 +228,7 @@ impl Model {
         self.tag_edit = None;
         self.checked_nodes.clear();
         self.selected = None;
+        self.file_preview = None;
         self.file_history = Default::default();
     }
 
@@ -347,8 +378,17 @@ pub(crate) fn selected_entry_read_only(model: &Model) -> bool {
 
 pub(crate) fn selected_branch(model: &Model) -> String {
     model
-        .file_history
-        .selected()
+        .file_preview
+        .as_ref()
+        .map(FileBranch::id)
+        .or_else(|| {
+            model
+                .selected
+                .as_ref()
+                .filter(|entry| entry.preview())
+                .and_then(Entry::selected_branch_id)
+        })
+        .or_else(|| model.file_history.selected())
         .or_else(|| model.selected.as_ref().and_then(Entry::selected_branch_id))
         .unwrap_or_default()
         .to_owned()
@@ -394,24 +434,28 @@ pub(crate) fn branch_name(branch: &FileBranch) -> String {
         name
     }
 }
-pub(crate) fn directory_branch_value(branch: &DirectoryBranch, default_scope: bool) -> String {
-    if default_scope {
-        branch.id()
-    } else {
-        branch.name()
-    }
-    .to_owned()
+pub(crate) fn directory_branch_value(branch: &DirectoryBranch) -> String {
+    branch.id().to_owned()
 }
 pub(crate) fn selected_directory_branch(model: &Model) -> Option<(String, String, String)> {
-    let branch = model
-        .directory_branches
-        .iter()
-        .find(|branch| branch.current())?;
+    let branch = viewed_directory_branch(model)?;
     Some((
         model.repository_id.clone(),
         branch.id().to_owned(),
         branch.name().to_owned(),
     ))
+}
+
+pub(crate) fn viewed_directory_branch(model: &Model) -> Option<&DirectoryBranch> {
+    if let Some(preview) = &model.directory_preview {
+        return preview
+            .at_directory(&model.directory)
+            .then_some(&preview.branch);
+    }
+    model
+        .directory_branches
+        .iter()
+        .find(|branch| branch.current())
 }
 
 #[cfg(test)]

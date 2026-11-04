@@ -80,6 +80,7 @@ pub(crate) struct PageParts {
     pub(crate) branches: Vec<DirectoryBranch>,
     pub(crate) context: Option<Context>,
     pub(crate) writable: bool,
+    pub(crate) preview: bool,
     pub(crate) directory_file_count: u64,
     pub(crate) branches_supported: bool,
     pub(crate) default_branch_scope: bool,
@@ -94,6 +95,9 @@ impl Page {
     ) -> Result<Self, api::Error> {
         ingress::page(value, slot, directory, limit, selected).map_err(Into::into)
     }
+    pub(super) fn preview(&self) -> bool {
+        self.parts.preview
+    }
     pub(super) fn into_parts(self) -> PageParts {
         self.parts
     }
@@ -103,8 +107,12 @@ impl Page {
 pub(crate) struct Context {
     repository_id: String,
     repository_path: Option<name_policy::LookupPath>,
+    base_head: String,
 }
 impl Context {
+    pub(crate) fn base_head(&self) -> &str {
+        &self.base_head
+    }
     pub(crate) fn repository_id(&self) -> &str {
         &self.repository_id
     }
@@ -178,6 +186,7 @@ enum Body {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Entry {
+    preview: bool,
     entry_id: String,
     path: DisplayPath,
     body: Body,
@@ -187,6 +196,9 @@ pub(crate) struct Entry {
     read_only: bool,
 }
 impl Entry {
+    pub(crate) fn preview(&self) -> bool {
+        self.preview
+    }
     pub(crate) fn entry_id(&self) -> &str {
         &self.entry_id
     }
@@ -252,7 +264,7 @@ impl Entry {
         self.backup
     }
     pub(crate) fn read_only(&self) -> bool {
-        self.read_only
+        self.read_only || self.preview
     }
     pub(crate) fn inherited(&self) -> bool {
         matches!(

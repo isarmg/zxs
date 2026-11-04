@@ -113,6 +113,8 @@ fn action_label(action: &str) -> String {
         "directory.namespace.delete" => t("批量删除", "Deleted from selected branches"),
         "directory.namespace.rename" => t("批量重命名", "Renamed in selected branches"),
         "directory.tree.write" => t("写入目录子树", "Wrote folder subtree"),
+        "directory.default.set" => t("设置默认目录分支", "Set default folder branch"),
+        "file.default.set" => t("设置默认文件分支", "Set default file branch"),
         "directory.default.select" => t(
             "切换 SMB 默认目录分支",
             "Switched SMB default folder branch",

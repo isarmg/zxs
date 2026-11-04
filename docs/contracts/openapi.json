@@ -781,7 +781,7 @@
     "/api/file-manager/disks/{slot}/entries": {
       "get": {
         "operationId": "listFileManagerEntries",
-        "description": "主盘列出当前命名空间；备份盘按授权过滤后，使用每个文件已配置的该slot用户逻辑路径直接浏览，不强制P01前缀。备份条目只读，不提供目录分支操作；优先显示实际在该槽AVAILABLE的当前正文，否则显示该槽最新AVAILABLE正文。backup.version_id是固定读取依据，不得被主盘当前head替换；主路径改名不改变用户备份路径。无live alias时historical_only=true、repository_path=null，历史和下载仍按稳定file/version授权。未配置用户路径的旧容器保留primary/repository前缀兼容。 分页默认200、最多500条，query在分页前全目录过滤。cursor绑定业务代数、配置、盘位、路径、搜索及limit；认证变更不改变业务快照，但每次请求重新准入。LISTING_CHANGED要求重新加载首页，不拼接不同快照。",
+        "description": "主盘列出当前命名空间；备份盘按授权过滤后，使用每个文件已配置的该slot用户逻辑路径直接浏览，不强制P01前缀。备份条目只读，不提供目录分支操作；优先显示实际在该槽AVAILABLE的当前正文，否则显示该槽最新AVAILABLE正文。backup.version_id是固定读取依据，不得被主盘当前head替换；主路径改名不改变用户备份路径。无live alias时historical_only=true、repository_path=null，历史和下载仍按稳定file/version授权。未配置用户路径的旧容器保留primary/repository前缀兼容。 分页默认200、最多500条，query在分页前全目录过滤。cursor绑定业务代数、配置、盘位、路径、搜索及limit；认证变更不改变业务快照，但每次请求重新准入。LISTING_CHANGED要求重新加载首页，不拼接不同快照。 传入成对的 directory_branch_id/expected_tree_id 只浏览该不可变目录组合，不发布默认选择；预览为只读，游标绑定分支、子树与当前命名空间。",
         "parameters": [
           {
             "name": "slot",
@@ -847,6 +847,28 @@
             "in": "query",
             "required": false,
             "description": "与selected_path成对且精确匹配的稳定身份。",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "directory_branch_id",
+            "in": "query",
+            "required": false,
+            "description": "目录分支预览身份，两个字段必须同时提供。",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "expected_tree_id",
+            "in": "query",
+            "required": false,
+            "description": "目录分支预览身份，两个字段必须同时提供。",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -1522,6 +1544,10 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "preview": {
+                      "const": true,
+                      "description": "仅目录分支预览时存在；预览 writable 必须为 false。"
                     }
                   },
                   "additionalProperties": false,
@@ -4289,7 +4315,7 @@
       },
       "put": {
         "operationId": "selectDefaultDirectoryBranch",
-        "description": "由已认证的唯一管理员选择根目录分支作为 Web/SMB 共享默认视图，仍须满足业务状态与可写约束。该分支保存的子树不因设置默认而改写；旧读句柄固定版本，受影响旧写会话冲突并保留暂存内容。",
+        "description": "显式发布已浏览的目录分支为该目录的 Web/SMB 默认组合；允许根目录与子目录，范围外不变。expected_tree_id 固定所浏览子树，expected_head 固定将被替换的当前命名空间；任一改变返回 LISTING_CHANGED。永久幂等回执先于动态基线检查，旧读句柄固定版本，受影响旧写会话冲突并保留暂存。",
         "parameters": [
           {
             "name": "repo",
@@ -4308,16 +4334,30 @@
                 "type": "object",
                 "properties": {
                   "directory_branch_id": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
                   },
                   "operation_id": {
                     "$ref": "#/components/schemas/OperationId"
+                  },
+                  "expected_tree_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "expected_head": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
                   }
                 },
                 "additionalProperties": false,
                 "required": [
                   "directory_branch_id",
-                  "operation_id"
+                  "operation_id",
+                  "expected_tree_id",
+                  "expected_head"
                 ]
               }
             }
@@ -7260,6 +7300,507 @@
             }
           }
         ]
+      }
+    },
+    "/api/setup/initialize": {
+      "post": {
+        "operationId": "initializeManagement",
+        "description": "公开一次性创建唯一管理员，无授权密钥。精确 Origin、Fetch Metadata、JSON 内容类型、来源限流与有界任务保护；锁内仅无账户且无历史权威时允许，并发仅一次成功。不接受磁盘、模式或预设。正文最多16 KiB且十秒内读完。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementInitializeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagementInitializeRequest"
+              }
+            }
+          },
+          "x-maxBytes": 16384,
+          "description": "严格 JSON 请求，最多 16384 字节，十秒读取期限。"
+        },
+        "security": []
+      }
+    },
+    "/api/admin/storage/status": {
+      "get": {
+        "operationId": "getStorageActivationStatus",
+        "description": "当前管理员查询首次存储激活状态。management_ready 不等于存储可写。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageActivationStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/directories": {
+      "get": {
+        "operationId": "browseStorageDirectories",
+        "description": "只读真实目录枚举，最多200条、扫描4096项；非快照，can_browse 不表示可初始化。不会挂载、创建目录或更改权限。 发现范围为服务端持久根及其目录；候选必须严格位于根内，并绑定发现根与存储目录身份。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageDirectoryListing"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/StorageHostPath"
+            }
+          }
+        ]
+      }
+    },
+    "/api/admin/storage/directories/inspect": {
+      "post": {
+        "operationId": "inspectStorageDirectory",
+        "description": "检查实际挂载点和其内既存空目录，允许多层子目录；根须0700且属于服务账号。身份摘要仅用于一致性，不是授权令牌。 JSON正文最多64 KiB且十秒内读完。 发现范围为服务端持久根及其目录；候选必须严格位于根内，并绑定发现根与存储目录身份。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageCandidateSelection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageDirectoryInspectRequest"
+              }
+            }
+          },
+          "x-maxBytes": 65536,
+          "description": "严格 JSON 请求，最多 65536 字节，十秒读取期限。"
+        }
+      }
+    },
+    "/api/admin/storage/activate": {
+      "post": {
+        "operationId": "activateFirstStorage",
+        "description": "当前管理员首次激活，重新验证选择与权限，持久化 mount_path/root_path。服务端有界任务不随客户端断开取消；不提供已有池热增盘。 JSON正文最多4 MiB且十秒内读完。 发现范围为服务端持久根及其目录；候选必须严格位于根内，并绑定发现根与存储目录身份。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageActivationResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageActivationRequest"
+              }
+            }
+          },
+          "x-maxBytes": 4194304,
+          "description": "严格 JSON 请求，最多 4194304 字节，十秒读取期限。"
+        }
+      }
+    },
+    "/api/admin/storage/complete-activation": {
+      "post": {
+        "operationId": "completeStorageActivation",
+        "description": "仅在 completion_available 时补全原持久意图；不更换目录或重置管理员。 JSON正文最多16 KiB且十秒内读完。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageActivationResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageActivationCompletionRequest"
+              }
+            }
+          },
+          "x-maxBytes": 16384,
+          "description": "严格 JSON 请求，最多 16384 字节，十秒读取期限。"
+        }
+      }
+    },
+    "/api/setup/status": {
+      "get": {
+        "operationId": "getManagementSetupStatus",
+        "description": "公开最小账户设置状态，不返回磁盘、预设或授权密钥。无账户时访问 Web 者可先设置唯一管理员；历史或损坏权威不视为空安装。",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementSetupStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "引导授权或状态读取失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/recovery-status": {
+      "get": {
+        "operationId": "getBootstrapRecoveryStatus",
+        "description": "仅灾备恢复使用的 bootstrap 授权状态与 CSRF；不用于首次创建账户。",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementRecoveryStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "引导授权或状态读取失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-ZXS-Bootstrap",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/admin/storage/discovery-root": {
+      "get": {
+        "operationId": "getStorageDiscoveryRoot",
+        "description": "读取持久发现根，默认 /zxs/data/disks；只有内部目录可作为候选，根本身只能浏览。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageDiscoveryRootSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "setStorageDiscoveryRoot",
+        "description": "当前管理员原值比较后持久更新发现根，验证已有目录且不修改权限或创建目录。未完成激活时拒绝；更改不移动或重新挂载已有存储。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageDiscoveryRootSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageSetDiscoveryRootRequest"
+              }
+            }
+          },
+          "x-maxBytes": 65536,
+          "description": "严格 JSON 请求，最多 65536 字节，十秒读取期限。"
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/default-branch": {
+      "put": {
+        "operationId": "setDefaultFileBranch",
+        "description": "显式设置一个逻辑文件路径的默认分支。只改变该路径的默认读取和 SMB 目标，不改变其他别名。expected_node_id 固定浏览分支的节点，expected_head 固定当前命名空间；冲突不发布，原 operation_id 可查询和重放。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "operation_id": {
+                      "$ref": "#/components/schemas/OperationId"
+                    },
+                    "operation_kind": {
+                      "type": "string"
+                    },
+                    "request_digest": {
+                      "$ref": "#/components/schemas/Hash"
+                    },
+                    "state": {
+                      "enum": [
+                        "completed",
+                        "in_doubt"
+                      ]
+                    },
+                    "commit_state": {
+                      "type": "string"
+                    },
+                    "protection_at_publish": {
+                      "type": "string"
+                    },
+                    "publication_sequence": {
+                      "$ref": "#/components/schemas/UInt64"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "operation_id",
+                    "operation_kind",
+                    "request_digest",
+                    "state",
+                    "commit_state",
+                    "result",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；写操作结果不确定时按原operation_id查询，不能改key盲目重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "branch_id": {
+                    "$ref": "#/components/schemas/BranchId"
+                  },
+                  "operation_id": {
+                    "$ref": "#/components/schemas/OperationId"
+                  },
+                  "repository_id": {
+                    "$ref": "#/components/schemas/RepositoryId"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "expected_node_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "expected_head": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "branch_id",
+                  "operation_id",
+                  "repository_id",
+                  "path",
+                  "expected_node_id",
+                  "expected_head"
+                ],
+                "dependentRequired": {
+                  "repository_id": [
+                    "path"
+                  ],
+                  "path": [
+                    "repository_id"
+                  ]
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -13385,6 +13926,430 @@
         ],
         "additionalProperties": false,
         "description": "本机 Samba 改密客户端成功退出后返回；不保证已建立的 SMB 连接立即失效，不撤销 Web 会话。"
+      },
+      "StorageHostPath": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "pattern": "^/(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000]+)*)?$",
+        "x-maxUtf8Bytes": 4096,
+        "description": "真实宿主绝对 UTF-8 路径，最多4096字节；服务端另拒绝 . / .. 组件，符号链接及身份不匹配。不是业务文件 PortablePath。"
+      },
+      "StorageDirectoryIdentity": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "inode": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "ctime_seconds": {
+            "type": "string"
+          },
+          "ctime_nanoseconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "required": [
+          "device",
+          "inode",
+          "ctime_seconds",
+          "ctime_nanoseconds"
+        ],
+        "additionalProperties": false
+      },
+      "StorageMountIdentity": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "device_major": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "device_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "root_inode": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "filesystem": {
+            "type": "string"
+          },
+          "filesystem_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mount_id",
+          "device_major",
+          "device_minor",
+          "root_inode",
+          "filesystem",
+          "filesystem_root"
+        ],
+        "additionalProperties": false
+      },
+      "StorageDirectoryInspectRequest": {
+        "type": "object",
+        "properties": {
+          "mount_path": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          },
+          "root_path": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          }
+        },
+        "required": [
+          "mount_path",
+          "root_path"
+        ],
+        "additionalProperties": false
+      },
+      "StorageCandidateSelection": {
+        "type": "object",
+        "properties": {
+          "selection_id": {
+            "type": "string",
+            "pattern": "^directory_[0-9a-f]{64}$"
+          },
+          "mount_path": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          },
+          "root_path": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          },
+          "mount_identity": {
+            "$ref": "#/components/schemas/StorageMountIdentity"
+          },
+          "root_identity": {
+            "$ref": "#/components/schemas/StorageDirectoryIdentity"
+          },
+          "discovery_root": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          },
+          "discovery_identity": {
+            "$ref": "#/components/schemas/StorageDirectoryIdentity"
+          }
+        },
+        "required": [
+          "selection_id",
+          "mount_path",
+          "root_path",
+          "mount_identity",
+          "root_identity",
+          "discovery_root",
+          "discovery_identity"
+        ],
+        "additionalProperties": false
+      },
+      "StorageDirectoryEntry": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          },
+          "can_browse": {
+            "type": "boolean"
+          },
+          "problem": {
+            "enum": [
+              null,
+              "symbolic_link",
+              "permission_denied",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "can_browse",
+          "problem"
+        ],
+        "additionalProperties": false
+      },
+      "StorageDirectoryListing": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          },
+          "mount_path": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          },
+          "mount_identity": {
+            "$ref": "#/components/schemas/StorageMountIdentity"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/StorageDirectoryIdentity"
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/StorageDirectoryEntry"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "skipped_non_utf8": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "required": [
+          "path",
+          "mount_path",
+          "mount_identity",
+          "identity",
+          "entries",
+          "truncated",
+          "skipped_non_utf8"
+        ],
+        "additionalProperties": false
+      },
+      "ManagementInitializeRequest": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "additionalProperties": false
+      },
+      "ManagementInitializeResponse": {
+        "type": "object",
+        "properties": {
+          "initialized": {
+            "const": true
+          },
+          "storage_pending": {
+            "const": true
+          }
+        },
+        "required": [
+          "initialized",
+          "storage_pending"
+        ],
+        "additionalProperties": false
+      },
+      "StorageActivationStatus": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "enum": [
+              "pending",
+              "active",
+              "recovery_required",
+              "unavailable"
+            ]
+          },
+          "disk_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "completion_available": {
+            "type": "boolean"
+          },
+          "allow_development": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "state",
+          "disk_ids",
+          "completion_available",
+          "allow_development"
+        ],
+        "additionalProperties": false
+      },
+      "StorageActivationRequest": {
+        "type": "object",
+        "properties": {
+          "selections": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/StorageCandidateSelection"
+            }
+          },
+          "mode": {
+            "enum": [
+              "production",
+              "development"
+            ]
+          }
+        },
+        "required": [
+          "selections",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "StorageActivationCompletionRequest": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "StorageActivationResponse": {
+        "type": "object",
+        "properties": {
+          "activated": {
+            "const": true
+          },
+          "restart_required": {
+            "type": "boolean"
+          },
+          "recovering": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "activated",
+          "restart_required",
+          "recovering"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "restart_required": {
+                "const": true
+              },
+              "recovering": {
+                "const": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "restart_required": {
+                "const": false
+              },
+              "recovering": {
+                "const": true
+              }
+            }
+          }
+        ]
+      },
+      "ManagementSetupStatus": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "enum": [
+              "empty",
+              "management_ready",
+              "existing",
+              "recovery_required",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "ManagementRecoveryStatus": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "enum": [
+              "empty",
+              "management_ready",
+              "existing",
+              "recovery_required",
+              "unavailable"
+            ]
+          },
+          "disk_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "local_authorization_required": {
+            "type": "boolean"
+          },
+          "allow_development": {
+            "type": "boolean"
+          },
+          "completion_available": {
+            "type": "boolean"
+          },
+          "config_presets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "csrf_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "disk_ids",
+          "local_authorization_required",
+          "allow_development",
+          "completion_available",
+          "config_presets",
+          "csrf_token"
+        ],
+        "additionalProperties": false
+      },
+      "StorageDiscoveryRootSettings": {
+        "type": "object",
+        "properties": {
+          "discovery_root": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          }
+        },
+        "required": [
+          "discovery_root"
+        ],
+        "additionalProperties": false
+      },
+      "StorageSetDiscoveryRootRequest": {
+        "type": "object",
+        "properties": {
+          "expected_discovery_root": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          },
+          "discovery_root": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          }
+        },
+        "required": [
+          "expected_discovery_root",
+          "discovery_root"
+        ],
+        "additionalProperties": false
       }
     }
   }

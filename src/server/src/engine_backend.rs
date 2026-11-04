@@ -1143,6 +1143,23 @@ impl Backend for EngineBackend {
             .expect("invariant: service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         let repository = file_manager::file_repo(&engine, &request.file_id)?;
+        if let Some(baseline) = &request.default_baseline {
+            let location = request.location.as_ref().ok_or_else(|| {
+                ApiError::invalid("setting a file default requires its logical path")
+            })?;
+            return engine
+                .set_file_default(storage_engine::FileDefaultSelection {
+                    file_id: &request.file_id,
+                    branch_id: &request.branch_id,
+                    repository_id: &location.repository_id,
+                    path: &location.path,
+                    expected_node_id: &baseline.expected_node_id,
+                    expected_head: &baseline.expected_head,
+                    principal: &current.principal,
+                    operation_id: request.operation_id,
+                })
+                .map_err(error);
+        }
         match request.location {
             Some(location) => {
                 if location.repository_id != repository.repository_id {
@@ -1311,12 +1328,14 @@ impl Backend for EngineBackend {
         let current = current_protected_identity(&engine, identity)?;
         repository(&engine, &request.repository_id)?;
         engine
-            .select_default_directory_branch(
-                &request.repository_id,
-                &request.directory_branch_id,
-                &current.principal,
-                request.operation_id,
-            )
+            .set_directory_default(storage_engine::DirectoryDefaultSelection {
+                repository_id: &request.repository_id,
+                directory_branch_id: &request.directory_branch_id,
+                expected_tree_id: &request.expected_tree_id,
+                expected_head: &request.expected_head,
+                principal: &current.principal,
+                operation_id: request.operation_id,
+            })
             .map_err(error)
     }
     fn directory_selection(

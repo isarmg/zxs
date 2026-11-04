@@ -27,19 +27,33 @@ pub(super) fn page(
     }
     let backup = fields.backup()?;
     let writable = fields.boolean("writable")?;
-    if writable == backup {
+    let preview = if fields.contains("preview") {
+        if !fields.boolean("preview")? {
+            return Err(field_error("preview", "true when present"));
+        }
+        true
+    } else {
+        false
+    };
+    if writable != (!backup && !preview) || backup && preview {
         return Err(DecodeError::Relation(
             "page writeability disagrees with backup status",
         ));
     }
-    let entries = entries(fields.array("entries")?, directory_key, limit, backup)?;
-    let selected = selection(
+    let mut entries = entries(fields.array("entries")?, directory_key, limit, backup)?;
+    let mut selected = selection(
         fields.take("selected_entry")?,
         selected,
         directory_key,
         backup,
         &entries,
     )?;
+    for entry in &mut entries {
+        entry.preview = preview;
+    }
+    if let Some(entry) = &mut selected {
+        entry.preview = preview;
+    }
     let total = fields.integer("total_entries")?;
     let directory_file_count = fields.integer("directory_file_count")?;
     let listed_files = entries
@@ -102,6 +116,7 @@ pub(super) fn page(
             branches,
             context,
             writable,
+            preview,
             directory_file_count,
             branches_supported,
             default_branch_scope,
@@ -226,11 +241,12 @@ fn context(value: Value) -> Result<Option<Context>, DecodeError> {
     let repository_id = fields.id("repository_id")?;
     let repository_path = lookup_path(&fields.text("repository_path")?, "repository_path")?;
     fields.id("branch_id")?;
-    fields.id("base_head")?;
+    let base_head = fields.id("base_head")?;
     fields.finish()?;
     Ok(Some(Context {
         repository_id,
         repository_path,
+        base_head,
     }))
 }
 fn branches(

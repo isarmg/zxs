@@ -18,4 +18,6 @@
 | [0010：SMB 写入准入分代与有界额度授予](0010-smb-write-generations-and-extent-grants.md) | 已采纳，当前源码设计；发布阶段与保存回执不变 | 第 10、11 章及 [SMB 组件](../components/smb.md) |
 | [0011：预置 Samba 账号的持久单一绑定](0011-smb-account-selection.md) | 已采纳，当前源码设计；不提升 Web 权限 | [SMB 组件](../components/smb.md)、API 与 Web 账户设置 |
 
+| [0012：系统初始化与存储池首次激活分离](0012-management-and-storage-activation.md) | 当前源码设计；已激活池动态增删未实现 | 系统管理、首次存储激活及第 09、10 章 |
+
 决策文档只保留当前背景、选择、代价、替代方案与关联规则，不追加实施进度或构建日志。

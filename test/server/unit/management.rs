@@ -346,32 +346,35 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
     let root = tempfile::tempdir().unwrap();
     let data = root.path().join("pool");
     let management = data.join("management");
+    let discovery = root.path().join("disks");
+    std::fs::create_dir(&discovery).unwrap();
     let mut disks = std::collections::BTreeMap::new();
     for &id in ids {
-        let path = root.path().join(id);
+        let path = discovery.join(id);
         std::fs::create_dir(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         disks.insert(id.to_owned(), path);
     }
-    let (backend, auth) = open_service_with_disks(&data, &management, disks, true).unwrap();
-    let key = "a".repeat(64);
-    std::fs::write(management.join("bootstrap.key"), &key).unwrap();
-    std::fs::set_permissions(
-        management.join("bootstrap.key"),
-        std::fs::Permissions::from_mode(0o600),
+    // No deployment candidate registry is needed for management setup or activation.
+    let (backend, auth) = open_service_with_options(
+        &data,
+        &management,
+        ManagementOptions {
+            allow_development_setup: true,
+            ..Default::default()
+        },
     )
     .unwrap();
     let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
     assert_eq!(
         request(&app, "/api/setup/status", None, None).await.0,
-        StatusCode::UNAUTHORIZED
+        StatusCode::OK
     );
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/setup/status")
-                .header("x-zxs-bootstrap", &key)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -391,9 +394,25 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let response=app.clone().oneshot(Request::builder().method("POST").uri("/api/setup/initialize")
-        .header("host","127.0.0.1:7400").header("origin","http://127.0.0.1:7400").header("x-zxs-bootstrap",&key).header("x-csrf-token",status["csrf_token"].as_str().unwrap()).header("content-type","application/json")
-        .body(Body::from(json_codec::to_vec(&json!({"mode":"development","disk_ids":ids,"username":"admin","password":"a-long-test-password"})).unwrap())).unwrap()).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/setup/initialize")
+                .header("host", "127.0.0.1:7400")
+                .header("origin", "http://127.0.0.1:7400")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json_codec::to_vec(
+                        &json!({"username":"admin","password":"a-long-test-password"}),
+                    )
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     let code = response.status();
     let value: Value = json_codec::from_slice(
         &http_routing::body::to_bytes(response.into_body(), 65536)
@@ -402,11 +421,12 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
     )
     .unwrap();
     assert_eq!(code, StatusCode::OK, "{value:?}");
-    assert_eq!(value["restart_required"], false);
-    assert_eq!(
-        web_setup_response::validate(web_setup_response::Action::Wizard, value.clone()).unwrap(),
-        web_setup_response::Success::Recovering
-    );
+    web_setup_response::validate(value.clone()).unwrap();
+    assert_eq!(value["storage_pending"], true);
+    assert!(!data.join("config.json").exists());
+    for path in disks.values() {
+        assert!(std::fs::read_dir(path).unwrap().next().is_none());
+    }
     assert!(data.join("management-authority.json").exists());
     assert!(management.join("management-auth.json").exists());
     assert_eq!(
@@ -421,22 +441,9 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
         StatusCode::OK
     );
 
-    for _ in 0..200 {
-        if !backend.management_status().recovering() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
     assert_eq!(
         backend.management_status().state(),
-        crate::StorageState::Ready
-    );
-    let config: storage_contract::Config =
-        json_codec::from_slice(&std::fs::read(data.join("config.json")).unwrap()).unwrap();
-    assert_eq!(config.disks.len(), ids.len());
-    assert_eq!(
-        config.disks.iter().filter(|d| d.metadata_member).count(),
-        ids.len()
+        crate::StorageState::Unconfigured
     );
     let (_, login) = request(
         &app,
@@ -446,12 +453,82 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
     )
     .await;
     let token = login["token"].as_str().unwrap();
+    let (code, pending) = request(&app, "/api/admin/storage/status", Some(token), None).await;
+    assert_eq!(code, StatusCode::OK, "{pending:?}");
+    assert_eq!(pending["state"], "pending");
+    let (code, settings) = put_json(
+        &app,
+        "/api/admin/storage/discovery-root",
+        token,
+        json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{settings:?}");
+    assert_eq!(settings["discovery_root"], discovery.to_str().unwrap());
+    let (code, stale) = put_json(
+        &app,
+        "/api/admin/storage/discovery-root",
+        token,
+        json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::CONFLICT, "{stale:?}");
+    assert_eq!(
+        request(
+            &app,
+            "/api/admin/storage/directories?path=/",
+            Some(token),
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut selections = Vec::new();
+    for path in disks.values() {
+        let uri = format!(
+            "/api/admin/storage/directories?path={}",
+            storage_contract::client_protocol::uri_component_segment(path.to_str().unwrap())
+        );
+        let (code, listing) = request(&app, &uri, Some(token), None).await;
+        assert_eq!(code, StatusCode::OK, "{listing:?}");
+        let (code, selected) = request(
+            &app,
+            "/api/admin/storage/directories/inspect",
+            Some(token),
+            Some(json!({"mount_path":listing["mount_path"],"root_path":path})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{selected:?}");
+        selections.push(selected);
+    }
+    let (code, activated) = request(
+        &app,
+        "/api/admin/storage/activate",
+        Some(token),
+        Some(json!({"selections":selections,"mode":"development"})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{activated:?}");
+    super::web_activation_response::activation(activated).unwrap();
+    wait_for_ready(&backend).await;
+    let config: storage_contract::Config =
+        json_codec::from_slice(&std::fs::read(data.join("config.json")).unwrap()).unwrap();
+    assert_eq!(config.disks.len(), ids.len());
+    assert_eq!(
+        config
+            .disks
+            .iter()
+            .filter(|disk| disk.metadata_member)
+            .count(),
+        ids.len()
+    );
     let (code, repository) = request(&app, "/api/repositories", Some(token), Some(json!({"name":"single-copy","primary_slot_id":"P01","target_copies":1,"operation_id":storage_contract::new_id("op").unwrap()}))).await;
     assert_eq!(code, StatusCode::OK, "{repository:?}");
     if remove_data_disk {
         drop(app);
         drop(backend);
-        std::fs::remove_dir_all(root.path().join(ids[0])).unwrap();
+        std::fs::remove_dir_all(discovery.join(ids[0])).unwrap();
         let (backend, auth) = open_service(&data, &management).unwrap();
         let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
         let (code, login) = request(
@@ -719,175 +796,133 @@ fn completed_disk_observation_releases_engine_before_retry() {
 }
 
 #[tokio::test]
-async fn web_completion_requires_bound_pristine_pre_authority_setup_proof() {
+async fn activation_completion_uses_original_directories_and_preserves_current_account() {
     use std::os::unix::fs::PermissionsExt;
-    for (interrupted_owned_setup, authority_already_claimed) in
-        [(true, false), (true, true), (false, false)]
-    {
-        let root = tempfile::tempdir().unwrap();
-        let data = root.path().join("pool");
-        let management = data.join("management");
-        let mut disks = std::collections::BTreeMap::new();
-        for id in ["one", "two", "three"] {
-            let path = root.path().join(id);
-            std::fs::create_dir(&path).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-            disks.insert(id.to_owned(), path);
-        }
-        let (backend, auth) =
-            open_service_with_disks(&data, &management, disks.clone(), true).unwrap();
-        let key = "a".repeat(64);
-        std::fs::write(management.join("bootstrap.key"), &key).unwrap();
-        std::fs::set_permissions(
-            management.join("bootstrap.key"),
-            std::fs::Permissions::from_mode(0o600),
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("system");
+    let management = data.join("management");
+    let discovery = root.path().join("disks");
+    std::fs::create_dir(&discovery).unwrap();
+    let disk = discovery.join("mounted-disk-subdirectory");
+    std::fs::create_dir(&disk).unwrap();
+    std::fs::set_permissions(&disk, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (backend, auth) = open_service_with_options(
+        &data,
+        &management,
+        ManagementOptions {
+            allow_development_setup: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
+    wait_for_idle(&backend).await;
+    let (code, value) = first_account_json(
+        &app,
+        "/api/setup/initialize",
+        Some(json!({"username":"admin","password":"a-long-test-password"})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{value:?}");
+    let (_, login) = request(
+        &app,
+        "/api/auth/login",
+        None,
+        Some(json!({"username":"admin","password":"a-long-test-password"})),
+    )
+    .await;
+    let token = login["token"].as_str().unwrap();
+    let auth = backend.inner.auth.lock().unwrap().clone().unwrap();
+    let identity = auth.lock().unwrap().authenticate(token).unwrap();
+    backend
+        .setup_operation(
+            "set_discovery_root",
+            json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
+            None,
+            Some(&identity),
         )
         .unwrap();
-        if interrupted_owned_setup {
-            let service = crate::setup_recovery::SetupRecovery::new(
-                data.clone(),
-                management.clone(),
-                disks.clone(),
-            )
-            .unwrap()
-            .allow_development_mode();
-            let permit = service.authorize_bootstrap(&key).unwrap();
-            let request=json_codec::from_value(json!({"mode":"development","disk_ids":["one","two","three"],"username":"admin","password":"a-long-test-password"})).unwrap();
-            let error = service
-                .initialize(&permit, request, |_engine, _, _| {
-                    Err(crate::ApiError::new(
-                        ::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        storage_contract::ErrorCode::InjectedFailure,
-                        "injected failure before authority publication",
-                    ))
-                })
-                .unwrap_err();
-            assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
-        } else {
-            drop(
-                storage_engine::Engine::initialize(
-                    &data,
-                    storage_contract::Config::development([
-                        disks["one"].clone(),
-                        disks["two"].clone(),
-                        disks["three"].clone(),
-                    ])
-                    .unwrap(),
-                )
-                .unwrap(),
-            );
-        }
-        if authority_already_claimed {
-            claim_authority(&data).unwrap();
-        }
-        let completion_expected = interrupted_owned_setup && !authority_already_claimed;
-        assert!(!management.join("management-auth.json").exists());
-        assert_eq!(
-            data.join("management-authority.json").exists(),
-            authority_already_claimed
-        );
-        let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
-        for _ in 0..100 {
-            if !backend.management_status().recovering() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/setup/status")
-                    .header("x-zxs-bootstrap", &key)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let status: Value = json_codec::from_slice(
-            &http_routing::body::to_bytes(response.into_body(), 65536)
-                .await
-                .unwrap(),
+    let before = std::fs::read(management.join("management-auth.json")).unwrap();
+    let listing = crate::storage_directories::browse_within(
+        discovery.to_str().unwrap(),
+        disk.to_str().unwrap(),
+    )
+    .unwrap();
+    let selection = crate::storage_directories::inspect_within(
+        discovery.to_str().unwrap(),
+        &storage_contract::storage_directories::InspectRequest {
+            mount_path: listing.mount_path,
+            root_path: disk.to_str().unwrap().into(),
+        },
+        &[data.clone(), management.clone()],
+    )
+    .unwrap();
+    let service = crate::setup_recovery::SetupRecovery::new(
+        data.clone(),
+        management.clone(),
+        Default::default(),
+    )
+    .unwrap()
+    .allow_development_mode();
+    let error = service
+        .activate(
+            &identity,
+            crate::setup_recovery::StorageActivationRequest {
+                selections: vec![selection],
+                mode: storage_engine::Mode::Development,
+            },
+            |_| Ok(()),
+            |_| {
+                Err(crate::ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    storage_contract::ErrorCode::InjectedFailure,
+                    "stop before auth replica publication",
+                ))
+            },
         )
-        .unwrap();
-        assert_eq!(
-            status["completion_available"], completion_expected,
-            "{status:?}"
-        );
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/setup/complete-initialization")
-                    .header("host", "127.0.0.1:7400")
-                    .header("origin", "http://127.0.0.1:7400")
-                    .header("x-zxs-bootstrap", &key)
-                    .header("x-csrf-token", status["csrf_token"].as_str().unwrap())
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json_codec::to_vec(
-                            &json!({"username":"admin","password":"a-long-test-password"}),
-                        )
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let code = response.status();
-        let value: Value = json_codec::from_slice(
-            &http_routing::body::to_bytes(response.into_body(), 65536)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        if completion_expected {
-            assert_eq!(code, StatusCode::OK, "{value:?}");
-            assert_eq!(value["completed"], true);
-            assert_eq!(
-                web_setup_response::validate(web_setup_response::Action::Complete, value.clone())
-                    .unwrap(),
-                web_setup_response::Success::Recovering
-            );
-            wait_for_ready(&backend).await;
-            assert!(data.join("management-authority.json").exists());
-            assert!(management.join("management-auth.json").exists());
-            assert_eq!(
-                request(
-                    &app,
-                    "/api/auth/login",
-                    None,
-                    Some(json!({"username":"admin","password":"a-long-test-password"}))
-                )
-                .await
-                .0,
-                StatusCode::OK
-            );
-        } else {
-            assert!(!code.is_success(), "{value:?}");
-            assert!(!management.join("management-auth.json").exists());
-            assert_eq!(
-                data.join("management-authority.json").exists(),
-                authority_already_claimed
-            );
-        }
-    }
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
+    assert!(service.activation_admitted().is_err());
+    let (code, status) = request(&app, "/api/admin/storage/status", Some(token), None).await;
+    assert_eq!(code, StatusCode::OK, "{status:?}");
+    assert_eq!(status["state"], "recovery_required");
+    assert_eq!(status["completion_available"], true);
+    let (code, value) = request(
+        &app,
+        "/api/admin/storage/complete-activation",
+        Some(token),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{value:?}");
+    super::web_activation_response::activation(value).unwrap();
+    wait_for_ready(&backend).await;
+    assert_eq!(
+        std::fs::read(management.join("management-auth.json")).unwrap(),
+        before
+    );
+    let (code, status) = request(&app, "/api/admin/storage/status", Some(token), None).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(status["state"], "active");
+    assert_eq!(status["completion_available"], false);
 }
 
-async fn bootstrap_json(
-    app: &Router,
-    key: &str,
-    path: &str,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
+async fn wait_for_idle(backend: &ManagementBackend) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while backend.management_status().recovering() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn first_account_json(app: &Router, path: &str, body: Option<Value>) -> (StatusCode, Value) {
     let status = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/setup/status")
-                .header("x-zxs-bootstrap", key)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -911,8 +946,6 @@ async fn bootstrap_json(
                 .uri(path)
                 .header("host", "127.0.0.1:7400")
                 .header("origin", "http://127.0.0.1:7400")
-                .header("x-zxs-bootstrap", key)
-                .header("x-csrf-token", status["csrf_token"].as_str().unwrap())
                 .header("content-type", "application/json")
                 .body(Body::from(json_codec::to_vec(&body).unwrap()))
                 .unwrap(),
@@ -930,123 +963,65 @@ async fn bootstrap_json(
 }
 
 #[tokio::test]
-async fn preset_web_setup_is_lazy_digest_bound_and_preserves_custom_configuration() {
-    use std::os::unix::fs::PermissionsExt;
+async fn account_setup_ignores_unavailable_candidates_and_rejects_old_disk_fields_and_routes() {
     let root = tempfile::tempdir().unwrap();
     let data = root.path().join("pool");
     let management = data.join("management");
-    let mut disks = std::collections::BTreeMap::new();
-    for id in ["one", "two", "three", "four"] {
-        let path = root.path().join(id);
-        std::fs::create_dir(&path).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        disks.insert(id.to_owned(), path);
-    }
-    let mut config = storage_contract::Config::development([
-        disks["one"].clone(),
-        disks["two"].clone(),
-        disks["three"].clone(),
-    ])
-    .unwrap();
-    let mut extra = config.disks[2].clone();
-    extra.slot_id = "D01".into();
-    extra.level = 4;
-    extra.upstream_slot_id = Some("C01".into());
-    extra.disk_id = storage_contract::new_id("disk").unwrap();
-    extra.root = disks["four"].clone();
-    extra.metadata_member = false;
-    config.disks.push(extra);
-    config.max_workspaces = 7;
-    config.checksum_chunk_bytes = 1_048_576;
-    let preset = root.path().join("custom-config.json");
-    std::fs::write(&preset, json_codec::to_vec(&config).unwrap()).unwrap();
-    std::fs::set_permissions(&preset, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let unavailable = root.path().join("not-mounted");
     let (backend, auth) = open_service_with_options(
         &data,
         &management,
         ManagementOptions {
-            setup_disks: disks,
-            setup_configs: std::collections::BTreeMap::from([
-                ("custom".into(), preset.clone()),
-                (
-                    "offline".into(),
-                    root.path().join("unavailable-preset.json"),
-                ),
-            ]),
-            allow_development_setup: true,
-            retained_workspace_limits: None,
-            scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy::default(),
+            setup_disks: std::collections::BTreeMap::from([(
+                "offline".into(),
+                unavailable.clone(),
+            )]),
+            setup_configs: std::collections::BTreeMap::from([(
+                "offline".into(),
+                root.path().join("missing-preset.json"),
+            )]),
+            ..Default::default()
         },
     )
     .unwrap();
-    let key = "b".repeat(64);
-    std::fs::write(management.join("bootstrap.key"), &key).unwrap();
-    std::fs::set_permissions(
-        management.join("bootstrap.key"),
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
     let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
-    assert_eq!(
-        request(&app, "/healthz", None, None).await.0,
-        StatusCode::OK
-    );
-    for _ in 0..100 {
-        if !backend.management_status().recovering() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    let (_, status) = bootstrap_json(&app, &key, "/api/setup/status", None).await;
-    assert_eq!(status["config_presets"], json!(["custom", "offline"]));
-    let (code, preview) = bootstrap_json(
-        &app,
-        &key,
+    wait_for_idle(&backend).await;
+    let (_, status) = first_account_json(&app, "/api/setup/status", None).await;
+    assert_eq!(status["state"], "empty");
+    let (code,_)=first_account_json(&app,"/api/setup/initialize",Some(json!({"username":"admin","password":"a-long-test-password","disk_ids":["offline"],"mode":"production"}))).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    for path in [
         "/api/setup/preset-preview",
-        Some(json!({"preset_id":"custom"})),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK, "{preview:?}");
-    assert!(!preview.to_string().contains(root.path().to_str().unwrap()));
-    assert_eq!(
-        preview["configuration"]["disks"].as_array().unwrap().len(),
-        4
-    );
-    config.max_workspaces = 8;
-    std::fs::write(&preset, json_codec::to_vec(&config).unwrap()).unwrap();
-    let (code,_)=bootstrap_json(&app,&key,"/api/setup/initialize-preset",Some(json!({"preset_id":"custom","config_digest":preview["config_digest"],"username":"admin","password":"a-long-test-password"}))).await;
-    assert!(!code.is_success());
+        "/api/setup/initialize-preset",
+        "/api/setup/complete-initialization",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!response.status().is_success(), "obsolete route {path}");
+    }
     assert!(!data.join("config.json").exists());
     assert!(!management.join("management-auth.json").exists());
-    let (code, preview) = bootstrap_json(
+    let (code, value) = first_account_json(
         &app,
-        &key,
-        "/api/setup/preset-preview",
-        Some(json!({"preset_id":"custom"})),
+        "/api/setup/initialize",
+        Some(json!({"username":"admin","password":"a-long-test-password"})),
     )
     .await;
-    assert_eq!(code, StatusCode::OK);
-    let (code,value)=bootstrap_json(&app,&key,"/api/setup/initialize-preset",Some(json!({"preset_id":"custom","config_digest":preview["config_digest"],"username":"admin","password":"a-long-test-password"}))).await;
     assert_eq!(code, StatusCode::OK, "{value:?}");
-    assert_eq!(
-        web_setup_response::validate(web_setup_response::Action::Preset, value.clone()).unwrap(),
-        web_setup_response::Success::Recovering
-    );
-    wait_for_ready(&backend).await;
-    let persisted: Value =
-        json_codec::from_slice(&std::fs::read(data.join("config.json")).unwrap()).unwrap();
-    assert_eq!(persisted, json_codec::to_value(config).unwrap());
-    assert_eq!(
-        request(
-            &app,
-            "/api/auth/login",
-            None,
-            Some(json!({"username":"admin","password":"a-long-test-password"}))
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
+    web_setup_response::validate(value).unwrap();
+    assert!(!unavailable.exists());
+    assert!(!data.join("config.json").exists());
+    assert!(management.join("management-auth.json").exists());
 }
 
 async fn wait_for_ready(backend: &ManagementBackend) {
@@ -1250,4 +1225,221 @@ fn below_baseline_runtime_limits_fail_in_background_without_blocking_management(
             .is_ok()
     );
     assert_eq!(std::fs::read(data.join("config.json")).unwrap(), config);
+}
+
+async fn put_json(app: &Router, path: &str, token: &str, body: Value) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(path)
+                .header("authorization", format!("Bearer {token}"))
+                .header("host", "127.0.0.1:7400")
+                .header("origin", "http://127.0.0.1:7400")
+                .header("content-type", "application/json")
+                .body(Body::from(json_codec::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let code = response.status();
+    let bytes = http_routing::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    (code, json_codec::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn public_first_account_is_keyless_origin_checked_and_single_winner() {
+    let temporary = tempfile::tempdir().unwrap();
+    let data = temporary.path().join("system");
+    let management = temporary.path().join("management");
+    let (backend, auth) = open_service(&data, &management).unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
+    wait_for_idle(&backend).await;
+    assert!(!management.join("bootstrap.key").exists());
+    assert_eq!(
+        request(&app, "/api/setup/status", None, None).await,
+        (StatusCode::OK, json!({"state":"empty"}))
+    );
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/setup/initialize")
+                .header("host", "127.0.0.1:7400")
+                .header("origin", "https://untrusted.invalid")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"username":"outsider","password":"a-long-test-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+    assert!(!management.join("management-auth.json").exists());
+    let (first, second) = tokio::join!(
+        first_account_json(
+            &app,
+            "/api/setup/initialize",
+            Some(json!({"username":"first","password":"a-long-test-password"}))
+        ),
+        first_account_json(
+            &app,
+            "/api/setup/initialize",
+            Some(json!({"username":"second","password":"another-long-password"}))
+        )
+    );
+    assert_eq!(
+        [first.0, second.0]
+            .iter()
+            .filter(|code| **code == StatusCode::OK)
+            .count(),
+        1,
+        "{first:?} {second:?}"
+    );
+    assert_eq!(
+        request(&app, "/api/setup/status", None, None).await,
+        (StatusCode::OK, json!({"state":"management_ready"}))
+    );
+    let before = std::fs::read(management.join("management-auth.json")).unwrap();
+    let retry = first_account_json(
+        &app,
+        "/api/setup/initialize",
+        Some(json!({"username":"replacement","password":"replacement-password"})),
+    )
+    .await;
+    assert_eq!(retry.0, StatusCode::CONFLICT, "{retry:?}");
+    assert_eq!(
+        std::fs::read(management.join("management-auth.json")).unwrap(),
+        before
+    );
+    assert!(!data.join("config.json").exists());
+    assert!(!management.join("bootstrap.key").exists());
+    backend.drain_management().unwrap();
+}
+
+#[test]
+fn anonymous_account_initialization_cannot_drain_or_detach_an_existing_backend() {
+    for status in [
+        StorageState::Ready,
+        StorageState::ReadOnly,
+        StorageState::RecoveryRequired,
+        StorageState::Unavailable,
+    ] {
+        for (held, recovering) in [(false, false), (true, false), (false, true), (true, true)] {
+            let root = tempfile::tempdir().unwrap();
+            let data = root.path().join("pool");
+            let management = root.path().join("management");
+            let engine = storage_engine::Engine::initialize(
+                &data,
+                storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+            )
+            .unwrap();
+            let existing = Arc::new(EngineBackend::new(engine));
+            let weak = Arc::downgrade(&existing);
+            let holder = held.then(|| existing.clone());
+            let primary =
+                AuthStore::initialize_management(&management, "admin", "a-long-test-password")
+                    .unwrap();
+            drop(primary);
+            let (backend, auth) = open_service(&data, &management).unwrap();
+            *crate::lock(&backend.inner.auth) = Some(Arc::new(Mutex::new(auth)));
+            {
+                let mut state = crate::lock(&backend.inner.state);
+                state.backend = Some(existing);
+                state.status = status;
+                state.admitted = true;
+                state.observed_at = std::time::Instant::now();
+            }
+            backend.inner.recovering.store(recovering, Ordering::SeqCst);
+            let credentials = fs::read(management.join("management-auth.json")).unwrap();
+            let authority = fs::read(data.join("management-authority.json")).unwrap();
+            let error = backend
+                .setup_operation(
+                    "initialize",
+                    json!({"username":"attacker","password":"a-different-password"}),
+                    None,
+                    None,
+                )
+                .unwrap_err();
+            assert_eq!(error.code, storage_contract::ErrorCode::RecoveryRequired);
+            {
+                let state = crate::lock(&backend.inner.state);
+                assert!(state.admitted, "{status:?}, held={held}");
+                assert_eq!(state.status, status);
+                assert!(Arc::ptr_eq(
+                    state.backend.as_ref().unwrap(),
+                    &weak.upgrade().unwrap()
+                ));
+            }
+            assert_eq!(
+                fs::read(management.join("management-auth.json")).unwrap(),
+                credentials
+            );
+            assert_eq!(
+                fs::read(data.join("management-authority.json")).unwrap(),
+                authority
+            );
+            assert_eq!(backend.inner.recovering.load(Ordering::SeqCst), recovering);
+            backend.inner.recovering.store(false, Ordering::SeqCst);
+            drop(holder);
+        }
+    }
+}
+
+#[test]
+fn first_account_refreshes_an_inflight_pre_account_observation_without_claiming_its_gate() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("system");
+    let management = root.path().join("management");
+    let (backend, auth) = open_service(&data, &management).unwrap();
+    *crate::lock(&backend.inner.auth) = Some(Arc::new(Mutex::new(auth)));
+    let (entered, entry) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let calls = Arc::new(AtomicU64::new(0));
+    let worker_calls = calls.clone();
+    backend.inner.recovering.store(true, Ordering::SeqCst);
+    let inner = backend.inner.clone();
+    *crate::lock(&backend.inner.recovery_worker) = Some(std::thread::spawn(move || {
+        inner.run_recovery(move |inner| {
+            if worker_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                entered.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(5)).unwrap();
+                // A startup result captured before account creation arrives late.
+                inner.set(None, StorageState::Unavailable);
+                Ok(())
+            } else {
+                inner.recover_once()
+            }
+        });
+    }));
+    entry.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        backend
+            .setup_operation(
+                "initialize",
+                json!({"username":"admin","password":"a-long-test-password"}),
+                None,
+                None
+            )
+            .unwrap(),
+        json!({"initialized":true,"storage_pending":true})
+    );
+    assert!(backend.inner.recovering.load(Ordering::SeqCst));
+    release.send(()).unwrap();
+    let worker = crate::lock(&backend.inner.recovery_worker).take().unwrap();
+    worker.join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        backend.management_status().state(),
+        StorageState::Unconfigured
+    );
+    assert!(!backend.inner.recovering.load(Ordering::SeqCst));
+    assert!(!data.join("config.json").exists());
 }

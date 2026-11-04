@@ -643,3 +643,47 @@ fn independent_selection_and_page_share_entity_identity_and_count_constraints() 
     value["selected_entry"] = wire(&requested);
     assert!(Page::parse(value, "P01", &ROOT, PAGE_SIZE, Some(&requested)).is_err());
 }
+
+#[test]
+fn preview_pages_preserve_body_identity_and_never_grant_write_authority() {
+    let mut value = response(1);
+    value["preview"] = true.into();
+    value["writable"] = false.into();
+    value["entries"][0]["read_only"] = true.into();
+    let page = parse(value.clone()).unwrap();
+    assert!(page.preview());
+    let parts = page.into_parts();
+    assert!(!parts.writable);
+    assert!(parts.entries[0].preview());
+    assert!(parts.entries[0].read_only());
+    assert_eq!(parts.entries[0].version_id(), Some("version"));
+    assert_eq!(parts.context.unwrap().base_head(), "head");
+    value["writable"] = true.into();
+    assert!(parse(value.clone()).is_err());
+    value["writable"] = false.into();
+    value["backup"] = true.into();
+    assert!(parse(value.clone()).is_err());
+    value.as_object_mut().unwrap().remove("backup");
+    value["preview"] = false.into();
+    assert!(parse(value).is_err());
+}
+
+#[test]
+fn preview_selection_refresh_agrees_with_the_same_entry_in_its_page() {
+    let mut value = response(1);
+    value["preview"] = true.into();
+    value["writable"] = false.into();
+    value["entries"][0]["read_only"] = true.into();
+    let requested = parse(value.clone()).unwrap().into_parts().entries[0].clone();
+    value["selected_entry"] = value["entries"][0].clone();
+    let page = Page::parse(value, "P01", &ROOT, PAGE_SIZE, Some(&requested)).unwrap();
+    let parts = page.into_parts();
+    assert_eq!(parts.selected, Some(parts.entries[0].clone()));
+    assert!(parts.selected.unwrap().preview());
+}
+
+pub(crate) fn preview_entry(patch: Value) -> Entry {
+    let mut entry = entry(patch);
+    entry.preview = true;
+    entry
+}

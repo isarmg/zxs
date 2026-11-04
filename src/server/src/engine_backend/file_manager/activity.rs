@@ -319,6 +319,7 @@ fn file_operation_events<'a>(
             "file.metadata"
                 | "version.metadata"
                 | "file.branch.rename"
+                | "file.default.set"
                 | "file.path.metadata"
                 | "file.branches.merge"
                 | "file.tags.update"
@@ -350,8 +351,11 @@ fn file_operation_events<'a>(
             .map_err(crate::engine_backend::error)?
             .iter()
             .find(|entry| entry.file_id == file);
-        let relative = path_node
-            .map(|node| node.path.clone())
+        let relative = (operation.kind == "file.default.set")
+            .then(|| operation.result.get("path").and_then(Value::as_str))
+            .flatten()
+            .map(str::to_owned)
+            .or_else(|| path_node.map(|node| node.path.clone()))
             .or_else(|| current.map(|entry| entry.path().to_owned()))
             .or_else(|| {
                 engine
@@ -408,6 +412,7 @@ fn directory_operation_events<'a>(
             "directory.branches.create"
                 | "directory.branches.select"
                 | "directory.default.select"
+                | "directory.default.set"
                 | "directory.branch.rename"
                 | "directory.scope.initialize"
         ) && op.result.get("no_change").and_then(Value::as_bool) != Some(true)

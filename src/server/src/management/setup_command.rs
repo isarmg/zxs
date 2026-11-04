@@ -2,17 +2,15 @@
 use crate::{
     ApiError,
     setup_recovery::{
-        CompleteSetupRequest, PresetSetupRequest, RecoveryCommitRequest, RecoveryPreviewRequest,
-        RestoreRequest, SetupRequest,
+        RecoveryCommitRequest, RecoveryPreviewRequest, RestoreRequest, StorageActivationRequest,
     },
 };
 use json_codec::Value;
 
-// No Debug or Serialize: several variants own administrator credentials.
+// Request-local lifecycle inputs; public account setup has its own one-time lock.
 pub(super) enum SetupCommand {
-    Initialize(SetupRequest),
-    InitializePreset(PresetSetupRequest),
-    CompleteInitialization(CompleteSetupRequest),
+    Activate(StorageActivationRequest),
+    CompleteActivation,
     RestoreSystem(RestoreRequest),
     RecoveryPreview(RecoveryPreviewRequest),
     RecoveryCommit(RecoveryCommitRequest),
@@ -22,15 +20,17 @@ pub(super) enum SetupCommand {
 impl SetupCommand {
     pub(super) fn parse(action: &str, input: Value) -> Result<Self, ApiError> {
         Ok(match action {
-            "initialize" => {
-                Self::Initialize(json_codec::from_value(input).map_err(ApiError::invalid_source)?)
+            "activate" => {
+                Self::Activate(json_codec::from_value(input).map_err(ApiError::invalid_source)?)
             }
-            "initialize_preset" => Self::InitializePreset(
-                json_codec::from_value(input).map_err(ApiError::invalid_source)?,
-            ),
-            "complete_initialization" => Self::CompleteInitialization(
-                json_codec::from_value(input).map_err(ApiError::invalid_source)?,
-            ),
+            "complete_activation" => {
+                if !input.as_object().is_some_and(|object| object.is_empty()) {
+                    return Err(ApiError::invalid(
+                        "activation completion accepts an empty object",
+                    ));
+                }
+                Self::CompleteActivation
+            }
             "restore_system" => Self::RestoreSystem(
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?,
             ),
@@ -53,9 +53,8 @@ impl SetupCommand {
 
     pub(super) fn resumes_storage(&self) -> bool {
         match self {
-            Self::Initialize(_)
-            | Self::InitializePreset(_)
-            | Self::CompleteInitialization(_)
+            Self::Activate(_)
+            | Self::CompleteActivation
             | Self::RestoreSystem(_)
             | Self::RecoveryCommit(_) => true,
             Self::RecoveryPreview(_) | Self::OfflineCheck(_) => false,

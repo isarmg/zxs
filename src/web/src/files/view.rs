@@ -81,7 +81,16 @@ fn disk_roots(state: RwSignal<State>) -> impl IntoView {
     }
 }
 fn directory(state: RwSignal<State>) -> impl IntoView {
-    let default_scope = Memo::new(move |_| state.with(|s| s.files.default_branch_scope));
+    let default_disabled = Signal::derive(move || {
+        state.with(|s| {
+            !actions::default_write_allowed(s)
+                || !s.files.loaded
+                || s.files
+                    .directory_preview
+                    .as_ref()
+                    .is_none_or(|preview| !preview.at_directory(&s.files.directory))
+        })
+    });
     let rename_branch = Memo::new(move |_| state.with(|s| selected_directory_branch(&s.files)));
     let folder_options = Signal::derive(move || {
         state.with(|s| {
@@ -90,7 +99,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
                 .iter()
                 .map(|branch| {
                     SelectOption::new(
-                        directory_branch_value(branch, s.files.default_branch_scope),
+                        directory_branch_value(branch),
                         directory_branch_name(branch),
                     )
                 })
@@ -99,17 +108,16 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
     });
     let folder_value = Signal::derive(move || {
         state.with(|s| {
-            s.files
-                .directory_branches
-                .iter()
-                .find(|branch| branch.current())
-                .map(|branch| directory_branch_value(branch, s.files.default_branch_scope))
+            super::model::viewed_directory_branch(&s.files)
+                .map(|branch| branch.id().to_owned())
                 .unwrap_or_default()
         })
     });
     let folder_disabled = Signal::derive(move || {
         state.with(|s| {
-            !actions::write_allowed(s)
+            !s.session_active()
+                || actions::pending(s)
+                || s.files.loading
                 || !s.files.loaded
                 || !s.files.directory_branches_supported
                 || s.files.directory_branches.is_empty()
@@ -141,11 +149,15 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::start_current(state)>{t("备份设置","Backup settings")}</button>
             <div class="zxs-file-search zxs-form-grid"><label class="zxs-form-field"><span>{t("搜索当前文件夹","Search this folder")}</span><input class="zxs-input zxs-input--compact" type="search" aria-label=t("搜索当前文件夹","Search this folder") placeholder=t("搜索当前文件夹","Search this folder") prop:value=move ||state.with(|s|s.files.query.clone()) on:input=move |event|actions::search(state,event_target_value(&event))/></label></div>
         </div>
-        <div class="zxs-file-toolbar zxs-flow zxs-surface-end">{move ||view!{<Select label=if default_scope.get(){t("当前主分支（SMB 默认）","Current main branch (SMB default)")}else{t("当前目录分支","Current folder branch")} options=folder_options value=folder_value disabled=folder_disabled placeholder=if default_scope.get(){t("主版本","Main")}else{t("尚无目录分支","No folder branches")} on_change=Callback::new(move |value:String|{if state.with_untracked(|s|s.files.default_branch_scope){actions::select_default_branch(state,value)}else{let path=state.with_untracked(|s|s.files.directory.clone());let _=actions::directory_branch(state,path,value,true);}})/>}}
-            {move ||rename_branch.get().map(|(repository,branch_id,name)|inline::control(state,t("重命名分支","Rename branch"),Some("rename"),inline::Target::RenameDirectoryBranch{repository,branch_id,name},folder_disabled))}
-            <p class="zxs-row">{move ||if default_scope.get(){t("恢复所选文件分支组合，并作为 SMB 默认视图。","Restores the selected file branch combination as the default SMB view.")}else{t("恢复此目录保存的文件分支组合，不改变目录外文件。","Restores this folder’s saved file branch combination without changing files outside it.")}}</p></div>
+        <div class="zxs-file-toolbar zxs-flow zxs-surface-end">
+            <Select label=t("浏览目录分支","Browse folder branch") options=folder_options value=folder_value disabled=folder_disabled placeholder=t("尚无目录分支","No folder branches") on_change=Callback::new(move |value:String|actions::preview_directory_branch(state,value))/>
+            <button class="zxs-button" data-zxs-set-directory-default="true" disabled=move ||default_disabled.get() on:click=move |_|if let Some(id)=state.with_untracked(|s|super::model::viewed_directory_branch(&s.files).map(|branch|branch.id().to_owned())){actions::select_default_branch(state,id);}>{t("设为默认分支","Set as default branch")}</button>
+            {move ||rename_branch.get().map(|(repository,branch_id,name)|inline::control(state,t("重命名分支","Rename branch"),Some("rename"),inline::Target::RenameDirectoryBranch{repository,branch_id,name},mutation_disabled))}
+            <Show when=move ||state.with(|s|s.files.directory_preview.is_some())><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|actions::return_to_default(state)>{t("返回默认视图","Return to default view")}</button></Show>
+            <p class="zxs-row">{t("切换仅浏览分支，不改变默认分支。设为默认后才更新默认读取和 SMB；目录外文件保持不变。","Switching only browses a branch. Set it as default to update default reads and SMB; files outside the folder stay unchanged.")}</p>
+        </div>
         <Show when=move ||state.with(|s|s.files.loaded&&s.files.writable&&!s.files.directory_branches_supported)><p class="zxs-row">{t("请选择具体文件夹后管理目录分支；此硬盘根目录包含多个已有的文件目录。","Select a specific folder to manage folder branches; this disk root contains multiple existing file namespaces.")}</p></Show>
-        <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable)><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
+        <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable&&s.files.directory_preview.is_none())><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
         {backup::view(state)}
         {batch::view(state)}
         <div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush">{file_table(state)}</section></div>

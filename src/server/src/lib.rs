@@ -22,6 +22,7 @@ pub mod integrity_scrub;
 pub mod management;
 mod service_lifecycle;
 mod shutdown;
+pub mod storage_directories;
 pub use shutdown::ShutdownSignal;
 #[cfg(feature = "core")]
 pub mod setup_recovery;

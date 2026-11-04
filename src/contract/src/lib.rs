@@ -8,6 +8,7 @@ pub mod encoding;
 pub mod history_window;
 mod integer_json;
 pub mod smb_account;
+pub mod storage_directories;
 pub use content_hash::{ContentHash, ParseContentHashError};
 mod operation_id;
 mod operation_outcome;

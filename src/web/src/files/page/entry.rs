@@ -23,6 +23,7 @@ pub(super) fn parse(value: Value) -> Result<Entry, DecodeError> {
     };
     fields.finish()?;
     Ok(Entry {
+        preview: false,
         entry_id,
         path,
         body,

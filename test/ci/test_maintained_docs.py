@@ -37,9 +37,10 @@ class MaintainedDocs(unittest.TestCase):
         self.assertEqual(args[0], '/zxs/zxs')
         self.assertEqual(service['WorkingDirectory'], '/zxs')
         for option, path in (('--root', '/zxs/data/state'),
-                             ('--management-root', '/zxs/data/management'),
-                             ('--setup-disk', 'P01=/zxs/data/disks/P01')):
+                             ('--management-root', '/zxs/data/management')):
             self.assertEqual(args[args.index(option) + 1], path)
+        self.assertNotIn('--setup-disk', args)
+        self.assertNotIn('--setup-config', args)
         self.assertNotIn('--external-origin', args)
         self.assertNotIn('--web-dir', args)
         self.assertNotIn('StateDirectory', service)

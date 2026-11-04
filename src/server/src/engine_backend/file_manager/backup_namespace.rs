@@ -652,6 +652,7 @@ impl SelectedListing {
             slot_id: self.scope.slot_id,
             path: self.scope.path,
             backup: true,
+            preview: false,
             entries: page.entries,
             selected_entry: page.selected_entry,
             context: None,
