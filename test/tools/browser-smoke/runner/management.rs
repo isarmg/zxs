@@ -139,6 +139,14 @@ pub(super) fn setup(
     let server = fixture.launch(daemon, web, "server.log")?;
     let storage = fixture.root.join("storage-parent/selected-storage");
     server.finish(|| {
+        let previews = std::env::var_os("ZXS_LOGIN_PREVIEWS")
+            .map(|dir| std::path::PathBuf::from(dir).join("first-account"));
+        fixture.visit(browser)?;
+        super::auth_layout::first_account(
+            browser,
+            &format!("http://127.0.0.1:{}", fixture.port),
+            previews.as_deref(),
+        )?;
         fixture.open(browser)?;
         browser.keys(&browser.css("[data-setup-user]")?, "fresh-admin")?;
         reauthorize_identity(browser, "fresh-admin")?;

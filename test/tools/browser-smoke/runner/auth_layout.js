@@ -1,22 +1,11 @@
 // Observe actual visibility and decoration bytes; do not mutate the product DOM.
-const done = arguments[arguments.length - 1];
+const done = arguments[arguments.length - 1], expectedSetup=arguments[0];
 (async () => {
 const card = document.querySelector('.authentication-card');
 // innerWidth includes a classic scrollbar; content must fit the layout viewport.
 const layoutWidth = document.documentElement.clientWidth;
 const rect = e => { const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; };
 const rendered = e => e.checkVisibility({opacityProperty:true,visibilityProperty:true});
-// Chromium may retain nonempty layout rects below a closed native disclosure.
-// Exclude only that intentional state, never an unexpectedly hidden control.
-const disclosed = e => {
-    for (let ancestor=e.parentElement;ancestor;ancestor=ancestor.parentElement) {
-        if (ancestor.tagName==='DETAILS'&&!ancestor.open) {
-            const summary=[...ancestor.children].find(child=>child.tagName==='SUMMARY');
-            if (!summary?.contains(e)) return false;
-        }
-    }
-    return true;
-};
 const luminance = rgb => rgb.slice(0,3).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((sum,x,i)=>sum+x*[.2126,.7152,.0722][i],0);
 const contrast = (a,b) => { const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); };
 const raster = async url => {
@@ -133,11 +122,9 @@ const surfacePaint = async node => {
     const paint=native?{valid:true,property:'border'}:await decoration(node,css);
     return {...paint,valid:bordered&&paint.valid&&rendered(node)};
 };
-const groupNodes=[...card.querySelectorAll('.zxs-form-grid')].filter(disclosed);
+const groupNodes=[...card.querySelectorAll('.zxs-form-grid')];
 const groupPaint=new Map(await Promise.all(groupNodes.map(async node=>[node,await surfacePaint(node)])));
-const allControls=[...card.querySelectorAll('input.zxs-input,textarea.zxs-input,button.zxs-button')];
-const controls=allControls.filter(disclosed);
-const closedContentHidden=allControls.filter(e=>!disclosed(e)).every(e=>!rendered(e));
+const controls=[...card.querySelectorAll('input.zxs-input,textarea.zxs-input,button.zxs-button')];
 const visible=await Promise.all(controls.map(async e => {
     const s=getComputedStyle(e), r=rect(e), isRendered=rendered(e);
     const internal=e.tagName==='INPUT'||e.tagName==='TEXTAREA', group=e.closest('.zxs-form-grid');
@@ -157,9 +144,33 @@ const rowNodes=[...form.children];
 const rows=rowNodes.map(rect);
 const required=[form.querySelector('[name=username]'),form.querySelector('[name=password]'),form.querySelector('button[type=submit]'),card.querySelector(':scope > section button')];
 const requiredPresent=required.every(e=>e&&controls.includes(e));
-const setup=card.querySelector('details');
-const setupPresent=!setup.open||(setup.querySelectorAll('input.zxs-input').length>=1&&setup.querySelectorAll('button.zxs-button').length>=2);
 const separate = list => list.every((r,i)=>!i||r.y>=list[i-1].bottom-.5);
+// The fixture supplies the installation state; absent fields never infer it.
+const setup=card.querySelector('form[data-first-account-form]');
+const setupStatus=setup?.querySelector(':scope > [role=status]');
+const setupCheck=setup?.querySelector('[data-setup-check]');
+const setupClear=setup?.querySelector(':scope > button[type=button]:not([data-setup-check])');
+const statusTexts={existing:['已存在安装，请登录。','An installation already exists. Sign in.'],
+    empty:['可以创建管理员账户，无需添加硬盘。','Ready to create the administrator account. No disks are required.']};
+const setupRows=setup?[...setup.children]:[];
+const creationSelectors=['[data-setup-user]','[data-setup-password]','[data-setup-confirm]','button[type=submit]'];
+const creation=setup?creationSelectors.map(selector=>[...setup.querySelectorAll(selector)]):[];
+const present=e=>!!e&&e.isConnected&&rendered(e);
+const within=e=>{const r=rect(e);return r.width>0&&r.height>0&&r.x>=0&&r.right<=layoutWidth+1;};
+let creationValid=false;
+if(expectedSetup==='existing')creationValid=creation.length===4&&creation.every(nodes=>nodes.length===0);
+if(expectedSetup==='empty'&&creation.length===4&&creation.every(nodes=>nodes.length===1)) {
+    const [user,password,confirm,submit]=creation.map(nodes=>nodes[0]), label=confirm.closest('label');
+    creationValid=[user,password,submit].every(e=>controls.includes(e))&&[user,password,confirm].every(e=>!e.disabled)
+        &&user.autocomplete==='username'&&password.type==='password'&&password.autocomplete==='new-password'
+        &&confirm.type==='checkbox'&&!confirm.checked&&submit.disabled
+        &&present(confirm)&&within(confirm)&&present(label)&&within(label)&&label.textContent.trim().length>0;
+}
+const setupPresent=card.querySelectorAll('form[data-first-account-form]').length===1&&present(setup)
+    &&setup.parentElement.tagName==='SECTION'&&setup.parentElement.parentElement===card&&present(setup.parentElement)&&within(setup)
+    &&present(setupStatus)&&within(setupStatus)&&statusTexts[expectedSetup]?.includes(setupStatus.textContent.trim())===true
+    &&[setupCheck,setupClear].every(e=>present(e)&&controls.includes(e)&&!e.disabled)
+    &&creationValid&&setupRows.every(present)&&separate(setupRows.map(rect));
 const formGroups=groupNodes.map(group=>{
     const bounds=rect(group);
     const fields=[...group.querySelectorAll(':scope > label.zxs-form-field')].map(field=>{
@@ -182,7 +193,7 @@ const formGroups=groupNodes.map(group=>{
 const formGroupsPresent=formGroups.length>0&&controls.filter(e=>e.tagName==='INPUT'||e.tagName==='TEXTAREA')
     .every(e=>e.closest('.zxs-form-grid')&&e.closest('label.zxs-form-field'));
 const header=rect(document.querySelector('.authentication-language')), panel=rect(card);
-return {valid:formGroupsPresent&&formGroups.every(group=>group.valid)&&requiredPresent&&setupPresent&&closedContentHidden&&document.documentElement.scrollWidth<=layoutWidth+1&&visible.every(e=>e.valid)&&regionNodes.every(rendered)&&rowNodes.every(rendered)&&separate(regions)&&separate(rows)&&panel.y>=header.bottom&&[header,panel].every(r=>r.x>=0&&r.right<=layoutWidth+1),
+return {valid:formGroupsPresent&&formGroups.every(group=>group.valid)&&requiredPresent&&setupPresent&&document.documentElement.scrollWidth<=layoutWidth+1&&visible.every(e=>e.valid)&&regionNodes.every(rendered)&&rowNodes.every(rendered)&&separate(regions)&&separate(rows)&&panel.y>=header.bottom&&[header,panel].every(r=>r.x>=0&&r.right<=layoutWidth+1),
     viewport:{width:innerWidth,height:innerHeight,clientWidth:layoutWidth,scrollbarWidth:innerWidth-layoutWidth},documentWidth:document.documentElement.scrollWidth,header,panel,regions,rows,formGroups,formGroupsPresent,
-    requiredPresent,setupPresent,closedContentHidden,excludedClosedDisclosure:allControls.length-controls.length,controls:visible};
+    requiredPresent,setupPresent,expectedSetup,creationValid,setupRows:setupRows.map(rect),controls:visible};
 })().then(done,error=>done({valid:false,error:String(error)}));
