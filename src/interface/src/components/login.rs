@@ -1,10 +1,13 @@
 use super::ErrorState;
-use crate::component::{component_props_builder, component_view};
 use crate::{i18n::t, prelude::*};
+
 #[component]
 pub fn LoginPage(
     pending: Signal<bool>,
     remote_failure: Signal<Option<super::Feedback>>,
+    notice: Signal<String>,
+    retry_available: Signal<bool>,
+    on_retry: Callback<()>,
     on_submit: Callback<super::LoginCredentials>,
 ) -> impl IntoView {
     let username = NodeRef::<web_interface::html::Input>::new();
@@ -26,158 +29,42 @@ pub fn LoginPage(
             secret.set_value("");
         }
     });
-    View::new(
-        web_interface::html::form()
-            .child((
-                web_interface::html::h1().child(
-                    #[allow(unused_braces)]
-                    {
-                        IntoRender::into_render({ t("登录", "Sign in") })
-                    },
-                ),
-                web_interface::html::div()
-                    .class("zxs-form-grid")
-                    .child((
-                web_interface::html::label()
-                    .child((
-                        web_interface::html::span().child(
-                            #[allow(unused_braces)]
-                            {
-                                IntoRender::into_render({ t("用户名", "Username") })
-                            },
-                        ),
-                        web_interface::html::input()
-                            .class("zxs-input")
-                            .node_ref(username)
-                            .name("username")
-                            .autocomplete("username")
-                            .required(true)
-                            .maxlength("64")
-                            .readonly(
-                                ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                                    move || pending.get(),
-                                ),
-                            ),
-                    ))
-                    .class("zxs-form-field"),
-                web_interface::html::label()
-                    .child((
-                        web_interface::html::span().child(
-                            #[allow(unused_braces)]
-                            {
-                                IntoRender::into_render({ t("密码", "Password") })
-                            },
-                        ),
-                        web_interface::html::input()
-                            .class("zxs-input")
-                            .node_ref(password)
-                            .name("password")
-                            .r#type("password")
-                            .autocomplete("current-password")
-                            .required(true)
-                            .maxlength("1024")
-                            .readonly(
-                                ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                                    move || pending.get(),
-                                ),
-                            ),
-                    ))
-                    .class("zxs-form-field"),
-                    )),
-                IntoRender::into_render({
-                    move || {
-                        failure.get().map(|(message, id)| {
-                            View::new({
-                                #[allow(unreachable_code)]
-                                #[allow(unused_mut)]
-                                #[allow(
-                                    clippy::let_and_return,
-                                    clippy::let_unit_value,
-                                    clippy::unit_arg
-                                )]
-                                component_view(
-                                    #[allow(clippy::needless_borrows_for_generic_args)]
-                                    &ErrorState,
-                                    {
-                                        let mut props = component_props_builder(&ErrorState)
-                                            .message(
-                                                #[allow(unused_braces)]
-                                                {
-                                                    message
-                                                },
-                                            )
-                                            .request_id(
-                                                #[allow(unused_braces)]
-                                                {
-                                                    id
-                                                },
-                                            )
-                                            .build();
-                                        props
-                                    },
-                                )
-                            })
-                        })
-                    }
-                }),
-                web_interface::html::button()
-                    .child(
-                        #[allow(unused_braces)]
-                        {
-                            IntoRender::into_render({
-                                move || {
-                                    if pending.get() {
-                                        t("正在登录…", "Signing in…")
-                                    } else {
-                                        t("登录", "Sign in")
-                                    }
-                                }
-                            })
-                        },
-                    )
-                    .class("zxs-button")
-                    .r#type("submit")
-                    .disabled(
-                        ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                            move || pending.get(),
-                        ),
-                    ),
-            ))
-            .novalidate(true)
-            .aria_busy(
-                ::web_interface::prelude::IntoAttributeValue::into_attribute_value(move || {
-                    pending.get().to_string()
-                }),
-            )
-            .on(web_interface::ev::input, move |_| failure.set(None))
-            .on(web_interface::ev::submit, move |event| {
+    view! {
+        <form data-auth-form="login" aria-label=t("登录", "Sign in") novalidate
+            aria-busy=move ||pending.get().to_string()
+            on:input=move |_|failure.set(None)
+            on:submit=move |event| {
                 event.prevent_default();
-                if pending.get_untracked() {
-                    return;
-                }
-                let name = username.get_untracked().unwrap();
-                let secret = password.get_untracked().unwrap();
+                if pending.get_untracked() { return; }
+                let name=username.get_untracked().expect("invariant: mounted login username");
+                let secret=password.get_untracked().expect("invariant: mounted login password");
                 if name.value().is_empty() {
-                    failure.set(Some((t("请输入用户名。", "Enter your username."), None)));
-                    if let Err(error) = name.focus() {
-                        web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
-                    }
+                    failure.set(Some((t("请输入账户名。", "Enter your account name."),None)));
+                    if let Err(error)=name.focus() {web_sys::console::warn_2(&"Could not move keyboard focus".into(),&error);}
                     return;
                 }
                 if secret.value().is_empty() {
-                    failure.set(Some((t("请输入密码。", "Enter your password."), None)));
-                    if let Err(error) = secret.focus() {
-                        web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
-                    }
+                    failure.set(Some((t("请输入密码。", "Enter your password."),None)));
+                    if let Err(error)=secret.focus() {web_sys::console::warn_2(&"Could not move keyboard focus".into(),&error);}
                     return;
                 }
                 failure.set(None);
-                let credentials = super::LoginCredentials {
-                    username: name.value(),
-                    password: secret.value(),
-                };
+                let credentials=super::LoginCredentials{username:name.value(),password:secret.value()};
                 secret.set_value("");
                 on_submit.run(credentials);
-            }),
-    )
+            }>
+            <label class="zxs-auth-label" for="zxs-login-username">{t("账户名", "Account name")}</label>
+            <input id="zxs-login-username" class="zxs-input" node_ref=username name="username" autocomplete="username" required maxlength="64" readonly=move ||pending.get()/>
+            <label class="zxs-auth-label" for="zxs-login-password">{t("密码", "Password")}</label>
+            <input id="zxs-login-password" class="zxs-input" node_ref=password name="password" type="password" autocomplete="current-password" required maxlength="1024" readonly=move ||pending.get()/>
+            <div class="zxs-auth-information">
+                {move ||failure.get().map(|(message,id)|view!{<ErrorState message=message request_id=id/>})}
+                <Show when=move ||failure.get().is_none()><span role="status">{move ||notice.get()}</span></Show>
+            </div>
+            <div class="zxs-auth-actions">
+                <button type="submit" class="zxs-button" disabled=move ||pending.get()>{move ||if pending.get(){t("正在登录…", "Signing in…")}else{t("登录", "Sign in")}}</button>
+                <Show when=move ||retry_available.get()><button type="button" class="zxs-button" data-setup-check="" aria-label=t("检查设置状态", "Check setup status") title=t("检查设置状态", "Check setup status") disabled=move ||pending.get() on:click=move |_|on_retry.run(())><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 11-2l3 3M4 16l3 3a7 7 0 0 0 11-2"/></svg></button></Show>
+            </div>
+        </form>
+    }
 }

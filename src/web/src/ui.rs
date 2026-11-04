@@ -184,11 +184,22 @@ pub fn app() -> impl IntoView {
     let session = Memo::new(move |_| state.with(session_view));
     let logout_pending = Memo::new(move |_| state.with(|s| s.logout_pending()));
     let login_pending = Memo::new(move |_| {
-        state.with(|s| {
-            s.login_in_flight || s.restoring() || s.logout_pending() || s.logout_unconfirmed()
-        })
+        setup_state.with(crate::setup::Model::pending)
+            || state.with(|s| {
+                s.login_in_flight || s.restoring() || s.logout_pending() || s.logout_unconfirmed()
+            })
     });
-    let login_failure = Memo::new(move |_| state.with(|s| s.login_failure.clone()));
+    let login_failure = Memo::new(move |_| {
+        state
+            .with(|s| {
+                s.login_failure
+                    .clone()
+                    .or_else(|| s.session_failure.clone())
+            })
+            .or_else(|| setup_state.with(crate::setup::Model::feedback))
+    });
+    let login_notice = Memo::new(move |_| state.with(|s| s.session_notice.clone()));
+    let setup_retry = Memo::new(move |_| setup_state.with(crate::setup::Model::retry_available));
     let on_login = Callback::new(move |credentials: LoginCredentials| {
         let Some(epoch) = state.try_update(begin_login).flatten() else {
             return;
@@ -202,6 +213,7 @@ pub fn app() -> impl IntoView {
             }
             match result {
                 Ok(value) => {
+                    setup_state.update(crate::setup::Model::authenticated);
                     state.update(|s| {
                         let login_in_flight = s.login_in_flight;
                         let session_epoch = s.session_epoch;
@@ -221,9 +233,13 @@ pub fn app() -> impl IntoView {
             state.update(|s| s.login_in_flight = false);
         });
     });
-    let login: ChildrenFn = ToChildren::to_children(
-        move || view! { {management::summary(state)} {move ||state.with(|s|s.session_failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})} {crate::setup::view(setup_state)} <LoginPage pending=login_pending.into() remote_failure=login_failure.into() on_submit=on_login/> },
-    );
+    let sign_in: ChildrenFn = ToChildren::to_children(move || {
+        view! {
+            <LoginPage pending=login_pending.into() remote_failure=login_failure.into() notice=login_notice.into() retry_available=setup_retry.into() on_retry=Callback::new(move |_|crate::setup::check(setup_state)) on_submit=on_login/>
+        }
+    });
+    let login: ChildrenFn =
+        ToChildren::to_children(move || crate::setup::view(setup_state, sign_in.clone()));
     view! {
         <AppShell product="zxs" session=session.into() pending_logout=logout_pending.into() on_logout=Callback::new(move |_|logout(state)) on_account=Callback::new(move |_|navigate(state,Page::Account)) on_restore=Callback::new(move |_|restore_session(state)) login=login>
             {workspace(state)}

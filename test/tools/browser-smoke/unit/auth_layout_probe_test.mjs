@@ -3,379 +3,361 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 const source=readFileSync(new URL('../runner/auth_layout.js',import.meta.url),'utf8');
-const box=(y,height=44,width=240,x=40)=>({x,y,width,height,right:x+width,bottom:y+height});
+const box=(y,height=44,width=244,x=38)=>({x,y,width,height,right:x+width,bottom:y+height});
+let observations=0;
 function fixture(empty=false) {
-    const native={opacity:'1',borderTopWidth:'1px',borderTopStyle:'solid',borderTopColor:'rgb(0, 0, 0)',borderImageSource:'none',backgroundImage:'none'};
-    for(const side of ['Right','Bottom','Left'])for(const property of ['Width','Style','Color'])native[`border${side}${property}`]=native[`borderTop${property}`];
-    const node=(name,y,tagName='BUTTON')=>({name,textContent:name,tagName,type:tagName==='INPUT'?'text':'button',disabled:false,checked:false,autocomplete:'',parentElement:null,children:[],dataset:{},visible:true,isConnected:true,box:box(y),style:{...native},
-        getBoundingClientRect(){return this.box;},querySelector(){return null;},
+    const base={opacity:'1',borderImageSource:'none',backgroundImage:'none',backgroundColor:'transparent',boxShadow:'none',outlineWidth:'0px',outlineStyle:'none',outlineColor:'rgb(0, 0, 0)',outlineOffset:'0px',
+        '--zxs-contour-extent':'0px','--zxs-compact-row-height':'36px',minHeight:'36px','--zxs-contour-panel':'calc(36px / 2)','--zxs-bg-panel':'#f2f2f2',aspectRatio:'auto',
+        transform:'none',filter:'none',clipPath:'none',maskImage:'none',display:'block',visibility:'visible',
+        getPropertyValue(name){return this[name]??'';}};
+    for(const side of ['Top','Right','Bottom','Left'])Object.assign(base,{[`border${side}Width`]:'0px',[`border${side}Style`]:'none',[`border${side}Color`]:'rgb(0, 0, 0)'});
+    const node=(name,y,tagName='DIV')=>({name:'',textContent:name,tagName,type:tagName==='INPUT'?'text':'button',namespaceURI:'http://www.w3.org/1999/xhtml',
+        focused:false,disabled:false,checked:false,readOnly:false,required:false,autocomplete:'',tabIndex:0,id:'',htmlFor:'',parentElement:null,children:[],dataset:{},attributes:{},className:'',visible:true,isConnected:true,box:box(y),style:{...base},
+        getBoundingClientRect(){return this.box;},getAttribute(name){return Object.hasOwn(this.attributes,name)?this.attributes[name]:null;},hasAttribute(name){return this.getAttribute(name)!==null;},
         checkVisibility(options){assert.equal(options.opacityProperty,true);assert.equal(options.visibilityProperty,true);return this.visible;},
-        matches(selector){return selector==='.zxs-product-identity'&&this.name==='product';},
-        closest(selector){for(let n=this;n;n=n.parentElement)if(n.selector===selector)return n;return null;},
+        matches(selector){return selector.split(',').some(part=>{
+            const s=part.trim();if(s===':focus-visible')return this.focused;const tag=s.match(/^[\w-]+/);
+            return (!tag||tag[0].toLowerCase()===this.tagName.toLowerCase())
+                &&[...s.matchAll(/\.([\w-]+)/g)].every(m=>this.className.split(' ').includes(m[1]))
+                &&[...s.matchAll(/\[([\w-]+)(?:=["']?([^\]"']+)["']?)?\]/g)].every(([,key,value])=>{
+                    const actual=['name','id','type'].includes(key)?this[key]:this.getAttribute(key);
+                    return value===undefined?actual!==null:actual===value;
+                });
+        });},
+        querySelectorAll(selector){
+            const direct=selector.startsWith(':scope > '),s=direct?selector.slice(9):selector;
+            const children=direct?this.children:this.children.flatMap(child=>[child,...child.querySelectorAll('*')]);
+            return children.filter(child=>s==='*'||child.matches(s));
+        },querySelector(selector){return this.querySelectorAll(selector)[0]??null;},
         contains(child){for(let n=child;n;n=n.parentElement)if(n===this)return true;return false;}});
-    const card=node('card',105,'DIV');card.box=box(105,empty?900:650,292,14);
-    const header=node('header',14);header.box=box(14,44,96,210);
-    const section=node('management',119,'SECTION');section.box=box(119,75);
-    const form=node('form',208,'FORM');form.box=box(208,239);
-    const setupSection=node('setup section',461,'SECTION');setupSection.box=box(461,empty?470:240);
-    const setupForm=node('setup form',550,'FORM');setupForm.box=box(550,empty?374:146);setupForm.parentElement=setupSection;setupSection.children=[setupForm];
-    const manager=node('manager',150), username=node('username',239,'INPUT'), password=node('password',321,'INPUT'), login=node('login',403);
-    manager.parentElement=section;for(const e of [username,password,login])e.parentElement=form;
-    const setupInput=node('setupInput',652,'INPUT'),setupPassword=node('setupPassword',706,'INPUT');
-    setupInput.autocomplete='username';setupPassword.autocomplete='new-password';setupPassword.type='password';
-    const setupCheck=node('setupCheck',550),setupClear=node('setupClear',empty?880:652),setupSubmit=node('setupSubmit',826);
-    setupSubmit.type='submit';setupSubmit.disabled=true;
-    const setupStatus=node('setup status',608,'P');setupStatus.box=box(608,30);
-    setupStatus.textContent=empty?'Ready to create the administrator account. No disks are required.':'An installation already exists. Sign in.';
-    const setupConfirm=node('setup confirm',778,'INPUT'),confirmLabel=node('Create this administrator account.',768,'LABEL');
-    confirmLabel.selector='label';setupConfirm.type='checkbox';setupConfirm.box=box(778,16,16);setupConfirm.parentElement=confirmLabel;
-    confirmLabel.children=[setupConfirm];
-    for(const e of [setupInput,setupPassword,setupCheck,setupClear,setupSubmit,setupStatus,confirmLabel])e.parentElement=setupForm;
-    for(const e of [manager,setupCheck,setupClear]){e.style.borderTopColor='rgba(0, 0, 0, 0)';e.style.backgroundImage='url("blob:paint")';e.dataset.zxsContourState='paint';}
-    const controls=[manager,username,password,login,setupCheck,setupClear,...(empty?[setupInput,setupPassword,setupSubmit]:[])];
-    const field=(name,control,y)=>{
-        const wrapper=node(name+' field',y,'LABEL');wrapper.selector='label.zxs-form-field';
-        const label=node(name+' label',y+10,'SPAN');label.box=box(y+10,24,72);
-        for(const side of ['Top','Right','Bottom','Left']){control.style[`border${side}Width`]='0px';wrapper.style[`border${side}Width`]='0px';}
-        control.style.borderBottomWidth='1px';control.style.borderBottomStyle='dashed';
-        control.style.backgroundColor='transparent';control.style.boxShadow='none';
-        control.box=box(y,44,152,128);label.parentElement=wrapper;control.parentElement=wrapper;
-        wrapper.children=[label,control];wrapper.querySelector=selector=>selector===':scope > span'?label:control;
-        return {wrapper,label,control};
-    };
-    const usernameField=field('username',username,239),passwordField=field('password',password,321),setupField=field('setup',setupInput,652),setupPasswordField=field('setup password',setupPassword,706);
-    const group=(name,parent,fields)=>{
-        const g=node(name,fields[0].wrapper.box.y,'DIV');g.selector='.zxs-form-grid';g.parentElement=parent;
-        g.box=box(g.box.y,fields.at(-1).wrapper.box.bottom-g.box.y);g.children=fields.map(f=>f.wrapper);
-        g.querySelectorAll=selector=>selector.includes('svg[')?g.foregrounds:g.children;for(const e of g.children)e.parentElement=g;return g;
-    };
-    const loginGroup=group('login group',form,[usernameField,passwordField]);
-    const setupGroup=group('setup group',setupForm,[setupField,setupPasswordField]);
-    const setupRows=[setupCheck,setupStatus,...(empty?[setupGroup,confirmLabel,setupSubmit]:[]),setupClear];setupForm.children=setupRows;
-    const groups=[loginGroup,...(empty?[setupGroup]:[])],setupForms=[setupForm];
-    const rows=[loginGroup,login];form.children=rows;
-    const product=node('product',0);card.children=[product,section,form,setupSection];for(const e of card.children)e.parentElement=card;
-    const required={'[name=username]':username,'[name=password]':password,'button[type=submit]':login};
-    form.querySelector=selector=>required[selector];
-    const setupQueries={':scope > [role=status]':setupStatus,'[data-setup-check]':setupCheck,':scope > button[type=button]:not([data-setup-check])':setupClear};
-    const creation={'[data-setup-user]':empty?[setupInput]:[],'[data-setup-password]':empty?[setupPassword]:[],
-        '[data-setup-confirm]':empty?[setupConfirm]:[],'button[type=submit]':empty?[setupSubmit]:[]};
-    setupForm.querySelector=selector=>setupQueries[selector];setupForm.querySelectorAll=selector=>creation[selector];
-    card.querySelector=selector=>({'form[data-first-account-form]':setupForms[0],':scope > form':form,':scope > section button':manager})[selector];
-    card.querySelectorAll=selector=>selector==='.zxs-form-grid'?groups:selector==='form[data-first-account-form]'?setupForms:controls;
-    let decoded=0;
-    const f={card,header,form,controls,manager,username,password,login,setupInput,setupCheck,setupClear,setupPassword,setupSubmit,setupStatus,setupConfirm,confirmLabel,setupForm,setupSection,setupQueries,creation,groups,setupForms,setupRows,required,rows,document:null,node,field,usernameField,passwordField,setupField,setupPasswordField,loginGroup,setupGroup,expectedSetup:empty?'empty':'existing',
-        decoded:()=>decoded,created:[],revoked:[],onDecode:()=>{},foregroundPixels:'ring',foregroundAlpha:255,backgroundColor:255,backgroundAlpha:255};
-    const urls=new Map();
-    const svgElement=tag=>({tag,attributes:{},children:[],setAttribute(name,value){this.attributes[name]=String(value);},appendChild(child){this.children.push(child);}});
-    const URL={createObjectURL(blob){const url=`blob:foreground-${f.created.length}`;const exported=JSON.parse(blob.parts[0]);f.created.push(exported);urls.set(url,exported);return url;},
-        revokeObjectURL(url){f.revoked.push(url);urls.delete(url);}};
-    class Blob {constructor(parts,options){assert.equal(options.type,'image/svg+xml');this.parts=parts;}}
-    class XMLSerializer {serializeToString(element){return JSON.stringify(element);}}
-    class Image {
-        naturalWidth=48;naturalHeight=48;
-        async decode(){
-            decoded++;f.onDecode(this.src);
-            if(this.src==='blob:broken'||(this.src.startsWith('blob:foreground-')&&f.foregroundDecodeFails))throw new Error('image decode failed');
-            this.exported=urls.get(this.src);
-            if(this.exported){this.naturalWidth=Number(this.exported.attributes.width);this.naturalHeight=Number(this.exported.attributes.height);}
-        }
+    const append=(parent,...children)=>{parent.children.push(...children);for(const child of children)child.parentElement=parent;};
+    const root=node('',0,'HTML');root.scrollWidth=320;root.clientWidth=320;
+    const card=node('',100);card.className='authentication-card';card.box=box(100,216,292,14);card.style['--zxs-contour-extent']='18px';
+    card.style.borderImageSource='url("blob:fill")';card.style.borderImageSlice='48.7805% fill';
+    card.style.borderImageWidth='20px';card.style.borderImageOutset='2px';card.style.borderImageRepeat='stretch';card.dataset.zxsContourState='paint';
+    const header=node('',14);header.className='authentication-language';header.box=box(14,44,96,210);append(root,header,card);
+    const language=node('Language',14,'BUTTON'),theme=node('Theme',14,'BUTTON');language.box=box(14,44,44,210);theme.box=box(14,44,44,262);append(header,language,theme);
+    const form=node('',100,'FORM');form.box=box(100,216);form.attributes[empty?'data-first-account-form':'data-auth-form']=empty?'':'login';append(card,form);
+    const usernameLabel=node('Account name',100,'LABEL');usernameLabel.box=box(100,36);
+    const username=node('',136,'INPUT'),passwordLabel=node('Password',172,'LABEL'),password=node('',208,'INPUT');passwordLabel.box=box(172,36);
+    username.name='username';username.autocomplete='username';password.name='password';password.type='password';password.autocomplete=empty?'new-password':'current-password';
+    for(const [input,label,key] of [[username,usernameLabel,'username'],[password,passwordLabel,'password']]){
+        input.box.height=36;input.box.bottom=input.box.y+36;input.id=`zxs-${empty?'setup':'login'}-${key}`;input.required=true;input.labels=[label];label.htmlFor=input.id;label.control=input;
+        input.className='zxs-input';input.style.borderBottomWidth='1px';input.style.borderBottomStyle='dashed';
     }
-    const document={documentElement:{scrollWidth:320,clientWidth:320},querySelector:selector=>selector==='.authentication-card'?card:header,
-        createElementNS(ns,tag){assert.equal(ns,'http://www.w3.org/2000/svg');return svgElement(tag);},
-        createElement(tag){assert.equal(tag,'canvas');let image;
-            return {width:0,height:0,getContext(){return {drawImage(value){image=value;},getImageData(x,y,width,height){
-                const pixels=new Uint8ClampedArray(width*height*4),w=image.naturalWidth,h=image.naturalHeight;
-                for(let row=0;row<height;row++)for(let column=0;column<width;column++){
-                    const i=(row*width+column)*4,px=x+column,py=y+row;
-                    const edge=px===0||py===0||px===w-1||py===h-1;
-                    if(image.exported){
-                        // Deliberate pixel models, not an SVG parser or renderer.
-                        const attrs=image.exported.children[0].attributes;
-                        const color=attrs.fill==='none'?[0,0,0,0]:attrs.fill.match(/[\d.]+/g).map(Number);
-                        const shapes={ring:edge,blank:false,top:py===0,'three-sides':edge&&px!==0,
-                            icon:px>w*.45&&px<w*.55&&py>h*.45&&py<h*.55,
-                            'four-dots':((px===0||px===w-1)&&py===Math.floor(h/2))||((py===0||py===h-1)&&px===Math.floor(w/2)),
-                            'center-hole':!(px===Math.floor(w/2)&&py===Math.floor(h/2)),solid:true};
-                        assert.ok(Object.hasOwn(shapes,f.foregroundPixels));
-                        const ink=attrs.d!==''&&shapes[f.foregroundPixels];
-                        pixels[i]=color[0];pixels[i+1]=color[1];pixels[i+2]=color[2];
-                        pixels[i+3]=ink?f.foregroundAlpha*(color.length===4?color[3]:1)*Number(attrs.opacity)*Number(attrs['fill-opacity'])*Number(image.exported.attributes.opacity):0;
-                    }else{
-                        const ink=edge&&image.src!=='blob:blank'&&image.src!=='blob:background';
-                        const color=image.src==='blob:background'?f.backgroundColor:255;
-                        pixels[i]=pixels[i+1]=pixels[i+2]=ink?0:color;
-                        pixels[i+3]=image.src==='blob:background'?f.backgroundAlpha:255;
+    if(empty){username.attributes['data-setup-user']='';password.attributes['data-setup-password']='';}
+    const information=node('',244);information.className='zxs-auth-information';information.box=box(244,36);
+    const status=node(empty?'Please set an account name and password.':'',244,'SPAN');status.attributes.role='status';status.box=box(244,36);append(information,status);
+    const actions=node('',280);actions.className='zxs-auth-actions';actions.box=box(280,36);
+    const submit=node(empty?'Set up account':'Sign in',280,'BUTTON');submit.box=box(280,36);submit.type='submit';submit.className='zxs-button';submit.disabled=empty;
+    const check=node('',280,'BUTTON'),clear=node('',280,'BUTTON');
+    for(const [button,key,text] of [[check,'check','Check setup status'],[clear,'clear','Clear setup inputs']]){
+        button.className='zxs-button';button.attributes[`data-setup-${key}`]='';button.attributes['aria-label']=text;button.attributes.title=text;
+    }
+    if(empty){submit.box=box(280,36,140);check.box=box(280,36,44,186);clear.box=box(280,36,44,238);append(actions,submit,check,clear);}else append(actions,submit);
+    append(form,usernameLabel,username,passwordLabel,password,information,actions);
+    let decoded=0;
+    const f={root,card,header,language,theme,form,usernameLabel,username,passwordLabel,password,information,status,actions,submit,check,clear,node,append,expectedSetup:empty?'empty':'existing',phase:'initial',innerWidth:320,innerHeight:568,
+        decoded:()=>decoded,onDecode:()=>{},fillShape:'round',fillAlpha:255,fillColor:[242,242,242],tileWidth:41,tileHeight:41};
+    class Image {
+        naturalWidth=f.tileWidth;naturalHeight=f.tileHeight;
+        async decode(){decoded++;f.onDecode(this.src);if(this.src==='blob:broken')throw new Error('image decode failed');}
+    }
+    const document={documentElement:root,querySelector:selector=>root.querySelector(selector),
+        createElement(tag){assert.equal(tag,'canvas');let image,fill=[0,0,0,0];
+            const context={drawImage(value){image=value;},fillRect(){},
+                set fillStyle(value){if(/^#[0-9a-f]{6}$/i.test(value))fill=[...value.slice(1).match(/../g).map(n=>parseInt(n,16)),255];else fill=[0,0,0,0];},
+                getImageData(x,y,width,height){
+                    if(!image)return {data:new Uint8ClampedArray(fill)};
+                    const pixels=new Uint8ClampedArray(width*height*4),w=image.naturalWidth,h=image.naturalHeight;
+                    for(let py=0;py<height;py++)for(let px=0;px<width;px++){
+                        const i=(py*width+px)*4,dx=px+.5-w/2,dy=py+.5-h/2;
+                        const distance=Math.hypot(dx,dy),radius=Math.min(w,h)/2-2;
+                        // Deliberate round-fill pixel model, not an SVG parser or renderer.
+                        const shapes={round:distance<radius,blank:false,square:px>=2&&px<w-2&&py>=2&&py<h-2,
+                            ring:distance<radius&&distance>radius-2,glyph:Math.abs(dx)<3&&Math.abs(dy)<3,
+                            cross:Math.abs(dx)<2||Math.abs(dy)<2,solid:true};
+                        assert.ok(Object.hasOwn(shapes,f.fillShape));
+                        const ink=shapes[f.fillShape]&&image.src!=='blob:blank';
+                        for(let c=0;c<3;c++)pixels[i+c]=f.blackRing&&distance>radius-1?0:f.fillColor[c];pixels[i+3]=ink?f.fillAlpha:0;
                     }
-                }return {data:pixels};
-            }}}};}};
+                    return {data:pixels};
+                }};
+            return {width:0,height:0,getContext(){return context;}};
+        }};
     f.document=document;
-    f.withForeground=(group=loginGroup)=>{
-        group.style.borderTopColor='transparent';group.style.borderImageSource='url("blob:background")';group.dataset.zxsContourState='clip';
-        const foreground=node('foreground',group.box.y,'svg'),path=node('path',group.box.y,'path');
-        const style={d:'none',fill:'rgb(0, 0, 0)',fillRule:'evenodd',stroke:'none',opacity:'1',fillOpacity:'1',strokeOpacity:'1',strokeWidth:'1px',
-            display:'block',visibility:'visible',transform:'none',filter:'none',clipPath:'none',maskImage:'none'};
-        foreground.box={...group.box};foreground.parentElement=group;foreground.path=path;foreground.style={...style};
-        foreground.attributes={viewBox:`0 0 ${group.box.width} ${group.box.height}`};foreground.children=[path];
-        path.parentElement=foreground;path.style={...style};
-        path.attributes={d:`M0 0H${group.box.width}V${group.box.height}H0Z M1 1V${group.box.height-1}H${group.box.width-1}V1Z`,fill:'rgb(255, 0, 0)'};
-        let computedD;
-        Object.defineProperty(path.style,'d',{enumerable:true,get:()=>computedD??`path("${path.attributes.d}")`,set:value=>{computedD=value;}});
-        for(const element of [foreground,path])element.getAttribute=name=>element.attributes[name]??null;
-        Object.defineProperty(foreground,'outerHTML',{get:()=>JSON.stringify({attributes:foreground.attributes,children:foreground.children.map(child=>child.attributes)})});
-        group.foreground=foreground;group.foregrounds=[foreground];group.querySelector=()=>group.foreground;
-        foreground.querySelector=()=>foreground.path;
-        f.foreground=foreground;f.path=path;
-        return f;
-    };
-    f.run=()=>new Promise(resolve=>runInNewContext(source,{arguments:[f.expectedSetup,resolve],document,Image,Blob,URL,XMLSerializer,innerWidth:320,innerHeight:568,getComputedStyle:node=>node.style}));
+    f.run=()=>{observations++;return new Promise(resolve=>runInNewContext(source,{arguments:[f.expectedSetup,f.phase,resolve],document,Image,
+        innerWidth:f.innerWidth,innerHeight:f.innerHeight,getComputedStyle:node=>node.style}));};
     return f;
 }
-let f=fixture(),result=await f.run();
-assert.equal(result.valid,true);assert.equal(result.expectedSetup,'existing');assert.equal(result.controls.length,6);assert.equal(f.decoded(),3);
-assert.equal(result.controls[0].paint.property,'backgroundImage');assert.ok(result.controls[0].paint.contrastingPixels>0);
-f=fixture();f.creation['[data-setup-user]']=[f.setupInput];result=await f.run();assert.equal(result.valid,false,'Existing installations cannot expose account creation fields');
-f=fixture(true);result=await f.run();assert.equal(result.valid,true);assert.equal(result.controls.length,9);assert.equal(result.expectedSetup,'empty');
-f=fixture(true);f.setupInput.visible=false;result=await f.run();assert.equal(result.valid,false);assert.equal(result.controls.length,9,'Unexpectedly hidden first-account controls must not be filtered away');
-f=fixture();f.manager.style.backgroundImage='url("blob:blank")';result=await f.run();assert.equal(result.valid,false);assert.equal(result.controls[0].paint.contrastingPixels,0);
-f=fixture();f.manager.style.borderImageSource='url("blob:paint")';f.manager.style.backgroundImage='none';result=await f.run();assert.equal(result.valid,true);assert.equal(result.controls[0].paint.property,'borderImageSource');
-f=fixture();f.manager.isConnected=false;result=await f.run();assert.equal(result.valid,false,'Detached decoration cannot count as paint');
-f=fixture();f.manager.style.backgroundImage='none';result=await f.run();assert.equal(result.valid,false,'A G4 state marker alone is not paint');
-f=fixture();f.manager.style.backgroundImage='url("blob:broken")';result=await f.run();assert.equal(result.valid,false);assert.match(result.error,/decode failed/);
-f=fixture();f.required['[name=username]']=null;result=await f.run();assert.equal(result.valid,false);assert.equal(result.requiredPresent,false);
-f=fixture();f.username.visible=false;result=await f.run();assert.equal(result.valid,false,'Hidden login controls must fail');
-f=fixture();f.password.box=box(250);result=await f.run();assert.equal(result.valid,false,'Overlapping rows must still fail');
-f=fixture();f.username.box=box(239,43);result=await f.run();assert.equal(result.valid,false,'Small hit targets must still fail');
-f=fixture();f.username.box=box(239,44,300);result=await f.run();assert.equal(result.valid,false,'Horizontal overflow must still fail');
-// Classic scrollbars reserve layout width even though innerWidth stays 320.
-f=fixture(true);f.document.documentElement.clientWidth=305;result=await f.run();assert.equal(result.valid,false,'A 320px root overflowing a 305px content viewport must fail');assert.equal(result.viewport.scrollbarWidth,15);
-f=fixture(true);f.document.documentElement.clientWidth=305;f.document.documentElement.scrollWidth=305;f.card.box=box(105,800,277,14);f.header.box=box(14,44,96,195);result=await f.run();assert.equal(result.valid,true,'Content that fits beside a classic scrollbar must pass');
-f.setupClear.box=box(771,44,275);result=await f.run();assert.equal(result.valid,false,'A setup control under the scrollbar must fail even if the reported document width fits');
-f=fixture(true);f.document.documentElement.clientWidth=305;f.document.documentElement.scrollWidth=305;f.card.box=box(105,800,292,24);result=await f.run();assert.equal(result.valid,false,'The card must also fit the layout viewport');
-f=fixture(true);f.document.documentElement.clientWidth=305;f.document.documentElement.scrollWidth=305;f.card.box=box(105,800,277,14);f.header.box=box(14,44,96,219);result=await f.run();assert.equal(result.valid,false,'Header controls cannot extend under the scrollbar');
-f=fixture(true);result=await f.run();assert.equal(result.valid,true,'Overlay scrollbars do not reserve layout width');assert.equal(result.viewport.scrollbarWidth,0);
-// Optional feedback can add content without a fixed row count or reserved slot.
-f=fixture();const feedback={...f.password,name:'conditional error',box:box(380,64)};f.rows.splice(1,0,feedback);f.login.box=box(460);f.form.box=box(208,296);f.setupSection.box=box(518,240);f.card.box=box(105,472,292,14);result=await f.run();assert.equal(result.valid,true,'Variable-height conditional feedback must stay in the normal content flow');
-// Natural label lengths do not determine each control's column.
-f=fixture();f.usernameField.label.box=box(249,24,30);f.passwordField.label.box=box(331,24,80);result=await f.run();assert.equal(result.valid,true,'Varied label lengths retain a shared control edge');
-f=fixture();f.usernameField.label.box=box(225,72,72);f.usernameField.wrapper.box=box(225,72);f.loginGroup.box=box(225,140);result=await f.run();assert.equal(result.valid,true,'Wrapped labels may be taller than controls without stacking them');
-f=fixture();f.password.box=box(321,44,140,140);result=await f.run();assert.equal(result.valid,false,'Individually valid same-row fields must share a control column');assert.equal(result.formGroups[0].aligned,false);
-f=fixture();f.usernameField.label.box=box(208,24);f.username.box=box(239);f.usernameField.wrapper.box=box(208,75);f.loginGroup.box=box(208,157);result=await f.run();assert.equal(result.valid,false,'Labels stacked above inputs must fail');assert.equal(result.formGroups[0].fields[0].sameRow,false);
-f=fixture();f.passwordField.wrapper.box=box(270);result=await f.run();assert.equal(result.valid,false,'Overlapping field wrappers must fail');
-f=fixture(true);f.setupField.label.box=box(620,24,72);result=await f.run();assert.equal(result.valid,false,'First-account fields obey the same-row contract too');
-f=fixture();f.usernameField.label.visible=false;result=await f.run();assert.equal(result.valid,false,'Unexpectedly hidden labels must fail');
-f=fixture();const extra=f.field('optional text',f.node('optional text',375,'TEXTAREA'),375);extra.wrapper.parentElement=f.loginGroup;f.loginGroup.children.push(extra.wrapper);f.controls.push(extra.control);f.loginGroup.box=box(239,180);f.login.box=box(433);f.form.box=box(208,269);f.setupSection.box=box(491,240);f.card.box=box(105,445,292,14);result=await f.run();assert.equal(result.valid,true,'Additional textarea rows need no fixed field count');assert.equal(result.formGroups[0].fields.length,3);
-f=fixture();for(const field of [f.usernameField,f.passwordField]){field.label.box=box(field.label.box.y,24,48,24);field.control.box=box(field.control.box.y,44,196,92);field.wrapper.box=box(field.wrapper.box.y,44,264,24);}f.loginGroup.box=box(239,126,264,24);result=await f.run();assert.equal(result.valid,true,'Responsive column widths and edges are not fixed pixel contracts');
-// Interior controls have only a dashed underline; the shared group supplies the outer frame.
-f=fixture();result=await f.run();assert.equal(result.controls.find(c=>c.name==='username').paint.property,'form-group');assert.equal(result.controls.find(c=>c.name==='username').paint.underline,true);
-f=fixture();f.username.style.borderRightWidth='1px';result=await f.run();assert.equal(result.valid,false,'Any independent interior input border must fail');
-f=fixture();f.username.style.backgroundColor='rgb(255, 255, 255)';result=await f.run();assert.equal(result.valid,false,'Interior input surfaces must remain transparent');
-f=fixture();f.username.style.boxShadow='0 0 0 1px black';result=await f.run();assert.equal(result.valid,false,'An inset shadow cannot replace the removed input box');
-f=fixture();f.loginGroup.style.borderLeftWidth='0px';result=await f.run();assert.equal(result.valid,false,'The outer form frame must be complete');
-f=fixture();f.loginGroup.visible=false;result=await f.run();assert.equal(result.valid,false,'Inputs cannot borrow paint from a hidden group');
-f=fixture();f.passwordField.wrapper.style.borderTopWidth='1px';result=await f.run();assert.equal(result.valid,false,'Full-row separators must not return');
-f=fixture();f.username.style.borderBottomColor='transparent';result=await f.run();assert.equal(result.valid,false,'The input underline must actually be painted');
-f=fixture();f.loginGroup.style.borderTopColor='transparent';f.loginGroup.style.borderImageSource='url("blob:paint")';f.loginGroup.dataset.zxsContourState='paint';result=await f.run();assert.equal(result.valid,true,'A decoded G4 outer frame supports underlined controls');assert.equal(result.formGroups[0].paint.property,'borderImageSource');assert.equal(f.decoded(),4);
-f.loginGroup.style.borderImageSource='url("blob:blank")';result=await f.run();assert.equal(result.valid,false,'A blank G4 outer frame cannot supply control paint');
-f.loginGroup.style.borderImageSource='none';result=await f.run();assert.equal(result.valid,false,'The outer frame G4 marker alone is insufficient');
-f.loginGroup.style.borderImageSource='url("blob:broken")';result=await f.run();assert.equal(result.valid,false);assert.match(result.error,/decode failed/);
-f=fixture();f.username.style.borderBottomWidth='0px';result=await f.run();assert.equal(result.valid,false,'Missing input underline must fail');
-f=fixture();f.username.style.borderBottomStyle='solid';result=await f.run();assert.equal(result.valid,false,'A solid input underline is not the requested dash');
-f=fixture();f.usernameField.wrapper.style.borderBottomWidth='1px';f.usernameField.wrapper.style.borderBottomStyle='dashed';result=await f.run();assert.equal(result.valid,false,'Even a dashed line must not span the entire label row');
-f=fixture();result=await f.run();assert.equal(result.valid,true,'Only each right-hand input has a dashed underline');assert.equal(result.formGroups[0].fields.every(field=>field.noRowBorder),true);
-// Both scenes must validate the real first-account form, never infer state
-// from absent fields or hide an unexpected control from the observation.
+
+let f=fixture(),result=await f.run();assert.equal(result.valid,true,JSON.stringify(result));
+f=fixture(true);result=await f.run();assert.equal(result.valid,true,JSON.stringify(result));
+assert.equal(result.controls.length,5);assert.equal(result.sixRows,true);assert.equal(result.sharedRowHeight,36);
+assert.equal(result.controls[0].paint.property,'input-underline');assert.equal(result.outerPaint.edgeFill.every(Boolean),true);
+for(const empty of [false,true])for(const phase of empty?['initial','refreshed','keyboard-focus']:['initial','refreshed','invalid-login']) {
+    f=fixture(empty);f.phase=phase;
+    if(phase==='invalid-login'){f.status.attributes.role='alert';f.status.textContent='Enter your account name.';f.information.children=[f.status];f.status.parentElement=f.information;}
+    assert.equal((await f.run()).valid,true,`${empty?'empty':'existing'} ${phase} six-row layout`);
+}
+f=fixture(true);f.status.textContent='请设置账户名和密码';f.submit.textContent='设置账户';assert.equal((await f.run()).valid,true,'Chinese setup hint and action');
+f=fixture(true);for(const input of [f.username,f.password])input.required=false;assert.equal((await f.run()).valid,true,'Setup admission belongs to the disabled submit, not browser required attributes');
+f=fixture();f.username.focused=true;f.username.style.borderBottomWidth='3px';assert.equal((await f.run()).valid,true,'Focused dashed underline retains the shared row target');
+// Preferred desktop 3:2 geometry never hides taller feedback; small viewports can grow naturally.
+for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
+    f=fixture(true);f.innerWidth=width;f.innerHeight=height;f.root.clientWidth=width;f.root.scrollWidth=width;
+    if(width>416)f.card.style.aspectRatio='3 / 2';
+    assert.equal((await f.run()).valid,true,`Model viewport ${width}x${height}, not browser evidence`);
+}
+f=fixture();f.phase='invalid-login';f.status.attributes.role='alert';f.status.textContent='A long error wraps onto more lines.';f.status.box=box(244,108);f.information.box=box(244,108);f.information.children=[f.status];f.status.parentElement=f.information;
+for(const node of [f.actions,f.submit])node.box=box(352,36);f.form.box=box(100,288);f.card.box=box(100,288,292,14);
+assert.equal((await f.run()).valid,true,'Feedback grows within row five, never inserts a seventh row');
+f=fixture();f.root.clientWidth=305;f.root.scrollWidth=305;f.card.box=box(100,216,277,14);f.header.box=box(14,44,96,195);f.language.box=box(14,44,44,195);f.theme.box=box(14,44,44,247);
+assert.equal((await f.run()).valid,true,'Content fits beside a classic scrollbar');
+f.clear.box=box(280,36,44,290); // Not in Existing form.
+assert.equal((await f.run()).valid,true,'Only the current state form is observed');
 for(const empty of [false,true])for(const [name,change] of [
-    ['missing setup form',f=>{f.setupForms.length=0;}],
-    ['duplicate setup form',f=>{f.setupForms.push(f.setupForm);} ],
-    ['hidden setup form',f=>{f.setupForm.visible=false;}],
-    ['detached setup form',f=>{f.setupForm.isConnected=false;}],
-    ['hidden setup section',f=>{f.setupSection.visible=false;}],
-    ['wrong setup owner',f=>{f.setupForm.parentElement=f.form;}],
-    ['missing status',f=>{f.setupQueries[':scope > [role=status]']=null;}],
-    ['hidden status',f=>{f.setupStatus.visible=false;}],
-    ['empty status',f=>{f.setupStatus.textContent='';}],
-    ['wrong state status',f=>{f.setupStatus.textContent='The system state could not be verified. Initialization is blocked.';}],
-    ['status overflow',f=>{f.setupStatus.box=box(608,30,400);} ],
-    ['missing setup check',f=>{f.setupQueries['[data-setup-check]']=null;}],
-    ['hidden setup check',f=>{f.setupCheck.visible=false;}],
-    ['disabled setup check',f=>{f.setupCheck.disabled=true;}],
-    ['missing setup clear',f=>{f.setupQueries[':scope > button[type=button]:not([data-setup-check])']=null;}],
-    ['hidden setup clear',f=>{f.setupClear.visible=false;}],
-    ['disabled setup clear',f=>{f.setupClear.disabled=true;}],
-    ['overlapping setup rows',f=>{f.setupStatus.box=box(560,30);} ],
-    ['setup form overflow',f=>{f.setupForm.box=box(550,400,300);} ],
-    ['invalid expected state',f=>{f.expectedSetup='unknown';}],
-    ['wrong expected state',f=>{f.expectedSetup=f.expectedSetup==='existing'?'empty':'existing';}],
+    ['unknown expected state',f=>{f.expectedSetup='unknown';}],
+    ['wrong expected state',f=>{f.expectedSetup=f.expectedSetup==='empty'?'existing':'empty';}],
+    ['unknown phase',f=>{f.phase='unknown';}],
+    ['wrong phase',f=>{f.phase=f.expectedSetup==='empty'?'invalid-login':'keyboard-focus';}],
+    ['missing form',f=>{f.card.children=[];}],
+    ['duplicate form',f=>{f.append(f.card,f.node('',100,'FORM'));}],
+    ['hidden form',f=>{f.form.visible=false;}],
+    ['detached form',f=>{f.form.isConnected=false;}],
+    ['wrong form owner',f=>{f.form.parentElement=f.root;}],
+    ['extra card section',f=>{f.append(f.card,f.node('Long explanation',100,'SECTION'));}],
+    ['missing row',f=>{f.form.children.splice(0,1);}],
+    ['seventh row',f=>{f.append(f.form,f.node('extra',316));}],
+    ['wrong row order',f=>{[f.form.children[0],f.form.children[1]]=[f.form.children[1],f.form.children[0]];}],
+    ['wrapped field box',f=>{f.form.children[0].tagName='DIV';}],
+    ['wrong hint row',f=>{f.information.className='';}],
+    ['wrong action row',f=>{f.actions.className='';}],
+    ['hidden label',f=>{f.usernameLabel.visible=false;}],
+    ['empty label',f=>{f.usernameLabel.textContent='';}],
+    ['missing input ID',f=>{f.username.id='';}],
+    ['wrong label for',f=>{f.usernameLabel.htmlFor=f.password.id;}],
+    ['wrong actual label control',f=>{f.usernameLabel.control=f.password;}],
+    ['duplicate accessible label',f=>{f.username.labels.push(f.passwordLabel);}],
+    ['missing accessible label',f=>{f.username.labels=[];}],
+    ['hidden username',f=>{f.username.visible=false;}],
+    ['hidden password',f=>{f.password.visible=false;}],
+    ['disabled username',f=>{f.username.disabled=true;}],
+    ['readonly password',f=>{f.password.readOnly=true;}],
+    ['nonkeyboard username',f=>{f.username.tabIndex=-1;}],
+    ['wrong username name',f=>{f.username.name='login';}],
+    ['wrong password name',f=>{f.password.name='secret';}],
+    ['wrong username autocomplete',f=>{f.username.autocomplete='off';}],
+    ['wrong password autocomplete',f=>{f.password.autocomplete=f.expectedSetup==='empty'?'current-password':'new-password';}],
+    ['unmasked password',f=>{f.password.type='text';}],
+    ['unexpected checkbox',f=>{const checkbox=f.node('',316,'INPUT');checkbox.type='checkbox';f.append(f.actions,checkbox);}],
+    ['hidden action',f=>{f.submit.visible=false;}],
+    ['unlabeled action',f=>{f.submit.textContent='';}],
+    ['wrong submit action',f=>{f.submit.textContent='Continue';}],
+    ['nonkeyboard submit',f=>{f.submit.tabIndex=-1;}],
+    ['missing submit',f=>{f.submit.type='button';}],
+    ['duplicate submit',f=>{f.append(f.actions,{...f.submit});}],
+    ['extra action wrapper',f=>{f.append(f.actions,f.node('',280));}],
+    ['input too short',f=>{f.username.box=box(136,35);}],
+    ['oversized input row',f=>{f.username.box.height=100;f.username.box.bottom=f.username.box.y+100;}],
+    ['oversized label row',f=>{f.usernameLabel.box.height=72;f.usernameLabel.box.bottom=f.usernameLabel.box.y+72;}],
+    ['label too short',f=>{f.usernameLabel.box=box(100,35);}],
+    ['hint too short',f=>{f.information.box=box(244,35);}],
+    ['action too short',f=>{f.submit.box=box(280,35);}],
+    ['missing shared min height',f=>{f.usernameLabel.style.minHeight='0px';}],
+    ['wrong row token',f=>{f.card.style['--zxs-compact-row-height']='44px';}],
+    ['missing shared row token',f=>{f.root.style['--zxs-compact-row-height']='';}],
+    ['row overlaps label',f=>{f.password.box=box(180,36);}],
+    ['inputs misaligned',f=>{f.password.box=box(208,36,240,42);}],
+    ['form outside panel',f=>{f.form.box=box(100,216,300);}],
+    ['input outside panel',f=>{f.username.box=box(136,36,300);}],
+    ['input under scrollbar',f=>{f.root.clientWidth=305;f.root.scrollWidth=305;f.username.box=box(136,36,268);}],
+    ['document overflow',f=>{f.root.scrollWidth=322;}],
+    ['panel under scrollbar',f=>{f.root.clientWidth=304;f.root.scrollWidth=304;}],
+    ['panel too wide',f=>{f.innerWidth=980;f.root.clientWidth=980;f.root.scrollWidth=980;f.card.box=box(100,216,340,14);f.card.style.aspectRatio='3 / 2';}],
+    ['panel clips lower rows',f=>{f.card.box=box(100,150,292,14);}],
+    ['panel covers header',f=>{f.header.box=box(90,44,96,210);}],
+    ['header overflow',f=>{f.header.box=box(14,44,96,230);}],
+    ['hidden panel',f=>{f.card.visible=false;}],
+    ['hidden header',f=>{f.header.visible=false;}],
+    ['wrong desktop ratio',f=>{f.innerWidth=980;f.card.style.aspectRatio='1 / 1';}],
+    ['independent corner token',f=>{f.card.style['--zxs-contour-panel']='42px';}],
+    ['missing shared corner',f=>{f.root.style['--zxs-contour-panel']='';}],
+    ['zero outer corner',f=>{f.card.style['--zxs-contour-extent']='0px';}],
+    ['input side box',f=>{f.username.style.borderRightWidth='1px';}],
+    ['input background',f=>{f.username.style.backgroundColor='rgb(255, 255, 255)';}],
+    ['input background decoration',f=>{f.username.style.backgroundImage='url("blob:paint")';}],
+    ['input outline box',f=>{f.username.style.outlineWidth='3px';f.username.style.outlineStyle='solid';}],
+    ['action outline box',f=>{f.submit.style.outlineWidth='3px';f.submit.style.outlineStyle='solid';}],
+    ['label outline box',f=>{f.usernameLabel.style.outlineWidth='3px';f.usernameLabel.style.outlineStyle='solid';}],
+    ['hint outline box',f=>{f.information.style.outlineWidth='3px';f.information.style.outlineStyle='solid';}],
+    ['input shadow box',f=>{f.username.style.boxShadow='0 0 0 1px black';}],
+    ['input contour',f=>{f.username.style['--zxs-contour-extent']='18px';}],
+    ['missing underline',f=>{f.username.style.borderBottomWidth='0px';}],
+    ['wrong normal underline width',f=>{f.username.style.borderBottomWidth='2px';}],
+    ['wrong focused underline width',f=>{f.username.focused=true;}],
+    ['small toolbar target',f=>{f.language.box=box(14,43,44,210);}],
+    ['solid underline',f=>{f.username.style.borderBottomStyle='solid';}],
+    ['transparent underline',f=>{f.username.style.borderBottomColor='transparent';}],
+    ['label border',f=>{f.usernameLabel.style.borderBottomWidth='1px';}],
+    ['form border',f=>{f.form.style.borderTopWidth='1px';}],
+    ['hint box',f=>{f.information.style.backgroundColor='white';}],
+    ['action box',f=>{f.submit.style.borderLeftWidth='1px';}],
+    ['action contour',f=>{f.submit.style['--zxs-contour-extent']='18px';}],
+    ['legacy inner group',f=>{f.actions.className+=' zxs-form-grid';}],
+    ['internal contour SVG',f=>{const svg=f.node('',0,'svg');svg.namespaceURI='http://www.w3.org/2000/svg';svg.attributes['data-zxs-contour-decoration']='foreground';f.append(f.information,svg);}],
+    ['unexpected outer border',f=>{f.card.style.borderLeftWidth='1px';}],
+
+    ['outer marker only',f=>{f.card.style.borderImageSource='none';}],
+    ['blank outer paint',f=>{f.card.style.borderImageSource='url("blob:blank")';}],
+    ['ring-only instead of fill',f=>{f.fillShape='ring';}],
+    ['icon instead of outer frame',f=>{f.fillShape='glyph';}],
+    ['outer image detached',f=>{f.card.isConnected=false;}],
+    ['outer image decode failure',f=>{f.card.style.borderImageSource='url("blob:broken")';}],
 ]) {
     f=fixture(empty);change(f);result=await f.run();assert.equal(result.valid,false,`${empty?'empty':'existing'}: ${name}`);
 }
-for(const selector of ['[data-setup-user]','[data-setup-password]','[data-setup-confirm]','button[type=submit]']) {
-    f=fixture();f.creation[selector]=[f.setupInput];assert.equal((await f.run()).valid,false,`Existing installation cannot render ${selector}`);
-    f=fixture(true);f.creation[selector]=[];assert.equal((await f.run()).valid,false,`Empty installation requires ${selector}`);
-    f=fixture(true);f.creation[selector].push(f.creation[selector][0]);assert.equal((await f.run()).valid,false,`Duplicate ${selector} must fail`);
-}
 for(const [name,change] of [
-    ['hidden administrator name',f=>{f.setupInput.visible=false;}],
-    ['hidden administrator password',f=>{f.setupPassword.visible=false;}],
-    ['disabled administrator name',f=>{f.setupInput.disabled=true;}],
-    ['disabled administrator password',f=>{f.setupPassword.disabled=true;}],
-    ['wrong username autocomplete',f=>{f.setupInput.autocomplete='off';}],
-    ['wrong password autocomplete',f=>{f.setupPassword.autocomplete='current-password';}],
-    ['unmasked password',f=>{f.setupPassword.type='text';}],
-    ['hidden consent',f=>{f.setupConfirm.visible=false;}],
-    ['disabled consent',f=>{f.setupConfirm.disabled=true;}],
-    ['prechecked consent',f=>{f.setupConfirm.checked=true;}],
-    ['wrong consent type',f=>{f.setupConfirm.type='text';}],
-    ['zero-sized consent',f=>{f.setupConfirm.box=box(778,0,16);} ],
-    ['overflowing consent',f=>{f.setupConfirm.box=box(778,16,400);} ],
-    ['missing consent label',f=>{f.setupConfirm.parentElement=f.setupForm;}],
-    ['hidden consent label',f=>{f.confirmLabel.visible=false;}],
-    ['empty consent label',f=>{f.confirmLabel.textContent='';}],
-    ['hidden account submit',f=>{f.setupSubmit.visible=false;}],
-    ['premature enabled account submit',f=>{f.setupSubmit.disabled=false;}],
-]) {
-    f=fixture(true);change(f);assert.equal((await f.run()).valid,false,name);
-}
-f=fixture(true);for(const e of [f.username,f.password,f.setupInput,f.setupPassword])Object.defineProperty(e,'value',{get(){throw new Error('Probe must not inspect credentials');}});
-assert.equal((await f.run()).valid,true,'Layout observation never reads account values or mutates consent/submission state');
-assert.equal(f.setupConfirm.checked,false);assert.equal(f.setupSubmit.disabled,true);
-// The product inserts setup before login; geometry also accepts this natural order.
-f=fixture(true);
-const move=(node,dy)=>{node.box={...node.box,y:node.box.y+dy,bottom:node.box.bottom+dy};for(const child of node.children)move(child,dy);};
-move(f.setupSection,-250);move(f.form,800);f.card.box=box(105,1200,292,14);f.card.children=[f.card.children[0],f.card.children[1],f.setupSection,f.form];
-assert.equal((await f.run()).valid,true,'Always-visible setup can precede the below-fold login form');
-// Source wiring is separate evidence from these unit-model DOM/pixel cases.
-const host=readFileSync(new URL('../runner/auth_layout.rs',import.meta.url),'utf8');
-const management=readFileSync(new URL('../runner/management.rs',import.meta.url),'utf8');
-const setupSource=readFileSync(new URL('../../../../src/web/src/setup.rs',import.meta.url),'utf8');
-assert.doesNotMatch(host,/details|setup_open|setup disclosure/);
-assert.doesNotMatch(source,/disclosed|closedContentHidden|excludedClosedDisclosure|querySelector\('details'\)/);
-assert.match(host,/run_with_setup\(browser, origin, output, SetupState::Existing\)/);
-assert.match(host,/run_with_setup\(browser, origin, output, SetupState::Empty\)/);
-assert.match(host,/\(320, 568\), \(390, 844\), \(980, 760\), \(1440, 900\)/);
-assert.match(host,/"args": \[setup.name\(\)\]/);
-assert.match(host,/for phase in \["initial", "refreshed", "invalid-login"\]/);
-assert.match(host,/browser.click\(&check\)/);
-assert.match(host,/:focus-visible/);assert.match(host,/\.zxs-error/);
-assert.ok(host.indexOf('window.scrollTo(0,0)')<host.indexOf('Duration::from_millis(150)'));
-assert.ok(host.indexOf('Duration::from_millis(150)')<host.indexOf('"/execute/async"'));
-assert.ok(host.indexOf('dir.join(&name)')<host.indexOf('if geometry["valid"] != true'));
-assert.ok(host.indexOf('dir.join("login-layout.json")')<host.indexOf('if geometry["valid"] != true'));
-assert.match(host,/Emulation.clearDeviceMetricsOverride/);
-assert.match(management,/join\("first-account"\)/);
-const fresh=management.slice(management.indexOf('pub(super) fn setup('),management.indexOf('struct SetupFixture'));
-assert.ok(fresh.indexOf('fixture.visit(browser)?')<fresh.indexOf('super::auth_layout::first_account('),'Clear prior-origin cookies before the fresh layout scene');
-assert.ok(fresh.indexOf('super::auth_layout::first_account(')<fresh.indexOf('fixture.open(browser)?'));
-assert.ok(fresh.indexOf('super::auth_layout::first_account(')<fresh.indexOf('credentials_and_confirm('));
-assert.match(setupSource,/<form class="zxs-stack" data-first-account-form=""/);
-for(const marker of ['data-setup-check','data-setup-user','data-setup-password','data-setup-confirm'])assert.ok(setupSource.includes(marker));
-assert.doesNotMatch(setupSource,/<details|<summary/);
-// A foreground ring is separate from its opaque, borderless background image.
-f=fixture().withForeground();result=await f.run();assert.equal(result.valid,true);
-let paint=result.formGroups[0].paint;
-assert.equal(paint.property,'foreground');assert.equal(paint.centerAlpha,0);assert.equal(paint.backgroundCenterAlpha,255);
-assert.ok(paint.edgePixels.every(n=>n>0));assert.ok(paint.contrastingPixels>=Math.min(paint.width,paint.height));
-assert.equal(f.created.length,1);assert.equal(f.revoked.length,1);
-assert.equal(f.created[0].attributes.viewBox,f.foreground.attributes.viewBox);
-assert.equal(f.created[0].attributes.width,String(f.loginGroup.box.width));
-assert.equal(f.created[0].attributes.height,String(f.loginGroup.box.height));
-assert.equal(f.created[0].children[0].attributes.d,f.path.attributes.d,'Export the actual path');
-assert.equal(f.created[0].children[0].attributes.fill,f.path.style.fill,'Use computed fill, not the different color attribute');
-assert.equal(f.created[0].children[0].attributes['fill-rule'],'evenodd');assert.equal(f.created[0].children[0].attributes.stroke,'none');
-f=fixture().withForeground();f.foreground.attributes.preserveAspectRatio='none';f.path.style.d='path("M0 0H240V126H0Z M2 2V124H238V2Z")';result=await f.run();assert.equal(result.valid,true);
-assert.equal(f.created[0].children[0].attributes.d,'M0 0H240V126H0Z M2 2V124H238V2Z','Export computed CSS geometry rather than the overridden d attribute');
-assert.equal(f.created[0].attributes.preserveAspectRatio,'none','Retain SVG viewBox alignment');
-f=fixture().withForeground();f.path.style.fill='rgb(80, 80, 80)';assert.equal((await f.run()).valid,true,'Contrasting foreground need not be exactly black');
-f=fixture().withForeground();f.backgroundColor=24;f.path.style.fill='rgb(220, 220, 220)';assert.equal((await f.run()).valid,true,'Compare dark-theme foreground against its own background');
-f=fixture(true).withForeground();f.withForeground(f.setupGroup);result=await f.run();assert.equal(result.valid,true,'First-account setup uses the same actual foreground contract');assert.equal(f.revoked.length,2);
-f=fixture().withForeground();f.foregroundAlpha=200;assert.equal((await f.run()).valid,true,'Existing alpha threshold remains inclusive');
+    ['missing setup hint',f=>{f.information.children=[];}],
+    ['empty setup hint',f=>{f.status.textContent='';}],
+    ['old long setup hint',f=>{f.status.textContent='Ready to create the administrator account. No disks are required.';}],
+    ['wrong setup state hint',f=>{f.status.textContent='An installation already exists. Sign in.';}],
+    ['hidden setup hint',f=>{f.status.visible=false;}],
+    ['duplicate setup hint',f=>{f.append(f.information,{...f.status});}],
+    ['setup hint overflow',f=>{f.status.box=box(244,36,400);}],
+    ['setup hint clipping',f=>{f.status.box=box(244,100);}],
+    ['setup error in healthy fixture',f=>{f.status.attributes.role='alert';}],
+    ['missing setup username marker',f=>{delete f.username.attributes['data-setup-user'];}],
+    ['missing setup password marker',f=>{delete f.password.attributes['data-setup-password'];}],
+    ['unexpected confirm marker',f=>{f.submit.attributes['data-setup-confirm']='';}],
+    ['premature enabled creation',f=>{f.submit.disabled=false;}],
+    ['missing check',f=>{delete f.check.attributes['data-setup-check'];}],
+    ['missing clear',f=>{delete f.clear.attributes['data-setup-clear'];}],
+    ['disabled check',f=>{f.check.disabled=true;}],
+    ['disabled clear',f=>{f.clear.disabled=true;}],
+    ['unnamed icon check',f=>{delete f.check.attributes['aria-label'];}],
+    ['untitled icon clear',f=>{delete f.clear.attributes.title;}],
+    ['overlapping actions',f=>{f.clear.box={...f.check.box};}],
+    ['nonbutton clear',f=>{f.clear.type='submit';}],
+]) {f=fixture(true);change(f);assert.equal((await f.run()).valid,false,name);}
 for(const [name,change] of [
-    ['empty path',f=>{f.path.attributes.d='';}],
-    ['missing path',f=>{f.foreground.path=null;}],
-    ['extra solid SVG child',f=>{f.foreground.children.push({attributes:{tag:'rect',fill:'black'}});}],
-    ['duplicate foreground SVG',f=>{f.loginGroup.foregrounds.push({...f.foreground});}],
-    ['CSS removes path geometry',f=>{f.path.style.d='none';}],
-    ['CSS empties path geometry',f=>{f.path.style.d='path("")';}],
-    ['faded host',f=>{f.loginGroup.style.opacity='0.05';}],
-    ['blank SVG pixels',f=>{f.foregroundPixels='blank';}],
-    ['single side',f=>{f.foregroundPixels='top';}],
-    ['three sides',f=>{f.foregroundPixels='three-sides';}],
-    ['central icon',f=>{f.foregroundPixels='icon';}],
-    ['four isolated pixels',f=>{f.foregroundPixels='four-dots';}],
-    ['solid interior',f=>{f.foregroundPixels='solid';}],
-    ['solid interior except one clear pixel',f=>{f.foregroundPixels='center-hole';}],
-    ['low contrast',f=>{f.path.style.fill='rgb(170, 170, 170)';}],
-    ['subthreshold alpha',f=>{f.foregroundAlpha=199;}],
-    ['raw contrast passes but composited contrast fails',f=>{f.path.style.fill='rgba(140, 140, 140, 0.785)';}],
-    ['transparent fill',f=>{f.path.style.fill='none';}],
-    ['faded path',f=>{f.path.style.opacity='0.5';}],
-    ['faded fill',f=>{f.path.style.fillOpacity='0.5';}],
-    ['faded SVG',f=>{f.foreground.style.opacity='0.5';}],
-    ['non-evenodd fill',f=>{f.path.style.fillRule='nonzero';}],
-    ['unexpected stroke',f=>{f.path.style.stroke='rgb(0, 0, 0)';}],
-    ['hidden path',f=>{f.path.style.visibility='hidden';}],
-    ['undisplayed path',f=>{f.path.style.display='none';}],
-    ['hidden SVG',f=>{f.foreground.visible=false;}],
-    ['hidden host',f=>{f.loginGroup.visible=false;}],
-    ['detached path',f=>{f.path.isConnected=false;}],
-    ['detached SVG',f=>{f.foreground.isConnected=false;}],
-    ['detached host',f=>{f.loginGroup.isConnected=false;}],
-    ['wrong SVG owner',f=>{f.foreground.parentElement=f.form;}],
-    ['wrong path owner',f=>{f.path.parentElement=f.loginGroup;}],
-    ['transformed path',f=>{f.path.style.transform='matrix(1, 0, 0, 1, 10, 0)';}],
-    ['transformed SVG',f=>{f.foreground.style.transform='matrix(1, 0, 0, 1, 10, 0)';}],
-    ['filtered path',f=>{f.path.style.filter='opacity(0)';}],
-    ['clipped path',f=>{f.path.style.clipPath='inset(100%)';}],
-    ['masked SVG',f=>{f.foreground.style.maskImage='url("blob:mask")';}],
-    ['transparent background',f=>{f.backgroundAlpha=0;}],
-    ['insufficiently opaque background',f=>{f.backgroundAlpha=199;}],
-    ['no background image',f=>{f.loginGroup.style.borderImageSource='none';}],
-    ['background decode failure',f=>{f.loginGroup.style.borderImageSource='url("blob:broken")';}],
-    ['foreground decode failure',f=>{f.foregroundDecodeFails=true;}],
+    ['unexpected existing hint',f=>{f.status.textContent='Unexpected setup explanation';}],
+    ['disabled login',f=>{f.submit.disabled=true;}],
+    ['missing native login required',f=>{f.username.required=false;}],
+    ['unexpected creation marker',f=>{f.username.attributes['data-setup-user']='';}],
+    ['unexpected creation action',f=>{f.append(f.actions,f.check);}],
+    ['missing expected local error',f=>{f.phase='invalid-login';}],
+]) {f=fixture();change(f);assert.equal((await f.run()).valid,false,name);}
+for(const empty of [false,true]) {
+    f=fixture(empty);for(const input of [f.username,f.password])Object.defineProperty(input,'value',{get(){throw new Error('Probe must not read credentials');}});
+    assert.equal((await f.run()).valid,true,'Layout probe never reads credential values or changes submit admission');assert.equal(f.submit.disabled,empty);
+}
+
+// The borderless outer panel is a decoded compact fill, not a dark ring.
+f=fixture();result=await f.run();assert.equal(result.outerPaint.property,'outer-fill');assert.equal(result.outerPaint.width,41);assert.equal(result.outerPaint.height,41);
+assert.deepEqual(Array.from(result.outerPaint.center),[242,242,242,255]);assert.ok(result.outerPaint.corners.every(a=>a===0));assert.equal(result.outerPaint.transparentMargin,true);
+f=fixture();f.fillAlpha=200;assert.equal((await f.run()).valid,true,'Fill alpha threshold remains inclusive');
+f=fixture();f.card.style['--zxs-bg-panel']='#252c31';f.root.style['--zxs-bg-panel']='#252c31';f.fillColor=[37,44,49];assert.equal((await f.run()).valid,true,'Actual dark-theme fill is compared with its own shared panel token');
+f=fixture();f.submit.focused=true;f.submit.style.borderBottomWidth='3px';f.submit.style.borderBottomStyle='dashed';assert.equal((await f.run()).valid,true,'Action keyboard focus is a dashed underline, not a decorative box');
+for(const [name,change] of [
+    ['blank pixels',f=>{f.fillShape='blank';}],
+    ['ring without fill',f=>{f.fillShape='ring';}],
+    ['square fill instead of rounded corners',f=>{f.fillShape='square';}],
+    ['entirely solid image',f=>{f.fillShape='solid';}],
+    ['center glyph',f=>{f.fillShape='glyph';}],
+    ['cross reaching four edges',f=>{f.fillShape='cross';}],
+    ['weak fill',f=>{f.fillAlpha=199;}],
+    ['black silhouette around gray fill',f=>{f.blackRing=true;}],
+    ['wrong fill color',f=>{f.fillColor=[200,200,200];}],
+    ['missing fill token',f=>{f.card.style['--zxs-bg-panel']='';}],
+    ['wrong positive extent',f=>{f.card.style['--zxs-contour-extent']='99px';}],
+    ['wrong tile width',f=>{f.tileWidth=43;}],
+    ['wrong tile height',f=>{f.tileHeight=43;}],
+    ['slice consumes center',f=>{f.card.style.borderImageSlice='50% fill';}],
+    ['slice without fill',f=>{f.card.style.borderImageSlice='48.7805%';}],
+    ['nonpercentage slice',f=>{f.card.style.borderImageSlice='20 fill';}],
+    ['wrong physical corner width',f=>{f.card.style.borderImageWidth='18px';}],
+    ['wrong margin placement',f=>{f.card.style.borderImageOutset='0px';}],
+    ['repeated rather than stretched tile',f=>{f.card.style.borderImageRepeat='repeat';}],
+    ['background decoration hiding the fill',f=>{f.card.style.backgroundImage='url("blob:fill")';}],
+    ['solid native background hides rounded corners',f=>{f.card.style.backgroundColor='#f2f2f2';}],
+    ['native border replaces fill',f=>{f.card.style.borderTopWidth='1px';}],
+    ['native outer outline',f=>{f.card.style.outlineWidth='3px';f.card.style.outlineStyle='solid';}],
+    ['private fill token',f=>{f.card.style['--zxs-bg-panel']='#c8c8c8';f.fillColor=[200,200,200];}],
+    ['faded host',f=>{f.card.style.opacity='0.5';}],
+    ['shadow behind fill',f=>{f.card.style.boxShadow='0 0 0 1px black';}],
+    ['filtered fill',f=>{f.card.style.filter='blur(1px)';}],
+    ['transformed fill',f=>{f.card.style.transform='matrix(1,0,0,1,1,1)';}],
+    ['masked fill',f=>{f.card.style.maskImage='url("blob:mask")';}],
+    ['clipped fill',f=>{f.card.style.clipPath='inset(10px)';}],
+    ['wrong contour state',f=>{f.card.dataset.zxsContourState='fallback';}],
+    ['unexpected foreground SVG',f=>{const svg=f.node('',100,'svg');svg.namespaceURI='http://www.w3.org/2000/svg';svg.attributes['data-zxs-contour-decoration']='foreground';f.append(f.card,svg);}],
+]) {f=fixture();change(f);assert.equal((await f.run()).valid,false,name);}
+// A live source can change while image.decode awaits. Every captured paint and
+// identity property must still belong to this same connected card afterward.
+for(const [name,change] of [
+    ['host detached',f=>{f.card.isConnected=false;}],
+    ['host reparented',f=>{f.card.parentElement=f.form;}],
+    ['host replaced',f=>{f.root.children[f.root.children.indexOf(f.card)]={...f.card};}],
+    ['host hidden',f=>{f.card.visible=false;}],
+    ['source replaced',f=>{f.card.style.borderImageSource='url("blob:other")';}],
+    ['state changed',f=>{f.card.dataset.zxsContourState='clip';}],
+    ['decoration inserted',f=>{const svg=f.node('',100,'svg');svg.attributes['data-zxs-contour-decoration']='foreground';f.append(f.card,svg);}],
+    ...['x','y','width','height'].map(axis=>[`host ${axis} changed`,f=>{f.card.box[axis]+=.25;}]),
+    ...['opacity','backgroundColor','backgroundImage','borderImageSlice','borderImageWidth','borderImageOutset','borderImageRepeat',
+        'outlineWidth','outlineStyle','outlineColor','outlineOffset','boxShadow','transform','filter','clipPath','maskImage','display','visibility',
+        ...['Top','Right','Bottom','Left'].flatMap(side=>['Width','Style','Color'].map(part=>`border${side}${part}`)),
+        '--zxs-contour-extent','--zxs-bg-panel','--zxs-compact-row-height','--zxs-contour-panel'].map(property=>
+        [`host ${property} changed`,f=>{f.card.style[property]='changed';}]),
+    ['root row changed',f=>{f.root.style['--zxs-compact-row-height']='40px';}],
+    ['root fill changed',f=>{f.root.style['--zxs-bg-panel']='#ffffff';}],
+    ['root corner changed',f=>{f.root.style['--zxs-contour-panel']='20px';}],
 ]) {
-    f=fixture().withForeground();change(f);result=await f.run();
-    assert.equal(result.valid,false,name);
-    assert.equal(f.revoked.length,f.created.length,`${name}: release every owned blob`);
+    f=fixture();f.onDecode=()=>change(f);result=await f.run();assert.equal(result.valid,false,`decode: ${name}`);
 }
-for(const axis of ['x','y','width','height']) {
-    f=fixture().withForeground();f.foreground.box[axis]+=2;
-    assert.equal((await f.run()).valid,false,`Initially misplaced foreground ${axis}`);
-    assert.equal(f.created.length,0);
+// Product wiring is separate evidence from the DOM/pixel models above. The
+// explicit models-only option is for isolated worktrees awaiting production edits.
+if(!process.argv.includes('--models-only')) {
+    const host=readFileSync(new URL('../runner/auth_layout.rs',import.meta.url),'utf8');
+    const management=readFileSync(new URL('../runner/management.rs',import.meta.url),'utf8');
+    const setupSource=readFileSync(new URL('../../../../src/web/src/setup.rs',import.meta.url),'utf8');
+    const loginSource=readFileSync(new URL('../../../../src/interface/src/components/login.rs',import.meta.url),'utf8');
+    const authCss=readFileSync(new URL('../../../../src/web/public/styles/components/auth.css',import.meta.url),'utf8');
+    const geometryCss=readFileSync(new URL('../../../../src/web/public/styles/components/geometry.css',import.meta.url),'utf8');
+    const paintSource=readFileSync(new URL('../../../../src/interface/src/contours/paint.rs',import.meta.url),'utf8');
+    assert.match(host,/run_with_setup\(browser, origin, output, SetupState::Existing\)/);
+    assert.match(host,/run_with_setup\(browser, origin, output, SetupState::Empty\)/);
+    assert.match(host,/\(320, 568\), \(390, 844\), \(980, 760\), \(1440, 900\)/);
+    assert.match(host,/"args": \[setup.name\(\), phase\]/);
+    assert.match(host,/for phase in \["initial", "refreshed", setup.final_phase\(\)\]/);
+    assert.match(host,/Self::Existing => "invalid-login"/);assert.match(host,/Self::Empty => "keyboard-focus"/);
+    assert.match(host,/browser.command\("POST", "\/refresh"/);
+    assert.match(host,/:focus-visible/);assert.match(host,/\.zxs-auth-information \.zxs-error/);
+    assert.ok(host.indexOf('window.scrollTo(0,0)')<host.indexOf('Duration::from_millis(150)'));
+    assert.ok(host.indexOf('Duration::from_millis(150)')<host.indexOf('"/execute/async"'));
+    assert.ok(host.indexOf('dir.join(&name)')<host.indexOf('if geometry["valid"] != true'));
+    assert.ok(host.indexOf('dir.join("login-layout.json")')<host.indexOf('if geometry["valid"] != true'));
+    assert.match(host,/Emulation.clearDeviceMetricsOverride/);
+    assert.match(management,/join\("first-account"\)/);
+    const fresh=management.slice(management.indexOf('pub(super) fn setup('),management.indexOf('struct SetupFixture'));
+    assert.ok(fresh.indexOf('fixture.visit(browser)?')<fresh.indexOf('super::auth_layout::first_account('));
+    assert.ok(fresh.indexOf('super::auth_layout::first_account(')<fresh.indexOf('fixture.open(browser)?'));
+    assert.ok(fresh.indexOf('super::auth_layout::first_account(')<fresh.indexOf('credentials('));
+    assert.match(setupSource,/<form data-first-account-form=""/);assert.match(loginSource,/<form data-auth-form="login"/);
+    for(const text of ['请设置账户名和密码','Please set an account name and password.','设置账户','Set up account'])assert.ok(setupSource.includes(text));
+    for(const marker of ['data-setup-check','data-setup-clear','data-setup-user','data-setup-password'])assert.ok(setupSource.includes(marker));
+    assert.doesNotMatch(setupSource+loginSource,/data-setup-confirm|zxs-form-grid|<details|<summary/);
+    assert.match(authCss,/width: min\(calc\(var\(--zxs-compact-row-height\) \* 9\), 100%\)/);
+    assert.match(authCss,/grid-template-rows: repeat\(6, minmax\(var\(--zxs-compact-row-height\), max-content\)\)/);
+    assert.match(authCss,/min-height: var\(--zxs-compact-row-height\)/);
+    assert.match(authCss,/aspect-ratio: 3 \/ 2/);assert.match(authCss,/aspect-ratio: auto/);
+    assert.match(authCss,/--zxs-contour-extent: var\(--zxs-contour-panel\)/);
+    assert.doesNotMatch(authCss,/--zxs-contour-(?:panel|control|notification|dialog):/);
+    assert.match(geometryCss,/--zxs-contour-control: calc\(var\(--zxs-compact-row-height\) \/ 2\)/);
+    assert.match(geometryCss,/--zxs-contour-panel: var\(--zxs-contour-control\)/);
+    assert.match(geometryCss,/\.zxs-app-shell \.zxs-frame \{[^}]*--zxs-contour-extent: var\(--zxs-contour-panel\)/);
+    assert.match(paintSource,/let margin = 2\.0;/);assert.match(paintSource,/let size = extent \* 2\.0 \+ 1\.0 \+ margin \* 2\.0;/);
+    assert.match(paintSource,/slice: Some\(extent \+ margin\)/);
+    console.log('PASS auth-layout source wiring, four-viewport driver and shared geometry contracts (not browser acceptance)');
 }
-// A stale raster cannot pass after either await, even when the old DOM survives.
-for(const stage of ['background','foreground'])for(const [name,change] of [
-    ['host detached',f=>{f.loginGroup.isConnected=false;}],
-    ['host reparented',f=>{f.loginGroup.parentElement=f.card;}],
-    ['host border lost',f=>{f.loginGroup.style.borderLeftWidth='0px';}],
-    ['host border style lost',f=>{f.loginGroup.style.borderBottomStyle='none';}],
-    ['host border color changed',f=>{f.loginGroup.style.borderRightColor='red';}],
-    ['host faded',f=>{f.loginGroup.style.opacity='0.05';}],
-    ['duplicate foreground added',f=>{f.loginGroup.foregrounds.push({...f.foreground});}],
-    ['extra SVG child added',f=>{f.foreground.children.push({attributes:{tag:'rect',fill:'black'}});}],
-    ['SVG detached',f=>{f.foreground.isConnected=false;}],
-    ['path detached',f=>{f.path.isConnected=false;}],
-    ['SVG reparented',f=>{f.foreground.parentElement=f.form;}],
-    ['path reparented',f=>{f.path.parentElement=f.loginGroup;}],
-    ['SVG replaced',f=>{f.loginGroup.foreground={...f.foreground};}],
-    ['path replaced',f=>{f.foreground.path={...f.path};}],
-    ['path data changed',f=>{f.path.attributes.d+=' M0 0';}],
-    ['viewBox changed',f=>{f.foreground.attributes.viewBox='0 0 100 100';}],
-    ['path attribute changed',f=>{f.path.attributes.fill='red';}],
-    ['SVG attribute changed',f=>{f.foreground.attributes.preserveAspectRatio='none';}],
-    ['hidden SVG',f=>{f.foreground.visible=false;}],
-    ['hidden host',f=>{f.loginGroup.visible=false;}],
-    ['background source changed',f=>{f.loginGroup.style.borderImageSource='url("blob:other")';}],
-    ['contour state changed',f=>{f.loginGroup.dataset.zxsContourState='paint';}],
-    ...['x','y','width','height'].map(axis=>[`SVG ${axis} moved`,f=>{f.foreground.box[axis]+=.25;}]),
-    ...['x','y','width','height'].map(axis=>[`host ${axis} moved`,f=>{f.loginGroup.box[axis]+=.25;}]),
-    ...['d','fill','fillRule','stroke','opacity','fillOpacity','strokeWidth','strokeOpacity','display','visibility','transform','filter','clipPath','maskImage'].map(property=>
-        [`path ${property} changed`,f=>{f.path.style[property]='changed';}]),
-    ...['opacity','display','visibility','transform','filter','clipPath','maskImage'].map(property=>
-        [`SVG ${property} changed`,f=>{f.foreground.style[property]='changed';}]),
-]) {
-    f=fixture().withForeground();f.onDecode=url=>{if(stage==='background'?url==='blob:background':url.startsWith('blob:foreground-'))change(f);};
-    result=await f.run();assert.equal(result.valid,false,`${stage} decode: ${name}`);
-    assert.equal(f.revoked.length,f.created.length,`${stage} decode: ${name}: release every owned blob`);
-}
-console.log('PASS auth-layout probe classification, original negatives and foreground raster/stability models (unit models only; no browser rendering)');
+console.log(`PASS ${observations} ${process.argv.includes('--models-only')?'models-only ':''}auth-layout six-row/state/accessibility/shared-geometry and live G4 fill classification (unit models only; no browser rendering)`);

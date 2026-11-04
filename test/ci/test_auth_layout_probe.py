@@ -13,6 +13,10 @@ class AuthLayoutProbe(unittest.TestCase):
         subprocess.run(['node', 'test/tools/browser-smoke/unit/auth_layout_probe_test.mjs'],
                        cwd=ROOT, check=True)
 
+    def test_setup_lifecycle_host_regressions(self):
+        subprocess.run(['node', 'test/tools/browser-smoke/unit/setup_lifecycle_probe_test.mjs'],
+                       cwd=ROOT, check=True)
+
     def test_failure_retains_real_screenshot_before_assertion(self):
         source = (ROOT / 'test/tools/browser-smoke/runner/auth_layout.rs').read_text()
         self.assertLess(source.index('dir.join(&name)'), source.index('if geometry["valid"] != true'))

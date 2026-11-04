@@ -1,199 +1,190 @@
-// Observe actual visibility and decoration bytes; do not mutate the product DOM.
-const done = arguments[arguments.length - 1], expectedSetup=arguments[0];
+// Observe the actual six-row form and decoded G4 fill without changing product DOM.
+const done=arguments[arguments.length-1],expectedSetup=arguments[0],phase=arguments[1];
 (async () => {
-const card = document.querySelector('.authentication-card');
+const card=document.querySelector('.authentication-card');
 // innerWidth includes a classic scrollbar; content must fit the layout viewport.
-const layoutWidth = document.documentElement.clientWidth;
-const rect = e => { const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; };
-const rendered = e => e.checkVisibility({opacityProperty:true,visibilityProperty:true});
-const luminance = rgb => rgb.slice(0,3).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((sum,x,i)=>sum+x*[.2126,.7152,.0722][i],0);
-const contrast = (a,b) => { const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); };
-const raster = async url => {
+const layoutWidth=document.documentElement.clientWidth;
+const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
+const rendered=e=>e.checkVisibility({opacityProperty:true,visibilityProperty:true});
+const transparent=color=>color==='rgba(0, 0, 0, 0)'||color==='transparent';
+const sides=['Top','Right','Bottom','Left'];
+const noOutline=css=>parseFloat(css.outlineWidth)===0||['none','hidden'].includes(css.outlineStyle);
+const equal=(a,b)=>Object.keys(a).every(key=>a[key]===b[key]);
+const raster=async url=>{
     // Decode through img-src blob, not CSP-disallowed blob fetch.
     const image=new Image();image.src=url;await image.decode();
     const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
     const context=canvas.getContext('2d');context.drawImage(image,0,0);
     return {width:canvas.width,height:canvas.height,pixels:context.getImageData(0,0,canvas.width,canvas.height).data};
 };
-const foregroundSelector=':scope > svg[data-zxs-contour-decoration="foreground"]';
-const foregroundStyle = node => {
-    const css=getComputedStyle(node);
-    return Object.fromEntries(['d','fill','fillRule','stroke','opacity','fillOpacity','strokeOpacity','strokeWidth',
-        'display','visibility','transform','filter','clipPath','maskImage'].map(name=>[name,css[name]]));
+const colorPixel=color=>{
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+    const context=canvas.getContext('2d');context.fillStyle='rgba(0, 0, 0, 0)';context.fillStyle=color;context.fillRect(0,0,1,1);
+    return [...context.getImageData(0,0,1,1).data];
 };
-const foregroundPaint = async (node, foreground, property, source, url) => {
-    const path=foreground.querySelector(':scope > path');
-    if (!path||foreground.children.length!==1||foreground.children[0]!==path) {
-        return {valid:false,property:'foreground',reason:'expected one foreground path'};
-    }
-    const box=rect(node), svgBox=rect(foreground), parent=node.parentElement;
-    const style=foregroundStyle(path), svgStyle=foregroundStyle(foreground);
-    const markup=foreground.outerHTML, viewBox=foreground.getAttribute('viewBox');
-    // SVG d is a presentation attribute: a CSS declaration can override it.
-    const computedPath=style.d.match(/^path\("([^"]*)"\)$/);
-    const hostStyle=()=>{
+const outerFill=async node=>{
+    const properties=['opacity','backgroundColor','backgroundImage','borderImageSource','borderImageSlice','borderImageWidth',
+        'borderImageOutset','borderImageRepeat','outlineWidth','outlineStyle','outlineColor','outlineOffset','boxShadow','transform','filter','clipPath','maskImage','display','visibility',
+        ...sides.flatMap(side=>['Width','Style','Color'].map(part=>`border${side}${part}`))];
+    const snapshot=()=>{
         const css=getComputedStyle(node);
-        return Object.fromEntries(['opacity',...['Top','Right','Bottom','Left'].flatMap(side=>
-            ['Width','Style','Color'].map(part=>`border${side}${part}`))].map(name=>[name,css[name]]));
+        return {...Object.fromEntries(properties.map(name=>[name,css[name]])),
+            extent:css.getPropertyValue('--zxs-contour-extent'),color:css.getPropertyValue('--zxs-bg-panel'),
+            row:css.getPropertyValue('--zxs-compact-row-height'),panel:css.getPropertyValue('--zxs-contour-panel'),
+            rootRow:getComputedStyle(document.documentElement).getPropertyValue('--zxs-compact-row-height'),
+            rootPanel:getComputedStyle(document.documentElement).getPropertyValue('--zxs-contour-panel'),
+            rootColor:getComputedStyle(document.documentElement).getPropertyValue('--zxs-bg-panel')};
     };
-    const host=hostStyle();
-    const state=node.dataset.zxsContourState;
-    const equal=(a,b)=>Object.keys(a).every(key=>a[key]===b[key]);
-    const plain=s=>s.display!=='none'&&s.visibility==='visible'&&s.transform==='none'
-        &&s.filter==='none'&&s.clipPath==='none'&&s.maskImage==='none';
-    // The controller emits an untransformed even-odd ring, not a stroked icon.
-    if (!computedPath||host.opacity!=='1'||!plain(style)||!plain(svgStyle)||style.fillRule!=='evenodd'||style.stroke!=='none'
-        ||box.width<=0||box.height<=0||!['x','y','width','height'].every(key=>Math.abs(box[key]-svgBox[key])<=1)) {
-        return {valid:false,property:'foreground',reason:'hidden, misplaced or unsupported foreground'};
-    }
-    const stable=()=>node.isConnected&&node.parentElement===parent&&foreground.isConnected&&path.isConnected
-        &&foreground.parentElement===node&&path.parentElement===foreground
-        &&node.querySelectorAll(foregroundSelector).length===1&&node.querySelector(foregroundSelector)===foreground
-        &&foreground.children.length===1&&foreground.children[0]===path&&foreground.querySelector(':scope > path')===path
-        &&rendered(node)&&rendered(foreground)&&foreground.outerHTML===markup
-        &&equal(rect(node),box)&&equal(rect(foreground),svgBox)
-        &&equal(foregroundStyle(path),style)&&equal(foregroundStyle(foreground),svgStyle)&&equal(hostStyle(),host)
-        &&getComputedStyle(node)[property]===source&&node.dataset.zxsContourState===state;
-    if (!stable()) return {valid:false,property:'foreground',stable:false};
-    // Foreground borders are deliberately absent from the background decoration.
-    // Its opaque center remains the contrast reference in either theme.
-    const background=await raster(url);
-    const centerIndex=(Math.floor(background.height/2)*background.width+Math.floor(background.width/2))*4;
-    const center=[...background.pixels.slice(centerIndex,centerIndex+4)], backgroundStable=stable();
-    if (!backgroundStable||center[3]<200) return {valid:false,property:'foreground',stable:backgroundStable,backgroundCenterAlpha:center[3]};
-    const ns='http://www.w3.org/2000/svg';
-    const exported=document.createElementNS(ns,'svg'), exportedPath=document.createElementNS(ns,'path');
-    exported.setAttribute('width',String(svgBox.width));exported.setAttribute('height',String(svgBox.height));
-    exported.setAttribute('viewBox',viewBox);exported.setAttribute('opacity',svgStyle.opacity);
-    const aspectRatio=foreground.getAttribute('preserveAspectRatio');
-    if(aspectRatio!==null)exported.setAttribute('preserveAspectRatio',aspectRatio);
-    exportedPath.setAttribute('d',computedPath[1]);
-    for(const [attribute,value] of [['fill',style.fill],['fill-rule',style.fillRule],['stroke',style.stroke],
-        ['opacity',style.opacity],['fill-opacity',style.fillOpacity]]) exportedPath.setAttribute(attribute,value);
-    exported.appendChild(exportedPath);
-    const ownedUrl=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(exported)],{type:'image/svg+xml'}));
-    try {
-        const {width:w,height:h,pixels}=await raster(ownedUrl);
-        const edgePixels=[0,0,0,0];let contrastingPixels=0,centerAlpha=0;
-        const middleX=x=>x>=Math.floor(w*.4)&&x<Math.ceil(w*.6);
-        const middleY=y=>y>=Math.floor(h*.4)&&y<Math.ceil(h*.6);
-        for(let y=0;y<h;y++)for(let x=0;x<w;x++) {
-            const i=(y*w+x)*4;
-            if(middleX(x)&&middleY(y))centerAlpha=Math.max(centerAlpha,pixels[i+3]);
-            if(pixels[i+3]<200)continue;
-            const alpha=pixels[i+3]/255, visible=[0,1,2].map(channel=>pixels[i+channel]*alpha+center[channel]*(1-alpha));
-            if(contrast(visible,center)<3)continue;
-            contrastingPixels++;
-            if(middleX(x)&&y<Math.ceil(h*.25))edgePixels[0]++;
-            if(middleY(y)&&x>=Math.floor(w*.75))edgePixels[1]++;
-            if(middleX(x)&&y>=Math.floor(h*.75))edgePixels[2]++;
-            if(middleY(y)&&x<Math.ceil(w*.25))edgePixels[3]++;
-        }
-        const unchanged=stable();
-        return {valid:unchanged&&centerAlpha===0&&edgePixels.every(n=>n>0)&&contrastingPixels>=Math.min(w,h),
-            property:'foreground',stable:unchanged,width:w,height:h,centerAlpha,backgroundCenterAlpha:center[3],edgePixels,contrastingPixels};
-    } finally {
-        URL.revokeObjectURL(ownedUrl);
-    }
-};
-const decoration = async (node, css) => {
-    const property=css.borderImageSource!=='none'?'borderImageSource':'backgroundImage';
-    const source=css[property], match=source.match(/^url\(["']?(blob:[^"')]+)["']?\)$/);
-    if (!match||!['paint','clip'].includes(node.dataset.zxsContourState)) return {valid:false,property,source};
-    const foreground=node.querySelector(foregroundSelector);
-    if (foreground) return foregroundPaint(node,foreground,property,source,match[1]);
-    // G4 exact controls use background-image; nine-slice surfaces use border-image.
+    const css=snapshot(),box=rect(node),parent=node.parentElement,state=node.dataset.zxsContourState;
+    const source=css.borderImageSource,match=source.match(/^url\(["']?(blob:[^"')]+)["']?\)$/),extent=parseFloat(css.extent);
+    const slice=css.borderImageSlice.match(/^([\d.]+)% fill$/);
+    // Current borderless canonical panels use a compact tile with 2px margins
+    // and an unstretched 1px center strip, not a border ring or a full-size SVG.
+    const size=extent*2+5,inset=extent+2;
+    const geometry=extent>0&&slice&&Math.abs(Number(slice[1])-inset/size*100)<.001
+        &&css.borderImageWidth===`${inset}px`&&css.borderImageOutset==='2px'&&css.borderImageRepeat==='stretch';
+    const unadorned=sides.every(side=>parseFloat(css[`border${side}Width`])===0)
+        &&css.opacity==='1'&&noOutline(css)&&css.color.trim()===css.rootColor.trim()&&transparent(css.backgroundColor)&&css.backgroundImage==='none'&&css.boxShadow==='none'
+        &&['transform','filter','clipPath','maskImage'].every(name=>css[name]==='none')
+        &&css.display!=='none'&&css.visibility==='visible'&&node.querySelectorAll('[data-zxs-contour-decoration]').length===0;
+    const stable=()=>node.isConnected&&node.parentElement===parent&&document.querySelector('.authentication-card')===node
+        &&rendered(node)&&equal(rect(node),box)&&equal(snapshot(),css)&&node.dataset.zxsContourState===state
+        &&node.querySelectorAll('[data-zxs-contour-decoration]').length===0;
+    if(!match||state!=='paint'||!geometry||!unadorned||!stable())return {valid:false,property:'outer-fill',geometry,unadorned,source};
+    const expected=colorPixel(css.color);
     const {width,height,pixels}=await raster(match[1]);
-    const i=(Math.floor(height/2)*width+Math.floor(width/2))*4, center=[...pixels.slice(i,i+4)];
-    let contrastingPixels=0;
-    for(let i=0;i<pixels.length;i+=4) {
-        if(pixels[i+3]>=200&&contrast([pixels[i],pixels[i+1],pixels[i+2]],center)>=3) contrastingPixels++;
-    }
-    const stable=node.isConnected&&getComputedStyle(node)[property]===source;
-    return {valid:stable&&center[3]>=200&&contrastingPixels>=Math.min(width,height),property,stable,
-        width,height,centerAlpha:center[3],contrastingPixels};
+    const pixel=(x,y)=>[...pixels.slice((y*width+x)*4,(y*width+x)*4+4)];
+    const filled=(x,y)=>{const p=pixel(x,y);return p[3]>=200&&p.slice(0,3).every((v,i)=>Math.abs(v-expected[i])<=1);};
+    const center=pixel(Math.floor(width/2),Math.floor(height/2));
+    const middle=[.3,.5,.7];
+    const bodyFilled=middle.every(x=>middle.every(y=>filled(Math.floor(width*x),Math.floor(height*y))));
+    const edgeFill=[[Math.floor(width/2),3],[width-4,Math.floor(height/2)],
+        [Math.floor(width/2),height-4],[3,Math.floor(height/2)]].map(([x,y])=>filled(x,y));
+    const corners=[[3,3],[width-4,3],[width-4,height-4],[3,height-4]].map(([x,y])=>pixel(x,y)[3]);
+    let wrongColorPixels=0;
+    for(let i=0;i<pixels.length;i+=4)if(pixels[i+3]>=200
+        &&[0,1,2].some(channel=>Math.abs(pixels[i+channel]-expected[channel])>1))wrongColorPixels++;
+    let transparentMargin=true;
+    for(let x=0;x<width;x++)transparentMargin&&=pixel(x,0)[3]===0&&pixel(x,height-1)[3]===0;
+    for(let y=0;y<height;y++)transparentMargin&&=pixel(0,y)[3]===0&&pixel(width-1,y)[3]===0;
+    const unchanged=stable();
+    return {valid:unchanged&&width===Math.round(size)&&height===Math.round(size)&&expected[3]>=200
+            &&wrongColorPixels===0&&bodyFilled&&edgeFill.every(Boolean)&&corners.every(alpha=>alpha<=8)&&transparentMargin,
+        property:'outer-fill',stable:unchanged,source,width,height,expectedSize:size,extent,slice:Number(slice[1]),
+        expected,center,wrongColorPixels,bodyFilled,edgeFill,corners,transparentMargin};
 };
-const transparent = color => color==='rgba(0, 0, 0, 0)'||color==='transparent';
-const sides=['Top','Right','Bottom','Left'];
-const surfacePaint = async node => {
-    const css=getComputedStyle(node);
-    const bordered=sides.every(side=>parseFloat(css[`border${side}Width`])>0&&!['none','hidden'].includes(css[`border${side}Style`]));
-    const native=bordered&&sides.every(side=>!transparent(css[`border${side}Color`]));
-    const paint=native?{valid:true,property:'border'}:await decoration(node,css);
-    return {...paint,valid:bordered&&paint.valid&&rendered(node)};
-};
-const groupNodes=[...card.querySelectorAll('.zxs-form-grid')];
-const groupPaint=new Map(await Promise.all(groupNodes.map(async node=>[node,await surfacePaint(node)])));
-const controls=[...card.querySelectorAll('input.zxs-input,textarea.zxs-input,button.zxs-button')];
-const visible=await Promise.all(controls.map(async e => {
-    const s=getComputedStyle(e), r=rect(e), isRendered=rendered(e);
-    const internal=e.tagName==='INPUT'||e.tagName==='TEXTAREA', group=e.closest('.zxs-form-grid');
-    const underline=['Top','Right','Left'].every(side=>parseFloat(s[`border${side}Width`])===0)
-        &&parseFloat(s.borderBottomWidth)>0&&s.borderBottomStyle==='dashed'&&!transparent(s.borderBottomColor)
-        &&s.backgroundImage==='none'&&s.borderImageSource==='none'&&transparent(s.backgroundColor)&&s.boxShadow==='none';
-    const paint=internal?{valid:underline&&groupPaint.get(group)?.valid===true,property:'form-group',underline}:await surfacePaint(e);
-    const painted=paint.valid;
-    return {name:e.name||e.textContent.trim(),rect:r,rendered:isRendered,painted,paint,
-        valid:isRendered&&r.height>=44&&r.width>0&&r.x>=0&&r.right<=layoutWidth+1&&painted};
-}));
-const regionNodes=[...card.children].filter(e=>!e.matches('.zxs-product-identity'));
-const regions=regionNodes.map(rect);
-const form=card.querySelector(':scope > form');
-// Top-level blocks separate vertically; each field keeps its label beside its control.
-const rowNodes=[...form.children];
-const rows=rowNodes.map(rect);
-const required=[form.querySelector('[name=username]'),form.querySelector('[name=password]'),form.querySelector('button[type=submit]'),card.querySelector(':scope > section button')];
-const requiredPresent=required.every(e=>e&&controls.includes(e));
-const separate = list => list.every((r,i)=>!i||r.y>=list[i-1].bottom-.5);
-// The fixture supplies the installation state; absent fields never infer it.
-const setup=card.querySelector('form[data-first-account-form]');
-const setupStatus=setup?.querySelector(':scope > [role=status]');
-const setupCheck=setup?.querySelector('[data-setup-check]');
-const setupClear=setup?.querySelector(':scope > button[type=button]:not([data-setup-check])');
-const statusTexts={existing:['已存在安装，请登录。','An installation already exists. Sign in.'],
-    empty:['可以创建管理员账户，无需添加硬盘。','Ready to create the administrator account. No disks are required.']};
-const setupRows=setup?[...setup.children]:[];
-const creationSelectors=['[data-setup-user]','[data-setup-password]','[data-setup-confirm]','button[type=submit]'];
-const creation=setup?creationSelectors.map(selector=>[...setup.querySelectorAll(selector)]):[];
+// The installation fixture is authoritative; never infer state from absent fields.
+const expectedFormSelector=expectedSetup==='existing'?'form[data-auth-form="login"]'
+    :expectedSetup==='empty'?'form[data-first-account-form]':null;
+const forms=[...card.querySelectorAll('form')];
+const form=expectedFormSelector?card.querySelector(expectedFormSelector):null;
 const present=e=>!!e&&e.isConnected&&rendered(e);
+const inside=(inner,outer)=>inner.x>=outer.x-.5&&inner.right<=outer.right+.5
+    &&inner.y>=outer.y-.5&&inner.bottom<=outer.bottom+.5;
 const within=e=>{const r=rect(e);return r.width>0&&r.height>0&&r.x>=0&&r.right<=layoutWidth+1;};
-let creationValid=false;
-if(expectedSetup==='existing')creationValid=creation.length===4&&creation.every(nodes=>nodes.length===0);
-if(expectedSetup==='empty'&&creation.length===4&&creation.every(nodes=>nodes.length===1)) {
-    const [user,password,confirm,submit]=creation.map(nodes=>nodes[0]), label=confirm.closest('label');
-    creationValid=[user,password,submit].every(e=>controls.includes(e))&&[user,password,confirm].every(e=>!e.disabled)
-        &&user.autocomplete==='username'&&password.type==='password'&&password.autocomplete==='new-password'
-        &&confirm.type==='checkbox'&&!confirm.checked&&submit.disabled
-        &&present(confirm)&&within(confirm)&&present(label)&&within(label)&&label.textContent.trim().length>0;
-}
-const setupPresent=card.querySelectorAll('form[data-first-account-form]').length===1&&present(setup)
-    &&setup.parentElement.tagName==='SECTION'&&setup.parentElement.parentElement===card&&present(setup.parentElement)&&within(setup)
-    &&present(setupStatus)&&within(setupStatus)&&statusTexts[expectedSetup]?.includes(setupStatus.textContent.trim())===true
-    &&[setupCheck,setupClear].every(e=>present(e)&&controls.includes(e)&&!e.disabled)
-    &&creationValid&&setupRows.every(present)&&separate(setupRows.map(rect));
-const formGroups=groupNodes.map(group=>{
-    const bounds=rect(group);
-    const fields=[...group.querySelectorAll(':scope > label.zxs-form-field')].map(field=>{
-        const label=field.querySelector(':scope > span'), control=field.querySelector(':scope > input,:scope > textarea');
-        if (!label||!control) return {valid:false,rect:rect(field)};
-        const row=rect(field), left=rect(label), right=rect(control);
-        const sameRow=left.right<=right.x+.5&&Math.min(left.bottom,right.bottom)>Math.max(left.y,right.y)
-            &&Math.abs((left.y+left.bottom-right.y-right.bottom)/2)<=2;
-        const contained=row.x>=bounds.x-.5&&row.right<=bounds.right+.5&&row.y>=bounds.y-.5&&row.bottom<=bounds.bottom+.5
-            &&[left,right].every(r=>r.x>=row.x-.5&&r.right<=row.right+.5&&r.y>=row.y-.5&&r.bottom<=row.bottom+.5);
-        const css=getComputedStyle(field);
-        const noRowBorder=sides.every(side=>parseFloat(css[`border${side}Width`])===0);
-        return {valid:noRowBorder&&rendered(field)&&rendered(label)&&rendered(control)&&sameRow&&contained,
-            rect:row,label:left,control:right,sameRow,contained,noRowBorder};
-    });
-    const aligned=fields.every(field=>field.control&&Math.abs(field.control.x-fields[0].control.x)<=1);
-    return {valid:bounds.x>=0&&bounds.right<=layoutWidth+1&&groupPaint.get(group).valid&&rendered(group)&&fields.length>0&&fields.every(field=>field.valid)&&separate(fields.map(field=>field.rect))&&aligned,
-        rect:rect(group),fields,aligned,paint:groupPaint.get(group)};
+const separate=list=>list.every((r,i)=>!i||r.y>=list[i-1].bottom-.5);
+const headerNode=document.querySelector('.authentication-language'),header=rect(headerNode),panel=rect(card);
+const panelStyle=getComputedStyle(card),rootStyle=getComputedStyle(document.documentElement);
+const corner={extent:panelStyle.getPropertyValue('--zxs-contour-extent').trim(),
+    token:panelStyle.getPropertyValue('--zxs-contour-panel').trim(),
+    shared:rootStyle.getPropertyValue('--zxs-contour-panel').trim()};
+const rowHeightToken=panelStyle.getPropertyValue('--zxs-compact-row-height').trim();
+const sharedRowHeight=Number.parseFloat(rootStyle.getPropertyValue('--zxs-compact-row-height'));
+const rowHeightValid=rowHeightToken===rootStyle.getPropertyValue('--zxs-compact-row-height').trim()&&sharedRowHeight>0;
+const sharedCorner=corner.token!==''&&corner.token===corner.shared&&parseFloat(corner.extent)===sharedRowHeight/2;
+const compact=innerWidth<=416||innerHeight<=480;
+const aspect=panelStyle.aspectRatio.split('/').map(Number);
+const preferredRatio=compact?panelStyle.aspectRatio==='auto':aspect.length===2&&aspect[0]/aspect[1]===1.5;
+// Content may make the panel taller. It must never be compressed or clipped to 3:2.
+const panelGeometry=panel.width<=sharedRowHeight*9+.5&&(compact||panel.height>=panel.width/1.5-.5)
+    &&panel.y>=header.bottom&&[header,panel].every(r=>r.x>=0&&r.right<=layoutWidth+1);
+const headerControls=[...headerNode.querySelectorAll('button')];
+const headerTargets=headerControls.length===2&&headerControls.every(e=>present(e)&&within(e)
+    &&rect(e).height>=44&&rect(e).width>=44&&inside(rect(e),header));
+const outerPaint=await outerFill(card);
+const outerFrame=outerPaint.valid&&sharedCorner;
+const semanticChildren=[...card.children].filter(e=>!e.matches('svg[data-zxs-contour-decoration="foreground"]'));
+const formPresent=forms.length===1&&forms[0]===form&&present(form)&&form.parentElement===card
+    &&semanticChildren.length===1&&semanticChildren[0]===form&&within(form)&&inside(rect(form),panel);
+const rows=form?[...form.children]:[],rowBoxes=rows.map(rect);
+const sixRows=rows.length===6&&rows.map(e=>e.tagName).join(',')==='LABEL,INPUT,LABEL,INPUT,DIV,DIV'
+    &&rows[4].matches('.zxs-auth-information')&&rows[5].matches('.zxs-auth-actions');
+const controls=form?[...form.querySelectorAll('input,textarea,button')]:[];
+const noSurface=e=>{
+    const css=getComputedStyle(e),focus=e.tagName==='BUTTON'&&e.matches(':focus-visible');
+    return sides.every(side=>parseFloat(css[`border${side}Width`])===(focus&&side==='Bottom'?3:0))
+        &&(!focus||css.borderBottomStyle==='dashed'&&!transparent(css.borderBottomColor))
+        &&css.backgroundImage==='none'&&css.borderImageSource==='none'&&transparent(css.backgroundColor)
+        &&css.boxShadow==='none'&&noOutline(css)&&parseFloat(css.getPropertyValue('--zxs-contour-extent'))===0
+        &&e.querySelectorAll('svg[data-zxs-contour-decoration]').length===0;
+};
+const underline=e=>{
+    const css=getComputedStyle(e);
+    return ['Top','Right','Left'].every(side=>parseFloat(css[`border${side}Width`])===0)
+        &&parseFloat(css.borderBottomWidth)===(e.matches(':focus-visible')?3:1)&&css.borderBottomStyle==='dashed'&&!transparent(css.borderBottomColor)
+        &&css.backgroundImage==='none'&&css.borderImageSource==='none'&&transparent(css.backgroundColor)
+        &&css.boxShadow==='none'&&noOutline(css)&&parseFloat(css.getPropertyValue('--zxs-contour-extent'))===0
+        &&e.querySelectorAll('svg[data-zxs-contour-decoration]').length===0;
+};
+const name=e=>(e.getAttribute('aria-label')||e.textContent).trim();
+const visible=controls.map(e=>{
+    const r=rect(e),input=e.tagName==='INPUT',paint={property:input?'input-underline':'unboxed-action',
+        valid:input?underline(e):e.tagName==='BUTTON'&&noSurface(e)&&name(e).length>0};
+    return {name:e.name||name(e),rect:r,rendered:present(e),painted:paint.valid,paint,
+        valid:present(e)&&r.height>=sharedRowHeight&&r.width>=sharedRowHeight&&within(e)&&inside(r,panel)&&paint.valid};
 });
-const formGroupsPresent=formGroups.length>0&&controls.filter(e=>e.tagName==='INPUT'||e.tagName==='TEXTAREA')
-    .every(e=>e.closest('.zxs-form-grid')&&e.closest('label.zxs-form-field'));
-const header=rect(document.querySelector('.authentication-language')), panel=rect(card);
-return {valid:formGroupsPresent&&formGroups.every(group=>group.valid)&&requiredPresent&&setupPresent&&document.documentElement.scrollWidth<=layoutWidth+1&&visible.every(e=>e.valid)&&regionNodes.every(rendered)&&rowNodes.every(rendered)&&separate(regions)&&separate(rows)&&panel.y>=header.bottom&&[header,panel].every(r=>r.x>=0&&r.right<=layoutWidth+1),
-    viewport:{width:innerWidth,height:innerHeight,clientWidth:layoutWidth,scrollbarWidth:innerWidth-layoutWidth},documentWidth:document.documentElement.scrollWidth,header,panel,regions,rows,formGroups,formGroupsPresent,
-    requiredPresent,setupPresent,expectedSetup,creationValid,setupRows:setupRows.map(rect),controls:visible};
+// Wrappers, hint content and labels are transparent. SVG icon paths are not
+// HTML surfaces, but an internal G4 decoration anywhere is always forbidden.
+const interiors=form?[form,...form.querySelectorAll('*')].filter(e=>e.namespaceURI==='http://www.w3.org/1999/xhtml'&&e.tagName!=='INPUT'):[];
+const noInternalBoxes=interiors.every(noSurface)&&card.querySelectorAll('.zxs-form-grid').length===0
+    &&(form?.querySelectorAll('svg[data-zxs-contour-decoration]').length===0);
+let fieldsValid=false,stateValid=false,informationValid=false,actionsValid=false;
+if(sixRows) {
+    const [userLabel,user,passwordLabel,password,information,actions]=rows;
+    const inputs=[...form.querySelectorAll('input')],submit=[...actions.querySelectorAll('button[type=submit]')];
+    fieldsValid=inputs.length===2&&inputs[0]===user&&inputs[1]===password
+        &&[user,password].every(e=>!e.disabled&&!e.readOnly&&e.tabIndex>=0)
+        &&user.name==='username'&&user.type==='text'&&user.autocomplete==='username'
+        &&password.name==='password'&&password.type==='password'
+        &&[[userLabel,user],[passwordLabel,password]].every(([label,input])=>input.id!==''
+            &&label.htmlFor===input.id&&label.control===input&&label.textContent.trim().length>0
+            &&input.labels.length===1&&input.labels[0]===label);
+    const setupMarkers=[...form.querySelectorAll('[data-setup-user],[data-setup-password],[data-setup-confirm]')];
+    const checks=[...actions.querySelectorAll('[data-setup-check]')],clears=[...actions.querySelectorAll('[data-setup-clear]')];
+    const buttons=[...actions.querySelectorAll('button')];
+    const statuses=[...information.querySelectorAll('[role=status]')],alerts=[...information.querySelectorAll('[role=alert]')];
+    const errorPhase=expectedSetup==='existing'&&phase==='invalid-login';
+    informationValid=errorPhase?alerts.length===1&&statuses.length===0&&present(alerts[0])&&within(alerts[0])
+            &&inside(rect(alerts[0]),rect(information))&&alerts[0].textContent.trim().length>0
+        :expectedSetup==='existing'?statuses.length===1&&present(statuses[0])&&alerts.length===0
+            &&statuses[0].textContent.trim()===''&&information.textContent.trim()===''
+        :statuses.length===1&&alerts.length===0&&present(statuses[0])&&within(statuses[0])
+            &&inside(rect(statuses[0]),rect(information))
+            &&['请设置账户名和密码','Please set an account name and password.'].includes(statuses[0].textContent.trim());
+    actionsValid=submit.length===1&&buttons.every(e=>e.parentElement===actions&&present(e)&&e.tabIndex>=0)
+        &&actions.children.length===buttons.length&&controls.length===inputs.length+buttons.length
+        &&buttons.every((e,i)=>buttons.slice(i+1).every(other=>{
+            const a=rect(e),b=rect(other);return a.right<=b.x+.5||b.right<=a.x+.5||a.bottom<=b.y+.5||b.bottom<=a.y+.5;
+        }));
+    if(expectedSetup==='existing')stateValid=user.required&&password.required&&password.autocomplete==='current-password'&&setupMarkers.length===0
+        &&checks.length===0&&clears.length===0&&buttons.length===1&&submit.length===1&&!submit[0].disabled
+        &&['登录','Sign in'].includes(submit[0].textContent.trim());
+    if(expectedSetup==='empty')stateValid=password.autocomplete==='new-password'&&setupMarkers.length===2
+        &&setupMarkers[0]===user&&setupMarkers[1]===password&&user.hasAttribute('data-setup-user')&&password.hasAttribute('data-setup-password')
+        &&checks.length===1&&clears.length===1&&buttons.length===3&&submit.length===1&&submit[0].disabled
+        &&['设置账户','Set up account'].includes(submit[0].textContent.trim())
+        &&[checks[0],clears[0]].every(e=>!e.disabled&&e.type==='button'&&e.getAttribute('aria-label')?.trim()&&e.getAttribute('title')?.trim());
+}
+const allowedPhases=expectedSetup==='existing'?['initial','refreshed','invalid-login']:['initial','refreshed','keyboard-focus'];
+const rowGeometry=sixRows&&rows.every(e=>present(e)&&within(e)&&inside(rect(e),rect(form))
+        &&rect(e).height>=sharedRowHeight&&parseFloat(getComputedStyle(e).minHeight)>=sharedRowHeight)&&separate(rowBoxes)
+    &&rowBoxes.slice(0,4).every(r=>Math.abs(r.height-sharedRowHeight)<=.5)
+    &&Math.abs(rowBoxes[1].x-rowBoxes[3].x)<=1&&Math.abs(rowBoxes[1].width-rowBoxes[3].width)<=1;
+return {valid:allowedPhases.includes(phase)&&formPresent&&sixRows&&fieldsValid&&stateValid&&informationValid&&actionsValid
+    &&rowHeightValid&&noInternalBoxes&&rowGeometry&&visible.every(e=>e.valid)&&outerFrame&&preferredRatio&&panelGeometry
+    &&headerTargets&&present(card)&&present(headerNode)&&document.documentElement.scrollWidth<=layoutWidth+1,
+    viewport:{width:innerWidth,height:innerHeight,clientWidth:layoutWidth,scrollbarWidth:innerWidth-layoutWidth},
+    documentWidth:document.documentElement.scrollWidth,header,headerTargets,headerControls:headerControls.map(rect),panel,expectedSetup,phase,formPresent,sixRows,fieldsValid,
+    stateValid,informationValid,actionsValid,noInternalBoxes,rowGeometry,rows:rowBoxes,controls:visible,
+    outerFrame,outerPaint,sharedCorner,corner,rowHeightValid,rowHeightToken,sharedRowHeight,preferredRatio,aspectRatio:panelStyle.aspectRatio,panelGeometry};
 })().then(done,error=>done({valid:false,error:String(error)}));

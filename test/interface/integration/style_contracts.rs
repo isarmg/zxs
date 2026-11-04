@@ -43,29 +43,89 @@ fn session_restoration_is_visually_empty() {
 }
 
 #[test]
-fn anonymous_forms_keep_visible_controls_and_content_driven_layout() {
+fn anonymous_forms_reuse_six_shared_height_rows_and_panel_contours() {
     let css = include_str!("../../../src/web/public/styles/components/auth.css");
-    assert!(!css.contains("border-bottom: 1px solid transparent"));
-    assert!(css.contains(".authentication-card .zxs-input { min-width: 0; padding-block:"));
-    assert!(!css.contains(".authentication-card :is(.zxs-button, .zxs-input):focus-visible"));
-    assert!(css.contains(".authentication-card .zxs-button { border: 1px solid"));
-    assert!(css.contains(".authentication-card > form > .zxs-error {"));
-    assert!(!css.contains(".authentication-card .zxs-error {"));
-    assert!(css.contains(".authentication-language { justify-self: end; }"));
-    assert!(css.contains(".authentication-card .zxs-stack:not(details)"));
-    for obsolete in [
-        "grid-row:",
-        "grid-template-rows: auto minmax",
+    assert!(css.contains("aspect-ratio: 3 / 2;"));
+    assert!(css.contains(
+        "grid-template-rows: repeat(6, minmax(var(--zxs-compact-row-height), max-content))"
+    ));
+    assert!(css.contains("width: min(calc(var(--zxs-compact-row-height) * 9), 100%)"));
+    assert!(css.contains("min-height: calc(var(--zxs-compact-row-height) * 6)"));
+    assert!(css.contains("--zxs-contour-extent: var(--zxs-contour-panel)"));
+    for private_override in [
+        "--zxs-contour-control:",
+        "--zxs-contour-panel:",
+        "--zxs-contour-notification:",
         "380px",
-        "28rem",
         "100cqw",
+        "overflow: hidden",
         "display: contents",
     ] {
         assert!(
-            !css.contains(obsolete),
-            "obsolete fixed login constraint: {obsolete}"
+            !css.contains(private_override),
+            "obsolete private geometry: {private_override}"
         );
     }
+    assert!(css.contains(".authentication-card { aspect-ratio: auto; }"));
+    let login = include_str!("../../../src/interface/src/components/login.rs");
+    let setup = include_str!("../../../src/web/src/setup.rs");
+    for source in [login, setup] {
+        assert!(source.contains("class=\"zxs-auth-information\""));
+        assert!(source.contains("class=\"zxs-auth-actions\""));
+        assert_eq!(source.matches("<label class=\"zxs-auth-label\"").count(), 2);
+        assert_eq!(source.matches("<input id=").count(), 2);
+        assert!(!source.contains("zxs-form-grid"));
+        assert!(!source.contains("<h1") && !source.contains("<h2"));
+    }
+}
+
+#[test]
+fn anonymous_card_has_no_nested_decorative_surfaces_or_setup_explanation() {
+    let css = include_str!("../../../src/web/public/styles/components/auth.css");
+    let rule = css.split(".authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) {")
+        .nth(1).unwrap().split('}').next().unwrap();
+    for property in [
+        "border: 0;",
+        "background: transparent;",
+        "box-shadow: none;",
+        "--zxs-contour-extent: 0px;",
+        "--zxs-contour-mode: none;",
+        "--zxs-contour-foreground: 0;",
+    ] {
+        assert!(
+            rule.contains(property),
+            "missing unboxed property: {property}"
+        );
+    }
+    let setup = include_str!("../../../src/web/src/setup.rs");
+    assert!(!setup.contains("Before an account is set"));
+    assert!(!setup.contains("未设置账户时"));
+    assert!(!setup.contains("confirmed:") && !setup.contains("data-setup-confirm"));
+    assert!(setup.contains("请设置账户名和密码"));
+    for marker in [
+        "data-first-account-form",
+        "data-setup-user",
+        "data-setup-password",
+        "data-setup-check",
+        "data-setup-clear",
+        "can_initialize(s)",
+    ] {
+        assert!(
+            setup.contains(marker),
+            "account creation must retain {marker}"
+        );
+    }
+    let ui = include_str!("../../../src/web/src/ui.rs");
+    assert!(ui.contains("crate::setup::view(setup_state, sign_in.clone())"));
+    let shell = include_str!("../../../src/interface/src/components/shell.rs");
+    let card = shell
+        .split("<div class=\"authentication-card\">")
+        .nth(1)
+        .unwrap()
+        .split("</div>")
+        .next()
+        .unwrap();
+    assert!(!card.contains("zxs-product-identity"));
 }
 
 #[test]
@@ -252,7 +312,8 @@ fn shared_form_groups_align_fields_without_individual_input_boxes() {
     assert!(!css.contains(".zxs-form-field + .zxs-form-field"));
     let login = include_str!("../../../src/interface/src/components/login.rs");
     let account = include_str!("../../../src/interface/src/components/account.rs");
-    assert!(login.contains(".class(\"zxs-form-grid\")"));
+    assert!(login.contains("data-auth-form=\"login\""));
+    assert!(!login.contains("zxs-form-grid"));
     assert!(account.contains(".class(\"zxs-account-fields zxs-form-grid\")"));
     let account_css =
         include_str!("../../../src/web/public/styles/components/account-settings.css");

@@ -112,7 +112,9 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
                     "Page.navigate",
                     json!({"url":format!("{}/?lang=en", proxy.origin)}),
                 )?;
-                let input = browser.css("input[autocomplete='username']")?;
+                let input = browser.css(
+                    "form[data-auth-form='login'] input[autocomplete='username']:not([readonly])",
+                )?;
                 browser.keys(&input, "fallback-is-usable")?;
                 wait_for("both original font HTTP requests", || {
                     if proxy.requested.load(Ordering::SeqCst) >= 2 {
@@ -153,7 +155,7 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
                     else { Err("font result or functional readiness incorrect".into()) }
                     })?;
                     browser.keys(
-                        &browser.css("input[autocomplete='username']")?,
+                        &browser.css("form[data-auth-form='login'] input[autocomplete='username']:not([readonly])")?,
                         "-still-usable",
                     )?;
                     if mode == "delayed" {

@@ -1,105 +1,34 @@
-/* Authentication follows content flow and the available layout viewport.
- * Business geometry in geometry.css never targets this shell. */
-.authentication-shell { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; justify-items: center; align-items: start; gap: 1rem; min-height: 100dvh; padding: 1rem; box-sizing: border-box; color: var(--zxs-text-primary,#18181b); background: var(--zxs-bg-page,#fafafa); font-family: var(--zxs-font-ui,monospace); line-height: var(--zxs-line-height-body,1.5); --zxs-contour-control: 27px; --zxs-contour-panel: 42px; --zxs-contour-notification: 48px; --zxs-contour-dialog: 54px; }
+/* Six authentication rows use the same row height and panel contour as the
+ * signed-in content. Longer feedback grows in flow; no row is clipped. */
+.authentication-shell { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; justify-items: center; align-items: start; gap: 1rem; min-height: 100dvh; padding: 24px; box-sizing: border-box; color: var(--zxs-text-primary,#18181b); background: var(--zxs-bg-page,#fafafa); font-family: var(--zxs-font-ui,monospace); line-height: var(--zxs-line-height-body,1.5); }
 .authentication-language { justify-self: end; }
-.authentication-content { display: grid; grid-template-columns: minmax(0, 1fr); align-self: center; justify-items: stretch; gap: 1rem; width: fit-content; max-width: 100%; min-width: 0; }
-.authentication-card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 1rem; width: 100%; max-width: 100%; min-width: 0; padding: 1.5rem; box-sizing: border-box; background: var(--zxs-bg-panel,#fff); border: 1px solid currentColor; border-radius: 0; --zxs-contour-extent: var(--zxs-contour-notification); }
-.authentication-shell :is(.zxs-button,.zxs-input) { --zxs-contour-extent: var(--zxs-contour-control); }
-html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
-  /* Labels, inputs and conditional feedback keep their natural document order. */
-  .authentication-shell { padding: 24px; font-size: 1rem; }
-  .authentication-card { border: 0; border-radius: 0; }
-  /* Health, sign-in and protected setup each retain their own content flow.
-   * Business .zxs-stack geometry is intentionally scoped to .zxs-app-shell. */
-  .authentication-card > * { min-width: 0; margin-block: 0; }
-  .authentication-card :is(p, pre) { margin-block: 0; }
-  .authentication-card pre { max-width: 100%; overflow: auto; white-space: pre-wrap; }
-  .authentication-card .zxs-stack:not(details) { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
-  .authentication-card .zxs-flow { display: flex; flex-wrap: wrap; gap: .5rem; }
-  .authentication-card details > summary { cursor: pointer; min-height: 44px; padding-block: .75rem; }
-  .authentication-card details[open] > summary { margin-block-end: .5rem; }
-  .authentication-card details > form { margin-block-start: 1rem; }
-  .authentication-card details label:has(> input[type="checkbox"]) { display: block; }
-  .authentication-card details { border-top: 1px solid var(--zxs-block-border); }
-  .authentication-card .zxs-button { border: 1px solid var(--zxs-block-muted); padding: .5rem .8rem; }
-  .authentication-card .zxs-input { min-width: 0; padding-block: .5rem; }
-  .authentication-card .zxs-button { background: var(--zxs-bg-page); }
-  .authentication-card .zxs-button:focus-visible { outline: 3px solid var(--zxs-focus); outline-offset: 3px; }
-  .zxs-login-controls { display: flex; align-items: center; gap: 8px; }
-  .zxs-login-controls > button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 44px; padding: 0 8px; line-height: 1; }
-  .zxs-login-controls svg { width: var(--zxs-header-icon-size, 1em); height: var(--zxs-header-icon-size, 1em); }
-  &[data-zxs-theme="light"] :is(.authentication-card, .zxs-login-controls) {
-    --zxs-text-primary: #000;
-    --zxs-text-link: #000;
-    --zxs-action-primary: #000;
-    --zxs-block-muted: #000;
-    color: var(--zxs-text-primary);
-  }
-
-  .authentication-card > form {
-    position: relative;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: .75rem;
-    padding: 0;
-    font-size: max(1rem, 16px);
-    font-weight: 400;
-    line-height: 1.5;
-  }
-  .authentication-card > form :is(label, span, input, button) { font: inherit; }
-  .authentication-card > form .zxs-form-field > span { display: flex; align-items: center; gap: 1ch; color: var(--zxs-block-muted); }
-  .authentication-card > form .zxs-input {
-    align-self: center;
-    min-height: 44px;
-    height: auto;
-    border-radius: 0;
-  }
-  .authentication-card > form > .zxs-error {
-    align-self: stretch;
-    margin: 0;
-    padding: 0;
-    border-radius: 0;
-    font-size: inherit;
-    overflow: auto;
-  }
-  .authentication-card > form > .zxs-error .zxs-request-id { font-size: inherit; }
-  .authentication-card > form > button {
-    justify-self: stretch;
-    justify-content: center;
-    align-self: center;
-    display: flex;
-    align-items: center;
-    gap: 1ch;
-    min-height: 44px;
-    height: auto;
-    border-radius: 0;
-    font-size: inherit;
-  }
-  @media (max-width: 26rem), (max-height: 30rem) {
-    .authentication-shell { padding: 1rem; }
-    .authentication-card { padding: 1rem 1.25rem; }
-  }
-  .authentication-card > form .zxs-form-field > span::before,
-  .authentication-card > form > button::before {
-    content: "";
-    width: 1em;
-    height: 1em;
-    flex: 0 0 1em;
-    background: currentColor;
-    mask: var(--zxs-block-icon) center / contain no-repeat;
-  }
-  .authentication-card > form .zxs-form-field:has([name="username"]) > span {
-    --zxs-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Crect x='1' y='1' width='22' height='22' rx='5'/%3E%3Ccircle cx='12' cy='9' r='3'/%3E%3Cpath d='M6 19v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2'/%3E%3C/svg%3E");
-  }
-  .authentication-card > form .zxs-form-field:has([name="password"]) > span {
-    --zxs-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Crect x='1' y='1' width='22' height='22' rx='5'/%3E%3Crect x='6' y='11' width='12' height='8' rx='1'/%3E%3Cpath d='M8 11V8a4 4 0 0 1 8 0v3'/%3E%3C/svg%3E");
-  }
-  .authentication-card > form > button {
-    --zxs-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Crect x='1' y='1' width='22' height='22' rx='5'/%3E%3Cpath d='M13 6h5v12h-5M4 12h10m-4-4 4 4-4 4'/%3E%3C/svg%3E");
-  }
-  .authentication-shell :is(h1, h2, h3, p, label, span, input, button, strong, small, code, .zxs-error, .zxs-request-id) { font-size: inherit; }
-
-
-  .authentication-card:is([data-zxs-contour-state="clip"], [data-zxs-contour-state="paint"]) { padding-inline: var(--zxs-contour-text-inset, 26px); }
-  .authentication-card .zxs-input, .authentication-card .zxs-error, .authentication-card > form > button { --zxs-contour-extent: 0px; }
+.authentication-content { display: grid; align-self: center; justify-items: stretch; gap: 1rem; width: min(calc(var(--zxs-compact-row-height) * 9), 100%); min-width: 0; }
+.authentication-card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; width: 100%; min-width: 0; aspect-ratio: 3 / 2; min-height: calc(var(--zxs-compact-row-height) * 6); padding: 0 var(--zxs-contour-text-inset); box-sizing: border-box; color: var(--zxs-text-primary); background: var(--zxs-bg-panel,#fff); border: 0; border-radius: 0; --zxs-contour-extent: var(--zxs-contour-panel); }
+.authentication-card > form { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(6, minmax(var(--zxs-compact-row-height), max-content)); margin: 0; padding: 0; min-width: 0; font-size: max(1rem, 16px); font-weight: 400; line-height: 1.5; }
+.authentication-card > form > * { box-sizing: border-box; min-width: 0; min-height: var(--zxs-compact-row-height); margin: 0; }
+.authentication-card :is(label, input, button) { font: inherit; }
+.authentication-card .zxs-auth-label { display: flex; align-items: center; gap: 1ch; }
+.authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border-radius: 0; }
+/* The outer card is the only decorative box. Native text controls retain the
+ * shared dashed underline and its thicker keyboard focus indicator. */
+.authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) { border: 0; background: transparent; box-shadow: none; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
+.authentication-card .zxs-auth-information { display: grid; align-items: center; overflow-wrap: anywhere; }
+.authentication-card .zxs-error { margin: 0; padding: 0; font-size: inherit; }
+.authentication-card .zxs-request-id { margin: 0; font-size: inherit; }
+.authentication-card .zxs-auth-actions { display: flex; flex-wrap: wrap; align-items: center; column-gap: 1ch; }
+.authentication-card .zxs-button { display: inline-flex; align-items: center; justify-content: center; gap: 1ch; min-width: var(--zxs-compact-row-height); min-height: var(--zxs-compact-row-height); padding: 0; box-sizing: border-box; }
+.authentication-card .zxs-button:focus-visible { outline: 0; border-bottom: 3px dashed var(--zxs-focus); }
+.authentication-card .zxs-button svg { width: 1em; height: 1em; }
+.zxs-login-controls { display: flex; align-items: center; gap: 8px; }
+.zxs-login-controls > button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 44px; padding: 0 8px; line-height: 1; }
+.zxs-login-controls svg { width: var(--zxs-header-icon-size, 1em); height: var(--zxs-header-icon-size, 1em); }
+html[data-zxs-theme="light"] :is(.authentication-card, .zxs-login-controls) { --zxs-text-primary: #000; --zxs-text-link: #000; --zxs-action-primary: #000; --zxs-block-muted: #000; color: var(--zxs-text-primary); }
+.authentication-card .zxs-auth-label::before,
+.authentication-card .zxs-auth-actions > button[type="submit"]::before { content: ""; width: 1em; height: 1em; flex: 0 0 1em; background: currentColor; mask: var(--zxs-block-icon) center / contain no-repeat; }
+.authentication-card .zxs-auth-label:nth-child(1) { --zxs-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M5 21v-3a7 7 0 0 1 14 0v3'/%3E%3C/svg%3E"); }
+.authentication-card .zxs-auth-label:nth-child(3) { --zxs-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Crect x='5' y='11' width='14' height='10' rx='1'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E"); }
+.authentication-card .zxs-auth-actions > button[type="submit"] { --zxs-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Cpath d='M13 4h7v16h-7M3 12h12m-4-4 4 4-4 4'/%3E%3C/svg%3E"); }
+@media (max-width: 26rem), (max-height: 30rem) {
+  .authentication-shell { padding: 1rem; }
+  .authentication-card { aspect-ratio: auto; }
 }

@@ -7,6 +7,30 @@ enum SetupState {
     Empty,
 }
 impl SetupState {
+    fn form(self) -> &'static str {
+        match self {
+            Self::Existing => ".authentication-card > form[data-auth-form='login']",
+            Self::Empty => ".authentication-card > form[data-first-account-form]",
+        }
+    }
+    fn user(self) -> &'static str {
+        match self {
+            Self::Existing => "[name='username']",
+            Self::Empty => "[data-setup-user]",
+        }
+    }
+    fn password(self) -> &'static str {
+        match self {
+            Self::Existing => "[name='password']",
+            Self::Empty => "[data-setup-password]",
+        }
+    }
+    fn final_phase(self) -> &'static str {
+        match self {
+            Self::Existing => "invalid-login",
+            Self::Empty => "keyboard-focus",
+        }
+    }
     fn name(self) -> &'static str {
         match self {
             Self::Existing => "existing",
@@ -34,18 +58,22 @@ fn run_with_setup(
         || {
             browser.cdp("Emulation.clearDeviceMetricsOverride", json!({}))?;
             browser.command("POST", "/url", Some(json!({"url":origin})))?;
-            browser.css("input[autocomplete='current-password']")?;
+            browser.css(&format!(
+                "{} {}:not([disabled]):not([readonly])",
+                setup.form(),
+                setup.password()
+            ))?;
             Ok(())
         },
     )?;
     println!(
-        "PASS anonymous {} setup layout, visible controls, status refresh and login focus at four viewports",
+        "PASS anonymous {} six-row layout, visible controls, status reload and keyboard focus at four viewports",
         setup.name()
     );
     Ok(())
 }
 
-fn geometry(browser: &Browser, setup: SetupState) -> Result<Value> {
+fn geometry(browser: &Browser, setup: SetupState, phase: &str) -> Result<Value> {
     // Clicking below the fold scrolls the page. Measure after restoring the
     // viewport and allowing ResizeObserver/G4 to reposition real foregrounds.
     browser.script("window.scrollTo(0,0);return true")?;
@@ -54,7 +82,7 @@ fn geometry(browser: &Browser, setup: SetupState) -> Result<Value> {
         "POST",
         "/execute/async",
         Some(json!({
-            "script": include_str!("auth_layout.js"), "args": [setup.name()]
+            "script": include_str!("auth_layout.js"), "args": [setup.name(), phase]
         })),
     )
 }
@@ -70,32 +98,47 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>, setup: SetupSta
             "Emulation.setDeviceMetricsOverride",
             json!({"width":width,"height":height,"deviceScaleFactor":1,"mobile":false}),
         )?;
-        browser.css(".authentication-card > form [name='username']")?;
-        browser.css(".authentication-card > section button:not([disabled])")?;
-        wait_for("anonymous fonts and viewport", || {
-            if browser.script(&format!("return innerWidth==={width} && innerHeight==={height} && document.fonts.status==='loaded'"))? == true { Ok(()) } else { Err("viewport or font loading pending".into()) }
-        })?;
-        for phase in ["initial", "refreshed", "invalid-login"] {
-            let check =
-                browser.css("[data-first-account-form] [data-setup-check]:not([disabled])")?;
+        for phase in ["initial", "refreshed", setup.final_phase()] {
             if phase == "refreshed" {
-                browser.click(&check)?;
-                browser.css("[data-first-account-form] [data-setup-check]:not([disabled])")?;
+                // Reload remounts the real app and re-reads setup status. Existing
+                // accounts no longer expose an unrelated first-setup action.
+                browser.command("POST", "/refresh", Some(json!({})))?;
             }
-            if phase == "invalid-login" {
-                let username = browser.css(".authentication-card > form [name='username']")?;
+            let username = browser.css(&format!(
+                "{} {}:not([disabled]):not([readonly])",
+                setup.form(),
+                setup.user()
+            ))?;
+            browser.css(&format!(
+                "{} {}:not([disabled]):not([readonly])",
+                setup.form(),
+                setup.password()
+            ))?;
+            wait_for("anonymous fonts and viewport", || {
+                if browser.script(&format!("return innerWidth==={width} && innerHeight==={height} && document.fonts.status==='loaded'"))? == true { Ok(()) } else { Err("viewport or font loading pending".into()) }
+            })?;
+            if phase == setup.final_phase() {
                 browser.click(&username)?;
                 browser.keys(&username, "\u{e004}")?;
-                if browser.script("const e=document.activeElement,s=getComputedStyle(e);return e.name==='password'&&e.matches(':focus-visible')&&parseFloat(s.borderBottomWidth)===3&&s.borderBottomStyle==='dashed'&&(parseFloat(s.outlineWidth)===0||s.outlineStyle==='none')")? != true {
+                let selector =
+                    json_codec::to_string(&format!("{} {}", setup.form(), setup.password()))?;
+                if browser.script(&format!("const e=document.activeElement,s=getComputedStyle(e);return e===document.querySelector({selector})&&e.matches(':focus-visible')&&parseFloat(s.borderBottomWidth)===3&&s.borderBottomStyle==='dashed'&&(parseFloat(s.outlineWidth)===0||s.outlineStyle==='none')"))? != true {
                     return Err(format!("anonymous {width}x{height} keyboard focus is invisible").into());
                 }
                 accessibility::input_surfaces(browser)?;
-                // Empty submission is local validation, never an authentication request.
-                browser
-                    .click(&browser.css(".authentication-card > form > button[type=submit]")?)?;
-                browser.css(".authentication-card > form > .zxs-error")?;
+                if matches!(setup, SetupState::Existing) {
+                    // Empty login is local validation, never an authentication request.
+                    browser.click(&browser.css(&format!(
+                        "{} .zxs-auth-actions > button[type=submit]",
+                        setup.form()
+                    ))?)?;
+                    browser.css(&format!(
+                        "{} .zxs-auth-information .zxs-error",
+                        setup.form()
+                    ))?;
+                }
             }
-            let geometry = geometry(browser, setup)?;
+            let geometry = geometry(browser, setup, phase)?;
             if let Some(dir) = output {
                 let name = format!("login-{width}x{height}-{}-{phase}.png", setup.name());
                 let data = browser.command("GET", "/screenshot", None)?;

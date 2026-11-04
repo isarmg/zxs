@@ -72,11 +72,11 @@ pub(super) fn run(
     browser.command("DELETE", "/cookie", None)?;
     browser.command("POST", "/url", Some(json!({"url":origin})))?;
     browser.keys(
-        &browser.css("input[autocomplete='username']")?,
+        &browser.css("form[data-auth-form='login'] input[autocomplete='username']:not([readonly])")?,
         "smoke-admin",
     )?;
     browser.keys(
-        &browser.css("input[autocomplete='current-password']")?,
+        &browser.css("form[data-auth-form='login'] input[autocomplete='current-password']:not([readonly])")?,
         password,
     )?;
     browser.click(&browser.button("Sign in", "登录")?)?;
@@ -120,7 +120,7 @@ pub(super) fn run(
         return Err("uncaught browser error during offline management".into());
     }
     browser.click(&browser.button("Sign out", "退出")?)?;
-    browser.css("input[autocomplete='current-password']")?;
+    browser.css("form[data-auth-form='login'] input[autocomplete='current-password']:not([readonly])")?;
     println!(
         "PASS real corrupt-pool daemon: existing administrator login, health, CPU/memory, retry and logout without initialization"
     );
@@ -150,8 +150,10 @@ pub(super) fn setup(
         fixture.open(browser)?;
         browser.keys(&browser.css("[data-setup-user]")?, "fresh-admin")?;
         reauthorize_identity(browser, "fresh-admin")?;
-        credentials_and_confirm(browser, "fresh-admin", password)?;
-        browser.click(&browser.button("Complete first-time setup", "完成首次设置")?)?;
+        credentials(browser, "fresh-admin", password)?;
+        browser.click(
+            &browser.css("[data-first-account-form] button[type=submit]:not([disabled])")?,
+        )?;
         fixture.wait_state("unconfigured")?;
         fixture.no_storage()?;
         cleared_secrets(browser, password)?;
@@ -268,15 +270,19 @@ impl SetupFixture {
             "/url",
             Some(json!({"url":format!("http://127.0.0.1:{}",self.port)})),
         )?;
-        browser.css("input[autocomplete='current-password']")?;
+        browser
+            .css(".authentication-card > form input[autocomplete='username']:not([disabled]):not([readonly])")?;
         Ok(())
     }
     fn open(&self, browser: &Browser) -> Result<()> {
         self.visit(browser)?;
-        self.authorize(browser)
+        self.authorize(browser)?;
+        browser.css("[data-first-account-form] [data-setup-user]:not([disabled])")?;
+        browser.css("[data-first-account-form] [data-setup-password]:not([disabled])")?;
+        Ok(())
     }
     fn authorize(&self, browser: &Browser) -> Result<()> {
-        browser.click(&browser.button("Check setup status", "检查设置状态")?)?;
+        browser.click(&browser.css("[data-setup-check]:not([disabled])")?)?;
         Ok(())
     }
     fn wait_state(&self, expected: &str) -> Result<()> {
@@ -323,27 +329,51 @@ impl SetupFixture {
     }
 }
 
+const REAUTHORIZE_PROBE: &str = r#"
+if(window.__zxsSetupRecheck)throw new Error('Setup recheck probe already installed');
+const original=window.fetch;
+const state=window.__zxsSetupRecheck={reads:[],form:document.querySelector('[data-first-account-form]'),
+  identity:document.querySelector('[data-setup-user]'),password:document.querySelector('[data-setup-password]'),
+  restore:()=>{window.fetch=original;delete window.__zxsSetupRecheck;}};
+window.fetch=async function(...args){
+  const input=args[0],url=new URL(typeof input === 'string' ? input : input.url,location.href);
+  const method=(args[1]?.method || input.method || 'GET').toUpperCase();
+  const response=await Reflect.apply(original,this,args);
+  if(url.origin === location.origin && url.pathname === '/api/setup/status' && method === 'GET'){
+    const body=await response.clone().json();state.reads.push({status:response.status,state:body.state});
+  }
+  return response;
+};return true;
+"#;
 fn reauthorize_identity(browser: &Browser, username: &str) -> Result<()> {
-    for _ in 0..2 {
-        browser.click(&browser.css("[data-setup-confirm]")?)?;
-        browser.script("window.__setupIdentityBeforeAuthorization = document.querySelector('[data-setup-user]'); return true")?;
-        browser.click(&browser.button("Check setup status", "检查设置状态")?)?;
-        browser.css("[data-setup-user]")?;
-        let expected = json_codec::to_string(username)?;
-        wait_for("reauthorized setup identity matches submission", || {
-            if browser.script(&format!("return document.querySelector('[data-setup-user]') !== window.__setupIdentityBeforeAuthorization && document.querySelector('[data-setup-user]')?.value === {expected} && !document.querySelector('[data-setup-confirm]').checked"))? == true { Ok(()) }
-            else { Err("reauthorization changed displayed administrator identity".into()) }
-        })?;
-        browser.script("delete window.__setupIdentityBeforeAuthorization; return true")?;
-    }
-    Ok(())
+    browser.script(REAUTHORIZE_PROBE)?;
+    with_cleanup(
+        || {
+            let expected = json_codec::to_string(username)?;
+            for count in 1..=2 {
+                browser.click(&browser.css("[data-setup-check]:not([disabled])")?)?;
+                wait_for(
+                    "real setup recheck preserves the displayed identity",
+                    || {
+                        if browser.script(&format!("const s=window.__zxsSetupRecheck,e=document.querySelector('[data-setup-user]'),check=document.querySelector('[data-setup-check]');return s.reads.length === {count} && s.reads.every(r=>r.status===200&&r.state==='empty') && document.querySelector('[data-first-account-form]') === s.form && document.querySelector('[data-setup-password]') === s.password && e === s.identity && e?.value === {expected} && !e.disabled && check?.disabled === false && !document.querySelector('[data-setup-confirm]')"))? == true { Ok(()) }
+                else { Err("real setup recheck replaced or changed the displayed administrator identity".into()) }
+                    },
+                )?;
+            }
+            Ok(())
+        },
+        || {
+            browser.script("window.__zxsSetupRecheck.restore();return true")?;
+            Ok(())
+        },
+    )
 }
-fn credentials_and_confirm(browser: &Browser, username: &str, password: &str) -> Result<()> {
+fn credentials(browser: &Browser, username: &str, password: &str) -> Result<()> {
     let user = browser.css("[data-setup-user]")?;
     browser.command("POST", &format!("/element/{user}/clear"), Some(json!({})))?;
     browser.keys(&user, username)?;
     browser.keys(&browser.css("[data-setup-password]")?, password)?;
-    browser.click(&browser.css("[data-setup-confirm]")?)?;
+    browser.css("[data-first-account-form] button[type=submit]:not([disabled])")?;
     Ok(())
 }
 fn cleared_secrets(browser: &Browser, password: &str) -> Result<()> {
@@ -362,14 +392,18 @@ fn cleared_secrets(browser: &Browser, password: &str) -> Result<()> {
 }
 fn sign_in(browser: &Browser, username: &str, password: &str) -> Result<()> {
     browser.keys(
-        &browser.css(".authentication-card input[autocomplete='username']")?,
+        &browser
+            .css("form[data-auth-form='login'] input[autocomplete='username']:not([disabled]):not([readonly])")?,
         username,
     )?;
     browser.keys(
-        &browser.css("input[autocomplete='current-password']")?,
+        &browser.css(
+            "form[data-auth-form='login'] input[autocomplete='current-password']:not([disabled]):not([readonly])",
+        )?,
         password,
     )?;
-    browser.click(&browser.button("Sign in", "登录")?)?;
+    browser
+        .click(&browser.css("form[data-auth-form='login'] button[type=submit]:not([disabled])")?)?;
     browser.button("Sign out", "退出")?;
     Ok(())
 }
@@ -557,22 +591,32 @@ window.fetch=async function(...args){
 };
 return true;
 "#;
-fn lost_initialize_state(browser: &Browser) -> Result<json_codec::Value> {
-    browser.script(r#"
+const LOST_INITIALIZE_STATE: &str = r#"
 const state=window.__zxsLostInitialize;
 if(!state)throw new Error('Lost initialization probe is missing');
-const key=document.querySelector('[data-setup-key]'),form=document.querySelector('[data-first-account-form]'),password=form?.querySelector('[data-setup-password]'),text=form?.textContent || '';
+const key=document.querySelector('[data-setup-key]'),form=document.querySelector('[data-first-account-form]');
+const login=document.querySelector('form[data-auth-form="login"]'),password=form?.querySelector('[data-setup-password]'),text=form?.textContent || '';
+const visible=node=>node.checkVisibility({opacityProperty:true,visibilityProperty:true});
+const forms=Array.from(document.querySelectorAll('.authentication-card > form'));
+const loginReady=forms.length===1 && forms[0]===login && !!login?.isConnected && visible(login)
+  && ['[name=username]','[name=password]','button[type=submit]'].every(selector=>{
+    const node=login.querySelector(selector);return !!node?.isConnected && !node.disabled && !node.readOnly && visible(node);
+  });
+const complete=!form && !state.form.isConnected && loginReady;
+const submits=Array.from(form?.querySelectorAll('button[type=submit]') || []);
 return {sameForm:form === state.form && state.form.isConnected,
-  unknown:Array.from(form?.querySelectorAll('p[role=alert]') || []).some(e=>/Outcome unknown\. Repeated initialization is blocked|结果未知，已禁止重复初始化/.test(e.textContent)),
-  complete:/The administrator account is ready|管理员账户已建立/.test(text),
+  unknown:!!form?.querySelector('[data-setup-unknown]') && Array.from(form?.querySelectorAll('[role=alert]') || []).some(e=>visible(e)&&/Outcome unconfirmed\. Check setup status\.|结果未确认，请检查设置状态。/.test(e.textContent)),
+  complete,
   transportError:text.includes('Browser smoke: initialize response lost after successful initialization'),
   keyAbsent:!key,passwordCleared:!password || password.value === '',
-  settled:!!form && !form.querySelector('[data-setup-check]')?.disabled,
-  noInitialization:!!form && !form.querySelector('button[type=submit], [data-setup-disk], [data-setup-completion]'),
+  settled:form ? form.querySelector('[data-setup-check]')?.disabled === false : complete,
+  noInitialization:form ? submits.length===1 && submits[0].disabled && visible(submits[0]) && !form.querySelector('[data-setup-disk], [data-setup-completion]') : complete,
   reloadBlocked:document.querySelector('[data-language-toggle]')?.disabled === true,
   dropped:state.dropped,initialization:state.initialization,setupPosts:state.setupPosts,statusReads:state.statusReads,logins:state.logins,
   submitStimuli:state.submitStimuli,stimuliSettled:state.stimuliSettled};
-"#)
+"#;
+fn lost_initialize_state(browser: &Browser) -> Result<json_codec::Value> {
+    browser.script(LOST_INITIALIZE_STATE)
 }
 fn unknown_initialize_fence(browser: &Browser) -> Result<json_codec::Value> {
     let state = lost_initialize_state(browser)?;
@@ -619,10 +663,10 @@ fn lost_initialize_response(
     let server = fixture.launch(daemon, web, "server.log")?;
     server.finish(|| {
         fixture.open(browser)?;
-        credentials_and_confirm(browser,"lost-response-admin",password)?;
+        credentials(browser,"lost-response-admin",password)?;
         with_cleanup(|| {
             browser.script(LOST_INITIALIZE_PROBE)?;
-            browser.click(&browser.button("Complete first-time setup","完成首次设置")?)?;
+            browser.click(&browser.css("[data-first-account-form] button[type=submit]:not([disabled])")?)?;
             wait_for("successful account response loss becomes unknown", || {
                 let state=unknown_initialize_fence(browser)?;
                 if state["transportError"]==true && state["keyAbsent"]==true && state["passwordCleared"]==true {Ok(())}
@@ -633,7 +677,7 @@ fn lost_initialize_response(
             let authority=fs::read(fixture.pool.join("management-authority.json"))?;
             let account=fs::read(fixture.management.join("management-auth.json"))?;
             repeat_unknown_initialize(browser,3)?;
-            browser.click(&browser.button("Clear setup inputs","清除设置输入")?)?;
+            browser.click(&browser.css("[data-setup-clear]:not([disabled])")?)?;
             let cleared=unknown_initialize_fence(browser)?;
             if cleared["keyAbsent"]!=true || cleared["passwordCleared"]!=true {
                 return Err("clear setup inputs retained credentials".into());

@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
     "compliance/external-tests/foundation.json": "7553f119ba2b1a530ea7c8126701f0410a88945425a76ceb7e7643f6cbb1fecf",
-    "compliance/external-tests/integrated.json": "5c4b1b7798e72bcd707a7b162d0390ebe2d1d7893c275a9202a2d9ad496d6198",
+    "compliance/external-tests/integrated.json": "ecf47417401e835222c819029a8ef6500e7a5b8799b5f8877ce00998b4928c24",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79149,7 +79149,7 @@
       ]
     },
     "src/interface": {
-      "bytes": 81074,
+      "bytes": 83421,
       "directory": "src/interface",
       "file_count": 18,
       "files": [
@@ -79173,7 +79173,7 @@
         },
         {
           "path": "test/interface/integration/style_contracts.rs",
-          "sha256": "cfcb45deb352e4c46c1b861686744f37cacfd90505d9698017808c343183da85",
+          "sha256": "e79893e90f327788516337f512138d710cd5b6efe96552dfd5a1b580d19d2b24",
           "source": "src/interface/tests/style_contracts.rs",
           "source_sha256_before": "82c878873c25b7f1a59261e4a577dd68c5cc0dd48eb986cb32b221f33f2826b8"
         },
@@ -79817,11 +79817,11 @@
         "src/components/account.rs": "26d0ffc9a770b62a2ca840e220a8162ec47b261464694df7bd1169ddac79d14c",
         "src/components/dialog.rs": "9ceaeb3ca91c2d3155e33b63f5723574a11f8e07a9ce6477900843484d5c3119",
         "src/components/header.rs": "fadcf0d8f898a4d1b6400d2f1fa7356367cf1125cacacf91c36c78092f750353",
-        "src/components/login.rs": "0f15b0c0023056e1cefc251ed5e90b4df4e11b17a5d8401cf2bc5d51ad7a1208",
+        "src/components/login.rs": "bfff50bf545c905d0651152a5f1a9d8ccc86a63b09098a0ba257c041078fcf53",
         "src/components/mod.rs": "10cd01e58a8ae9a376fb13a9144de6034bd9194f79db61da0b2b8ca6e46d08ad",
         "src/components/notification.rs": "121a99dcc2522db1a0e6600ccfc74edc2a935d547f0d069ebcfc7a1c987f9ba0",
         "src/components/select.rs": "850f7a9b2956d047a9d1dc254118454f6e3e89bd1efc4bc6ee2ad75dbf029ef4",
-        "src/components/shell.rs": "73e5e8dfd6e2cbe6642ba6724c276228e6ae06b45cb78f56ac53556951131923",
+        "src/components/shell.rs": "b1db8f57032fadaa071bd8e7e6dbd283d33ec3f895cab1ad188fd054ec6e8d7f",
         "src/components/state.rs": "5a9a5324005dd4d9072b0eb5965e373ae99814f75e386925307fcfe943f342ab",
         "src/contours/controller.rs": "65c884bbb06fb0fb19f725c0a5420619d33d279f6d43789c9960fa58fee4a2e9",
         "src/contours/frame.rs": "9d789a4509f518f1d7060fe91f774c0fcf2a09c28dde6ea0aa82a84691a93241",
