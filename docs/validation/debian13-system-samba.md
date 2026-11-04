@@ -16,9 +16,14 @@
 2. [SDK 构建](../../.github/scripts/smb-sdk.sh) 下载同版本源包，核固定原档和 Debian 补丁 SHA，应用 Debian 补丁并调用原 `debian/rules configure`，保留完整内部布局/特性参数；仅缩小编译目标，不替换配置合同。
 3. bindgen 从真实内部头生成布局；执行全部 VFS FFI/异步/所有权测试、编译 warning 门禁、panic=abort 负例与 release 正例。产出独立 `zxs.so` 和 `VFS-BUILD.json`（精确 Git commit/tree、apt/SDK版本、模块 SHA）。
 4. [运行容器](../../.github/containers/debian13-runtime.Dockerfile) 只有系统 apt Samba、其通用运行依赖及验证用 Python，没有 compiler/Cargo/SDK。`--network none` 仅允许隔离 loopback，不开放用户网络或主机服务。
-5. [实际客户端验收](../../.github/scripts/check-system-samba.py) 以既存隔离 root 身份和一次性独立凭据，在私有临时 passdb 中认证；真实 apt smbd 加载 VFS，SMB3 强制签名/加密；另以非 root 服务身份通过实际 HTTP `/api/smb/password` 改变一次性凭据，验证旧密码拒绝、新密码认证成功及 Web 会话保持。通过 `/api/smb/account` 在两个预置账号之间切换并切回，检查代际递增、读取结果一致、新账号访问成功；旧账号仍能在 IPC$ 认证而 ZXS 共享拒绝，避免把错误密码当作绑定撤销证据。每次账号切换前还在一个已建立的真实 Samba tree 上读到已知正文，切换后同一 tree 的指定文件读取必须失败且不能返回任何正文；新账号须仍能读取同一文件，服务和 fixture 不能同时退出。主动关闭旧 RPC 可以表现为 IO_DEVICE_ERROR/CONNECTION_DISCONNECTED，不等同于声称得到 ACCESS_DENIED；门禁只接受与该指定读取绑定的上述状态或 ACCESS_DENIED，拒绝任意连接错误及仅靠新 tree 拒绝作为证据。该客户端固定本机 445 端口，隔离容器内 smbd 同时监听 445 与既有 44545；不访问宿主服务。随后拒绝错误密码和匿名，上传/下载校字节、改名，权威 binding 撤销后必须 ACCESS_DENIED，恢复后删除。真实 EngineBackend 独立核对发布及最终状态；不以 mock RPC 或任意连接错误代替通过。
+5. [实际客户端验收](../../.github/scripts/check-system-samba.py) 以既存隔离 root 身份和一次性独立凭据，在私有临时 passdb 中认证；真实 apt smbd 加载 VFS，SMB3 强制签名/加密；另以非 root 服务身份通过实际 HTTP `/api/smb/password` 改变一次性凭据，验证旧密码拒绝、新密码认证成功及 Web 会话保持。通过 `/api/smb/account` 在两个预置账号之间切换并切回，检查代际递增、读取结果一致、新账号访问成功；旧账号仍能在 IPC$ 认证而 ZXS 共享拒绝，避免把错误密码当作绑定撤销证据。每次账号切换前还在一个已建立的真实 Samba tree 上读到已知正文，切换后同一 tree 的指定文件读取必须失败且不能返回任何正文；新账号须仍能读取同一文件，服务和 fixture 不能同时退出。主动关闭旧 RPC 可以表现为 IO_DEVICE_ERROR/CONNECTION_DISCONNECTED，不等同于声称得到 ACCESS_DENIED；门禁接受与该指定读取绑定的上述状态或 ACCESS_DENIED；OBJECT_PATH_NOT_FOUND 仅按下述完整宿主映射证据验证，不能独立放行。拒绝任意连接错误及仅靠新 tree 拒绝作为证据。该客户端固定本机 445 端口，隔离容器内 smbd 同时监听 445 与既有 44545；不访问宿主服务。随后拒绝错误密码和匿名，上传/下载校字节、改名，权威 binding 撤销后必须 ACCESS_DENIED，恢复后删除。真实 EngineBackend 独立核对发布及最终状态；不以 mock RPC 或任意连接错误代替通过。
 
 所有配置/凭据/临时磁盘只在一次性 CI 隔离环境；运行镜像预建三个独立的合成非 root 账户 `zxs-engine-test`、`zxs-smb-test` 和 `zxs-smb-next-test`，分别用于引擎进程与两个 Samba 登录候选。验收脚本只使用这些既有账户；不创建或更改宿主 OS 账号，不修改用户主机权限、不安装或启动真实部署服务。
+
+固定的 Samba 4.22.11 在父目录打开失败时，把除 ACCESS_DENIED 外的状态转换成 OBJECT_PATH_NOT_FOUND（[宿主源码](https://github.com/samba-team/samba/blob/samba-4.22.11/source3/smbd/filename.c#L799)）。门禁不把此状态单独视为撤权证据：必须先在新建的独立 PID 日志中确认旧 tree 的同一文件成功读取，再固定该日志的文件身份、字节位置及前缀摘要。切换后只接受同 PID/UID、同一个 CREATE 请求 ID、精确 `report.txt` 的 RPC closed → 父目录 EIO → IO_DEVICE_ERROR → 最终 OBJECT_PATH_NOT_FOUND 完整记录；缺段、请求交错、身份不同、日志轮转或截断均失败。原有零字节、新账号同正文读取、服务和引擎存活检查全部保留，生产错误映射不变。每 PID 的当前/轮转日志与脱敏后的客户端输出一并保留，合成日志解析回归不能替代真实 Samba 成功收据。
+
+解析器回归测试从公开的消息格式契约构造最小合成记录，只使用任意测试标识和不存在的路径，不包含实际 CI 日志或运行元数据；它仅验证证据关联与拒绝路径，不替代真实 Samba 验收。
+
 部署侧按当前安装说明配置系统 Samba 既有候选账号、每个共享的 valid users 和独立 SMB 凭据，ZXS 同时只启用一个绑定，禁 guest/force-user；ZXS 与 Samba 密码不静默复用。
 
 ## 安全更新

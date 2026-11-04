@@ -87,18 +87,116 @@ def password_request(port, token, method, path, payload=None):
         connection.close()
 
 
-def revoked_account_tree_read(output, returncode, destination):
+def revoked_account_tree_read(output, returncode, destination, mapped_path_rejection=None):
     """A known live tree must reject this post-switch read, not merely disconnect somewhere."""
     # Closing the old ZXS RPC transport can surface EIO/EPIPE through the Samba
     # VFS, rather than an authorization status. Do not accept arbitrary errors.
     allowed = {"NT_STATUS_IO_DEVICE_ERROR", "NT_STATUS_CONNECTION_DISCONNECTED", "NT_STATUS_ACCESS_DENIED"}
-    failures = [status for line in output.splitlines() if "report.txt" in line
+    failures = [status for line in output.splitlines() if re.search(r"(?:^|\s)\\?report\.txt(?:$|\s)", line)
                 for status in re.findall(r"\bNT_STATUS_[A-Z_]+\b", line)]
+    if mapped_path_rejection is not None:
+        allowed.add("NT_STATUS_OBJECT_PATH_NOT_FOUND")
     if returncode != 0 or not failures or any(status not in allowed for status in failures):
-        raise RuntimeError("existing account tree did not reject the specific post-switch read")
+        raise RuntimeError("existing account tree did not reject the specific post-switch read: "
+                           f"returncode={returncode}, statuses={failures}")
     if destination.exists() and destination.stat().st_size != 0:
         raise RuntimeError("revoked account tree returned file bytes after the switch")
     return sorted(set(failures))
+
+
+def identity_log_files(work):
+    return sorted(path for path in work.glob("samba-identity.*")
+                  if re.fullmatch(r"samba-identity\.[0-9]+\.log(?:\.old)?", path.name))
+
+
+def samba_header(line):
+    match = re.fullmatch(r"\[[^\n]*, pid=([0-9]+), effective\(([0-9]+), [0-9]+\),[^\n]*\] "
+                         r"[^\n]+\(([a-zA-Z0-9_]+)\)", line)
+    return (int(match[1]), int(match[2]), match[3]) if match else None
+
+
+def account_tree_log_boundary(work, previous_logs, uid):
+    """Bind the known successful read to one newly connected smbd's own log."""
+    candidates = []
+    for path in identity_log_files(work):
+        if path.name in previous_logs or path.name.endswith(".old"):
+            continue
+        pid = int(path.name.split(".")[1])
+        with path.open("rb") as log:
+            data = log.read()
+            metadata = os.fstat(log.fileno())
+        lines = data.decode().splitlines()
+        reads = [index for index, line in enumerate(lines[:-1])
+                 if samba_header(line) == (pid, uid, "smb2_read_complete")
+                 and re.fullmatch(r"  smbd_smb2_read: fnum [0-9]+, file report\.txt, length=3 offset=0 read=3",
+                                  lines[index + 1])]
+        if len(reads) != 1:
+            continue
+        if not data.endswith(b"\n") or any(line.startswith("[") and
+                (samba_header(line) is None or samba_header(line)[0] != pid) for line in lines):
+            raise RuntimeError("incomplete or mixed-PID account tree log")
+        candidates.append((path, pid, (metadata.st_dev, metadata.st_ino, len(data), hashlib.sha256(data).digest())))
+    if len(candidates) != 1:
+        raise RuntimeError("expected one new per-PID log with the known account tree read")
+    return candidates[0]
+
+
+def account_tree_log_after(path, boundary):
+    with path.open("rb") as log:
+        data = log.read()
+        metadata = os.fstat(log.fileno())
+    device, inode, offset, digest = boundary
+    if (metadata.st_dev, metadata.st_ino) != (device, inode) or len(data) < offset \
+            or hashlib.sha256(data[:offset]).digest() != digest:
+        raise RuntimeError("account tree log rotated or changed across the switch")
+    return data[offset:].decode()
+
+
+def mapped_account_tree_rejection(log, pid, uid, export_root):
+    """Prove the exact pinned Samba parent-path mapping, never generic NOT_FOUND."""
+    lines = log.splitlines()
+    dispatches = []
+    for index, line in enumerate(lines[:-1]):
+        if samba_header(line) == (pid, uid, "smbd_smb2_request_dispatch"):
+            match = re.fullmatch(r"  smbd_smb2_request_dispatch: opcode\[SMB2_OP_CREATE\] mid = ([0-9]+)",
+                                 lines[index + 1])
+            if match:
+                dispatches.append((index, int(match[1])))
+    if len(dispatches) != 1:
+        raise RuntimeError("missing or ambiguous post-switch CREATE request")
+    start, mid = dispatches[0]
+    stages = [
+        ("smbd_smb2_create_send", "  smbd_smb2_create_send: name [report.txt]"),
+        ("openat_pathref_fsp_dot", f"  openat_pathref_fsp_dot: smb_vfs_openat({export_root}/.) failed: Input/output error"),
+        ("filename_convert_dirfsp_nosymlink", "  filename_convert_dirfsp_nosymlink: opening directory  failed: NT_STATUS_IO_DEVICE_ERROR"),
+    ]
+    stage = 0
+    rpc_closed = False
+    for index in range(start + 2, len(lines) - 1):
+        header = samba_header(lines[index])
+        if lines[index].startswith("[") and header is None:
+            raise RuntimeError("malformed post-switch Samba header")
+        if header is None:
+            continue
+        if header[:2] != (pid, uid) or header[2] == "smbd_smb2_request_dispatch":
+            raise RuntimeError("interleaved identity or request in post-switch CREATE")
+        body = lines[index + 1]
+        relevant = header[2] in {"openat_pathref_fsp_dot", "filename_convert_dirfsp_nosymlink"} \
+            or (header[2] == "smbd_smb2_create_send" and body.startswith("  smbd_smb2_create_send: name ["))
+        if relevant:
+            if stage >= len(stages) or (header[2], body) != stages[stage]:
+                raise RuntimeError("wrong or reordered post-switch CREATE evidence stage")
+            if stage == 1:
+                rpc_closed = lines[index - 1] == "zxs SMB: RPC connection is closed"
+            stage += 1
+        if header[2] == "smbd_smb2_request_done_ex":
+            expected = f"  smbd_smb2_request_done_ex: mid [{mid}] idx[1] status[NT_STATUS_OBJECT_PATH_NOT_FOUND] "
+            if stage != len(stages) or not rpc_closed or not body.startswith(expected):
+                raise RuntimeError("incomplete RPC-closed/EIO/path-status evidence for the exact CREATE")
+            return {"smbd_pid": pid, "uid": uid, "create_mid": mid, "file": "report.txt",
+                    "vfs_error": "RPC connection is closed", "directory_status": "NT_STATUS_IO_DEVICE_ERROR",
+                    "wire_status": "NT_STATUS_OBJECT_PATH_NOT_FOUND"}
+    raise RuntimeError("missing exact post-switch CREATE completion")
 
 
 def read_account_tree_before_switch(previous_tree, before_switch, tree_ready):
@@ -212,7 +310,7 @@ cache directory = {work}/cache
 lock directory = {work}/lock
 pid directory = {work}/pid
 ncalrpc dir = {work}/ncalrpc
-log file = {work}/samba-identity.log
+log file = {work}/samba-identity.%d.log
 # Isolated synthetic fixture only: distinguish parent ACL checks from VFS/RPC failures.
 log level = 10
 max log size = 4096
@@ -303,11 +401,14 @@ force user = {smb_user.pw_name}
                     tree_ready = work / f"account-tree-{expected_generation}-ready"
                     before_switch = work / f"account-tree-{expected_generation}-before.bin"
                     after_switch = work / f"account-tree-{expected_generation}-after.bin"
+                    previous_logs = {path.name for path in identity_log_files(work)}
                     previous_tree = subprocess.Popen(base + ["-A", str(previous_credential)], env=environment,
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, start_new_session=True)
                     children.append(previous_tree)
                     read_account_tree_before_switch(previous_tree, before_switch, tree_ready)
+                    previous_uid = smb_user.pw_uid if expected_generation == "1" else next_user.pw_uid
+                    tree_log, tree_pid, log_boundary = account_tree_log_boundary(work, previous_logs, previous_uid)
                     saved = password_request(ready["password_http_port"], web_token, "POST", "/api/smb/account",
                         {"username": username, "expected_generation": expected_generation,
                          "administrator_password": "synthetic-web-test-password"})
@@ -316,17 +417,24 @@ force user = {smb_user.pw_name}
                     if password_request(ready["password_http_port"], web_token, "GET", "/api/smb/account") != saved:
                         raise RuntimeError("SMB account selection readback differs")
                     denial, _ = previous_tree.communicate(f'get report.txt "{after_switch}"\nquit\n', timeout=30)
-                    statuses = revoked_account_tree_read(denial, previous_tree.returncode, after_switch)
+                    (work / f"account-tree-{expected_generation}.log").write_text(denial)
+                    post_switch_log = account_tree_log_after(tree_log, log_boundary)
                     active_body = work / f"account-tree-{expected_generation}-active.bin"
                     client(f'get report.txt "{active_body}"', credential=credential)
                     if active_body.read_bytes() != b"old":
                         raise RuntimeError("selected account cannot read the same body after switching")
                     if daemon.poll() is not None or fixture.poll() is not None:
                         raise RuntimeError("account switch denial coincided with a fixture/service exit")
+                    mapped_rejection = None
+                    if "NT_STATUS_OBJECT_PATH_NOT_FOUND" in denial:
+                        mapped_rejection = mapped_account_tree_rejection(
+                            post_switch_log, tree_pid, previous_uid, work / "empty")
+                    statuses = revoked_account_tree_read(denial, previous_tree.returncode, after_switch, mapped_rejection)
                     result.setdefault("account_existing_trees", []).append({
                         "previous_generation": expected_generation, "selected_generation": saved["generation"],
                         "before_body_verified": True, "post_switch_read_statuses": statuses,
-                        "post_switch_bytes": 0, "selected_account_body_verified": True})
+                        "post_switch_bytes": 0, "selected_account_body_verified": True,
+                        "host_mapped_rpc_rejection": mapped_rejection})
                     # Prove the old password still authenticates independently of
                     # the ZXS share; a login failure is not binding-revocation proof.
                     ipc = subprocess.run([base[0], "//127.0.0.1/IPC$", *base[2:], "-A", str(previous_credential), "-c", "quit"],
@@ -396,7 +504,7 @@ force user = {smb_user.pw_name}
                 wait_file(engine_work / "verified.json", fixture)
                 if fixture.wait(timeout=30) != 0:
                     raise RuntimeError("real engine authoritative validation failed")
-                identity_logs = [work / "samba-identity.log.old", work / "samba-identity.log"]
+                identity_logs = identity_log_files(work)
                 result["nonroot_io"] = nonroot_io_evidence(
                     [path.read_text() for path in identity_logs if path.is_file()], smb_user.pw_uid)
                 if list((work / "empty").iterdir()):
@@ -415,7 +523,9 @@ force user = {smb_user.pw_name}
                             child.wait()
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 # Keep diagnostic output, never synthetic passwords/auth files.
-                for name in ("engine.log", "smbd.log", "samba-identity.log.old", "samba-identity.log"):
+                names = ["engine.log", "smbd.log", "account-tree-1.log", "account-tree-2.log"]
+                names.extend(path.name for path in identity_log_files(work))
+                for name in names:
                     if not (work / name).exists():
                         continue
                     text = (work / name).read_text(errors="replace").replace(password, "[redacted]")
