@@ -53,3 +53,162 @@ fn anonymous_forms_keep_visible_controls_and_isolated_login_rows() {
     assert!(css.contains(".authentication-language { justify-self: end; }"));
     assert!(css.contains(".authentication-card .zxs-stack:not(details)"));
 }
+
+#[test]
+fn file_rows_use_checked_selection_and_pointer_capable_hover() {
+    let view = include_str!("../../../src/web/src/files/view.rs");
+    let css = include_str!("../../../src/web/public/styles/components/file-manager.css");
+    assert!(view.contains("aria-selected=move ||checked.get().to_string()"));
+    assert!(!view.contains("selected: Memo<Option<String>>"));
+    assert!(css.contains(".zxs-file-table tbody tr { background: transparent; }"));
+    assert!(css.contains("@media (hover: hover) and (pointer: fine)"));
+}
+
+#[test]
+fn header_omits_account_text_but_preserves_accessible_account_control() {
+    let ui = include_str!("../../../src/web/src/ui.rs");
+    let shell = include_str!("../../../src/interface/src/components/shell.rs");
+    let icons = include_str!("../../../src/web/src/icons.rs");
+    assert!(!ui.contains("zxs-session-identity"));
+    assert!(shell.contains("aria-label=t(\"账号设置\", \"Account settings\")"));
+    assert!(icons.contains("M19.518 9.264a8 8 0 1 1-4.782-4.782"));
+}
+
+#[test]
+fn header_icons_follow_menu_text_without_shrinking_hit_targets() {
+    let css = include_str!("../../../src/web/public/styles/components/geometry.css");
+    let rule = css
+        .split(".zxs-app-shell .zxs-control-group--comfortable .zxs-button {")
+        .nth(1)
+        .expect("header button geometry")
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(rule.contains("font-size: var(--zxs-compact-font-size);"));
+    assert!(rule.contains("--zxs-control-height: var(--zxs-input-row-height);"));
+    assert!(rule.contains("min-width: var(--zxs-control-height);"));
+    assert!(rule.contains("height: var(--zxs-control-height);"));
+    let appearance = include_str!("../../../src/web/public/styles/components/content-blocks.css");
+    assert!(appearance.contains(".zxs-header-actions svg { width: var(--zxs-header-icon-size,1em); height: var(--zxs-header-icon-size,1em); }"));
+}
+
+#[test]
+fn administration_refresh_lives_in_header_without_loading_copy() {
+    let ui = include_str!("../../../src/web/src/ui.rs");
+    let disks = include_str!("../../../src/web/src/admin/disks.rs");
+    assert!(ui.contains("Page::Admin=>!admin::can_load_disks(s)"));
+    assert!(ui.contains("Page::Admin=>admin::load_disks(state)"));
+    assert!(!disks.contains("Refresh disk list"));
+    assert!(!disks.contains("LoadingState"));
+    assert!(disks.contains("aria-busy="));
+    assert!(
+        disks.contains("<ErrorState message=feedback.message request_id=feedback.request_id/>")
+    );
+}
+
+#[test]
+fn refresh_ring_animation_uses_actual_pending_state_and_reduced_motion() {
+    let ui = include_str!("../../../src/web/src/ui.rs");
+    let css = include_str!("../../../src/web/public/styles/components/content-blocks.css");
+    assert!(ui.contains("aria-busy=move ||state.with(header_refreshing).to_string()"));
+    assert!(css.contains(".zxs-header-refresh[aria-busy=true] > .zxs-refresh-icon"));
+    assert!(css.contains("@media (prefers-reduced-motion: reduce)"));
+    assert!(
+        css.contains(
+            ".zxs-header-refresh[aria-busy=true] > .zxs-refresh-icon { animation: none; }"
+        )
+    );
+}
+
+#[test]
+fn details_remove_return_row_and_its_exclusive_code() {
+    let detail = include_str!("../../../src/web/src/files/detail.rs");
+    let rows = include_str!("../../../src/web/src/files/rows.rs");
+    let icons = include_str!("../../../src/web/src/icons.rs");
+    let css = include_str!("../../../src/web/public/styles/components/file-manager.css");
+    assert!(!detail.contains("Back to files"));
+    assert!(!detail.contains("Page::Files"));
+    assert!(!detail.contains("zxs-entry-navigation"));
+    assert!(!css.contains("zxs-entry-navigation"));
+    assert!(!icons.contains("\"back\" =>"));
+    assert!(!rows.contains("selection_id"));
+    assert!(detail.contains("join_path(")); // The useful Location property remains.
+}
+
+#[test]
+fn main_navigation_places_health_immediately_before_administration() {
+    let ui = include_str!("../../../src/web/src/ui.rs");
+    let navigation = ui
+        .split("<HeaderNavigation ")
+        .nth(1)
+        .unwrap()
+        .split("</HeaderNavigation>")
+        .next()
+        .unwrap();
+    let mut last = 0;
+    for page in ["Files", "Details", "Status", "History", "Health", "Admin"] {
+        let position = navigation.find(&format!("Page::{page}")).unwrap();
+        assert!(position > last, "{page} is not in the requested DOM order");
+        last = position;
+    }
+}
+
+#[test]
+fn menu_refresh_pages_do_not_create_loading_text_rows() {
+    for source in [
+        include_str!("../../../src/web/src/files/view.rs"),
+        include_str!("../../../src/web/src/files/detail.rs"),
+        include_str!("../../../src/web/src/history.rs"),
+        include_str!("../../../src/web/src/monitor.rs"),
+        include_str!("../../../src/web/src/monitor/scrub.rs"),
+        include_str!("../../../src/web/src/admin/disks.rs"),
+    ] {
+        assert!(!source.contains("LoadingState"));
+        assert!(!source.contains("Loading…"));
+        assert!(source.contains("aria-busy="));
+    }
+    let chart = include_str!("../../../src/web/src/monitor/chart.rs");
+    assert!(!chart.contains("Loading history"));
+    assert!(chart.contains("aria-busy="));
+}
+
+#[test]
+fn history_disk_filter_removes_label_dom_but_keeps_control_names() {
+    let history = include_str!("../../../src/web/src/history.rs");
+    let select = include_str!("../../../src/interface/src/components/select.rs");
+    assert!(history.contains("<Select label=t(\"硬盘\",\"Disk\") show_label=false"));
+    assert!(select.contains("show_label.then(move ||view!{<label"));
+    assert_eq!(
+        select
+            .matches("aria-label=(!show_label).then(||label.get_value())")
+            .count(),
+        2
+    );
+    assert_eq!(
+        select
+            .matches("aria-labelledby=show_label.then(||label_id.get_value())")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn empty_folder_message_is_rendered_inside_pagination() {
+    let view = include_str!("../../../src/web/src/files/view.rs");
+    let pagination = view
+        .split("<nav class=\"zxs-file-pagination ")
+        .nth(1)
+        .unwrap()
+        .split("</nav>")
+        .next()
+        .unwrap();
+    assert!(pagination.contains("This folder is empty."));
+    assert!(
+        pagination.contains("<span class=\"zxs-file-empty\" role=\"status\" aria-live=\"polite\"")
+    );
+    assert_eq!(view.matches("This folder is empty.").count(), 1);
+    assert!(
+        pagination.contains("s.files.loaded&&s.files.entries.is_empty()&&s.files.query.is_empty()")
+    );
+    assert!(view.contains("No files match your search."));
+}

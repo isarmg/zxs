@@ -107,6 +107,8 @@
 .zxs-app-shell .zxs-input--underline:focus { border-bottom-color: var(--zxs-focus); outline: 0; }
 .zxs-app-shell .zxs-control-group--comfortable .zxs-button {
   --zxs-control-height: var(--zxs-input-row-height);
+  /* Keep a 44px target without enlarging the adjacent menu typography. */
+  font-size: var(--zxs-compact-font-size);
   justify-content: center;
   flex-shrink: 0;
   min-width: var(--zxs-control-height);

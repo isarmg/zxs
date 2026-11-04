@@ -501,3 +501,43 @@ fn logout_supersedes_pending_login_and_settlement_reopens_admission() {
         state.update(|s| assert!(begin_login(s).unwrap() > logout_epoch));
     });
 }
+
+#[test]
+fn refresh_indicator_follows_only_the_current_pages_active_read() {
+    let mut state = State::default();
+    assert!(!header_refreshing(&state));
+    state.files.loading = true;
+    assert!(header_refreshing(&state));
+    state.files.loading = false;
+    assert!(!header_refreshing(&state));
+    state.page = Page::Details;
+    assert!(
+        !header_refreshing(&state),
+        "missing selection alone is not a refresh"
+    );
+    state.files.history_loading = true;
+    assert!(header_refreshing(&state));
+    state.page = Page::History;
+    assert!(
+        !header_refreshing(&state),
+        "an old page's read does not spin this page's icon"
+    );
+    state.activity.loading = true;
+    assert!(header_refreshing(&state));
+    state.activity.loading = false;
+    assert!(!header_refreshing(&state));
+    state.page = Page::Status;
+    state.monitor.loading = true;
+    assert!(header_refreshing(&state));
+    state.monitor.loading = false;
+    assert!(!header_refreshing(&state));
+    state.monitor.history_loading = true;
+    assert!(header_refreshing(&state));
+    state.monitor.history_loading = false;
+    state.monitor.capacity_loading = true;
+    assert!(header_refreshing(&state));
+    state.monitor.capacity_loading = false;
+    assert!(!header_refreshing(&state));
+    state.page = Page::Account;
+    assert!(!header_refreshing(&state));
+}

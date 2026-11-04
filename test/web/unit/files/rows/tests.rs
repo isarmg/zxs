@@ -191,16 +191,15 @@ fn aliases_sessions_and_navigation_do_not_reuse_wrong_identity() {
     ]);
     let old = Listing::capture(&state).project();
     assert_ne!(old[0].key, old[1].key);
-    assert_ne!(old[0].selection_id, old[1].selection_id);
-    state.files.selected = Some(state.files.entries[0].clone());
-    let selected = entry_key(state.files.selected.as_ref().unwrap());
+    assert_ne!(old[0].check_id, old[1].check_id);
+    state.files.checked_entries.insert(old[0].check_id.clone());
     assert_eq!(
         old.iter()
-            .filter(|row| row.selection_id == selected)
+            .filter(|row| state.files.checked_entries.contains(&row.check_id))
             .count(),
         1
     );
-    assert_eq!(old[0].selection_id, selected);
+    assert!(state.files.checked_entries.contains(&old[0].check_id));
     state.files.directory = "another".into();
     assert!(old[0].current_entry(&state).is_none());
     assert_ne!(old[0].key, Listing::capture(&state).project()[0].key);

@@ -3,7 +3,7 @@ use super::*;
 use crate::files::model::FileOperation;
 
 #[test]
-fn disk_roots_preserve_loading_empty_and_refresh_states() {
+fn disk_roots_preserve_rows_while_loading_and_only_confirm_empty_after_load() {
     for loading_disks in [false, true] {
         for disks_loaded in [false, true] {
             for disks in [vec![], vec![disk("offline", false, false, 0)]] {
@@ -13,9 +13,7 @@ fn disk_roots_preserve_loading_empty_and_refresh_states() {
                     disks: disks.clone(),
                     ..Model::default()
                 };
-                let expected = if loading_disks && !disks_loaded {
-                    DiskRoots::Loading
-                } else if disks_loaded && disks.is_empty() {
+                let expected = if disks_loaded && disks.is_empty() {
                     DiskRoots::Empty
                 } else {
                     DiskRoots::Disks(disks)

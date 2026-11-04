@@ -77,9 +77,73 @@ fn select_action(browser: &Browser, en: &str, zh: &str) -> Result<()> {
     ))?;
     browser.click(&button)
 }
+// Hold only delivery of the real list Response to observe the pending UI.
+fn refresh_disks_from_header(browser: &Browser) -> Result<()> {
+    browser.css(".zxs-header-refresh:not([disabled])")?;
+    if browser.script("return [...document.querySelectorAll('.zxs-disk-management button')].some(e=>['Refresh disk list','刷新硬盘列表'].includes(e.textContent.trim()))")? != false {
+        return Err("duplicate disk-list refresh entry remains in administration".into());
+    }
+    browser.script(r#"
+        const original=window.fetch;
+        let release; const gate=new Promise(resolve=>release=resolve);
+        window.__zxsAdminRefresh={count:0,held:false,release,restore:()=>{release();window.fetch=original;delete window.__zxsAdminRefresh;}};
+        window.fetch=async function(...args){
+            const result=await Reflect.apply(original,this,args),request=args[0];
+            const url=new URL(request instanceof Request?request.url:request,location.href);
+            if(url.origin===location.origin&&url.pathname==='/api/admin/disks'){
+                window.__zxsAdminRefresh.count++;window.__zxsAdminRefresh.held=true;await gate;
+            }
+            return result;
+        };return true;
+    "#)?;
+    with_cleanup(
+        || {
+            browser.cdp(
+                "Emulation.setEmulatedMedia",
+                json!({"features":[{"name":"prefers-reduced-motion","value":"no-preference"}]}),
+            )?;
+            browser.click(&browser.css(".zxs-header-refresh")?)?;
+            wait_for(
+                "real admin refresh held without visible loading copy",
+                || {
+                    if browser.script("return window.__zxsAdminRefresh.held&&window.__zxsAdminRefresh.count===1&&document.querySelector('.zxs-header-refresh').disabled&&document.querySelector('.zxs-header-refresh').getAttribute('aria-busy')==='true'&&getComputedStyle(document.querySelector('.zxs-refresh-icon')).animationName==='zxs-refresh-spin'&&document.querySelector('.zxs-disk-management').getAttribute('aria-busy')==='true'&&!document.querySelector('.zxs-disk-management .zxs-loading')")? == true { Ok(()) } else { Err("header refresh state or loading-copy suppression is incorrect".into()) }
+                },
+            )?;
+            browser.cdp(
+                "Emulation.setEmulatedMedia",
+                json!({"features":[{"name":"prefers-reduced-motion","value":"reduce"}]}),
+            )?;
+            wait_for(
+                "reduced-motion refresh remains busy without rotation",
+                || {
+                    if browser.script("return document.querySelector('.zxs-header-refresh').getAttribute('aria-busy')==='true'&&getComputedStyle(document.querySelector('.zxs-refresh-icon')).animationName==='none'")? == true { Ok(()) } else { Err("refresh animation ignores reduced motion".into()) }
+                },
+            )?;
+            browser.cdp(
+                "Emulation.setEmulatedMedia",
+                json!({"features":[{"name":"prefers-reduced-motion","value":"no-preference"}]}),
+            )?;
+            browser.script("window.__zxsAdminRefresh.release();return true")?;
+            browser.css(".zxs-header-refresh:not([disabled])")?;
+            if browser.script("return document.querySelector('.zxs-header-refresh').getAttribute('aria-busy')==='false'&&getComputedStyle(document.querySelector('.zxs-refresh-icon')).animationName==='none'")? != true {
+                return Err("refresh ring did not stop after the list and detail reads settled".into());
+            }
+            Ok(())
+        },
+        || {
+            let restore = browser.script("window.__zxsAdminRefresh.restore();return true");
+            let media = browser.cdp("Emulation.setEmulatedMedia", json!({"features":[]}));
+            restore?;
+            media?;
+            Ok(())
+        },
+    )
+}
+
 fn inspect(browser: &Browser, locale: &str) -> Result<()> {
     browser.click(&browser.button("Administration", "系统管理")?)?;
     browser.css(SECTION)?;
+    refresh_disks_from_header(browser)?;
     select_action(browser, "Inspect / query", "检查 / 查询")?;
     expect_labels(browser, "nav button", &ACTIONS, locale)?;
     expect_labels(browser, ":scope > button", &QUERIES, locale)?;

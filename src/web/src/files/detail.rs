@@ -8,7 +8,7 @@ use super::{
     tags, version_tree,
 };
 use crate::{icons::FileIcon, ui::State};
-use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
+use web_interface::components::{EmptyState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
 pub(crate) fn page(state: RwSignal<State>) -> impl IntoView {
@@ -17,10 +17,6 @@ pub(crate) fn page(state: RwSignal<State>) -> impl IntoView {
     let selected = detail_selection(state);
     view! {
         <section class="zxs-content-stack zxs-entry-page zxs-stack">
-            <nav class="zxs-entry-navigation zxs-flow" aria-label=t("详情导航","Details navigation")>
-                <button class="zxs-button" on:click=move |_|state.update(|s|{s.page=crate::ui::Page::Files;})><FileIcon name="back"/>{t("返回文件列表","Back to files")}</button>
-                <span>{move ||state.with(|s|join_path(&s.files.slot,&s.files.directory))}</span>
-            </nav>
             {move ||match selected.get() {
                 Some(selection) => entry_view(state, selection).into_any(),
                 None => view!{<EmptyState message=t("请在文件页面选择一个文件或文件夹，查看详情。","Choose a file or folder on the Files page to view its details.")/>}.into_any(),
@@ -201,7 +197,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                         {merge::view(state)}
                     </Show>
                 </section>
-                <section class="zxs-entry-section zxs-entry-version-history zxs-stack"><h3 class="zxs-row">{t("版本历史","Version history")}</h3><Show when=move ||state.with(|s|s.files.history_loading)><LoadingState/></Show>
+                <section class="zxs-entry-section zxs-entry-version-history zxs-stack" aria-busy=move ||state.with(|s|s.files.history_loading).to_string()><h3 class="zxs-row">{t("版本历史","Version history")}</h3>
                     <div class="zxs-file-toolbar zxs-flow">
                         <button class="zxs-button" disabled=move ||history_page_disabled.get()||state.with(|s|s.files.file_history.previous_cursor().is_none()) on:click=move |_|actions::page_history_nodes(state,false)>{t("上一页历史","Previous history page")}</button>
                         <button class="zxs-button" disabled=move ||history_page_disabled.get()||state.with(|s|s.files.file_history.next_cursor().is_none()) on:click=move |_|actions::page_history_nodes(state,true)>{t("下一页历史","Next history page")}</button>

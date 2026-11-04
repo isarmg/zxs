@@ -74,6 +74,9 @@ fn check(browser: &Browser) -> Result<()> {
         })?;
         browser.click(&browser.button("History", "历史记录")?)?;
         let trigger = browser.css(".zxs-history-toolbar .zxs-select-trigger")?;
+        if browser.script("const root=document.querySelector('.zxs-history-toolbar .zxs-select'),name=document.documentElement.lang==='zh-CN'?'硬盘':'Disk';return !root.querySelector('label')&&[...root.querySelectorAll('[role=combobox],[role=listbox]')].every(e=>e.getAttribute('aria-label')===name&&!e.hasAttribute('aria-labelledby'))")? != true {
+            return Err("history disk selector retains a visible label row or lost its accessible name".into());
+        }
         browser.click(&trigger)?;
         visible_menu(browser, false, theme, "normal paint")?;
         browser.keys(&trigger, "\u{e00c}")?; // Escape.

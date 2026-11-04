@@ -6,7 +6,7 @@ use super::{
     rows::{Row, visible_rows},
 };
 use crate::{format, icons::FileIcon, ui::State};
-use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
+use web_interface::components::{EmptyState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
@@ -14,22 +14,19 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     super::history_index::provide(state);
     let slot = Memo::new(move |_| state.with(|s| s.files.slot.clone()));
     view! {
-        <section class="zxs-content-stack zxs-file-manager zxs-stack">
+        <section class="zxs-content-stack zxs-file-manager zxs-stack" aria-busy=move ||state.with(|s|s.files.loading||s.files.loading_disks).to_string()>
             {move ||if slot.get().is_empty(){disk_roots(state).into_any()}else{directory(state).into_any()}}
         </section>
     }
 }
 #[derive(Debug, PartialEq, Eq)]
 enum DiskRoots {
-    Loading,
     Empty,
     Disks(Vec<super::model::Disk>),
 }
 
 fn disk_roots_projection(model: &super::model::Model) -> DiskRoots {
-    if model.loading_disks && !model.disks_loaded {
-        DiskRoots::Loading
-    } else if model.disks_loaded && model.disks.is_empty() {
+    if model.disks_loaded && model.disks.is_empty() {
         DiskRoots::Empty
     } else {
         DiskRoots::Disks(model.disks.clone())
@@ -60,7 +57,6 @@ fn disk_roots(state: RwSignal<State>) -> impl IntoView {
         <p class="zxs-row">{t("选择一个硬盘目录查看文件。","Choose a disk directory to browse its files.")}</p>
         {move ||{
             let disks = match state.with(|s| disk_roots_projection(&s.files)) {
-                DiskRoots::Loading => return view!{<LoadingState/>}.into_any(),
                 DiskRoots::Empty => return view!{<EmptyState message=t("没有可访问的硬盘目录。","No disk directories are available.")/>}.into_any(),
                 DiskRoots::Disks(disks) => disks,
             };
@@ -158,24 +154,21 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
 fn file_table(state: RwSignal<State>) -> impl IntoView {
     let rows = visible_rows(state);
     let disabled = Memo::new(move |_| state.with(|s| !actions::write_allowed(s)));
-    let selected =
-        Memo::new(move |_| state.with(|s| s.files.selected.as_ref().map(super::model::entry_key)));
     view! {
         <div aria-busy=move ||state.with(|s|s.files.loading).to_string()>
-            <Show when=move ||state.with(|s|s.files.loading&&!s.files.loaded)><LoadingState/></Show>
             <div class="zxs-table-scroll"><table class="zxs-table zxs-file-table" aria-label=t("文件列表：每页最多 200 项","Files: up to 200 entries per page")><thead><tr><th scope="col"><label class="zxs-file-check zxs-flow"><input type="checkbox" aria-label=t("选择本页全部条目（最多 200 项）","Select all entries on this page (up to 200)") disabled=move ||disabled.get() prop:checked=move ||rows.with(|rows|!rows.is_empty()&&state.with(|s|rows.iter().all(|row|s.files.checked_entries.contains(&row.check_id)))) on:change=move |event|{
                 let checked=event_target_checked(&event);
                 rows.with_untracked(|rows|state.update(|s|{for row in rows {if row.current_entry(s).is_some(){if checked{s.files.checked_entries.insert(row.check_id.clone());}else{s.files.checked_entries.remove(&row.check_id);}}}}));
             }/><span>{t("名称","Name")}</span></label></th><th scope="col">{t("类型","Type")}</th><th scope="col">{t("大小","Size")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
-                <tbody><ForSnapshot each=move ||rows.get() key=|row|row.key.clone() children=move |row|file_row(state,row,disabled,selected)/></tbody>
+                <tbody><ForSnapshot each=move ||rows.get() key=|row|row.key.clone() children=move |row|file_row(state,row,disabled)/></tbody>
             </table></div>
             <nav class="zxs-file-pagination zxs-flow" aria-label=t("文件列表分页","File list pages")>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.loading||actions::pending(s)||s.files.previous_cursor.is_none()) on:click=move |_|actions::change_page(state,false)>{t("上一页","Previous page")}</button>
-                <span role="status" aria-live="polite">{move ||state.with(|s|if s.files.loading{t("正在读取…","Loading…")}else if s.files.listing_failed{t("读取失败，请重试。","Loading failed. Retry the page.")}else{format!("{} {} · {} {} · {}",t("本页","This page"),s.files.entries.len(),t("匹配总数","Total matches"),s.files.total_entries,t("仅选择本页","Selection is page-local"))})}</span>
+                <span role="status" aria-live="polite">{move ||state.with(|s|if s.files.listing_failed{t("读取失败，请重试。","Loading failed. Retry the page.")}else{format!("{} {} · {} {} · {}",t("本页","This page"),s.files.entries.len(),t("匹配总数","Total matches"),s.files.total_entries,t("仅选择本页","Selection is page-local"))})}</span>
+                <Show when=move ||state.with(|s|s.files.loaded&&s.files.entries.is_empty()&&s.files.query.is_empty())><span class="zxs-file-empty" role="status" aria-live="polite">{t("这个文件夹是空的。","This folder is empty.")}</span></Show>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.loading||actions::pending(s)||s.files.next_cursor.is_none()) on:click=move |_|actions::change_page(state,true)>{t("下一页","Next page")}</button>
                 <Show when=move ||state.with(|s|s.files.listing_failed)><button class="zxs-button" on:click=move |_|actions::load_entries(state)>{t("重试","Retry")}</button></Show>
             </nav>
-            <Show when=move ||state.with(|s|s.files.loaded&&s.files.entries.is_empty()&&s.files.query.is_empty())><p class="zxs-file-empty">{t("这个文件夹是空的。","This folder is empty.")}</p></Show>
             <Show when=move ||rows.with(|rows|rows.is_empty())&&state.with(|s|s.files.loaded&&!s.files.query.is_empty())><p class="zxs-file-empty">{t("没有匹配的文件。","No files match your search.")}</p></Show>
         </div>
     }
@@ -200,16 +193,12 @@ fn file_row(
     state: RwSignal<State>,
     row: ReadSignal<std::sync::Arc<Row>>,
     disabled: Memo<bool>,
-    selected: Memo<Option<String>>,
 ) -> impl IntoView {
-    let is_selected = Memo::new(move |_| {
-        row.with(|row| selected.with(|selected| selected.as_ref() == Some(&row.selection_id)))
-    });
     let checked = Memo::new(move |_| {
         row.with(|row| state.with(|s| s.files.checked_entries.contains(&row.check_id)))
     });
     view! {
-        <tr class:is-selected=move ||is_selected.get() aria-selected=move ||is_selected.get().to_string() on:click=move |_|activate_row(state,row,false)>
+        <tr class:is-selected=move ||checked.get() aria-selected=move ||checked.get().to_string() on:click=move |_|activate_row(state,row,false)>
             <td><div class="zxs-file-select-name zxs-flow"><input class="zxs-entry-checkbox" type="checkbox" aria-label=move ||row.with(|row|format!("{} {}",t("选择","Select"),row.name)) disabled=move ||disabled.get() prop:checked=move ||checked.get() on:click=move |event|event.stop_propagation() on:change=move |event|{
                 let checked=event_target_checked(&event);
                 row.with_untracked(|row|state.update(|s|{if row.current_entry(s).is_some(){if checked{s.files.checked_entries.insert(row.check_id.clone());}else{s.files.checked_entries.remove(&row.check_id);}}}));

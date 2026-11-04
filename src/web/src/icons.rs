@@ -4,14 +4,13 @@ pub fn FileIcon(name: &'static str) -> impl IntoView {
     let path = match name {
         "folder" => "M3 20V5h6l3 3h8v3M3 20h16l3-9H7l-4 9",
         "file" => "M6 3h8l4 4v14H6V3m8 0v5h4M9 12h6m-6 4h6",
-        "back" => "m10 5-7 7 7 7M3 12h18",
         "home" => "m3 10 9-8 9 8M5 8v13h14V8M9 21v-8h6v8",
         "move" => "M4 4v7a5 5 0 0 0 5 5h11m-5-5 5 5-5 5",
         "delete" => "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7",
         "rename" => "m4 17-1 4 4-1L21 6l-4-4L4 17m10-12 4 4",
         "tags" => "M3 3h8l10 10-8 8L3 11V3m4 4h.01",
         "logout" => "M10 3H3v18h7m5-15 6 6-6 6m-8-6h14",
-        "refresh" => "M20 7v5h-5M4 17a9 9 0 1 0 1-12",
+        "refresh" => "M19.518 9.264a8 8 0 1 1-4.782-4.782",
         "account" => "M20 21a8 8 0 0 0-16 0M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8",
         "create" => "M12 3v18M3 12h18",
         "cpu" => {
@@ -25,6 +24,7 @@ pub fn FileIcon(name: &'static str) -> impl IntoView {
     let icon_class = match name {
         "folder" => "zxs-file-icon zxs-file-icon--folder",
         "file" => "zxs-file-icon zxs-file-icon--file",
+        "refresh" => "zxs-file-icon zxs-refresh-icon",
         _ => "zxs-file-icon",
     };
     view! {
@@ -37,6 +37,7 @@ pub fn FileIcon(name: &'static str) -> impl IntoView {
             fill="none"
             stroke="currentColor"
             stroke-width="1.7"
+            stroke-linecap=if name == "refresh" { "round" } else { "butt" }
         >
             <path d=path/>
         </svg>

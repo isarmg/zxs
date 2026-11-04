@@ -402,3 +402,22 @@ fn capacity_decode_failure_retains_source_without_exposing_wire_detail() {
     assert!(model.capacity_failure.is_none());
     assert!(model.capacity.is_some());
 }
+
+#[test]
+fn refresh_is_pending_until_each_status_page_read_settles() {
+    let mut state = State::default();
+    assert!(!refreshing(&state));
+    state.monitor.loading = true;
+    state.monitor.history_loading = true;
+    state.monitor.capacity_loading = true;
+    state.monitor.scrub.loading = true;
+    assert!(refreshing(&state));
+    state.monitor.loading = false;
+    assert!(refreshing(&state));
+    state.monitor.history_loading = false;
+    assert!(refreshing(&state));
+    state.monitor.capacity_loading = false;
+    assert!(refreshing(&state));
+    state.monitor.scrub.loading = false;
+    assert!(!refreshing(&state));
+}

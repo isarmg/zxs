@@ -23,15 +23,19 @@
 .zxs-app-shell .zxs-file-table tbody .zxs-button { min-height: calc(var(--zxs-file-row-height) - 2px); height: calc(var(--zxs-file-row-height) - 2px); padding: 0; font-size: inherit; white-space: nowrap; }
 .zxs-file-list-panel .zxs-entry-actions { flex-wrap: nowrap; }
 .zxs-file-table td:first-child { min-width: 10rem; overflow-wrap: anywhere; }
-.zxs-file-table tbody tr:hover,.zxs-file-table tr[aria-selected=true] { background: var(--zxs-bg-page); }
+/* Selection describes the checked batch rows, never the last detail viewed.
+ * Touch taps must not leave a sticky emulated hover after navigation. */
+.zxs-file-table tbody tr { background: transparent; }
+.zxs-file-table tr[aria-selected=true] { background: var(--zxs-bg-page); }
+@media (hover: hover) and (pointer: fine) {
+  .zxs-file-table tbody tr:hover { background: var(--zxs-bg-page); }
+}
 .zxs-disk-table tbody tr[data-online=true] { cursor: pointer; }
 .zxs-file-name { width: 100%; max-width: min(24rem,100%); }
 .zxs-file-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zxs-file-name svg { flex: 0 0 auto; width: var(--zxs-file-icon-size,1em); height: var(--zxs-file-icon-size,1em); }
 .zxs-file-icon--folder { color: var(--zxs-text-link); }
 .zxs-file-icon--file { color: var(--zxs-text-primary); }
-.zxs-entry-navigation > .zxs-button { flex-shrink: 0; }
-.zxs-entry-navigation > :not(.zxs-button) { min-width: 0; overflow-wrap: anywhere; }
 .zxs-entry-content .zxs-input { width: 100%; }
 .zxs-history-field pre { min-width: 0; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .zxs-version-tree-scroll { container-type: inline-size; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
@@ -55,6 +59,7 @@
 .zxs-file-properties :is(dt,dd) { display: flex; align-items: center; }
 .zxs-file-properties dt { color: var(--zxs-block-muted); }
 .zxs-file-empty { margin: 0; padding: var(--zxs-block-gap); color: var(--zxs-block-muted); text-align: center; }
+.zxs-file-pagination > .zxs-file-empty { min-width: 0; margin-inline-start: var(--zxs-list-content-inset); padding: 0; text-align: start; overflow-wrap: anywhere; }
 .zxs-file-manager .zxs-select,.zxs-entry-page .zxs-select { max-width: min(24rem,100%); }
 @media (max-width: 36rem) {
   .zxs-file-table :is(th,td) { min-width: 0; }

@@ -445,3 +445,71 @@ fn a_refresh_started_before_a_note_save_cannot_revert_the_successful_note() {
         );
     });
 }
+
+#[test]
+fn header_disk_refresh_uses_the_same_session_loading_and_save_admission() {
+    let mut state = ready_state();
+    for storage in [
+        crate::management::Storage::Ready,
+        crate::management::Storage::ReadOnly,
+        crate::management::Storage::Unavailable,
+    ] {
+        state.management.storage = storage;
+        assert!(
+            can_load(&state),
+            "management reads must survive data storage faults"
+        );
+    }
+    state.admin_console.disks.loading = true;
+    assert!(!can_load(&state), "duplicate list refresh is blocked");
+    state.admin_console.disks.loading = false;
+    let card = state.admin_console.disks.cards.get_mut("P01").unwrap();
+    card.draft = Some(Draft {
+        owner: 1,
+        request: DiskNoteRequest {
+            expected_disk_id: "disk-one".into(),
+            expected_note: "original".into(),
+            note: "draft".into(),
+        },
+        saving: true,
+        error: None,
+    });
+    assert!(
+        !can_load(&state),
+        "pending note save keeps the existing refresh fence"
+    );
+    state
+        .admin_console
+        .disks
+        .cards
+        .get_mut("P01")
+        .unwrap()
+        .draft
+        .as_mut()
+        .unwrap()
+        .saving = false;
+    assert!(
+        can_load(&state),
+        "editing without a pending save does not discard the draft"
+    );
+    state.authenticated = false;
+    assert!(!can_load(&state));
+}
+
+#[test]
+fn disk_refresh_pending_covers_details_and_stops_on_success_or_error() {
+    for result in [Ok(record("P01", "disk-one", "original")), Err(error(500))] {
+        Owner::new().with(|| {
+            let state = RwSignal::new(ready_state());
+            let (epoch, generation) = state
+                .try_update(|s| begin_details(s, "P01"))
+                .flatten()
+                .unwrap();
+            assert!(state.with_untracked(refreshing));
+            assert!(!state.with_untracked(can_load));
+            complete_details(state, epoch, "P01", generation, result);
+            assert!(!state.with_untracked(refreshing));
+            assert!(state.with_untracked(can_load));
+        });
+    }
+}

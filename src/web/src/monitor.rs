@@ -11,9 +11,7 @@ use crate::{
 };
 use json_codec::Value;
 use storage_contract::{CapacityWarning, WorkspaceCapacity, WorkspaceCapacityScope};
-use web_interface::components::{
-    EmptyState, ErrorState, Feedback, LoadingState, Select, SelectOption,
-};
+use web_interface::components::{EmptyState, ErrorState, Feedback, Select, SelectOption};
 use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
@@ -29,7 +27,6 @@ pub(crate) struct Model {
     pub capacity_loading: bool,
     pub capacity_failure: Option<api::Error>,
     pub loading: bool,
-    pub loaded: bool,
     pub failure: Option<Feedback>,
     history: crate::snapshot::Snapshot<Option<history::History>>,
     pub range: String,
@@ -50,7 +47,6 @@ impl Default for Model {
             capacity_loading: false,
             capacity_failure: None,
             loading: false,
-            loaded: false,
             failure: None,
             history: None.into(),
             range: "1min".into(),
@@ -61,6 +57,11 @@ impl Default for Model {
             history_failure: None,
         }
     }
+}
+
+pub(crate) fn refreshing(state: &State) -> bool {
+    let model = &state.monitor;
+    model.loading || model.history_loading || model.capacity_loading || model.scrub.loading
 }
 
 pub(crate) fn load(state: RwSignal<State>) {
@@ -94,7 +95,6 @@ fn accept_status_response(model: &mut Model, value: Value) {
             model.snapshot = value;
             model.observation_issues = issues;
             model.snapshot_decode_failure = None;
-            model.loaded = true;
             model.failure = None;
         }
         Err(source) => {
@@ -509,12 +509,11 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     });
     let available_metrics = Memo::new(move |_| state.with(|s| metrics(&s.monitor.snapshot)));
     view! {
-        <section class="zxs-content-stack zxs-monitor-page zxs-stack">
+        <section class="zxs-content-stack zxs-monitor-page zxs-stack" aria-busy=move ||state.with(refreshing).to_string()>
             <Show when=move ||state.with(|s|s.session_active()) fallback=||view!{<EmptyState message=t("请登录后查看系统状态。","Sign in to view system status.")/>}>
                 <div class="zxs-monitor-toolbar zxs-flow zxs-surface-end"><p class="zxs-row">{t("每 5 秒刷新 CPU、内存和硬盘状态。","CPU, memory and disk status refresh every 5 seconds.")}</p><div class="zxs-monitor-range"><Select label=t("历史范围","History range") options=options value=range on_change=Callback::new(move |range|select_range(state,range))/></div></div>
                 {move ||state.with(|s|s.monitor.failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
                 {move ||state.with(|s|s.monitor.history_failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
-                <Show when=move ||state.with(|s|s.monitor.loading&&!s.monitor.loaded)><LoadingState/></Show>
                 {scrub::view(state)}
                 <article class="zxs-content-panel zxs-frame zxs-frame--inset" aria-label=t("持久工作区证据配额", "Retained workspace evidence capacity")>
                     <h2>{t("持久工作区证据配额", "Retained workspace evidence capacity")}</h2>

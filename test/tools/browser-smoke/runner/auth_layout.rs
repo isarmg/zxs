@@ -17,6 +17,16 @@ pub(super) fn run(browser: &Browser, origin: &str, output: Option<&Path>) -> Res
     Ok(())
 }
 
+fn geometry(browser: &Browser) -> Result<Value> {
+    browser.command(
+        "POST",
+        "/execute/async",
+        Some(json!({
+            "script": include_str!("auth_layout.js"), "args": []
+        })),
+    )
+}
+
 fn check(browser: &Browser, origin: &str, output: Option<&Path>) -> Result<()> {
     if let Some(dir) = output {
         fs::create_dir_all(dir)?;
@@ -42,12 +52,7 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>) -> Result<()> {
             }
             // ResizeObserver/G4 consumes the same live DOM before measurements.
             thread::sleep(Duration::from_millis(150));
-            let geometry = browser.script(include_str!("auth_layout.js"))?;
-            if geometry["valid"] != true {
-                return Err(
-                    format!("anonymous {width}x{height}, setup open={open}: {geometry}").into(),
-                );
-            }
+            let geometry = geometry(browser)?;
             browser.script("window.scrollTo(0,0);return true")?;
             if let Some(dir) = output {
                 let name = format!(
@@ -62,6 +67,21 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>) -> Result<()> {
             }
             evidence
                 .push(json!({"width":width,"height":height,"setup_open":open,"geometry":geometry}));
+            // Persist real evidence before asserting, so a failed layout still
+            // leaves its screenshot and exact measurements in the CI artifact.
+            if let Some(dir) = output {
+                fs::write(
+                    dir.join("login-layout.json"),
+                    json_codec::to_vec_pretty(
+                        &json!({"renderer":"production WASM with real temporary server; CSS viewport sizes, not physical mobile devices","checks":evidence}),
+                    )?,
+                )?;
+            }
+            if geometry["valid"] != true {
+                return Err(
+                    format!("anonymous {width}x{height}, setup open={open}: {geometry}").into(),
+                );
+            }
         }
         let username = browser.css(".authentication-card > form [name='username']")?;
         browser.click(&username)?;
@@ -72,20 +92,12 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>) -> Result<()> {
         // Empty submission is local validation, never an authentication request.
         browser.click(&browser.css(".authentication-card > form > button[type=submit]")?)?;
         browser.css(".authentication-card > form > .zxs-error")?;
-        if browser.script(include_str!("auth_layout.js"))?["valid"] != true {
+        if geometry(browser)?["valid"] != true {
             return Err(format!(
                 "anonymous {width}x{height} validation feedback overlaps controls"
             )
             .into());
         }
-    }
-    if let Some(dir) = output {
-        fs::write(
-            dir.join("login-layout.json"),
-            json_codec::to_vec_pretty(
-                &json!({"renderer":"production WASM with real temporary server; CSS viewport sizes, not physical mobile devices","checks":evidence}),
-            )?,
-        )?;
     }
     Ok(())
 }

@@ -362,7 +362,7 @@ fn exercise(
     wait_for(
         "restored seeded directory and selected writable file",
         || {
-            if browser.script("const note=document.querySelector('button[aria-label=\"Edit file note\"], button[aria-label=\"编辑文件备注\"]');return document.querySelector('.zxs-entry-navigation > span')?.textContent.trim()==='P01/browser-fixtures' && document.querySelector('.zxs-file-heading h2')?.textContent.trim()==='browser-smoke.txt' && !!note && !note.disabled")? == true {
+            if browser.script("const note=document.querySelector('button[aria-label=\"Edit file note\"], button[aria-label=\"编辑文件备注\"]');return document.querySelector('.zxs-file-properties dd')?.textContent.trim()==='P01/browser-fixtures/browser-smoke.txt' && !document.querySelector('.zxs-entry-navigation') && document.querySelector('.zxs-file-heading h2')?.textContent.trim()==='browser-smoke.txt' && !!note && !note.disabled")? == true {
             Ok(())
         } else {
             Err("logout fixture directory, file selection or note readiness not restored".into())

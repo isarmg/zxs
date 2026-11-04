@@ -248,20 +248,32 @@ pub(crate) fn navigate(state: RwSignal<State>, page: Page) {
         Page::Details | Page::Account | Page::Files => {}
     }
 }
+fn header_refreshing(state: &State) -> bool {
+    match state.page {
+        Page::Files => {
+            state.files.loading || state.files.loading_disks || state.files.history_loading
+        }
+        Page::Details => state.files.loading || state.files.history_loading,
+        Page::Status => monitor::refreshing(state),
+        Page::History => state.activity.loading,
+        Page::Admin => admin::disks_refreshing(state),
+        Page::Health | Page::Account => false,
+    }
+}
+
 fn workspace(state: RwSignal<State>) -> impl IntoView {
     let page = Memo::new(move |_| state.with(|s| s.page));
     view! {
         <HeaderNavigation label=t("主导航","Main navigation")>
-            {[ (Page::Health,t("管理健康","Management health")), (Page::Files,t("文件","Files")), (Page::Details,t("详情","Details")), (Page::Status,t("状态","Status")), (Page::History,t("历史记录","History")) ].into_iter().map(move |(page,title)|view! {
+            {[ (Page::Files,t("文件","Files")), (Page::Details,t("详情","Details")), (Page::Status,t("状态","Status")), (Page::History,t("历史记录","History")), (Page::Health,t("管理健康","Management health")) ].into_iter().map(move |(page,title)|view! {
                 <button class="zxs-button" aria-current=move ||(state.with(|s|s.page==page)).then_some("page") on:click=move |_|navigate(state,page)>{title}</button>
             }).collect_view()}
             <Show when=move ||state.with(|s|s.session_active())><button class="zxs-button" aria-current=move ||state.with(|s|(s.page==Page::Admin).then_some("page")) on:click=move |_|navigate(state,Page::Admin)>{t("系统管理","Administration")}</button></Show>
         </HeaderNavigation>
         <HeaderActions><div class="zxs-header-tools zxs-flow">
-            <Show when=move ||state.with(|s|matches!(s.page,Page::Files|Page::Details|Page::Status|Page::History))>
-                <button class="zxs-button zxs-header-refresh" type="button" aria-label=t("刷新","Refresh") title=t("刷新","Refresh") disabled=move ||state.with(|s|match s.page{Page::Files=>s.files.loading||s.files.loading_disks,Page::Details=>s.files.loading||s.files.history_loading||s.files.selected.is_none(),Page::Status=>s.monitor.loading||!s.session_active(),Page::History=>s.activity.loading,_=>true}) on:click=move |_|match state.with_untracked(|s|s.page){Page::Files|Page::Details=>if state.with_untracked(|s|s.files.slot.is_empty()){files::load_disks(state)}else{files::load_entries(state)},Page::Status=>monitor::load(state),Page::History=>history::load(state),_=>{}}><FileIcon name="refresh"/></button>
+            <Show when=move ||state.with(|s|matches!(s.page,Page::Files|Page::Details|Page::Status|Page::History|Page::Admin))>
+                <button class="zxs-button zxs-header-refresh" type="button" aria-busy=move ||state.with(header_refreshing).to_string() aria-label=t("刷新","Refresh") title=t("刷新","Refresh") disabled=move ||state.with(|s|match s.page{Page::Files=>header_refreshing(s),Page::Details=>header_refreshing(s)||s.files.selected.is_none(),Page::Status=>monitor::refreshing(s)||!s.session_active(),Page::History=>s.activity.loading,Page::Admin=>!admin::can_load_disks(s),_=>true}) on:click=move |_|match state.with_untracked(|s|s.page){Page::Files|Page::Details=>if state.with_untracked(|s|s.files.slot.is_empty()){files::load_disks(state)}else{files::load_entries(state)},Page::Status=>monitor::load(state),Page::History=>history::load(state),Page::Admin=>admin::load_disks(state),_=>{}}><FileIcon name="refresh"/></button>
             </Show>
-            <span class="zxs-session-identity">{move ||state.with(|s|s.principal.clone())}</span>
         </div></HeaderActions>
         <Show when=move ||state.with(|s|s.page!=Page::Health&&!s.management.storage.writable())>{management::summary(state)}</Show>
         {move ||match page.get() { Page::Health=>management::view(state).into_any(),Page::Admin=>admin::view(state).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}

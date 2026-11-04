@@ -26,7 +26,6 @@ pub(super) struct Row {
     pub check_id: String,
     pub name: String,
     pub directory: bool,
-    pub selection_id: String,
     pub size: Option<u64>,
 }
 impl Row {
@@ -54,7 +53,6 @@ impl PartialEq for Row {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key
             && self.name == other.name
-            && self.selection_id == other.selection_id
             && self.directory == other.directory
             && self.size == other.size
     }
@@ -98,7 +96,6 @@ impl Listing {
                     check_id,
                     name,
                     directory: !file_kind(entry),
-                    selection_id: entry_key(entry),
                     size: Some(entry.size()),
                 })
             })

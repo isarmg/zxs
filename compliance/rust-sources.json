@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
     "compliance/external-tests/foundation.json": "7553f119ba2b1a530ea7c8126701f0410a88945425a76ceb7e7643f6cbb1fecf",
-    "compliance/external-tests/integrated.json": "a4ba2a1009ddfea1a4674089de8afc47029b704e6f0e17ffc3c307df55d0ad00",
+    "compliance/external-tests/integrated.json": "c27ad0889642796478ca3453f793756873452fc4c57539009f46512e79725d8f",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79149,7 +79149,7 @@
       ]
     },
     "src/interface": {
-      "bytes": 71476,
+      "bytes": 78133,
       "directory": "src/interface",
       "file_count": 18,
       "files": [
@@ -79173,7 +79173,7 @@
         },
         {
           "path": "test/interface/integration/style_contracts.rs",
-          "sha256": "4113d722b3e3ebe99c7efca8711923dc82cc36c06d02c2d8363012ee6fa4e3ad",
+          "sha256": "8fd0d1992ba4013ee7482c05d10d6fd6ebfa7ee82f6a4795456bc7d5b93c3fd4",
           "source": "src/interface/tests/style_contracts.rs",
           "source_sha256_before": "82c878873c25b7f1a59261e4a577dd68c5cc0dd48eb986cb32b221f33f2826b8"
         },
@@ -79820,7 +79820,7 @@
         "src/components/login.rs": "3a3eeabde1b6e01cf19abc6b53012b819f07fd28aaefd153157abcbfc9bb2aa7",
         "src/components/mod.rs": "10cd01e58a8ae9a376fb13a9144de6034bd9194f79db61da0b2b8ca6e46d08ad",
         "src/components/notification.rs": "121a99dcc2522db1a0e6600ccfc74edc2a935d547f0d069ebcfc7a1c987f9ba0",
-        "src/components/select.rs": "4145ddf4328e117ebd977bcf76ff8da7855d374eff864a47e50b2638a271b4a6",
+        "src/components/select.rs": "009c4bc49d2f5e9d9d0d512f784fe3c287d3d7de281144ed5387a8b9bf07b0a6",
         "src/components/shell.rs": "73e5e8dfd6e2cbe6642ba6724c276228e6ae06b45cb78f56ac53556951131923",
         "src/components/state.rs": "5a9a5324005dd4d9072b0eb5965e373ae99814f75e386925307fcfe943f342ab",
         "src/contours/controller.rs": "65c884bbb06fb0fb19f725c0a5420619d33d279f6d43789c9960fa58fee4a2e9",

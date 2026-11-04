@@ -74,9 +74,11 @@ fn position(
 
 /// A labeled, controlled single choice. Empty values are ordinary valid options.
 /// Keyboard focus stays on the trigger; the active list option is announced by ID.
+/// Without a visible label row, the same name labels both control and listbox directly.
 #[component]
 pub fn Select(
     label: String,
+    #[prop(default = true)] show_label: bool,
     options: Signal<Vec<SelectOption>>,
     value: Signal<String>,
     on_change: Callback<String>,
@@ -231,10 +233,10 @@ pub fn Select(
     });
     view! {
         <div class="zxs-select" node_ref=root>
-            <label class="zxs-select-label zxs-row" id=label_id.get_value() for=control_id.get_value()>{label.get_value()}</label>
+            {show_label.then(move ||view!{<label class="zxs-select-label zxs-row" id=label_id.get_value() for=control_id.get_value()>{label.get_value()}</label>})}
             <button class="zxs-input zxs-select-trigger zxs-input--compact" type="button" node_ref=trigger
                 id=control_id.get_value() role="combobox" aria-haspopup="listbox"
-                aria-labelledby=label_id.get_value() aria-controls=list_id.get_value()
+                aria-labelledby=show_label.then(||label_id.get_value()) aria-label=(!show_label).then(||label.get_value()) aria-controls=list_id.get_value()
                 aria-expanded=move || open.get().to_string()
                 aria-activedescendant=move || if open.get() { active.get().map(|index| format!("{}-{index}", list_id.get_value())) } else { None }
                 disabled=move || disabled.get()
@@ -283,7 +285,7 @@ pub fn Select(
                 }}</span>
                 <svg class="zxs-select-arrow" aria-hidden="true" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
             </button>
-            <div class="zxs-select-panel zxs-frame" node_ref=panel id=list_id.get_value() role="listbox" popover="manual" aria-labelledby=label_id.get_value()>
+            <div class="zxs-select-panel zxs-frame" node_ref=panel id=list_id.get_value() role="listbox" popover="manual" aria-labelledby=show_label.then(||label_id.get_value()) aria-label=(!show_label).then(||label.get_value())>
                 {move || {
                     let entries = options.get();
                     if entries.is_empty() { return view! { <div class="zxs-select-empty zxs-row" role="status">{t("没有可用选项", "No options available")}</div> }.into_any(); }

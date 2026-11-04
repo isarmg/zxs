@@ -10,7 +10,7 @@ use storage_contract::disk_details::{
     DiskDetailsRecord, DiskMapping, DiskNoteRequest, DiskNoteResponse,
 };
 use web_interface::{
-    components::{EmptyState, ErrorState, LoadingState},
+    components::{EmptyState, ErrorState},
     i18n::t,
     prelude::*,
     tasks::spawn_local,
@@ -180,13 +180,24 @@ fn complete_list(
     }
 }
 
+pub(crate) fn refreshing(state: &State) -> bool {
+    state.admin_console.disks.loading
+        || state
+            .admin_console
+            .disks
+            .cards
+            .values()
+            .any(|card| card.loading)
+}
+
+pub(crate) fn can_load(state: &State) -> bool {
+    state.session_active() && !refreshing(state) && !state.admin_console.disks.saving()
+}
+
 pub(crate) fn load(state: RwSignal<State>) {
     let captured = state
         .try_update(|s| {
-            if !s.session_active()
-                || s.admin_console.disks.loading
-                || s.admin_console.disks.saving()
-            {
+            if !can_load(s) {
                 return None;
             }
             let model = &mut s.admin_console.disks;
@@ -450,10 +461,9 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
         })
     });
     view! {
-        <section class="zxs-frame zxs-stack zxs-disk-management-card" data-slot=slot.get_value()>
+        <section class="zxs-frame zxs-stack zxs-disk-management-card" data-slot=slot.get_value() aria-busy=move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_some_and(|card|card.loading)).to_string()>
             <h3 class="zxs-row">{slot.get_value()}</h3>
             <button class="zxs-button" disabled=move ||busy.get()||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_some_and(|card|card.loading)) on:click=move |_|load_card(state,slot.get_value())>{t("刷新硬盘信息","Refresh disk information")}</button>
-            <Show when=move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_some_and(|card|card.loading))><LoadingState/></Show>
             {move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).and_then(|card|card.error.clone())).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
             {move ||details.get().map(|record| {
                 let fields = [
@@ -500,11 +510,9 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
 }
 
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
-    view! {<section class="zxs-stack zxs-disk-management" aria-label=t("硬盘信息与备注","Disk information and notes")>
+    view! {<section class="zxs-stack zxs-disk-management" aria-busy=move ||state.with(|s|s.admin_console.disks.loading).to_string() aria-label=t("硬盘信息与备注","Disk information and notes")>
         <h2 class="zxs-row">{t("硬盘信息与备注","Disk information and notes")}</h2>
         <p class="zxs-row">{t("P01、B01 是逻辑角色，不是机箱盘位。身份字段仅供辨认，不参与存储准入。","P01 and B01 are logical roles, not chassis bays. Identity fields are informational and do not control storage admission.")}</p>
-        <button class="zxs-button" disabled=move ||state.with(|s|!s.session_active()||s.admin_console.disks.loading||s.admin_console.disks.saving()) on:click=move |_|load(state)>{t("刷新硬盘列表","Refresh disk list")}</button>
-        <Show when=move ||state.with(|s|s.admin_console.disks.loading)><LoadingState/></Show>
         {move ||state.with(|s|s.admin_console.disks.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
         <Show when=move ||state.with(|s|s.admin_console.disks.loaded&&s.admin_console.disks.cards.is_empty())><EmptyState message=t("没有已登记的硬盘。","No disks are registered.")/></Show>
         <For each=move ||state.with(|s|s.admin_console.disks.cards.keys().cloned().collect::<Vec<_>>()) key=|slot|slot.clone() children=move |slot|card(state,slot)/>

@@ -11,7 +11,9 @@ use messages::Message;
 use web_interface::{prelude::*, tasks::spawn_local};
 
 pub use disks::DecodeError as DiskDetailsError;
-pub(crate) use disks::load as load_disks;
+pub(crate) use disks::{
+    can_load as can_load_disks, load as load_disks, refreshing as disks_refreshing,
+};
 use request::{Kind, QueryKind};
 pub(crate) use response::ResponseError;
 use response::{Contract, ValidatedAdminResponse, ValidatedPlan};

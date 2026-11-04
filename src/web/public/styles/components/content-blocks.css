@@ -54,3 +54,10 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   &:not([data-zxs-selection="custom"]) .zxs-header-navigation [aria-current="page"] { text-decoration: underline; text-underline-offset: .25em; }
   &:not([data-zxs-selection="custom"]) .zxs-button[aria-pressed="true"] { background: transparent; color: var(--zxs-text-primary); text-decoration: underline; text-underline-offset: .25em; text-decoration-thickness: 1px; }
 }
+
+/* The gap returns to its upper-right resting position when the read settles. */
+.zxs-header-refresh[aria-busy=true] > .zxs-refresh-icon { animation: zxs-refresh-spin .8s linear infinite; transform-origin: center; }
+@keyframes zxs-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .zxs-header-refresh[aria-busy=true] > .zxs-refresh-icon { animation: none; }
+}

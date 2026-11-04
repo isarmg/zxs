@@ -167,12 +167,12 @@ pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
     let is_power = metric.is_power();
     let samples = series_projection(state, metric);
     let presentation = presentation_projection(state);
-    view! {<div class="zxs-metric-chart" node_ref=root aria-label=aria_label>
+    view! {<div class="zxs-metric-chart" node_ref=root aria-label=aria_label aria-busy=move ||state.with(|s|s.monitor.history_loading).to_string()>
         {move ||{
             let (width,height)=dimensions.get();
             let (loading,range)=presentation.get();
             let plot=samples.with(|series| plot(&series.points,series.from,series.to,series.interval,width,height,is_power));
-            if plot.paths.is_empty()&&plot.dots.is_empty(){return view!{<p class="zxs-chart-empty">{if loading{t("正在读取历史…","Loading history…")}else{t("暂无可用历史","No available history yet")}}</p>}.into_any();}
+            if plot.paths.is_empty()&&plot.dots.is_empty(){return (!loading).then(||view!{<p class="zxs-chart-empty">{t("暂无可用历史","No available history yet")}</p>}).into_any();}
             let axis_y=(height-4.).max(14.4);
             view!{<svg viewBox=format!("0 0 {width} {height}") preserveAspectRatio="none" role="img" aria-label=format!("{} · {}",label,range)>
                 <title>{format!("{} · {} · {}",label,range,t("空缺表示未采样或不可用，不表示零。","Gaps indicate missing or unavailable samples, not zero."))}</title>

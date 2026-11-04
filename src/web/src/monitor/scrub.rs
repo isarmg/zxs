@@ -6,7 +6,7 @@ use crate::{
 };
 use json_codec::Value;
 use web_interface::{
-    components::{ErrorState, Feedback, LoadingState},
+    components::{ErrorState, Feedback},
     i18n::t,
     prelude::*,
     tasks::spawn_local,
@@ -16,7 +16,7 @@ use wire::{Baseline, Completion, Freshness, Outcome, Phase, Status, Trigger};
 #[derive(Clone, Default)]
 pub(super) struct Model {
     observation: Option<Status>,
-    loading: bool,
+    pub(super) loading: bool,
     failure: Option<Feedback>,
 }
 pub(super) fn load(state: RwSignal<State>) {
@@ -191,11 +191,10 @@ fn latest(status: &Status) -> String {
 }
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
-        <article class="zxs-content-panel zxs-frame zxs-frame--inset" data-integrity-scrub="" aria-label=t("完整性巡检", "Full integrity scan")>
+        <article class="zxs-content-panel zxs-frame zxs-frame--inset" data-integrity-scrub="" aria-busy=move ||state.with(|s|s.monitor.scrub.loading).to_string() aria-label=t("完整性巡检", "Full integrity scan")>
             <h2>{t("完整性巡检", "Full integrity scan")}</h2>
             <p>{t("以下为最后查询的巡检状态；存储就绪和写入成功不等于全池完整性检查。", "This is the last queried scan status; storage readiness and successful writes are not full-pool integrity checks.")}</p>
             {move || state.with(|s| s.monitor.scrub.failure.clone()).map(|error| view! { <ErrorState message=error.message request_id=error.request_id/> })}
-            <Show when=move || state.with(|s| s.monitor.scrub.loading && s.monitor.scrub.observation.is_none())><LoadingState/></Show>
             <p role="status" data-integrity-freshness=move || state.with(|s| freshness_key(s.monitor.scrub.observation.as_ref()))>{move || state.with(|s| freshness(s.monitor.scrub.observation.as_ref()))}</p>
             {move || state.with(|s| s.monitor.scrub.observation.as_ref().map(|status| view! {
                 <p>{phase(status)}</p>

@@ -5,9 +5,7 @@ use crate::{
     ui::{State, current_session, fail, feedback},
 };
 use json_codec::Value;
-use web_interface::components::{
-    EmptyState, ErrorState, Feedback, LoadingState, Select, SelectOption,
-};
+use web_interface::components::{EmptyState, ErrorState, Feedback, Select, SelectOption};
 use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
@@ -169,10 +167,9 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     });
     let selected = Signal::derive(move || state.with(|s| s.activity.disk.clone()));
     let visible_events = visible_events(state);
-    view! {<section class="zxs-content-stack zxs-history-page zxs-stack">
+    view! {<section class="zxs-content-stack zxs-history-page zxs-stack" aria-busy=move ||state.with(|s|s.activity.loading).to_string()>
         <p class="zxs-row">{t("显示最近 200 条已提交的文件操作。选择文件可查看它的版本和分支。","The latest 200 committed file operations are shown. Select a file to view its versions and branches.")}</p>
-        <div class="zxs-history-toolbar zxs-flow zxs-flow--end zxs-surface-end"><Select label=t("硬盘","Disk") options=options value=selected on_change=Callback::new(move |disk:String|state.update(|s|s.activity.disk=disk))/></div>
-        <Show when=move ||state.with(|s|s.activity.loading&&!s.activity.loaded)><LoadingState/></Show>
+        <div class="zxs-history-toolbar zxs-flow zxs-flow--end zxs-surface-end"><Select label=t("硬盘","Disk") show_label=false options=options value=selected on_change=Callback::new(move |disk:String|state.update(|s|s.activity.disk=disk))/></div>
         {move ||state.with(|s|s.activity.failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
         <Show when=move || !visible_events.with(Vec::is_empty)><div class="zxs-content-panel zxs-history-list-panel zxs-frame zxs-stack zxs-stack--flush"><ul class="zxs-activity-list zxs-history-list" aria-label=t("文件操作记录","File operation history")>{move ||{
             visible_events.get().into_iter().map(|event|{
