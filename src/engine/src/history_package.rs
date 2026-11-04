@@ -510,7 +510,7 @@ pub(crate) fn bound_history_objects_with_roots_at(
     })
 }
 
-fn bound_history_objects_with(
+pub(crate) fn bound_history_objects_with(
     candidate: &Candidate,
     admitted: Option<&AdmittedState>,
     mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
@@ -631,6 +631,10 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
         &package.join("publication.json"),
         MAX_METADATA,
     )?)?;
+    if proof.candidate.generation().is_some() {
+        let authority: crate::engine::membership_transition::pending::activation::PortableAuthority = read_json(&package.join("membership-generation.json"))?;
+        authority.verify_candidate(&proof.candidate)?;
+    }
     let root = AuthenticatedMetadataObject::authenticate(
         "history-manifest",
         &proof.manifest_hash,
@@ -727,7 +731,11 @@ impl Engine {
         for disk in &members {
             for (record, _) in self
                 .metadata_integrity
-                .observe(scan_at(&self.disk_resources.get(disk)?.root, disk))?
+                .observe(scan_configured_at(
+                    &self.disk_resources.get(disk)?.root,
+                    disk,
+                    &self.config,
+                ))?
                 .records
                 .into_iter()
                 .rev()
@@ -860,6 +868,17 @@ impl Engine {
                     package_object(&staging, object.kind(), object.hash())?
                 };
                 write_atomic(&path, object.bytes(), false)?;
+            }
+            if proof.candidate.generation().is_some() {
+                let generation = self
+                    .config
+                    .generation()
+                    .expect("invariant: exported generation candidate was admitted");
+                write_json(
+                    &staging.join("membership-generation.json"),
+                    &generation.portable,
+                    false,
+                )?;
             }
             write_json(&staging.join("publication.json"), &proof, false)?;
             sync_dir(&staging)?;

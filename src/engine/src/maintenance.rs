@@ -441,6 +441,7 @@ impl Engine {
         Ok(())
     }
     pub(crate) fn cleanup_purged(&mut self) -> Result<()> {
+        self.require_unfenced_membership()?;
         self.require_no_commit_preparation()?;
         if !self
             .state
@@ -459,9 +460,11 @@ impl Engine {
             first_error,
         } = self.trusted_evidence_members();
         for member in &members {
-            let scanned = self
-                .metadata_integrity
-                .observe(scan_at(&self.disk_resources.get(member)?.root, member))?;
+            let scanned = self.metadata_integrity.observe(scan_configured_at(
+                &self.disk_resources.get(member)?.root,
+                member,
+                &self.config,
+            ))?;
             if let Some((record, _)) = scanned.records.iter().rev().find(|(r, _)| {
                 r.sequence == self.state.sequence && r.record_type == RecordType::Publication
             }) {
@@ -587,7 +590,7 @@ impl Engine {
                     .expect("invariant: an admitted cleanup slot retains its disk handle");
                 let root = &handle.root;
                 let dir = version_dir(d, &v.history_tree_id, id);
-                match root.directory(&dir) {
+                match root.directory_identity(&dir) {
                     Ok(_) => {}
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -600,13 +603,9 @@ impl Engine {
                 root.write_json(&dir.join("purged.json"), &tombstone, true)?;
                 let content =
                     crate::container_storage::content_path_at(root, &dir, v, &mut |_| Ok(()))?;
-                match root.remove_file(&content) {
-                    Ok(()) => root.sync_dir(content.parent().expect("content parent"))?,
-                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
-                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
-                        if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                }
+                // Unlink and its parent-directory sync share one admission;
+                // cancellation cannot retire the writer before durability.
+                root.remove_file_if_present_synced(&content)?;
             }
         }
         Ok(())

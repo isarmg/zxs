@@ -414,6 +414,13 @@ impl Session {
             Some(Handle::Write(_)) => return Err(ApiError::unsupported()),
             None => unreachable!("invariant: read authorization admitted this handle"),
         };
+        // Version authorization concerns metadata; it does not admit disk I/O.
+        // Check even a cached/empty read so an idle handle cannot resurrect a
+        // cancelled source after the gate has closed its payload descriptor.
+        if let Err(error) = content.check_running() {
+            self.read_cache = None;
+            return Err(error);
+        }
         if length == 0 || offset >= content.size {
             return Ok(bytes::Bytes::new());
         }

@@ -216,7 +216,7 @@ impl<'a> PlanningContext<'a> {
         {
             result["branch_generation"] = json!(branch.generation.to_string());
         }
-        result["membership_epoch"] = json!("1");
+        result["membership_epoch"] = json!(self.config.membership_epoch().to_string());
         let mut protection = Vec::new();
         for p in &prepared {
             let mut slots = Vec::new();

@@ -11,8 +11,13 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod admission;
+pub use admission::DiskFile;
+pub(crate) use admission::{DiskIoBinding, DiskIoLease, JournalIo, UploadFinish, UploadIo};
 mod owned;
-pub(crate) use owned::{DiskHandle, DiskResources, DiskRoot};
+pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
+mod fencing;
+pub(crate) use fencing::{DiskWriter, FenceOwner, WriterLocks};
 
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     e.into()
@@ -67,6 +72,8 @@ pub(crate) struct DiskSeal {
 pub(crate) enum DiskSealFormat {
     #[serialization(rename = "managed-directory")]
     ManagedDirectory,
+    #[serialization(rename = "membership-generation")]
+    MembershipGeneration { authority_hash: String },
 }
 
 /// Add identity context only after bounded file I/O has succeeded.
@@ -172,7 +179,8 @@ pub(crate) fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     read_file_bytes(open_regular(path)?, maximum)
 }
 /// Apply the same metadata bound to an already validated, held regular file.
-pub(crate) fn read_file_bytes(mut file: File, maximum: usize) -> Result<Vec<u8>> {
+pub(crate) fn read_file_bytes(file: impl Into<crate::ReadFile>, maximum: usize) -> Result<Vec<u8>> {
+    let mut file = file.into();
     if file.metadata()?.len() > maximum as u64 {
         return Err(Error::new(
             ErrorCode::ResourceLimit,
@@ -361,19 +369,60 @@ pub(crate) fn full_copy(
 }
 
 /// Owns the freshly written, verified and synced output until installation.
-#[derive(Debug)]
 pub(crate) struct VerifiedCopy<'a> {
-    file: File,
+    file: ReadFile,
     version: &'a FileVersion,
     checksums: ChecksumManifest,
+    stamp: crate::file_stamp::FileStamp,
+}
+
+impl std::fmt::Debug for VerifiedCopy<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VerifiedCopy")
+            .field("version", &self.version)
+            .field("stamp", &self.stamp)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> VerifiedCopy<'a> {
+    fn new(
+        file: ReadFile,
+        version: &'a FileVersion,
+        checksums: ChecksumManifest,
+    ) -> std::result::Result<Self, CopyFailure> {
+        let stamp = crate::file_stamp::FileStamp::from_metadata(&file.metadata()?);
+        Ok(Self {
+            file,
+            version,
+            checksums,
+            stamp,
+        })
+    }
+
     pub(crate) fn checksums(&self) -> &ChecksumManifest {
         &self.checksums
     }
 
-    pub(crate) fn into_parts(self) -> (&'a FileVersion, File) {
+    pub(crate) fn check_at(&self, root: &DiskRoot, path: &Path) -> Result<()> {
+        use crate::file_stamp::FileStamp;
+        if FileStamp::from_metadata(&self.file.metadata()?) != self.stamp
+            || FileStamp::from_metadata(&root.open_read_regular(path)?.metadata()?) != self.stamp
+        {
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "copied payload changed before installation",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn version(&self) -> &'a FileVersion {
+        self.version
+    }
+
+    pub(crate) fn into_parts(self) -> (&'a FileVersion, ReadFile) {
         (self.version, self.file)
     }
 }
@@ -411,7 +460,7 @@ impl From<storage_contract::Error> for CopyFailure {
 }
 
 pub(crate) fn verified_full_copy<'a>(
-    source: File,
+    source: impl std::os::unix::fs::FileExt,
     destination: &Path,
     version: &'a FileVersion,
     max_bytes: u64,
@@ -423,48 +472,21 @@ pub(crate) fn verified_full_copy<'a>(
         max_bytes,
         Some(version),
     )
-    .map(|(_, _, checksums, file)| VerifiedCopy {
-        file,
-        version,
-        checksums,
-    })
+    .and_then(|(_, _, checksums, file)| VerifiedCopy::new(file.into(), version, checksums))
 }
 
 pub(crate) fn verified_full_copy_at<'a>(
     root: &DiskRoot,
-    source: File,
+    source: impl std::os::unix::fs::FileExt,
     destination: &Path,
     version: &'a FileVersion,
     max_bytes: u64,
 ) -> std::result::Result<VerifiedCopy<'a>, CopyFailure> {
-    let parent = destination
-        .parent()
-        .expect("invariant: payload destination has a parent");
-    root.private_dir(parent)?;
-    let directory = root.directory(parent)?;
-    let name = EntryName::new(
-        destination
-            .file_name()
-            .expect("invariant: payload destination has a name"),
-    )
-    .map_err(fs_error)?;
-    full_copy_checked(
-        source,
-        &directory,
-        &name,
-        version.checksum_chunk_bytes,
-        max_bytes,
-        Some(version),
-    )
-    .map(|(_, _, checksums, file)| VerifiedCopy {
-        file,
-        version,
-        checksums,
-    })
+    root.verified_copy(source, destination, version, max_bytes)
 }
 
 fn full_copy_to_path(
-    source: File,
+    source: impl std::os::unix::fs::FileExt,
     destination: &Path,
     chunk_bytes: u32,
     max_bytes: u64,
@@ -504,6 +526,7 @@ fn full_copy_to_path(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn full_copy_held(
     source: File,
     directory: &OpenAt2Root,
@@ -522,19 +545,71 @@ pub(crate) fn full_copy_held(
     .map_err(CopyFailure::into_error)
 }
 
+/// The observer receives identity evidence, never a raw file capability. Upload
+/// cleanup can therefore own the published scratch even if its final fsync fails.
+enum FullCopyProgress {
+    Check,
+    Created {
+        name: EntryName,
+        identity: platform_io::fs_safety::linux::FileIdentity,
+    },
+    Published,
+}
+
+fn full_copy_held_observed(
+    source: &File,
+    directory: &OpenAt2Root,
+    destination_name: &EntryName,
+    chunk_bytes: u32,
+    max_bytes: u64,
+    observe: &mut impl FnMut(FullCopyProgress) -> Result<()>,
+) -> Result<(u64, ContentHash, ChecksumManifest, File)> {
+    full_copy_checked_observed(
+        source,
+        directory.directory(),
+        destination_name,
+        chunk_bytes,
+        max_bytes,
+        None,
+        observe,
+    )
+    .map_err(CopyFailure::into_error)
+}
+
 fn full_copy_checked(
-    source: File,
+    source: impl std::os::unix::fs::FileExt,
     directory: &File,
     destination_name: &EntryName,
     chunk_bytes: u32,
     max_bytes: u64,
     expected: Option<&FileVersion>,
 ) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
-    let temporary = format!(".zxs-full-{}", new_id("req")?);
+    full_copy_checked_observed(
+        &source,
+        directory,
+        destination_name,
+        chunk_bytes,
+        max_bytes,
+        expected,
+        &mut |_| Ok(()),
+    )
+}
+
+fn full_copy_checked_observed(
+    source: &impl std::os::unix::fs::FileExt,
+    directory: &File,
+    destination_name: &EntryName,
+    chunk_bytes: u32,
+    max_bytes: u64,
+    expected: Option<&FileVersion>,
+    observe: &mut impl FnMut(FullCopyProgress) -> Result<()>,
+) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
+    observe(FullCopyProgress::Check)?;
+    let temporary = EntryName::new(format!(".zxs-full-{}", new_id("req")?)).map_err(fs_error)?;
     let mut target = File::from(
         rustix::fs::openat(
             directory,
-            temporary.as_str(),
+            temporary.as_os_str(),
             rustix::fs::OFlags::CREATE
                 | rustix::fs::OFlags::EXCL
                 | rustix::fs::OFlags::WRONLY
@@ -544,7 +619,14 @@ fn full_copy_checked(
         )
         .map_err(std::io::Error::from)?,
     );
+    let mut identity = None;
     let result = (|| {
+        let created = platform_io::fs_safety::linux::FileIdentity::from_fd(&target)?;
+        identity = Some(created);
+        observe(FullCopyProgress::Created {
+            name: temporary.clone(),
+            identity: created,
+        })?;
         let mut full = blake3::Hasher::new();
         let mut chunks = Vec::new();
         let mut size = 0u64;
@@ -552,9 +634,11 @@ fn full_copy_checked(
         loop {
             let mut used = 0;
             while used < buf.len() {
+                observe(FullCopyProgress::Check)?;
+                let end = used + (buf.len() - used).min(64 * 1024);
                 let n = std::os::unix::fs::FileExt::read_at(
-                    &source,
-                    &mut buf[used..],
+                    source,
+                    &mut buf[used..end],
                     size + used as u64,
                 )
                 .map_err(|error| CopyFailure::Source(error.into()))?;
@@ -578,7 +662,10 @@ fn full_copy_checked(
                     "file exceeds configured maximum",
                 )));
             }
-            target.write_all(&buf[..used])?;
+            for block in buf[..used].chunks(64 * 1024) {
+                observe(FullCopyProgress::Check)?;
+                target.write_all(block)?;
+            }
             full.update(&buf[..used]);
             chunks.push(*blake3::hash(&buf[..used]).as_bytes());
         }
@@ -600,35 +687,69 @@ fn full_copy_checked(
                 "copied content differs from the published manifest",
             )));
         }
+        observe(FullCopyProgress::Check)?;
         target.set_permissions(fs::Permissions::from_mode(0o400))?;
         // Persist the complete bytes and final mode together before publishing
         // the name. The rename still needs its own parent-directory barrier.
+        observe(FullCopyProgress::Check)?;
         target.sync_all()?;
+        observe(FullCopyProgress::Check)?;
         rustix::fs::renameat_with(
             directory,
-            temporary.as_str(),
+            temporary.as_os_str(),
             directory,
             destination_name.as_os_str(),
             rustix::fs::RenameFlags::NOREPLACE,
         )
         .map_err(std::io::Error::from)?;
+        observe(FullCopyProgress::Published)?;
         directory.sync_all()?;
+        observe(FullCopyProgress::Check)?;
         Ok((size, hash, checksums))
     })();
     match result {
         Ok((size, hash, checksums)) => Ok((size, hash, checksums, target)),
         Err(operation) => {
-            match rustix::fs::unlinkat(directory, temporary.as_str(), rustix::fs::AtFlags::empty())
-            {
-                Ok(()) | Err(rustix::io::Errno::NOENT) => Err(operation),
+            // If fstat itself failed, no pathname has a proven cleanup identity.
+            // Preserve that temporary and return the concrete original failure.
+            let Some(identity) = identity else {
+                return Err(operation);
+            };
+            match remove_owned_file(directory, &temporary, identity) {
+                Ok(()) => Err(operation),
                 Err(cleanup) => Err(CopyFailure::Destination(Error::Cleanup {
                     operation: Box::new(operation.into_error()),
-                    cleanup: cleanup.into(),
+                    cleanup,
                 })),
             }
         }
     }
 }
+/// A private scratch name can be replaced between preparation and cleanup.
+/// Never delete a different inode merely because it now has our former name.
+fn remove_owned_file(
+    directory: &File,
+    name: &EntryName,
+    identity: platform_io::fs_safety::linux::FileIdentity,
+) -> std::io::Result<()> {
+    let stat = match rustix::fs::statat(
+        directory,
+        name.as_os_str(),
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(stat) => stat,
+        Err(rustix::io::Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if stat.st_dev != identity.device || stat.st_ino != identity.inode {
+        return Ok(());
+    }
+    match rustix::fs::unlinkat(directory, name.as_os_str(), rustix::fs::AtFlags::empty()) {
+        Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(crate) fn verify_payload(directory: &Path, version: &FileVersion) -> Result<()> {
     verify_payload_held(directory, version).map(|_| ())
 }
@@ -636,7 +757,7 @@ pub(crate) fn verify_payload(directory: &Path, version: &FileVersion) -> Result<
 pub(crate) fn open_payload(
     directory: &Path,
     version: &FileVersion,
-) -> Result<(File, ChecksumManifest)> {
+) -> Result<(ReadFile, ChecksumManifest)> {
     let directory = absolute_path(directory)?;
     let history = directory.parent().and_then(Path::parent).ok_or_else(|| {
         Error::new(
@@ -653,12 +774,12 @@ pub(crate) fn open_payload_at(
     root: &DiskRoot,
     directory: &Path,
     version: &FileVersion,
-) -> Result<(File, Vec<u8>, ChecksumManifest)> {
+) -> Result<(ReadFile, Vec<u8>, ChecksumManifest)> {
     let checks = read_authenticated_checksums_at(root, directory, version)?;
     let manifest = decode_authenticated_checksums(&checks, version)?;
     let path =
         crate::container_storage::content_path_at(root, directory, version, &mut |_| Ok(()))?;
-    let file = root.open_regular(&path)?;
+    let file = root.open_read_regular(&path)?;
     if file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
             ErrorCode::ChecksumMismatch,
@@ -694,7 +815,7 @@ pub(crate) fn read_authenticated_checksums_at(
     version: &FileVersion,
 ) -> Result<Vec<u8>> {
     let length = checksum_manifest_length(version)?;
-    let mut file = root.open_regular(&directory.join("checksums.bin"))?;
+    let mut file = root.open_read_regular(&directory.join("checksums.bin"))?;
     if file.metadata()?.len() != length as u64 {
         return Err(Error::new(
             ErrorCode::ChecksumMismatch,
@@ -702,7 +823,9 @@ pub(crate) fn read_authenticated_checksums_at(
         ));
     }
     let mut checks = vec![0; length];
-    file.read_exact(&mut checks)?;
+    if read_observed_fill(&mut file, &mut checks, &mut |_| Ok(()))? != length {
+        return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+    }
     if file.read(&mut [0; 1])? != 0
         || blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash
     {
@@ -759,8 +882,8 @@ pub(crate) fn open_payload_file_observed_at(
     directory: &Path,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<File> {
-    let file = root.open_regular(&crate::container_storage::content_path_at(
+) -> Result<ReadFile> {
+    let file = root.open_read_regular(&crate::container_storage::content_path_at(
         root, directory, version, observe,
     )?)?;
     if file.metadata()?.len() != version.logical_size {
@@ -772,7 +895,7 @@ pub(crate) fn open_payload_file_observed_at(
     Ok(file)
 }
 
-pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Result<File> {
+pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Result<ReadFile> {
     let (file, manifest) = open_payload(directory, version)?;
     verify_open_payload(file, manifest, version, usize::MAX, &mut |_| Ok(()))
 }
@@ -784,28 +907,28 @@ pub(crate) fn verify_payload_held_with(
     directory: &Path,
     version: &FileVersion,
     mut checkpoint: impl FnMut() -> Result<()>,
-) -> Result<File> {
+) -> Result<ReadFile> {
     checkpoint()?;
     let (file, manifest) = open_payload(directory, version)?;
     verify_open_payload_observed(file, manifest, version, &mut |_| checkpoint())
 }
 
 pub(crate) fn verify_open_payload_observed(
-    file: File,
+    file: ReadFile,
     manifest: ChecksumManifest,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<File> {
+) -> Result<ReadFile> {
     verify_open_payload(file, manifest, version, 64 * 1024, observe)
 }
 
 fn verify_open_payload(
-    mut file: File,
+    mut file: ReadFile,
     manifest: ChecksumManifest,
     version: &FileVersion,
     maximum_read: usize,
     observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<File> {
+) -> Result<ReadFile> {
     let mut full = blake3::Hasher::new();
     let mut buffer = vec![0u8; manifest.chunk_bytes as usize];
     let mut remaining = manifest.logical_size;
@@ -846,7 +969,7 @@ pub(crate) struct VerifiedExisting<'a> {
     version: &'a FileVersion,
     directory: PathBuf,
     path: PathBuf,
-    file: File,
+    file: ReadFile,
 }
 impl<'a> VerifiedExisting<'a> {
     #[cfg(test)]
@@ -896,8 +1019,8 @@ impl<'a> VerifiedExisting<'a> {
             "invariant: install consumes its admitted directory"
         );
         if path != self.path
-            || FileIdentity::from_fd(root.open_regular(path)?)?
-                != FileIdentity::from_fd(&self.file)?
+            || FileIdentity::from_metadata(&root.open_read_regular(path)?.metadata()?)
+                != FileIdentity::from_metadata(&self.file.metadata()?)
         {
             return Err(Error::new(
                 ErrorCode::PreparationStale,
@@ -928,13 +1051,22 @@ pub(crate) fn identity(config: &ValidatedConfig, disk: &DiskConfig) -> Result<Di
     Ok(seal_for_root(config, disk, &m))
 }
 
-fn identity_at(config: &ValidatedConfig, disk: &DiskConfig, root: &File) -> Result<DiskSeal> {
+pub(crate) fn identity_at(
+    config: &ValidatedConfig,
+    disk: &DiskConfig,
+    root: &File,
+) -> Result<DiskSeal> {
     Ok(seal_for_root(config, disk, &root.metadata()?))
 }
 
 fn seal_for_root(config: &ValidatedConfig, disk: &DiskConfig, metadata: &fs::Metadata) -> DiskSeal {
     DiskSeal {
-        format: DiskSealFormat::ManagedDirectory,
+        format: match config.generation_hash() {
+            None => DiskSealFormat::ManagedDirectory,
+            Some(hash) => DiskSealFormat::MembershipGeneration {
+                authority_hash: hash.to_owned(),
+            },
+        },
         pool_id: config.pool_id.clone(),
         disk_id: disk.disk_id.clone(),
         slot_id: disk.slot_id.clone(),

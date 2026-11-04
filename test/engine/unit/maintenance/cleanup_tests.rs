@@ -2,6 +2,9 @@
 use super::*;
 use std::{io::Read, path::PathBuf};
 
+#[path = "io_tail_tests.rs"]
+mod io_tail_tests;
+
 fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> String {
     let workspace = engine.create_workspace(branch, "admin").unwrap();
     engine
@@ -403,4 +406,51 @@ fn cleanup_rechecks_a_target_seal_after_publication_evidence_admission() {
         .unwrap();
     assert!(!content.exists());
     assert!(directory.join("purged.json").is_file());
+}
+
+#[test]
+fn membership_anchor_isolation_keeps_rejected_purge_target_untouched() {
+    let (temporary, mut engine, repo, _cut, first, _last) = fixture();
+    let plan = engine
+        .create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin")
+        .unwrap();
+    let (blocker, payloads) = blocked_cleanup(&engine, &first);
+    let operation = OperationId::generate().unwrap();
+    assert!(
+        engine
+            .commit_plan(&plan.plan_id, "admin", operation)
+            .is_err()
+    );
+    fs::remove_dir(blocker).unwrap();
+    let rejected = engine.config.disks[2].clone();
+    let anchor = rejected.root.join("metadata/pool-membership/config.json");
+    let original_anchor = fs::read(&anchor).unwrap();
+    fs::write(&anchor, b"{").unwrap();
+    let rejected_body = fs::read(&payloads[2]).unwrap();
+    let rejected_journal = fs::read(crate::journal::log_path(&rejected)).unwrap();
+    drop(engine);
+    let recovered = Engine::open(&temporary.path().join("system")).unwrap();
+    assert!(recovered.is_read_only());
+    assert_eq!(recovered.state.content_states[&first], ContentState::Purged);
+    assert!(recovered.disk_resources.available(&rejected).is_none());
+    assert_eq!(fs::read(&payloads[2]).unwrap(), rejected_body);
+    assert_eq!(
+        fs::read(crate::journal::log_path(&rejected)).unwrap(),
+        rejected_journal
+    );
+    assert_eq!(fs::read(&anchor).unwrap(), b"{");
+    for payload in &payloads[..2] {
+        assert!(
+            !payload.exists(),
+            "healthy targets may finish the published cleanup"
+        );
+    }
+    drop(recovered);
+    fs::write(anchor, original_anchor).unwrap();
+    let reopened = Engine::open(&temporary.path().join("system")).unwrap();
+    assert!(!reopened.is_read_only());
+    assert!(
+        !payloads[2].exists(),
+        "verified reopen can finish the old published cleanup"
+    );
 }

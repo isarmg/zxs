@@ -308,7 +308,7 @@ impl Engine {
             std::sync::Arc::new(PublishedStateBase {
                 state: std::sync::Arc::downgrade(&self.state),
                 metadata_epoch,
-                snapshot: candidate.snapshot_hash,
+                snapshot: candidate.snapshot_hash.clone(),
                 sequence: self.state.sequence,
                 config_hash,
                 config: self.config.clone(),
@@ -401,7 +401,7 @@ impl Engine {
                     &evidence.version.history_tree_id,
                     &evidence.version.version_id,
                 );
-                match handle.root.directory(&dir) {
+                match handle.root.directory_identity(&dir) {
                     Ok(_) => {}
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -695,7 +695,7 @@ fn repair_local_proof<T: data_serialization::Serialize>(
 ) -> Result<()> {
     use platform_io::fs_safety::linux::FileIdentity;
     let expected = encode_metadata(value, MAX_METADATA)?;
-    let original = match root.open_regular(path) {
+    let original = match root.open_read_regular(path) {
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
         | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
             if error.kind() == std::io::ErrorKind::NotFound =>
@@ -716,9 +716,9 @@ fn repair_local_proof<T: data_serialization::Serialize>(
     let parent = path.parent().expect("proof parent");
     let quarantine = parent.join("proof-quarantine");
     root.private_dir(&quarantine)?;
-    let source = root.directory(parent)?;
-    let destination = root.directory(&quarantine)?;
-    if FileIdentity::from_fd(&original)? != FileIdentity::from_fd(root.open_regular(path)?)? {
+    if FileIdentity::from_metadata(&original.metadata()?)
+        != FileIdentity::from_metadata(&root.open_read_regular(path)?.metadata()?)
+    {
         return Err(Error::new(
             storage_contract::ErrorCode::UnsafePath,
             "local proof identity changed before repair",
@@ -729,18 +729,10 @@ fn repair_local_proof<T: data_serialization::Serialize>(
         path.file_name().expect("proof name").to_string_lossy(),
         new_id("req")?
     );
-    rustix::fs::renameat_with(
-        &source,
-        path.file_name().expect("proof name"),
-        &destination,
-        name.as_str(),
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(std::io::Error::from)?;
-    destination.sync_all()?;
-    source.sync_all()?;
-    if FileIdentity::from_fd(&original)?
-        != FileIdentity::from_fd(root.open_regular(&quarantine.join(name))?)?
+    let retained = quarantine.join(name);
+    root.rename_noreplace_destination_first_synced(path, &retained)?;
+    if FileIdentity::from_metadata(&original.metadata()?)
+        != FileIdentity::from_metadata(&root.open_read_regular(&retained)?.metadata()?)
     {
         return Err(Error::new(
             storage_contract::ErrorCode::UnsafePath,
@@ -857,6 +849,10 @@ mod history_baseline_tests;
 #[cfg(all(test, feature = "fault-injection"))]
 #[path = "../../../../test/engine/unit/engine/publication/omission_tests.rs"]
 mod omission_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/publication/io_tail_tests.rs"]
+mod io_tail_tests;
 
 impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_publication(
@@ -1020,24 +1016,34 @@ impl crate::engine::PlanningContext<'_> {
                 .reference(),
             "incremental history roots differ from complete projection",
         );
-        let candidate = Candidate {
-            pool_id: self.config.pool_id.clone(),
-            sequence: next.sequence,
-            transaction_id: new_id("tx")?,
-            operation_id: result.operation_id,
-            request_digest: result.request_digest.clone(),
-            previous_snapshot: self.snapshot.clone(),
-            snapshot_hash,
-            versions: prepared
-                .iter()
-                .map(|p| VersionEvidence {
-                    version: p.version.clone(),
-                    placement: p.placement.clone(),
-                })
-                .collect(),
-            metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
-            history_roots: history_basis.reference().clone(),
-        };
+        let candidate = Candidate::new(
+            CandidateData {
+                pool_id: self.config.pool_id.clone(),
+                sequence: next.sequence,
+                transaction_id: match self
+                    .config
+                    .generation()
+                    .and_then(|generation| generation.transaction_id(result.operation_id))
+                {
+                    Some(id) => id,
+                    None => new_id("tx")?,
+                },
+                operation_id: result.operation_id,
+                request_digest: result.request_digest.clone(),
+                previous_snapshot: self.snapshot.clone(),
+                snapshot_hash,
+                versions: prepared
+                    .iter()
+                    .map(|p| VersionEvidence {
+                        version: p.version.clone(),
+                        placement: p.placement.clone(),
+                    })
+                    .collect(),
+                metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
+                history_roots: history_basis.reference().clone(),
+            },
+            self.config.generation_hash(),
+        );
         crate::metadata_budget::preflight_publication_prepared(
             self,
             &candidate,
@@ -1233,19 +1239,9 @@ impl crate::engine::PlanningContext<'_> {
                     )?;
                     root.sync_dir(&staging)?;
                     root.private_dir(directory.parent().expect("version parent"))?;
-                    let staging_parent =
-                        root.directory(staging.parent().expect("staging parent"))?;
-                    let version_parent =
-                        root.directory(directory.parent().expect("version parent"))?;
-                    rustix::fs::renameat_with(
-                        &staging_parent,
-                        staging.file_name().expect("staging name"),
-                        &version_parent,
-                        directory.file_name().expect("version name"),
-                        rustix::fs::RenameFlags::NOREPLACE,
-                    )
-                    .map_err(std::io::Error::from)?;
-                    root.sync_dir(directory.parent().expect("version parent"))?;
+                    // The formal payload is never cleanup scratch after rename.
+                    // Its directory barriers finish under the same admitted owner.
+                    root.rename_noreplace_destination_first_synced(&staging, &directory)?;
                     crate::container_storage::PreparedContent::Copied(copied)
                 }
                 Err(error) => return Err(error),
@@ -1256,7 +1252,7 @@ impl crate::engine::PlanningContext<'_> {
                 crate::container_storage::install_version_content_at(root, &directory, content)?;
             drop(reservation);
             if index + 1 < p.placement.route_slot_ids.len() {
-                source = Some(root.open_regular(&path)?);
+                source = Some(ReadFile::from(root.open_leased_regular(&path)?));
             }
         }
         Ok(())

@@ -6,6 +6,7 @@
 | --- | --- |
 | `engine.rs` | 生命周期、业务准入、操作查询、在克隆状态上组合一次业务变更 |
 | `engine/config.rs` | 拓扑与额度配置、独占操作系统锁 |
+| `engine/disk_registry.rs`、`engine/disk_lifecycle/plan.rs` | 借用当前已准入登记与冻结业务图，生成不执行注销的分页影响预览 |
 | `disk/owned.rs` | 同代磁盘根与身份所有权、盘内 FD 相对 I/O；不持 writer lock |
 | `engine/publication.rs` | 正文准备、精确元数据预检、持久决定与发布屏障 |
 | `engine/recovery.rs` | 仅沿已验证发布前缀回放，协调未完成决定 |
@@ -173,3 +174,9 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 
 新增历史合并祖先验证共用 `business/file_ancestry`：同快照 scoped 图一次构建，merge provenance 扫描一次，BFS visited 去重，按唯一节点/边计费。来源解析先做明确作者/所有候选 head 的廉价证明，再多起点搜索；写入按 reviewed head 分组，多来源共享遍历，全部预验证先于任何派生。全局扫描 header、原始父记录、图容量和累计搜索工作均有独立硬上限；取消覆盖读侧每步。chosen 标签继承也借用单一 base parent 并共用写预算。此优化不改变旧 `/merge` 祖先规则或其资源策略，不把命名、分支派生、健康检查、发布成本声称为常数。数值与失败语义见[历史节点合并](../15-api-and-errors.md#历史节点合并)。
+
+## 可恢复注销的纯影响预览（P1）
+
+`Engine::preview_disk_deregistration` 只回答假设移除一个准确登记后，哪些版本及冻结命名空间 occurrence 仍有其他登记持有者。它不会注销、写恢复入口、停止 I/O、修改 Config/State/索引或把备份升级为主盘。接口是受信本地域 API，应用仍负责当前管理员认证；预览不是执行权限或“可安全删除”结论。实现与后续边界见[纯影响规划](../design/disk-deregistration-preview.md)。
+
+修复与永久损失分类的 I/O 尾部回归源码及后续 GitHub 执行入口见[测试说明](../testing/repair-io-tails.md)。说明中的命令不代表本批已经执行。

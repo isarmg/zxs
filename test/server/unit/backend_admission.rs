@@ -1488,7 +1488,7 @@ fn probe_content() -> Content {
     let mut file = tempfile::tempfile().unwrap();
     std::io::Write::write_all(&mut file, b"abc").unwrap();
     Content {
-        file,
+        file: file.into(),
         size: 3,
         hash: blake3::hash(b"abc").to_hex().to_string(),
         checksum_manifest: None,

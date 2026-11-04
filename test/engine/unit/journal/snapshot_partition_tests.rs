@@ -110,18 +110,21 @@ fn current_snapshot_and_candidate_reject_old_and_unknown_shapes_without_rewritin
     }
     value.as_object_mut().unwrap().remove("business_generation");
     assert!(json_codec::from_value::<Snapshot>(value).is_err());
-    let candidate = Candidate {
-        pool_id: new_id("pool").unwrap(),
-        sequence: 1,
-        transaction_id: new_id("tx").unwrap(),
-        operation_id: storage_contract::OperationId::generate().unwrap(),
-        request_digest: "a".repeat(64),
-        previous_snapshot: None,
-        snapshot_hash: prepared.hash,
-        versions: Vec::new(),
-        metadata_disk_ids: Vec::new(),
-        history_roots: stored_map(&[], json_codec::Map::new()),
-    };
+    let candidate = Candidate::new(
+        CandidateData {
+            pool_id: new_id("pool").unwrap(),
+            sequence: 1,
+            transaction_id: new_id("tx").unwrap(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
+            request_digest: "a".repeat(64),
+            previous_snapshot: None,
+            snapshot_hash: prepared.hash,
+            versions: Vec::new(),
+            metadata_disk_ids: Vec::new(),
+            history_roots: stored_map(&[], json_codec::Map::new()),
+        },
+        None,
+    );
     let mut value = json_codec::to_value(&candidate).unwrap();
     value["additional"] = json_codec::json!(true);
     assert!(json_codec::from_value::<Candidate>(value).is_err());

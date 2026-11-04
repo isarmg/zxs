@@ -58,10 +58,12 @@ pub(crate) fn read<R: Read + Seek>(
         .chain(fallbacks.iter_mut())
         .enumerate()
     {
-        match file
-            .seek(SeekFrom::Start(base))
-            .and_then(|_| file.read_exact(&mut buffer))
-        {
+        match file.seek(SeekFrom::Start(base)).and_then(|_| {
+            for block in buffer.chunks_mut(64 * 1024) {
+                file.read_exact(block)?;
+            }
+            Ok(())
+        }) {
             Ok(()) => {
                 if blake3::hash(&buffer).as_bytes() == expected {
                     verified_source = Some(source);

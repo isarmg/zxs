@@ -4,6 +4,9 @@ use std::{
     io::{Read, Seek},
     path::PathBuf,
 };
+#[path = "io_tail_tests.rs"]
+mod io_tail_tests;
+
 fn pending() -> (tempfile::TempDir, PathBuf, Config, String, OperationId) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");

@@ -1,5 +1,7 @@
 //! zxs HTTP boundary. Storage semantics stay in the synchronous core backend.
 pub mod auth;
+mod content_file;
+pub use content_file::ContentFile;
 #[cfg(any(feature = "core", test))]
 mod content_proof_budget;
 #[cfg(feature = "core")]
@@ -266,18 +268,39 @@ impl UploadSource {
 
 /// A successful content open must hold its core read lease until the body drops.
 pub struct Content {
-    pub fallback_files: Vec<std::fs::File>,
+    pub fallback_files: Vec<ContentFile>,
     pub checksum_manifest: Option<storage_contract::ChecksumManifest>,
-    pub file: std::fs::File,
+    pub file: ContentFile,
     pub size: u64,
     pub hash: String,
     pub lease: Box<dyn Send + Sync>,
     pub download_name: Option<String>,
 }
 impl Content {
-    /// Raw descriptor consumers require a fully verified replica before handoff.
+    /// A cached byte buffer is not permission to resume an offline disk. Select
+    /// an independently admitted replica before continuing an existing stream.
+    pub(crate) fn check_running(&mut self) -> Result<(), ApiError> {
+        let Err(source) = self.file.check_running() else {
+            return Ok(());
+        };
+        for index in 0..self.fallback_files.len() {
+            if self.fallback_files[index].check_running().is_ok() {
+                std::mem::swap(&mut self.file, &mut self.fallback_files[index]);
+                return Ok(());
+            }
+        }
+        Err(ApiError::new(
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
+            storage_contract::ErrorCode::ContentUnavailable,
+            "no running content replica is available",
+        )
+        .with_source(source))
+    }
+
+    /// Whole-file consumers require a fully verified replica before reading.
     /// Range consumers instead verify each emitted chunk from the same buffer.
     pub fn fully_verified(mut self) -> Result<Self, ApiError> {
+        self.check_running()?;
         let Some(manifest) = self.checksum_manifest.as_ref() else {
             return Ok(self);
         };
@@ -305,7 +328,7 @@ impl Content {
 }
 
 fn verify_content_file(
-    file: &mut std::fs::File,
+    file: &mut ContentFile,
     manifest: &storage_contract::ChecksumManifest,
     size: u64,
     hash: &str,
@@ -330,7 +353,9 @@ fn verify_content_file(
     let mut buffer = vec![0; manifest.chunk_bytes as usize];
     for expected in &manifest.chunks {
         let length = remaining.min(manifest.chunk_bytes as u64) as usize;
-        file.read_exact(&mut buffer[..length])?;
+        for block in buffer[..length].chunks_mut(64 * 1024) {
+            file.read_exact(block)?;
+        }
         if blake3::hash(&buffer[..length]).as_bytes() != expected {
             return Err(corrupt());
         }

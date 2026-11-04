@@ -8,7 +8,6 @@ use crate::{disk::*, *};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, btree_map::Entry},
-    fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -16,6 +15,24 @@ use std::{
 enum WorkspaceLocation {
     System(DiskRoot),
     Primary(DiskRoot),
+}
+
+enum StagedSourceLocation<'a> {
+    System(PathBuf),
+    Managed(&'a DiskConfig, PathBuf),
+}
+impl StagedSourceLocation<'_> {
+    fn path(&self) -> &Path {
+        match self {
+            Self::System(path) | Self::Managed(_, path) => path,
+        }
+    }
+    fn owner(&self) -> Option<&str> {
+        match self {
+            Self::System(_) => None,
+            Self::Managed(disk, _) => Some(&disk.disk_id),
+        }
+    }
 }
 
 impl WorkspaceLocation {
@@ -49,8 +66,13 @@ impl WorkspaceSource<'_> {
         &self.path
     }
 
-    fn open(&self) -> Result<fs::File> {
-        self.location.root().open_regular(&self.path)
+    fn open(&self) -> Result<crate::ReadFile> {
+        match self.location {
+            WorkspaceLocation::System(root) => root.open_regular(&self.path).map(Into::into),
+            WorkspaceLocation::Primary(root) => {
+                root.open_leased_regular(&self.path).map(Into::into)
+            }
+        }
     }
 }
 
@@ -394,19 +416,17 @@ impl Engine {
                     .ok_or_else(|| recovery_required("workspace staging resource is unavailable"))?
                     .open()?;
                 let digest = file.content_hash.digest();
-                platform_io::payload::verify_full(
-                    &mut source,
-                    platform_io::payload::Expectation {
+                source
+                    .verify_full(platform_io::payload::Expectation {
                         bytes: file.size,
                         blake3: Some(digest),
-                    },
-                )
-                .map_err(|source| {
-                    Error::from(source).context(
-                        ErrorCode::RecoveryRequired,
-                        "workspace staging bytes do not match surviving mirror",
-                    )
-                })?;
+                    })
+                    .map_err(|source| {
+                        Error::from(source).context(
+                            ErrorCode::RecoveryRequired,
+                            "workspace staging bytes do not match surviving mirror",
+                        )
+                    })?;
             }
         }
         Ok(LoadedWorkspace {
@@ -724,9 +744,12 @@ impl Engine {
             ));
         }
         for file in workspace.files.values() {
+            let projected = self
+                .planning_context()
+                .project_staged_path(&workspace.workspace_id, &file.source_path)?;
             if let Some(primary) = &primary
-                && !file.source_path.starts_with(primary)
-                && !file.source_path.starts_with(&local)
+                && !projected.path().starts_with(primary)
+                && !projected.path().starts_with(&local)
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::UnsafePath,
@@ -815,27 +838,39 @@ impl Engine {
                 damage.get_or_insert(error);
             }
             for member in &members {
-                for (record, _) in self
-                    .metadata_integrity
-                    .observe(crate::journal::scan_at(
-                        &self.disk_resources.get(member)?.root,
-                        member,
-                    ))?
+                let scanned =
+                    self.metadata_integrity
+                        .observe(crate::journal::scan_configured_at(
+                            &self.disk_resources.get(member)?.root,
+                            member,
+                            &self.config,
+                        ))?;
+                let mut candidates = scanned
                     .records
+                    .into_iter()
+                    .filter(|(record, _)| {
+                        record.sequence == operation.sequence
+                            && record.record_type == RecordType::Publication
+                    })
+                    .map(|(record, _)| record.candidate_hash)
+                    .collect::<Vec<_>>();
+                if let Some(hash) = self
+                    .config
+                    .generation()
+                    .and_then(|generation| generation.historical_candidate(operation.sequence))
                 {
-                    if record.sequence != operation.sequence
-                        || record.record_type != RecordType::Publication
-                    {
-                        continue;
-                    }
+                    candidates.push(hash.to_owned());
+                }
+                for hash in candidates {
                     let candidate: crate::journal::Candidate =
                         crate::publication_evidence::verified_object_observed_at(
                             &self.disk_resources,
                             &members,
                             "candidate",
-                            &record.candidate_hash,
+                            &hash,
                             &mut |error| self.metadata_integrity.fault(error),
                         )?;
+                    self.verify_candidate_membership(&candidate)?;
                     if candidate.operation_id != request.operation_id
                         || candidate.sequence != operation.sequence
                     {
@@ -1164,7 +1199,20 @@ impl<'a> crate::engine::PlanningContext<'a> {
         workspace: &str,
         file: &StagedFile,
     ) -> Result<Option<ReadSource>> {
-        let path = &file.source_path;
+        match self.project_staged_path(workspace, &file.source_path)? {
+            StagedSourceLocation::System(path) => Ok(Some(ReadSource::external(path))),
+            StagedSourceLocation::Managed(disk, path) => Ok(self
+                .disk_resources
+                .available(disk)
+                .map(|owner| ReadSource::on_disk(owner, path))),
+        }
+    }
+
+    fn project_staged_path(
+        &self,
+        workspace: &str,
+        path: &Path,
+    ) -> Result<StagedSourceLocation<'a>> {
         if path
             .components()
             .any(|part| matches!(part, Component::ParentDir))
@@ -1175,22 +1223,43 @@ impl<'a> crate::engine::PlanningContext<'a> {
             ));
         }
         let local = self.root.join("workspaces").join(workspace);
-        if path.strip_prefix(&local).is_ok() {
-            return Ok(Some(ReadSource::external(path.clone())));
-        }
+        let mut selected = path
+            .strip_prefix(&local)
+            .is_ok()
+            .then(|| StagedSourceLocation::System(path.to_owned()));
         for disk in &self.config.disks {
-            let directory = disk.root.join("staging/workspaces").join(workspace);
-            if path.strip_prefix(directory).is_ok() {
-                return Ok(self
-                    .disk_resources
-                    .available(disk)
-                    .map(|owner| ReadSource::on_disk(owner, path.clone())));
+            let aliases = self
+                .config
+                .generation()
+                .and_then(|generation| generation.historical_workspace_roots(disk));
+            for root in std::iter::once(&disk.root).chain(aliases.into_iter().flatten()) {
+                let directory = root.join("staging/workspaces").join(workspace);
+                if let Ok(relative) = path.strip_prefix(&directory) {
+                    let projected = StagedSourceLocation::Managed(
+                        disk,
+                        disk.root
+                            .join("staging/workspaces")
+                            .join(workspace)
+                            .join(relative),
+                    );
+                    if selected.as_ref().is_some_and(|previous| {
+                        previous.owner() != projected.owner() || previous.path() != projected.path()
+                    }) {
+                        return Err(Error::new(
+                            ErrorCode::UnsafePath,
+                            "workspace historical locator has ambiguous owner or relative address",
+                        ));
+                    }
+                    selected = Some(projected);
+                }
             }
         }
-        Err(Error::new(
-            ErrorCode::UnsafePath,
-            "workspace staging path escapes owned directory",
-        ))
+        selected.ok_or_else(|| {
+            Error::new(
+                ErrorCode::UnsafePath,
+                "workspace staging path escapes owned directory",
+            )
+        })
     }
 
     pub(crate) fn staged_source(
@@ -1211,7 +1280,7 @@ impl<'a> crate::engine::PlanningContext<'a> {
 // These bounded redundant files may be absent or contain a torn JSON mirror.
 // I/O/permission failures are not evidence of absence or recoverable corruption.
 fn read_workspace_evidence<T: data_serialization::de::DeserializeOwned>(
-    file: Result<fs::File>,
+    file: Result<impl Into<crate::ReadFile>>,
     damage: &mut Option<Error>,
 ) -> Result<Option<T>> {
     let bytes = file.and_then(|file| read_file_bytes(file, MAX_METADATA));

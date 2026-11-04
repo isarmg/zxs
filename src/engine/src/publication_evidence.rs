@@ -157,6 +157,38 @@ fn resolve_verified_snapshot<F: FnMut(&Error)>(
     }
     result
 }
+/// Visit the exact stored snapshot closure without re-encoding, repairing or
+/// admitting a replacement layout. Consumers may stage copies, but this walk
+/// alone is not semantic State admission or a publication/readiness certificate.
+pub(crate) fn visit_snapshot_objects_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    hash: &str,
+    mut visit: impl FnMut(AuthenticatedMetadataObject) -> Result<()>,
+) -> Result<()> {
+    let root = verified_graph_object_at(resources, members, "snapshot", hash)?;
+    let snapshot: Snapshot = json_codec::from_value(root.value().clone())?;
+    validate_snapshot_schema(&snapshot)?;
+    for reference in snapshot
+        .maps
+        .values()
+        .chain(std::iter::once(&snapshot.events))
+    {
+        crate::metadata_map::visit_objects(
+            reference,
+            |kind, hash| verified_graph_object_at(resources, members, kind, hash),
+            &mut visit,
+        )?;
+    }
+    visit(verified_graph_object_at(
+        resources,
+        members,
+        "state-control-auth",
+        snapshot.control_auth.hash(),
+    )?)?;
+    visit(root)
+}
+
 /// A seal has no independently supplied digest: validate its complete receipt
 /// barrier against the exact candidate and publication before accepting a copy.
 pub(crate) fn verified_publication_seal_at(

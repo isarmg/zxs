@@ -366,7 +366,7 @@ fn content(lease: Arc<AtomicUsize>) -> Content {
     Content {
         checksum_manifest: None,
         fallback_files: Vec::new(),
-        file,
+        file: file.into(),
         size: 10,
         hash: "hash".into(),
         lease: Box::new(ReadLease(lease)),
@@ -395,8 +395,8 @@ fn content_to_verify(
 ) -> Content {
     Content {
         checksum_manifest: Some(manifest(bytes)),
-        fallback_files,
-        file,
+        fallback_files: fallback_files.into_iter().map(Into::into).collect(),
+        file: file.into(),
         size: bytes.len() as u64,
         hash: blake3::hash(bytes).to_hex().to_string(),
         lease: Box::new(ReadLease(lease)),
@@ -513,7 +513,7 @@ fn fully_verified_preserves_the_last_failure_in_pop_order() {
 fn fully_verified_without_manifest_preserves_the_existing_content() {
     let dropped = Arc::new(AtomicUsize::new(0));
     let mut content = content(dropped.clone());
-    content.fallback_files.push(payload_file(b"unused"));
+    content.fallback_files.push(payload_file(b"unused").into());
     content.file.seek(SeekFrom::Start(4)).unwrap();
     let mut content = content.fully_verified().unwrap();
     assert!(content.checksum_manifest.is_none());
@@ -568,7 +568,7 @@ async fn verification_failure_after_a_chunk_stays_a_stream_error() {
     let content = Content {
         checksum_manifest: Some(expected),
         fallback_files: Vec::new(),
-        file,
+        file: file.into(),
         size: original.len() as u64,
         hash: blake3::hash(&original).to_hex().to_string(),
         lease: Box::new(ReadLease(dropped.clone())),
@@ -2287,7 +2287,7 @@ async fn opaque_etag_bytes_and_empty_representations_obey_conditions() {
     for method in [Method::GET, Method::HEAD] {
         let mut empty = content(Arc::default());
         empty.size = 0;
-        empty.file.set_len(0).unwrap();
+        empty.file = tempfile::tempfile().unwrap().into();
         let mut headers = HeaderMap::new();
         headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
         headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-0"));
@@ -2302,3 +2302,105 @@ async fn opaque_etag_bytes_and_empty_representations_obey_conditions() {
         );
     }
 }
+
+struct CancellingReader {
+    inner: std::io::Cursor<Vec<u8>>,
+    bytes: Arc<AtomicUsize>,
+    reads_remaining: usize,
+}
+
+impl Read for CancellingReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.reads_remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "disk binding is quiescing",
+            ));
+        }
+        self.reads_remaining -= 1;
+        assert!(buffer.len() <= 64 * 1024);
+        let count = self.inner.read(buffer)?;
+        self.bytes.fetch_add(count, Ordering::SeqCst);
+        Ok(count)
+    }
+}
+
+impl Seek for CancellingReader {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(position)
+    }
+}
+
+#[test]
+fn cancellation_inside_a_large_verified_chunk_uses_only_an_allowed_replica() {
+    for width in [262_144, 4_194_304] {
+        let payload = vec![42; width];
+        let proof = storage_contract::ChecksumManifest {
+            chunk_bytes: width as u32,
+            logical_size: width as u64,
+            chunks: vec![*blake3::hash(&payload).as_bytes()],
+        };
+        let cancelled_bytes = Arc::new(AtomicUsize::new(0));
+        let fallback_bytes = Arc::new(AtomicUsize::new(0));
+        let mut reader = VerifiedRange::new(
+            CancellingReader {
+                inner: std::io::Cursor::new(payload.clone()),
+                bytes: cancelled_bytes.clone(),
+                reads_remaining: 1,
+            },
+            vec![CancellingReader {
+                inner: std::io::Cursor::new(payload.clone()),
+                bytes: fallback_bytes.clone(),
+                reads_remaining: usize::MAX,
+            }],
+            proof,
+            0,
+            width as u64,
+        )
+        .unwrap();
+        assert_eq!(reader.next_chunk().unwrap().unwrap().as_ref(), payload);
+        assert_eq!(cancelled_bytes.load(Ordering::SeqCst), 64 * 1024);
+        assert_eq!(fallback_bytes.load(Ordering::SeqCst), width);
+    }
+}
+
+#[test]
+fn cancellation_without_a_replica_is_terminal_and_exposes_no_partial_chunk() {
+    let payload = vec![42; 262_144];
+    let proof = storage_contract::ChecksumManifest {
+        chunk_bytes: payload.len() as u32,
+        logical_size: payload.len() as u64,
+        chunks: vec![*blake3::hash(&payload).as_bytes()],
+    };
+    let bytes = Arc::new(AtomicUsize::new(0));
+    let mut reader = VerifiedRange::new(
+        CancellingReader {
+            inner: std::io::Cursor::new(payload),
+            bytes: bytes.clone(),
+            reads_remaining: 1,
+        },
+        vec![],
+        proof,
+        0,
+        262_144,
+    )
+    .unwrap();
+    let error = reader.next_chunk().unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(bytes.load(Ordering::SeqCst), 64 * 1024);
+    let cause = std::error::Error::source(
+        error
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<VerifiedChunkUnavailable>()
+            .unwrap(),
+    )
+    .unwrap()
+    .downcast_ref::<std::io::Error>()
+    .unwrap();
+    assert_eq!(cause.kind(), std::io::ErrorKind::PermissionDenied);
+}
+
+#[cfg(feature = "core")]
+#[path = "disk_cancellation_tests.rs"]
+mod disk_cancellation_tests;

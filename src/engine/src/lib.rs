@@ -17,6 +17,15 @@ mod disk;
 mod engine;
 mod file_stamp;
 mod historical_save;
+pub use engine::{
+    DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
+    DiskRegistrationIdentity, DiskRegistryCommitment, FrozenDeregistrationBoundary,
+    HistoricalDiskDefinition, ImpactPage, ImpactPageSize, NamespaceDeregistrationPreview,
+    NamespaceOccurrenceImpact, NamespaceOccurrenceScan, OccurrenceVisibility, PreparedDiskRegistry,
+    RegisteredDisk, RegisteredHolders, RegistrationEffect, RegistrationMode, RegistryExitEffect,
+    RegistryExitRequest, TargetPlacementRole, VerifiedDiskRegistry, VerifiedRegistryCandidate,
+    VerifiedRegistryPublication, VersionDeregistrationImpact, VersionImpactScan,
+};
 pub use engine::{DirectoryHistoryRead, PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod history_package;
 mod journal;
@@ -37,18 +46,24 @@ pub use business::{
     validate_branch_name,
 };
 pub use degraded_recovery::RecoveryPlan;
-pub use disk::{offline_check, offline_export};
+pub use disk::{DiskFile, offline_check, offline_export};
+#[cfg(feature = "fault-injection")]
+pub use engine::DiskQuiesceFault;
 pub use engine::{
     ContentReadPlan, DiskObservation, DiskObservationFailure, DiskObservationPlan,
     DiskObservationStage, Engine, FileHistorySourceRead, HistoryWindowCancellation,
     HistoryWindowRead, IndexFailure, IndexFailureStage, IndexHealth, IntegrityScrubArea,
     IntegrityScrubBatch, IntegrityScrubBatchAdmission, IntegrityScrubCancellation,
     IntegrityScrubCompletion, IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan,
-    IntegrityScrubReport, IntegrityScrubSchedule, IntegrityScrubTarget, MetadataMemberProbe,
-    MetadataView, ObservedDiskStatus, OpenedContent, OperationReadObservation, OperationReadPlan,
-    OperationRecord, RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure,
-    RecoveryWarnings, RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory,
-    WorkspaceInventoryRecord, WorkspaceReadPlan,
+    IntegrityScrubReport, IntegrityScrubSchedule, IntegrityScrubTarget,
+    MembershipArchiveInspection, MembershipControlArchive, MembershipExitAction,
+    MembershipFenceStatus, MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
+    MembershipJournalInspection, MetadataMemberProbe, MetadataView, ObservedDiskStatus,
+    OpenedContent, OperationReadObservation, OperationReadPlan, OperationRecord,
+    PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus, RangeContent,
+    ReadFile, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
+    RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
+    WorkspaceReadPlan, verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

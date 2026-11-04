@@ -57,7 +57,7 @@ impl RecordingBackend {
     ) -> Result<Content, ApiError> {
         self.record(method, Some(identity), arguments)?;
         Ok(Content {
-            file: self.file.try_clone().unwrap(),
+            file: self.file.try_clone().unwrap().into(),
             fallback_files: vec![],
             checksum_manifest: None,
             size: self.file.metadata().unwrap().len(),

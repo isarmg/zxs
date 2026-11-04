@@ -4,7 +4,6 @@ use crate::engine::provenance::MetadataIntegrity;
 use crate::file_stamp::FileStamp;
 use crate::{disk::*, journal::*, *};
 use std::{
-    fs::File,
     io::Read,
     path::{Path, PathBuf},
     sync::{
@@ -76,18 +75,21 @@ pub(super) fn payload_proof_budget() -> Arc<PayloadProofBudget> {
 }
 
 struct HeldFile {
-    file: File,
+    file: DiskFile,
     stamp: FileStamp,
 }
 impl HeldFile {
     fn open(root: &DiskRoot, path: &Path) -> Result<Self> {
-        let file = root.open_regular(path)?;
-        let stamp = FileStamp::of(&file)?;
+        let file = root.open_leased_regular(path)?;
+        let stamp = FileStamp::from_metadata(&file.metadata()?);
         Ok(Self { file, stamp })
     }
     fn validate(&self, root: &DiskRoot, path: &Path) -> Result<()> {
-        let current = root.open_regular(path)?;
-        if FileStamp::of(&self.file)? != self.stamp || FileStamp::of(&current)? != self.stamp {
+        self.file.check_running()?;
+        let current = root.open_leased_regular(path)?;
+        if FileStamp::from_metadata(&self.file.metadata()?) != self.stamp
+            || FileStamp::from_metadata(&current.metadata()?) != self.stamp
+        {
             return Err(Error::new(
                 storage_contract::ErrorCode::PreparationStale,
                 "verified payload or metadata changed after preparation",

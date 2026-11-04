@@ -118,7 +118,7 @@ impl MetadataReadContext<'_> {
         }
     }
 
-    fn observe<T>(&self, result: Result<T>) -> Result<T> {
+    pub(crate) fn observe<T>(&self, result: Result<T>) -> Result<T> {
         match self.integrity {
             Some(integrity) => integrity.observe(result),
             None => result,
@@ -131,6 +131,22 @@ impl MetadataReadContext<'_> {
         let saved = self.observe(loaded)?;
         self.observe(self.config.verify_saved_metadata_membership(&saved))?;
         Ok(saved)
+    }
+    pub(crate) fn generation_candidate(
+        &self,
+        authority: &str,
+        candidate: &crate::journal::Candidate,
+    ) -> Result<()> {
+        self.observe(if self.config.generation_hash() != Some(authority) {
+            Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "local generation differs from admitted reader",
+            ))
+        } else {
+            Ok(())
+        })?;
+        // Candidate-local proof damage is not a shared authority failure.
+        self.config.verify_candidate_membership(candidate)
     }
     pub(crate) fn seal(
         &self,

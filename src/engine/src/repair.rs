@@ -5,13 +5,12 @@ use crate::{
     journal::Candidate,
     *,
 };
-use platform_io::payload::{Expectation, verify_full};
-use std::fs::File;
+use platform_io::payload::Expectation;
 
 fn required(message: impl Into<String>) -> Error {
     Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
 }
-fn matching(source: Result<File>, version: &FileVersion) -> Result<bool> {
+fn matching(source: Result<impl Into<ReadFile>>, version: &FileVersion) -> Result<bool> {
     let mut file = match source {
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
         | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -22,19 +21,16 @@ fn matching(source: Result<File>, version: &FileVersion) -> Result<bool> {
         Err(error) => {
             return Err(error.context(ErrorCode::RecoveryRequired, "cannot open recovery bytes"));
         }
-        Ok(file) => file,
+        Ok(file) => file.into(),
     };
     if file.metadata()?.len() != version.logical_size {
         return Ok(false);
     }
     let hash = version.content_hash.digest();
-    match verify_full(
-        &mut file,
-        Expectation {
-            bytes: version.logical_size,
-            blake3: Some(hash),
-        },
-    ) {
+    match file.verify_full(Expectation {
+        bytes: version.logical_size,
+        blake3: Some(hash),
+    }) {
         Ok(_) => Ok(true),
         Err(platform_io::payload::Error::Digest | platform_io::payload::Error::Length { .. }) => {
             Ok(false)
@@ -62,7 +58,7 @@ impl Engine {
                 crate::container_storage::content_path_at(root, &directory, version, &mut |_| {
                     Ok(())
                 })?;
-            if matching(root.open_regular(&source), version)? {
+            if matching(root.open_leased_regular(&source), version)? {
                 return Ok(Some(ReadSource::on_disk(owner, source)));
             }
         }
@@ -88,7 +84,7 @@ impl Engine {
                 let entry = entry?;
                 let path = directory.join(entry.as_path());
                 if path.extension().is_some_and(|suffix| suffix == "full")
-                    && matching(root.open_regular(&path), version)?
+                    && matching(root.open_leased_regular(&path), version)?
                 {
                     return Ok(Some(ReadSource::on_disk(owner, path)));
                 }
@@ -141,7 +137,7 @@ impl Engine {
                 // Quarantine is an inspection bundle, independently of the
                 // live container layout used by the original version.
                 let source = path.join("content").join(&version.creation_name);
-                if matching(root.open_regular(&source), version)? {
+                if matching(root.open_leased_regular(&source), version)? {
                     return Ok(Some(ReadSource::on_disk(owner, source)));
                 }
             }
@@ -193,7 +189,7 @@ impl Engine {
                     version,
                     &mut |_| Ok(()),
                 )?;
-                match root.open_regular(&content) {
+                match root.open_read_regular(&content) {
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
                         if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -201,18 +197,12 @@ impl Engine {
                     Ok(_) => {
                         let destination = bundle.join("content");
                         root.private_dir(&destination)?;
-                        let from = root.directory(content.parent().expect("content parent"))?;
-                        let to = root.directory(&destination)?;
-                        rustix::fs::renameat_with(
-                            &from,
-                            content.file_name().expect("payload name"),
-                            &to,
-                            version.creation_name.as_str(),
-                            rustix::fs::RenameFlags::NOREPLACE,
-                        )
-                        .map_err(std::io::Error::from)?;
-                        from.sync_all()?;
-                        to.sync_all()?;
+                        // Keep repair's source-first barriers in one admitted
+                        // operation, including either tail after cancellation.
+                        root.rename_noreplace_synced(
+                            &content,
+                            &destination.join(&version.creation_name),
+                        )?;
                         if source.path() == content {
                             source = ReadSource::on_disk(
                                 owner,
@@ -221,7 +211,7 @@ impl Engine {
                         }
                     }
                 }
-                match root.directory(&directory) {
+                match root.directory_identity(&directory) {
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
                         if error.kind() == std::io::ErrorKind::NotFound =>
@@ -231,21 +221,7 @@ impl Engine {
                     Err(error) => return Err(error),
                     Ok(_) => {}
                 }
-                let parent = directory
-                    .parent()
-                    .ok_or_else(|| required("replica parent missing"))?;
-                let from = root.directory(parent)?;
-                let to = root.directory(&bundle)?;
-                rustix::fs::renameat_with(
-                    &from,
-                    directory.file_name().expect("version directory name"),
-                    &to,
-                    "metadata",
-                    rustix::fs::RenameFlags::NOREPLACE,
-                )
-                .map_err(std::io::Error::from)?;
-                from.sync_all()?;
-                to.sync_all()?;
+                root.rename_noreplace_synced(&directory, &bundle.join("metadata"))?;
             }
             self.prepare_payload(&Prepared {
                 version: version.clone(),

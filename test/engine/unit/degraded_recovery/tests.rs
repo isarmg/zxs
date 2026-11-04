@@ -1,5 +1,259 @@
 use super::*;
 use crate::r29_local_publication;
+#[path = "../repair/io_tail_support.rs"]
+#[expect(
+    dead_code,
+    reason = "repair tests share the read and sync gate support"
+)]
+mod io_tail_support;
+
+#[test]
+fn loss_classification_rejects_io_and_authority_failures() {
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::Interrupted,
+        std::io::ErrorKind::Other,
+    ] {
+        assert!(!classifiable_payload_damage(
+            &std::io::Error::from(kind).into()
+        ));
+    }
+    for code in [
+        ErrorCode::DiskUnavailable,
+        ErrorCode::UnsafePath,
+        ErrorCode::ResourceLimit,
+    ] {
+        assert!(!classifiable_payload_damage(&Error::new(
+            code,
+            "unavailable evidence"
+        )));
+    }
+    for kind in [
+        std::io::ErrorKind::NotFound,
+        std::io::ErrorKind::UnexpectedEof,
+    ] {
+        assert!(classifiable_payload_damage(
+            &std::io::Error::from(kind).into()
+        ));
+    }
+    for code in [
+        ErrorCode::ChecksumMismatch,
+        ErrorCode::ChecksumFormatInvalid,
+    ] {
+        assert!(classifiable_payload_damage(&Error::new(
+            code,
+            "damaged bytes"
+        )));
+    }
+}
+
+#[test]
+#[ignore = "requires repair/io_tails.c as repair_io_tails.so in LD_PRELOAD"]
+fn classification_read_eio_preserves_original_failure_instead_of_declaring_corruption() {
+    use io_tail_support::{Point, SyscallGate};
+    for checksum in [false, true] {
+        let (_temp, engine, _, candidate) = fixture("after_accept_2");
+        let evidence = &candidate.versions[0];
+        let disk = engine
+            .disk(&evidence.placement.route_slot_ids[0])
+            .unwrap()
+            .clone();
+        let root = &engine.disk_resources.get(&disk).unwrap().root;
+        let directory = version_dir(
+            &disk,
+            &evidence.version.history_tree_id,
+            &evidence.version.version_id,
+        );
+        let content = crate::container_storage::content_path_at(
+            root,
+            &directory,
+            &evidence.version,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let watched = if checksum {
+            directory.join("checksums.bin")
+        } else {
+            content.clone()
+        };
+        let bytes = fs::read(&watched).unwrap();
+        let body = fs::read(&content).unwrap();
+        let frozen = canonical_json(&candidate).unwrap();
+        let logs: Vec<_> = engine
+            .members()
+            .iter()
+            .map(|disk| {
+                let path = log_path(disk);
+                let bytes = fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect();
+        std::thread::scope(|threads| {
+            let gate = SyscallGate::arm(&disk.root, &watched, Point::Read, true);
+            let work = threads.spawn(|| observe(&engine, &candidate));
+            gate.wait();
+            gate.release();
+            let error = work.join().unwrap().unwrap_err();
+            assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+            let Error::Context { source, .. } = error else {
+                panic!("classification lost its verification failure: {error}");
+            };
+            let Error::Contract(storage_contract::Error::Io { source, .. }) = *source else {
+                panic!("classification lost its original read error: {source}");
+            };
+            assert_eq!(source.raw_os_error(), Some(5));
+        });
+        assert_eq!(canonical_json(&candidate).unwrap(), frozen);
+        assert_eq!(fs::read(watched).unwrap(), bytes);
+        assert_eq!(fs::read(content).unwrap(), body);
+        for (path, bytes) in logs {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+    }
+}
+
+#[test]
+fn loss_observation_keeps_missing_corrupt_and_revoked_authority_distinct() {
+    let (_temp, engine, _, candidate) = fixture("after_accept_2");
+    let evidence = &candidate.versions[0];
+    let first = engine.disk(&evidence.placement.route_slot_ids[0]).unwrap();
+    let second = engine.disk(&evidence.placement.route_slot_ids[1]).unwrap();
+    let directory = |disk: &DiskConfig| {
+        version_dir(
+            disk,
+            &evidence.version.history_tree_id,
+            &evidence.version.version_id,
+        )
+    };
+    let content = |disk: &DiskConfig| {
+        crate::container_storage::content_path_at(
+            &engine.disk_resources.get(disk).unwrap().root,
+            &directory(disk),
+            &evidence.version,
+            &mut |_| Ok(()),
+        )
+        .unwrap()
+    };
+    let first_content = content(first);
+    let second_content = content(second);
+    let frozen = canonical_json(&candidate).unwrap();
+    let retained = fs::read(&first_content).unwrap();
+    let logs: Vec<_> = engine
+        .members()
+        .iter()
+        .map(|disk| {
+            let path = log_path(disk);
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    fs::remove_file(directory(first).join("checksums.bin")).unwrap();
+    fs::remove_file(&second_content).unwrap();
+    let observed = observe(&engine, &candidate).unwrap();
+    assert_eq!(observed[0]["slots"][0]["state"], "CORRUPT");
+    assert_eq!(observed[0]["slots"][1]["state"], "MISSING");
+    assert_eq!(observed[0]["slots"][2]["state"], "COMPLETE_VERIFIED");
+    let handle = engine.disk_resources.get(first).unwrap();
+    drop(
+        handle
+            .root
+            .io_binding()
+            .unwrap()
+            .begin_quiesce()
+            .unwrap()
+            .unwrap(),
+    );
+    let error = observe(&engine, &candidate).unwrap_err();
+    assert!(matches!(
+        error.code(),
+        ErrorCode::RecoveryRequired | ErrorCode::DiskUnavailable
+    ));
+    assert_eq!(canonical_json(&candidate).unwrap(), frozen);
+    assert_eq!(fs::read(first_content).unwrap(), retained);
+    assert!(!second_content.exists());
+    for (path, bytes) in logs {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
+#[ignore = "requires repair/io_tails.c as repair_io_tails.so in LD_PRELOAD"]
+fn classification_close_holds_original_descriptor_and_writer_until_real_tail() {
+    use io_tail_support::{Point, SyscallGate, competitor, descriptors, excluded};
+    let (_temp, engine, _, candidate) = fixture("after_accept_2");
+    let evidence = &candidate.versions[0];
+    let disk = engine
+        .disk(&evidence.placement.route_slot_ids[0])
+        .unwrap()
+        .clone();
+    let owner = std::sync::Arc::clone(engine.disk_resources.get(&disk).unwrap());
+    let directory = version_dir(
+        &disk,
+        &evidence.version.history_tree_id,
+        &evidence.version.version_id,
+    );
+    let content = crate::container_storage::content_path_at(
+        &owner.root,
+        &directory,
+        &evidence.version,
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    // Fail before verify_payload opens the body, then skip content_path_at's
+    // presence probe so the gate covers the classifier's own descriptor.
+    fs::remove_file(directory.join("checksums.bin")).unwrap();
+    let bytes = fs::read(&content).unwrap();
+    let frozen = canonical_json(&candidate).unwrap();
+    let logs: Vec<_> = engine
+        .members()
+        .iter()
+        .map(|disk| {
+            let path = log_path(disk);
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    let binding = owner.root.io_binding().unwrap();
+    let competitor = competitor(&disk);
+    std::thread::scope(|threads| {
+        let gate = SyscallGate::arm(&disk.root, &content, Point::Close, false);
+        gate.skip_presence_close();
+        let work = threads.spawn(move || {
+            let result = observe(&engine, &candidate);
+            (engine, candidate, result)
+        });
+        gate.wait();
+        assert_eq!(descriptors(&content), 1);
+        drop(binding.begin_quiesce().unwrap().unwrap());
+        assert_eq!(binding.status().unwrap().ordinary, 1);
+        assert!(!binding.status().unwrap().drained());
+        assert_eq!(descriptors(&content), 1);
+        assert!(descriptors(&disk.root) > 0);
+        excluded(&competitor, true);
+        assert!(owner.root.open_read_regular(&content).is_err());
+        gate.release();
+        let (engine, candidate, result) = work.join().unwrap();
+        // The next version's probe must reject this stopped member, rather
+        // than silently turning an unavailable device into permanent loss.
+        assert!(result.is_err());
+        assert!(binding.status().unwrap().drained());
+        assert_eq!(descriptors(&content), 0);
+        assert_eq!(descriptors(&disk.root), 0);
+        excluded(&competitor, false);
+        assert_eq!(canonical_json(&candidate).unwrap(), frozen);
+        assert!(
+            !engine
+                .state
+                .operations
+                .contains_key(&candidate.operation_id)
+        );
+    });
+    assert_eq!(fs::read(content).unwrap(), bytes);
+    for (path, bytes) in logs {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
 fn fixture(point: &str) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
     fixture_with_history(point, 0)
 }
@@ -1170,4 +1424,59 @@ fn scrub_classifies_acknowledged_permanent_loss_as_payload_unavailable_not_metad
     assert_eq!(report.payload_copies_verified, 2);
     assert_eq!(report.payload_copies_unavailable, 3);
     assert_eq!(report.payload_copies_unverified, 1);
+}
+
+#[test]
+fn membership_activation_preserves_degraded_outcome_and_acknowledged_missing_proofs() {
+    let (temp, engine, operation, candidate) = fixture("after_accept_2");
+    lose(&engine, &candidate, true);
+    drop(engine);
+    let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
+    let plan = engine
+        .prepare_degraded_recovery(operation, "alice", "acknowledged permanent loss")
+        .unwrap();
+    engine
+        .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+        .unwrap();
+    assert!(!engine.blocked);
+    let outcome = engine.state.operations[&operation].clone();
+    let mut target = (*engine.config).clone();
+    let added = Config::development((0..4).map(|n| temp.path().join(format!("new-{n}"))))
+        .unwrap()
+        .disks
+        .pop()
+        .unwrap();
+    private_dir(&added.root).unwrap();
+    target.disks.push(added.clone());
+    engine
+        .begin_membership_handoff(target, "alice", OperationId::generate().unwrap())
+        .unwrap();
+    let archive = temp.path().join("archive");
+    private_dir(&archive).unwrap();
+    let certificate = engine.build_membership_control_archive(&archive).unwrap();
+    engine
+        .enroll_pending_members(
+            &archive,
+            &certificate.root_hash,
+            vec![crate::engine::PendingMemberDirectory {
+                disk_id: added.disk_id,
+                directory: std::fs::File::open(added.root).unwrap(),
+            }],
+        )
+        .unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    engine.activate_pending_membership().unwrap();
+    assert_eq!(engine.state.operations[&operation], outcome);
+    let report = engine.scrub(&IntegrityScrubCancellation::new()).unwrap();
+    assert_eq!(report.metadata_failures, 0, "{report:?}");
+    assert_eq!(report.payload_copies_required, 6);
+    assert_eq!(report.payload_copies_verified, 3);
+    assert_eq!(report.payload_copies_unavailable, 3);
+    assert_eq!(report.payload_copies_unverified, 0);
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("state")).unwrap();
+    assert_eq!(engine.state.operations[&operation], outcome);
+    let report = engine.scrub(&IntegrityScrubCancellation::new()).unwrap();
+    assert_eq!(report.metadata_failures, 0, "{report:?}");
+    assert_eq!(report.payload_copies_unavailable, 3);
 }

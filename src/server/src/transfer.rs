@@ -842,12 +842,13 @@ fn content_precondition(headers: &HeaderMap, etag: &[u8]) -> Result<Option<Statu
 }
 
 fn content_response_with_limits(
-    content: Content,
+    mut content: Content,
     method: Method,
     headers: HeaderMap,
     limits: &TransferLimits,
     deadline: tokio::time::Instant,
 ) -> Result<Response, ApiError> {
+    content.check_running()?;
     let manifest = content.checksum_manifest;
     let download_name = content.download_name;
     let mut file = content.file;

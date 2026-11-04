@@ -540,7 +540,8 @@ fn payload_cancellation_is_observed_between_bounded_reads() {
         }
         cancellation.checkpoint()
     })
-    .unwrap_err();
+    .err()
+    .unwrap();
     assert_eq!(error.code(), ErrorCode::OperationAborted);
     assert_eq!(checkpoints, 3);
     assert!(
@@ -1487,6 +1488,17 @@ fn batch_from_a_previous_engine_owner_is_not_a_lease_for_the_reopened_pool() {
     let old_plan = engine.prepare_integrity_scrub().unwrap();
     let mut old_batch = Some(engine.admit_integrity_scrub_batch(&old_plan, &id).unwrap());
     drop(engine);
+    let error = Engine::open(&temp.path().join("system"))
+        .err()
+        .expect("an admitted payload read retains the original writer lock");
+    assert_eq!(error.code(), ErrorCode::WriterAlreadyActive);
+    // Retire actual I/O before reopening. Keep only the old logical version
+    // lease so the new owner must reject it rather than accepting provenance
+    // from a previous Engine. Dropping Engine alone must never release live I/O.
+    let IntegrityScrubBatchAdmission::Ready(batch) = old_batch.as_mut().unwrap() else {
+        panic!("the original owner admitted this version");
+    };
+    batch.payloads.clear();
     let reopened = Engine::open(&temp.path().join("system")).unwrap();
     let outcome = reopened.prepare_integrity_scrub().unwrap().run(
         &IntegrityScrubCancellation::new(),
@@ -1797,4 +1809,98 @@ fn scheduled_real_purge_supersession_revokes_before_finish_without_a_metadata_fa
         engine.finish_integrity_scrub(outcome).completion,
         IntegrityScrubCompletion::Superseded
     ));
+}
+
+#[test]
+fn idle_scrub_batch_drops_cancelled_disk_payload_without_dropping_other_copies() {
+    let (_temp, mut engine, repository) = fixture();
+    let id = save(&mut engine, &repository, b"held scrub body");
+    let plan = engine.prepare_integrity_scrub().unwrap();
+    let IntegrityScrubBatchAdmission::Ready(batch) =
+        engine.admit_integrity_scrub_batch(&plan, &id).unwrap()
+    else {
+        panic!("current fixture was superseded");
+    };
+    let disk = &engine.config.disks[0];
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    assert!(binding.status().unwrap().ordinary > 0);
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(batch.payloads.len(), 3);
+    for (slot, file) in &batch.payloads {
+        let file = file.as_ref().unwrap();
+        if slot == &disk.slot_id {
+            assert_eq!(
+                file.metadata().unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        } else {
+            assert_eq!(file.metadata().unwrap().len(), 15);
+        }
+    }
+}
+
+#[test]
+fn scrub_metadata_journal_and_disk_fence_close_after_full_drain() {
+    let (_temp, engine, _repository) = fixture();
+    let disk = engine.config.metadata_members().next().unwrap();
+    let path =
+        crate::engine::membership_transition::pending::activation::log_path(&engine.config, disk);
+    let before = fs::read(&path).unwrap();
+    let descriptors = || {
+        fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|entry| match fs::read_link(entry) {
+                Ok(target) => target == path,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => panic!("cannot inspect test descriptor: {error}"),
+            })
+            .count()
+    };
+    let writers = descriptors();
+    assert!(writers > 0);
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    let mut cancelled = false;
+    let outcome = engine.prepare_integrity_scrub().unwrap().run(
+        &IntegrityScrubCancellation::new(),
+        |_, _| panic!("empty repository has no body batches"),
+        |bytes| {
+            if bytes > 0 && !cancelled && descriptors() > writers {
+                assert_eq!(descriptors(), writers + 1);
+                assert!(binding.status().unwrap().ordinary > 0);
+                drop(binding.begin_quiesce().unwrap().unwrap());
+                assert!(binding.status().unwrap().drained());
+                assert_eq!(descriptors(), 0, "all journal descriptors retire");
+                let lock = fs::File::open(disk.root.join(".writer.lock")).unwrap();
+                rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+                    .unwrap();
+                let system_lock = fs::File::open(engine.root.join("writer.lock")).unwrap();
+                assert_eq!(
+                    rustix::fs::flock(
+                        &system_lock,
+                        rustix::fs::FlockOperation::NonBlockingLockExclusive
+                    ),
+                    Err(rustix::io::Errno::WOULDBLOCK),
+                );
+                cancelled = true;
+            }
+        },
+        |_| {},
+    );
+    assert!(cancelled);
+    assert!(!engine.finish_integrity_scrub(outcome).is_healthy());
+    assert_eq!(fs::read(&path).unwrap(), before);
 }

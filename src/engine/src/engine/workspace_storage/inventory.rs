@@ -17,9 +17,9 @@ pub struct WorkspaceInventoryRecord {
 /// per-ID index or decoded history. Mirrors are deliberately reported separately.
 pub struct WorkspaceInventory {
     locations: Vec<WorkspaceLocation>,
-    current: Option<(usize, platform_io::fs_safety::linux::DirectoryEntries)>,
+    current: Option<(usize, DiskDirectoryEntries)>,
     next_location: usize,
-    _locks: Vec<fs::File>,
+    _locks: WriterLocks,
 }
 
 impl WorkspaceInventory {
@@ -112,3 +112,7 @@ impl Iterator for WorkspaceInventory {
         self.next_record().transpose()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/workspace_inventory_fencing_tests.rs"]
+mod tests;

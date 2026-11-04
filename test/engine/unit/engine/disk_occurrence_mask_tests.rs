@@ -1,0 +1,827 @@
+//! Frozen metadata vectors only. They do not activate a registry or simulate
+//! publication: the isolated Engine receives a fixture State and its exact
+//! prepared snapshot hash before registry capture. Original files stay intact.
+use super::super::{PreparedDiskRegistry, RegistryExitRequest, encode_registry};
+use super::*;
+use crate::*;
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+const HISTORY: &str = "history_00000000000000000000000000000001";
+fn id(prefix: &str, n: usize) -> String {
+    format!("{prefix}_{n:032x}")
+}
+fn operation() -> OperationId {
+    "op_00000000000000000000000000000001".parse().unwrap()
+}
+
+struct Fixture {
+    config: ValidatedConfig,
+    state: State,
+}
+impl Fixture {
+    fn new() -> Self {
+        let mut config =
+            Config::development((0..4).map(|n| format!("/unopened-preview/disabled-{n}").into()))
+                .unwrap();
+        // Two independent primary roots, one with two backup tiers. The fourth
+        // registration has no metadata vote, but still owns visible content.
+        config.disks[3].level = 1;
+        config.disks[3].upstream_slot_id = None;
+        config.disks[3].metadata_member = false;
+        let mut state = State {
+            sequence: 9,
+            business_generation: 7,
+            topology_generation: 3,
+            ..State::default()
+        };
+        state.control_auth =
+            Some(json_codec::json!({"private_test_marker":"never project credentials"}));
+        for (n, slot) in [(1, "P01"), (2, "D04")] {
+            let history = id("history", n);
+            let repository = Repository {
+                repository_id: id("repo", n),
+                name: format!("namespace-{n}"),
+                history_tree_id: history.clone(),
+                main_branch_id: id("br", n),
+                primary_slot_id: slot.into(),
+                target_copies: 3,
+                name_policy: "portable".into(),
+                unicode_version: "15.1".into(),
+                smb_enabled: false,
+                smb_binding_generation: 1,
+                file_manager_root: true,
+            };
+            state.histories.insert(
+                history.clone(),
+                HistoryTree {
+                    history_tree_id: history.clone(),
+                    repository_id: repository.repository_id.clone(),
+                    root_commit_id: id("commit", n),
+                    main_branch_id: Some(repository.main_branch_id.clone()),
+                    generation: 1,
+                    state: HistoryState::Active,
+                    provenance: None,
+                },
+            );
+            state.branches.insert(
+                repository.main_branch_id.clone(),
+                Branch {
+                    branch_id: repository.main_branch_id.clone(),
+                    history_tree_id: history,
+                    name: "main".into(),
+                    head_commit_id: id("commit", n),
+                    fork_commit_id: id("commit", n),
+                    branch_kind: BranchKind::Full,
+                    file_id: None,
+                    file_node_id: None,
+                    pending_file_versions: BTreeMap::new(),
+                    generation: 1,
+                    state: BranchState::Active,
+                },
+            );
+            state
+                .repositories
+                .insert(repository.repository_id.clone(), repository);
+        }
+        let mut fixture = Self {
+            config: config.try_into().unwrap(),
+            state,
+        };
+        fixture.add_version(1, 1, &["P01"]); // a, target exclusive.
+        fixture.add_version(2, 2, &["P01", "B01", "C01"]); // b, shared.
+        fixture.add_version(3, 3, &["P01", "B01"]); // older version of c.
+        fixture.add_version(4, 3, &["P01"]); // c HEAD, target exclusive.
+        fixture.add_version(5, 4, &["D04"]); // unrelated, nonvoting primary.
+        fixture
+            .state
+            .versions
+            .get_mut(&id("ver", 5))
+            .unwrap()
+            .history_tree_id = id("history", 2);
+        fixture.commit(
+            1,
+            1,
+            vec![
+                file(1, 1, "a"),
+                file(2, 2, "dir/b"),
+                file(3, 4, "c"),
+                directory(10, "dir"),
+                directory(11, "empty"),
+            ],
+        );
+        fixture.commit(2, 2, vec![file(4, 5, "unrelated"), directory(12, "empty")]);
+        fixture.commit(3, 1, vec![file(3, 3, "c")]);
+        fixture.directory_branch(
+            1,
+            1,
+            vec![
+                directory(20, "shared"),
+                file(2, 2, "shared/b"),
+                file(3, 4, "shared/c"),
+                file(3, 3, "shared/c-retained"),
+            ],
+        );
+        fixture.directory_branch(
+            2,
+            1,
+            vec![
+                directory(21, "alias"),
+                file(2, 2, "alias/b"),
+                file(3, 3, "alias/c"),
+            ],
+        );
+        fixture.directory_branch(3, 2, vec![directory(22, "empty")]);
+        fixture
+            .state
+            .file_notes
+            .insert(id("file", 3), "retained note".into());
+        fixture
+            .state
+            .version_notes
+            .insert(id("ver", 3), "old body note".into());
+        fixture
+            .state
+            .directory_selections
+            .insert(id("dir", 1), id("dbr", 1));
+        fixture
+    }
+    fn add_version(&mut self, n: usize, file: usize, route: &[&str]) {
+        let version = FileVersion {
+            history_tree_id: HISTORY.into(),
+            version_id: id("ver", n),
+            file_id: id("file", file),
+            creation_primary_slot_id: route[0].into(),
+            logical_size: n as u64,
+            version_sequence: n as u64,
+            content_hash: "0".repeat(64).parse().unwrap(),
+            checksum_chunk_bytes: 262144,
+            checksum_manifest_hash: "1".repeat(64),
+            creation_name: format!("file-{file}"),
+            storage_name: format!("v{n:06}_20261104T000000Z_00000000.txt"),
+            created_at: "2026-11-04T00:00:00Z".into(),
+            source_version_ids: Vec::new(),
+            created_as_full_checkpoint: true,
+        };
+        self.state.placements.insert(
+            version.version_id.clone(),
+            Placement {
+                version_id: version.version_id.clone(),
+                primary_slot_id: route[0].into(),
+                target_copies: route.len() as u32,
+                route_slot_ids: route.iter().map(|slot| (*slot).into()).collect(),
+                topology_generation: 3,
+                binding_generations: route.iter().map(|slot| ((*slot).into(), 1)).collect(),
+            },
+        );
+        self.state
+            .versions
+            .insert(version.version_id.clone(), version);
+    }
+    fn commit(&mut self, n: usize, history: usize, entries: Vec<Entry>) {
+        self.state.commits.insert(
+            id("commit", n),
+            Commit {
+                commit_id: id("commit", n),
+                history_tree_id: id("history", history),
+                kind: "save".into(),
+                parent_commit_ids: Vec::new(),
+                tree_id: id("tree", n),
+                sequence: n as u64,
+                operation_id: operation(),
+                author: "admin".into(),
+                message: "frozen namespace".into(),
+                entries,
+                namespace_deletions: None,
+                pending_file_versions: BTreeMap::new(),
+                provenance: None,
+            },
+        );
+    }
+    fn directory_branch(&mut self, n: usize, repository: usize, entries: Vec<Entry>) {
+        let branch = DirectoryBranch {
+            directory_branch_id: id("dbr", n),
+            repository_id: id("repo", repository),
+            directory_id: id("dir", n),
+            path: "".into(),
+            name: format!("view-{n}"),
+            parent_branch_id: None,
+            head_tree_id: id("dtree", n),
+            commit_id: id("commit", repository),
+            entries: entries.clone(),
+            file_branches: BTreeMap::new(),
+            file_contexts: BTreeMap::new(),
+            inherited_files: BTreeMap::new(),
+            directory_refs: BTreeMap::new(),
+            materialized: false,
+            sequence: 1,
+        };
+        self.state.directory_trees.insert(
+            branch.head_tree_id.clone(),
+            DirectoryTree {
+                tree_id: branch.head_tree_id.clone(),
+                directory_branch_id: branch.directory_branch_id.clone(),
+                parent_tree_id: None,
+                commit_id: branch.commit_id.clone(),
+                path: branch.path.clone(),
+                entries,
+                file_branches: BTreeMap::new(),
+                file_contexts: BTreeMap::new(),
+                inherited_files: BTreeMap::new(),
+                directory_refs: BTreeMap::new(),
+                sequence: 1,
+            },
+        );
+        self.state
+            .directory_branches
+            .insert(branch.directory_branch_id.clone(), branch);
+    }
+}
+fn file(file: usize, version: usize, path: &str) -> Entry {
+    Entry {
+        entry_id: id("entry", file),
+        path: name_policy::PortablePath::parse(path).unwrap(),
+        kind: NamespaceEntryKind::File,
+        file_id: id("file", file),
+        version_id: id("ver", version),
+        size: version as u64,
+    }
+}
+fn directory(n: usize, path: &str) -> Entry {
+    Entry {
+        entry_id: id("entry", n),
+        path: name_policy::PortablePath::parse(path).unwrap(),
+        kind: NamespaceEntryKind::Directory,
+        file_id: String::new(),
+        version_id: String::new(),
+        size: 0,
+    }
+}
+
+type Objects = BTreeMap<(String, String), Vec<u8>>;
+fn read(objects: &Objects, kind: &str, hash: &str) -> Result<Vec<u8>> {
+    objects
+        .get(&(kind.into(), hash.into()))
+        .cloned()
+        .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "fixture object missing"))
+}
+fn registry(prepared: &PreparedDiskRegistry) -> VerifiedDiskRegistry {
+    let objects: Objects = prepared
+        .objects()
+        .map(|(kind, hash, bytes)| ((kind.into(), hash.into()), bytes.to_vec()))
+        .collect();
+    prepared
+        .verify_with(|kind, hash| read(&objects, kind, hash))
+        .unwrap()
+}
+fn objects(prepared: &PreparedOccurrenceMask) -> Objects {
+    prepared
+        .objects()
+        .map(|(kind, hash, bytes)| ((kind.into(), hash.into()), bytes.to_vec()))
+        .collect()
+}
+fn fixture(owner_retained: bool) -> (tempfile::TempDir, Engine, VerifiedDiskRegistry) {
+    let mut fixture = Fixture::new();
+    if owner_retained {
+        fixture
+            .state
+            .repositories
+            .get_mut(&id("repo", 1))
+            .unwrap()
+            .primary_slot_id = "D04".into();
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = (*fixture.config).clone();
+    for (n, disk) in config.disks.iter_mut().enumerate() {
+        disk.root = temp.path().join(format!("data-{n}"));
+    }
+    let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
+    engine.state = Arc::new(fixture.state);
+    engine.snapshot = Some(
+        crate::journal::prepare_snapshot(&engine.state, MAX_METADATA)
+            .unwrap()
+            .hash,
+    );
+    let base = registry(&engine.prepare_disk_registry_base().unwrap());
+    (temp, engine, base)
+}
+fn target(base: &VerifiedDiskRegistry, slot: &str) -> DiskRegistrationIdentity {
+    base.historical_topology()
+        .find(|disk| disk.identity.slot_id == slot)
+        .unwrap()
+        .identity
+        .clone()
+}
+fn successor(base: &VerifiedDiskRegistry, hash: &str, operation: usize) -> VerifiedDiskRegistry {
+    let request = RegistryExitRequest {
+        target: target(base, "P01"),
+        operation_id: id("op", operation).parse().unwrap(),
+        principal: "admin".into(),
+        request_digest: "1".repeat(64),
+        intent_hash: "2".repeat(64),
+        effect: RegistryExitEffect::Detach {
+            occurrence_mask_hash: hash.into(),
+        },
+    };
+    let prepared = base.prepare_exit(request).unwrap();
+    let objects: Objects = prepared
+        .objects()
+        .map(|(kind, hash, bytes)| ((kind.into(), hash.into()), bytes.to_vec()))
+        .collect();
+    base.verify_successor(prepared.commitment(), |kind, hash| {
+        read(&objects, kind, hash)
+    })
+    .unwrap()
+}
+fn path(value: &str) -> name_policy::PortablePath {
+    name_policy::PortablePath::parse(value).unwrap()
+}
+fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut out = BTreeMap::new();
+    for item in fs::read_dir(root).unwrap() {
+        let path = item.unwrap().path();
+        if path.is_dir() {
+            out.extend(files(&path));
+        } else {
+            out.insert(path.clone(), fs::read(path).unwrap());
+        }
+    }
+    out
+}
+
+#[test]
+fn membership_registry_occurrence_mixed_namespace_is_one_write_baseline() {
+    let (_temp, engine, base) = fixture(true);
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let prepared = source.prepare_mask().unwrap();
+    let objects = objects(&prepared);
+    let verified = source
+        .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
+        .unwrap();
+    let next = successor(&base, prepared.hash(), 1);
+    let projection = verified
+        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
+        .unwrap();
+    assert!(projection.lookup(&path("a")).is_none());
+    assert!(projection.lookup(&path("c")).is_none());
+    assert!(projection.lookup(&path("dir/b")).is_some());
+    assert!(projection.lookup(&path("empty")).is_some());
+    assert!(projection.lookup(&path("dir")).is_some());
+    let mut draft = projection.entries().to_vec();
+    draft
+        .iter_mut()
+        .find(|entry| entry.path() == "dir/b")
+        .unwrap()
+        .version_id = id("ver", 99);
+    projection.validate_draft(&draft).unwrap();
+    assert!(draft.iter().all(|entry| entry.path() != "a"));
+    let fresh = projection.file_identity(&path("a")).unwrap();
+    assert_ne!(fresh.entry_id(), id("entry", 1));
+    assert_ne!(fresh.file_id(), id("file", 1));
+    assert!(fresh.base_version_id().is_none());
+    let shared = projection.file_identity(&path("dir/b")).unwrap();
+    assert_eq!(shared.file_id(), id("file", 2));
+    assert_eq!(shared.base_version_id(), Some(id("ver", 2).as_str()));
+    draft.push(Entry {
+        entry_id: fresh.entry_id().into(),
+        path: path("a"),
+        kind: NamespaceEntryKind::File,
+        file_id: fresh.file_id().into(),
+        version_id: id("ver", 100),
+        size: 1,
+    });
+    projection.validate_draft(&draft).unwrap();
+    draft.push(file(1, 1, "renamed-old-a"));
+    assert!(matches!(
+        projection.validate_draft(&draft),
+        Err(ProjectionError::IdentityReuse(_))
+    ));
+}
+
+#[test]
+fn membership_registry_occurrence_hidden_pending_identity_cannot_reenter_as_fresh_file() {
+    let (_temp, mut engine, _) = fixture(true);
+    // Deliberately malformed metadata vector: normal snapshot admission requires
+    // pending versions to exist. This also fences a pending-only identity if a
+    // future producer reaches this boundary with an unmaterialized reference.
+    Arc::make_mut(&mut engine.state)
+        .branches
+        .get_mut(&id("br", 1))
+        .unwrap()
+        .pending_file_versions
+        .insert(id("file", 77), id("ver", 77));
+    engine.snapshot = Some(
+        crate::journal::prepare_snapshot(&engine.state, MAX_METADATA)
+            .unwrap()
+            .hash,
+    );
+    let base = registry(&engine.prepare_disk_registry_base().unwrap());
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let prepared = source.prepare_mask().unwrap();
+    let objects = objects(&prepared);
+    let verified = source
+        .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
+        .unwrap();
+    let next = successor(&base, prepared.hash(), 1);
+    let projection = verified
+        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
+        .unwrap();
+    let mut resurrected = file(77, 77, "a");
+    resurrected.entry_id = id("entry", 999);
+    assert!(matches!(
+        projection.validate_draft(&[resurrected]),
+        Err(ProjectionError::IdentityReuse(_))
+    ));
+    let fresh = projection.file_identity(&path("a")).unwrap();
+    let mut pending_body = file(77, 77, "a");
+    pending_body.entry_id = fresh.entry_id().into();
+    pending_body.file_id = fresh.file_id().into();
+    assert!(matches!(
+        projection.validate_draft(&[pending_body]),
+        Err(ProjectionError::IdentityReuse(_))
+    ));
+    let mut revived_version = projection.lookup(&path("dir/b")).unwrap().clone();
+    revived_version.version_id = id("ver", 1);
+    assert!(projection.validate_draft(&[revived_version]).is_err());
+}
+
+#[test]
+fn membership_registry_occurrence_versions_and_scopes_do_not_collapse_to_file_id() {
+    let (_temp, engine, base) = fixture(true);
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let prepared = source.prepare_mask().unwrap();
+    let objects = objects(&prepared);
+    let verified = source
+        .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
+        .unwrap();
+    let next = successor(&base, prepared.hash(), 1);
+    let current = verified
+        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
+        .unwrap();
+    let historical = verified
+        .project(&next, &NamespaceScope::Commit(id("commit", 3)))
+        .unwrap();
+    assert!(current.lookup(&path("c")).is_none());
+    assert!(matches!(
+        current.validate_draft(&[directory(22, "foreign-empty")]),
+        Err(ProjectionError::IdentityReuse(_))
+    ));
+    current
+        .validate_draft(&[directory(999, "new-empty")])
+        .unwrap();
+    assert_eq!(
+        historical.lookup(&path("c")).unwrap().version_id,
+        id("ver", 3)
+    );
+    assert!(matches!(
+        historical.file_identity(&path("new")),
+        Err(ProjectionError::NotWritable)
+    ));
+    let one = verified
+        .project(&next, &NamespaceScope::DirectoryHead(id("dbr", 1)))
+        .unwrap();
+    let two = verified
+        .project(&next, &NamespaceScope::DirectoryHead(id("dbr", 2)))
+        .unwrap();
+    assert!(one.lookup(&path("shared/c")).is_none());
+    let retained_alias = one.lookup(&path("shared/c-retained")).unwrap();
+    assert_eq!(retained_alias.entry_id, id("entry", 3));
+    assert_eq!(retained_alias.version_id, id("ver", 3));
+    let mut alias_draft = one.entries().to_vec();
+    alias_draft
+        .iter_mut()
+        .find(|entry| entry.path() == "shared/c-retained")
+        .unwrap()
+        .version_id = id("ver", 99);
+    one.validate_draft(&alias_draft).unwrap();
+    assert!(alias_draft.iter().all(|entry| entry.path() != "shared/c"));
+    let mut revived_alias = alias_draft.clone();
+    revived_alias.push(file(3, 100, "shared/c"));
+    assert!(matches!(
+        one.validate_draft(&revived_alias),
+        Err(ProjectionError::IdentityReuse(_))
+    ));
+    let fresh = one.file_identity(&path("shared/c")).unwrap();
+    assert_ne!(fresh.entry_id(), id("entry", 3));
+    assert_ne!(fresh.file_id(), id("file", 3));
+    assert!(fresh.base_version_id().is_none());
+    alias_draft.push(Entry {
+        entry_id: fresh.entry_id().into(),
+        path: path("shared/c"),
+        kind: NamespaceEntryKind::File,
+        file_id: fresh.file_id().into(),
+        version_id: id("ver", 100),
+        size: 1,
+    });
+    one.validate_draft(&alias_draft).unwrap();
+    assert_eq!(
+        two.lookup(&path("alias/c")).unwrap().version_id,
+        id("ver", 3)
+    );
+}
+
+#[test]
+fn membership_registry_occurrence_removed_owner_keeps_shared_content_without_write_route() {
+    let (_temp, engine, base) = fixture(false);
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let prepared = source.prepare_mask().unwrap();
+    let objects = objects(&prepared);
+    let verified = source
+        .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
+        .unwrap();
+    let next = successor(&base, prepared.hash(), 1);
+    let projection = verified
+        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
+        .unwrap();
+    assert!(projection.lookup(&path("dir/b")).is_some());
+    assert!(projection.lookup(&path("dir")).is_some());
+    assert!(projection.lookup(&path("empty")).is_none());
+    assert!(matches!(
+        projection.file_identity(&path("a")),
+        Err(ProjectionError::NotWritable)
+    ));
+    assert!(matches!(
+        projection.new_workspace("admin", 1),
+        Err(ProjectionError::NotWritable)
+    ));
+}
+
+#[test]
+fn membership_registry_occurrence_rehashed_omissions_and_extra_deletions_are_rejected() {
+    let (_temp, engine, base) = fixture(true);
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let expected = source.expected().unwrap();
+    let scope_key = NamespaceScope::BranchHead(id("br", 1)).key().unwrap();
+    let mut candidates = Vec::new();
+    let mut missing = expected.clone();
+    missing
+        .scopes
+        .get_mut(&scope_key)
+        .unwrap()
+        .hidden
+        .remove("a");
+    candidates.push(missing);
+    let mut shared = expected.clone();
+    shared.scopes.get_mut(&scope_key).unwrap().hidden.insert(
+        "dir/b".into(),
+        object_hash("disk-occurrence-entry", &file(2, 2, "dir/b")).unwrap(),
+    );
+    candidates.push(shared);
+    let mut scope = expected.clone();
+    scope.scopes.remove(&scope_key);
+    candidates.push(scope);
+    let mut head = expected.clone();
+    head.scopes
+        .get_mut(&scope_key)
+        .unwrap()
+        .binding
+        .frozen_head_id = id("commit", 3);
+    candidates.push(head);
+    let mut hash = expected.clone();
+    *hash
+        .scopes
+        .get_mut(&scope_key)
+        .unwrap()
+        .hidden
+        .get_mut("a")
+        .unwrap() = "0".repeat(64);
+    candidates.push(hash);
+    let mut snapshot = expected.clone();
+    snapshot.binding.source.snapshot_hash = Some("0".repeat(64));
+    candidates.push(snapshot);
+    let mut target = expected.clone();
+    target.binding.target.binding_generation += 1;
+    candidates.push(target);
+    let mut prior = expected.clone();
+    prior.binding.predecessor.view_generation += 1;
+    candidates.push(prior);
+    for candidate in candidates {
+        let prepared = encode_mask(&candidate).unwrap();
+        let objects = objects(&prepared);
+        assert!(matches!(
+            source.verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash)),
+            Err(ProjectionError::MaskMismatch)
+        ));
+    }
+}
+
+#[test]
+fn membership_registry_occurrence_every_required_page_is_authenticated_without_fallback() {
+    let (_temp, mut engine, _) = fixture(true);
+    let state = Arc::make_mut(&mut engine.state);
+    let mut entries = Vec::new();
+    for n in 100..430 {
+        let mut version = state.versions[&id("ver", 1)].clone();
+        version.version_id = id("ver", n);
+        version.file_id = id("file", n);
+        state.versions.insert(version.version_id.clone(), version);
+        let mut placement = state.placements[&id("ver", 1)].clone();
+        placement.version_id = id("ver", n);
+        state
+            .placements
+            .insert(placement.version_id.clone(), placement);
+        entries.push(file(n, n, &format!("item-{n}")));
+    }
+    state.commits.get_mut(&id("commit", 1)).unwrap().entries = entries;
+    engine.snapshot = Some(
+        crate::journal::prepare_snapshot(&engine.state, MAX_METADATA)
+            .unwrap()
+            .hash,
+    );
+    let base = registry(&engine.prepare_disk_registry_base().unwrap());
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let prepared = source.prepare_mask().unwrap();
+    let all = objects(&prepared);
+    assert!(all.keys().any(|(kind, _)| kind == "metadata-index"));
+    assert!(all.keys().filter(|(kind, _)| kind == "state-page").count() > 3);
+    source
+        .verify_mask(prepared.hash(), |kind, hash| read(&all, kind, hash))
+        .unwrap();
+    for key in all.keys() {
+        let mut missing = all.clone();
+        missing.remove(key);
+        assert!(
+            source
+                .verify_mask(prepared.hash(), |kind, hash| read(&missing, kind, hash))
+                .is_err()
+        );
+        let mut corrupt = all.clone();
+        corrupt.get_mut(key).unwrap().push(b'x');
+        assert!(
+            source
+                .verify_mask(prepared.hash(), |kind, hash| read(&corrupt, kind, hash))
+                .is_err()
+        );
+    }
+    assert!(
+        source
+            .verify_mask(prepared.hash(), |_, _| Ok(vec![b' '; MAX_METADATA + 1]))
+            .is_err()
+    );
+}
+
+fn workspace(proof: &projection::WorkspaceProjection) -> Workspace {
+    Workspace {
+        workspace_id: proof.workspace_id().into(),
+        purpose: WorkspacePurpose::Normal,
+        branch_id: id("br", 1),
+        principal: "admin".into(),
+        base_head: id("commit", 1),
+        fencing_token: 9,
+        files: BTreeMap::new(),
+        selected_file_branches: BTreeMap::new(),
+        selected_file_contexts: BTreeMap::new(),
+        selected_directory_branches: BTreeMap::new(),
+        directory_selection_generations: BTreeMap::new(),
+        file_selection_generations: BTreeMap::new(),
+        namespace_operations: Vec::new(),
+        created_at: 0,
+        state: WorkspaceState::Open,
+    }
+}
+#[test]
+fn membership_registry_occurrence_workspace_proof_rejects_old_identity_scope_head_and_view() {
+    let (_temp, engine, base) = fixture(true);
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let prepared = source.prepare_mask().unwrap();
+    let objects = objects(&prepared);
+    let verified = source
+        .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
+        .unwrap();
+    let next = successor(&base, prepared.hash(), 1);
+    let projection = verified
+        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
+        .unwrap();
+    let proof = projection.new_workspace("admin", 9).unwrap();
+    let current = workspace(&proof);
+    projection.validate_workspace(&proof, &current).unwrap();
+    let mut old = current.clone();
+    old.workspace_id = id("ws", 1);
+    assert!(projection.validate_workspace(&proof, &old).is_err());
+    let mut old = current.clone();
+    old.base_head = id("commit", 3);
+    assert!(projection.validate_workspace(&proof, &old).is_err());
+    let mut old = current.clone();
+    old.fencing_token += 1;
+    assert!(projection.validate_workspace(&proof, &old).is_err());
+    let mut old = current.clone();
+    old.principal = "other".into();
+    assert!(projection.validate_workspace(&proof, &old).is_err());
+    let other_scope = verified
+        .project(&next, &NamespaceScope::BranchHead(id("br", 2)))
+        .unwrap();
+    assert!(other_scope.validate_workspace(&proof, &current).is_err());
+    let other_decision = successor(&base, prepared.hash(), 2);
+    let other_view = verified
+        .project(&other_decision, &NamespaceScope::BranchHead(id("br", 1)))
+        .unwrap();
+    assert!(other_view.validate_workspace(&proof, &current).is_err());
+    let mut forged_generation = next.clone();
+    forged_generation.commitment.view_generation += 1;
+    assert!(matches!(
+        verified.project(&forged_generation, &NamespaceScope::BranchHead(id("br", 1))),
+        Err(ProjectionError::BaselineMismatch)
+    ));
+}
+
+#[test]
+fn membership_registry_occurrence_foreign_or_stale_registry_source_is_rejected() {
+    let (_temp, mut engine, base) = fixture(true);
+    let target = target(&base, "P01");
+    engine.snapshot = Some("a".repeat(64));
+    assert!(matches!(
+        FrozenDetachSource::capture(&engine, &base, &target),
+        Err(ProjectionError::SourceMismatch(_))
+    ));
+    engine.snapshot = base.state.source.snapshot_hash.clone();
+    Arc::make_mut(&mut engine.state).sequence += 1;
+    assert!(FrozenDetachSource::capture(&engine, &base, &target).is_err());
+    Arc::make_mut(&mut engine.state).sequence -= 1;
+    let mut changed = base.state.clone();
+    changed.source.pool_id = "foreign".into();
+    let foreign = registry(&encode_registry(changed).unwrap());
+    assert!(FrozenDetachSource::capture(&engine, &foreign, &target).is_err());
+    let mut target = target;
+    target.binding_generation += 1;
+    assert!(matches!(
+        FrozenDetachSource::capture(&engine, &base, &target),
+        Err(ProjectionError::Preview(_))
+    ));
+    engine.snapshot = None;
+    let base = registry(&engine.prepare_disk_registry_base().unwrap());
+    assert!(FrozenDetachSource::capture(&engine, &base, &target).is_err());
+}
+
+#[test]
+fn membership_registry_occurrence_projection_preserves_history_and_original_file_bytes() {
+    let (temp, engine, base) = fixture(true);
+    fs::write(
+        engine.config.disks[0].root.join("untouched-user-content"),
+        b"physical bytes are not erased",
+    )
+    .unwrap();
+    let before_files = files(temp.path());
+    let before_state = canonical_json(engine.state()).unwrap();
+    let before_config = canonical_json(engine.config()).unwrap();
+    let history: Vec<_> = engine
+        .state
+        .commits
+        .values()
+        .map(|commit| canonical_json(commit).unwrap())
+        .collect();
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let prepared = source.prepare_mask().unwrap();
+    let objects = objects(&prepared);
+    let verified = source
+        .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
+        .unwrap();
+    let next = successor(&base, prepared.hash(), 1);
+    for scope in source.preview.namespaces() {
+        let projection = verified.project(&next, &scope.into()).unwrap();
+        let _draft = projection.entries().to_vec();
+    }
+    assert_eq!(canonical_json(engine.state()).unwrap(), before_state);
+    assert_eq!(canonical_json(engine.config()).unwrap(), before_config);
+    assert_eq!(
+        engine
+            .state
+            .commits
+            .values()
+            .map(|commit| canonical_json(commit).unwrap())
+            .collect::<Vec<_>>(),
+        history
+    );
+    assert_eq!(files(temp.path()), before_files);
+}
+
+#[test]
+fn membership_registry_occurrence_strict_root_rejects_future_intent_and_unknown_fields() {
+    let (_temp, engine, base) = fixture(true);
+    let source = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let prepared = source.prepare_mask().unwrap();
+    let mut objects = objects(&prepared);
+    let root_bytes = read(&objects, MASK_KIND, prepared.hash()).unwrap();
+    let mut root: json_codec::Value = crate::decode_strict(&root_bytes).unwrap();
+    root.as_object_mut()
+        .unwrap()
+        .insert("intent_hash".into(), "1".repeat(64).into());
+    let hash = object_hash(MASK_KIND, &root).unwrap();
+    objects.insert(
+        (MASK_KIND.into(), hash.clone()),
+        canonical_json(&root).unwrap(),
+    );
+    assert!(
+        source
+            .verify_mask(&hash, |kind, hash| read(&objects, kind, hash))
+            .is_err()
+    );
+    assert!(
+        !String::from_utf8(root_bytes)
+            .unwrap()
+            .contains("intent_hash")
+    );
+}

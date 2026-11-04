@@ -17,6 +17,10 @@ fn typed_parent_io_handles_root_children_and_missing_nested_directories() {
         let path = temporary.path().join(relative);
         root.write_atomic(&path, b"owned", false).unwrap();
         assert_eq!(root.read_bytes(&path, 5).unwrap(), b"owned");
+        let mut source = root.open_read_regular(&path).unwrap();
+        let mut bytes = Vec::new();
+        source.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"owned");
         assert!(root.open_optional_regular(&path).unwrap().is_some());
         assert!(root.optional_metadata(&path).unwrap().unwrap().is_file());
         root.remove_file(&path).unwrap();

@@ -60,6 +60,13 @@ impl Engine {
                 let candidate: Candidate =
                     verified_object_at(&self.disk_resources, online, "candidate", hash)?;
                 self.verify_candidate_membership(&candidate)?;
+                // Ancestor publications belong to their exact archived journal,
+                // never to this generation's active namespace.
+                if self.config.generation().is_some_and(|generation| {
+                    generation.historical_candidate(candidate.sequence) == Some(hash)
+                }) {
+                    continue;
+                }
                 let publication: Publication = verified_object_at(
                     &self.disk_resources,
                     online,
@@ -124,13 +131,26 @@ impl Engine {
     }
 
     pub(super) fn prepare_recovery(&mut self) -> Result<PreparedRecovery> {
+        self.prepare_recovery_with_warnings(Vec::new())
+    }
+
+    pub(super) fn prepare_recovery_with_warnings(
+        &mut self,
+        admission_warnings: Vec<super::RecoverySealFailure>,
+    ) -> Result<PreparedRecovery> {
         self.metadata_integrity.invalidate();
         self.published_state_base = None;
-        self.recovery_warnings = super::RecoveryWarnings::default();
+        // Only this invocation's read-only admission may seed diagnostics.
+        // Excluded roots will not be visited again by the journal scan below.
+        self.recovery_warnings = super::RecoveryWarnings {
+            seals: admission_warnings,
+            ..super::RecoveryWarnings::default()
+        };
         let members = self.members();
         let mut online = Vec::new();
         let mut prefixes = BTreeMap::<String, BTreeSet<String>>::new();
         let mut opened_journals = BTreeMap::new();
+        let mut rejected_anchors = BTreeSet::new();
         let mut torn_tail = false;
         let mut records = super::recovery_checkpoint::Records::new();
         for d in &members {
@@ -153,7 +173,24 @@ impl Engine {
                     });
                 continue;
             }
-            let opened = OpenJournal::scan_at(&handle.root, d)?;
+            // Even an empty genesis journal must retain its original membership.
+            // An edited system Config cannot establish a replacement voter set.
+            let anchor = self.config.verify_root_membership(&handle.root, d);
+            if let Err(source) = anchor {
+                self.metadata_integrity.fault(&source);
+                rejected_anchors.insert(d.disk_id.clone());
+                self.recovery_warnings
+                    .seals
+                    .push(super::RecoverySealFailure {
+                        context: super::RecoverySealContext::MembershipAnchor {
+                            disk_id: d.disk_id.clone(),
+                            slot_id: d.slot_id.clone(),
+                        },
+                        source,
+                    });
+                continue;
+            }
+            let opened = OpenJournal::scan_configured_at(&handle.root, d, &self.config)?;
             let scanned = &opened.scan;
             torn_tail |= scanned.torn_tail;
             prefixes.insert(
@@ -188,10 +225,25 @@ impl Engine {
             online.push(d.clone());
         }
         if online.len() < self.config.metadata_quorum() {
-            return Err(Error::new(
-                storage_contract::ErrorCode::MetadataQuorumUnavailable,
-                "online service requires a majority of the configured metadata members; use offline recovery",
-            ));
+            let message = "online service requires a majority of the configured metadata members; use offline recovery";
+            if let Some(index) = self.recovery_warnings.seals.iter().position(|failure| {
+                matches!(
+                    failure.context,
+                    super::RecoverySealContext::MembershipAnchor { .. }
+                )
+            }) {
+                let super::RecoverySealFailure { context, source } =
+                    self.recovery_warnings.seals.remove(index);
+                return Err(source.context(
+                    ErrorCode::MetadataQuorumUnavailable,
+                    format!("{message}; rejected {context:?}"),
+                ));
+            }
+            return Err(Error::new(ErrorCode::MetadataQuorumUnavailable, message));
+        }
+        if !rejected_anchors.is_empty() {
+            self.disk_resources =
+                std::sync::Arc::new(self.disk_resources.excluding(&rejected_anchors));
         }
         let journaled = records
             .values()
@@ -210,6 +262,7 @@ impl Engine {
             })
             .collect();
         self.reject_unjournaled_publications(&online, &journaled)?;
+        self.admit_membership_fence(&online, &records)?;
         Ok(PreparedRecovery {
             members,
             online,
@@ -242,6 +295,8 @@ impl Engine {
             torn_tail,
             mut candidates,
         } = prepared;
+        let fenced = self.membership_fence.is_some();
+        let can_repair = online.len() == members.len() && !fenced;
         let mut scanned_journals = BTreeMap::new();
         for disk in &online {
             let opened = opened_journals
@@ -251,7 +306,7 @@ impl Engine {
             scanned_journals.insert(disk.disk_id.clone(), scanned);
             self.journals.insert(disk.disk_id.clone(), writer);
         }
-        let checkpoint = if online.len() == members.len() && !torn_tail {
+        let checkpoint = if can_repair && !torn_tail {
             match super::recovery_checkpoint::load(self, &prefixes, &records) {
                 Ok(checkpoint) => checkpoint.filter(|c| {
                     records
@@ -314,9 +369,7 @@ impl Engine {
             let publication = prepared.publication;
             let mut barrier_failure = prepared.barrier_failure;
             let admitted = prepared.snapshot.map(|snapshot| snapshot.into_admitted());
-            if online.len() == members.len()
-                && let Some(source) = barrier_failure.take()
-            {
+            if can_repair && let Some(source) = barrier_failure.take() {
                 self.recovery_warnings
                     .seals
                     .push(super::RecoverySealFailure {
@@ -390,7 +443,7 @@ impl Engine {
                     );
                     self.bind_recovered_history_roots(roots);
                 }
-                self.snapshot = Some(candidate.snapshot_hash);
+                self.snapshot = Some(candidate.snapshot_hash.clone());
                 continue;
             }
             let admitted = match admitted {
@@ -414,10 +467,7 @@ impl Engine {
                 self.blocked = true;
                 break;
             }
-            if publication.is_none()
-                && mode == RecoveryMode::CompletePending
-                && online.len() == members.len()
-            {
+            if publication.is_none() && mode == RecoveryMode::CompletePending && can_repair {
                 let result = next
                     .operations
                     .get(&candidate.operation_id)
@@ -437,7 +487,7 @@ impl Engine {
                 )?;
                 self.repair_pending_payloads(&candidate)?;
             }
-            if online.len() == members.len() {
+            if can_repair {
                 // Repair only replicas of the exact hash-bound snapshot. Never
                 // manufacture a replacement state from an unverifiable copy.
                 repair_snapshot_copies(
@@ -519,7 +569,7 @@ impl Engine {
                     admitted.into_visible_state(candidate.operation_id, recovered_result),
                 );
                 self.bind_recovered_history_roots(roots);
-                self.snapshot = Some(candidate.snapshot_hash);
+                self.snapshot = Some(candidate.snapshot_hash.clone());
             } else if let Some(p) = publication {
                 if p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
                     return Err(Error::new(
@@ -553,7 +603,7 @@ impl Engine {
                     admitted.into_visible_state(candidate.operation_id, recovered_result),
                 );
                 self.bind_recovered_history_roots(roots);
-                self.snapshot = Some(candidate.snapshot_hash);
+                self.snapshot = Some(candidate.snapshot_hash.clone());
                 self.blocked = true;
             } else {
                 self.blocked = true;
@@ -567,13 +617,16 @@ impl Engine {
                 retain_replayed_records(history, self.journals[&disk.disk_id].records());
             }
         }
-        if online.len() != members.len() {
+        if !can_repair {
             self.blocked = true;
         }
         if mode == RecoveryMode::CompletePending && !self.blocked {
             self.repair_journal_tails()?;
         } else if self.journals.values().any(JournalWriter::needs_recovery) {
             self.blocked = true;
+        }
+        if fenced {
+            return Ok(());
         }
         self.cleanup_purged()?;
         // Optional acceleration only. Failure to create a checkpoint must never
@@ -618,46 +671,22 @@ fn repair_snapshot_copies(
     hash: &str,
     repaired_pages: &mut BTreeSet<String>,
 ) -> Result<()> {
-    let root = crate::publication_evidence::verified_graph_object_at(
-        resources, sources, "snapshot", hash,
-    )?;
-    let snapshot: Snapshot = json_codec::from_value(root.value().clone())?;
-    validate_snapshot_schema(&snapshot)?;
-    for reference in snapshot
-        .maps
-        .values()
-        .chain(std::iter::once(&snapshot.events))
-    {
-        crate::metadata_map::visit_objects(
-            reference,
-            |kind, hash| {
-                crate::publication_evidence::verified_graph_object_at(
-                    resources, sources, kind, hash,
-                )
-            },
-            |object| {
-                // Domain participates in the key: a digest is not an object kind.
-                let address = format!("{}/{}", object.kind(), object.hash());
-                if !repaired_pages.contains(&address) {
-                    crate::publication_evidence::repair_authenticated_object_at(
-                        resources, members, &object,
-                    )?;
-                    remember_repaired_page(repaired_pages, &address);
-                    #[cfg(test)]
-                    PAGE_REPAIR_COUNT.with(|count| count.set(count.get() + 1));
-                }
-                Ok(())
-            },
-        )?;
-    }
-    let auth = crate::publication_evidence::verified_graph_object_at(
-        resources,
-        sources,
-        "state-control-auth",
-        snapshot.control_auth.hash(),
-    )?;
-    crate::publication_evidence::repair_authenticated_object_at(resources, members, &auth)?;
-    crate::publication_evidence::repair_authenticated_object_at(resources, members, &root)
+    crate::publication_evidence::visit_snapshot_objects_at(resources, sources, hash, |object| {
+        // Domain participates in the key: a digest is not an object kind.
+        let address = format!("{}/{}", object.kind(), object.hash());
+        let cacheable = matches!(object.kind(), "state-page" | "metadata-index");
+        if !cacheable || !repaired_pages.contains(&address) {
+            crate::publication_evidence::repair_authenticated_object_at(
+                resources, members, &object,
+            )?;
+            if cacheable {
+                remember_repaired_page(repaired_pages, &address);
+                #[cfg(test)]
+                PAGE_REPAIR_COUNT.with(|count| count.set(count.get() + 1));
+            }
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]

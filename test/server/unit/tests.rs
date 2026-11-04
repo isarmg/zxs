@@ -693,7 +693,9 @@ impl Backend for TestBackend {
         Ok(Content {
             checksum_manifest: None,
             fallback_files: Vec::new(),
-            file: std::fs::File::open(&self.path).map_err(ApiError::io)?,
+            file: std::fs::File::open(&self.path)
+                .map_err(ApiError::io)?
+                .into(),
             size: 10,
             hash: blake3::hash(b"0123456789").to_hex().to_string(),
             lease: Box::new(()),

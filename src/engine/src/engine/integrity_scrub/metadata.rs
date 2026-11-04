@@ -89,6 +89,18 @@ pub(super) fn verify_member(
 ) -> Result<(AcknowledgedUnavailable, bool)> {
     let root = &plan.disk_resources.get(disk)?.root;
     verify_saved_membership(plan, root, disk, observe)?;
+    if let Some(generation) = plan.config.generation() {
+        // Frozen history remains a recovery dependency after switching journals.
+        // Reuse this scrub's distinct-object memory budget and read observer;
+        // repeated reads are metered but never charged as distinct objects.
+        let archived =
+            generation.verify_archive_observed(root, disk, observe, MAX_VERIFIED_OBJECTS)?;
+        report.metadata_publications_verified += archived.published_candidates;
+        report.metadata_objects_verified += archived.immutable_metadata_objects;
+        report.journal_frames_verified += usize::try_from(archived.journal_frames)
+            .map_err(|_| Error::new(ErrorCode::ResourceLimit, "archived frame count overflow"))?;
+        progress(report);
+    }
     MemberScan {
         plan,
         disk,
@@ -106,15 +118,29 @@ pub(super) fn verify_member(
 
 impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<'_, O, P> {
     fn journal(&mut self) -> Result<(AcknowledgedUnavailable, bool)> {
+        self.frozen_payload_expectations()?;
         // Hash-linked receipts are not signatures. Bind the observed chain to
         // this Engine's admitted writer tail, not a newly self-consistent disk.
         let expected_tail = self.plan.tails.get(&self.disk.disk_id).ok_or_else(|| {
             Error::new(ErrorCode::RecoveryRequired, "metadata member has no admitted writer anchor; recover it before certifying its retained closure")
         })?;
         // No BufReader read-ahead: only the explicit one-byte probe may read beyond the captured frontier.
-        let mut reader = JournalFrameReader::new(self.root.open_regular(&log_path(self.disk))?);
-        let mut previous_snapshot = None;
-        let mut published_sequence = 0;
+        let mut reader = JournalFrameReader::new(self.root.open_read_regular(
+            &crate::engine::membership_transition::pending::activation::log_path(
+                &self.plan.config,
+                self.disk,
+            ),
+        )?);
+        let mut previous_snapshot = self
+            .plan
+            .config
+            .generation()
+            .and_then(|generation| generation.snapshot());
+        let mut published_sequence = self
+            .plan
+            .config
+            .generation()
+            .map_or(0, |generation| generation.base.sequence);
         let mut last_frame = None;
         let mut frames = 0;
         loop {
@@ -149,7 +175,7 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
                         "published candidate does not extend the retained snapshot chain",
                     ));
                 }
-                previous_snapshot = Some(candidate.snapshot_hash);
+                previous_snapshot = Some(candidate.snapshot_hash.clone());
                 published_sequence = record.sequence;
             }
             last_frame = Some(frame_hash);
@@ -176,6 +202,25 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
         }
         let extra = !self.plan.verify_eof && reader.probe_extra_observed(self.observe)?;
         Ok((std::mem::take(&mut self.unavailable), extra))
+    }
+
+    fn frozen_payload_expectations(&mut self) -> Result<()> {
+        let Some(generation) = self.plan.config.generation().cloned() else {
+            return Ok(());
+        };
+        for hash in generation.historical_candidates() {
+            let candidate: Candidate = self.object("candidate", hash)?;
+            generation.verify_candidate(&candidate)?;
+            let seal: PublicationSeal = self
+                .root
+                .read_json_observed(&publication_seal_path(self.disk, hash), self.observe)?;
+            let publication: Publication = self.object("publication", &seal.publication_hash)?;
+            verify_publication_seal(&candidate, &publication, &seal)?;
+            // These are original voters' receipts, not a new member's local
+            // journal. Its independently checked archive proves this prefix.
+            self.record_payload_expectations(&candidate, &publication)?;
+        }
+        Ok(())
     }
 
     fn publication(&mut self, record: &Record, frame_hash: &str) -> Result<Candidate> {
@@ -546,7 +591,22 @@ fn verify_saved_membership(
         &disk.root.join("metadata/pool-membership/config.json"),
         observe,
     )?)?;
-    plan.config.verify_saved_metadata_membership(&saved)
+    match plan.config.generation() {
+        None => plan.config.verify_saved_metadata_membership(&saved),
+        Some(generation) => {
+            generation
+                .original()
+                .verify_saved_metadata_membership(&saved)?;
+            let authority: crate::engine::membership_transition::pending::activation::PortableAuthority = root.read_json_observed(&disk.root.join("metadata/pool-membership/generation.json"), observe)?;
+            if authority.hash()? != generation.hash {
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "scrub generation authority differs",
+                ));
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
