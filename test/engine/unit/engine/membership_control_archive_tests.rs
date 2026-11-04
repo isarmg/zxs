@@ -92,7 +92,7 @@ fn membership_control_archive_is_independent_and_preserves_original_bytes() {
     assert_eq!(source_bytes(&config), before);
     let store = store(&path);
     for disk in &config.disks {
-        let directory = store.member_directory(disk);
+        let directory = store.member_directory(disk, None);
         assert_eq!(
             fs::read(directory.join("journal.bin")).unwrap(),
             before[&log_path(disk)]
@@ -319,7 +319,7 @@ fn membership_control_archive_rejects_changed_logs_identity_and_trusted_binding(
         let mut archive = engine.build_membership_control_archive(&path).unwrap();
         let source = source_bytes(&config);
         let store = store(&path);
-        let directory = store.member_directory(&config.disks[0]);
+        let directory = store.member_directory(&config.disks[0], None);
         match damage {
             "prefix" => {
                 let path = directory.join("journal.bin");
@@ -644,7 +644,7 @@ fn membership_control_archive_cannot_replace_admitted_fence_with_its_own_summary
     let original = source_bytes(&config);
     let store = store(&path);
     let disk = &config.disks[0];
-    let journal_path = store.member_directory(disk).join("journal.bin");
+    let journal_path = store.member_directory(disk, None).join("journal.bin");
     let mut reader = JournalFrameReader::new(fs::File::open(&journal_path).unwrap());
     let retained = loop {
         let before = reader.valid_bytes;

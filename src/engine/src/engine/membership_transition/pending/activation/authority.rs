@@ -206,7 +206,10 @@ impl PortableAuthority {
     }
 
     pub(super) fn archive_hash(&self) -> Result<String> {
-        Ok(object_hash("membership-control-archive", &self.head.archive)?)
+        Ok(object_hash(
+            "membership-control-archive",
+            &self.head.archive,
+        )?)
     }
 
     pub(super) fn lineage(&self) -> Result<Vec<(String, TransitionIntent)>> {

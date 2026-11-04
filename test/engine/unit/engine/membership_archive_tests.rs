@@ -24,6 +24,18 @@ fn fixture() -> (tempfile::TempDir, Config, Engine) {
         .unwrap();
     (temp, config, engine)
 }
+fn frozen_epoch(engine: &Engine) -> FrozenEpoch<'_> {
+    let intent = &engine.membership_fence.as_ref().unwrap().intent;
+    let mut source = LiveSource {
+        engine,
+        members: engine.members(),
+        destination: None,
+        seals: BTreeMap::new(),
+        copied: BTreeSet::new(),
+    };
+    FrozenEpoch::read(intent, &mut source).unwrap()
+}
+
 fn bytes(config: &Config) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
     fn visit(path: &std::path::Path, out: &mut BTreeMap<std::path::PathBuf, Vec<u8>>) {
         for entry in fs::read_dir(path).unwrap() {
@@ -206,8 +218,9 @@ fn membership_archive_prefix_rejects_same_sequence_with_different_candidate_byte
     )
     .unwrap();
     let publications = BTreeMap::from([(candidate.sequence, first.0.candidate_hash.clone())]);
+    let epoch = frozen_epoch(&engine);
     let prefix = VerifiedFrozenPrefix {
-        config: &engine.config,
+        epoch: &epoch,
         publications: &publications,
     };
     prefix.verify_candidate(&candidate).unwrap();
@@ -236,8 +249,9 @@ fn membership_archive_stage_references_reject_unrelated_objects() {
         seals: BTreeMap::new(),
         copied: BTreeSet::new(),
     };
+    let epoch = frozen_epoch(&engine);
     let mut inspection = Inspection {
-        config: &engine.config,
+        epoch: &epoch,
         source: &mut source,
         members: engine.members(),
         objects: BTreeSet::new(),

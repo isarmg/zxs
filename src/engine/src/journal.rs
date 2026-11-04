@@ -113,6 +113,7 @@ pub(crate) fn log_path(d: &DiskConfig) -> PathBuf {
 pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
     scan_at(&DiskRoot::open(&d.root)?, d)
 }
+#[cfg(test)]
 pub(crate) fn scan_at(root: &DiskRoot, d: &DiskConfig) -> Result<Scan> {
     scan_path_at(root, &log_path(d))
 }
