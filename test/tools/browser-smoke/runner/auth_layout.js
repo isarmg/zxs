@@ -91,8 +91,11 @@ const sharedRowHeight=Number.parseFloat(rootStyle.getPropertyValue('--zxs-compac
 const rowHeightValid=rowHeightToken===rootStyle.getPropertyValue('--zxs-compact-row-height').trim()&&sharedRowHeight>0;
 const restoredCorner=parseFloat(corner.extent)===corner.original;
 const compact=innerWidth<=416||innerHeight<=480;
+// The fixture/action defines feedback state. Never infer it from missing DOM.
+const feedbackExpected=expectedSetup==='unconfirmed'||rateLimited
+    ||(expectedSetup==='existing'&&phase==='invalid-login');
 const aspect=panelStyle.aspectRatio.split('/').map(Number);
-const preferredRatio=compact?panelStyle.aspectRatio==='auto':aspect.length===2&&aspect[0]/aspect[1]===1.5;
+const preferredRatio=compact||feedbackExpected?panelStyle.aspectRatio==='auto':aspect.length===2&&aspect[0]/aspect[1]===1.5;
 // Content may make the panel taller. It must never be compressed or clipped to 3:2.
 const panelGeometry=panel.width<=sharedRowHeight*9+.5&&(compact||panel.height>=panel.width/1.5-.5)
     &&panel.y>=header.bottom&&[header,panel].every(r=>r.x>=0&&r.right<=layoutWidth+1);
@@ -153,7 +156,7 @@ if(sixRows) {
     const signIns=[...actions.querySelectorAll('[data-setup-sign-in]')],unconfirmed=expectedSetup==='unconfirmed';
     const buttons=[...actions.querySelectorAll('button')];
     const statuses=[...information.querySelectorAll('[role=status]')],alerts=[...information.querySelectorAll('[role=alert]')];
-    const errorPhase=(expectedSetup==='existing'&&phase==='invalid-login')||unconfirmed||rateLimited;
+    const errorPhase=feedbackExpected;
     informationValid=errorPhase?alerts.length===1&&statuses.length===0&&present(alerts[0])&&within(alerts[0])
             &&inside(rect(alerts[0]),rect(information))&&alerts[0].textContent.trim().length>0
         :expectedSetup==='existing'?statuses.length===1&&present(statuses[0])&&alerts.length===0
@@ -193,7 +196,7 @@ const rowGeometry=sixRows&&rows.every(e=>present(e)&&within(e)&&inside(rect(e),r
     &&Math.abs(rowBoxes[1].x-rowBoxes[3].x)<=1&&Math.abs(rowBoxes[1].width-rowBoxes[3].width)<=1;
 // Healthy desktop forms must actually fit six shared rows and 3:2, not merely
 // declare a preferred ratio. Necessary errors and narrow layouts may grow.
-const normalGeometry=compact||expectedSetup==='unconfirmed'||rateLimited||phase==='invalid-login'
+const normalGeometry=compact||feedbackExpected
     ||(sixRows&&rowBoxes.every(r=>Math.abs(r.height-sharedRowHeight)<=.5)
         &&Math.abs(panel.height-panel.width/1.5)<=.5);
 return {valid:allowedPhases.includes(phase)&&formPresent&&sixRows&&fieldsValid&&stateValid&&informationValid&&actionsValid

@@ -76,10 +76,13 @@ class ValidationBatchWorkflow(unittest.TestCase):
         script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
                                  .split('      - name:', 1)[0])
         base = '72e7258be1d1a5d461476c259db5ec0eeec7e75f'
-        expected_parent = '90410707850443016397d9022251c97594abb607'
+        expected_parent = 'd2716dc456c093eaf96d0392a2e0e34304370935'
+        intermediate = '90410707850443016397d9022251c97594abb607'
+        expected_chain = f'{expected_parent} {intermediate}\n{intermediate} {base}'
         self.assertIn(f'base={base}', script)
         self.assertIn(f'expected_parent={expected_parent}', script)
-        self.assertIn('git show -s --format=%P "$expected_parent"', script)
+        self.assertIn(f'intermediate={intermediate}', script)
+        self.assertIn('git rev-list --parents --max-count=2 "$expected_parent"', script)
         self.assertIn('https://github.com/isarmg/zxs/actions/runs/41839207213', script)
         self.assertIn('git show -s --format=%P HEAD', script)
         self.assertIn('git diff --quiet "$base" HEAD -- src \':(exclude)src/web\'', script)
@@ -108,7 +111,7 @@ class ValidationBatchWorkflow(unittest.TestCase):
                 "show -s --format=%P HEAD")
                     [ "$TEST_GIT_FAIL" != parent ] || return 42
                     printf '%s\n' "$TEST_PARENT" ;;
-                "show -s --format=%P $expected_parent")
+                "rev-list --parents --max-count=2 $expected_parent")
                     [ "$TEST_GIT_FAIL" != ancestor ] || return 42
                     printf '%s\n' "$TEST_ANCESTOR" ;;
                 "diff --quiet $base HEAD -- src :(exclude)src/web")
@@ -124,13 +127,15 @@ class ValidationBatchWorkflow(unittest.TestCase):
             esac
         }
         '''
-        cases = [(expected_parent, base, paths, 0, 0, True, '')]
+        cases = [(expected_parent, expected_chain, paths, 0, 0, True, '')]
         for parent in ['another-parent', expected_parent + ' second-parent', '']:
-            cases.append((parent, base, paths, 0, 0, False, ''))
-        for ancestor in ['another-base', base + ' second-parent', '']:
+            cases.append((parent, expected_chain, paths, 0, 0, False, ''))
+        for ancestor in ['another-base', expected_chain + ' second-parent', '',
+                         f'{expected_parent} {intermediate}\n{intermediate} wrong-base',
+                         f'{expected_parent} wrong-parent\n{intermediate} {base}']:
             cases.append((expected_parent, ancestor, paths, 0, 0, False, ''))
-        cases.extend([(expected_parent, base, paths, 1, 0, False, ''),
-                      (expected_parent, base, paths, 0, 1, False, '')])
+        cases.extend([(expected_parent, expected_chain, paths, 1, 0, False, ''),
+                      (expected_parent, expected_chain, paths, 0, 1, False, '')])
         for extra in ['src/smb/src/client.rs', 'src/platform/src/payload.rs',
                       'src/web/Cargo.toml', 'src/web/src/unknown.rs',
                       'test/engine/unit/tests.rs', 'test/server/unit/tests.rs',
@@ -139,9 +144,9 @@ class ValidationBatchWorkflow(unittest.TestCase):
                       'Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'rust-toolchain.toml',
                       'docs/contracts/core.schema.json', 'tools/rust-sources/manage.py',
                       'docs/unrelated.md', 'test/tools/browser-smoke/runner/unknown.rs']:
-            cases.append((expected_parent, base, paths + [extra], 0, 0, False, ''))
+            cases.append((expected_parent, expected_chain, paths + [extra], 0, 0, False, ''))
         for failed in ['parent', 'ancestor', 'source', 'tests', 'paths']:
-            cases.append((expected_parent, base, paths, 0, 0, False, failed))
+            cases.append((expected_parent, expected_chain, paths, 0, 0, False, failed))
         for parent, ancestor, changed, source_changed, tests_changed, expected, failed in cases:
             with self.subTest(parent=parent, ancestor=ancestor, changed=changed, failed=failed,
                               source_changed=source_changed, tests_changed=tests_changed):

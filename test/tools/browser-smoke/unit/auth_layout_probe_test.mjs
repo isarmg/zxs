@@ -142,11 +142,12 @@ f.status.textContent='Set a name and password.';f.information.box=box(445,36,272
 f.form.box=box(301,216,272,354);f.card.box=box(301,216,324,328);f.actions.box=box(481,36,272,354);
 for(const node of [f.submit,f.check,f.clear])node.box=box(481,36,node.box.width,node.box.x);
 result=await f.run();assert.equal(result.valid,true,JSON.stringify(result));assert.equal(result.normalGeometry,true);
+f.card.style.aspectRatio='auto';result=await f.run();assert.equal(result.valid,false);assert.equal(result.preferredRatio,false,'Healthy desktop forms must retain their preferred 3:2 ratio');
 
 f=fixture();f.phase='invalid-login';f.status.attributes.role='alert';f.status.textContent='A long error wraps onto more lines.';f.status.box=box(244,108);f.information.box=box(244,108);f.information.children=[f.status];f.status.parentElement=f.information;
 for(const node of [f.actions,f.submit])node.box=box(352,36);f.form.box=box(100,288);f.card.box=box(100,288,292,14);
 assert.equal((await f.run()).valid,true,'Feedback grows within row five, never inserts a seventh row');
-f.innerWidth=980;f.innerHeight=760;f.root.clientWidth=980;f.root.scrollWidth=980;f.card.style.aspectRatio='3 / 2';f.card.box=box(100,288,324,14);
+f.innerWidth=980;f.innerHeight=760;f.root.clientWidth=980;f.root.scrollWidth=980;f.card.style.aspectRatio='auto';f.card.box=box(100,288,324,14);
 assert.equal((await f.run()).valid,true,'Necessary desktop feedback grows beyond the preferred ratio');
 f.card.box=box(100,216,324,14);assert.equal((await f.run()).valid,false,'A fixed six-row minimum must not leave long feedback outside the card');
 f.card.box=box(100,288,324,14);
@@ -154,23 +155,33 @@ const requestId=f.node('Request ID: setup-request',316,'P');requestId.className=
 assert.equal((await f.run()).valid,true,'Request identity stays fully inside the growing information row');
 requestId.box=box(352,24);result=await f.run();assert.equal(result.valid,false);assert.equal(result.informationValid,false);
 
-// 90410707 captured a login form with two actions and this exact 429 text/ID.
-// Its PNG shows a 324x216 card; no failure-page DOM rectangles were captured.
-// The row rectangles below model the visible overflow, not measured browser data.
-f=fixture();f.expectedSetup='rate-limited';f.phase='status-rejected';f.innerWidth=1440;f.innerHeight=857;
-f.root.clientWidth=1440;f.root.scrollWidth=1440;f.card.style.aspectRatio='3 / 2';
-f.card.box=box(350,216,324,558);f.form.box=box(350,396,272,584);
-for(const [i,node] of [f.usernameLabel,f.username,f.passwordLabel,f.password].entries())node.box=box(350+i*36,36,272,584);
-f.information.box=box(494,216,272,584);f.status.box=box(494,216,272,584);f.status.tagName='DIV';f.status.className='zxs-error zxs-row';f.status.attributes.role='alert';
+// d2716dc4 captured the exact 980x760 outer/row/action rectangles below:
+// 396px of form content overflowed a 324x216 card with a 3:2 ratio.
+// Its 390x844 capture passed with the same width/content and aspect-ratio:auto.
+// Request-ID descendant rectangles remain models; only their text was captured.
+f=fixture();f.expectedSetup='rate-limited';f.phase='status-rejected';f.innerWidth=980;f.innerHeight=760;
+f.root.clientWidth=980;f.root.scrollWidth=980;f.card.style.aspectRatio='3 / 2';
+f.card.box=box(301,216,324,328);f.form.box=box(301,396,272,354);
+for(const [i,node] of [f.usernameLabel,f.username,f.passwordLabel,f.password].entries())node.box=box(301+i*36,36,272,354);
+f.information.box=box(445,216,272,354);f.status.box=box(445,216,272,354);f.status.tagName='DIV';f.status.className='zxs-error zxs-row';f.status.attributes.role='alert';
 f.status.textContent='RESOURCE_LIMIT_EXCEEDED · too many setup attempts; retry after 60 seconds (retryable; check the original save status before retrying)';
-const rateId=f.node('Request ID: req_00000000000000000000000000000013',638,'P');rateId.className='zxs-request-id';rateId.box=box(638,72,272,584);
-const rateCode=f.node('req_00000000000000000000000000000013',662,'CODE');rateCode.box=box(662,48,272,584);f.append(rateId,rateCode);f.append(f.status,rateId);
-f.actions.box=box(710,36,272,584);f.submit.box=box(710,36,92.8,584);f.check.box=box(710,36,36,686.4);f.append(f.actions,f.check);
+const rateId=f.node('Request ID: req_00000000000000000000000000000012',589,'P');rateId.className='zxs-request-id';rateId.box=box(589,72,272,354);
+const rateCode=f.node('req_00000000000000000000000000000012',613,'CODE');rateCode.box=box(613,48,272,354);f.append(rateId,rateCode);f.append(f.status,rateId);
+f.actions.box=box(661,36,272,354);f.submit.box=box(661,36,92.796875,354);f.check.box=box(661,36,36,456.390625);f.append(f.actions,f.check);
 result=await f.run();assert.equal(result.valid,false);assert.equal(result.formPresent,false);
+assert.equal(result.preferredRatio,false,'Desktop error feedback must release the preferred ratio');
 assert.equal(result.informationValid,true);assert.equal(result.stateValid,true);assert.equal(result.controls.slice(2).every(e=>!e.valid),true);
-f.card.box=box(350,396,324,558);result=await f.run();assert.equal(result.valid,true,JSON.stringify(result));
+f.card.style.aspectRatio='auto';result=await f.run();assert.equal(result.preferredRatio,true);assert.equal(result.valid,false,'Changing the declaration alone never excuses overflow');
+const rateNodes=[f.card,f.form,f.usernameLabel,f.username,f.passwordLabel,f.password,f.information,f.status,rateId,rateCode,f.actions,f.submit,f.check];
+for(const node of rateNodes)node.box=box(node.box.y-48,node.box.height,node.box.width,node.box.x-295);
+f.innerWidth=390;f.innerHeight=844;f.root.clientWidth=390;f.root.scrollWidth=390;f.card.box=box(253,396,324,33);
+result=await f.run();assert.equal(result.valid,true,'Measured 390x844 content-sized card contains all six rows and both actions');
+for(const node of rateNodes)node.box=box(node.box.y+48,node.box.height,node.box.width,node.box.x+295);
+f.innerWidth=980;f.innerHeight=760;f.root.clientWidth=980;f.root.scrollWidth=980;
+result=await f.run();assert.equal(result.valid,true,'Model of the same content-flow policy on desktop; real CI must verify CSS sizing');
+f.card.style.aspectRatio='3 / 2';assert.equal((await f.run()).preferredRatio,false,'A taller model cannot hide a retained desktop error ratio');f.card.style.aspectRatio='auto';
 assert.equal(result.controls.length,4,'Rate-limited login keeps two inputs, Sign in and Check, not setup actions');
-rateCode.box=box(710,48,272,584);assert.equal((await f.run()).informationValid,false,'The actual request identity may not overflow its information row');rateCode.box=box(662,48,272,584);
+rateCode.box=box(661,48,272,354);assert.equal((await f.run()).informationValid,false,'The actual request identity may not overflow its information row');rateCode.box=box(613,48,272,354);
 f.check.disabled=true;assert.equal((await f.run()).stateValid,false,'The rate-limit retry must remain usable');f.check.disabled=false;
 f.status.textContent='An unrelated server failure';assert.equal((await f.run()).informationValid,false,'An arbitrary error is not rate-limit evidence');
 
@@ -185,7 +196,7 @@ for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
     const signIn=f.node('Try signing in',376,'BUTTON');signIn.box=box(376,36,160);signIn.className='zxs-button';signIn.attributes['data-setup-sign-in']='';
     f.append(f.actions,signIn);f.actions.children=[f.submit,f.check,signIn,f.clear];
     f.form.box=box(100,312);f.card.box=box(100,312,width>416?324:292,14);
-    if(width>416)f.card.style.aspectRatio='3 / 2';
+    f.status.tagName='DIV';f.status.className='zxs-error zxs-row';
     result=await f.run();assert.equal(result.valid,true,`Unconfirmed ${width}x${height}: ${JSON.stringify(result)}`);
     assert.equal(result.controls.length,6);assert.equal(result.actionsValid,true);
     f.card.box=box(100,216,f.card.box.width,14);result=await f.run();
@@ -461,6 +472,7 @@ if(!process.argv.includes('--models-only')) {
     assert.match(authCss,/width: min\(calc\(var\(--zxs-compact-row-height\) \* 9\), 100%\)/);
     assert.match(authCss,/grid-template-rows: repeat\(6, minmax\(var\(--zxs-compact-row-height\), max-content\)\)/);
     assert.match(authCss,/\.authentication-card \{[^}]*aspect-ratio: 3 \/ 2; min-height: max-content;/);
+    assert.match(authCss,/\.authentication-card:has\(\.zxs-error\) \{ aspect-ratio: auto; \}/);
     assert.doesNotMatch(authCss,/min-height: min-content;/);
     assert.doesNotMatch(authCss,/min-height: calc\(var\(--zxs-compact-row-height\) \* 6\)/);
     assert.match(authCss,/min-height: var\(--zxs-compact-row-height\)/);

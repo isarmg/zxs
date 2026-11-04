@@ -1,10 +1,11 @@
 /* Six authentication rows retain shared row height and the original 48px G4
- * card corner. The six grid tracks provide the minimum height; the card's
- * max-content minimum includes expanded feedback and wrapped action tracks. */
+ * card corner. Healthy desktop forms prefer 3:2; error feedback explicitly
+ * releases that ratio so the six tracks can size to their full content. */
 .authentication-shell { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; justify-items: center; align-items: start; gap: 1rem; min-height: 100dvh; padding: 24px; box-sizing: border-box; color: var(--zxs-text-primary,#18181b); background: var(--zxs-bg-page,#fafafa); font-family: var(--zxs-font-ui,monospace); line-height: var(--zxs-line-height-body,1.5); }
 .authentication-language { justify-self: end; }
 .authentication-content { display: grid; align-self: center; justify-items: stretch; gap: 1rem; width: min(calc(var(--zxs-compact-row-height) * 9), 100%); min-width: 0; }
 .authentication-card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; width: 100%; min-width: 0; aspect-ratio: 3 / 2; min-height: max-content; padding: 0 var(--zxs-contour-text-inset); box-sizing: border-box; color: var(--zxs-text-primary); background: var(--zxs-bg-panel,#fff); border: 0; border-radius: 0; --zxs-contour-extent: 48px; }
+.authentication-card:has(.zxs-error) { aspect-ratio: auto; }
 .authentication-card > form { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(6, minmax(var(--zxs-compact-row-height), max-content)); margin: 0; padding: 0; min-width: 0; font-size: max(1rem, 16px); font-weight: 400; line-height: 1.5; }
 .authentication-card > form > * { box-sizing: border-box; min-width: 0; min-height: var(--zxs-compact-row-height); margin: 0; }
 .authentication-card :is(label, input, button) { font: inherit; }

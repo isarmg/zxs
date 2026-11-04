@@ -36,10 +36,12 @@ jobs:
           # Native/HTTP/contracts/protocol/budget and real Samba succeeded here:
           # https://github.com/isarmg/zxs/actions/runs/41839207213
           base=72e7258be1d1a5d461476c259db5ec0eeec7e75f
-          expected_parent=90410707850443016397d9022251c97594abb607
+          expected_parent=d2716dc456c093eaf96d0392a2e0e34304370935
+          intermediate=90410707850443016397d9022251c97594abb607
+          expected_chain=$(printf '%s %s\n%s %s' "$expected_parent" "$intermediate" "$intermediate" "$base")
           retry=false
           if parents=$(git show -s --format=%P HEAD) && [ "$parents" = "$expected_parent" ] &&
-             ancestor=$(git show -s --format=%P "$expected_parent") && [ "$ancestor" = "$base" ] &&
+             ancestor=$(git rev-list --parents --max-count=2 "$expected_parent") && [ "$ancestor" = "$expected_chain" ] &&
              git diff --quiet "$base" HEAD -- src ':(exclude)src/web' &&
              git diff --quiet "$base" HEAD -- test ':(exclude)test/interface' ':(exclude)test/tools/browser-smoke' ':(exclude)test/ci/test_validation_batch_workflow.py' &&
              changed=$(git diff --name-only --no-renames "$base" HEAD); then
