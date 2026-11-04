@@ -153,25 +153,8 @@ impl Engine {
             operation,
             json!({"file_id":file,"node_id":node,"note":note}),
             |engine, state, _| {
-                let history = state
-                    .file_path_nodes
-                    .get(node)
-                    .filter(|n| n.file_id == file)
-                    .map(|n| n.history_tree_id.clone())
-                    .or_else(|| {
-                        state
-                            .file_metadata_nodes
-                            .get(node)
-                            .filter(|n| n.file_id == file)
-                            .map(|n| n.history_tree_id.clone())
-                    })
-                    .ok_or_else(|| {
-                        Error::new(
-                            storage_contract::ErrorCode::FileNodeNotFound,
-                            "file metadata node missing",
-                        )
-                    })?;
-                engine.repository_for_history(&history)?;
+                let history = Self::file_node_note_history(engine.state(), file, node)?;
+                engine.repository_for_history(history)?;
                 if note.is_empty() {
                     state.file_path_notes.remove(node);
                 } else {

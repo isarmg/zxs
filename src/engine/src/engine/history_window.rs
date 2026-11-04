@@ -134,24 +134,4 @@ impl Engine {
     pub(crate) fn bind_recovered_history_roots(&mut self, roots: BTreeMap<String, String>) {
         self.history_window_roots = Some(HistoryRootBindings::recovered(&self.state, roots));
     }
-
-    /// Local plans are excluded by the exhaustive history projection. Preserve
-    /// that proof across this one known mutation instead of treating arbitrary
-    /// new State allocations as if they had publication evidence.
-    pub(crate) fn retain_local_plan(&mut self, plan: crate::Plan) {
-        let roots = self
-            .history_window_roots
-            .as_ref()
-            .filter(|binding| binding.state.ptr_eq(&Arc::downgrade(&self.state)))
-            .map(|binding| binding.roots.clone());
-        Arc::make_mut(&mut self.state)
-            .plans
-            .insert(plan.plan_id.clone(), plan);
-        self.history_window_roots = roots.map(|roots| {
-            Arc::new(HistoryRootBindings {
-                state: Arc::downgrade(&self.state),
-                roots,
-            })
-        });
-    }
 }

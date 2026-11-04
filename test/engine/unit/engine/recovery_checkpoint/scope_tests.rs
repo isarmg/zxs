@@ -162,7 +162,7 @@ fn checkpoint_scope_generation_cannot_be_recreated_from_the_same_config_json() {
             &archive.archive_path,
             &archive.root_hash,
             vec![crate::PendingMemberDirectory {
-                disk_id: disk.disk_id,
+                disk_id: disk.disk_id.clone(),
                 directory: fs::File::open(&disk.root).unwrap(),
             }],
         )
@@ -178,8 +178,24 @@ fn checkpoint_scope_generation_cannot_be_recreated_from_the_same_config_json() {
     let config_hash = scope.context.config_hash.clone();
     drop(scope);
     let prefixes = prefixes(&engine);
+    let added_root = &engine.disk_resources.get(&disk).unwrap().root;
+    assert!(
+        metadata(added_root, Path::new("histories"))
+            .unwrap()
+            .is_none()
+    );
     save(&engine, &journals(&engine)).unwrap();
-    assert!(load(&engine, &prefixes, &Records::new()).unwrap().is_some());
+    let checkpoint = load(&engine, &prefixes, &Records::new()).unwrap().unwrap();
+    assert!(
+        checkpoint.coverage[&disk.disk_id]
+            .iter()
+            .any(|entry| { entry.path == "histories" && matches!(entry.value, Covered::Absent) })
+    );
+    assert!(
+        metadata(added_root, Path::new("histories"))
+            .unwrap()
+            .is_none()
+    );
     let state = canonical_json(engine.state()).unwrap();
     let admitted = engine.config.clone();
     // The serialized Config deliberately has no admitted Generation. Schema
@@ -193,6 +209,19 @@ fn checkpoint_scope_generation_cannot_be_recreated_from_the_same_config_json() {
     assert!(load(&engine, &prefixes, &Records::new()).unwrap().is_none());
     assert_eq!(canonical_json(engine.state()).unwrap(), state);
     engine.config = admitted;
+    assert!(load(&engine, &prefixes, &Records::new()).unwrap().is_some());
+
+    // Covering absence is not permission to ignore future contents. Even an
+    // empty new directory requires ordinary replay under the same authority.
+    engine
+        .disk_resources
+        .get(&disk)
+        .unwrap()
+        .root
+        .private_dir(&disk.root.join("histories"))
+        .unwrap();
+    assert!(load(&engine, &prefixes, &Records::new()).unwrap().is_none());
+    assert_eq!(canonical_json(engine.state()).unwrap(), state);
 }
 
 #[test]

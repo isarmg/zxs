@@ -638,7 +638,7 @@ fn production_unstopped_relocation_is_identity_checked_and_frozen_before_first_s
         .with_disk_roots(moved.clone())
         .unwrap();
     write_json(&fixture.system.join("config.json"), &config, true).unwrap();
-    let engine = Engine::open(&fixture.system).unwrap();
+    let mut engine = Engine::open(&fixture.system).unwrap();
     assert_eq!(
         engine
             .config
@@ -648,22 +648,37 @@ fn production_unstopped_relocation_is_identity_checked_and_frozen_before_first_s
             .collect::<Vec<_>>(),
         moved
     );
+    engine
+        .create_repository(
+            &RepositoryName::parse("relocated").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
     let target = binding(&config, &config.disks[0]);
     let operation = OperationId::generate().unwrap();
-    let digest = "b".repeat(64);
-    let stop = engine
-        .synchronize_disk_exit_stop(&target, operation, &digest)
+    engine
+        .begin_disk_exit(
+            &target.disk_id,
+            MembershipExitAction::PlannedOffline,
+            "admin",
+            operation,
+        )
         .unwrap();
-    assert!(stop.matches(&target, operation, &digest));
-    drop(stop);
+    let archive = engine.build_managed_membership_control_archive().unwrap();
+    engine
+        .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+        .unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    let result = engine.activate_pending_disk_exit().unwrap();
+    assert_eq!(result.operation_id, operation);
     drop(engine);
     let mut io = CountedIo::default();
-    assert_eq!(
-        discover_startup_with_io(&fixture.system, config, &mut io)
-            .err()
-            .unwrap()
-            .code(),
-        ErrorCode::RecoveryRequired
-    );
+    let (config, _) = discover_startup_with_io(&fixture.system, config, &mut io).unwrap();
+    assert!(config.excludes_io_disk(&target.disk_id));
+    assert_eq!(config.metadata_members().len(), 2);
+    assert_eq!(config.metadata_quorum(), 2);
     io.assert_only(&moved[1..]);
 }

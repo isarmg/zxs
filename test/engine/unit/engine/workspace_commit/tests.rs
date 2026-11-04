@@ -295,24 +295,27 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
     let purge = engine
         .create_purge_plan(&repo.history_tree_id, vec![old_version], "admin")
         .unwrap();
-    assert!(!Arc::ptr_eq(&frozen, &engine.state));
+    assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert_eq!(canonical_json(frozen.as_ref()).unwrap(), frozen_bytes);
     assert!(!frozen.plans.contains_key(&purge.plan_id));
-    assert_eq!(engine.state.plans[&purge.plan_id], purge);
+    assert!(!engine.state.plans.contains_key(&purge.plan_id));
+    assert_eq!(engine.plan(&purge.plan_id).unwrap(), purge);
 
     let with_purge = Arc::clone(&engine.state);
     let with_purge_bytes = canonical_json(with_purge.as_ref()).unwrap();
     let historical = engine
         .create_historical_save_plan(&repo.history_tree_id, options, "admin")
         .unwrap();
-    assert!(!Arc::ptr_eq(&with_purge, &engine.state));
+    assert!(Arc::ptr_eq(&with_purge, &engine.state));
     assert_eq!(
         canonical_json(with_purge.as_ref()).unwrap(),
         with_purge_bytes
     );
     assert!(!with_purge.plans.contains_key(&historical.plan_id));
-    assert_eq!(engine.state.plans[&historical.plan_id], historical);
-    assert_eq!(engine.state.plans[&purge.plan_id], purge);
+    assert!(!engine.state.plans.contains_key(&historical.plan_id));
+    assert_eq!(engine.plan(&historical.plan_id).unwrap(), historical);
+    assert!(!engine.state.plans.contains_key(&purge.plan_id));
+    assert_eq!(engine.plan(&purge.plan_id).unwrap(), purge);
 
     let before_publish = Arc::clone(&engine.state);
     let before_publish_bytes = canonical_json(before_publish.as_ref()).unwrap();

@@ -412,7 +412,23 @@ fn coverage(
         let root = &engine.disk_resources.get(d)?.root;
         let mut entries = Vec::new();
         inventory(root, Path::new("metadata"), &mut entries, &mut budget)?;
-        inventory(root, Path::new("histories"), &mut entries, &mut budget)?;
+        // A newly admitted member receives control metadata without creating
+        // an empty payload namespace. Cover that exact absence rather than
+        // creating it or omitting it from the checkpoint: later appearance
+        // must invalidate the shortcut and force authoritative replay.
+        let histories = Path::new("histories");
+        if metadata(root, histories)?.is_none() {
+            add_entry(
+                &mut entries,
+                CoverageEntry {
+                    path: "histories".into(),
+                    value: Covered::Absent,
+                },
+                &mut budget,
+            )?;
+        } else {
+            inventory(root, histories, &mut entries, &mut budget)?;
+        }
         for path in absent.get(&d.disk_id).into_iter().flatten() {
             add_entry(
                 &mut entries,

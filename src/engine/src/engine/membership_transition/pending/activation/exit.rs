@@ -8,6 +8,7 @@ use crate::engine::disk_registry::{
 };
 
 mod runtime;
+pub(in crate::engine) mod stop_plan;
 pub(in crate::engine) use runtime::PendingDiskExit;
 pub(in crate::engine::membership_transition) mod replay;
 mod verify;

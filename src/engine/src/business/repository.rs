@@ -20,6 +20,8 @@ pub(super) fn main_for_branch<'a>(state: &'a State, branch: &str) -> Option<&'a 
 impl Engine {
     /// Rebind an SMB share only after the manager explicitly selects a live
     /// branch. A history split never invokes this operation implicitly.
+    /// Registry admission proves a metadata-only change, not body I/O or write
+    /// authority for a disabled or detached owner.
     pub fn set_smb_binding(
         &mut self,
         repository: &str,
@@ -91,6 +93,10 @@ impl Engine {
                         "close affected write workspaces before rebinding the share",
                     ));
                 }
+                let namespace_binding = engine
+                    .admitted_current_namespaces()?
+                    .map(|current| current.smb_binding_source(state, &repo, branch))
+                    .transpose()?;
                 let history_id = repo.history_tree_id.clone();
                 let repo = state
                     .repositories
@@ -117,13 +123,17 @@ impl Engine {
                         "history generation exhausted",
                     )
                 })?;
-                Ok(json!({
+                let mut result = json!({
                     "repository_id": repository,
                     "branch_id": branch_id,
                     "smb_enabled": enabled,
                     "generation": history.generation.to_string(),
                     "smb_binding_generation": binding_generation.to_string()
-                }))
+                });
+                if let Some(binding) = namespace_binding {
+                    result["namespace_binding"] = binding;
+                }
+                Ok(result)
             },
         )
     }

@@ -15,7 +15,9 @@ mod file_branches;
 mod file_synchronization;
 mod history_merges;
 mod new_scope;
+mod path_notes;
 mod relocation;
+mod smb_bindings;
 mod workspace;
 use crate::{
     BranchState, Commit, Entry, Error, ErrorCode, NamespaceEntryKind, NamespaceOperation, Result,
@@ -190,6 +192,7 @@ impl CurrentNamespaces {
             || kind == "workspace.namespace.admit"
             || kind == "file.namespace"
             || kind == "file.metadata"
+            || kind == "file.path.metadata"
             || kind == "version.metadata"
             || kind == "file.branch.rename"
             || kind == "file.branch.create"
@@ -475,6 +478,8 @@ impl CurrentNamespaces {
     /// Derived only before a real publication. Ordinary publication installs the
     /// result atomically with its State; failure leaves the previous view intact.
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
+        self.verify_path_notes(previous, next)?;
+        self.verify_smb_bindings(previous, next)?;
         let mut view = self.clone();
         let branch_changes = next.branches.changes_since(&previous.branches);
         let directory_changes = next

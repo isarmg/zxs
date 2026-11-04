@@ -1362,7 +1362,16 @@ impl Engine {
             ));
         }
         self.require_write()?;
-        self.planning_context().plan_new_mutation(
+        let context = self.planning_context();
+        if kind == "smb.binding.update" {
+            return context.plan_smb_binding_mutation(
+                principal,
+                operation_id,
+                digest,
+                |_, next, prepared| change(self, next, prepared),
+            );
+        }
+        context.plan_new_mutation(
             kind,
             principal,
             operation_id,

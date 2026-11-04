@@ -163,7 +163,6 @@ impl Engine {
             &plan,
             false,
         )?;
-        self.retain_local_plan(plan.clone());
         Ok(plan)
     }
     pub fn cancel_plan(

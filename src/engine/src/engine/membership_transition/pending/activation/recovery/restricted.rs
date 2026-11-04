@@ -1,11 +1,14 @@
 //! Fixed-probe authority reconstruction before Engine resource admission.
 //! Publication replay remains a separate gate; probes never choose a new N/Q.
 use super::*;
+#[path = "exit_stop.rs"]
+mod exit_stop;
 use crate::engine::disk_lifecycle::bootstrap::{
     BootstrapError, LoadedLocator, ReadProbe, RestrictedProbes, StopHint,
     runtime::{management_error, open_store},
     store::BootstrapStore,
 };
+pub(in crate::engine::membership_transition::pending::activation) use exit_stop::verify_prepared_exit_stop;
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum RestrictedDiscoveryFailure {
@@ -61,6 +64,7 @@ fn discover_startup_with_io(
 ) -> Result<(ValidatedConfig, BootstrapStore)> {
     let terminal = super::super::terminal_resume::completed_selector(root)?;
     let store = open_store(root)?;
+    super::super::exit::stop_plan::require_no_pending_stop(root, &store)?;
     let config = discover_startup_in_store_with_io(&store, projected, io)?;
     super::super::root_extension::require_selected_activation(root, &config)?;
     if let Some(terminal) = terminal {

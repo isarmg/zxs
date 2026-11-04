@@ -2,8 +2,8 @@
 use super::*;
 
 mod restricted;
-pub(super) use restricted::verify_prepared_add;
 pub(crate) use restricted::{discover_startup, discover_startup_in_store};
+pub(super) use restricted::{verify_prepared_add, verify_prepared_exit_stop};
 
 pub(crate) fn latest_restore_config(
     configs: &BTreeMap<String, (ValidatedConfig, usize)>,
@@ -722,10 +722,16 @@ impl Engine {
     /// Routine open remains read-only at this boundary and never adopts pending roots.
     pub fn resume_membership_activation(root: &Path) -> Result<Self> {
         let (root, projected) = Self::recovery_projection(root, None)?;
-        let extension = super::root_extension::prepare_resume(&root, &projected)?;
-        let (config, bootstrap) = match &extension {
-            Some(extension) => (extension.config(), None),
-            None => {
+        let stop = super::exit::stop_plan::prepare_resume(&root, &projected)?;
+        let extension = if stop.is_none() {
+            super::root_extension::prepare_resume(&root, &projected)?
+        } else {
+            None
+        };
+        let (config, bootstrap) = match (&stop, &extension) {
+            (Some(stop), _) => (stop.config(), None),
+            (_, Some(extension)) => (extension.config(), None),
+            (None, None) => {
                 let (config, bootstrap) = discover_startup(&root, projected)?;
                 (config, Some(bootstrap))
             }
@@ -764,6 +770,9 @@ impl Engine {
             }
         }
         let mut engine = Self::prepare_recovery_resources(root, config, resources)?;
+        if let Some(stop) = stop {
+            stop.publish(&engine)?;
+        }
         if let Some(extension) = extension {
             extension.publish(&engine)?;
         }

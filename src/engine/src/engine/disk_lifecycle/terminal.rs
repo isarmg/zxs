@@ -117,7 +117,7 @@ impl TerminalDiskExit {
             ));
         }
         self.store.synchronize_preparation(authority)?;
-        let stop = synchronize_stop(&self.store, &self.verified)?;
+        let stop = synchronize_stop(&self.store, &self.verified, Some(&self.binding))?;
         #[cfg(feature = "fault-injection")]
         engine.failpoint("after_terminal_stop")?;
         drop(self.binding.begin_quiesce()?);
@@ -166,7 +166,7 @@ impl TerminalManagement {
         store.require_no_resume()?;
         let verified = store.load_authority()?;
         store.synchronize_preparation(&verified.authority)?;
-        let stop = synchronize_stop(&store, &verified)?;
+        let stop = synchronize_stop(&store, &verified, None)?;
         let target_stop = RecoveredDiskIo::admit_terminal(&stop)?;
         store.publish(&verified.authority)?;
         Self::from_verified(store, verified, locks, target_stop)
@@ -180,7 +180,7 @@ impl TerminalManagement {
         let verified = store.load_authority()?;
         store.verify_publication(&verified.authority)?;
         crate::engine::membership_transition::pending::activation::terminal_resume::resume_bootstrap_extension(store.system(), &verified)?;
-        let stop = synchronize_stop(&store, &verified)?;
+        let stop = synchronize_stop(&store, &verified, None)?;
         let target_stop = RecoveredDiskIo::admit_terminal(&stop)?;
         Self::from_verified(store, verified, locks, target_stop)
     }
@@ -291,28 +291,11 @@ impl TerminalManagement {
 fn synchronize_stop(
     store: &TerminalStore,
     verified: &VerifiedTerminalAuthority,
+    live_binding: Option<&DiskIoBinding>,
 ) -> Result<VerifiedTerminalStop> {
-    let authority = &verified.authority;
-    let identity = authority.target();
-    let intent_digest =
-        IntentDigest::parse(&authority.transition_hash()?).map_err(management_error)?;
+    let identity = verified.authority.target();
     let mut bootstrap = open_store(store.system().path())?;
-    let mut locator = bootstrap
-        .reload(&identity.pool_id)
-        .map_err(management_error)?;
-    let present = locator.stop_hints().any(|stop| {
-        stop.disk_id == identity.disk_id
-            && stop.slot_id == identity.slot_id
-            && stop.binding_generation == identity.binding_generation
-            && stop.operation_id == authority.operation_id()
-            && stop.intent_digest == intent_digest
-    });
-    if !present {
-        locator = bootstrap
-            .append_terminal_stop(&locator, verified)
-            .map_err(management_error)?;
-    }
-    bootstrap.sync_current(&locator).map_err(management_error)?;
+    store.synchronize_stop_plan(&mut bootstrap, verified, live_binding)?;
     Ok(VerifiedTerminalStop { identity })
 }
 
@@ -329,3 +312,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/engine/terminal_management_adversarial_tests.rs"]
 mod adversarial_tests;
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/terminal_stop_publication_tests.rs"]
+mod stop_publication_tests;

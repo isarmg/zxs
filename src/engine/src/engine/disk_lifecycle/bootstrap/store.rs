@@ -3,11 +3,14 @@ mod root_extension;
 pub(crate) use root_extension::PreparedRootExtension;
 
 use super::*;
+#[path = "stop_publication.rs"]
+mod stop_publication;
 use platform_io::fs_safety::{
     AdvisoryLock, AtomicFile, EntryName, PrivateDirectory,
     linux::{MountPolicy, OpenAt2Root, open_private_regular},
 };
 use std::{io::Read, os::unix::fs::MetadataExt};
+pub(in crate::engine) use stop_publication::PreparedStop;
 
 const HEAD_FILE: &str = "head.json";
 const LOCK_FILE: &str = "writer.lock";
@@ -75,59 +78,6 @@ impl BootstrapStore {
         roots: Vec<RootObservation>,
     ) -> Result<LoadedLocator> {
         self.publish(None, Record::initial(pool_id, roots)?)
-    }
-    /// Caller must authenticate the successor and retain its admitted handles.
-    /// This only adds locator addresses; it cannot remove or clear any stop.
-    pub(crate) fn append_roots(
-        &mut self,
-        previous: &LoadedLocator,
-        roots: Vec<RootObservation>,
-    ) -> Result<LoadedLocator> {
-        match Record::extend(previous, roots)? {
-            Some(record) => self.publish(Some(&previous.head), record),
-            None => {
-                self.sync_current(previous)?;
-                Ok(previous.clone())
-            }
-        }
-    }
-
-    /// Persist after the retained control closure is prepared, but BEFORE any
-    /// irreversible target closure or active Exit marker. Any error, including
-    /// uncertain publication/fsync, forbids advancing that stop boundary.
-    /// The exact same request can retry a partially published local update.
-    /// A pending stop survives even if the corresponding intent never existed.
-    pub(crate) fn append_stop(
-        &mut self,
-        previous: &LoadedLocator,
-        target: &DiskRegistrationIdentity,
-        operation_id: OperationId,
-        intent_digest: IntentDigest,
-    ) -> Result<LoadedLocator> {
-        let record = Record::stop(previous, target, operation_id, intent_digest)?;
-        self.publish(Some(&previous.head), record)
-    }
-    /// An empty discovery set is available only to an independently verified
-    /// terminal handoff. This hint supplies no voters or business authority.
-    pub(in crate::engine) fn append_terminal_stop(
-        &mut self,
-        previous: &LoadedLocator,
-        verified: &crate::engine::membership_transition::terminal::VerifiedTerminalAuthority,
-    ) -> Result<LoadedLocator> {
-        let authority = &verified.authority;
-        let digest = authority
-            .transition_hash()
-            .map_err(|source| BootstrapError::Io {
-                stage: "terminal intent digest",
-                source: std::io::Error::other(source),
-            })?;
-        let record = Record::terminal_stop(
-            previous,
-            &authority.target(),
-            authority.operation_id(),
-            IntentDigest::parse(&digest)?,
-        )?;
-        self.publish(Some(&previous.head), record)
     }
     /// Any absent/corrupt head, missing payload, dangling newer record, partial
     /// temporary file, inconsistent chain or unknown entry closes discovery.
@@ -419,3 +369,7 @@ fn expected_records(generation: u64) -> Inventory {
         maximum: generation,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/engine/bootstrap_store_fixtures.rs"]
+mod fixtures;

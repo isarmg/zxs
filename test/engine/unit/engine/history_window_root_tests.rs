@@ -258,7 +258,7 @@ fn logical_history_roots_do_not_depend_on_write_reuse_or_integrity_epoch() {
 }
 
 #[test]
-fn a_durable_local_plan_preserves_exact_roots_across_state_detachment_and_restart() {
+fn a_durable_local_plan_preserves_the_published_state_and_exact_roots_after_restart() {
     let (temp, mut engine, repository, file) = fixture();
     let history = &repository.history_tree_id;
     let old_view = engine.metadata_view();
@@ -288,7 +288,7 @@ fn a_durable_local_plan_preserves_exact_roots_across_state_detachment_and_restar
         )
         .unwrap();
     let new_view = engine.metadata_view();
-    assert!(!std::ptr::eq(
+    assert!(std::ptr::eq(
         old_view.business_projection(),
         new_view.business_projection()
     ));
@@ -299,7 +299,8 @@ fn a_durable_local_plan_preserves_exact_roots_across_state_detachment_and_restar
             .contains_key(&plan.plan_id)
     );
     assert!(new_view.business_projection().plans.is_empty());
-    assert_eq!(engine.state().plans[&plan.plan_id], plan);
+    assert!(!engine.state().plans.contains_key(&plan.plan_id));
+    assert_eq!(engine.plan(&plan.plan_id).unwrap(), plan);
     assert_eq!(engine.state().sequence, sequence);
     assert_eq!(old_view.history_root(history).unwrap(), root);
     assert_eq!(new_view.history_root(history).unwrap(), root);
@@ -315,6 +316,76 @@ fn a_durable_local_plan_preserves_exact_roots_across_state_detachment_and_restar
     assert_eq!(observed_root(&engine, history), root);
     assert_eq!(engine.plan(&plan.plan_id).unwrap(), plan);
     assert_catalog_matches(&engine);
+}
+
+#[test]
+fn unrelated_publication_does_not_publish_local_ready_plans_after_cold_recovery() {
+    let (temp, mut engine, target, original) = fixture();
+    save(&mut engine, &target, b"replacement body");
+    let frozen = Arc::clone(&engine.state);
+    let frozen_bytes = canonical_json(frozen.as_ref()).unwrap();
+    let root = observed_root(&engine, &target.history_tree_id);
+    let source = engine.state.branches[&target.main_branch_id]
+        .head_commit_id
+        .clone();
+    let purge = engine
+        .create_purge_plan(&target.history_tree_id, vec![original.version_id], "admin")
+        .unwrap();
+    let historical = engine
+        .create_historical_save_plan(
+            &target.history_tree_id,
+            HistoricalSaveOptions {
+                source_commit_id: source,
+                name: "durable local preview".into(),
+                workspace_id: None,
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    assert!(Arc::ptr_eq(&frozen, &engine.state));
+    assert_eq!(canonical_json(engine.state()).unwrap(), frozen_bytes);
+    for plan in [&purge, &historical] {
+        assert_eq!(plan.state, PlanState::Ready);
+        assert!(!engine.state().plans.contains_key(&plan.plan_id));
+        assert_eq!(engine.plan(&plan.plan_id).unwrap(), *plan);
+    }
+
+    // Publish unrelated business metadata after both previews. Neither local
+    // file is an authoritative predecessor record that may ride this write.
+    let unrelated = repository(&mut engine, "unrelated plan publication");
+    assert!(engine.state().sequence > frozen.sequence);
+    assert_eq!(canonical_json(frozen.as_ref()).unwrap(), frozen_bytes);
+    assert_eq!(engine.state().plans, frozen.plans);
+    let published_sequence = engine.state().sequence;
+    assert_eq!(observed_root(&engine, &target.history_tree_id), root);
+    assert_catalog_matches(&engine);
+    for plan in [&purge, &historical] {
+        assert!(!engine.state().plans.contains_key(&plan.plan_id));
+        assert_eq!(engine.plan(&plan.plan_id).unwrap(), *plan);
+    }
+    drop(engine);
+
+    // Exercise cold replay and the checkpoint it leaves, not just the live
+    // metadata projection, which intentionally omits every plan.
+    for _ in 0..2 {
+        let engine = Engine::open(&temp.path().join("state")).unwrap();
+        assert_eq!(engine.state().sequence, published_sequence);
+        assert!(
+            engine
+                .state()
+                .repositories
+                .contains_key(&unrelated.repository_id)
+        );
+        assert_eq!(engine.state().plans, frozen.plans);
+        assert_eq!(observed_root(&engine, &target.history_tree_id), root);
+        assert_catalog_matches(&engine);
+        for plan in [&purge, &historical] {
+            assert!(!engine.state().plans.contains_key(&plan.plan_id));
+            assert_eq!(engine.plan(&plan.plan_id).unwrap(), *plan);
+        }
+    }
 }
 
 #[test]

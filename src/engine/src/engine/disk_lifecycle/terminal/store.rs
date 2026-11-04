@@ -1,6 +1,8 @@
 //! Immutable, bounded terminal authority selected by protected system state.
 //! System writer ownership serializes both this path and ordinary Engine work.
 use super::*;
+#[path = "stop_plan.rs"]
+mod stop_plan;
 use crate::{
     decode_strict, disk::MAX_METADATA, engine::membership_transition::terminal::AUTHORITY_KIND,
     journal::AuthenticatedMetadataObject,

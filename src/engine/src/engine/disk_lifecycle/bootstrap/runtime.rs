@@ -102,6 +102,7 @@ impl Engine {
     ) -> crate::Result<InitialActivationProbeGuard> {
         let root = existing_private_dir(root)?.path().to_path_buf();
         let store = open_store(&root)?;
+        crate::engine::membership_transition::pending::activation::exit::stop_plan::require_no_pending_stop(&root, &store)?;
         let locator = store.reload(&config.pool_id).map_err(management_error)?;
         if config.generation().is_some()
             || locator.head.generation != 1
@@ -301,19 +302,19 @@ impl Engine {
         }
         let intent_digest = IntentDigest::parse(intent_hash).map_err(management_error)?;
         let mut store = open_store(&self.root)?;
-        let mut locator = store
-            .reload(&self.config.pool_id)
-            .map_err(management_error)?;
-        if append && locator.stop_hints().next().is_none() {
-            // Preserve a previously authenticated, unstopped directory relocation
-            // before making its exclusion irreversible. Held resources only.
-            locator = store
-                .append_roots(
-                    &locator,
-                    observe(&self.config, self.disk_resources.handles())?,
-                )
-                .map_err(management_error)?;
-        }
+        let prepared = crate::engine::membership_transition::pending::activation::exit::stop_plan::synchronize(
+            self, &mut store, binding, operation_id, intent_digest, append,
+        )?;
+        let locator = match prepared {
+            Some(locator) => locator,
+            None => {
+                let locator = store
+                    .reload(&self.config.pool_id)
+                    .map_err(management_error)?;
+                store.sync_current(&locator).map_err(management_error)?;
+                locator
+            }
+        };
         let present = locator.stop_hints().any(|stop| {
             stop.disk_id == binding.disk_id
                 && stop.slot_id == binding.slot_id
@@ -322,34 +323,26 @@ impl Engine {
                 && stop.intent_digest == intent_digest
         });
         if !present {
-            if append {
-                locator = store
-                    .append_stop(&locator, binding, operation_id, intent_digest)
-                    .map_err(management_error)?;
-            } else {
-                // Explicit system-loss recovery records only supplied retained
-                // addresses. Unlisted roots remain forbidden without probing
-                // them to manufacture a historical directory observation.
-                if !locator.excludes_binding(binding)
-                    || !self.config.excludes_io_disk(&binding.disk_id)
-                {
-                    return Err(Error::new(
-                        ErrorCode::RecoveryRequired,
-                        "exact stop or durable retained-root exclusion is absent",
-                    ));
-                }
-                let generation = self.config.generation().ok_or_else(|| {
-                    Error::new(
-                        ErrorCode::RecoveryRequired,
-                        "retained-root exclusion has no Exit authority",
-                    )
-                })?;
-                generation
-                    .portable
-                    .verify_bootstrap_stop(binding, operation_id, intent_hash)?;
+            // Explicit system-loss recovery records only supplied retained
+            // addresses. Unlisted roots remain forbidden without probing
+            // them to manufacture a historical directory observation.
+            if !locator.excludes_binding(binding) || !self.config.excludes_io_disk(&binding.disk_id)
+            {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "exact stop or durable retained-root exclusion is absent",
+                ));
             }
+            let generation = self.config.generation().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "retained-root exclusion has no Exit authority",
+                )
+            })?;
+            generation
+                .portable
+                .verify_bootstrap_stop(binding, operation_id, intent_hash)?;
         }
-        store.sync_current(&locator).map_err(management_error)?;
         Ok(DurableDiskStop {
             binding: binding.clone(),
             operation_id,

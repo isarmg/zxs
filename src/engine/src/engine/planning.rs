@@ -201,6 +201,69 @@ impl<'a> PlanningContext<'a> {
         {
             return Err(super::disk_registry::current::pending_publication());
         }
+        self.prepare_new_mutation(kind, principal, operation_id, digest, change)
+    }
+
+    /// SMB binding has a closed, metadata-only proof, not a general kind permit.
+    /// The candidate cannot leave planning until its native receipt and every
+    /// changed State field match the admitted source. Publication and cold replay
+    /// independently recheck the proof before retaining unchanged namespaces.
+    pub(super) fn plan_smb_binding_mutation<F>(
+        &self,
+        principal: &str,
+        operation_id: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
+        if self.current_namespaces.is_none()
+            && self
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(super::disk_registry::current::pending_publication());
+        }
+        let plan = self.prepare_new_mutation(
+            "smb.binding.update",
+            principal,
+            operation_id,
+            digest,
+            change,
+        )?;
+        let MutationPlan::Prepared {
+            next,
+            prepared,
+            result,
+        } = &plan
+        else {
+            unreachable!("invariant: new mutation preparation does not replay old receipts");
+        };
+        if !prepared.is_empty() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "SMB binding cannot prepare payload writes",
+            ));
+        }
+        if let Some(view) = self.current_namespaces {
+            view.verify_new_smb_binding(self.state, next, result)?;
+        }
+        Ok(plan)
+    }
+
+    fn prepare_new_mutation<F>(
+        &self,
+        kind: &str,
+        principal: &str,
+        operation_id: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
         // Published and planning views share only the immutable base. Every
         // mutation still owns an independent next State until publication.
         let mut next = self.state.as_ref().clone();
