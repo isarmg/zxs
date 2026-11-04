@@ -3,6 +3,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
+import subprocess
+import sys
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -123,6 +126,59 @@ class SystemSambaGate(unittest.TestCase):
         self.assertIn('previous.returncode == 0 or "NT_STATUS_UNSUCCESSFUL" not in previous.stdout', script)
         self.assertIn('.replace(next_password, "[redacted]")', script)
 
+    def test_account_tree_read_sequences_commands_after_buffered_input_is_consumed(self):
+        # Model Samba 4.22's poll-before-fgets reader with real buffered pipe I/O.
+        # This tests driver synchronization only, not Samba/runtime acceptance.
+        reader = '''
+import select
+import shlex
+import sys
+from pathlib import Path
+poll = select.poll()
+poll.register(sys.stdin.fileno(), select.POLLIN | select.POLLHUP)
+while True:
+    poll.poll()
+    line = sys.stdin.readline()
+    if not line:
+        break
+    command = shlex.split(line)
+    if command[0] == "get":
+        Path(command[2]).write_bytes(sys.argv[1].encode())
+    elif command[0] == "!touch":
+        Path(command[1]).touch()
+'''
+        for batched, body in ((True, "old"), (False, "old"), (False, "bad")):
+            with self.subTest(batched=batched, body=body), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                before = root / "before read.bin"
+                ready = root / "tree ready"
+                process = subprocess.Popen([sys.executable, "-c", reader, body],
+                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                try:
+                    if batched:
+                        process.stdin.write(f'get report.txt "{before}"\n!touch ' + shlex.quote(str(ready)) + "\n")
+                        process.stdin.flush()
+                        GATE.wait_file(before, process, timeout=5)
+                        self.assertEqual(before.read_bytes(), b"old")
+                        # The second line is buffered in the reader, so its next
+                        # poll cannot see it until more pipe input (or EOF) arrives.
+                        with self.assertRaises(TimeoutError):
+                            GATE.wait_file(ready, process, timeout=0.2)
+                    else:
+                        wait = GATE.wait_file
+                        with patch.object(GATE, "wait_file",
+                                          side_effect=lambda path, child, timeout: wait(path, child, timeout=5)):
+                            if body == "bad":
+                                with self.assertRaisesRegex(RuntimeError, "known body before switching"):
+                                    GATE.read_account_tree_before_switch(process, before, ready)
+                            else:
+                                GATE.read_account_tree_before_switch(process, before, ready)
+                        self.assertTrue(ready.is_file())
+                    self.assertIsNone(process.poll())  # Keep this exact tree alive for the switch.
+                finally:
+                    _, error = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, error)
+
     def test_existing_tree_gate_requires_specific_read_failure_and_no_returned_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "download.bin"
@@ -142,7 +198,9 @@ class SystemSambaGate(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "returned file bytes"):
                 GATE.revoked_account_tree_read("NT_STATUS_ACCESS_DENIED opening remote file report.txt", 0, target)
         script = (ROOT / ".github/scripts/check-system-samba.py").read_text()
-        self.assertLess(script.index('wait_file(tree_ready, previous_tree'), script.index('saved = password_request'))
+        run = script.split('def run(args):', 1)[1]
+        self.assertLess(run.index('read_account_tree_before_switch(previous_tree, before_switch, tree_ready)'),
+                        run.index('saved = password_request'))
         self.assertIn('before_switch.read_bytes() != b"old"', script)
         self.assertIn('active_body.read_bytes() != b"old"', script)
         self.assertIn('account-switch-existing-tree-read-revoked', script)

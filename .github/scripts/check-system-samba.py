@@ -101,6 +101,21 @@ def revoked_account_tree_read(output, returncode, destination):
     return sorted(set(failures))
 
 
+def read_account_tree_before_switch(previous_tree, before_switch, tree_ready):
+    previous_tree.stdin.write(f'get report.txt "{before_switch}"\n')
+    previous_tree.stdin.flush()
+    # Samba's non-interactive reader polls stdin before each buffered fgets.
+    # Sending both lines together can leave the marker buffered behind that poll.
+    # File creation proves the first command was consumed; the later marker
+    # still runs only after that same tree's get has completed and closed the file.
+    wait_file(before_switch, previous_tree, timeout=30)
+    previous_tree.stdin.write("!touch " + shlex.quote(str(tree_ready)) + "\n")
+    previous_tree.stdin.flush()
+    wait_file(tree_ready, previous_tree, timeout=30)
+    if before_switch.read_bytes() != b"old":
+        raise RuntimeError("existing account tree did not read the known body before switching")
+
+
 def run(args):
     args.output.unlink(missing_ok=True)  # A failed rerun must not retain a prior success receipt.
     if os.geteuid() != 0 or os.environ.get("ZXS_ISOLATED_SAMBA_TEST") != "1":
@@ -292,11 +307,7 @@ force user = {smb_user.pw_name}
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, start_new_session=True)
                     children.append(previous_tree)
-                    previous_tree.stdin.write(f'get report.txt "{before_switch}"\n!touch ' + shlex.quote(str(tree_ready)) + "\n")
-                    previous_tree.stdin.flush()
-                    wait_file(tree_ready, previous_tree, timeout=30)
-                    if before_switch.read_bytes() != b"old":
-                        raise RuntimeError("existing account tree did not read the known body before switching")
+                    read_account_tree_before_switch(previous_tree, before_switch, tree_ready)
                     saved = password_request(ready["password_http_port"], web_token, "POST", "/api/smb/account",
                         {"username": username, "expected_generation": expected_generation,
                          "administrator_password": "synthetic-web-test-password"})
