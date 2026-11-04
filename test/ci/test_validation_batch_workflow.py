@@ -11,6 +11,11 @@ ROOT = Path(__file__).resolve().parents[2]
 BRANCH = 'validation/ui-smb-history-20261104'
 
 
+def step_body(workflow, name):
+    following = workflow.split(f'- name: {name}', 1)[1]
+    return re.split(r'\n(?:      - |  [a-z][a-z-]*:)', following, maxsplit=1)[0]
+
+
 class ValidationBatchWorkflow(unittest.TestCase):
     def setUp(self):
         self.normal = (ROOT / '.github/workflows/ci.yml').read_text()
@@ -55,8 +60,10 @@ class ValidationBatchWorkflow(unittest.TestCase):
         script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
                                  .split('      - name:', 1)[0])
         base = '01305735ce153015a08bf14c6920cdce40b8b79b'
+        parent = '8019ec672d666fb3812af1231be2e766114b1ef3'
         self.assertIn(f'base={base}', script)
-        self.assertIn('fetch-depth: 2', self.batch)
+        self.assertIn(f'expected_parent={parent}', script)
+        self.assertIn('fetch-depth: 3', self.batch)
         self.assertIn('git diff --name-only --no-renames "$base" HEAD', script)
         paths = [
             '.github/workflows/validate-ui-smb-history.yml',
@@ -74,6 +81,7 @@ class ValidationBatchWorkflow(unittest.TestCase):
             if [ "$*" = "$TEST_GIT_FAIL" ]; then return 42; fi
             case "$*" in
                 "rev-parse HEAD^") printf '%s\n' "$TEST_PARENT" ;;
+                "rev-parse $expected_parent^") printf '%s\n' "$base" ;;
                 "rev-parse HEAD:src") printf '%s\n' "$TEST_SOURCE" ;;
                 "rev-parse $base:src") printf '%s\n' baseline-source ;;
                 "diff --name-only --no-renames $base HEAD") printf '%s\n' "$TEST_PATHS" ;;
@@ -82,18 +90,18 @@ class ValidationBatchWorkflow(unittest.TestCase):
         }
         '''
         cases = [
-            (base, 'baseline-source', paths, True, ''),
+            (parent, 'baseline-source', paths, True, ''),
             ('another-parent', 'baseline-source', paths, False, ''),
-            (base, 'changed-source', paths, False, ''),
+            (parent, 'changed-source', paths, False, ''),
         ]
         for extra in ['src/smb/src/client.rs', 'test/smb/unit/client/tests.rs',
                       'test/interface/integration/style_contracts.rs',
                       '.github/workflows/smb-sdk.yml', 'Cargo.lock',
                       'docs/unrelated.md', 'test/tools/browser-smoke/runner/unknown.rs']:
-            cases.append((base, 'baseline-source', paths + [extra], False, ''))
-        for failed in ['rev-parse HEAD^', 'rev-parse HEAD:src', f'rev-parse {base}:src',
+            cases.append((parent, 'baseline-source', paths + [extra], False, ''))
+        for failed in ['rev-parse HEAD^', f'rev-parse {parent}^', 'rev-parse HEAD:src', f'rev-parse {base}:src',
                        f'diff --name-only --no-renames {base} HEAD']:
-            cases.append((base, 'baseline-source', paths, False, failed))
+            cases.append((parent, 'baseline-source', paths, False, failed))
         for parent, source, changed, expected, failed in cases:
             with self.subTest(parent=parent, source=source, changed=changed, failed=failed):
                 with tempfile.TemporaryDirectory() as directory:
@@ -121,8 +129,16 @@ class ValidationBatchWorkflow(unittest.TestCase):
                        'Check changed wire contracts and SMB feature combinations',
                        'Build production Web distribution',
                        'Exercise real login, setup, monitor, file rows and history flows']:
-            step = self.batch.split(f'- name: {marker}', 1)[1].split('      - name:', 1)[0]
+            step = step_body(self.batch, marker)
             self.assertNotIn(condition, step)
+
+    def test_step_scope_stops_at_next_action_or_job(self):
+        selected = "      - name: selected\n        run: keep-this\n"
+        for following in ["      - name: next\n        if: unrelated\n",
+                          "      - uses: actions/next\n        if: unrelated\n",
+                          "  web-tests:\n    if: unrelated\n"]:
+            self.assertEqual(step_body(selected + following, 'selected'),
+                             "\n        run: keep-this")
 
     def test_batch_keeps_read_permissions_and_same_run_assets(self):
         self.assertIn('permissions:\n  contents: read\n', self.batch)

@@ -27,18 +27,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 3
       - name: Bind validation to the pushed commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Scope the reviewed test-only retry
         id: scope
         run: |
           # Success evidence: https://github.com/isarmg/zxs/actions/runs/41813864437
-          # Only its direct child with this exact test/doc change set may reuse
-          # Web/Samba and native unit results. Other commits keep all six jobs.
+          # This one retry after the static-only child may reuse the successful
+          # baseline only with the exact cumulative test/doc changes below.
           base=01305735ce153015a08bf14c6920cdce40b8b79b
+          expected_parent=8019ec672d666fb3812af1231be2e766114b1ef3
           retry=false
-          if parent=$(git rev-parse HEAD^) && [ "$parent" = "$base" ] &&
+          if parent=$(git rev-parse HEAD^) && [ "$parent" = "$expected_parent" ] &&
+             ancestor=$(git rev-parse "$expected_parent^") && [ "$ancestor" = "$base" ] &&
              source=$(git rev-parse HEAD:src) && baseline_source=$(git rev-parse "$base:src") &&
              [ "$source" = "$baseline_source" ] &&
              changed=$(git diff --name-only --no-renames "$base" HEAD); then
