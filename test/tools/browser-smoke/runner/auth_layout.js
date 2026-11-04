@@ -19,24 +19,110 @@ const disclosed = e => {
 };
 const luminance = rgb => rgb.slice(0,3).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((sum,x,i)=>sum+x*[.2126,.7152,.0722][i],0);
 const contrast = (a,b) => { const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); };
+const raster = async url => {
+    // Decode through img-src blob, not CSP-disallowed blob fetch.
+    const image=new Image();image.src=url;await image.decode();
+    const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+    const context=canvas.getContext('2d');context.drawImage(image,0,0);
+    return {width:canvas.width,height:canvas.height,pixels:context.getImageData(0,0,canvas.width,canvas.height).data};
+};
+const foregroundSelector=':scope > svg[data-zxs-contour-decoration="foreground"]';
+const foregroundStyle = node => {
+    const css=getComputedStyle(node);
+    return Object.fromEntries(['d','fill','fillRule','stroke','opacity','fillOpacity','strokeOpacity','strokeWidth',
+        'display','visibility','transform','filter','clipPath','maskImage'].map(name=>[name,css[name]]));
+};
+const foregroundPaint = async (node, foreground, property, source, url) => {
+    const path=foreground.querySelector(':scope > path');
+    if (!path||foreground.children.length!==1||foreground.children[0]!==path) {
+        return {valid:false,property:'foreground',reason:'expected one foreground path'};
+    }
+    const box=rect(node), svgBox=rect(foreground), parent=node.parentElement;
+    const style=foregroundStyle(path), svgStyle=foregroundStyle(foreground);
+    const markup=foreground.outerHTML, viewBox=foreground.getAttribute('viewBox');
+    // SVG d is a presentation attribute: a CSS declaration can override it.
+    const computedPath=style.d.match(/^path\("([^"]*)"\)$/);
+    const hostStyle=()=>{
+        const css=getComputedStyle(node);
+        return Object.fromEntries(['opacity',...['Top','Right','Bottom','Left'].flatMap(side=>
+            ['Width','Style','Color'].map(part=>`border${side}${part}`))].map(name=>[name,css[name]]));
+    };
+    const host=hostStyle();
+    const state=node.dataset.zxsContourState;
+    const equal=(a,b)=>Object.keys(a).every(key=>a[key]===b[key]);
+    const plain=s=>s.display!=='none'&&s.visibility==='visible'&&s.transform==='none'
+        &&s.filter==='none'&&s.clipPath==='none'&&s.maskImage==='none';
+    // The controller emits an untransformed even-odd ring, not a stroked icon.
+    if (!computedPath||host.opacity!=='1'||!plain(style)||!plain(svgStyle)||style.fillRule!=='evenodd'||style.stroke!=='none'
+        ||box.width<=0||box.height<=0||!['x','y','width','height'].every(key=>Math.abs(box[key]-svgBox[key])<=1)) {
+        return {valid:false,property:'foreground',reason:'hidden, misplaced or unsupported foreground'};
+    }
+    const stable=()=>node.isConnected&&node.parentElement===parent&&foreground.isConnected&&path.isConnected
+        &&foreground.parentElement===node&&path.parentElement===foreground
+        &&node.querySelectorAll(foregroundSelector).length===1&&node.querySelector(foregroundSelector)===foreground
+        &&foreground.children.length===1&&foreground.children[0]===path&&foreground.querySelector(':scope > path')===path
+        &&rendered(node)&&rendered(foreground)&&foreground.outerHTML===markup
+        &&equal(rect(node),box)&&equal(rect(foreground),svgBox)
+        &&equal(foregroundStyle(path),style)&&equal(foregroundStyle(foreground),svgStyle)&&equal(hostStyle(),host)
+        &&getComputedStyle(node)[property]===source&&node.dataset.zxsContourState===state;
+    if (!stable()) return {valid:false,property:'foreground',stable:false};
+    // Foreground borders are deliberately absent from the background decoration.
+    // Its opaque center remains the contrast reference in either theme.
+    const background=await raster(url);
+    const centerIndex=(Math.floor(background.height/2)*background.width+Math.floor(background.width/2))*4;
+    const center=[...background.pixels.slice(centerIndex,centerIndex+4)], backgroundStable=stable();
+    if (!backgroundStable||center[3]<200) return {valid:false,property:'foreground',stable:backgroundStable,backgroundCenterAlpha:center[3]};
+    const ns='http://www.w3.org/2000/svg';
+    const exported=document.createElementNS(ns,'svg'), exportedPath=document.createElementNS(ns,'path');
+    exported.setAttribute('width',String(svgBox.width));exported.setAttribute('height',String(svgBox.height));
+    exported.setAttribute('viewBox',viewBox);exported.setAttribute('opacity',svgStyle.opacity);
+    const aspectRatio=foreground.getAttribute('preserveAspectRatio');
+    if(aspectRatio!==null)exported.setAttribute('preserveAspectRatio',aspectRatio);
+    exportedPath.setAttribute('d',computedPath[1]);
+    for(const [attribute,value] of [['fill',style.fill],['fill-rule',style.fillRule],['stroke',style.stroke],
+        ['opacity',style.opacity],['fill-opacity',style.fillOpacity]]) exportedPath.setAttribute(attribute,value);
+    exported.appendChild(exportedPath);
+    const ownedUrl=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(exported)],{type:'image/svg+xml'}));
+    try {
+        const {width:w,height:h,pixels}=await raster(ownedUrl);
+        const edgePixels=[0,0,0,0];let contrastingPixels=0,centerAlpha=0;
+        const middleX=x=>x>=Math.floor(w*.4)&&x<Math.ceil(w*.6);
+        const middleY=y=>y>=Math.floor(h*.4)&&y<Math.ceil(h*.6);
+        for(let y=0;y<h;y++)for(let x=0;x<w;x++) {
+            const i=(y*w+x)*4;
+            if(middleX(x)&&middleY(y))centerAlpha=Math.max(centerAlpha,pixels[i+3]);
+            if(pixels[i+3]<200)continue;
+            const alpha=pixels[i+3]/255, visible=[0,1,2].map(channel=>pixels[i+channel]*alpha+center[channel]*(1-alpha));
+            if(contrast(visible,center)<3)continue;
+            contrastingPixels++;
+            if(middleX(x)&&y<Math.ceil(h*.25))edgePixels[0]++;
+            if(middleY(y)&&x>=Math.floor(w*.75))edgePixels[1]++;
+            if(middleX(x)&&y>=Math.floor(h*.75))edgePixels[2]++;
+            if(middleY(y)&&x<Math.ceil(w*.25))edgePixels[3]++;
+        }
+        const unchanged=stable();
+        return {valid:unchanged&&centerAlpha===0&&edgePixels.every(n=>n>0)&&contrastingPixels>=Math.min(w,h),
+            property:'foreground',stable:unchanged,width:w,height:h,centerAlpha,backgroundCenterAlpha:center[3],edgePixels,contrastingPixels};
+    } finally {
+        URL.revokeObjectURL(ownedUrl);
+    }
+};
 const decoration = async (node, css) => {
     const property=css.borderImageSource!=='none'?'borderImageSource':'backgroundImage';
     const source=css[property], match=source.match(/^url\(["']?(blob:[^"')]+)["']?\)$/);
     if (!match||!['paint','clip'].includes(node.dataset.zxsContourState)) return {valid:false,property,source};
-    // G4 exact controls use background-image, while nine-slice surfaces use
-    // border-image. Decode through img-src blob, not CSP-disallowed blob fetch.
-    const image=new Image();image.src=match[1];await image.decode();
-    const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
-    const context=canvas.getContext('2d');context.drawImage(image,0,0);
-    const center=[...context.getImageData(Math.floor(canvas.width/2),Math.floor(canvas.height/2),1,1).data];
-    const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;
+    const foreground=node.querySelector(foregroundSelector);
+    if (foreground) return foregroundPaint(node,foreground,property,source,match[1]);
+    // G4 exact controls use background-image; nine-slice surfaces use border-image.
+    const {width,height,pixels}=await raster(match[1]);
+    const i=(Math.floor(height/2)*width+Math.floor(width/2))*4, center=[...pixels.slice(i,i+4)];
     let contrastingPixels=0;
     for(let i=0;i<pixels.length;i+=4) {
         if(pixels[i+3]>=200&&contrast([pixels[i],pixels[i+1],pixels[i+2]],center)>=3) contrastingPixels++;
     }
     const stable=node.isConnected&&getComputedStyle(node)[property]===source;
-    return {valid:stable&&center[3]>=200&&contrastingPixels>=Math.min(canvas.width,canvas.height),property,stable,
-        width:canvas.width,height:canvas.height,centerAlpha:center[3],contrastingPixels};
+    return {valid:stable&&center[3]>=200&&contrastingPixels>=Math.min(width,height),property,stable,
+        width,height,centerAlpha:center[3],contrastingPixels};
 };
 const transparent = color => color==='rgba(0, 0, 0, 0)'||color==='transparent';
 const sides=['Top','Right','Bottom','Left'];

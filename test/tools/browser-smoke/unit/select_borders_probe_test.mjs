@@ -3,19 +3,22 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 const source=readFileSync(new URL('../runner/select_borders.js',import.meta.url),'utf8');
-// The anonymous setup Select is outside .zxs-app-shell. Its black color must
-// retain its separate black border while native auth text fields use underlines.
+// The history toolbar's disk Select must retain its separate black border while
+// native text fields, including the account-only setup inputs, use underlines.
 const css=readFileSync(new URL('../../../../src/web/public/styles/components/select.css',import.meta.url),'utf8');
 const authCss=readFileSync(new URL('../../../../src/web/public/styles/components/auth.css',import.meta.url),'utf8');
-const setup=readFileSync(new URL('../../../../src/web/src/setup.rs',import.meta.url),'utf8');
-assert.match(setup,/<Select label=t\("本地预置方案 ID"/);
+const history=readFileSync(new URL('../../../../src/web/src/history.rs',import.meta.url),'utf8');
+assert.match(history,/<div\s+class="zxs-history-toolbar\b[^"]*">\s*<Select\b/,
+    'The history toolbar exercised by the browser gate must use the shared Select');
 assert.doesNotMatch(authCss,/\.authentication-card \.zxs-input\s*\{[^}]*border:/);
 const baseCss=readFileSync(new URL('../../../../src/web/public/styles/components/base.css',import.meta.url),'utf8');
 assert.match(baseCss,/:root :is\(input,textarea\)\.zxs-input\s*\{[^}]*border-bottom: 1px dashed/,
     'Underline policy must target native text controls, not the button-based Select');
 assert.match(css,/:root \.zxs-select \.zxs-select-trigger\.zxs-input\s*\{\s*border-color:\s*#000;\s*\}/,
-    'Global Select color rule must outrank auth inputs without changing background or dimensions');
+    'Global Select color rule must preserve black borders without changing background or dimensions');
 const selectSource=readFileSync(new URL('../../../../src/interface/src/components/select.rs',import.meta.url),'utf8');
+assert.match(selectSource,/<button\s+class="zxs-input zxs-select-trigger zxs-input--compact"[^>]*role="combobox"/,
+    'Select must remain a button-based combobox, outside the native text underline policy');
 assert.match(selectSource,/let panel_width = bounds\.width\(\)\.min\(\(width - 16\.0\)\.max\(0\.0\)\);/,
     'Popup must use the trigger border-box width without a separate minimum');
 assert.match(selectSource,/let left = bounds\.left\(\)\.min\(width - panel_width - 8\.0\)\.max\(8\.0\);/,

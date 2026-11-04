@@ -497,7 +497,7 @@ fn openapi(api: &Value) -> Result {
         "complete-initialization",
     ] {
         require(
-            api["paths"].get(&format!("/api/setup/{removed}")).is_none(),
+            api["paths"].get(format!("/api/setup/{removed}")).is_none(),
             "removed public storage initialization route was republished",
         )?;
     }
