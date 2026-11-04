@@ -103,9 +103,9 @@ fn membership_activation_publishes_target_generation_and_reopens() {
     let result = fixture.engine.activate_pending_membership().unwrap();
     assert_eq!(result.operation_id, fixture.operation);
     assert_eq!(result.result["membership_epoch"], "2");
-    for (operation, original) in old_operations {
+    for (operation, original) in old_operations.iter() {
         assert_eq!(original.result["membership_epoch"], "1");
-        assert_eq!(fixture.engine.state.operations[&operation], original);
+        assert_eq!(&fixture.engine.state.operations[operation], original);
     }
     assert_eq!(fixture.engine.state.topology_generation, 2);
     assert_ne!(fixture.engine.snapshot, old_snapshot);
