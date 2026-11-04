@@ -60,7 +60,11 @@ impl Engine {
                 let candidate: Candidate =
                     verified_object_at(&self.disk_resources, online, "candidate", hash)?;
                 self.verify_candidate_membership(&candidate)?;
-                if self.config.generation().is_some() && candidate.generation().is_none() {
+                // Ancestor publications belong to their exact archived journal,
+                // never to this generation's active namespace.
+                if self.config.generation().is_some_and(|generation| {
+                    generation.historical_candidate(candidate.sequence) == Some(hash)
+                }) {
                     continue;
                 }
                 let publication: Publication = verified_object_at(

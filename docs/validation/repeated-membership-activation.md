@@ -1,6 +1,6 @@
 # 重复纯添加：后继代际实验批次
 
-本批源码在首次激活基础上实现后继权威链。首次批次的[GitHub 成功证据](first-membership-activation.md)只覆盖首次添加，不覆盖本批。当前未执行本地编译、测试或本批 GitHub 验证，只有源码整理与差异检查；不能据此合入 main 或开放在线 API/Web。
+本批源码在首次激活基础上实现后继权威链。首次批次的[GitHub 成功证据](first-membership-activation.md)只覆盖首次添加，不覆盖本批。[重复批次首次功能运行](https://github.com/isarmg/zxs/actions/runs/41812908199)中 22 个激活测试通过 18 个，4 个多代测试因恢复入口把已归档前代封印误判为当前日志缺失而失败；生产、Clippy、静态、契约和其余受影响过滤通过。现已将豁免条件收窄为认证历史索引中的精确 sequence/hash 匹配，并增加当前日志缺失的反例，修复尚待 GitHub 验证。未执行本地编译或测试，不能据此合入 main 或开放在线 API/Web。
 
 ## 已编写、待 GitHub 执行
 
@@ -10,6 +10,7 @@
 - 原正文、旧本地 proof、冻结旧日志不变；只保留 data-only 根时分别导出 Genesis、第一代、第二代正文，旧和最新历史包独立检查。删除便携前驱节点明确失败，不回退 Genesis。
 - 丢失系统目录、移动目标成员目录并只提供 3/4 目标多数：恢复最新已发布结果，缺员保持禁止新写。
 - 一个目标成员的祖先 archive root 损坏：保持 N=4/Q=3，隔离该成员，保留其所有文件字节并给出恢复警告，其余多数仍读取最新结果。
+- 连续两次添加后，清空当前代日志或截断到激活已发布前缀，即使后续完整 publication seal 仍在，也必须拒绝恢复且不凭封印重造决策历史；原日志截断字节和封印均保持不变。
 - 既有首次激活 17 组及受影响成员、恢复、降级、proof、scanner、workspace、history package、scrub、identity、provenance 过滤继续执行。
 
 复用现有 [membership-validation workflow](../../.github/workflows/membership-validation.yml)，不新增完整 CI 或修改触发规则。新增测试仍使用 `membership_activation_` 前缀；具体测试计数、编译、生产、Clippy、格式、架构和契约结果必须绑定本批提交与 Actions 运行后填写。

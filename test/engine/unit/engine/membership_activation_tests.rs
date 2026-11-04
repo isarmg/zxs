@@ -1084,6 +1084,74 @@ fn membership_activation_successive_additions_keep_each_epoch_and_standalone_pro
 }
 
 #[test]
+fn membership_activation_successor_seals_cannot_replace_missing_current_journals() {
+    for keep_activation_prefix in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.engine.activate_pending_membership().unwrap();
+        prepare_successor(&mut fixture.engine, fixture.temp.path(), "truncated");
+        let activated = fixture.engine.activate_pending_membership().unwrap();
+        let members = fixture.engine.members();
+        let journals = members
+            .iter()
+            .map(|disk| {
+                let path = log_path(&fixture.engine.config, disk);
+                let prefix = if keep_activation_prefix {
+                    fs::read(&path).unwrap()
+                } else {
+                    Vec::new()
+                };
+                (path, prefix)
+            })
+            .collect::<Vec<_>>();
+        write_body(&mut fixture.engine, &fixture.branch, b"sealed third epoch");
+        let disk = &members[0];
+        let root = &fixture.engine.disk_resources.get(disk).unwrap().root;
+        let scan = scan_configured_at(root, disk, &fixture.engine.config).unwrap();
+        let record = &scan.records.last().unwrap().0;
+        assert_eq!(record.record_type, RecordType::Publication);
+        let candidate: Candidate =
+            load_object_at(root, disk, "candidate", &record.candidate_hash).unwrap();
+        assert!(candidate.sequence > activated.sequence);
+        let generation = fixture.engine.config.generation().unwrap();
+        assert_eq!(candidate.generation(), Some(generation.hash.as_str()));
+        assert_eq!(generation.historical_candidate(candidate.sequence), None);
+        let publication: Publication =
+            load_object_at(root, disk, "publication", &record.object_hash).unwrap();
+        let seals = members
+            .iter()
+            .map(|disk| {
+                let path = publication_seal_path(disk, &record.candidate_hash);
+                let bytes = fs::read(&path).unwrap();
+                let seal: PublicationSeal = decode_strict(&bytes).unwrap();
+                verify_publication_seal(&candidate, &publication, &seal).unwrap();
+                (path, bytes)
+            })
+            .collect::<Vec<_>>();
+        let Fixture { temp, engine, .. } = fixture;
+        drop(engine);
+        for (path, prefix) in &journals {
+            fs::write(path, prefix).unwrap();
+        }
+        let error = match Engine::open(&temp.path().join("system")) {
+            Ok(_) => panic!("missing current decisions must not be rebuilt from seals"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert!(
+            error
+                .to_string()
+                .contains("journal history omits a sealed publication")
+        );
+        for (path, prefix) in journals {
+            assert_eq!(fs::read(path).unwrap(), prefix);
+        }
+        for (path, bytes) in seals {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+    }
+}
+
+#[test]
 fn membership_activation_successor_failure_boundaries_resume_without_regressing() {
     for stage in [
         "marker",
