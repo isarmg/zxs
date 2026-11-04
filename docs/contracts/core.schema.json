@@ -6534,6 +6534,284 @@
         "discovery_root"
       ],
       "additionalProperties": false
+    },
+    "FileHistoryMergeInput": {
+      "type": "object",
+      "properties": {
+        "branch_id": {
+          "$ref": "#/$defs/BranchId"
+        },
+        "expected_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "source_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        }
+      },
+      "required": [
+        "branch_id",
+        "expected_node_id",
+        "source_node_id"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryHistoryIdentity": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "directory_id": {
+          "$ref": "#/$defs/DirectoryId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "collection": {
+          "type": "string",
+          "enum": [
+            "nodes",
+            "branches"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        }
+      },
+      "required": [
+        "repository_id",
+        "directory_id",
+        "history_tree_id",
+        "history_root",
+        "collection",
+        "limit"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryHistoryCurrent": {
+      "type": "object",
+      "properties": {
+        "directory_branch_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryBranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "directory_branch_id",
+        "tree_id"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryHistoryNode": {
+      "type": "object",
+      "properties": {
+        "tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "directory_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "parent_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_endpoint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "in_window",
+            "outside_window",
+            null
+          ]
+        },
+        "commit_id": {
+          "$ref": "#/$defs/CommitId"
+        },
+        "path": {
+          "type": "string",
+          "description": "Historical path, not scope identity. Empty for repository root."
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "tree_id",
+        "directory_branch_id",
+        "parent_tree_id",
+        "parent_endpoint",
+        "commit_id",
+        "path",
+        "sequence"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryHistoryBranch": {
+      "type": "object",
+      "properties": {
+        "directory_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "x-maxUtf8Bytes": 128
+        },
+        "parent_branch_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryBranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head_tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "materialized": {
+          "type": "boolean"
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "directory_branch_id",
+        "name",
+        "parent_branch_id",
+        "head_tree_id",
+        "materialized",
+        "current",
+        "sequence"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryHistoryPage": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/DirectoryHistoryIdentity"
+        },
+        "current": {
+          "$ref": "#/$defs/DirectoryHistoryCurrent"
+        },
+        "nodes": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/DirectoryHistoryNode"
+          }
+        },
+        "branches": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/DirectoryHistoryBranch"
+          }
+        },
+        "page": {
+          "type": "object",
+          "properties": {
+            "previous_cursor": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[0-9a-f]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "next_cursor": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[0-9a-f]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "previous_cursor",
+            "next_cursor"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "identity",
+        "current",
+        "nodes",
+        "branches",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "FileHistorySource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "source_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "branch": {
+          "$ref": "#/$defs/HistoryBranchSummary"
+        }
+      },
+      "required": [
+        "file_id",
+        "source_node_id",
+        "history_root",
+        "branch"
+      ]
     }
   }
 }

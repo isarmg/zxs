@@ -274,3 +274,182 @@ fn history_changed_uses_the_existing_error_envelope_and_exact_first_party_code()
     let error = json!({"error":{"code":"HISTORY_CHANGED","message":"Refresh current history","retryable":false,"request_id":"req_00000000000000000000000000000001"}});
     assert!(validator(&core).unwrap().is_valid(&error));
 }
+
+fn assert_shared_history_shape(name: &str, value: &Value) {
+    for (file, prefix) in [
+        ("core.schema.json", "#/$defs/"),
+        ("openapi.json", "#/components/schemas/"),
+    ] {
+        let mut document = read(&root().join("docs/contracts").join(file)).unwrap();
+        let shape = if file == "core.schema.json" {
+            document["$defs"][name].clone()
+        } else {
+            document["components"]["schemas"][name].clone()
+        };
+        document["$ref"] = format!("{prefix}{name}").into();
+        let check = validator(&document).unwrap();
+        assert!(check.is_valid(value), "{file}: {name}");
+        assert_eq!(
+            array(&shape["required"])
+                .unwrap()
+                .iter()
+                .map(|field| field.as_str().unwrap())
+                .collect::<BTreeSet<_>>(),
+            object(value)
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            "{file}: {name} must require every published field"
+        );
+        let mut extra = value.clone();
+        extra["unknown_field"] = true.into();
+        assert!(!check.is_valid(&extra), "{file}: {name} unknown field");
+        for required in array(&shape["required"]).unwrap() {
+            let field = required.as_str().unwrap();
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(!check.is_valid(&missing), "{file}: {name} missing {field}");
+        }
+        if value.get("sequence").is_some() {
+            let mut zero = value.clone();
+            zero["sequence"] = "0".into();
+            assert!(check.is_valid(&zero), "{file}: {name} zero sequence");
+            for invalid in [
+                json!("18446744073709551616"),
+                json!("01"),
+                json!("-1"),
+                json!("18446744073709551615\n"),
+                json!(1),
+            ] {
+                let mut malformed = value.clone();
+                malformed["sequence"] = invalid;
+                assert!(!check.is_valid(&malformed), "{file}: {name} sequence");
+            }
+        }
+    }
+}
+
+#[test]
+fn historical_merge_shared_schemas_match_actual_wire_types() {
+    use storage_contract::file_history_merge::{FileHistorySource, FileHistorySourceRequest};
+
+    let HistoryWindowPage::Branches {
+        identity, branches, ..
+    } = json_codec::from_value(fixture("branches")).unwrap()
+    else {
+        panic!("fixture must contain file branches");
+    };
+    let source = FileHistorySource {
+        file_id: identity.file_id,
+        source_node_id: branches[0].node_id.clone().unwrap(),
+        history_root: identity.history_root,
+        branch: branches[0].clone(),
+    };
+    source
+        .validate(&FileHistorySourceRequest {
+            file_id: source.file_id.clone(),
+            node_id: source.source_node_id.clone(),
+            history_root: source.history_root,
+        })
+        .unwrap();
+    let input = storage_contract::FileHistoryMergeInput {
+        branch_id: source.branch.branch_id.as_str().into(),
+        expected_node_id: source.branch.node_id.as_ref().unwrap().as_str().into(),
+        source_node_id: source.source_node_id.as_str().into(),
+    };
+    assert_shared_history_shape(
+        "FileHistoryMergeInput",
+        &json_codec::to_value(input).unwrap(),
+    );
+    assert_shared_history_shape("FileHistorySource", &json_codec::to_value(source).unwrap());
+}
+
+#[test]
+fn directory_history_shared_schemas_match_actual_wire_types_and_u64_limits() {
+    use storage_contract::directory_history::*;
+    use storage_contract::history_window::{HistoryEndpoint, HistoryRoot};
+
+    let repository = storage_contract::new_id("repo").unwrap();
+    let branch_id = storage_contract::new_id("dbr").unwrap();
+    let tree_id = storage_contract::new_id("dtree").unwrap();
+    let identity = DirectoryHistoryIdentity {
+        repository_id: repository.clone(),
+        directory_id: repository.clone(),
+        history_tree_id: storage_contract::new_id("history").unwrap(),
+        history_root: HistoryRoot::parse(&"a".repeat(64)).unwrap(),
+        collection: DirectoryHistoryCollection::Nodes,
+        limit: 128,
+    };
+    let current = DirectoryHistoryCurrent {
+        directory_branch_id: Some(branch_id.clone()),
+        tree_id: Some(tree_id.clone()),
+    };
+    let node = DirectoryHistoryNode {
+        tree_id: tree_id.clone(),
+        directory_branch_id: branch_id.clone(),
+        parent_tree_id: Some(storage_contract::new_id("dtree").unwrap()),
+        parent_endpoint: Some(HistoryEndpoint::OutsideWindow),
+        commit_id: storage_contract::new_id("commit").unwrap(),
+        path: String::new(),
+        sequence: u64::MAX,
+    };
+    let branch = DirectoryHistoryBranch {
+        directory_branch_id: branch_id,
+        name: "main".into(),
+        parent_branch_id: None,
+        head_tree_id: tree_id,
+        materialized: true,
+        current: true,
+        sequence: u64::MAX,
+    };
+    for (name, value) in [
+        (
+            "DirectoryHistoryIdentity",
+            json_codec::to_value(&identity).unwrap(),
+        ),
+        (
+            "DirectoryHistoryCurrent",
+            json_codec::to_value(&current).unwrap(),
+        ),
+        ("DirectoryHistoryNode", json_codec::to_value(&node).unwrap()),
+        (
+            "DirectoryHistoryBranch",
+            json_codec::to_value(&branch).unwrap(),
+        ),
+    ] {
+        assert_shared_history_shape(name, &value);
+    }
+    let mut page = DirectoryHistoryPage {
+        identity,
+        current,
+        nodes: vec![node],
+        branches: Vec::new(),
+        page: DirectoryHistoryPagination {
+            previous_cursor: None,
+            next_cursor: None,
+        },
+    };
+    for collection in [
+        DirectoryHistoryCollection::Nodes,
+        DirectoryHistoryCollection::Branches,
+    ] {
+        if collection == DirectoryHistoryCollection::Branches {
+            page.identity.collection = collection;
+            page.nodes.clear();
+            page.branches.push(branch.clone());
+        }
+        let request = DirectoryHistoryRequest::parse(
+            &repository,
+            &repository,
+            collection,
+            BTreeMap::from([("limit".into(), "128".into())]),
+        )
+        .unwrap();
+        page.validate(&request).unwrap();
+        assert_shared_history_shape(
+            "DirectoryHistoryPage",
+            &json_codec::to_value(&page).unwrap(),
+        );
+    }
+}

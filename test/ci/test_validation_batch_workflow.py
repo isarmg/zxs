@@ -60,10 +60,10 @@ class ValidationBatchWorkflow(unittest.TestCase):
         script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
                                  .split('      - name:', 1)[0])
         base = '01305735ce153015a08bf14c6920cdce40b8b79b'
-        parent = '7ccbd2a3479dbdef396a0b83efcf2612980a364e'
+        parent = '882cc7fb99156e7ac151f8e6d2953d0c7e369d7a'
         self.assertIn(f'base={base}', script)
         self.assertIn(f'expected_parent={parent}', script)
-        self.assertIn('fetch-depth: 4', self.batch)
+        self.assertIn('fetch-depth: 5', self.batch)
         self.assertIn('git diff --name-only --no-renames "$base" HEAD', script)
         paths = [
             '.github/workflows/validate-ui-smb-history.yml',
@@ -78,6 +78,12 @@ class ValidationBatchWorkflow(unittest.TestCase):
             'test/tools/browser-smoke/runner/fixture.rs',
             'test/tools/browser-smoke/runner/naming.rs',
             'test/tools/browser-smoke/unit/fixture_tests.rs',
+            'docs/contracts/core.schema.json',
+            'docs/contracts/openapi.json',
+            'test/tools/contract-check/unit/history_window_tests.rs',
+            'test/tools/browser-smoke/runner/page_layout.rs',
+            'test/tools/browser-smoke/runner/file_row_layout.js',
+            'test/tools/browser-smoke/unit/file_row_layout_probe_test.mjs',
         ]
         # Execute the actual gate with controlled git replies, not the product.
         # Every unrelated file or mismatched commit/tree must restore coverage.
@@ -85,10 +91,10 @@ class ValidationBatchWorkflow(unittest.TestCase):
             if [ "$*" = "$TEST_GIT_FAIL" ]; then return 42; fi
             case "$*" in
                 "rev-parse HEAD^") printf '%s\n' "$TEST_PARENT" ;;
-                "rev-parse $expected_parent~2") printf '%s\n' "$base" ;;
+                "rev-parse $expected_parent~3") printf '%s\n' "$base" ;;
                 "rev-parse HEAD:src") printf '%s\n' "$TEST_SOURCE" ;;
                 "rev-parse $base:src") printf '%s\n' baseline-source ;;
-                "diff --quiet $expected_parent HEAD -- test/engine") return 0 ;;
+                "diff --quiet $expected_parent HEAD -- test/engine test/server") return 0 ;;
                 "diff --name-only --no-renames $base HEAD") printf '%s\n' "$TEST_PATHS" ;;
                 *) return 99 ;;
             esac
@@ -104,9 +110,9 @@ class ValidationBatchWorkflow(unittest.TestCase):
                       '.github/workflows/smb-sdk.yml', 'Cargo.lock',
                       'docs/unrelated.md', 'test/tools/browser-smoke/runner/unknown.rs']:
             cases.append((parent, 'baseline-source', paths + [extra], False, ''))
-        for failed in ['rev-parse HEAD^', f'rev-parse {parent}~2', 'rev-parse HEAD:src', f'rev-parse {base}:src',
+        for failed in ['rev-parse HEAD^', f'rev-parse {parent}~3', 'rev-parse HEAD:src', f'rev-parse {base}:src',
                        f'diff --name-only --no-renames {base} HEAD',
-                       f'diff --quiet {parent} HEAD -- test/engine']:
+                       f'diff --quiet {parent} HEAD -- test/engine test/server']:
             cases.append((parent, 'baseline-source', paths, False, failed))
         for parent, source, changed, expected, failed in cases:
             with self.subTest(parent=parent, source=source, changed=changed, failed=failed):
@@ -119,21 +125,20 @@ class ValidationBatchWorkflow(unittest.TestCase):
                                    check=True, env=env, capture_output=True, text=True)
                     self.assertEqual(output.read_text(), f'test_only_retry={str(expected).lower()}\n')
 
-    def test_retry_preserves_unrun_http_protocol_and_exact_head_browser(self):
+    def test_retry_preserves_unrun_protocol_and_exact_head_browser(self):
         condition = "if: needs.static.outputs.test_only_retry != 'true'"
-        self.assertEqual(self.batch.count(condition), 5)
-        self.assertIn("- name: Lint the changed HTTP integration target\n"
+        self.assertEqual(self.batch.count(condition), 6)
+        self.assertIn("- name: Lint the changed contract validation target\n"
                       "        if: needs.static.outputs.test_only_retry == 'true'\n"
-                      "        run: cargo clippy --locked --offline -p storage-server "
-                      "--test http_engine -- -D warnings", self.batch)
+                      "        run: cargo clippy --locked --offline -p contract-check "
+                      "--all-targets -- -D warnings", self.batch)
         for marker in ['Check affected native targets and no-core server',
                        'Exercise engine, server, client and wire unit contracts',
-                       'Exercise history integration']:
+                       'Exercise history integration', 'Exercise real HTTP routes']:
             self.assertIn(f'- name: {marker}\n        {condition}', self.batch)
         self.assertIn(f'name: Affected Web state and style contracts\n    {condition}', self.batch)
         self.assertIn(f'  smb-sdk:\n    {condition}', self.batch)
-        for marker in ['Exercise real HTTP routes',
-                       'Check changed wire contracts and SMB feature combinations',
+        for marker in ['Check changed wire contracts and SMB feature combinations',
                        'Build production Web distribution',
                        'Exercise real login, setup, monitor, file rows and history flows']:
             step = step_body(self.batch, marker)

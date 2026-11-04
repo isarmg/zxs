@@ -27,24 +27,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 4
+          fetch-depth: 5
       - name: Bind validation to the pushed commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Scope the reviewed test-only retry
         id: scope
         run: |
           # Success evidence: https://github.com/isarmg/zxs/actions/runs/41813864437
-          # Reuse Web/Samba/native units from the baseline, plus unchanged Engine
-          # integration from run 41817885256, only for this exact retry chain.
+          # Reuse Web/Samba/native units from the baseline, Engine integration
+          # from run 41817885256 and HTTP from 41820695812 only for this exact chain.
           base=01305735ce153015a08bf14c6920cdce40b8b79b
-          expected_parent=7ccbd2a3479dbdef396a0b83efcf2612980a364e
+          expected_parent=882cc7fb99156e7ac151f8e6d2953d0c7e369d7a
           retry=false
           if parent=$(git rev-parse HEAD^) && [ "$parent" = "$expected_parent" ] &&
-             ancestor=$(git rev-parse "$expected_parent~2") && [ "$ancestor" = "$base" ] &&
+             ancestor=$(git rev-parse "$expected_parent~3") && [ "$ancestor" = "$base" ] &&
              source=$(git rev-parse HEAD:src) && baseline_source=$(git rev-parse "$base:src") &&
              [ "$source" = "$baseline_source" ] &&
              changed=$(git diff --name-only --no-renames "$base" HEAD) &&
-             git diff --quiet "$expected_parent" HEAD -- test/engine; then
+             git diff --quiet "$expected_parent" HEAD -- test/engine test/server; then
             retry=true
             while IFS= read -r path; do
               case "$path" in
@@ -59,7 +59,13 @@ jobs:
                 test/server/integration/http_engine/directory_history.rs|\
                 test/tools/browser-smoke/runner/fixture.rs|\
                 test/tools/browser-smoke/runner/naming.rs|\
-                test/tools/browser-smoke/unit/fixture_tests.rs) ;;
+                test/tools/browser-smoke/unit/fixture_tests.rs|\
+                docs/contracts/core.schema.json|\
+                docs/contracts/openapi.json|\
+                test/tools/contract-check/unit/history_window_tests.rs|\
+                test/tools/browser-smoke/runner/page_layout.rs|\
+                test/tools/browser-smoke/runner/file_row_layout.js|\
+                test/tools/browser-smoke/unit/file_row_layout_probe_test.mjs) ;;
                 *) retry=false ;;
               esac
             done <<< "$changed"
@@ -85,15 +91,15 @@ jobs:
       - name: Install repository Rust toolchain
         run: rustup show active-toolchain
       - name: Format affected Rust packages
-        run: cargo fmt -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p smb-vfs -p browser-smoke -- --check
+        run: cargo fmt -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p smb-vfs -p browser-smoke -p contract-check -- --check
       - name: Check affected native targets and no-core server
         if: needs.static.outputs.test_only_retry != 'true'
         run: |
-          cargo clippy --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol --all-targets -- -D warnings
+          cargo clippy --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p contract-check --all-targets -- -D warnings
           cargo clippy --locked --offline -p storage-server --no-default-features --all-targets -- -D warnings
-      - name: Lint the changed HTTP integration target
+      - name: Lint the changed contract validation target
         if: needs.static.outputs.test_only_retry == 'true'
-        run: cargo clippy --locked --offline -p storage-server --test http_engine -- -D warnings
+        run: cargo clippy --locked --offline -p contract-check --all-targets -- -D warnings
       - name: Exercise engine, server, client and wire unit contracts
         if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract --lib
@@ -101,6 +107,7 @@ jobs:
         if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p storage-engine --test branch_alias_operations
       - name: Exercise real HTTP routes
+        if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p storage-server --test http_engine
       - name: Check changed wire contracts and SMB feature combinations
         run: |

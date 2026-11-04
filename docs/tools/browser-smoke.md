@@ -119,3 +119,5 @@ Node mock-host 自测仅核对探针隔离、暂停/释放和恢复，不运行 
 匿名字段探针核对六行直接 DOM 顺序、label 的 for/id 与实际输入关联、共享行高、信息提示和操作的边界；不再要求已删除的左标签右输入组合框。Node 模型覆盖错序、额外/隐藏行、错误状态、字段或动作过小、内容溢出、内部装饰复活以及外框绘制弱化等拒绝条件。
 
 原生文本输入外观探针 `input_surfaces.js` 在实际登录/设置、账户（含已呈现的SMB字段）、管理表单和文件搜索上读取 computed style，覆盖亮暗主题与320/980等视口。它对登录/首设卡内输入断言平时无边线、键盘焦点实线3px，对其余页面仍断言普通虚线1px、键盘焦点虚线3px；禁止其余三边、矩形outline、背景图、border-image、box-shadow和残留G4绘制资格；同时记录禁用态和clientWidth边界，绝不读取字段值或改变产品DOM。Select仍独立验证真实黑色外框与键盘焦点环，模型测试只验证探针本身，不替代真实Chrome执行。
+
+文件行小数滚动分成两项独立验收：DPR2 下对 0.5、1.5、7.5 的滚动请求记录浏览器实际值，允许浏览器自身量化，但产品 CSS 偏移必须始终与原生值相差小于 0.01 CSS px；随后仅将真实列表面板临时设为 CSS `zoom: 2`，再次请求同组偏移，必须实际读到非整数原生值并满足同一同步阈值。浏览器的量化与缩放关系见 [WPT 原生滚动测试](https://github.com/web-platform-tests/wpt/blob/master/css/cssom-view/scroll-offsets-fractional-zoom.html)；DPR 不是一定产生小数的保证。不替换 scrollLeft getter、不合成 scroll 事件、不跳过小数断言。共享几何探针以 `currentCSSZoom` 将 CSS 长度换算为真实视口坐标，保持 0.5px 几何阈值；不会把取整的 clientWidth 误当缩放后的精确宽度。每个样本在恢复 zoom 前保存请求值、实际值、CSS 偏移、DPR、zoom 与几何 JSON，成功或失败都还原面板原有 zoom 值及优先级。

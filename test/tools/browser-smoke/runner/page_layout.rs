@@ -160,17 +160,73 @@ fn file_row_resize(browser: &Browser) -> Result<()> {
         "Emulation.setDeviceMetricsOverride",
         json!({"width":320,"height":568,"deviceScaleFactor":2,"mobile":false}),
     )?;
-    browser.script("document.querySelector('.zxs-file-list-panel .zxs-table-scroll').scrollLeft=.5;return true")?;
-    wait_for(
-        "high-DPI native fractional scroll offset is preserved",
+    // Device-pixel ratio does not guarantee fractional CSSOM scroll offsets.
+    // First accept native quantization but require exact product synchronization.
+    file_row_scroll_samples(browser, 1)?;
+    // CSS zoom changes the browser's actual scroll coordinate conversion. At
+    // 2x, native 0.5 CSS px is a whole layout pixel, even on integer scroll paths.
+    // Never replace scrollLeft or dispatch a synthetic scroll event to get it.
+    let saved = browser.script("const style=document.querySelector('.zxs-file-list-panel').style;return {value:style.getPropertyValue('zoom'),priority:style.getPropertyPriority('zoom')}")?;
+    with_cleanup(
         || {
-            let metrics = browser.script("const s=document.querySelector('.zxs-file-list-panel .zxs-table-scroll'),offset=parseFloat(getComputedStyle(s).getPropertyValue('--zxs-file-scroll-left'));return {valid:devicePixelRatio===2&&s.scrollLeft>0&&!Number.isInteger(s.scrollLeft)&&Math.abs(offset-s.scrollLeft)<.01,left:s.scrollLeft,offset}")?;
-            if metrics["valid"] != true {
-                return Err(format!("fractional file-row scroll offset: {metrics}").into());
+            browser.script("document.querySelector('.zxs-file-list-panel').style.setProperty('zoom','2');return true")?;
+            file_row_scroll_samples(browser, 2)
+        },
+        || {
+            let restored = browser.script(&format!("const style=document.querySelector('.zxs-file-list-panel').style,value={},priority={};if(value)style.setProperty('zoom',value,priority);else style.removeProperty('zoom');return style.getPropertyValue('zoom')===value&&style.getPropertyPriority('zoom')===priority",saved["value"],saved["priority"]))?;
+            if restored != true {
+                return Err("file-row zoom fixture did not restore the author's zoom".into());
             }
             file_row_geometry(browser)
         },
     )
+}
+
+fn file_row_scroll_samples(browser: &Browser, zoom: u32) -> Result<()> {
+    let kind = browser.script("return document.querySelector('.zxs-file-table').classList.contains('zxs-disk-table')?'disks':'files'")?;
+    let kind = kind.as_str().ok_or("missing scroll fixture kind")?;
+    for requested in [0.5, 1.5, 7.5] {
+        browser.script(&format!("document.querySelector('.zxs-file-list-panel .zxs-table-scroll').scrollLeft={requested};return true"))?;
+        let mut evidence = Value::Null;
+        let result = wait_for("native scroll offset and zoomed row geometry", || {
+            let metrics = browser.script(&format!("const s=document.querySelector('.zxs-file-list-panel .zxs-table-scroll'),offset=parseFloat(getComputedStyle(s).getPropertyValue('--zxs-file-scroll-left')),fractional=!Number.isInteger(s.scrollLeft);return {{valid:devicePixelRatio===2&&s.currentCSSZoom==={zoom}&&s.scrollLeft>0&&({zoom}===1||fractional)&&Math.abs(offset-s.scrollLeft)<.01,requested:{requested},left:s.scrollLeft,offset,fractional,dpr:devicePixelRatio,zoom:s.currentCSSZoom}}"))?;
+            let geometry = browser.script(include_str!("file_row_layout.js"))?;
+            evidence = json!({"kind":kind,"metrics":metrics,"geometry":geometry});
+            if evidence["metrics"]["valid"] == true && evidence["geometry"]["valid"] == true {
+                Ok(())
+            } else {
+                Err(format!("file-row native scroll sample: {evidence}").into())
+            }
+        });
+        println!("INFO file-row native scroll sample: {evidence}");
+        let saved = (|| -> Result<()> {
+            let output = env::var_os("ZXS_VIEWPORT_PREVIEWS")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    result
+                        .is_err()
+                        .then(|| PathBuf::from("artifacts/browser-smoke/diagnostics"))
+                });
+            if let Some(directory) = output {
+                fs::create_dir_all(&directory)?;
+                fs::write(
+                    directory.join(format!(
+                        "row-scroll-{kind}-zoom-{zoom}-requested-{requested}.json"
+                    )),
+                    json_codec::to_vec_pretty(&evidence)?,
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            if let Err(save_error) = saved {
+                eprintln!("file-row scroll evidence also failed: {save_error}");
+            }
+            return Err(error);
+        }
+        saved?;
+    }
+    Ok(())
 }
 
 fn range_menu(browser: &Browser, theme: &str, width: u32) -> Result<()> {

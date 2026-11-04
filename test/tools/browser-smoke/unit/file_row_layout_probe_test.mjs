@@ -4,7 +4,8 @@ import {readFileSync} from 'node:fs';
 const source = readFileSync(new URL('../runner/file_row_layout.js', import.meta.url), 'utf8');
 const observe = new Function('document', 'getComputedStyle', 'matchMedia', source);
 const rect = (width, top, height = 36) => ({left: 0, top, width, height, bottom: top + height});
-function fixture({count = 3, width = 960, viewport = width, extent = 18, pagination = true} = {}) {
+function fixture({count = 3, width = 960, viewport = width, extent = 18, pagination = true, zoom = 1} = {}) {
+    const screen = box => Object.fromEntries(Object.entries(box).map(([key, value]) => [key, value * zoom]));
     const style = values => ({getPropertyValue(name) {
         return {'--zxs-contour-extent': `${extent}px`, '--zxs-block-border': '#dedede'}[name] ?? '';
     }, ...values});
@@ -16,7 +17,7 @@ function fixture({count = 3, width = 960, viewport = width, extent = 18, paginat
             style: style({display: 'table-row', backgroundColor: 'rgba(0, 0, 0, 0)', clipPath: 'none', maskImage: 'none'}),
             line: separator(header ? count > 0 : index < count, viewport),
             cells: [{style: style({borderBottomWidth: '0px'})}],
-            getBoundingClientRect() { return this.box; },
+            getBoundingClientRect() { return screen(this.box); },
             getAttribute(name) { assert.equal(name, 'aria-selected'); return String(this.selected); },
             matches(selector) { assert.equal(selector, ':hover'); return this.hovered; },
             querySelector(selector) {
@@ -24,21 +25,21 @@ function fixture({count = 3, width = 960, viewport = width, extent = 18, paginat
                 assert.equal(selector, ':scope > td > .zxs-file-row-decoration > .zxs-file-row-surface');
                 return this.surface;
             }};
-        node.decoration = {getBoundingClientRect: () => node.box, line: node.line,
+        node.decoration = {getBoundingClientRect: () => screen(node.box), line: node.line,
             style: style({overflowX: 'clip', overflowY: 'clip'}),
             contains: child => child === node.surface, querySelectorAll: () => []};
         if (!header) node.surface = {tabIndex: -1, state: 'paint', hidden: 'true', box: {...node.box, width: viewport},
             style: style({borderImageSource: 'url("blob:real-output")', borderImageSlice: '49% fill', pointerEvents: 'none', opacity: '0'}),
-            getBoundingClientRect() { return this.box; },
+            getBoundingClientRect() { return screen(this.box); },
             getAttribute(name) { return {'aria-hidden': this.hidden, 'data-zxs-contour-state': this.state}[name]; }};
         return node;
     };
     const rows = Array.from({length: count}, (_, index) => row(index + 1));
     const header = row(0, true);
-    const scroll = {scrollLeft: 0, clientLeft: 0, clientWidth: viewport,
-        getBoundingClientRect: () => rect(viewport, 0, (count + 1) * 36)};
+    const scroll = {scrollLeft: 0, clientLeft: 0, clientWidth: Math.round(viewport), offsetWidth: Math.round(viewport), currentCSSZoom: zoom,
+        getBoundingClientRect: () => screen(rect(viewport, 0, (count + 1) * 36))};
     const table = {parentElement: scroll, tBodies: [{rows}], tHead: {rows: [header]}};
-    const nav = pagination ? {line: separator(true, viewport), getBoundingClientRect: () => rect(viewport, (count + 1) * 36)} : null;
+    const nav = pagination ? {line: separator(true, viewport), getBoundingClientRect: () => screen(rect(viewport, (count + 1) * 36))} : null;
     const panel = {style: style({}), querySelector(selector) {return {'.zxs-file-table': table, '.zxs-file-pagination': nav}[selector];}};
     const document = {documentElement: {scrollWidth: viewport, clientWidth: viewport},
         querySelector(selector) { assert.equal(selector, '.zxs-file-list-panel'); return panel; },
@@ -49,7 +50,7 @@ function fixture({count = 3, width = 960, viewport = width, extent = 18, paginat
             }};
             return {getContext: () => context};
         }};
-    const state = {rows, header, panel, nav, document, pointer: true};
+    const state = {rows, header, panel, nav, scroll, document, pointer: true};
     state.setScroll = offset => {
         scroll.scrollLeft = offset;
         for (const node of [header, ...rows]) {
@@ -71,6 +72,21 @@ for (const count of [0, 1, 3, 5]) {
         }
     }
 }
+// Real CSS zoom scales bounding rects, not computed CSS lengths. Keep the
+// screen-space 0.5px tolerance and reject a truncated native half-pixel offset.
+for (const zoom of [1.25, 2]) {
+    const model = fixture({count:5, width:600, viewport:135.5, zoom});
+    for (const offset of [0.5, 1.5, 7.5, 600 - 135.5]) { model.setScroll(offset); valid(model); }
+}
+const truncated = fixture({width:600, viewport:135.5, zoom:2});
+truncated.setScroll(.5); truncated.rows[0].line.left = '18px';
+assert.equal(truncated.run().valid, false); checks++;
+const displaced = fixture({width:600, viewport:135.5, zoom:2});
+displaced.setScroll(.5); displaced.rows[0].surface.box.left = -.5;
+assert.equal(displaced.run().valid, false); checks++;
+invalid(model => {model.scroll.currentCSSZoom = 0;});
+invalid(model => {model.scroll.clientLeft = 1;});
+invalid(model => {model.scroll.offsetWidth += 15;});
 valid(fixture({count: 3, extent: 20}));
 for (const index of [0, 1, 2]) {
     let model = fixture(); model.rows[index].hovered = true; model.rows[index].surface.style.opacity = '1'; valid(model);

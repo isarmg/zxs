@@ -14862,9 +14862,7 @@
             "description": "Historical path, not scope identity. Empty for repository root."
           },
           "sequence": {
-            "type": "string",
-            "pattern": "^(0|[1-9][0-9]*)$",
-            "description": "Canonical unsigned 64-bit decimal string."
+            "$ref": "#/components/schemas/UInt64"
           }
         },
         "required": [
@@ -14909,9 +14907,7 @@
             "type": "boolean"
           },
           "sequence": {
-            "type": "string",
-            "pattern": "^(0|[1-9][0-9]*)$",
-            "description": "Canonical unsigned 64-bit decimal string."
+            "$ref": "#/components/schemas/UInt64"
           }
         },
         "required": [

@@ -4,6 +4,7 @@ const panel = document.querySelector('.zxs-file-list-panel');
 const table = panel.querySelector('.zxs-file-table');
 const scroll = table.parentElement;
 const nav = panel.querySelector('.zxs-file-pagination');
+const zoom = scroll.currentCSSZoom;
 const extent = parseFloat(getComputedStyle(panel).getPropertyValue('--zxs-contour-extent'));
 const body = [...table.tBodies[0].rows];
 const heads = [...table.tHead.rows];
@@ -15,18 +16,21 @@ const color = value => {
     return [...context.getImageData(0, 0, 1, 1).data].join(',');
 };
 const scrollBox = scroll.getBoundingClientRect();
-const viewport = {left: scrollBox.left + scroll.clientLeft, width: scroll.clientWidth};
+// This borderless, auto-height scrollport has no vertical scrollbar. Its rect
+// retains fractional width; integer clientWidth would lose precision under zoom.
+const scrollport = scroll.clientLeft === 0 && scroll.offsetWidth === scroll.clientWidth;
+const viewport = {left: scrollBox.left, width: scrollBox.width};
 const line = (node, pseudo, expected) => {
     const css = getComputedStyle(node, pseudo);
     const present = css.content !== 'none' && css.content !== 'normal';
     if (!expected) return {valid: !present, present};
-    const width = parseFloat(css.width), box = node.getBoundingClientRect();
+    const width = parseFloat(css.width) * zoom, box = node.getBoundingClientRect();
     const bounds = pseudo === '::before' ? box : viewport;
-    const start = box.left + parseFloat(css.left), end = start + width;
+    const start = box.left + parseFloat(css.left) * zoom, end = start + width;
     const left = start - bounds.left, right = bounds.left + bounds.width - end;
     const expectedColor = color(css.getPropertyValue('--zxs-block-border').trim());
-    return {valid: present && extent > 0 && close(left, extent) && close(right, extent)
-        && close(width, bounds.width - extent * 2)
+    return {valid: present && extent > 0 && close(left, extent * zoom) && close(right, extent * zoom)
+        && close(width, bounds.width - extent * zoom * 2)
         && parseFloat(css.borderBottomWidth) === 1 && css.borderBottomStyle === 'solid'
         && color(css.borderBottomColor) === expectedColor && expectedColor !== '0,0,0,0'
         && css.pointerEvents === 'none', present, left, right, width};
@@ -62,5 +66,5 @@ const rows = body.map((row, index) => {
 const pagination = nav ? line(nav, '::before', true) : {valid: true, absent: true};
 const joined = !nav || close(nav.getBoundingClientRect().top, scroll.getBoundingClientRect().bottom);
 const documentFits = document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1;
-return {valid: extent > 0 && headerLines.every(entry => entry.valid) && headerBorders && rows.every(row => row.valid)
-    && pagination.valid && joined && documentFits, extent, headerLines, headerBorders, rows, pagination, joined, documentFits, scrollLeft: scroll.scrollLeft, viewport};
+return {valid: Number.isFinite(zoom) && zoom > 0 && scrollport && extent > 0 && headerLines.every(entry => entry.valid) && headerBorders && rows.every(row => row.valid)
+    && pagination.valid && joined && documentFits, zoom, scrollport, extent, headerLines, headerBorders, rows, pagination, joined, documentFits, scrollLeft: scroll.scrollLeft, viewport};
