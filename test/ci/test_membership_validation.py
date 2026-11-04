@@ -44,7 +44,7 @@ class MembershipValidation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(runner, "EVIDENCE", Path(directory)):
                 with patch.object(runner.subprocess, "run", return_value=inventory):
-                    with patch.object(runner.subprocess, "Popen") as popen:
+                    with patch.object(runner.subprocess, "Popen") as popen, patch("builtins.print"):
                         process = popen.return_value.__enter__.return_value
                         process.stdout = iter(["test result: FAILED\n"])
                         process.wait.return_value = 101

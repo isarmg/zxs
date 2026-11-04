@@ -28,6 +28,7 @@ IO_ENGINE_GROUPS = (
     ("io-authority", "engine::config::io_authority::tests::", ()),
     ("guarded-engine-reads", "engine::reads::tests::", ()),
     ("verified-payloads", "engine::verified_payloads::tests::", ()),
+    ("workspace-range", "business::file::pending_regressions::", ()),
 )
 IO_SERVER_GROUPS = (
     ("http-transfer", "transfer::tests::", ()),

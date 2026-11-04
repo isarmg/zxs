@@ -1026,9 +1026,9 @@ impl Engine {
             )?;
             Some((previous.size, previous.content_hash))
         } else if let Some(entry) = base.get_key(parsed.key()) {
-            let source = self.open_content(&entry.version_id)?;
+            let mut source = self.open_content(&entry.version_id)?;
             std::io::copy(
-                &mut (&source.file).take(source.size.saturating_add(1)),
+                &mut (&mut source.file).take(source.size.saturating_add(1)),
                 &mut temporary,
             )?;
             Some((source.size, source.content_hash))
