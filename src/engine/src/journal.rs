@@ -685,6 +685,16 @@ impl PreparedMetadataObject {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+    /// Install already-hashed bytes through an admitted, held directory root.
+    pub(crate) fn store_at_root(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
+        if self.bytes.len() > MAX_METADATA {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "serialized metadata exceeds reader limit",
+            ));
+        }
+        write_object_bytes_at(root, disk, self.kind, &self.hash, &self.bytes)
+    }
     #[cfg(test)]
     pub(crate) fn store(&self, members: &[DiskConfig]) -> Result<String> {
         self.store_with(members, |disk| {

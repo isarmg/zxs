@@ -82,7 +82,7 @@ pub(in crate::engine::membership_transition) fn install_marker(
         }
     }
     for object in generation.portable.node_objects()? {
-        write_object_bytes_at(root, disk, object.kind(), &object.hash, object.bytes())?;
+        object.store_at_root(root, disk)?;
     }
     install_envelope(root, &directory.join("authority.json"), generation, false)?;
     install_envelope(root, &disk.root.join(GENERATION_FILE), generation, true)

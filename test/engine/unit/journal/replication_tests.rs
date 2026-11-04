@@ -164,6 +164,42 @@ fn prepared_publication_objects_encode_once_across_individual_held_member_stores
 }
 
 #[test]
+fn prepared_generation_object_uses_held_root_and_preserves_immutable_collision() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([
+        temp.path().join("one"),
+        temp.path().join("two"),
+        temp.path().join("three"),
+    ])
+    .unwrap();
+    let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
+    let value = CountedValue {
+        value: json_codec::json!({"authority": "frozen"}),
+        serializations: Cell::new(0),
+    };
+    let prepared =
+        PreparedMetadataObject::new("membership-generation", &value, MAX_METADATA).unwrap();
+    let disk = &engine.members()[0];
+    let handle = engine.disk_resources.get(disk).unwrap();
+    for _ in 0..2 {
+        prepared.store_at_root(&handle.root, disk).unwrap();
+    }
+    let path = object_path(disk, prepared.kind(), &prepared.hash);
+    assert_eq!(std::fs::read(&path).unwrap(), prepared.bytes());
+    assert_eq!(value.serializations.get(), 2);
+    std::fs::write(&path, b"damaged authority object").unwrap();
+    assert_eq!(
+        prepared
+            .store_at_root(&handle.root, disk)
+            .unwrap_err()
+            .code(),
+        ErrorCode::ObjectCollision
+    );
+    assert_eq!(std::fs::read(path).unwrap(), b"damaged authority object");
+    assert_eq!(value.serializations.get(), 2);
+}
+
+#[test]
 fn replicated_metadata_rejects_oversize_before_creating_any_object() {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([
