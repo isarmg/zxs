@@ -5,7 +5,7 @@ use crate::{
     journal::Candidate,
     *,
 };
-use platform_io::payload::{Expectation, verify_full};
+use platform_io::payload::Expectation;
 
 fn required(message: impl Into<String>) -> Error {
     Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
@@ -27,13 +27,10 @@ fn matching(source: Result<impl Into<ReadFile>>, version: &FileVersion) -> Resul
         return Ok(false);
     }
     let hash = version.content_hash.digest();
-    match verify_full(
-        &mut file,
-        Expectation {
-            bytes: version.logical_size,
-            blake3: Some(hash),
-        },
-    ) {
+    match file.verify_full(Expectation {
+        bytes: version.logical_size,
+        blake3: Some(hash),
+    }) {
         Ok(_) => Ok(true),
         Err(platform_io::payload::Error::Digest | platform_io::payload::Error::Length { .. }) => {
             Ok(false)

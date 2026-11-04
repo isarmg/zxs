@@ -1223,6 +1223,11 @@ fn generic_managed_copy_source_cannot_escape_its_read_gate() {
     let mut first = [0; 1];
     original.read_exact(&mut first).unwrap();
     assert_eq!(first, [b'o']);
+    let expectation = platform_io::payload::Expectation {
+        bytes: 8,
+        blake3: Some(blake3::hash(b"original")),
+    };
+    assert_eq!(original.verify_full(expectation).unwrap().bytes, 8);
     drop(binding.begin_quiesce().unwrap().unwrap());
     assert!(binding.status().unwrap().drained());
     assert_eq!(
@@ -1230,6 +1235,11 @@ fn generic_managed_copy_source_cannot_escape_its_read_gate() {
         ErrorCode::DiskUnavailable
     );
     for file in [&mut original, &mut duplicate] {
+        assert!(matches!(
+            file.verify_full(expectation),
+            Err(platform_io::payload::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+        ));
         assert_eq!(
             file.read(&mut first).unwrap_err().kind(),
             std::io::ErrorKind::PermissionDenied

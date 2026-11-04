@@ -35,6 +35,9 @@ IO_ENGINE_GROUPS = (
     ("file-stamps", "file_stamp::tests::", ()),
     ("workspace-range", "business::file::pending_regressions::", ()),
 )
+IO_PLATFORM_GROUPS = (
+    ("platform-payload", "payload::tests::", ()),
+)
 IO_SERVER_GROUPS = (
     ("http-transfer", "transfer::tests::", ()),
     ("smb-stream-read", "smb_rpc::tests::stream_read_tests::", ()),
@@ -115,6 +118,7 @@ def main():
     try:
         packages = [("storage-engine", GROUPS + (IO_ENGINE_GROUPS if options.disk_io else ()))]
         if options.disk_io:
+            packages.append(("platform-io", IO_PLATFORM_GROUPS))
             packages.append(("storage-server", IO_SERVER_GROUPS))
         for package, groups in packages:
             binary = build(package)

@@ -177,7 +177,8 @@ pub(crate) fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     read_file_bytes(open_regular(path)?, maximum)
 }
 /// Apply the same metadata bound to an already validated, held regular file.
-pub(crate) fn read_file_bytes(mut file: File, maximum: usize) -> Result<Vec<u8>> {
+pub(crate) fn read_file_bytes(file: impl Into<crate::ReadFile>, maximum: usize) -> Result<Vec<u8>> {
+    let mut file = file.into();
     if file.metadata()?.len() > maximum as u64 {
         return Err(Error::new(
             ErrorCode::ResourceLimit,

@@ -16,9 +16,11 @@ class MembershipValidation(unittest.TestCase):
     def test_only_engine_requests_its_fault_injection_feature(self):
         engine = runner.build_command("storage-engine")
         server = runner.build_command("storage-server")
+        platform = runner.build_command("platform-io")
         self.assertIn("fault-injection", engine)
         self.assertNotIn("--features", server)
-        for command in (engine, server):
+        self.assertNotIn("--features", platform)
+        for command in (engine, server, platform):
             self.assertIn("--lib", command)
             self.assertIn("--locked", command)
             self.assertIn("--offline", command)
@@ -26,12 +28,14 @@ class MembershipValidation(unittest.TestCase):
             self.assertNotIn("--workspace", command)
 
     def test_group_labels_are_distinct_and_include_both_consumer_protocols(self):
-        groups = runner.GROUPS + runner.IO_ENGINE_GROUPS + runner.IO_SERVER_GROUPS
+        groups = (runner.GROUPS + runner.IO_ENGINE_GROUPS
+                  + runner.IO_PLATFORM_GROUPS + runner.IO_SERVER_GROUPS)
         labels = [label for label, _, _ in groups]
         self.assertEqual(len(labels), len(set(labels)))
         self.assertIn("http-transfer", labels)
         self.assertIn("smb-stream-read", labels)
         self.assertIn("activation", labels)
+        self.assertIn("platform-payload", labels)
 
     def test_empty_test_inventory_is_a_failure(self):
         inventory = subprocess.CompletedProcess([], 0, "0 tests, 0 benchmarks\n", "")

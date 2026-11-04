@@ -44,7 +44,7 @@ jobs:
             python3 .github/scripts/check-architecture.py
             python3 -m unittest discover -s test/ci -p 'test_workflows.py'
             python3 -m unittest discover -s test/ci -p 'test_membership_validation.py'
-            cargo fmt -p storage-engine -p storage-server -- --check
+            cargo fmt -p storage-engine -p storage-server -p platform-io -- --check
           } 2>&1 | tee target/membership-validation/static.log
       - name: Compile unit-test binaries once and run affected groups
         if: ${{ !cancelled() }}
@@ -60,6 +60,9 @@ jobs:
             -p storage-engine --lib --features fault-injection --locked --offline \
             --message-format=json -- -D warnings \
             2>&1 | tee target/membership-validation/clippy.log
+          python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy \
+            -p platform-io --lib --locked --offline --message-format=json -- -D warnings \
+            2>&1 | tee target/membership-validation/platform-clippy.log
           python3 .github/scripts/check-rust-diagnostics.py -- cargo check \
             -p storage-server --lib --locked --offline --message-format=json \
             2>&1 | tee target/membership-validation/server-production.log

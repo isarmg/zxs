@@ -667,6 +667,20 @@ impl<T: Send + 'static> DiskIoResource<T> {
 }
 
 impl DiskIoResource<File> {
+    /// Never expose the inner File: verification holds its real resource guard
+    /// through identity, reads and cleanup, with cancellation between chunks.
+    pub(crate) fn verify_full(
+        &self,
+        expectation: platform_io::payload::Expectation,
+    ) -> std::result::Result<platform_io::payload::Receipt, platform_io::payload::Error> {
+        let mut access = self.access()?;
+        platform_io::payload::verify_full_observed(
+            &mut access.value().resource,
+            expectation,
+            &mut || self.check_io(),
+        )
+    }
+
     pub fn metadata(&self) -> io::Result<Metadata> {
         self.access()?.value().resource.metadata()
     }

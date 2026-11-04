@@ -86,6 +86,16 @@ impl From<DiskFile> for ReadFile {
 }
 
 impl ReadFile {
+    pub(crate) fn verify_full(
+        &mut self,
+        expectation: platform_io::payload::Expectation,
+    ) -> std::result::Result<platform_io::payload::Receipt, platform_io::payload::Error> {
+        match &mut self.0 {
+            ReadFileSource::Local(file) => platform_io::payload::verify_full(file, expectation),
+            ReadFileSource::Managed(file) => file.verify_full(expectation),
+        }
+    }
+
     pub fn check_running(&self) -> Result<()> {
         match &self.0 {
             ReadFileSource::Local(_) => Ok(()),

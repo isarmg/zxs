@@ -67,8 +67,13 @@ impl WorkspaceSource<'_> {
         &self.path
     }
 
-    fn open(&self) -> Result<fs::File> {
-        self.location.root().open_regular(&self.path)
+    fn open(&self) -> Result<crate::ReadFile> {
+        match self.location {
+            WorkspaceLocation::System(root) => root.open_regular(&self.path).map(Into::into),
+            WorkspaceLocation::Primary(root) => {
+                root.open_leased_regular(&self.path).map(Into::into)
+            }
+        }
     }
 }
 
@@ -412,19 +417,17 @@ impl Engine {
                     .ok_or_else(|| recovery_required("workspace staging resource is unavailable"))?
                     .open()?;
                 let digest = file.content_hash.digest();
-                platform_io::payload::verify_full(
-                    &mut source,
-                    platform_io::payload::Expectation {
+                source
+                    .verify_full(platform_io::payload::Expectation {
                         bytes: file.size,
                         blake3: Some(digest),
-                    },
-                )
-                .map_err(|source| {
-                    Error::from(source).context(
-                        ErrorCode::RecoveryRequired,
-                        "workspace staging bytes do not match surviving mirror",
-                    )
-                })?;
+                    })
+                    .map_err(|source| {
+                        Error::from(source).context(
+                            ErrorCode::RecoveryRequired,
+                            "workspace staging bytes do not match surviving mirror",
+                        )
+                    })?;
             }
         }
         Ok(LoadedWorkspace {
@@ -1278,7 +1281,7 @@ impl<'a> crate::engine::PlanningContext<'a> {
 // These bounded redundant files may be absent or contain a torn JSON mirror.
 // I/O/permission failures are not evidence of absence or recoverable corruption.
 fn read_workspace_evidence<T: data_serialization::de::DeserializeOwned>(
-    file: Result<fs::File>,
+    file: Result<impl Into<crate::ReadFile>>,
     damage: &mut Option<Error>,
 ) -> Result<Option<T>> {
     let bytes = file.and_then(|file| read_file_bytes(file, MAX_METADATA));
