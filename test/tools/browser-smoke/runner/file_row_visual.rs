@@ -3,17 +3,101 @@
 use super::*;
 
 fn move_pointer(browser: &Browser, point: Value) -> Result<()> {
-    browser.cdp(
-        "Input.dispatchMouseEvent",
-        json!({"type":"mouseMoved","x":point["x"],"y":point["y"]}),
+    browser.command(
+        "POST",
+        "/actions",
+        Some(json!({"actions":[{"type":"pointer","id":"file-row-mouse",
+            "parameters":{"pointerType":"mouse"},"actions":[{"type":"pointerMove",
+                "duration":0,"origin":"viewport","x":point["x"],"y":point["y"]}]}]})),
     )?;
     Ok(())
 }
 
-fn position(browser: &Browser, index: usize, end: bool) -> Result<Value> {
+fn position(browser: &Browser, index: usize, end: bool) -> Result<()> {
     browser.script(&format!(
-        "document.activeElement.blur();const row=document.querySelectorAll('.zxs-file-table tbody tr')[{index}];row.scrollIntoView({{block:'center'}});const s=row.closest('.zxs-table-scroll');s.scrollLeft={end}?s.scrollWidth-s.clientWidth:0;const b=s.getBoundingClientRect(),r=row.getBoundingClientRect();return {{x:b.left+s.clientWidth/2,y:r.top+r.height/2}}"
-    ))
+        "document.activeElement.blur();const row=document.querySelectorAll('.zxs-file-table tbody tr')[{index}];row.scrollIntoView({{block:'center',inline:'nearest',behavior:'instant'}});const s=row.closest('.zxs-table-scroll');s.scrollLeft={end}?s.scrollWidth-s.clientWidth:0;return true"
+    ))?;
+    // Resize/scroll can invalidate the panel's G4 mask. Do not send a one-shot
+    // pointer event against its previous frame's compositor hit-test geometry.
+    browser.command(
+        "POST",
+        "/execute/async",
+        Some(json!({"script":"const done=arguments[arguments.length-1];requestAnimationFrame(()=>requestAnimationFrame(()=>done(true)))","args":[]})),
+    )?;
+    Ok(())
+}
+
+fn pointer_state(browser: &Browser, index: usize, point: Value) -> Result<Value> {
+    browser.command(
+        "POST",
+        "/execute/sync",
+        Some(json!({"script":include_str!("file_row_pointer.js"),"args":[index,point]})),
+    )
+}
+
+fn pointer_evidence(browser: &Browser, state: &Value, end: bool, failed: bool) -> Result<()> {
+    println!("INFO real file-row pointer (end={end}, failed={failed}): {state}");
+    let output = env::var_os("ZXS_VIEWPORT_PREVIEWS").map(PathBuf::from);
+    if let Some(directory) =
+        output.or_else(|| failed.then(|| PathBuf::from("artifacts/browser-smoke/diagnostics")))
+    {
+        fs::create_dir_all(&directory)?;
+        let label = format!(
+            "row-pointer-{}-{}-{}-{end}",
+            state["kind"].as_str().ok_or("missing pointer row kind")?,
+            state["index"],
+            state["theme"].as_str().ok_or("missing pointer theme")?
+        );
+        fs::write(
+            directory.join(format!("{label}.json")),
+            json_codec::to_vec_pretty(state)?,
+        )?;
+        if failed {
+            // Capture before cleanup changes the viewport, theme, or pointer.
+            let screenshot = browser.cdp(
+                "Page.captureScreenshot",
+                json!({"format":"png","captureBeyondViewport":false}),
+            )?;
+            fs::write(
+                directory.join(format!("{label}.png")),
+                STANDARD.decode(
+                    screenshot["data"]
+                        .as_str()
+                        .ok_or("missing pointer failure screenshot")?,
+                )?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn hover_row(browser: &Browser, index: usize, end: bool) -> Result<()> {
+    position(browser, index, end)?;
+    let mut state = pointer_state(browser, index, Value::Null)?;
+    let result = wait_for("actual hovered row surface", || {
+        // Observe the live center each attempt. A layout change must not leave
+        // a stale coordinate, and an overlay must fail rather than be bypassed.
+        state = pointer_state(browser, index, Value::Null)?;
+        if state["visible"] != true || state["hitOnRow"] != true || state["hoverEnabled"] != true {
+            return Err(format!("row pointer target or mouse capability: {state}").into());
+        }
+        let point = state["point"].clone();
+        move_pointer(browser, point.clone())?;
+        state = pointer_state(browser, index, point)?;
+        if state["valid"] == true {
+            Ok(())
+        } else {
+            Err(format!("native pointer did not reveal row surface: {state}").into())
+        }
+    });
+    let evidence = pointer_evidence(browser, &state, end, result.is_err());
+    if let Err(error) = result {
+        if let Err(save_error) = evidence {
+            eprintln!("row pointer evidence also failed: {save_error}");
+        }
+        return Err(error);
+    }
+    evidence
 }
 
 fn pixels(browser: &Browser, scene: Value) -> Result<()> {
@@ -76,15 +160,7 @@ fn focus_pixels(browser: &Browser, selector: &str) -> Result<()> {
 }
 
 fn check_row(browser: &Browser, index: usize, end: bool, selected: bool) -> Result<()> {
-    let point = position(browser, index, end)?;
-    move_pointer(browser, point)?;
-    wait_for("actual hovered row surface", || {
-        if browser.script(&format!("const row=document.querySelectorAll('.zxs-file-table tbody tr')[{index}];return row.matches(':hover')&&getComputedStyle(row.querySelector('.zxs-file-row-surface')).opacity==='1'"))? == true {
-            Ok(())
-        } else {
-            Err("pointer did not hover the visible row".into())
-        }
-    })?;
+    hover_row(browser, index, end)?;
     row_pixels(browser, index)?;
     move_pointer(browser, json!({"x":0,"y":0}))?;
     page_layout::file_row_geometry(browser)?;

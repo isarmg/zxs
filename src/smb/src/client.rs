@@ -67,6 +67,7 @@ impl std::error::Error for RemoteError {
 fn remote_errno(code: ErrorCode) -> i32 {
     match code {
         ErrorCode::NotFound
+        | ErrorCode::DirectoryNotFound
         | ErrorCode::EntryNotFound
         | ErrorCode::VersionNotFound
         | ErrorCode::BranchNotFound
@@ -146,7 +147,6 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::DirectoryBranchNotFound
         | ErrorCode::DirectoryBranchScope
         | ErrorCode::DirectoryHistorySplitUnsupported
-        | ErrorCode::DirectoryNotFound
         | ErrorCode::DirectoryScopeRequired
         | ErrorCode::DiskAlreadyEnrolled
         | ErrorCode::DiskChanged

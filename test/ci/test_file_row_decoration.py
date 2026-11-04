@@ -19,6 +19,22 @@ class FileRowDecoration(unittest.TestCase):
         subprocess.run(['node', 'test/tools/browser-smoke/unit/file_row_pixels_probe_test.mjs'],
                        cwd=ROOT, check=True)
 
+    def test_native_pointer_observer_and_pre_cleanup_evidence(self):
+        subprocess.run(['node', '--check', 'test/tools/browser-smoke/runner/file_row_pointer.js'],
+                       cwd=ROOT, check=True)
+        subprocess.run(['node', 'test/tools/browser-smoke/unit/file_row_pointer_probe_test.mjs'],
+                       cwd=ROOT, check=True)
+        visual = (ROOT / 'test/tools/browser-smoke/runner/file_row_visual.rs').read_text()
+        self.assertIn('"pointerType":"mouse"', visual)
+        self.assertIn('"origin":"viewport"', visual)
+        self.assertIn('requestAnimationFrame(()=>requestAnimationFrame(', visual)
+        self.assertIn('pointer_state(browser, index, point)?', visual)
+        self.assertIn('let evidence = pointer_evidence(browser, &state, end, result.is_err());', visual)
+        self.assertLess(visual.index('pointer_evidence(browser, &state, end, result.is_err())'),
+                        visual.index('if let Err(error) = result'))
+        self.assertIn('"captureBeyondViewport":false', visual)
+        self.assertNotIn('CSS.forcePseudoState', visual)
+
     def test_inset_lines_and_g4_fill_reuse_the_frame_corner(self):
         css = (ROOT / 'src/web/public/styles/components/file-manager.css').read_text()
         self.assertIn('inset-inline: var(--zxs-contour-panel);', css)

@@ -69,11 +69,9 @@ pub(super) fn resolve(query: &query::Query<'_>, source: &str) -> Result<HistoryB
     let index = FileAncestry::new(query.state, scope.file, scope.history, || {
         query.cancel.checkpoint()
     })?;
-    if let Some(branch) =
-        index.source_branch(source, heads.into_iter(), &mut SearchBudget::read(), || {
-            query.cancel.checkpoint()
-        })?
-    {
+    if let Some(branch) = index.source_branch(source, heads, &mut SearchBudget::read(), || {
+        query.cancel.checkpoint()
+    })? {
         return summary(query, &query.state.branches[branch], &mut headers);
     }
     Err(Error::new(

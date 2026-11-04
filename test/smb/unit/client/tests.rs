@@ -179,6 +179,13 @@ fn terminal_close_releases_descriptor_on_business_error_poison_or_unwind() {
 fn remote_error_retains_operation_and_filesystem_errno() {
     for (code, message, errno, retryable, operation) in [
         (
+            ErrorCode::DirectoryNotFound,
+            "disk directory is empty",
+            libc::ENOENT,
+            false,
+            None,
+        ),
+        (
             ErrorCode::BranchNotActive,
             "merged file branch is read-only",
             libc::EROFS,

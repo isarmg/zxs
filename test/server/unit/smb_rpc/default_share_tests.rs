@@ -188,6 +188,55 @@ fn default_share_creates_one_internal_root_on_write_and_reuses_it_after_real_rpc
 }
 
 #[test]
+fn default_share_missing_stat_before_first_create_keeps_the_namespace_unchanged() {
+    for named_repository in [false, true] {
+        let (_temp, shared, _backend) = if named_repository {
+            let (temp, shared, backend, _branch) = fixture();
+            (temp, shared, backend)
+        } else {
+            empty_fixture(false)
+        };
+        let before = shared
+            .backend
+            .repositories_snapshot(&identity(&shared))
+            .unwrap();
+        let (mut stream, worker, _) = wire(shared.clone(), "alice");
+        // Samba probes the final component before issuing a create. The
+        // missing disk-root namespace must be an ordinary not-found result,
+        // not an I/O failure and not a reason to allocate metadata on lookup.
+        let (reply, descriptor) = binding_tests::exchange(
+            &mut stream,
+            Request::Stat {
+                path: "P01/default.txt".into(),
+            },
+        );
+        assert!(
+            matches!(
+                reply,
+                Response::Error {
+                    code: storage_contract::ErrorCode::DirectoryNotFound,
+                    ..
+                }
+            ),
+            "{reply:?}"
+        );
+        assert!(descriptor.is_none());
+        assert_eq!(
+            shared
+                .backend
+                .repositories_snapshot(&identity(&shared))
+                .unwrap(),
+            before
+        );
+        let (opened, file) = open(&mut stream, "P01/default.txt", true, true);
+        save(&mut stream, &opened, &file, b"created");
+        let (reader, _file) = open(&mut stream, "P01/default.txt", false, false);
+        assert_eq!(read_rpc(&mut stream, reader.handle, 0, 7), b"created");
+        close_wire(stream, worker);
+    }
+}
+
+#[test]
 fn default_share_rejects_wrong_account_before_creating_any_namespace() {
     let (_temp, shared, _backend) = empty_fixture(false);
     let (stream, worker, reply) = wire(shared.clone(), "another-user");
