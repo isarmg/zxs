@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--web", type=Path, required=True, help="validator reference only, never passed to server")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    args.output.unlink(missing_ok=True)  # A failed rerun must not retain a prior success receipt.
     release = platform.freedesktop_os_release()
     if (release.get("ID"), release.get("VERSION_ID"), platform.machine()) != ("debian", "13", "x86_64"):
         raise RuntimeError("requires Debian 13 amd64 runtime container")

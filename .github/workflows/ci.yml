@@ -203,6 +203,7 @@ jobs:
         env:
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
           ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
+          ZXS_LOGIN_PREVIEWS: artifacts/login-previews
         run: |
           export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
           bash .github/scripts/debian13-run.sh --native python3 .github/scripts/release-native.py
@@ -282,6 +283,15 @@ jobs:
         with:
           name: viewport-previews
           path: artifacts/viewport-previews/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain real anonymous mobile and desktop screenshots
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: login-previews
+          path: artifacts/login-previews/
           if-no-files-found: warn
           retention-days: 7
 

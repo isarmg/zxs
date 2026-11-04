@@ -230,9 +230,8 @@ fn delayed_wasm(browser: &Browser, origin: &str, boundary: CompletionBoundary) -
                         || delivery["heldPhase"] != "pending"
                         || delivery["delivered"] != 0
                         || delivery["streaming"] != 0
-                        || !state["rootHTML"]
-                            .as_str()
-                            .is_some_and(|html| !html.is_empty())
+                        || state["rootHTML"] != ""
+                        || state["bodyText"] != ""
                     {
                         return Err(format!(
                             "WASM response is not held at pending startup: {state}"
@@ -342,7 +341,7 @@ fn assert_terminal_wasm(
     match boundary {
         CompletionBoundary::PageHide => {
             // pagehide settles the bootstrap without rendering an error panel;
-            // the unmounted parser placeholder remains the same real DOM.
+            // the empty, unmounted root remains the same real DOM.
             if state["error"] != false || state["observation"]["failures"] != json!([]) {
                 return Err(
                     format!("unexpected pending-pagehide failure presentation: {state}").into(),
@@ -373,6 +372,7 @@ const main = document.querySelector('link[href="./zxs.css"]');
 const startup = document.querySelector('link[href="./styles/startup.css"]');
 const root = document.getElementById('root');
 const state = {error:!!error,phase:document.documentElement.dataset.zxsStartup,
+  bodyText:document.body.innerText.trim(),
   runtime:document.documentElement.getAttribute('data-zxs-runtime'),
   ready:document.documentElement.getAttribute('data-zxs-ready'),
   fonts:document.documentElement.dataset.zxsFonts,mainLoaded:!!main?.sheet,

@@ -67,6 +67,7 @@ def assert_owner_mode(path, uid, mode):
 
 
 def run(args):
+    args.output.unlink(missing_ok=True)  # A failed rerun must not retain a prior success receipt.
     if os.geteuid() != 0 or os.environ.get("ZXS_ISOLATED_SAMBA_TEST") != "1":
         raise RuntimeError("requires explicit isolated Debian fixture, never a user host")
     engine_user = pwd.getpwnam("zxs-engine-test")

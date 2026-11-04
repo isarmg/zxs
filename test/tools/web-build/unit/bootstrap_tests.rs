@@ -144,3 +144,12 @@ fn dom_ready_gates_binding_evaluation_but_not_terminal_failure() {
     assert_eq!(loader.matches("setTimeout(").count(), 1);
     assert!(!loader.contains(".style"));
 }
+
+#[test]
+fn pending_startup_has_no_visible_placeholder() {
+    let index = index();
+    assert!(index.contains("<body><div id=\"root\"></div></body>"));
+    for text in ["正在启动", "WebAssembly", "重新加载", "role=\"status\""] {
+        assert!(!index.contains(text), "unexpected loading content: {text}");
+    }
+}

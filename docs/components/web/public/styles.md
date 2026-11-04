@@ -7,7 +7,7 @@
 - `tokens/`：字体别名、间距、明暗主题、作用域 reset、标签隐藏、键盘焦点和减弱动态效果规则。应用根使用 `data-zxs-scope`，主题写入 `html[data-zxs-theme]`。
 - `components/geometry.css`：唯一业务几何层，集中尺寸令牌和可组合布局角色；页面不重新声明行高、字体比例、灰框、G4 角范围或首字内缩。
 - `components/base.css`：共享壳、表单、表格、对话框、通知的基础行为；`content-blocks.css` 仅负责主题配色及 hover、选中、禁用等视觉状态。
-- `components/auth.css`：独立六行登录布局。登录卡使用 `.authentication-card > form`，账号与密码控件分别带 `name="username"` 和 `name="password"`；错误占第 5 行，提交按钮占第 6 行。登录表单字号取卡片宽度的 1/18，最小 14px；控件最小高度 44px，窄屏和错误状态允许卡片自然增高。主题和语言控件置于卡片外的 `.zxs-login-controls`。
+- `components/auth.css`：独立六行登录布局。登录卡使用 `.authentication-card > form`，账号与密码控件分别带 `name="username"` 和 `name="password"`；错误占第 5 行，提交按钮占第 6 行。登录表单字号取卡片内容宽度的 1/18，最小 16px；控件最小高度 44px，输入与按钮始终保留可辨识边框和背景，键盘焦点有独立外环。管理状态、登录表单和首次设置分区排列，整卡由内容自然撑高；六行与错误行规则只作用于直接登录表单，不泄漏到设置表单。匿名壳提供自己的 stack/flow 间距，不依赖仅限已登录页面的业务几何。主题和语言控件置于卡片外的 `.zxs-login-controls`，占据正常文档流的独立顶部行，设置展开和矮屏滚动都不会覆盖它们。
 - `components/file-manager.css`：磁盘目录入口、可换行面包屑、工具栏、文件列表、文件详情和文件分支历史。磁盘不作为分支选择器。
 - `components/history.css`：已提交文件操作的紧凑列表、硬盘筛选及正常窄屏下的分行。
 - `components/system-status.css`：CPU、内存、磁盘容量及可用功耗采样的实时信息与历史折线图；状态卡统一为 3:2，桌面固定四列，最后一行不足四个仍占单列尺寸，手机每行一个。

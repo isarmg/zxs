@@ -18,6 +18,8 @@ JavaScript 仅由 wasm-bindgen 生成绑定，并由本工具生成通用资源�
 
 ## 必需资源启动边界
 
+正常启动保持空白：入口根节点为空，不预先显示启动说明、WebAssembly 检查建议或重载提示。WASM 挂载后的会话恢复阶段也不显示文字或动画，只保留不可见的忙碌语义；应用准备完成后直接显示实际界面。真正失败仍使用下述既有终态边界，不新增检查、自动重试或替代加载面板。
+
 `boot.js` 是 HTML head 内、两份静态 stylesheet link 之前的外部经典脚本，不使用 `async`、`defer` 或内联事件处理器。它是唯一启动 owner，在解析器创建两个 link 之前安装捕获阶段 `load`／`error` 监听；即使预加载扫描器已经取回资源，link 节点及其完成事件仍在脚本执行之后出现。`styles/startup.css` 和 `zxs.css` 各自必须收到真实 `load` 才准入，任一 `error` 明确失败并保留资源 URL。`link.sheet` 非空不是加载成功证明，失败请求也可能创建 CSSStyleSheet；不依据规则数量、资源 timing 或延迟重试猜测成功。
 
 绑定模块的动态导入等待 `DOMContentLoaded`；它与原 module script 都在解析完成后执行，但不声称两者相对 DOMContentLoaded 的时序相同。WASM 初始化再等待两个 CSS 准入结果。30 秒启动 deadline 从资源引导器开始运行计时，不因等待 DOM／CSS 而延长；`boot.js` 自身下载失败或停滞不在它尚未执行的计时范围内，不为此建立第二个启动 owner。

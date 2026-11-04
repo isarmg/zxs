@@ -24,8 +24,6 @@
 .zxs-status { color: var(--zxs-block-muted); }
 .zxs-inline-feedback > .zxs-error { flex: 1 1 0; }
 .zxs-application-boot { display: grid; place-items: center; min-height: 100dvh; color: var(--zxs-text-primary,#18181b); background: var(--zxs-bg-page,#fafafa); }
-.zxs-application-boot::after { content: ""; width: 1.25rem; height: 1.25rem; border: .15rem solid currentColor; border-inline-end-color: transparent; border-radius: 50%; animation: zxs-application-boot-spin .8s linear infinite; }
-@keyframes zxs-application-boot-spin { to { transform: rotate(360deg); } }
 .zxs-page-header { padding: env(safe-area-inset-top,0px) max(var(--zxs-content-spacing,var(--zxs-space-4,16px)),env(safe-area-inset-right,0px)) 0 max(var(--zxs-content-spacing,var(--zxs-space-4,16px)),env(safe-area-inset-left,0px)); }
 .zxs-product-identity { display: flex; align-items: center; margin: 0; white-space: nowrap; }
 .zxs-shell-layout { display: grid; grid-template-columns: minmax(0,1fr); }

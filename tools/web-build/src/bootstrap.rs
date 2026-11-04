@@ -12,7 +12,7 @@ pub fn loader() -> String {
 }
 
 pub fn index() -> &'static str {
-    r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark"><title>ZXS · 文件与历史</title><script src="./boot.js"></script><link id="zxs-startup-style" rel="stylesheet" href="./styles/startup.css"><link id="zxs-app-style" rel="stylesheet" href="./zxs.css"><link rel="modulepreload" href="./pkg/zxs.js"></head><body><div id="root"><p role="status">正在启动 ZXS。若此提示持续显示，请检查浏览器是否支持 WebAssembly 及服务端资源是否完整。</p></div></body></html>"#
+    r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark"><title>ZXS · 文件与历史</title><script src="./boot.js"></script><link id="zxs-startup-style" rel="stylesheet" href="./styles/startup.css"><link id="zxs-app-style" rel="stylesheet" href="./zxs.css"><link rel="modulepreload" href="./pkg/zxs.js"></head><body><div id="root"></div></body></html>"#
 }
 
 // Generated glue owns resource loading and fallback rendering only. The Rust

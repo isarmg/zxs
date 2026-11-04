@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,11 +15,16 @@ SPEC.loader.exec_module(GATE)
 
 
 class SystemSambaGate(unittest.TestCase):
-    def test_host_without_explicit_isolation_is_rejected_before_actions(self):
-        with patch.dict(os.environ, {}, clear=True), patch.object(GATE.subprocess, "check_output") as execute:
+    def test_host_without_explicit_isolation_is_rejected_before_host_actions(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True), \
+                patch.object(GATE.subprocess, "check_output") as execute, \
+                patch.object(GATE.pwd, "getpwnam") as accounts, \
+                patch.object(GATE.subprocess, "Popen") as processes:
             with self.assertRaisesRegex(RuntimeError, "isolated Debian fixture"):
-                GATE.run(None)
+                GATE.run(SimpleNamespace(output=Path(directory) / "receipt.json"))
             execute.assert_not_called()
+            accounts.assert_not_called()
+            processes.assert_not_called()
 
     def test_phase_markers_publish_complete_expected_bytes(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -83,3 +83,7 @@ cargo check --locked --offline -p browser-smoke
 ```
 
 Node mock-host 自测仅核对探针隔离、暂停/释放和恢复，不运行 WASM，也不能代替 Chrome 验收。Python 用例已进入现有 static suite 的 `test_*.py` discovery。
+
+## 匿名登录布局
+
+首次真实登录前检查 320×568、390×844、980×760 与 1440×900 四个 CSS 视口。真实管理状态、登录表单和首次设置分别有留白，输入及按钮必须有可见边框、至少 44px 高度且不横向溢出。用真实点击反复展开、收起设置，再验证空登录的本地错误与 Tab 焦点；不输入设置授权、不提交初始化，也不替换 API/WASM/DOM。设置 `ZXS_LOGIN_PREVIEWS=artifacts/login-previews` 保存实际截图及几何结果。这里的窄屏与宽屏只是 Chromium 视口，不是手机真机或手机浏览器“桌面网站”模式的完整模拟。

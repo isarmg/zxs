@@ -2,8 +2,12 @@
 
 提供独占 `Engine::scrub(&mut self, &IntegrityScrubCancellation)` 和锁外
 `prepare_integrity_scrub → plan.run → finish_integrity_scrub`，不替换
-`Engine::check` / `offline_check` 的磁盘目录诊断，不削减普通发布、读取、恢复、
-离线导出的任何现有校验。没有启用旧依赖免读、后台健康缓存或自动修复。
+`Engine::check` / `offline_check` 的磁盘目录诊断，不替代读取、恢复、离线导出的
+实际字节校验，也不自动修复。真实周期调度的完成元数据覆盖已接入
+[旧依赖免读准入](published-dependency-omission.md)，不是缓存一个健康标志后跳过校验。
+免读还须匹配成功发布谱系和有效元数据 epoch，并在决定开始前核对原 owner、
+准入代际与期限；无周期 owner、仅注册调度或只做手动巡检，均不产生该资格。
+正文可用性不等于共享元数据覆盖，不能据此宣称全部副本健康。
 
 ## 检查范围与可信锚
 
@@ -87,7 +91,7 @@ route 超预算明确 `Failed(ResourceLimit)`，不会截断成健康完成或�
 read，总 admission burst 小于 128 KiB。只累计实际字节，不在锁内调用限速等待；
 出锁先发布已观察到的 open/length/layout 故障，再交付实际 marker 账单。其余
 `on_read` 每次最多 64 KiB；即使读
-过程中被取消，已读字节也先记账。普通读写保持原完整验证与原正文/帧 read 粒度，不把后台64 KiB节流
+过程中被取消，已读字节也先记账。普通路径实际读取的正文/帧保持原验证与 read 粒度，不把后台64 KiB节流
 拆分强加到普通1 MiB正文块；普通 metadata/proof读取仍使用原非节流读取路径。目录身份读取与目录枚举不计入 byte counter；当前准入不做 procfs/sysfs 物理关系探测。
 `on_progress` 在每帧、每副本和首个观察到的故障后发布真实部分计数；其
 `Running` 永不健康，消费者不能在本轮已见故障后仍展示上次成功为 Fresh。
@@ -115,9 +119,10 @@ Config Arc、State Arc 和 OS writer lock 都不是物理磁盘快照；managed 
   中断已经进入内核的 I/O。取消/资源失败保留部分计数，终态分别为 Cancelled/Failed；binding 过期为 Superseded；
   `Complete` 仍可能带健康问题，只有 `is_healthy()` 才同时要求已完成且所有已定义检查成功。
 
-计算量是 journal 字节、每成员唯一保留 metadata 对象字节、格式本身的 root 引用表
-及 required payload 字节。旧 Snapshot/Candidate 根本身仍是全量引用表，这部分成本
-没有消失；未宣称 O(delta) 巡检或发布。
+计算量是 journal 字节、每成员唯一保留 metadata 对象字节及 required payload
+字节。当前[有界根格式](../adr/0006-bounded-metadata-roots.md)不免除完整巡检对保留
+闭包的遍历；普通发布的免读资格也不能跳过本次巡检应验证的对象。未宣称
+O(delta) 巡检或发布。
 
 ## 修复与验证
 

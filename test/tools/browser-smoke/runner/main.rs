@@ -23,6 +23,7 @@ mod base64_compatibility_tests;
 
 mod accessibility;
 mod admin_language;
+mod auth_layout;
 mod contour_evidence;
 mod contours;
 mod diagnostics;
@@ -271,12 +272,14 @@ fn exercise(
     diagnostics::install(browser)?;
     tree_frames::install(browser)?;
     let viewport_previews = env::var_os("ZXS_VIEWPORT_PREVIEWS").map(PathBuf::from);
-    let url = if screenshot.is_some() || viewport_previews.is_some() {
+    let login_previews = env::var_os("ZXS_LOGIN_PREVIEWS").map(PathBuf::from);
+    let url = if screenshot.is_some() || viewport_previews.is_some() || login_previews.is_some() {
         format!("{origin}/?lang=zh-CN")
     } else {
         origin.to_owned()
     };
-    browser.command("POST", "/url", Some(json!({"url":url})))?;
+    browser.command("POST", "/url", Some(json!({"url":&url})))?;
+    auth_layout::run(browser, &url, login_previews.as_deref())?;
     browser.keys(
         &browser.css("input[autocomplete='username']")?,
         "smoke-admin",
