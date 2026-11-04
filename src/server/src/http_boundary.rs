@@ -25,6 +25,9 @@ pub(crate) enum ApiErrorSource {
     #[cfg(feature = "core")]
     #[error("{0}")]
     Engine(#[from] storage_engine::Error),
+    #[cfg(feature = "core")]
+    #[error("{0}")]
+    DeregistrationPlan(#[from] storage_engine::DeregistrationPlanError),
     #[error("{0}")]
     Json(#[from] json_codec::Error),
     #[error("{0}")]

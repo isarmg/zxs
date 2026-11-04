@@ -103,7 +103,7 @@ impl CommandTimeout {
             return Err(Error::TimedOut);
         }
         let milliseconds =
-            duration.as_millis() + u128::from(duration.subsec_nanos() % 1_000_000 != 0);
+            duration.as_millis() + u128::from(!duration.subsec_nanos().is_multiple_of(1_000_000));
         let milliseconds = u32::try_from(milliseconds).map_err(|_| {
             Error::invalid("set SMART command deadline", "timeout exceeds Linux ABI")
         })?;

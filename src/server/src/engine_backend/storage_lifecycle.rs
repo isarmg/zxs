@@ -190,7 +190,7 @@ fn preview(engine: &Engine, request: ExitRequest) -> Result<(ExitPreview, Config
     let identity = registered.identity();
     let projection = engine
         .preview_disk_deregistration(&identity)
-        .map_err(ApiError::invalid_source)?;
+        .map_err(deregistration_plan_error)?;
     let boundary = projection.boundary();
     let snapshot_hash = boundary.published_snapshot_hash.ok_or_else(|| {
         ApiError::conflict(
@@ -319,3 +319,32 @@ fn exact_result(
     }
     Ok(result)
 }
+
+/// Projection failure classifications remain typed through the HTTP boundary.
+fn deregistration_plan_error(source: storage_engine::DeregistrationPlanError) -> ApiError {
+    use storage_contract::ErrorCode;
+    use storage_engine::DeregistrationPlanError;
+    let code = match &source {
+        DeregistrationPlanError::TargetNotRegistered(_)
+        | DeregistrationPlanError::VersionNotFound(_)
+        | DeregistrationPlanError::NamespaceNotFound(_) => ErrorCode::NotFound,
+        DeregistrationPlanError::TargetIdentityMismatch { .. } => ErrorCode::DiskIdentityMismatch,
+        DeregistrationPlanError::CurrentNamespaceUnavailable => ErrorCode::RecoveryRequired,
+        DeregistrationPlanError::PlacementMissing(_)
+        | DeregistrationPlanError::PlacementSlotNotRegistered { .. }
+        | DeregistrationPlanError::PlacementBindingMismatch { .. }
+        | DeregistrationPlanError::PlacementInvalid { .. }
+        | DeregistrationPlanError::NamespaceReferenceMissing(_) => ErrorCode::ObjectCorrupt,
+        DeregistrationPlanError::PageSizeOutOfRange(_) => ErrorCode::InvalidRequest,
+    };
+    ApiError::new(
+        super::error_registry::status(code),
+        code,
+        source.to_string(),
+    )
+    .with_source(source)
+}
+
+#[cfg(test)]
+#[path = "../../../../test/server/unit/engine_backend/storage_lifecycle_errors.rs"]
+mod errors_tests;
