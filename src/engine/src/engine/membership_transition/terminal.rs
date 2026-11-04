@@ -258,9 +258,6 @@ impl TerminalAuthority {
     pub(in crate::engine) fn predecessor(&self) -> Option<&PortableAuthority> {
         self.predecessor.as_ref()
     }
-    pub(in crate::engine) fn source_registry_commitment(&self) -> &DiskRegistryCommitment {
-        &self.source_registry
-    }
     pub(in crate::engine) fn registry_commitment(&self) -> &DiskRegistryCommitment {
         &self.registry
     }

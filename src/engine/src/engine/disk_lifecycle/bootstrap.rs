@@ -160,12 +160,6 @@ pub(crate) struct LoadedLocator {
     record: Record,
 }
 impl LoadedLocator {
-    /// Validate selected new handles against every historical locator identity
-    /// before mutating them. Stops remain exclusions; no storage root is read.
-    pub(crate) fn validate_root_expansion(&self, observations: Vec<RootObservation>) -> Result<()> {
-        Record::extend(self, observations).map(|_| ())
-    }
-
     /// Pure alias/history validation. Only the typed terminal store methods may
     /// persist this change; this inspection never opens or admits a root.
     pub(in crate::engine) fn validate_terminal_root_expansion(

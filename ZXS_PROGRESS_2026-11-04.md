@@ -4,6 +4,11 @@
 
 本文记录本轮 ZXS 改进已落地的代码、已有验证证据、已知失败和剩余工作，供后续继续开发时核对。它是有时间边界的快照，不代替功能规范、发布说明或部署验收。提交和运行链接固定到具体版本；分支后续移动不改变本文所记录的历史结果。
 
+## 主线质量检查修复（2026-11-04 21:09 UTC）
+
+针对 main `56a52638` 的 [CI 41903042460](https://github.com/isarmg/zxs/actions/runs/41903042460)，本批收窄终态激活函数的可见范围，删除未调用的内部辅助函数，整理终态接续边界参数并修正范围写法，同时修复两个引擎测试文件中的迭代与状态引用编译错误。原运行的 quality、workspace 和 Standalone ELF 失败；后者构建成功但诊断检查拒绝了相同的三条警告，并未进入后续浏览器验收。本批修改尚未执行构建或测试，需以本批提交的 CI 结果为准。
+
+
 ## 当前结论
 
 - UI、SMB、历史、放置配置及中立失焦修补已进入主线 [`e54281cf`](https://github.com/isarmg/zxs/commit/e54281cffca72915287fd72caa0a16702fccfb0a)，保留原 `a8e57f0d` 祖先。磁盘基础随后进入主线 [`349367a3`](https://github.com/isarmg/zxs/commit/349367a37d5ab220dda1b66f3f17eb1cea44de03)。生产 Abort/recovery 与已有池添加 API/Web 随后进入 [`024647ca`](https://github.com/isarmg/zxs/commit/024647ca57f5824c6d0ab27a7691b019c087118d)。该提交的 [完整 CI 41876682031](https://github.com/isarmg/zxs/actions/runs/41876682031) 已在多个构建组报告 E0425，未通过。窄修已进入 [`1d082cd9`](https://github.com/isarmg/zxs/commit/1d082cd99f34e05ea52d85152d75590e7462df65)，[完整 CI 41882962028](https://github.com/isarmg/zxs/actions/runs/41882962028) 截至本次记录仍在运行；quality 因未使用的 `open_optional_regular` 和可合并条件失败，workspace 在测试调用不存在的方法处编译失败，其余任务尚未核实终态。三项源码修补已随真实退出批进入 [`57464e4e`](https://github.com/isarmg/zxs/commit/57464e4e118440708183bc43dbdf2709f27b10fb)，但该提交的 CI 又被下述编译错误阻断，不能标为通过。

@@ -87,10 +87,10 @@ fn disk_exit_selected_projection_then_current_file_merge_and_restart() {
             .is_none()
     );
     fixture.assert_hidden();
-    for (id, old) in &old_commits {
+    for (id, old) in old_commits.iter() {
         assert_eq!(fixture.engine.state.commits.get(id), Some(old));
     }
-    for (id, old) in &old_trees {
+    for (id, old) in old_trees.iter() {
         assert_eq!(fixture.engine.state.directory_trees.get(id), Some(old));
     }
     assert_eq!(merge(&mut fixture.engine).unwrap(), receipt);
@@ -149,6 +149,6 @@ fn disk_exit_file_merge_rejects_tampered_selected_occurrence_context_and_ref() {
     }
     assert_eq!(
         canonical_json(fixture.engine.state()).unwrap(),
-        canonical_json(&state).unwrap()
+        canonical_json(state.as_ref()).unwrap()
     );
 }

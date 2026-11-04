@@ -33,7 +33,7 @@ impl ReceiptInput {
     fn parse(receipt: &OperationResult) -> Result<Self> {
         let inputs = receipt.result.get("source_inputs").ok_or_else(invalid)?;
         let count = inputs.as_array().ok_or_else(invalid)?.len();
-        if count < 2 || count > crate::business::file_ancestry::MAX_ANCESTRY_NODES {
+        if !(2..=crate::business::file_ancestry::MAX_ANCESTRY_NODES).contains(&count) {
             return Err(invalid());
         }
         let location: Option<ReceiptLocation> =

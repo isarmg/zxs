@@ -8,7 +8,9 @@ use super::decision::DecisionReceipt;
 use super::pending::{MemberIdentity, admission};
 use super::terminal::{TerminalAuthority, VerifiedTerminalAuthority};
 use super::*;
-use crate::engine::disk_registry::{DiskRegistryCommitment, VerifiedDiskRegistry};
+use crate::engine::disk_registry::{
+    DiskRegistryCommitment, VerifiedDiskRegistry, published::continuation::RegistryBoundary,
+};
 use std::{collections::BTreeSet, sync::Arc};
 
 pub(in crate::engine::membership_transition) const PROPOSAL_KIND: &str = "terminal-resume-proposal";
@@ -184,10 +186,12 @@ impl ResumeProposal {
             .as_ref()
             .expect("invariant: verified terminal boundary");
         terminal.verify_resume_at(
-            &self.terminal.hash()?,
-            boundary.sequence,
-            self.source_topology_generation,
-            &boundary.snapshot_hash,
+            RegistryBoundary {
+                authority: &self.terminal.hash()?,
+                snapshot: &boundary.snapshot_hash,
+                sequence: boundary.sequence,
+                topology_generation: self.source_topology_generation,
+            },
             &self.intent.target,
             &self.registry,
             |kind, hash| self.read(kind, hash),

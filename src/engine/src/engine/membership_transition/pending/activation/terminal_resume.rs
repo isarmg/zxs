@@ -59,7 +59,7 @@ fn operation_directory(management: &TerminalManagement) -> PathBuf {
         )
 }
 
-pub(in crate::engine::membership_transition) fn activate(
+pub(in crate::engine::membership_transition::pending) fn activate(
     management: TerminalManagement,
     source: PendingControlArchive,
     core: ResumeCore,

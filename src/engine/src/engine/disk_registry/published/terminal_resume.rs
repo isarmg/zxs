@@ -1,6 +1,7 @@
 //! Exact continuation of the no-voter management registry. Historical bindings,
 //! detach masks and disabled registrations survive; only fresh metadata members
 //! are introduced. This graph alone never admits an active Engine.
+use super::continuation::RegistryBoundary;
 use super::terminal::TerminalRegistry;
 use super::*;
 
@@ -12,45 +13,26 @@ impl TerminalRegistry {
         snapshot: &str,
         target: &ValidatedConfig,
     ) -> Result<PreparedDiskRegistry> {
-        encode_registry(self.resume_state(terminal_authority, source, snapshot, target)?)
-    }
-
-    fn resume_state(
-        &self,
-        authority: &str,
-        source: &State,
-        snapshot: &str,
-        target: &ValidatedConfig,
-    ) -> Result<RegistryState> {
-        self.resume_state_at(
-            authority,
-            source.sequence,
-            source.topology_generation,
-            snapshot,
+        encode_registry(self.resume_state_at(
+            RegistryBoundary {
+                authority: terminal_authority,
+                snapshot,
+                sequence: source.sequence,
+                topology_generation: source.topology_generation,
+            },
             target,
-        )
+        )?)
     }
 
     pub(in crate::engine) fn verify_resume_at(
         &self,
-        authority: &str,
-        source_sequence: u64,
-        source_topology_generation: u64,
-        snapshot: &str,
+        boundary: RegistryBoundary<'_>,
         target: &ValidatedConfig,
         expected: &DiskRegistryCommitment,
         read: impl FnMut(&'static str, &str) -> Result<Vec<u8>>,
     ) -> Result<VerifiedDiskRegistry> {
         let loaded = load_registry(expected, read)?;
-        if loaded
-            != self.resume_state_at(
-                authority,
-                source_sequence,
-                source_topology_generation,
-                snapshot,
-                target,
-            )?
-        {
+        if loaded != self.resume_state_at(boundary, target)? {
             return Err(invalid(
                 "terminal resume differs from its exact frozen source",
             ));
@@ -63,22 +45,19 @@ impl TerminalRegistry {
 
     fn resume_state_at(
         &self,
-        authority: &str,
-        sequence: u64,
-        topology_generation: u64,
-        snapshot: &str,
+        boundary: RegistryBoundary<'_>,
         target: &ValidatedConfig,
     ) -> Result<RegistryState> {
-        digest(authority)?;
-        digest(snapshot)?;
+        digest(boundary.authority)?;
+        digest(boundary.snapshot)?;
         let previous = self.verified_registry();
         let old = &previous.state;
         if !old.voters.is_empty()
             || old.pending_exit.is_none()
             || old.source.pool_id != target.pool_id
-            || old.source.sequence != sequence
-            || old.source.topology_generation != topology_generation
-            || old.source.snapshot_hash.as_deref() != Some(snapshot)
+            || old.source.sequence != boundary.sequence
+            || old.source.topology_generation != boundary.topology_generation
+            || old.source.snapshot_hash.as_deref() != Some(boundary.snapshot)
         {
             return Err(invalid(
                 "resume requires the exact certified no-voter boundary",
@@ -90,7 +69,7 @@ impl TerminalRegistry {
             .view_generation
             .checked_add(1)
             .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "registry generation exhausted"))?;
-        next.source.membership_authority = Some(authority.to_owned());
+        next.source.membership_authority = Some(boundary.authority.to_owned());
         next.pending_exit = None;
         for disk in &target.disks {
             if next.topology.contains_key(&disk.disk_id) {

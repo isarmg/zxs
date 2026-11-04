@@ -136,7 +136,7 @@ fn disk_exit_history_merge_uses_readable_old_nodes_of_hidden_source_head_and_res
     for (id, commit) in previous.commits.iter() {
         assert_eq!(fixture.engine.state.commits.get(id), Some(commit));
     }
-    for (id, receipt) in &previous.operations {
+    for (id, receipt) in previous.operations.iter() {
         assert_eq!(fixture.engine.state.operations.get(id), Some(receipt));
     }
     assert_eq!(
