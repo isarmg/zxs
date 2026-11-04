@@ -36,23 +36,43 @@ const encoded = arguments[0], scene = arguments[1], done = arguments[arguments.l
             // G4 leaves them page-colored while the curved ring remains visible.
             const corners = [sample(f.x - 4, f.y - 4), sample(f.x + f.width + 3, f.y - 4),
                 sample(f.x + f.width + 3, f.y + f.height + 3), sample(f.x - 4, f.y + f.height + 3)];
-            const curves = [0, 1, 2, 3].map(corner => {
-                let hits = 0;
-                for (let d = -4; d <= scene.extent / 2 + 2; d += .5) {
-                    const x = corner === 0 || corner === 3 ? f.x + d : f.x + f.width - 1 - d;
-                    const y = corner < 2 ? f.y + d : f.y + f.height - 1 - d;
-                    if (matches(sample(x, y), color)) hits++;
+            // A one-pixel diagonal can land entirely on antialiased edges.
+            // Observe a bounded 2 CSS px diagonal band using distinct screenshot
+            // pixel centers instead. Keep the original color tolerance and require
+            // at least two pixels spanning both axes in EACH corner. Stop halfway
+            // through the corner extent, before the input's text/caret interior.
+            const scaleX = width / scene.clip.width, scaleY = height / scene.clip.height;
+            const reach = scene.extent / 2;
+            const curveDetails = [0, 1, 2, 3].map(corner => {
+                const left = corner === 0 || corner === 3, top = corner < 2;
+                const originX = f.x + (left ? 0 : f.width), originY = f.y + (top ? 0 : f.height);
+                const x0 = Math.max(0, Math.floor((originX - (left ? 5 : reach)) * scaleX));
+                const x1 = Math.min(width, Math.ceil((originX + (left ? reach : 5)) * scaleX));
+                const y0 = Math.max(0, Math.floor((originY - (top ? 5 : reach)) * scaleY));
+                const y1 = Math.min(height, Math.ceil((originY + (top ? reach : 5)) * scaleY));
+                const hits = [];
+                let inspected = 0;
+                for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+                    const dx = ((x + .5) / scaleX - originX) * (left ? 1 : -1);
+                    const dy = ((y + .5) / scaleY - originY) * (top ? 1 : -1);
+                    if (dx < -5 || dy < -5 || dx > reach || dy > reach || Math.abs(dx - dy) > 2) continue;
+                    inspected++;
+                    if (matches(pixel(x, y), color)) hits.push({x, y});
                 }
-                return hits;
+                return {inspected, hits, xCount: new Set(hits.map(p => p.x)).size, yCount: new Set(hits.map(p => p.y)).size};
             });
+            const curves = curveDetails.map(corner => corner.hits.length);
             const checks = {
                 distinctFocus: !matches(color, page), corners: corners.every(p => matches(p, page)),
                 gap: gap.every(p => matches(p, page)),
                 ring: ring.every(p => matches(p, scene.focused ? color : page)),
-                curvedRing: !scene.focused || curves.every(hits => hits >= 2),
+                curvedRing: curveDetails.every(corner => scene.focused
+                    ? corner.hits.length >= 2 && corner.xCount >= 2 && corner.yCount >= 2
+                    : corner.hits.length === 0),
             };
             return {valid: Object.values(checks).every(Boolean), kind: scene.kind, focused: scene.focused,
-                checks, width, height, ring, gap, corners, curves};
+                checks, width, height, ring, gap, corners, curves, curveDetails,
+                frame: f, extent: scene.extent, clip: scene.clip};
         }
         if (scene.kind === 'focus') {
             const expected = rgba(scene.color), strip = Math.ceil(scene.ring + 1);

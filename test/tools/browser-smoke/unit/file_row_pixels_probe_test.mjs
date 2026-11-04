@@ -77,5 +77,64 @@ for (const [x, y] of [[10, 10], [53, 10], [53, 25], [10, 25]]) {
     for (let cy = y - 1; cy <= y + 1; cy++) for (let cx = x - 1; cx <= x + 1; cx++) clipped.put(cx, cy, panel);
     await check(clipped, false);
 }
+// A real light-theme PNG at 99b9628d had 96/131 on the diagonal but
+// exact 68-valued focus pixels beside it. Only the sampling footprint changes;
+// accepting antialias-only pixels would weaken the original color threshold.
+const curveCenters = [[10, 10], [53, 10], [53, 25], [10, 25]];
+const eraseCurve = (model, index) => {
+    const [cx, cy] = curveCenters[index];
+    for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) model.put(x, y, panel);
+};
+model = searchFocus();
+for (const [cx, cy] of curveCenters) {
+    for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) {
+        const diagonal = (cx === 10) === (cy === 10) ? x - cx === y - cy : x - cx === cy - y;
+        if (diagonal) model.put(x, y, [96, 96, 96, 255]);
+    }
+}
+await check(model, true);
+// A full rectangular ring has abundant focus-colored pixels in every corner,
+// but must still fail the separate G4 outer-corner background requirement.
+const rectangular = searchFocus(false); rectangular.scene.focused = true;
+for (let y = 4; y <= 31; y++) for (let x = 4; x <= 59; x++) {
+    if (x <= 5 || x >= 58 || y <= 5 || y >= 30) rectangular.put(x, y, focus);
+}
+await check(rectangular, false);
+// Fractional border-box positions must not duplicate a screenshot pixel or
+// assume matching left/right raster phases.
+model = searchFocus();
+Object.assign(model.scene.frame, {x: 8.3, y: 8.25, width: 47.7, height: 19.75});
+await check(model, true);
+for (let corner = 0; corner < 4; corner++) {
+    const [x, y] = curveCenters[corner];
+    const one = searchFocus(); eraseCurve(one, corner); one.put(x, y, focus);
+    await check(one, false);
+    const straight = searchFocus(); eraseCurve(straight, corner);
+    straight.put(x, y, focus); straight.put(x + 1, y, focus);
+    await check(straight, false);
+    const antialiasOnly = searchFocus(); eraseCurve(antialiasOnly, corner);
+    antialiasOnly.put(x, y, [96, 96, 96, 255]); antialiasOnly.put(x + 1, y + 1, [96, 96, 96, 255]);
+    await check(antialiasOnly, false);
+    // Four clear midpoint samples cannot hide an isolated stale corner ring.
+    const staleCorner = searchFocus(false); staleCorner.put(x, y, focus);
+    await check(staleCorner, false);
+}
+// Focus-colored text/caret pixels beyond the corner reach are not a stale ring.
+model = searchFocus(false); model.put(20, 20, focus); await check(model, true);
+// The pixel observer must work with independent dark focus and page colors.
+const darkFocus = [95, 168, 200, 255], darkPage = [11, 20, 26, 255];
+for (const focused of [false, true]) {
+    const dark = fixture('search-focus');
+    for (let y = 0; y < 36; y++) for (let x = 0; x < 64; x++) dark.put(x, y, darkPage);
+    Object.assign(dark.scene, {focused, color: '#5fa8c8', page: '#0b141a', extent: 9,
+        clip: {width: 64, height: 36}, frame: {x: 8, y: 8, width: 48, height: 20}});
+    if (focused) {
+        for (const [x, y] of [[32, 4], [59, 18], [32, 31], [4, 18]]) dark.put(x, y, darkFocus);
+        for (const [cx, cy] of curveCenters) {
+            dark.put(cx, cy, darkFocus); dark.put(cx + 1, cy + 1, darkFocus);
+        }
+    }
+    await check(dark, true);
+}
 model = fixture('unknown'); await check(model, false);
 console.log(`PASS ${checks} screenshot pixel-observer model cases (not browser screenshots)`);

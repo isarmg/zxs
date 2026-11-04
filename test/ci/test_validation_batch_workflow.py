@@ -76,13 +76,15 @@ class ValidationBatchWorkflow(unittest.TestCase):
         script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
                                  .split('      - name:', 1)[0])
         base = '72e7258be1d1a5d461476c259db5ec0eeec7e75f'
-        expected_parent = 'd2716dc456c093eaf96d0392a2e0e34304370935'
-        intermediate = '90410707850443016397d9022251c97594abb607'
-        expected_chain = f'{expected_parent} {intermediate}\n{intermediate} {base}'
+        expected_parent = '99b9628d9dca5373f2cd377bd10eced55106a511'
+        intermediate = 'd2716dc456c093eaf96d0392a2e0e34304370935'
+        prior = '90410707850443016397d9022251c97594abb607'
+        expected_chain = f'{expected_parent} {intermediate}\n{intermediate} {prior}\n{prior} {base}'
         self.assertIn(f'base={base}', script)
         self.assertIn(f'expected_parent={expected_parent}', script)
         self.assertIn(f'intermediate={intermediate}', script)
-        self.assertIn('git rev-list --parents --max-count=2 "$expected_parent"', script)
+        self.assertIn(f'prior={prior}', script)
+        self.assertIn('git rev-list --parents --max-count=3 "$expected_parent"', script)
         self.assertIn('https://github.com/isarmg/zxs/actions/runs/41839207213', script)
         self.assertIn('git show -s --format=%P HEAD', script)
         self.assertIn('git diff --quiet "$base" HEAD -- src \':(exclude)src/web\'', script)
@@ -101,7 +103,9 @@ class ValidationBatchWorkflow(unittest.TestCase):
             'test/tools/browser-smoke/runner/auth_layout.js',
             'test/tools/browser-smoke/runner/auth_layout.rs',
             'test/tools/browser-smoke/runner/management.rs',
+            'test/tools/browser-smoke/runner/file_row_pixels.js',
             'test/tools/browser-smoke/unit/auth_layout_probe_test.mjs',
+            'test/tools/browser-smoke/unit/file_row_pixels_probe_test.mjs',
             'test/tools/browser-smoke/unit/setup_lifecycle_probe_test.mjs',
         ]
         # Exercise the actual script with exact command replies in GitHub static.
@@ -111,7 +115,7 @@ class ValidationBatchWorkflow(unittest.TestCase):
                 "show -s --format=%P HEAD")
                     [ "$TEST_GIT_FAIL" != parent ] || return 42
                     printf '%s\n' "$TEST_PARENT" ;;
-                "rev-list --parents --max-count=2 $expected_parent")
+                "rev-list --parents --max-count=3 $expected_parent")
                     [ "$TEST_GIT_FAIL" != ancestor ] || return 42
                     printf '%s\n' "$TEST_ANCESTOR" ;;
                 "diff --quiet $base HEAD -- src :(exclude)src/web")
@@ -131,8 +135,9 @@ class ValidationBatchWorkflow(unittest.TestCase):
         for parent in ['another-parent', expected_parent + ' second-parent', '']:
             cases.append((parent, expected_chain, paths, 0, 0, False, ''))
         for ancestor in ['another-base', expected_chain + ' second-parent', '',
-                         f'{expected_parent} {intermediate}\n{intermediate} wrong-base',
-                         f'{expected_parent} wrong-parent\n{intermediate} {base}']:
+                         f'{expected_parent} {intermediate}\n{intermediate} {prior}\n{prior} wrong-base',
+                         f'{expected_parent} {intermediate}\n{intermediate} wrong-prior\n{prior} {base}',
+                         f'{expected_parent} wrong-parent\n{intermediate} {prior}\n{prior} {base}']:
             cases.append((expected_parent, ancestor, paths, 0, 0, False, ''))
         cases.extend([(expected_parent, expected_chain, paths, 1, 0, False, ''),
                       (expected_parent, expected_chain, paths, 0, 1, False, '')])
