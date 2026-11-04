@@ -59,6 +59,56 @@ fn metadata(root: &DiskRoot, relative: &Path) -> Result<Option<std::fs::Metadata
         result => result,
     }
 }
+
+fn open_optional_read(root: &DiskRoot, path: &Path) -> Result<Option<ReadFile>> {
+    match root.open_read_regular(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error)
+            if matches!(
+                &error,
+                Error::Filesystem(platform_io::fs_safety::Error::Io(source))
+                    if source.kind() == std::io::ErrorKind::NotFound
+            ) =>
+        {
+            // A failed full-path open can also mean a missing ancestor. Only
+            // absence below a safely opened parent is an optional leaf.
+            if root.optional_metadata(path)?.is_none() {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn checkpoint_bytes(mut file: ReadFile, maximum: usize) -> Result<Vec<u8>> {
+    if file.metadata()?.len() > maximum as u64 {
+        return Err(Error::new(
+            ErrorCode::ResourceLimit,
+            "metadata input exceeds limit",
+        ));
+    }
+    let mut output = Vec::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        file.check_running()?;
+        let remaining = (maximum + 1 - output.len()).min(buffer.len());
+        let count = read_observed_fill(&mut file, &mut buffer[..remaining], &mut |_| Ok(()))?;
+        output.extend_from_slice(&buffer[..count]);
+        if output.len() > maximum {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "metadata grew beyond limit",
+            ));
+        }
+        if count < remaining {
+            break;
+        }
+    }
+    Ok(output)
+}
+
 // Read every repair-relevant byte, not metadata timestamps. Installed named
 // version payloads are excluded: recovery reconstructs their publication proof
 // without re-verifying the body. Prepared content remains hashed because replay
@@ -73,12 +123,14 @@ fn named_container(root: &DiskRoot, relative: &Path) -> Result<bool> {
     if parts.len() == 5 && parts[4] != "namespace" {
         return Ok(true);
     }
-    let Some(file) =
-        root.open_optional_regular(&root.path().join(relative).join(".zxs-container-owner.json"))?
+    let Some(file) = open_optional_read(
+        root,
+        &root.path().join(relative).join(".zxs-container-owner.json"),
+    )?
     else {
         return Ok(false);
     };
-    let owner: String = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+    let owner: String = decode_strict(&checkpoint_bytes(file, MAX_METADATA)?)?;
     Ok(owner == parts[3])
 }
 fn payload(root: &DiskRoot, relative: &Path) -> Result<bool> {
@@ -195,7 +247,9 @@ fn directory_budget(path: &Path, entries: usize, bytes: usize) -> Result<()> {
     Ok(())
 }
 fn file_hash(root: &DiskRoot, path: &Path) -> Result<String> {
-    let mut file = root.open_regular(path)?;
+    hash_reader(root.open_read_regular(path)?)
+}
+fn hash_reader(mut file: impl Read) -> Result<String> {
     let mut h = blake3::Hasher::new();
     let mut bytes = [0; 64 * 1024];
     loop {
@@ -532,15 +586,10 @@ pub(super) fn load(
     let members = engine.members();
     let mut chosen = None;
     for d in &members {
-        let Some(file) = engine
-            .disk_resources
-            .get(d)?
-            .root
-            .open_optional_regular(&path(d))?
-        else {
+        let Some(file) = open_optional_read(&engine.disk_resources.get(d)?.root, &path(d))? else {
             return Ok(None);
         };
-        let envelope: Envelope = decode_strict(&read_file_bytes(file, MAX_CHECKPOINT_BYTES)?)?;
+        let envelope: Envelope = decode_strict(&checkpoint_bytes(file, MAX_CHECKPOINT_BYTES)?)?;
         let checkpoint = envelope.checkpoint;
         if checkpoint.config_hash != object_hash("replay-config", &engine.config)?
             || checkpoint.tips.len() != members.len()

@@ -5,6 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
+#[path = "membership_io_tests.rs"]
+mod membership_io_tests;
 
 fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     let temp = tempfile::tempdir().unwrap();
