@@ -392,8 +392,8 @@ fn graph_merge_review(browser: &Browser) -> Result<()> {
     browser.script("Array.from(document.querySelectorAll('.zxs-merge-review button')).find(button=>['Cancel','取消'].includes(button.textContent.trim())).click();return true")?;
     check(
         browser,
-        "cancelling graph merge removes only its selection controls",
-        "return !document.querySelector('.zxs-merge-review')&&!document.querySelector('[data-history-merge-input]')&&document.querySelectorAll('.zxs-version-node').length===32",
+        "cancelling graph merge preserves the current window and removes only its selection controls",
+        "const p=window.__zxsHistoryWindows;return p.index===1&&!document.querySelector('.zxs-merge-review')&&!document.querySelector('[data-history-merge-input]')&&document.querySelectorAll('.zxs-version-node').length===32&&document.querySelectorAll('.zxs-version-current').length===1&&!!document.querySelector('[data-node-id=\"'+p.current+'\"] .zxs-version-current')",
     )
 }
 
@@ -419,8 +419,24 @@ fn captured_merge_selection(browser: &Browser) -> Result<()> {
 }
 
 fn fields_and_cancellation(browser: &Browser) -> Result<()> {
+    // Graph-merge cancellation deliberately preserves the visible current node.
+    // Leave its window through real pagination before exercising the conditional
+    // locate-current control; do not make product navigation reset on cancel.
+    graph(browser, 1)?;
+    click(browser, "Next history page", "下一页历史")?;
+    graph(browser, 2)?;
+    check(
+        browser,
+        "field review starts with the current node outside the visible window",
+        "return document.querySelectorAll('.zxs-version-current').length===0&&Array.from(document.querySelectorAll('button')).some(button=>['Locate current node','定位当前节点'].includes(button.textContent.trim())&&!button.disabled)",
+    )?;
     click(browser, "Locate current node", "定位当前节点")?;
     graph(browser, 1)?;
+    check(
+        browser,
+        "field review locates the exact current node",
+        "const p=window.__zxsHistoryWindows;return document.querySelectorAll('.zxs-version-current').length===1&&!!document.querySelector('[data-node-id=\"'+p.current+'\"] .zxs-version-current')",
+    )?;
     let current = browser
         .script("return window.__zxsHistoryWindows.current")?
         .as_str()

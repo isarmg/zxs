@@ -60,14 +60,16 @@ class ValidationBatchWorkflow(unittest.TestCase):
         script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
                                  .split('      - name:', 1)[0])
         base = '01305735ce153015a08bf14c6920cdce40b8b79b'
-        parent = '882cc7fb99156e7ac151f8e6d2953d0c7e369d7a'
+        parent = '6e6c1f2163b8a5c3c80ad8cc92577e18606222e5'
         self.assertIn(f'base={base}', script)
         self.assertIn(f'expected_parent={parent}', script)
-        self.assertIn('fetch-depth: 5', self.batch)
+        self.assertIn('fetch-depth: 6', self.batch)
         self.assertIn('git diff --name-only --no-renames "$base" HEAD', script)
         paths = [
             '.github/workflows/validate-ui-smb-history.yml',
             'docs/tools/browser-smoke.md',
+            'docs/15-api-and-errors.md',
+            'test/tools/browser-smoke/runner/history_windows.rs',
             'test/ci/test_validation_batch_workflow.py',
             'test/ci/test_file_row_decoration.py',
             'test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs',
@@ -91,7 +93,7 @@ class ValidationBatchWorkflow(unittest.TestCase):
             if [ "$*" = "$TEST_GIT_FAIL" ]; then return 42; fi
             case "$*" in
                 "rev-parse HEAD^") printf '%s\n' "$TEST_PARENT" ;;
-                "rev-parse $expected_parent~3") printf '%s\n' "$base" ;;
+                "rev-parse $expected_parent~4") printf '%s\n' "$base" ;;
                 "rev-parse HEAD:src") printf '%s\n' "$TEST_SOURCE" ;;
                 "rev-parse $base:src") printf '%s\n' baseline-source ;;
                 "diff --quiet $expected_parent HEAD -- test/engine test/server") return 0 ;;
@@ -110,7 +112,7 @@ class ValidationBatchWorkflow(unittest.TestCase):
                       '.github/workflows/smb-sdk.yml', 'Cargo.lock',
                       'docs/unrelated.md', 'test/tools/browser-smoke/runner/unknown.rs']:
             cases.append((parent, 'baseline-source', paths + [extra], False, ''))
-        for failed in ['rev-parse HEAD^', f'rev-parse {parent}~3', 'rev-parse HEAD:src', f'rev-parse {base}:src',
+        for failed in ['rev-parse HEAD^', f'rev-parse {parent}~4', 'rev-parse HEAD:src', f'rev-parse {base}:src',
                        f'diff --name-only --no-renames {base} HEAD',
                        f'diff --quiet {parent} HEAD -- test/engine test/server']:
             cases.append((parent, 'baseline-source', paths, False, failed))

@@ -408,6 +408,8 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 
 右侧“设为默认分支”才发起上述显式 PUT。请求固定当前命名空间 head 及已浏览树／节点，拒绝过期视图；成功后回到默认视图。拒绝保留预览，不确定结果保留原 operation_id 并查询回执，不能生成另一请求掩盖发布状态。预览不授予重命名、删除、写入或批量修改权限。已有低层 select 接口仍是明确的持久化选择命令，不是 Web 浏览接口。
 
+<a id="历史节点合并"></a>
+
 ### 历史节点合并
 
 `merge-history` 的来源节点与分支 CAS head 分开：`source_node_id` 是实际参与合并的旧节点，`expected_node_id` 是用户审阅时该来源分支的当前 head。允许同一原分支的不同历史节点以及归档分支、只读合并别名；节点必须属于同一文件及来源分支的历史，重复来源节点、跨文件或跨分支历史明确拒绝。至少两个不同来源，数量仍受核心 `max_entries` 和 HTTP 1 MiB JSON 上限约束。
@@ -417,6 +419,8 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 `chosen_node_id` 可为同文件任意健康节点。始终新建继承其正文与标签的 `fmeta_` 合并节点（`reused_node:false`），不新增正文版本、不改变任何原节点的父边。独立合并记录保留全部派生分支与来源节点，新节点连接参与来源及所选结果来源。返回既有合并结果字段，并增加 `name` 与 `source_inputs`，后者按请求顺序保存原分支、历史节点和审阅 head。
 
 请求摘要为 `file.history.merge`、actor 与完整 `{file_id,inputs,chosen_node_id,name,location}`；`repository_id/path` 必须成对提供，省略则摘要明确绑定 `location:null`。重试必须保留原 operation_id 和全部输入；相同请求永久重放，不重复派生分支。确认、鉴权及撤权检查仍适用于重放。此接口不改变既有 `/merge` 的当前 head 合并语义，也不引入磁盘格式迁移。
+
+<a id="目录只读历史窗口"></a>
 
 ### 目录只读历史窗口
 

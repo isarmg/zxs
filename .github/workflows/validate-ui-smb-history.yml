@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 5
+          fetch-depth: 6
       - name: Bind validation to the pushed commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Scope the reviewed test-only retry
@@ -37,10 +37,10 @@ jobs:
           # Reuse Web/Samba/native units from the baseline, Engine integration
           # from run 41817885256 and HTTP from 41820695812 only for this exact chain.
           base=01305735ce153015a08bf14c6920cdce40b8b79b
-          expected_parent=882cc7fb99156e7ac151f8e6d2953d0c7e369d7a
+          expected_parent=6e6c1f2163b8a5c3c80ad8cc92577e18606222e5
           retry=false
           if parent=$(git rev-parse HEAD^) && [ "$parent" = "$expected_parent" ] &&
-             ancestor=$(git rev-parse "$expected_parent~3") && [ "$ancestor" = "$base" ] &&
+             ancestor=$(git rev-parse "$expected_parent~4") && [ "$ancestor" = "$base" ] &&
              source=$(git rev-parse HEAD:src) && baseline_source=$(git rev-parse "$base:src") &&
              [ "$source" = "$baseline_source" ] &&
              changed=$(git diff --name-only --no-renames "$base" HEAD) &&
@@ -50,6 +50,8 @@ jobs:
               case "$path" in
                 .github/workflows/validate-ui-smb-history.yml|\
                 docs/tools/browser-smoke.md|\
+                docs/15-api-and-errors.md|\
+                test/tools/browser-smoke/runner/history_windows.rs|\
                 test/ci/test_validation_batch_workflow.py|\
                 test/ci/test_file_row_decoration.py|\
                 test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs|\

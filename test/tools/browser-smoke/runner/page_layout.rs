@@ -34,6 +34,10 @@ fn search(browser: &Browser, empty: bool) -> Result<()> {
 }
 pub(super) fn files(browser: &Browser) -> Result<()> {
     let original_theme = browser.script("return document.documentElement.dataset.zxsTheme")?;
+    let previews = env::var_os("ZXS_VIEWPORT_PREVIEWS").map(PathBuf::from);
+    if let Some(directory) = &previews {
+        fs::create_dir_all(directory)?;
+    }
     with_cleanup(
         || {
             for empty in [false, true] {
@@ -44,6 +48,14 @@ pub(super) fn files(browser: &Browser) -> Result<()> {
                         viewport(browser, width, height)?;
                         accessibility::input_surfaces(browser)?;
                         file_row_geometry(browser)?;
+                        if !empty && let Some(directory) = &previews {
+                            let data = browser.command("GET", "/screenshot", None)?;
+                            fs::write(
+                                directory.join(format!("file-list-{theme}-{width}x{height}.png")),
+                                STANDARD
+                                    .decode(data.as_str().ok_or("missing file-list screenshot")?)?,
+                            )?;
+                        }
                     }
                 }
             }
