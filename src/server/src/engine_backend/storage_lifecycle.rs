@@ -15,6 +15,69 @@ fn engine_action(action: ExitAction) -> MembershipExitAction {
 }
 
 impl EngineBackend {
+    pub(crate) fn has_membership_fence(&self) -> bool {
+        crate::lock(&self.engine)
+            .membership_fence_status()
+            .is_some()
+    }
+
+    pub(crate) fn fence_terminal_exit(
+        &self,
+        identity: &Identity,
+        intent: &StoredExit,
+        progress: &mut impl FnMut(ExitPhase, Option<ArchiveBinding>) -> Result<(), ApiError>,
+    ) -> Result<(), ApiError> {
+        let mut engine = crate::lock(&self.engine);
+        prepare_terminal_fence(&mut engine, identity, intent, progress)
+    }
+
+    /// Only the lifecycle owner with a unique backend may consume the final
+    /// voter. Failed completion retains its original drain handle for retry.
+    pub(crate) fn complete_terminal_exit(
+        &mut self,
+        identity: &Identity,
+        intent: &StoredExit,
+        mut progress: impl FnMut(ExitPhase, Option<ArchiveBinding>) -> Result<(), ApiError>,
+    ) -> Result<storage_engine::TerminalManagement, ApiError> {
+        let engine = self
+            .engine
+            .get_mut()
+            .expect("invariant: service state lock poisoned");
+        prepare_terminal_fence(engine, identity, intent, &mut progress)?;
+        current_protected_identity(engine, identity)?;
+        progress(ExitPhase::Archiving, None)?;
+        let terminal_exit = self
+            .terminal_exit
+            .get_mut()
+            .expect("invariant: terminal handle lock poisoned");
+        if terminal_exit.is_none() {
+            *terminal_exit = Some(engine.prepare_terminal_disk_exit().map_err(error)?);
+        }
+        let handle = terminal_exit
+            .as_mut()
+            .expect("invariant: terminal preparation retains its drain handle");
+        let archive = handle.control_archive();
+        let binding = ArchiveBinding {
+            archive_path: archive.archive_path,
+            root_hash: archive.root_hash,
+            transition_hash: archive.transition_hash,
+        };
+        if intent
+            .archive
+            .as_ref()
+            .is_some_and(|saved| saved != &binding)
+        {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "terminal archive differs from the original operation",
+            ));
+        }
+        current_protected_identity(engine, identity)?;
+        progress(ExitPhase::Activating, Some(binding))?;
+        current_protected_identity(engine, identity)?;
+        handle.complete(engine).map_err(error)
+    }
+
     pub(crate) fn preview_storage_exit(
         &self,
         identity: &Identity,
@@ -131,6 +194,47 @@ impl EngineBackend {
     }
 }
 
+fn prepare_terminal_fence(
+    engine: &mut AdmissionEngine,
+    identity: &Identity,
+    intent: &StoredExit,
+    progress: &mut impl FnMut(ExitPhase, Option<ArchiveBinding>) -> Result<(), ApiError>,
+) -> Result<(), ApiError> {
+    let actor = current_protected_identity(engine, identity)?;
+    if let Some(fence) = engine.membership_fence_status() {
+        if fence.operation_id != intent.status.operation_id {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::IdempotencyKeyReused,
+                "terminal fence belongs to another operation",
+            ));
+        }
+    } else {
+        let (current, _) = preview(engine, intent.status.preview.request.clone())?;
+        if current != intent.status.preview {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::GenerationMismatch,
+                "terminal exit preview changed before fencing",
+            ));
+        }
+        progress(ExitPhase::Fencing, None)?;
+        engine
+            .begin_disk_exit(
+                &intent.status.preview.target.disk_id,
+                engine_action(intent.status.preview.request.action),
+                &actor.principal,
+                intent.status.operation_id,
+            )
+            .map_err(error)?;
+    }
+    if !engine.disk_exit_requires_management() {
+        return Err(ApiError::conflict(
+            storage_contract::ErrorCode::RecoveryRequired,
+            "the original fence is not a terminal management exit",
+        ));
+    }
+    Ok(())
+}
+
 fn preview(engine: &Engine, request: ExitRequest) -> Result<(ExitPreview, Config), ApiError> {
     if engine.membership_fence_status().is_some() {
         return Err(ApiError::conflict(
@@ -181,12 +285,6 @@ fn preview(engine: &Engine, request: ExitRequest) -> Result<(ExitPreview, Config
         .count();
     let target_metadata_members =
         original_metadata_members - usize::from(registered.metadata_member);
-    if target_metadata_members == 0 {
-        return Err(ApiError::conflict(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "the final metadata voter cannot exit without terminal pool authority",
-        ));
-    }
     let identity = registered.identity();
     let projection = engine
         .preview_disk_deregistration(&identity)
@@ -216,6 +314,11 @@ fn preview(engine: &Engine, request: ExitRequest) -> Result<(ExitPreview, Config
                 .to_str()
                 .ok_or_else(|| ApiError::invalid("registered directory is not a UTF-8 path"))?
                 .to_owned(),
+        },
+        authority: if target_metadata_members == 0 {
+            ExitAuthority::TerminalManagement
+        } else {
+            ExitAuthority::ActiveMembership
         },
         configuration_digest: configuration_digest(&config),
         preview_digest: String::new(),
@@ -290,7 +393,7 @@ fn verify_status(
     }
     Ok(())
 }
-fn exact_result(
+pub(crate) fn exact_result(
     result: OperationResult,
     intent: &StoredExit,
     archive: Option<&ArchiveBinding>,
@@ -308,6 +411,8 @@ fn exact_result(
         || outcome("binding_generation") != Some(binding_generation.as_str())
         || outcome("registration") != Some(registration)
         || outcome("target_io") != Some("closed")
+        || (intent.status.preview.authority == ExitAuthority::TerminalManagement
+            && outcome("authority_kind") != Some("terminal-management"))
         || result.kind != intent.status.preview.request.action.result_kind()
         || result.commit_state != storage_contract::CommitState::Published
         || archive.is_none_or(|binding| result.request_digest != binding.transition_hash)

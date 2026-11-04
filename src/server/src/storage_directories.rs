@@ -373,16 +373,96 @@ fn reject_non_storage_filesystem(filesystem: &str) -> Result<()> {
     Ok(())
 }
 
+/// SYSTEM-authenticated historical paths are filtered before any filesystem
+/// lookup. Mount aliases are mapped using mountinfo, without stat/open of old
+/// roots. Privileged mount mutation between snapshot and open remains an OS
+/// boundary; held-parent resolution and inventory rechecks detect later changes.
+struct FilesystemLocation {
+    device: (u32, u32),
+    path: PathBuf,
+}
+fn mapped_location(path: &Path, inventory: &[Mount]) -> Result<FilesystemLocation> {
+    let mount = inventory
+        .iter()
+        .filter(|mount| path.starts_with(&mount.path))
+        .max_by_key(|mount| mount.path.components().count())
+        .ok_or(Error::InvalidMounts)?;
+    // Stacked entries with the same visible mountpoint cannot be ordered from
+    // this inventory alone. Refuse that path before opening its directory.
+    if inventory
+        .iter()
+        .filter(|other| other.path == mount.path)
+        .count()
+        != 1
+    {
+        return Err(Error::Changed);
+    }
+    Ok(FilesystemLocation {
+        device: (mount.major, mount.minor),
+        path: mount_relative_location(mount, path),
+    })
+}
+struct StoppedRoot<'a> {
+    path: &'a Path,
+    location: FilesystemLocation,
+}
+struct StoppedRoots<'a> {
+    roots: Vec<StoppedRoot<'a>>,
+    inventory: &'a [Mount],
+}
+impl<'a> StoppedRoots<'a> {
+    fn new(paths: &'a [PathBuf], inventory: &'a [Mount]) -> Result<Self> {
+        let roots = paths
+            .iter()
+            .map(|path| {
+                absolute(path.to_str().ok_or(Error::InvalidPath)?)?;
+                Ok(StoppedRoot {
+                    path,
+                    location: mapped_location(path, inventory)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { roots, inventory })
+    }
+    fn check(&self, path: &Path, reject_ancestor: bool) -> Result<()> {
+        if self.roots.is_empty() {
+            return Ok(());
+        }
+        let location = mapped_location(path, self.inventory)?;
+        for stopped in &self.roots {
+            if path.starts_with(stopped.path)
+                || (reject_ancestor && stopped.path.starts_with(path))
+                || (location.device == stopped.location.device
+                    && (location.path.starts_with(&stopped.location.path)
+                        || (reject_ancestor && stopped.location.path.starts_with(&location.path))))
+            {
+                return Err(Error::Overlap(stopped.path.to_owned()));
+            }
+        }
+        Ok(())
+    }
+    fn unchanged(&self) -> Result<()> {
+        if !self.roots.is_empty() && mounts()? != self.inventory {
+            return Err(Error::Changed);
+        }
+        Ok(())
+    }
+}
+
 /// Bounded, read-only navigation. Files are not returned or opened. Symlink
 /// entries are reported as unavailable, never traversed. Nested mounts can be
 /// entered by a new browse request, where their own mount identity is resolved.
 pub fn browse(path: &str) -> Result<DirectoryListing> {
     let path = absolute(path)?;
     let observed = observe(&path, &mounts()?)?;
-    browse_observed(observed, true)
+    browse_observed(observed, true, None)
 }
 
-fn browse_observed(observed: Observed, report_links: bool) -> Result<DirectoryListing> {
+fn browse_observed(
+    observed: Observed,
+    report_links: bool,
+    stopped: Option<&StoppedRoots<'_>>,
+) -> Result<DirectoryListing> {
     let path = &observed.path;
     let browsing_root = OpenAt2Root::from_directory(
         observed.storage.directory().try_clone()?,
@@ -405,6 +485,14 @@ fn browse_observed(observed: Observed, report_links: bool) -> Result<DirectoryLi
             skipped_non_utf8 += 1;
             continue;
         };
+        let child = path.join(name);
+        if let Some(stopped) = stopped {
+            match stopped.check(&child, false) {
+                Ok(()) => {}
+                Err(Error::Overlap(_)) => continue,
+                Err(error) => return Err(error),
+            }
+        }
         let stat = unix::statat(
             observed.storage.directory(),
             entry.as_os_str(),
@@ -414,7 +502,6 @@ fn browse_observed(observed: Observed, report_links: bool) -> Result<DirectoryLi
         if kind != FileType::Directory && !(report_links && kind == FileType::Symlink) {
             continue;
         }
-        let child = path.join(name);
         let problem = if kind == FileType::Symlink {
             Some(DirectoryProblem::SymbolicLink)
         } else {
@@ -494,10 +581,16 @@ fn inspect_held(
     excluded_roots: &[PathBuf],
     discovery_root: &str,
     strict_descendant: bool,
+    stopped_roots: &[PathBuf],
 ) -> Result<HeldSelection> {
     let root_path = absolute(&request.root_path)?;
     let requested_mount = absolute(&request.mount_path)?;
     let inventory = mounts()?;
+    let stopped = StoppedRoots::new(stopped_roots, &inventory)?;
+    stopped.check(&absolute(discovery_root)?, false)?;
+    stopped.check(&root_path, true)?;
+    stopped.check(&requested_mount, false)?;
+    stopped.unchanged()?;
     let scope = DiscoveryScope::open(discovery_root, &inventory)?;
     let opened = scope.open_descendant(&root_path, strict_descendant)?;
     let observed = observe_opened(&root_path, opened, &inventory)?;
@@ -522,6 +615,7 @@ fn inspect_held(
     }
     verify_current(&observed)?;
     verify_current(&scope.observed)?;
+    stopped.unchanged()?;
     let selected = selection(&observed, &scope);
     Ok(HeldSelection {
         selected,
@@ -534,7 +628,7 @@ fn inspect_held(
 /// Inspect a currently empty, private directory without changing it. Permission
 /// checks are an observation; quota, future I/O and physical redundancy are not proved.
 pub fn inspect(request: &InspectRequest, excluded_roots: &[PathBuf]) -> Result<CandidateSelection> {
-    Ok(inspect_held(request, excluded_roots, &request.mount_path, false)?.selected)
+    Ok(inspect_held(request, excluded_roots, &request.mount_path, false, &[])?.selected)
 }
 
 pub struct HeldSelection {
@@ -567,6 +661,7 @@ pub fn revalidate(
         excluded_roots,
         &selected.discovery_root,
         false,
+        &[],
     )?;
     if held.selected != *selected {
         return Err(Error::Changed);
@@ -639,7 +734,7 @@ pub fn browse_within(discovery_root: &str, path: &str) -> Result<DirectoryListin
     let path = absolute(path)?;
     let opened = scope.open_descendant(&path, false)?;
     let observed = observe_opened(&path, opened, &inventory)?;
-    let listing = browse_observed(observed, false)?;
+    let listing = browse_observed(observed, false, None)?;
     verify_current(&scope.observed)?;
     Ok(listing)
 }
@@ -651,7 +746,7 @@ pub fn inspect_within(
     request: &InspectRequest,
     excluded_roots: &[PathBuf],
 ) -> Result<CandidateSelection> {
-    Ok(inspect_held(request, excluded_roots, discovery_root, true)?.selected)
+    Ok(inspect_held(request, excluded_roots, discovery_root, true, &[])?.selected)
 }
 
 /// Activation must call this while holding the settings/lifecycle lock. A new
@@ -672,11 +767,126 @@ pub fn revalidate_within(
         excluded_roots,
         discovery_root,
         true,
+        &[],
     )?;
     if held.selected != *selected {
         return Err(Error::Changed);
     }
     Ok(held)
+}
+
+/// Terminal navigation omits stopped roots before stat or opening children.
+/// Distinct directories on the same filesystem remain valid candidates.
+pub fn browse_fresh_within(
+    discovery_root: &str,
+    path: &str,
+    stopped_roots: &[PathBuf],
+) -> Result<DirectoryListing> {
+    let inventory = mounts()?;
+    let stopped = StoppedRoots::new(stopped_roots, &inventory)?;
+    let path = absolute(path)?;
+    stopped.check(&absolute(discovery_root)?, false)?;
+    stopped.check(&path, false)?;
+    stopped.unchanged()?;
+    let scope = DiscoveryScope::open(discovery_root, &inventory)?;
+    let opened = scope.open_descendant(&path, false)?;
+    let observed = observe_opened(&path, opened, &inventory)?;
+    let listing = browse_observed(observed, false, Some(&stopped))?;
+    verify_current(&scope.observed)?;
+    stopped.unchanged()?;
+    Ok(listing)
+}
+
+pub fn inspect_fresh_within(
+    discovery_root: &str,
+    request: &InspectRequest,
+    excluded_roots: &[PathBuf],
+    stopped_roots: &[PathBuf],
+) -> Result<CandidateSelection> {
+    Ok(inspect_held(request, excluded_roots, discovery_root, true, stopped_roots)?.selected)
+}
+
+pub fn revalidate_fresh_within(
+    discovery_root: &str,
+    selected: &CandidateSelection,
+    excluded_roots: &[PathBuf],
+    stopped_roots: &[PathBuf],
+) -> Result<HeldSelection> {
+    if absolute(discovery_root)? != absolute(&selected.discovery_root)? {
+        return Err(Error::Changed);
+    }
+    let held = inspect_held(
+        &InspectRequest {
+            mount_path: selected.mount_path.clone(),
+            root_path: selected.root_path.clone(),
+        },
+        excluded_roots,
+        discovery_root,
+        true,
+        stopped_roots,
+    )?;
+    if held.selected != *selected {
+        return Err(Error::Changed);
+    }
+    Ok(held)
+}
+
+pub fn validate_fresh_discovery_root(
+    root: &str,
+    excluded_roots: &[PathBuf],
+    stopped_roots: &[PathBuf],
+) -> Result<()> {
+    let inventory = mounts()?;
+    let stopped = StoppedRoots::new(stopped_roots, &inventory)?;
+    stopped.check(&absolute(root)?, false)?;
+    stopped.unchanged()?;
+    let scope = DiscoveryScope::open(root, &inventory)?;
+    reject_overlaps(&scope.observed, excluded_roots, &inventory)?;
+    verify_current(&scope.observed)?;
+    stopped.unchanged()
+}
+
+/// Pending preparation may change ctime, but cannot change selected device,
+/// inode, discovery root, or mount. Reopen from the managed held parent.
+#[cfg(feature = "core")]
+pub(crate) fn reopen_fresh_addition(
+    selected: &CandidateSelection,
+    stopped_roots: &[PathBuf],
+) -> std::result::Result<File, crate::ApiError> {
+    let inventory = mounts()?;
+    let stopped = StoppedRoots::new(stopped_roots, &inventory)?;
+    let root = absolute(&selected.root_path)?;
+    stopped.check(&absolute(&selected.discovery_root)?, false)?;
+    stopped.check(&root, true)?;
+    stopped.check(&absolute(&selected.mount_path)?, false)?;
+    stopped.unchanged()?;
+    let scope = DiscoveryScope::open(&selected.discovery_root, &inventory)?;
+    let observed = observe_opened(&root, scope.open_descendant(&root, true)?, &inventory)?;
+    if observed.root_identity.device != selected.root_identity.device
+        || observed.root_identity.inode != selected.root_identity.inode
+        || observed.mount_identity.device_major != selected.mount_identity.device_major
+        || observed.mount_identity.device_minor != selected.mount_identity.device_minor
+        || observed.mount_identity.root_inode != selected.mount_identity.root_inode
+        || observed.mount_identity.filesystem != selected.mount_identity.filesystem
+        || observed.mount_identity.filesystem_root != selected.mount_identity.filesystem_root
+        || scope.observed.root_identity.device != selected.discovery_identity.device
+        || scope.observed.root_identity.inode != selected.discovery_identity.inode
+    {
+        return Err(Error::Changed.into());
+    }
+    fs_safety::PrivateDirectory::from_directory(
+        observed
+            .storage
+            .directory()
+            .try_clone()
+            .map_err(Error::from)?,
+        root,
+    )
+    .map_err(Error::from)?;
+    verify_current(&observed)?;
+    verify_current(&scope.observed)?;
+    stopped.unchanged()?;
+    Ok(observed.storage.into_directory())
 }
 
 /// Resume only the same named directory after enrollment has changed its ctime.

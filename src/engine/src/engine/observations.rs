@@ -158,36 +158,7 @@ impl Engine {
     }
 
     pub fn prepare_disk_observation(&self) -> DiskObservationPlan {
-        let mut used_bytes: BTreeMap<String, u64> = BTreeMap::new();
-        for placement in self.state.placements.values() {
-            if self
-                .state
-                .content_states
-                .get(&placement.version_id)
-                .is_some_and(|state| {
-                    *state == ContentState::Purged || *state == ContentState::Migrated
-                })
-            {
-                continue;
-            }
-            let version = self
-                .state
-                .versions
-                .get(&placement.version_id)
-                .expect("invariant: every placement references an existing version");
-            for (index, slot) in placement.route_slot_ids.iter().enumerate() {
-                // Match used_bytes' membership semantics even for duplicate slots.
-                if placement.route_slot_ids[..index].contains(slot) {
-                    continue;
-                }
-                match used_bytes.get_mut(slot) {
-                    Some(used) => *used = used.saturating_add(version.logical_size),
-                    None => {
-                        used_bytes.insert(slot.clone(), version.logical_size);
-                    }
-                }
-            }
-        }
+        let used_bytes = logical_used_bytes(&self.state);
         DiskObservationPlan {
             metadata_integrity: std::sync::Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
@@ -335,3 +306,35 @@ impl DiskObservationPlan {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/observations/tests.rs"]
 mod tests;
+
+/// Logical bytes referenced by admitted placement metadata, never a physical
+/// capacity sample. Terminal management and live observations share this rule.
+pub(in crate::engine) fn logical_used_bytes(state: &State) -> BTreeMap<String, u64> {
+    let mut used_bytes: BTreeMap<String, u64> = BTreeMap::new();
+    for placement in state.placements.values() {
+        if state
+            .content_states
+            .get(&placement.version_id)
+            .is_some_and(|state| *state == ContentState::Purged || *state == ContentState::Migrated)
+        {
+            continue;
+        }
+        let version = state
+            .versions
+            .get(&placement.version_id)
+            .expect("invariant: every placement references an existing version");
+        for (index, slot) in placement.route_slot_ids.iter().enumerate() {
+            // Match used_bytes' membership semantics even for duplicate slots.
+            if placement.route_slot_ids[..index].contains(slot) {
+                continue;
+            }
+            match used_bytes.get_mut(slot) {
+                Some(used) => *used = used.saturating_add(version.logical_size),
+                None => {
+                    used_bytes.insert(slot.clone(), version.logical_size);
+                }
+            }
+        }
+    }
+    used_bytes
+}

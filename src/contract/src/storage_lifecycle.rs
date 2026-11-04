@@ -36,11 +36,40 @@ pub struct ExitTarget {
     /// Display only. Clients cannot supply an operating-system device action.
     pub root_path: String,
 }
+/// The final voter retires into authenticated management, not a zero-member pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum ExitAuthority {
+    ActiveMembership,
+    TerminalManagement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum TerminalRegistrations {
+    RetainedRegistrations,
+    EmptyRegistry,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct TerminalStorageStatus {
+    pub pool_id: String,
+    pub operation_id: OperationId,
+    pub authority_hash: String,
+    pub registrations: TerminalRegistrations,
+    pub registered_directories: usize,
+    /// Historical authenticated denominator, never recalculated from survivors.
+    pub original_metadata_members: usize,
+    pub original_metadata_quorum: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct ExitPreview {
     pub request: ExitRequest,
     pub target: ExitTarget,
+    pub authority: ExitAuthority,
     pub configuration_digest: String,
     pub preview_digest: String,
     #[serialization(with = "crate::u64_string")]

@@ -287,7 +287,16 @@ fn setup_dto_errors_and_unknown_actions_keep_auth_and_lifecycle_precedence() {
         marker
     );
     assert!(!data.join("config.json").exists());
-    assert!(backend.inner.state.lock().unwrap().backend.is_none());
+    assert!(
+        backend
+            .inner
+            .state
+            .lock()
+            .unwrap()
+            .backend
+            .engine()
+            .is_none()
+    );
     backend.inner.recovering.store(false, Ordering::SeqCst);
 }
 

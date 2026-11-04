@@ -35,6 +35,7 @@ pub enum StorageActivationState {
     Active,
     RecoveryRequired,
     Unavailable,
+    TerminalManagement,
 }
 
 #[derive(Serialize)]
@@ -43,6 +44,7 @@ pub struct StorageActivationStatus {
     pub disk_ids: Vec<String>,
     pub completion_available: bool,
     pub allow_development: bool,
+    pub terminal: Option<storage_contract::storage_lifecycle::TerminalStorageStatus>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -188,6 +190,24 @@ impl SetupRecovery {
     }
 
     pub fn storage_status(&self) -> StorageActivationStatus {
+        match storage_engine::TerminalManagement::requires_management(&self.data_root) {
+            Ok(false) => {}
+            terminal => {
+                // Until ManagementBackend admits the full authority, report a
+                // closed state without evaluating old activation disk proofs.
+                return StorageActivationStatus {
+                    state: if terminal.is_ok() {
+                        StorageActivationState::RecoveryRequired
+                    } else {
+                        StorageActivationState::Unavailable
+                    },
+                    disk_ids: Vec::new(),
+                    completion_available: false,
+                    allow_development: self.allow_development,
+                    terminal: None,
+                };
+            }
+        }
         let state = match self.installation_state() {
             Ok(InstallationState::ManagementReady) => StorageActivationState::Pending,
             Ok(InstallationState::Existing) if self.activation_admitted().is_ok() => {
@@ -210,6 +230,7 @@ impl SetupRecovery {
                     })
                     .unwrap_or(false),
             allow_development: self.allow_development,
+            terminal: None,
         }
     }
 

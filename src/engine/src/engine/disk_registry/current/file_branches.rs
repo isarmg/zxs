@@ -51,6 +51,29 @@ impl CurrentNamespaces {
         Ok(())
     }
 
+    /// Live history derivation admits only a newly created pending helper.
+    /// Its source is a current occurrence, not the source branch's frozen HEAD.
+    pub(crate) fn history_merge_input_entries<'a>(
+        &self,
+        previous: &State,
+        next: &'a State,
+        branch: &Branch,
+    ) -> Result<&'a [Entry]> {
+        let commit = next.commits.get(&branch.head_commit_id).ok_or_else(stale)?;
+        if commit.kind != "file_branch_pending"
+            || previous.commits.contains_key(&commit.commit_id)
+            || branch.generation != 1
+            || next.file_branch_aliases.contains_key(&branch.branch_id)
+        {
+            return Err(unsupported());
+        }
+        let owner = self
+            .new_file_branch_source(previous, next, branch, commit)?
+            .ok_or_else(unsupported)?;
+        self.validate_entries(Some(owner), &commit.entries)?;
+        Ok(&commit.entries)
+    }
+
     /// A new pending branch can choose an older body of a retained file. Its
     /// occurrence and every ancestor still come from one exact current owner.
     /// Reconstruct this proof from durable records during ordinary recovery too.
@@ -61,6 +84,14 @@ impl CurrentNamespaces {
         branch: &Branch,
         commit: &Commit,
     ) -> Result<Option<&'a CurrentScope>> {
+        if !previous.branches.contains_key(&branch.branch_id)
+            && branch.file_id.is_some()
+            && commit.kind == "file_metadata"
+        {
+            // A completed same-mutation history helper must enter through its
+            // receipt/merge graph proof, never the ordinary synchronization path.
+            return Err(unsupported());
+        }
         if previous.branches.contains_key(&branch.branch_id)
             || branch.file_id.is_none()
             || !matches!(
@@ -161,20 +192,35 @@ impl CurrentNamespaces {
         Ok(Some(owner))
     }
 
-    /// Project each named directory independently. A frozen child can only be
-    /// reused when its exact named HEAD and projected contents form the same
-    /// current closure. Arbitrary historical trees remain explicit read data.
+    /// Project each named directory independently. Selected compositions use
+    /// the same authenticated source as current batches; a named HEAD is still
+    /// the branch baseline, not a substitute for its actual selected tree.
+    /// Unselected frozen imports retain the existing exact-closure fence.
     pub(crate) fn file_merge_directories(
         &self,
         state: &State,
         repository: &str,
     ) -> Result<Vec<DirectoryBranch>> {
         let mut projected = BTreeMap::new();
+        let mut source_trees = BTreeMap::new();
         for branch in state
             .directory_branches
             .values()
             .filter(|branch| branch.repository_id == repository)
         {
+            if state.directory_selections.get(&branch.directory_id)
+                == Some(&branch.directory_branch_id)
+                && state.directory_tree_selections.get(&branch.directory_id)
+                    != Some(&branch.head_tree_id)
+            {
+                let source = self.batch_scope(state, &branch.directory_branch_id)?;
+                source_trees.insert(
+                    branch.directory_branch_id.clone(),
+                    source.selected_tree_id().to_owned(),
+                );
+                projected.insert(branch.directory_branch_id.clone(), source.branch().clone());
+                continue;
+            }
             let mut current = branch.clone();
             current.entries = self
                 .directory_entries(&branch.directory_branch_id, &branch.head_tree_id)?
@@ -204,15 +250,10 @@ impl CurrentNamespaces {
             current
                 .directory_refs
                 .retain(|directory, _| directories.contains(directory.as_str()));
-            if state.directory_selections.get(&branch.directory_id)
-                == Some(&branch.directory_branch_id)
-                && state
-                    .directory_tree_selections
-                    .get(&branch.directory_id)
-                    .is_some_and(|tree| tree != &branch.head_tree_id)
-            {
-                return Err(unsupported());
-            }
+            source_trees.insert(
+                branch.directory_branch_id.clone(),
+                branch.head_tree_id.clone(),
+            );
             projected.insert(branch.directory_branch_id.clone(), current);
         }
         for branch in projected.values() {
@@ -236,7 +277,7 @@ impl CurrentNamespaces {
                 let descendants = &branch.entries[start..];
                 let end =
                     descendants.partition_point(|entry| entry.lookup_key().starts_with(&prefix));
-                if child.head_tree_id != reference.tree_id
+                if source_trees[&child.directory_branch_id] != reference.tree_id
                     || child.directory_id != *directory
                     || child.path != root.path()
                     || child.entries.as_slice() != &descendants[..end]

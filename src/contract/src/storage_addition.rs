@@ -19,9 +19,27 @@ pub struct AdditionRequest {
     pub additions: Vec<DirectoryAddition>,
 }
 
+/// The supplied hash binds a preview, but is never an authentication token.
+/// Terminal authority is loaded and authenticated by the server itself.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AdditionAuthority {
+    ActiveMembership,
+    TerminalManagement {
+        terminal_authority_hash: String,
+        terminal_operation_id: OperationId,
+    },
+}
+impl AdditionAuthority {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::TerminalManagement { .. })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct AdditionPreview {
+    pub authority: AdditionAuthority,
     pub request: AdditionRequest,
     pub pool_id: String,
     pub configuration_digest: String,
@@ -75,6 +93,19 @@ pub enum AdditionPhase {
     Cancelling,
     Completed,
     Cancelled,
+}
+
+impl AdditionPhase {
+    pub fn is_metadata_resume(self) -> bool {
+        matches!(
+            self,
+            Self::Prepared
+                | Self::Enrolling
+                | Self::JointDecision
+                | Self::Activating
+                | Self::Completed
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

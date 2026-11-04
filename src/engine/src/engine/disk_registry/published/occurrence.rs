@@ -19,8 +19,6 @@ use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod continuation;
-pub(in crate::engine) mod projection;
-use projection::WriteProjection;
 
 const MASK_KIND: &str = "disk-occurrence-mask";
 
@@ -36,10 +34,6 @@ pub(in crate::engine) enum ProjectionError {
     MaskMismatch,
     #[error("projection baseline differs from workspace, scope, head or registry view")]
     BaselineMismatch,
-    #[error("namespace has no retained writable owner or is historical")]
-    NotWritable,
-    #[error("projected write would reuse a hidden or foreign identity: {0}")]
-    IdentityReuse(String),
 }
 type ProjectionResult<T> = std::result::Result<T, ProjectionError>;
 
@@ -57,14 +51,6 @@ pub(in crate::engine) enum NamespaceScope {
     DirectoryTree(String),
 }
 impl NamespaceScope {
-    fn borrowed(&self) -> DeregistrationNamespace<'_> {
-        match self {
-            Self::BranchHead(id) => DeregistrationNamespace::BranchHead(id),
-            Self::DirectoryHead(id) => DeregistrationNamespace::DirectoryHead(id),
-            Self::Commit(id) => DeregistrationNamespace::Commit(id),
-            Self::DirectoryTree(id) => DeregistrationNamespace::DirectoryTree(id),
-        }
-    }
     fn key(&self) -> Result<String> {
         object_hash("disk-occurrence-scope", self).map_err(Error::from)
     }
@@ -412,27 +398,6 @@ impl<'s, 'e> VerifiedOccurrenceMask<'s, 'e> {
             return Err(ProjectionError::BaselineMismatch);
         }
         Ok(())
-    }
-
-    pub(in crate::engine) fn project(
-        &self,
-        successor: &VerifiedDiskRegistry,
-        scope: &NamespaceScope,
-    ) -> ProjectionResult<WriteProjection<'s, 'e>> {
-        self.require_successor(successor)?;
-        let mask = self
-            .state
-            .scopes
-            .get(&scope.key()?)
-            .ok_or(ProjectionError::BaselineMismatch)?;
-        let namespace = self.source.preview.namespace(scope.borrowed())?;
-        Ok(WriteProjection::from_verified(
-            self.source,
-            successor.commitment.clone(),
-            &self.hash,
-            mask,
-            namespace.entries(),
-        ))
     }
 }
 

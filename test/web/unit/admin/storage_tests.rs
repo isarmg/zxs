@@ -40,6 +40,7 @@ fn ready() -> State {
         _disk_ids: vec![],
         completion_available: false,
         allow_development: false,
+        terminal: None,
     });
     state
 }
@@ -246,4 +247,27 @@ fn management_only_status_keeps_an_empty_disk_view_even_if_discovery_settings_fa
         StorageState::Pending
     );
     assert!(model.error.is_some());
+}
+
+#[test]
+fn terminal_management_allows_fresh_resume_but_never_initial_activation() {
+    let value = json!({
+        "state":"terminal_management", "disk_ids":["disk_retained"],
+        "completion_available":false, "allow_development":false,
+        "terminal": {
+            "pool_id":"pool_00000000000000000000000000000001", "operation_id":"op_00000000000000000000000000000001",
+            "authority_hash":"a".repeat(64), "registrations":"retained_registrations",
+            "registered_directories":1, "original_metadata_members":1, "original_metadata_quorum":1
+        }
+    });
+    let snapshot = storage_snapshot(value.clone()).unwrap();
+    let mut state = ready();
+    state.admin_console.storage.snapshot = Some(snapshot);
+    assert!(!state.admin_console.storage.can_activate());
+    assert!(!state.admin_console.storage.can_complete());
+    assert!(state.admin_console.storage.editable());
+    assert!(!lifecycle::can_preview(&state));
+    let mut mismatched = value;
+    mismatched["terminal"]["registrations"] = json!("empty_registry");
+    assert!(storage_snapshot(mismatched).is_err());
 }

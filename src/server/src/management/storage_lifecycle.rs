@@ -91,7 +91,8 @@ fn read_record(
                 .count()
         || preview.target_metadata_members
             != preview.original_metadata_members - usize::from(disk.metadata_member)
-        || preview.target_metadata_members == 0
+        || (preview.authority == ExitAuthority::TerminalManagement)
+            != (preview.target_metadata_members == 0)
         || (record.status.state == ExitState::Completed)
             != (record.status.phase == ExitPhase::Completed)
         || (record.status.state == ExitState::Completed) != record.status.result.is_some()
@@ -152,6 +153,7 @@ impl ManagementBackend {
         input: Value,
         identity: &Identity,
     ) -> Result<Value, ApiError> {
+        self.inner.current_management_identity(identity)?;
         if action == "disk_exit_status" {
             #[derive(Deserialize)]
             #[serialization(deny_unknown_fields)]
@@ -186,8 +188,9 @@ impl ManagementBackend {
                 "wait for the current storage recovery before changing registrations",
             ));
         }
-        let backend = self.inner.addition_backend()?;
+        self.inner.current_management_identity(identity)?;
         if action == "disk_exit_preview" {
+            let backend = self.inner.addition_backend()?;
             self.require_no_pending_addition()?;
             self.require_settled_exit()?;
             let request: ExitRequest =
@@ -222,8 +225,10 @@ impl ManagementBackend {
                 } else {
                     self.require_no_pending_addition()?;
                     self.require_settled_exit()?;
-                    let (preview, original) =
-                        backend.preview_storage_exit(identity, request.preview.request.clone())?;
+                    let (preview, original) = self
+                        .inner
+                        .addition_backend()?
+                        .preview_storage_exit(identity, request.preview.request.clone())?;
                     if preview != request.preview {
                         return Err(ApiError::conflict(
                             ErrorCode::GenerationMismatch,
@@ -261,8 +266,7 @@ impl ManagementBackend {
         if record.principal != identity.principal {
             return Err(ApiError::forbidden());
         }
-        backend.addition_configuration(identity)?;
-        if let Some(result) = backend.storage_exit_result(identity, &record)? {
+        if let Some(result) = self.storage_exit_result(identity, &mut record)? {
             finish(&mut record, result);
             save(&directory, &record)?;
             return Ok(
@@ -282,7 +286,7 @@ impl ManagementBackend {
         }
         let mut linked = latest == Some(record.status.operation_id);
         let intent = record.clone();
-        let outcome = backend.run_storage_exit(identity, &intent, |phase, archive| {
+        let progress = |phase, archive| {
             if let Some(archive) = archive {
                 record.archive = Some(archive);
             }
@@ -296,9 +300,23 @@ impl ManagementBackend {
                 linked = true;
             }
             Ok(())
-        });
+        };
+        let outcome = match intent.status.preview.authority {
+            ExitAuthority::ActiveMembership => self
+                .inner
+                .addition_backend()?
+                .run_storage_exit(identity, &intent, progress),
+            ExitAuthority::TerminalManagement => {
+                self.inner.run_terminal_exit(identity, &intent, progress)
+            }
+        };
         match outcome {
             Ok(result) => {
+                let result = crate::engine_backend::storage_lifecycle::exact_result(
+                    result,
+                    &record,
+                    record.archive.as_ref(),
+                )?;
                 finish(&mut record, result);
                 save(&directory, &record)?;
                 crate::lock(&self.inner.disk_observation).take();
@@ -327,6 +345,21 @@ impl ManagementBackend {
                 )
                 .with_source(Arc::new(error)))
             }
+        }
+    }
+
+    fn storage_exit_result(
+        &self,
+        identity: &Identity,
+        record: &mut StoredExit,
+    ) -> Result<Option<OperationResult>, ApiError> {
+        if self.inner.terminal(identity)?.is_some() {
+            return self.inner.terminal_exit_result(identity, record);
+        }
+        let backend = crate::lock(&self.inner.state).backend.engine().cloned();
+        match backend {
+            Some(backend) => backend.storage_exit_result(identity, record),
+            None => Ok(None),
         }
     }
 
@@ -366,10 +399,7 @@ impl ManagementBackend {
                 ));
             }
         } else {
-            let backend = crate::lock(&self.inner.state).backend.clone();
-            if let Some(backend) = backend
-                && let Some(result) = backend.storage_exit_result(identity, &record)?
-            {
+            if let Some(result) = self.storage_exit_result(identity, &mut record)? {
                 finish(&mut record, result);
             } else if record.status.state == ExitState::Completed {
                 return Err(ApiError::conflict(
@@ -391,6 +421,9 @@ pub(super) fn configuration_edges(
     chain: &mut super::storage_configuration::ConfigurationChain,
 ) -> Result<(), ApiError> {
     super::storage_configuration::records(&root.join(DIRECTORY), read_record, |record, latest| {
+        if record.status.preview.authority == ExitAuthority::TerminalManagement {
+            return Ok(());
+        }
         let original = configuration_digest(&record.original);
         let target = configuration_digest(&record.target_config());
         if latest {

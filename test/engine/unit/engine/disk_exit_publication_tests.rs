@@ -1,7 +1,6 @@
 //! Real retained publications, resources and restart paths. These are source
 //! tests, not a model receipt or a claim that physical power-loss was exercised.
 use super::*;
-use crate::*;
 use std::{fs, io::Read};
 
 struct Fixture {
@@ -262,7 +261,7 @@ fn disk_exit_source_generation_and_complete_mask_are_verified_before_stop() {
 }
 
 #[test]
-fn disk_exit_last_voter_and_redundant_offline_fail_before_new_fence() {
+fn disk_exit_unpublished_terminal_and_redundant_offline_fail_before_new_fence() {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([temp.path().join("only")]).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
@@ -603,7 +602,7 @@ fn disabled_binding_detaches_then_adds_and_exits_again_without_reopening_history
     let system = fixture.temp.path().join("system");
     write_json(&system.join("config.json"), &fixture.original, true).unwrap();
     drop(fixture.engine);
-    let engine = Engine::open(&system, RecoveryMode::CompletePending).unwrap();
+    let engine = Engine::open(&system).unwrap();
     assert!(engine.registered_disk(&first.disk_id).is_none());
     assert!(engine.registered_disk(&second.disk_id).is_none());
     assert!(engine.registered_disk(&added.disk_id).is_some());
@@ -661,7 +660,7 @@ fn post_exit_add_abort_inherits_current_registry_and_exact_hidden_view() {
     assert_eq!(files(&stopped.root), before);
     let system = fixture.temp.path().join("system");
     drop(fixture.engine);
-    let engine = Engine::open(&system, RecoveryMode::CompletePending).unwrap();
+    let engine = Engine::open(&system).unwrap();
     assert!(engine.list_tree(&fixture.branch).unwrap().is_empty());
     assert_eq!(
         engine.config.generation().unwrap().portable.exit_registry(),
@@ -694,7 +693,7 @@ fn disabled_detach_crash_replays_prior_d3_without_a_second_stop_or_target_probe(
         let system = fixture.temp.path().join("system");
         drop(fixture.engine);
         let mut engine = if point == "after_disk_exit_stop" {
-            Engine::open(&system, RecoveryMode::CompletePending).unwrap()
+            Engine::open(&system).unwrap()
         } else {
             Engine::resume_membership_activation(&system).unwrap()
         };
@@ -813,7 +812,7 @@ fn registry_successor_add_and_abort_never_recreate_lost_promoted_journals() {
                 "a promoted seal cannot admit a registry successor without its own journal"
             );
         }
-        assert!(Engine::open(&system, RecoveryMode::CompletePending).is_err());
+        assert!(Engine::open(&system).is_err());
         assert!(Engine::resume_membership_activation(&system).is_err());
         assert!(journals.iter().all(|path| !path.exists()));
         assert_eq!(files(&stopped.root), before);

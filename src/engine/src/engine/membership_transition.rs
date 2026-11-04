@@ -11,9 +11,15 @@ mod archive;
 pub use abort::MembershipAbortStatus;
 mod decision;
 mod effect;
+pub(in crate::engine) mod terminal;
+pub(in crate::engine) mod terminal_resume;
 pub use effect::MembershipExitAction;
 use effect::{ExitEffect, validate_transition_target};
 pub use pending::activation::exit::{DiskExitPhase, DiskExitStatus};
+pub use pending::activation::terminal_resume::{
+    TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
+};
+pub use pending::terminal_resume::{TerminalMetadataResume, TerminalMetadataResumeStatus};
 pub(crate) mod pending;
 pub use archive::{
     MembershipArchiveInspection, MembershipControlArchive, MembershipJournalInspection,
@@ -46,11 +52,18 @@ enum Origin {
         config: ValidatedConfig,
         predecessor_authority_hash: String,
     },
+    TerminalResume {
+        config: ValidatedConfig,
+        predecessor_authority_hash: Option<String>,
+        terminal_authority_hash: String,
+    },
 }
 impl Origin {
     fn config(&self) -> &ValidatedConfig {
         match self {
-            Self::Genesis { config } | Self::Successor { config, .. } => config,
+            Self::Genesis { config }
+            | Self::Successor { config, .. }
+            | Self::TerminalResume { config, .. } => config,
         }
     }
     fn predecessor(&self) -> Option<&str> {
@@ -60,6 +73,10 @@ impl Origin {
                 predecessor_authority_hash,
                 ..
             } => Some(predecessor_authority_hash),
+            Self::TerminalResume {
+                predecessor_authority_hash,
+                ..
+            } => predecessor_authority_hash.as_deref(),
         }
     }
 }

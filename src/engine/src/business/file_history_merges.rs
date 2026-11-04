@@ -4,9 +4,75 @@ use super::*;
 use json_codec::json;
 use std::collections::{BTreeMap, BTreeSet};
 
-struct PreparedSources {
-    versions: Vec<String>,
-    tags: BTreeSet<String>,
+pub(crate) struct PreparedSources {
+    pub(crate) versions: Vec<String>,
+    pub(crate) tags: BTreeSet<String>,
+}
+
+/// Only this explicit history consumer can construct a same-mutation input.
+/// Ordinary branch merges still require an admitted existing branch snapshot.
+struct DerivedBranchSource {
+    branch: Branch,
+    entries: Vec<Entry>,
+}
+
+pub(super) struct CurrentHistoryMergeInputs {
+    branches: BTreeMap<String, DerivedBranchSource>,
+}
+
+impl CurrentHistoryMergeInputs {
+    fn prepare(engine: &Engine, state: &State, inputs: &[FileMergeInput]) -> Result<Option<Self>> {
+        let Some(view) = engine.admitted_current_namespaces()? else {
+            return Ok(None);
+        };
+        let mut branches = BTreeMap::new();
+        for input in inputs {
+            let branch = &state.branches[&input.branch_id];
+            let entries = view.history_merge_input_entries(engine.state(), state, branch)?;
+            branches.insert(
+                input.branch_id.clone(),
+                DerivedBranchSource {
+                    branch: branch.clone(),
+                    entries: entries.to_vec(),
+                },
+            );
+        }
+        Ok(Some(Self { branches }))
+    }
+
+    pub(super) fn entries(&self, branch: &Branch) -> Result<&[Entry]> {
+        self.branches
+            .get(&branch.branch_id)
+            .filter(|admitted| &admitted.branch == branch)
+            .map(|admitted| admitted.entries.as_slice())
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::WorkspaceChanged,
+                    "historical merge input changed after occurrence admission",
+                )
+            })
+    }
+}
+
+impl FileHistoryMergeRequest<'_> {
+    pub(crate) fn native_digest(&self) -> Result<String> {
+        Engine::native_request_digest("file.history.merge", self.principal, &self.body())
+    }
+
+    /// Shared by live planning and authenticated publication replay. The proof
+    /// follows the original bounded history graph, never the current projection.
+    pub(crate) fn prepared_sources(&self, state: &State) -> Result<PreparedSources> {
+        if self.inputs.len() < 2 {
+            return Err(Error::new(
+                storage_contract::ErrorCode::InvalidRequest,
+                "historical merge requires at least two source nodes",
+            ));
+        }
+        if self.inputs.len() > MAX_ANCESTRY_NODES {
+            return Err(file_ancestry::exhausted());
+        }
+        sources(state, self)
+    }
 }
 fn sources(state: &State, request: &FileHistoryMergeRequest<'_>) -> Result<PreparedSources> {
     let mut seen = BTreeSet::new();
@@ -143,10 +209,7 @@ impl Engine {
                         "historical merge requires at least two bounded source nodes",
                     ));
                 }
-                if request.inputs.len() > MAX_ANCESTRY_NODES {
-                    return Err(file_ancestry::exhausted());
-                }
-                let prepared = sources(state, &request)?;
+                let prepared = request.prepared_sources(state)?;
                 let mut inputs = Vec::with_capacity(request.inputs.len());
                 for (ordinal, (input, version)) in
                     request.inputs.iter().zip(&prepared.versions).enumerate()
@@ -189,6 +252,7 @@ impl Engine {
                         expected_node_id: input.source_node_id.clone(),
                     });
                 }
+                let current_inputs = CurrentHistoryMergeInputs::prepare(engine, state, &inputs)?;
                 let mut result = file_merges::merge_change(
                     engine,
                     state,
@@ -203,10 +267,14 @@ impl Engine {
                     },
                     file_merges::MergeResultPolicy::AlwaysNewNode {
                         tags: &prepared.tags,
+                        current_inputs: current_inputs.as_ref(),
                     },
                 )?;
                 result["name"] = json!(request.name.as_str());
                 result["source_inputs"] = json!(request.inputs);
+                // The permanent receipt binds the exact original request during
+                // recovery, including absence of a path. Older receipts stay intact.
+                result["location"] = json!(request.location);
                 Ok(result)
             },
         )

@@ -14,6 +14,7 @@ fn preview(action: ExitAction) -> ExitPreview {
             binding_generation: 1,
             root_path: "/storage/registered".into(),
         },
+        authority: ExitAuthority::ActiveMembership,
         configuration_digest: "a".repeat(64),
         preview_digest: "b".repeat(64),
         snapshot_hash: "c".repeat(64),
@@ -74,5 +75,35 @@ fn exit_never_accepts_preparation_or_another_action_as_completion() {
     assert!(!model.blocks_edit());
     assert!(!accept(&mut model, record.clone()));
     record.result.as_mut().unwrap().commit_state = storage_contract::CommitState::InDoubt;
+    assert!(validate_status(&record, None).is_err());
+}
+
+#[test]
+fn final_voter_requires_explicit_terminal_authority_and_exact_terminal_receipt() {
+    let mut record = status(ExitAction::Deregister);
+    record.preview.original_metadata_members = 1;
+    record.preview.target_metadata_members = 0;
+    assert!(validate_preview(&record.preview).is_err());
+    record.preview.authority = ExitAuthority::TerminalManagement;
+    assert!(validate_preview(&record.preview).is_ok());
+    record.state = ExitState::Completed;
+    record.phase = ExitPhase::Completed;
+    record.result = Some(storage_contract::OperationResult {
+        operation_id: record.operation_id,
+        kind: "disk-deregister".into(),
+        commit_id: None,
+        history_tree_id: None,
+        branch_id: None,
+        commit_state: storage_contract::CommitState::Published,
+        protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+        current_health: storage_contract::CurrentHealth::Unknown,
+        request_digest: "d".repeat(64),
+        sequence: 4,
+        result: json!({"target_io":"closed"}),
+    });
+    assert!(validate_status(&record, None).is_err());
+    record.result.as_mut().unwrap().result["authority_kind"] = json!("terminal-management");
+    assert!(validate_status(&record, None).is_ok());
+    record.preview.target_metadata_members = 1;
     assert!(validate_status(&record, None).is_err());
 }

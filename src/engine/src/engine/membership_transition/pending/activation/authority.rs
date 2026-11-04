@@ -2,6 +2,7 @@
 //! successors carry each immutable predecessor node exactly once.
 use super::*;
 use crate::engine::membership_transition::abort::{AbortAuthorityEvidence, AbortCore};
+use crate::engine::membership_transition::terminal_resume::ResumeCore;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,6 +23,7 @@ enum AuthorityCore {
     Add(AuthorityNode),
     Abort(AbortCore),
     Exit(exit::ExitCore),
+    TerminalResume(Box<ResumeCore>),
 }
 
 pub(in crate::engine::membership_transition) trait AuthorityResolver {
@@ -34,12 +36,14 @@ impl AuthorityCore {
             Self::Add(node) => &node.archive,
             Self::Abort(core) => &core.archive,
             Self::Exit(core) => &core.archive,
+            Self::TerminalResume(core) => core.archive(),
         }
     }
     fn intent(&self, evidence: Option<&AbortAuthorityEvidence>) -> Result<TransitionIntent> {
         match (self, evidence) {
             (Self::Add(node), None) => node.intent(),
             (Self::Exit(core), None) => core.intent(),
+            (Self::TerminalResume(core), None) => core.intent(),
             (Self::Abort(core), Some(evidence)) => evidence.verify(core),
             _ => Err(Error::new(
                 ErrorCode::ObjectCorrupt,
@@ -49,7 +53,7 @@ impl AuthorityCore {
     }
     fn effective_config<'a>(&self, intent: &'a TransitionIntent) -> &'a ValidatedConfig {
         match self {
-            Self::Add(_) | Self::Exit(_) => &intent.target,
+            Self::Add(_) | Self::Exit(_) | Self::TerminalResume(_) => &intent.target,
             Self::Abort(_) => intent.origin.config(),
         }
     }
@@ -193,7 +197,9 @@ impl AuthorityNode {
     fn intent(&self) -> Result<TransitionIntent> {
         let verified = self.joint.verify()?;
         self.archive.verify_scope(&verified.intent)?;
-        if verified.intent.effect.is_some() {
+        if verified.intent.effect.is_some()
+            || matches!(verified.intent.origin, Origin::TerminalResume { .. })
+        {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "exit control evidence cannot authorize lifecycle activation",
@@ -241,9 +247,9 @@ impl PortableAuthority {
         match &self.head {
             AuthorityCore::Add(node) => Ok(&node.joint),
             AuthorityCore::Exit(core) => Ok(&core.joint),
-            AuthorityCore::Abort(_) => Err(Error::new(
+            AuthorityCore::Abort(_) | AuthorityCore::TerminalResume(_) => Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                "Abort authority has no Joint addition certificate",
+                "this authority has no Joint addition certificate",
             )),
         }
     }
@@ -269,10 +275,12 @@ impl PortableAuthority {
             AuthorityCore::Abort(core) => {
                 self.evidence[&self.hash()?].verify_member(core, root, disk)
             }
-            AuthorityCore::Add(_) | AuthorityCore::Exit(_) => Err(Error::new(
-                ErrorCode::ConfigConflict,
-                "expected Abort authority",
-            )),
+            AuthorityCore::Add(_) | AuthorityCore::Exit(_) | AuthorityCore::TerminalResume(_) => {
+                Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "expected Abort authority",
+                ))
+            }
         }
     }
 
@@ -294,6 +302,7 @@ impl PortableAuthority {
                 .as_ref()
                 .map(registry::RegistryContinuation::registry)),
             AuthorityCore::Exit(core) => Ok(Some(core.registry())),
+            AuthorityCore::TerminalResume(core) => Ok(Some(core.registry())),
             AuthorityCore::Abort(_) => {
                 let hash = object_hash(AUTHORITY_KIND, node)?;
                 let intent = node.intent(self.evidence.get(&hash))?;
@@ -326,6 +335,7 @@ impl PortableAuthority {
                 })
                 .transpose(),
             AuthorityCore::Exit(core) => core.verified_registry().map(Some),
+            AuthorityCore::TerminalResume(core) => core.verified_registry().map(Some),
             AuthorityCore::Abort(_) => {
                 let hash = object_hash(AUTHORITY_KIND, node)?;
                 let intent = node.intent(self.evidence.get(&hash))?;
@@ -346,6 +356,7 @@ impl PortableAuthority {
             AuthorityCore::Exit(core) => {
                 core.registry_from_source(source)?;
             }
+            AuthorityCore::TerminalResume(core) => core.verify_source(source)?,
             AuthorityCore::Abort(_) => (),
         }
         Ok(())
@@ -373,6 +384,9 @@ impl PortableAuthority {
         previous: Option<&crate::engine::disk_registry::current::CurrentNamespaces>,
     ) -> Result<crate::engine::disk_registry::current::PreparedCurrentNamespaces> {
         let intent = self.intent()?;
+        if let AuthorityCore::TerminalResume(core) = &self.head {
+            return core.current_namespaces(source, previous);
+        }
         if let AuthorityCore::Exit(core) = &self.head {
             return core.current_namespaces(source, previous);
         }
@@ -404,6 +418,9 @@ impl PortableAuthority {
     }
 
     pub(super) fn activation_mask_hash(&self) -> Result<Option<String>> {
+        if let Some(core) = self.terminal_resume_core() {
+            return core.activation_mask_hash();
+        }
         let Some(core) = self.exit_core() else {
             return Ok(None);
         };
@@ -433,26 +450,36 @@ impl PortableAuthority {
     ) -> Result<Vec<(crate::DiskRegistrationIdentity, OperationId, String)>> {
         let mut stops = BTreeMap::new();
         for (hash, intent) in self.lineage()? {
-            if matches!(self.node(&hash)?, AuthorityCore::Exit(_)) {
-                let effect = intent
-                    .effect
-                    .as_ref()
-                    .expect("invariant: verified exit effect");
-                let binding = effect.identity(&intent.origin.config().pool_id);
-                if let Some((previous, _, _)) = stops.get(&binding.disk_id) {
-                    if previous != &binding {
-                        return Err(Error::new(
-                            ErrorCode::PublicationInvalid,
-                            "stopped logical disk is rebound in authority lineage",
-                        ));
-                    }
-                } else {
-                    let transition = object_hash(INTENT_KIND, &intent)?;
-                    stops.insert(
-                        binding.disk_id.clone(),
-                        (binding, intent.operation_id, transition),
-                    );
+            let terminal_intent;
+            let stopped = match self.node(&hash)? {
+                AuthorityCore::Exit(_) => Some(&intent),
+                AuthorityCore::TerminalResume(core) => {
+                    terminal_intent = core.terminal().intent();
+                    Some(terminal_intent)
                 }
+                AuthorityCore::Add(_) | AuthorityCore::Abort(_) => None,
+            };
+            let Some(intent) = stopped else {
+                continue;
+            };
+            let effect = intent
+                .effect
+                .as_ref()
+                .expect("invariant: verified stop has exit effect");
+            let binding = effect.identity(&intent.origin.config().pool_id);
+            if let Some((previous, _, _)) = stops.get(&binding.disk_id) {
+                if previous != &binding {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "stopped logical disk is rebound in authority lineage",
+                    ));
+                }
+            } else {
+                let transition = object_hash(INTENT_KIND, intent)?;
+                stops.insert(
+                    binding.disk_id.clone(),
+                    (binding, intent.operation_id, transition),
+                );
             }
         }
         Ok(stops.into_values().collect())
@@ -601,7 +628,11 @@ impl PortableAuthority {
                         .get(&hash)
                         .expect("invariant: verified predecessor node")
                 };
-                Ok((node.archive().clone(), intent))
+                let archived_intent = match node {
+                    AuthorityCore::TerminalResume(core) => core.archive_intent().clone(),
+                    _ => intent,
+                };
+                Ok((node.archive().clone(), archived_intent))
             })
             .collect()
     }
@@ -647,6 +678,61 @@ impl PortableAuthority {
         };
         authority.lineage()?;
         Ok(authority)
+    }
+
+    pub(in crate::engine::membership_transition) fn new_terminal_resume(
+        core: ResumeCore,
+    ) -> Result<Self> {
+        let previous = core.terminal().predecessor();
+        let mut predecessors = BTreeMap::new();
+        let mut evidence = BTreeMap::new();
+        if let Some(previous) = previous {
+            predecessors = previous.predecessors.clone();
+            predecessors.insert(previous.hash()?, previous.head.clone());
+            evidence = previous.evidence.clone();
+        }
+        let authority = Self {
+            head: AuthorityCore::TerminalResume(Box::new(core)),
+            predecessors,
+            evidence,
+        };
+        authority.lineage()?;
+        Ok(authority)
+    }
+
+    pub(in crate::engine::membership_transition) fn terminal_resume_core(
+        &self,
+    ) -> Option<&ResumeCore> {
+        match &self.head {
+            AuthorityCore::TerminalResume(core) => Some(core),
+            _ => None,
+        }
+    }
+
+    pub(in crate::engine::membership_transition) fn archive_intent(
+        &self,
+    ) -> Result<TransitionIntent> {
+        match &self.head {
+            AuthorityCore::TerminalResume(core) => Ok(core.archive_intent().clone()),
+            _ => self.intent(),
+        }
+    }
+
+    pub(in crate::engine::membership_transition) fn read_archive_base(
+        &self,
+        root: DiskRoot,
+    ) -> Result<(State, BTreeMap<u64, String>)> {
+        let intent = self.archive_intent()?;
+        read_generation_base(
+            root,
+            &self.archive_hash()?,
+            &object_hash(INTENT_KIND, &intent)?,
+            &intent,
+        )
+    }
+
+    pub(in crate::engine::membership_transition) fn archive_transition(&self) -> Result<String> {
+        Ok(object_hash(INTENT_KIND, &self.archive_intent()?)?)
     }
 
     pub(crate) fn hash(&self) -> Result<String> {
@@ -723,6 +809,10 @@ impl PortableAuthority {
                     .as_ref()
                     .map(registry::RegistryContinuation::parent),
                 AuthorityCore::Exit(core) => core.registry_parent(),
+                AuthorityCore::TerminalResume(core) => core
+                    .terminal()
+                    .predecessor()
+                    .and_then(PortableAuthority::exit_registry),
                 AuthorityCore::Abort(_) => previous,
             };
             if carried != previous {

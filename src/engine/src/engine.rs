@@ -11,7 +11,7 @@ mod config;
 pub use config::ValidatedConfig;
 mod disk_registry;
 pub(crate) use disk_registry::current::{
-    CurrentNamespaces, NamespaceReadView, WorkspaceNamespaceBaseline,
+    CurrentBatchScope, CurrentNamespaces, NamespaceReadView, WorkspaceNamespaceBaseline,
 };
 pub use disk_registry::{
     DirectoryNamespaceView, DiskRegistrationIdentity, DiskRegistryCommitment,
@@ -23,12 +23,16 @@ pub use disk_registry::{
 mod disk_lifecycle;
 pub(crate) use disk_lifecycle::bootstrap::RecoveredDiskStop;
 pub use disk_lifecycle::bootstrap::runtime::InitialActivationProbeGuard;
+pub(crate) use disk_lifecycle::terminal::VerifiedTerminalStop;
 pub use disk_lifecycle::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
     FrozenDeregistrationBoundary, ImpactPage, ImpactPageSize, NamespaceDeregistrationPreview,
     NamespaceOccurrenceImpact, NamespaceOccurrenceScan, OccurrenceVisibility, RegisteredHolders,
-    RegistrationEffect, TargetPlacementRole, VersionDeregistrationImpact, VersionImpactScan,
+    RegistrationEffect, TargetPlacementRole, TerminalDiskExit, TerminalManagement,
+    TerminalManagementStatus, TerminalRegistrationState, VersionDeregistrationImpact,
+    VersionImpactScan,
 };
+pub use disk_registry::published::terminal::TerminalRegistry;
 mod planning;
 pub(crate) use planning::PlanningContext;
 mod index;
@@ -69,6 +73,10 @@ pub use membership_transition::{
     MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
     MembershipJournalInspection, PendingMemberControlReceipt, PendingMemberDirectory,
     PendingMembershipStatus, verify_membership_control_archive,
+};
+pub use membership_transition::{
+    TerminalMetadataResume, TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
+    TerminalMetadataResumeStatus,
 };
 mod recovery;
 use recovery::RecoveryMode;
@@ -599,6 +607,7 @@ impl Engine {
             ErrorCode::RecoveryRequired,
             "system state is unavailable; use explicit retained metadata roots for management recovery",
         ))?.path().to_path_buf();
+        disk_lifecycle::terminal::require_active_startup(&root)?;
         let config = read_json::<Config>(&root.join("config.json")).map_err(|source| source.context(
             ErrorCode::RecoveryRequired,
             "system projection is unavailable; use explicit retained metadata roots for management recovery",
@@ -664,6 +673,17 @@ impl Engine {
         disk_resources: Arc<DiskResources>,
     ) -> Result<Self> {
         let locks = acquire_locks(&root, &disk_resources)?;
+        Self::recovery_resources_with_locks(root, config, disk_resources, locks)
+    }
+
+    /// Internal ownership transfer from an authenticated management session.
+    /// Callers must retain the exact system and disk locks across this boundary.
+    fn recovery_resources_with_locks(
+        root: PathBuf,
+        config: ValidatedConfig,
+        disk_resources: Arc<DiskResources>,
+        locks: crate::disk::WriterLocks,
+    ) -> Result<Self> {
         let engine = Self {
             root,
             config,

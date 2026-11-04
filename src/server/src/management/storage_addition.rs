@@ -4,11 +4,11 @@ use data_serialization::{Deserialize, Serialize, de::DeserializeOwned};
 use platform_io::fs_safety::{AtomicFile, EntryName, PrivateDirectory};
 use storage_contract::{Config, DiskConfig, ErrorCode, OperationId, storage_addition::*};
 
-const DIRECTORY: &str = "storage-additions";
+pub(super) const DIRECTORY: &str = "storage-additions";
 const MAX_RECORD: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
-enum Format {
+pub(super) enum Format {
     #[serialization(rename = "storage-directory-addition")]
     Addition,
 }
@@ -22,10 +22,18 @@ pub(crate) struct ArchiveBinding {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum AdditionSource {
+    ActiveMembership,
+    TerminalManagement { original: Config },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct StoredAddition {
-    format: Format,
-    principal: String,
+    pub(super) source: AdditionSource,
+    pub(super) format: Format,
+    pub(super) principal: String,
     pub(crate) target: Config,
     pub(crate) archive: Option<ArchiveBinding>,
     pub(crate) status: AdditionStatus,
@@ -67,7 +75,7 @@ pub(super) fn read<T: DeserializeOwned>(
         .map(Some)
         .map_err(ApiError::invalid_source)
 }
-fn read_record(
+pub(super) fn read_record(
     directory: &PrivateDirectory,
     operation: OperationId,
 ) -> Result<Option<StoredAddition>, ApiError> {
@@ -116,6 +124,38 @@ fn read_record(
             return Err(corrupt());
         }
     }
+    match (&record.source, &preview.authority) {
+        (AdditionSource::ActiveMembership, AdditionAuthority::ActiveMembership) => {}
+        (
+            AdditionSource::TerminalManagement { original: saved },
+            AdditionAuthority::TerminalManagement {
+                terminal_authority_hash,
+                ..
+            },
+        ) => {
+            let mut historical = saved.clone();
+            for disk in &mut historical.disks {
+                disk.metadata_member = false;
+            }
+            if configuration_digest(&original) != configuration_digest(&historical)
+                || terminal_authority_hash.len() != 64
+                || !terminal_authority_hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || preview
+                    .request
+                    .additions
+                    .iter()
+                    .any(|add| !add.metadata_member)
+            {
+                return Err(corrupt());
+            }
+            storage_engine::ValidatedConfig::try_from(saved.clone())
+                .map_err(crate::engine_backend::error)?;
+            original = saved.clone();
+        }
+        _ => return Err(corrupt()),
+    }
     if configuration_digest(&original) != preview.configuration_digest
         || original
             .disks
@@ -143,7 +183,7 @@ fn running_state(continuation: AdditionContinuation) -> AdditionState {
     }
 }
 
-fn finish(record: &mut StoredAddition, result: storage_contract::OperationResult) {
+pub(super) fn finish(record: &mut StoredAddition, result: storage_contract::OperationResult) {
     let cancelled = result.kind == "membership-add-cancelled";
     record.status.state = if cancelled {
         AdditionState::Cancelled
@@ -165,7 +205,14 @@ fn finish(record: &mut StoredAddition, result: storage_contract::OperationResult
 }
 
 fn valid_status(status: &AdditionStatus, archive: Option<&ArchiveBinding>) -> bool {
-    if (status.state == AdditionState::Completed) != (status.phase == AdditionPhase::Completed)
+    if (status.preview.authority.is_terminal()
+        && (status.continuation != AdditionContinuation::Add
+            || matches!(
+                status.state,
+                AdditionState::Cancelling | AdditionState::Cancelled
+            )
+            || !status.phase.is_metadata_resume()))
+        || (status.state == AdditionState::Completed) != (status.phase == AdditionPhase::Completed)
         || (status.state == AdditionState::Cancelled) != (status.phase == AdditionPhase::Cancelled)
         || status.state.is_terminal() != status.result.is_some()
         || (status.state.is_terminal() && status.failure.is_some())
@@ -176,12 +223,32 @@ fn valid_status(status: &AdditionStatus, archive: Option<&ArchiveBinding>) -> bo
         result.operation_id == status.operation_id
             && result.commit_state == storage_contract::CommitState::Published
             && result.kind
-                == if status.state == AdditionState::Cancelled {
+                == if status.preview.authority.is_terminal() {
+                    "terminal-metadata-resume"
+                } else if status.state == AdditionState::Cancelled {
                     "membership-add-cancelled"
                 } else {
                     "membership-add"
                 }
             && archive.is_some_and(|binding| result.request_digest == binding.transition_hash)
+            && match &status.preview.authority {
+                AdditionAuthority::ActiveMembership => true,
+                AdditionAuthority::TerminalManagement {
+                    terminal_authority_hash,
+                    ..
+                } => {
+                    result
+                        .result
+                        .get("terminal_authority")
+                        .and_then(Value::as_str)
+                        == Some(terminal_authority_hash.as_str())
+                        && result
+                            .result
+                            .get("metadata_members")
+                            .and_then(Value::as_u64)
+                            == Some(status.preview.target_metadata_members as u64)
+                }
+            }
     })
 }
 
@@ -201,7 +268,7 @@ pub(super) fn write(
 pub(super) fn latest_name() -> EntryName {
     EntryName::new("latest.json").expect("invariant: static addition pointer")
 }
-fn save(directory: &PrivateDirectory, record: &StoredAddition) -> Result<(), ApiError> {
+pub(super) fn save(directory: &PrivateDirectory, record: &StoredAddition) -> Result<(), ApiError> {
     write(directory, &name(record.status.operation_id), record)
 }
 fn conflict(message: &'static str) -> ApiError {
@@ -213,13 +280,17 @@ impl Inner {
         self.ensure_running()?;
         // A fenced pool is deliberately not ready for ordinary business writes.
         // Retain its exact engine for authorized recovery of this operation.
-        crate::lock(&self.state).backend.clone().ok_or_else(|| {
-            ApiError::new(
-                http::StatusCode::SERVICE_UNAVAILABLE,
-                ErrorCode::StorageUnavailable,
-                "open the existing pool before continuing its storage addition",
-            )
-        })
+        crate::lock(&self.state)
+            .backend
+            .engine()
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::new(
+                    http::StatusCode::SERVICE_UNAVAILABLE,
+                    ErrorCode::StorageUnavailable,
+                    "open the existing pool before continuing its storage addition",
+                )
+            })
     }
 }
 
@@ -231,6 +302,7 @@ impl ManagementBackend {
         identity: &Identity,
         discovery_root: impl FnOnce() -> Result<String, ApiError>,
     ) -> Result<Value, ApiError> {
+        self.inner.current_management_identity(identity)?;
         if action == "disk_add_status" {
             #[derive(Deserialize)]
             #[serialization(deny_unknown_fields)]
@@ -270,13 +342,13 @@ impl ManagementBackend {
         } else {
             None
         };
-        let backend = self.inner.addition_backend()?;
+        let backend = crate::lock(&self.inner.state).backend.engine().cloned();
         if action == "disk_add_preview" {
             self.require_settled_exit()?;
             let request: AdditionRequest =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
             let (preview, _, _) = self.prepare_addition(
-                &backend,
+                backend.as_deref(),
                 identity,
                 request,
                 discovery_root
@@ -309,7 +381,7 @@ impl ManagementBackend {
                 self.require_settled_exit()?;
                 self.require_settled_addition(&directory)?;
                 let (preview, target, directories) = self.prepare_addition(
-                    &backend,
+                    backend.as_deref(),
                     identity,
                     request.preview.request.clone(),
                     discovery_root
@@ -323,7 +395,15 @@ impl ManagementBackend {
                     ));
                 }
                 held_directories = Some(directories);
+                let source = if preview.authority.is_terminal() {
+                    AdditionSource::TerminalManagement {
+                        original: self.inner.terminal_configuration(identity)?.0,
+                    }
+                } else {
+                    AdditionSource::ActiveMembership
+                };
                 let record = StoredAddition {
+                    source,
                     format: Format::Addition,
                     principal: identity.principal.clone(),
                     target,
@@ -367,6 +447,15 @@ impl ManagementBackend {
                     "cancellation does not bind the original addition preview",
                 ));
             }
+            if saved.status.preview.authority.is_terminal()
+                && continuation == AdditionContinuation::Cancel
+            {
+                return Err(ApiError::new(
+                    http::StatusCode::NOT_IMPLEMENTED,
+                    ErrorCode::UnsupportedOperation,
+                    "cancellation is not implemented for this metadata-resume stage; continue the original operation",
+                ));
+            }
             if !saved.status.state.is_terminal() {
                 saved.status.continuation = continuation;
             }
@@ -377,6 +466,15 @@ impl ManagementBackend {
         if record.principal != identity.principal {
             return Err(ApiError::forbidden());
         }
+        if record.status.preview.authority.is_terminal() {
+            return self.execute_terminal_resume(identity, &directory, record, held_directories);
+        }
+        let backend = backend.ok_or_else(|| {
+            ApiError::conflict(
+                ErrorCode::RecoveryRequired,
+                "the original addition Engine is unavailable",
+            )
+        })?;
         // Even exact terminal replay requires a currently valid system session.
         backend.addition_configuration(identity)?;
         if record.status.state.is_terminal() {
@@ -471,7 +569,10 @@ impl ManagementBackend {
         self.require_settled_addition(&directory)
     }
 
-    fn require_settled_addition(&self, directory: &PrivateDirectory) -> Result<(), ApiError> {
+    pub(super) fn require_settled_addition(
+        &self,
+        directory: &PrivateDirectory,
+    ) -> Result<(), ApiError> {
         if let Some(operation) = read::<OperationId>(directory, &latest_name())? {
             let record: StoredAddition = read_record(directory, operation)?.ok_or_else(|| {
                 ApiError::conflict(
@@ -533,8 +634,18 @@ impl ManagementBackend {
             Err(std::sync::TryLockError::WouldBlock) => true,
             Err(std::sync::TryLockError::Poisoned(_)) => false,
         };
-        if !running && !record.status.state.is_terminal() {
-            let backend = crate::lock(&self.inner.state).backend.clone();
+        if !running && record.status.preview.authority.is_terminal() {
+            if let Some(result) = self.inner.terminal_resume_result(identity, &record)? {
+                finish(&mut record, result);
+            } else {
+                record.status.result = None;
+                record.status.state = AdditionState::RecoveryRequired;
+                if record.status.phase == AdditionPhase::Completed {
+                    record.status.phase = AdditionPhase::Activating;
+                }
+            }
+        } else if !running && !record.status.state.is_terminal() {
+            let backend = crate::lock(&self.inner.state).backend.engine().cloned();
             if let Some(backend) = backend
                 && let Some(result) = backend.storage_addition_result(identity, &record)?
             {
@@ -548,9 +659,9 @@ impl ManagementBackend {
         })
     }
 
-    fn prepare_addition(
+    pub(super) fn prepare_addition(
         &self,
-        backend: &EngineBackend,
+        backend: Option<&EngineBackend>,
         identity: &Identity,
         request: AdditionRequest,
         discovery_root: &str,
@@ -567,19 +678,57 @@ impl ManagementBackend {
                 "select between one and 32 storage directories",
             ));
         }
-        let config = backend.addition_configuration(identity)?;
+        let (config, authority, stopped) = match backend {
+            Some(backend) => {
+                let (config, stopped) = backend.addition_directory_scope(identity)?;
+                (config, AdditionAuthority::ActiveMembership, stopped)
+            }
+            None => {
+                let terminal = self.inner.terminal(identity)?.ok_or_else(|| {
+                    ApiError::conflict(
+                        ErrorCode::RecoveryRequired,
+                        "continue the existing metadata resume before selecting another group",
+                    )
+                })?;
+                if terminal.operation(request.operation_id).is_some() {
+                    return Err(conflict(
+                        "metadata resume operation_id already belongs to permanent history",
+                    ));
+                }
+                let (config, authority) = self.inner.terminal_configuration(identity)?;
+                if request.additions.iter().any(|add| !add.metadata_member) {
+                    return Err(ApiError::invalid(
+                        "metadata resume requires fresh metadata directories",
+                    ));
+                }
+                let stopped = config.disks.iter().map(|disk| disk.root.clone()).collect();
+                (config, authority, stopped)
+            }
+        };
         let mut target = config.clone();
+        if authority.is_terminal() {
+            for disk in &mut target.disks {
+                disk.metadata_member = false;
+            }
+        }
         let mut directories = Vec::with_capacity(request.additions.len());
         let mut excluded = vec![
             self.inner.data_root.clone(),
             self.inner.management_root.clone(),
         ];
-        excluded.extend(config.disks.iter().map(|disk| disk.root.clone()));
+        excluded.extend(
+            config
+                .disks
+                .iter()
+                .filter(|disk| !stopped.contains(&disk.root))
+                .map(|disk| disk.root.clone()),
+        );
         for addition in &request.additions {
-            let held = crate::storage_directories::revalidate_within(
+            let held = crate::storage_directories::revalidate_fresh_within(
                 discovery_root,
                 &addition.selection,
                 &excluded,
+                &stopped,
             )?;
             let root = PathBuf::from(&held.selection().root_path);
             excluded.push(root.clone());
@@ -603,6 +752,7 @@ impl ManagementBackend {
         storage_engine::ValidatedConfig::try_from(target.clone())
             .map_err(crate::engine_backend::error)?;
         let mut preview = AdditionPreview {
+            authority,
             pool_id: config.pool_id.clone(),
             configuration_digest: configuration_digest(&config),
             preview_digest: String::new(),

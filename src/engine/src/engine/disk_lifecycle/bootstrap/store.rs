@@ -1,4 +1,7 @@
 //! Held-control-directory persistence with a bounded immutable stop ledger.
+mod root_extension;
+pub(crate) use root_extension::PreparedRootExtension;
+
 use super::*;
 use platform_io::fs_safety::{
     AdvisoryLock, AtomicFile, EntryName, PrivateDirectory,
@@ -27,12 +30,21 @@ pub(crate) struct BootstrapStore {
 }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum WriteFault {
+pub(in crate::engine) enum WriteFault {
     BeforeRecordBarrier,
     AfterRecordBarrier,
     BeforeHeadBarrier,
     AfterHeadBarrier,
 }
+#[cfg(test)]
+std::thread_local! {
+    static NEXT_WRITE_FAULT: std::cell::Cell<Option<WriteFault>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(in crate::engine) fn inject_next(phase: WriteFault) {
+    NEXT_WRITE_FAULT.with(|fault| fault.set(Some(phase)));
+}
+
 impl BootstrapStore {
     /// Acquires/synchronizes only the control lock, never a configured root.
     pub(crate) fn hold(directory: File, path: PathBuf) -> Result<Self> {
@@ -51,7 +63,7 @@ impl BootstrapStore {
             reader,
             _lock: lock,
             #[cfg(test)]
-            fault: None,
+            fault: NEXT_WRITE_FAULT.with(std::cell::Cell::take),
         })
     }
     /// Explicit installation only. Never call this from a missing-locator
@@ -92,6 +104,28 @@ impl BootstrapStore {
         intent_digest: IntentDigest,
     ) -> Result<LoadedLocator> {
         let record = Record::stop(previous, target, operation_id, intent_digest)?;
+        self.publish(Some(&previous.head), record)
+    }
+    /// An empty discovery set is available only to an independently verified
+    /// terminal handoff. This hint supplies no voters or business authority.
+    pub(in crate::engine) fn append_terminal_stop(
+        &mut self,
+        previous: &LoadedLocator,
+        verified: &crate::engine::membership_transition::terminal::VerifiedTerminalAuthority,
+    ) -> Result<LoadedLocator> {
+        let authority = &verified.authority;
+        let digest = authority
+            .transition_hash()
+            .map_err(|source| BootstrapError::Io {
+                stage: "terminal intent digest",
+                source: std::io::Error::other(source),
+            })?;
+        let record = Record::terminal_stop(
+            previous,
+            &authority.target(),
+            authority.operation_id(),
+            IntentDigest::parse(&digest)?,
+        )?;
         self.publish(Some(&previous.head), record)
     }
     /// Any absent/corrupt head, missing payload, dangling newer record, partial

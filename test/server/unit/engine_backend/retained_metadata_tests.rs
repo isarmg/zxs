@@ -50,14 +50,14 @@ fn saved_file(engine: &mut Engine, slot: &str, name: &str) -> (Entry, String) {
 fn file_note(file: &str, operation_id: OperationId) -> UpdateNote {
     UpdateNote {
         target: NoteTarget::File(file.into()),
-        note: Note::parse("current metadata").unwrap(),
+        note: Note::parse("current metadata".into()).unwrap(),
         operation_id,
     }
 }
 fn version_note(version: &str, operation_id: OperationId) -> UpdateNote {
     UpdateNote {
         target: NoteTarget::Version(version.into()),
-        note: Note::parse("historical metadata").unwrap(),
+        note: Note::parse("historical metadata".into()).unwrap(),
         operation_id,
     }
 }

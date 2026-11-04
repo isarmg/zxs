@@ -9,7 +9,7 @@ use crate::engine::disk_registry::{
 
 mod runtime;
 pub(in crate::engine) use runtime::PendingDiskExit;
-mod replay;
+pub(in crate::engine::membership_transition) mod replay;
 mod verify;
 
 /// Metadata-only progress, never inferred from online member counts.

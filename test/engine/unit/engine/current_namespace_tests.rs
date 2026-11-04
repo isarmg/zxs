@@ -696,7 +696,7 @@ fn membership_registry_current_unadapted_imports_never_invoke_the_mutation_plann
     let mut fixture = Fixture::new(false);
     fixture.project(false);
     let before = canonical_json(fixture.engine.state()).unwrap();
-    for kind in ["branch.create", "file.history.merge", "merge-link.create"] {
+    for kind in ["branch.create", "merge-link.create"] {
         let invoked = std::cell::Cell::new(false);
         let result = fixture.engine.plan_mutation_digest(
             kind,

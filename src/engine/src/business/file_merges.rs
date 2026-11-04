@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy)]
 pub(super) enum MergeResultPolicy<'a> {
     ReuseChosenInput,
-    AlwaysNewNode { tags: &'a BTreeSet<String> },
+    AlwaysNewNode {
+        tags: &'a BTreeSet<String>,
+        current_inputs: Option<&'a super::file_history_merges::CurrentHistoryMergeInputs>,
+    },
 }
 
 fn reaches(state: &State, start: &str, needle: &str) -> bool {
@@ -24,15 +27,13 @@ fn reaches(state: &State, start: &str, needle: &str) -> bool {
 }
 
 fn advance_current_merge_branch(
-    engine: &Engine,
     state: &mut State,
     input: &super::file_publication::NodePublication<'_>,
+    mut entries: Vec<Entry>,
 ) -> Result<()> {
     let branch = state.branches[input.target_branch].clone();
-    let source = engine.namespace_snapshot(input.target_branch)?;
     let version = super::file_nodes::node_version(state, input.file, input.target_node)?;
     let size = state.versions[&version].logical_size;
-    let mut entries = source.entries().to_vec();
     for entry in entries
         .iter_mut()
         .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == input.file)
@@ -207,12 +208,17 @@ impl CurrentMerge<'_> {
         mut branch: DirectoryBranch,
     ) -> Result<(String, String)> {
         let input = &self.input;
-        let previous = &state.commits[&branch.commit_id];
+        // A selected projection can relocate an old tree. Its commit is still
+        // the real ancestry source, while ancestor directory identities must
+        // come from the admitted current owner at the projected path.
+        let owner = &state.branches[&self.repository.main_branch_id];
+        let current = self
+            .view
+            .branch_entries(&owner.branch_id, &owner.head_commit_id)?;
         let mut full = branch.entries.clone();
         let key = name_policy::path_key(&branch.path);
         full.extend(
-            previous
-                .entries
+            current
                 .iter()
                 .filter(|entry| {
                     entry.kind == NamespaceEntryKind::Directory
@@ -427,6 +433,10 @@ pub(super) fn merge_change(
     let version = super::file_nodes::node_version(state, file, chosen_node)?;
     let body = state.versions[&version].clone();
     let repository = engine.repository_for_history(&body.history_tree_id)?;
+    let historical_inputs = match policy {
+        MergeResultPolicy::AlwaysNewNode { current_inputs, .. } => current_inputs,
+        MergeResultPolicy::ReuseChosenInput => None,
+    };
     let projected = if let Some(view) = engine.admitted_current_namespaces()? {
         view.require_branch_write(state, &repository.main_branch_id)?;
         if !engine
@@ -440,12 +450,19 @@ pub(super) fn merge_change(
                 "file is absent from the current owning namespace",
             ));
         }
-        Some(view.file_merge_directories(state, &repository.repository_id)?)
+        Some(if historical_inputs.is_some() {
+            // Same-mutation helpers cannot be referenced by an existing current
+            // composition. No frozen unrelated directory tree is imported.
+            Vec::new()
+        } else {
+            view.file_merge_directories(state, &repository.repository_id)?
+        })
     } else {
         None
     };
     let mut branches = BTreeSet::new();
     let mut heads = Vec::new();
+    let mut survivor_entries = None;
     for input in inputs {
         if !branches.insert(input.branch_id.clone()) {
             return Err(Error::new(
@@ -476,10 +493,15 @@ pub(super) fn merge_change(
         }
         let head = super::file_nodes::branch_head(state, &input.branch_id)?;
         if let Some(view) = engine.admitted_current_namespaces()? {
-            view.require_branch_write(state, &input.branch_id)?;
-            let current = engine.namespace_snapshot(&input.branch_id)?;
-            let entry = current
-                .entries()
+            let current;
+            let entries = if let Some(historical) = historical_inputs {
+                historical.entries(branch)?
+            } else {
+                view.require_branch_write(state, &input.branch_id)?;
+                current = engine.namespace_snapshot(&input.branch_id)?;
+                current.entries()
+            };
+            let entry = entries
                 .iter()
                 .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
                 .ok_or_else(|| {
@@ -493,6 +515,9 @@ pub(super) fn merge_change(
                     storage_contract::ErrorCode::FileBranchConflict,
                     "merge input node differs from its current occurrence",
                 ));
+            }
+            if input.branch_id == survivor {
+                survivor_entries = Some(entries.to_vec());
             }
         }
         if head != input.expected_node_id {
@@ -541,7 +566,7 @@ pub(super) fn merge_change(
                 branch_id: survivor.into(),
                 kind: FileMetadataKind::Merge,
                 tags: match policy {
-                    MergeResultPolicy::AlwaysNewNode { tags } => tags.clone(),
+                    MergeResultPolicy::AlwaysNewNode { tags, .. } => tags.clone(),
                     MergeResultPolicy::ReuseChosenInput => {
                         super::file_nodes::node_tags(state, chosen_node)
                     }
@@ -582,7 +607,11 @@ pub(super) fn merge_change(
         maximum: engine.config.max_entries,
     };
     let affected = if let Some(directories) = projected {
-        advance_current_merge_branch(engine, state, &publication)?;
+        advance_current_merge_branch(
+            state,
+            &publication,
+            survivor_entries.expect("invariant: current merge survivor input was admitted"),
+        )?;
         publish_current_merge(engine, state, directories, publication)?
     } else {
         super::file_publication::advance_branch_node(

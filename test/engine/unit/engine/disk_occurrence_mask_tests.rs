@@ -363,43 +363,46 @@ fn membership_registry_occurrence_mixed_namespace_is_one_write_baseline() {
         .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
         .unwrap();
     let next = successor(&base, prepared.hash(), 1);
-    let projection = verified
-        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
-        .unwrap();
-    assert!(projection.lookup(&path("a")).is_none());
-    assert!(projection.lookup(&path("c")).is_none());
-    assert!(projection.lookup(&path("dir/b")).is_some());
-    assert!(projection.lookup(&path("empty")).is_some());
-    assert!(projection.lookup(&path("dir")).is_some());
-    let mut draft = projection.entries().to_vec();
+    let view = verified.prepare_current_namespaces(&next).unwrap().view;
+    let branch = id("br", 1);
+    let entries = view.branch_entries(&branch, &id("commit", 1)).unwrap();
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !matches!(entry.path(), "a" | "c"))
+    );
+    for retained in ["dir/b", "empty", "dir"] {
+        assert!(entries.iter().any(|entry| entry.path() == retained));
+    }
+    let mut draft = entries.to_vec();
     draft
         .iter_mut()
         .find(|entry| entry.path() == "dir/b")
         .unwrap()
         .version_id = id("ver", 99);
-    projection.validate_draft(&draft).unwrap();
-    assert!(draft.iter().all(|entry| entry.path() != "a"));
-    let fresh = projection.file_identity(&path("a")).unwrap();
-    assert_ne!(fresh.entry_id(), id("entry", 1));
-    assert_ne!(fresh.file_id(), id("file", 1));
-    assert!(fresh.base_version_id().is_none());
-    let shared = projection.file_identity(&path("dir/b")).unwrap();
-    assert_eq!(shared.file_id(), id("file", 2));
-    assert_eq!(shared.base_version_id(), Some(id("ver", 2).as_str()));
-    draft.push(Entry {
-        entry_id: fresh.entry_id().into(),
+    view.validate_draft(&branch, &draft).unwrap();
+    // Production upload allocation is exercised by current_namespace_tests.
+    // Here the actual current consumer must admit a fresh pair and reject old IDs.
+    let fresh = Entry {
+        entry_id: new_id("entry").unwrap(),
         path: path("a"),
         kind: NamespaceEntryKind::File,
-        file_id: fresh.file_id().into(),
+        file_id: new_id("file").unwrap(),
         version_id: id("ver", 100),
         size: 1,
-    });
-    projection.validate_draft(&draft).unwrap();
+    };
+    assert_ne!(fresh.entry_id, id("entry", 1));
+    assert_ne!(fresh.file_id, id("file", 1));
+    view.validate_upload_identity(entries, "a", &fresh.entry_id)
+        .unwrap();
+    assert!(
+        view.validate_upload_identity(entries, "a", &id("entry", 1))
+            .is_err()
+    );
+    draft.push(fresh);
+    view.validate_draft(&branch, &draft).unwrap();
     draft.push(file(1, 1, "renamed-old-a"));
-    assert!(matches!(
-        projection.validate_draft(&draft),
-        Err(ProjectionError::IdentityReuse(_))
-    ));
+    assert!(view.validate_draft(&branch, &draft).is_err());
 }
 
 #[test]
@@ -427,26 +430,24 @@ fn membership_registry_occurrence_hidden_pending_identity_cannot_reenter_as_fres
         .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
         .unwrap();
     let next = successor(&base, prepared.hash(), 1);
-    let projection = verified
-        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
-        .unwrap();
+    let view = verified.prepare_current_namespaces(&next).unwrap().view;
+    let branch = id("br", 1);
     let mut resurrected = file(77, 77, "a");
     resurrected.entry_id = id("entry", 999);
-    assert!(matches!(
-        projection.validate_draft(&[resurrected]),
-        Err(ProjectionError::IdentityReuse(_))
-    ));
-    let fresh = projection.file_identity(&path("a")).unwrap();
+    assert!(view.validate_draft(&branch, &[resurrected]).is_err());
     let mut pending_body = file(77, 77, "a");
-    pending_body.entry_id = fresh.entry_id().into();
-    pending_body.file_id = fresh.file_id().into();
-    assert!(matches!(
-        projection.validate_draft(&[pending_body]),
-        Err(ProjectionError::IdentityReuse(_))
-    ));
-    let mut revived_version = projection.lookup(&path("dir/b")).unwrap().clone();
+    pending_body.entry_id = new_id("entry").unwrap();
+    pending_body.file_id = new_id("file").unwrap();
+    assert!(view.validate_draft(&branch, &[pending_body]).is_err());
+    let mut revived_version = view
+        .branch_entries(&branch, &id("commit", 1))
+        .unwrap()
+        .iter()
+        .find(|entry| entry.path() == "dir/b")
+        .unwrap()
+        .clone();
     revived_version.version_id = id("ver", 1);
-    assert!(projection.validate_draft(&[revived_version]).is_err());
+    assert!(view.validate_draft(&branch, &[revived_version]).is_err());
 }
 
 #[test]
@@ -459,67 +460,54 @@ fn membership_registry_occurrence_versions_and_scopes_do_not_collapse_to_file_id
         .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
         .unwrap();
     let next = successor(&base, prepared.hash(), 1);
-    let current = verified
-        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
+    let view = verified.prepare_current_namespaces(&next).unwrap().view;
+    let branch = id("br", 1);
+    let entries = view.branch_entries(&branch, &id("commit", 1)).unwrap();
+    assert!(entries.iter().all(|entry| entry.path() != "c"));
+    assert!(
+        view.validate_draft(&branch, &[directory(22, "foreign-empty")])
+            .is_err()
+    );
+    view.validate_draft(&branch, &[directory(999, "new-empty")])
         .unwrap();
-    let historical = verified
-        .project(&next, &NamespaceScope::Commit(id("commit", 3)))
-        .unwrap();
-    assert!(current.lookup(&path("c")).is_none());
-    assert!(matches!(
-        current.validate_draft(&[directory(22, "foreign-empty")]),
-        Err(ProjectionError::IdentityReuse(_))
-    ));
-    current
-        .validate_draft(&[directory(999, "new-empty")])
-        .unwrap();
+    // Immutable history remains history, never a current writable scope.
     assert_eq!(
-        historical.lookup(&path("c")).unwrap().version_id,
+        engine.state.commits[&id("commit", 3)]
+            .entries
+            .iter()
+            .find(|entry| entry.path() == "c")
+            .unwrap()
+            .version_id,
         id("ver", 3)
     );
-    assert!(matches!(
-        historical.file_identity(&path("new")),
-        Err(ProjectionError::NotWritable)
-    ));
-    let one = verified
-        .project(&next, &NamespaceScope::DirectoryHead(id("dbr", 1)))
+    assert!(
+        view.branch_entries(&id("commit", 3), &id("commit", 3))
+            .is_err()
+    );
+    let one = view
+        .directory_entries(&id("dbr", 1), &id("dtree", 1))
         .unwrap();
-    let two = verified
-        .project(&next, &NamespaceScope::DirectoryHead(id("dbr", 2)))
+    let two = view
+        .directory_entries(&id("dbr", 2), &id("dtree", 2))
         .unwrap();
-    assert!(one.lookup(&path("shared/c")).is_none());
-    let retained_alias = one.lookup(&path("shared/c-retained")).unwrap();
-    assert_eq!(retained_alias.entry_id, id("entry", 3));
-    assert_eq!(retained_alias.version_id, id("ver", 3));
-    let mut alias_draft = one.entries().to_vec();
-    alias_draft
-        .iter_mut()
+    assert!(one.iter().all(|entry| entry.path() != "shared/c"));
+    let retained = one
+        .iter()
         .find(|entry| entry.path() == "shared/c-retained")
-        .unwrap()
-        .version_id = id("ver", 99);
-    one.validate_draft(&alias_draft).unwrap();
-    assert!(alias_draft.iter().all(|entry| entry.path() != "shared/c"));
-    let mut revived_alias = alias_draft.clone();
-    revived_alias.push(file(3, 100, "shared/c"));
-    assert!(matches!(
-        one.validate_draft(&revived_alias),
-        Err(ProjectionError::IdentityReuse(_))
-    ));
-    let fresh = one.file_identity(&path("shared/c")).unwrap();
-    assert_ne!(fresh.entry_id(), id("entry", 3));
-    assert_ne!(fresh.file_id(), id("file", 3));
-    assert!(fresh.base_version_id().is_none());
-    alias_draft.push(Entry {
-        entry_id: fresh.entry_id().into(),
-        path: path("shared/c"),
-        kind: NamespaceEntryKind::File,
-        file_id: fresh.file_id().into(),
-        version_id: id("ver", 100),
-        size: 1,
-    });
-    one.validate_draft(&alias_draft).unwrap();
+        .unwrap();
+    assert_eq!(retained.entry_id, id("entry", 3));
+    assert_eq!(retained.version_id, id("ver", 3));
+    assert!(
+        view.validate_upload_identity(one, "shared/c", &retained.entry_id)
+            .is_err()
+    );
+    view.validate_upload_identity(one, "shared/c", &new_id("entry").unwrap())
+        .unwrap();
     assert_eq!(
-        two.lookup(&path("alias/c")).unwrap().version_id,
+        two.iter()
+            .find(|entry| entry.path() == "alias/c")
+            .unwrap()
+            .version_id,
         id("ver", 3)
     );
 }
@@ -534,20 +522,18 @@ fn membership_registry_occurrence_removed_owner_keeps_shared_content_without_wri
         .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
         .unwrap();
     let next = successor(&base, prepared.hash(), 1);
-    let projection = verified
-        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
-        .unwrap();
-    assert!(projection.lookup(&path("dir/b")).is_some());
-    assert!(projection.lookup(&path("dir")).is_some());
-    assert!(projection.lookup(&path("empty")).is_none());
-    assert!(matches!(
-        projection.file_identity(&path("a")),
-        Err(ProjectionError::NotWritable)
-    ));
-    assert!(matches!(
-        projection.new_workspace("admin", 1),
-        Err(ProjectionError::NotWritable)
-    ));
+    let view = verified.prepare_current_namespaces(&next).unwrap().view;
+    let branch = id("br", 1);
+    let entries = view.branch_entries(&branch, &id("commit", 1)).unwrap();
+    assert!(entries.iter().any(|entry| entry.path() == "dir/b"));
+    assert!(entries.iter().any(|entry| entry.path() == "dir"));
+    assert!(entries.iter().all(|entry| entry.path() != "empty"));
+    assert!(!view.branch_writable(&engine.state, &branch).unwrap());
+    assert!(view.require_branch_write(&engine.state, &branch).is_err());
+    assert!(
+        view.workspace_baseline(&engine.state, &workspace())
+            .is_err()
+    );
 }
 
 #[test]
@@ -664,9 +650,9 @@ fn membership_registry_occurrence_every_required_page_is_authenticated_without_f
     );
 }
 
-fn workspace(proof: &projection::WorkspaceProjection) -> Workspace {
+fn workspace() -> Workspace {
     Workspace {
-        workspace_id: proof.workspace_id().into(),
+        workspace_id: id("ws", 99),
         purpose: WorkspacePurpose::Normal,
         branch_id: id("br", 1),
         principal: "admin".into(),
@@ -693,37 +679,61 @@ fn membership_registry_occurrence_workspace_proof_rejects_old_identity_scope_hea
         .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
         .unwrap();
     let next = successor(&base, prepared.hash(), 1);
-    let projection = verified
-        .project(&next, &NamespaceScope::BranchHead(id("br", 1)))
+    let view = verified.prepare_current_namespaces(&next).unwrap().view;
+    let current = workspace();
+    // This is a private metadata fixture. A production workspace additionally
+    // needs the permanent admission receipt exercised by current_namespace_tests.
+    let baseline = view.workspace_baseline(&engine.state, &current).unwrap();
+    view.validate_workspace(&engine.state, &current, Some(&baseline))
         .unwrap();
-    let proof = projection.new_workspace("admin", 9).unwrap();
-    let current = workspace(&proof);
-    projection.validate_workspace(&proof, &current).unwrap();
+    assert!(
+        view.validate_workspace(&engine.state, &current, None)
+            .is_err()
+    );
     let mut old = current.clone();
     old.workspace_id = id("ws", 1);
-    assert!(projection.validate_workspace(&proof, &old).is_err());
+    assert!(
+        view.validate_workspace(&engine.state, &old, Some(&baseline))
+            .is_err()
+    );
     let mut old = current.clone();
     old.base_head = id("commit", 3);
-    assert!(projection.validate_workspace(&proof, &old).is_err());
+    assert!(
+        view.validate_workspace(&engine.state, &old, Some(&baseline))
+            .is_err()
+    );
     let mut old = current.clone();
     old.fencing_token += 1;
-    assert!(projection.validate_workspace(&proof, &old).is_err());
+    assert!(
+        view.validate_workspace(&engine.state, &old, Some(&baseline))
+            .is_err()
+    );
     let mut old = current.clone();
     old.principal = "other".into();
-    assert!(projection.validate_workspace(&proof, &old).is_err());
-    let other_scope = verified
-        .project(&next, &NamespaceScope::BranchHead(id("br", 2)))
-        .unwrap();
-    assert!(other_scope.validate_workspace(&proof, &current).is_err());
+    assert!(
+        view.validate_workspace(&engine.state, &old, Some(&baseline))
+            .is_err()
+    );
+    let mut other_scope = current.clone();
+    other_scope.branch_id = id("br", 2);
+    assert!(
+        view.validate_workspace(&engine.state, &other_scope, Some(&baseline))
+            .is_err()
+    );
     let other_decision = successor(&base, prepared.hash(), 2);
     let other_view = verified
-        .project(&other_decision, &NamespaceScope::BranchHead(id("br", 1)))
-        .unwrap();
-    assert!(other_view.validate_workspace(&proof, &current).is_err());
+        .prepare_current_namespaces(&other_decision)
+        .unwrap()
+        .view;
+    assert!(
+        other_view
+            .validate_workspace(&engine.state, &current, Some(&baseline))
+            .is_err()
+    );
     let mut forged_generation = next.clone();
     forged_generation.commitment.view_generation += 1;
     assert!(matches!(
-        verified.project(&forged_generation, &NamespaceScope::BranchHead(id("br", 1))),
+        verified.prepare_current_namespaces(&forged_generation),
         Err(ProjectionError::BaselineMismatch)
     ));
 }
@@ -780,9 +790,12 @@ fn membership_registry_occurrence_projection_preserves_history_and_original_file
         .verify_mask(prepared.hash(), |kind, hash| read(&objects, kind, hash))
         .unwrap();
     let next = successor(&base, prepared.hash(), 1);
-    for scope in source.preview.namespaces() {
-        let projection = verified.project(&next, &scope.into()).unwrap();
-        let _draft = projection.entries().to_vec();
+    let view = verified.prepare_current_namespaces(&next).unwrap().view;
+    for (id, branch) in &engine.state.branches {
+        assert!(view.branch_entries(id, &branch.head_commit_id).is_ok());
+    }
+    for (id, branch) in &engine.state.directory_branches {
+        assert!(view.directory_entries(id, &branch.head_tree_id).is_ok());
     }
     assert_eq!(canonical_json(engine.state()).unwrap(), before_state);
     assert_eq!(canonical_json(engine.config()).unwrap(), before_config);

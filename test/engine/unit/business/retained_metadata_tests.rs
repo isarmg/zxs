@@ -8,7 +8,7 @@ fn op() -> OperationId {
     OperationId::generate().unwrap()
 }
 fn note(value: &str) -> storage_contract::Note {
-    storage_contract::Note::parse(value).unwrap()
+    storage_contract::Note::parse(value.to_owned()).unwrap()
 }
 fn label(value: &str) -> storage_contract::BranchName {
     storage_contract::BranchName::parse(value).unwrap()

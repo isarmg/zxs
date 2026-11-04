@@ -1,6 +1,6 @@
 # ZXS 开发进度快照
 
-记录日期：2026-11-04，更新至 19:25 UTC。主线 e533750a 已包含缺席目标退出、当前分支/批量消费者与进程内 SMART；完整 CI 因两项明确构建错误阻断。本次仅交付对应窄修及源码回归，后续 Terminal/Resume 等功能仍独立开发，未纳入此补丁。历史统计时点分别列明。
+记录日期：2026-11-04，更新至 19:50 UTC。真实主线仍为 4e80fc4a；其 quality 作业 126811874735 已报告 15 项 lint/可见性错误，workspace 作业 126811874633 又报告 engine 18/server 2 项测试编译错误，未通过。下一源码批已修这些问题并整合终态管理、首次 TerminalResume、当前目录/历史消费者及普通 Add 定位账本恢复，尚未编译或测试。历史运行的统计时点分别列明。
 
 本文记录本轮 ZXS 改进已落地的代码、已有验证证据、已知失败和剩余工作，供后续继续开发时核对。它是有时间边界的快照，不代替功能规范、发布说明或部署验收。提交和运行链接固定到具体版本；分支后续移动不改变本文所记录的历史结果。
 
@@ -11,13 +11,29 @@
 - 已有池的在线新增、计划下线和删除登记尚未完成。实验协议、I/O 所有权收束及测试代码的进展，不能表述成这三项能力已经可用。
 - `349367a3` 的 [完整 CI 41868114575](https://github.com/isarmg/zxs/actions/runs/41868114575) 已出现质量任务及 engine 测试失败；浏览器构建也被相同无消费者封装警告阻断，尚未进入浏览器。修补已进入 `024647ca`，但新 CI 被另一处 E0425 构建错误阻断。此前失败不能改写为通过；本轮没有真实部署或真实数据盘操作。
 
-## 19:25 主线构建窄修
+## 已合入 4e80fc4a 的主线构建窄修
 
 主负责人已提交并读回 [`e533750a`](https://github.com/isarmg/zxs/commit/e533750a417002b4ccda75901a936145e0b0ed1d)，其 [完整 CI 41893637003](https://github.com/isarmg/zxs/actions/runs/41893637003) 实际报告：server 的 `DeregistrationPlanError` 不能转为 `ApiErrorSource`（E0277），以及 SMART 超时余数判断触发 Clippy `manual_is_multiple_of`。这些构建未通过，不能沿用此前结果或推断后续测试运行。
 
 本次窄修只处理两项：退出预览将领域错误穷尽映射为原有具体 HTTP 错误码并保留 typed source/detail，附映射源码回归；SMART 用标准整数整除判断表达相同的毫秒向上取整，保留非零与有界内核超时。不加 lint 豁免，不降低证明或错误边界。
 
-代码作者仅执行官方 rustfmt、差异及对象哈希核对，未编译或运行测试；主负责人负责发布后验证。该补丁不含终态管理、TerminalResume、重新启用、目录选择/历史合并的后续源码或临时 CI。已有功能仍需对应验收，当前不作可部署结论。
+窄修已由主负责人提交并读回 [`4e80fc4a`](https://github.com/isarmg/zxs/commit/4e80fc4a04155e9b8d6d149c413806bd81e52f2d)，完整树 `f3d7eccd0b8cad85e3bb039529265f4c5f2967bc`。代码作者仅执行官方 rustfmt、差异及对象哈希核对，未编译或运行测试；其后新 quality 错误见下一节，不能记为通过。该补丁不含终态管理、TerminalResume、重新启用、目录选择/历史合并的后续源码或临时 CI。已有功能仍需对应验收，当前不作可部署结论。
+
+## 19:50 待交付源码：终态与当前消费者
+
+以准确主线 `4e80fc4a04155e9b8d6d149c413806bd81e52f2d` 为基线，仅以下源码已经整合，不代表执行通过：
+
+- 最后一个投票数据目录退出时，保留原正 N/Q 和完整旧多数控制证明，先持久 SYSTEM archive 与受认证 stop，再等待实际 I/O Closed，进入无活动 metadata voter 的 TerminalManagement；不构造零盘 Genesis，不抹数据或凭资源表缺项判完成。HTTP/Web 已写终态实际交接、永久回执和冷启动选择；内容健康不虚报 Healthy。
+- 首次从 TerminalManagement 指定全新 metadata 目录组 Resume，使用独立已绑定旧终态的 proposal/decision、完整控制 archive、新组规定 Q 和真实首个 publication，恢复当前 registry/occurrence 及历史、永久旧操作结果。普通 Add 不能伪装 TerminalResume。服务只在新组真实 publication 与永久操作结果完成后返回成功，live pending持有原SYSTEM锁；fresh目录发现排除已停止root/已知bind别名，但外部并发mount变化仍有未验窗口。新组公开 API、原添加通道的真实服务/Web接线和受限目录发现均已写并整合；取消、终态旧 Disabled 身份启用和再次 terminal 的 head 轮换尚未全部闭合。
+- 普通 Add 与 TerminalResume 都有精确 bootstrap root 扩展计划：系统先保存准确前驱和目标记录，再写 record/head；恢复只续相同认证计划，不扫描选择最高记录或放宽常规启动。普通 Exit/Terminal stop 的同类中断计划仍在独立修补，不宣称全部掉电路径闭合。
+- 当前选中 directory tree 不等于 branch head 的合法批量操作已写精确来源消费者；显式文件历史合并已写当前 owner occurrence、保留正文、永久 actor/digest 与回放验证。未选中的不等价 frozen parent 仍不自动导入。
+- 已写独立终态对抗源码，覆盖重哈希 authority/head/archive 篡改、旧停止记录、原 journal 缺失、错误或回滚 selector、同逻辑身份第二物理域仍有句柄等情形。它们尚未运行，不能作为通过证据。
+
+主线 `4e80fc4a` 的 quality 作业 `126811874735` 的 15 项错误按真实调用修补：`VerifiedProposal` 三个原始证明字段收窄到 pending 作用域；删除已被 `CurrentNamespaces` 替代且没有生产消费者的借用式 WriteProjection 原型，把其测试迁到真实当前 namespace/draft/upload/workspace 入口；合并等价条件。没有 allow、空调用或测试专用生产分支。源测试仍保留隐藏身份/版本、旧工作区、错 scope/view、历史字节与实际文件不变等边界。
+
+workspace 的 20 项实际编译错误已按当前真实接口修补源码：普通 Engine::open 本来就执行 CompletePending，移除不存在的模式实参；历史 SharedRecords 使用真实 iter；joint 校验真实 certificate_hash、双方规定多数和已安装覆盖；日志损坏回归用该 Engine 的准确代际 log_path；Note 传拥有的 String；可选受管 ReadFile 错误直接匹配，不为测试增加 Debug。保留原拒绝、回执、历史与目标字节断言，另清理本批新增历史合并回归中的同类调用误用。async 与 SMB 的实际终止也是相同 server 两项 Note 编译错误，前段 Samba IDL/panic 是预期负例，不列为新增根因。
+
+本次代码作者仅执行源码阅读、合并、官方 rustfmt 和差异核对；未运行编译、Clippy、任何测试或 CI。下线／删除／恢复管理的完整功能验收尚未完成。活跃池 Disabled 重新启用、stop publication 中断、重复终态权威及当前命名历史分支消费者继续各自在独立范围编写，由主负责人统一提交和组织验证。
 
 ## 17:53 主线构建阻断与窄修
 
@@ -109,11 +125,11 @@
 
 本批作者仅做源码整合、格式化和差异审阅。新测试源码涵盖第一轮 D3、stop/关闭/部分 publication 中断、原操作续作、目标字节保留、共享内容、旧工作区、逻辑域排除、观察取消与 checkpoint 范围；都需要主负责人针对最终同一树运行后才能记录结果。
 
-## 18:55 后续源码批及主线构建状态
+## 已合入 e533750a 的后续源码批及构建状态
 
-基线为真实主线 [`57464e4e`](https://github.com/isarmg/zxs/commit/57464e4e118440708183bc43dbdf2709f27b10fb)，源码作者未运行本批测试、构建、Clippy、模型或 CI，没有远端推送。主负责人统一发布及验证。
+本批基于真实主线57464e4e，已由主负责人提交为 [`e533750a`](https://github.com/isarmg/zxs/commit/e533750a417002b4ccda75901a936145e0b0ed1d)。61文件净变化：源码32个 +3567/-334、测试15个 +4608/-16、文档14个 +343/-35，不累加中间提交。源码作者未运行编译或测试；该提交 CI 的两项新阻断及窄修见前文。
 
-该主线 CI 的 quality 任务 `126788359129` 实际报告未使用的 `DurableDiskStop` 导入、工作区 base 借用与隐藏 context 修改冲突、Exit runtime 两处 failpoint 的可变借用冲突、restricted recovery 中 metadata iterator 与移动 Config 冲突；workspace/build-tools 也在编译阶段被阻断，不能声称后续测试已经运行。本批改动将 base/current 绑定同一已持有 source-commit 快照，并修正上述生命周期借用范围；保留故障点、真实 guard、多数与持久化条件，不加入警告豁免。修补尚待运行确认。
+前一主线57464e4e 的 CI quality 任务 `126788359129` 实际报告未使用的 `DurableDiskStop` 导入、工作区 base 借用与隐藏 context 修改冲突、Exit runtime 两处 failpoint 的可变借用冲突、restricted recovery 中 metadata iterator 与移动 Config 冲突；workspace/build-tools 也在编译阶段被阻断，不能声称后续测试已经运行。本批改动将 base/current 绑定同一已持有 source-commit 快照，并修正上述生命周期借用范围；保留故障点、真实 guard、多数与持久化条件，不加入警告豁免。修补尚待运行确认。
 
 本批写入的实际消费者：
 
@@ -169,7 +185,7 @@
 
 ## 继续工作的顺序
 
-1. 主线已到 `57464e4e`，已知构建阻断按上述准确错误修补。主负责人核验运行终态，并接收基于该真实主线的新冻结源码批；代码作者继续剩余管理态和当前消费者闭环。
+1. 主线已到 `4e80fc4a`，主负责人核验构建窄修后的新运行结果。代码作者继续终态管理、新组接续、重新启用及其当前消费者与断电恢复闭环，下一批保留真实主线父链。
 2. 合并到同一候选树，保留各方实现，清理仅服务临时验证分支的专用门控和过时说明；更新本进度文档中的主线提交与状态。
 3. 将已冻结代码提交 `main`，由主负责人组织受影响检查和完整 CI；尚未执行的检查仍标记为未验证，既有 CI 的最终状态另行补充，不自动推断。
 4. 不进行真实部署、凭据或权限修改，不操作真实数据目录。在线新增、下线和删除只有在实现与对应验收都完成后，才能改写为可用。

@@ -11,6 +11,7 @@
 //! a stop, or re-enables a root. Explicit recovery must use a separate authority
 //! verifier. Directory identities do not imply independent physical devices.
 mod format;
+mod resume_observations;
 pub(crate) mod runtime;
 pub(crate) mod store;
 use format::{Head, Record, RootRecord};
@@ -159,6 +160,21 @@ pub(crate) struct LoadedLocator {
     record: Record,
 }
 impl LoadedLocator {
+    /// Validate selected new handles against every historical locator identity
+    /// before mutating them. Stops remain exclusions; no storage root is read.
+    pub(crate) fn validate_root_expansion(&self, observations: Vec<RootObservation>) -> Result<()> {
+        Record::extend(self, observations).map(|_| ())
+    }
+
+    /// Pure alias/history validation. Only the typed terminal store methods may
+    /// persist this change; this inspection never opens or admits a root.
+    pub(in crate::engine) fn validate_terminal_root_expansion(
+        &self,
+        observations: Vec<RootObservation>,
+    ) -> Result<()> {
+        Record::resume_terminal(self, observations).map(|_| ())
+    }
+
     fn permits_unstopped_relocation(&self, config: &Config) -> bool {
         self.record.stops.is_empty()
             && config.disks.len() == self.record.roots.len()
@@ -264,6 +280,11 @@ impl LoadedLocator {
     /// complete projection may relocate the same observed directory identity.
     /// Once restricted, changed addresses require explicit retained-root recovery.
     pub(crate) fn select<'a>(&'a self, config: &'a Config) -> Result<RestrictedProbes<'a>> {
+        if self.record.is_terminal() {
+            return Err(BootstrapError::ManagementOnly(
+                "terminal locator permits no storage-root discovery; authenticate protected management authority",
+            ));
+        }
         if config.pool_id != self.head.pool_id || config.disks.len() > MAX_ROOTS {
             return Err(BootstrapError::ManagementOnly(
                 "projection pool or size differs",

@@ -33,6 +33,7 @@ enum StorageState {
     Active,
     RecoveryRequired,
     Unavailable,
+    TerminalManagement,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -43,6 +44,36 @@ struct Snapshot {
     _disk_ids: Vec<String>,
     pub completion_available: bool,
     pub allow_development: bool,
+    #[serialization(deserialize_with = "nullable_terminal")]
+    pub terminal: Option<storage_contract::storage_lifecycle::TerminalStorageStatus>,
+}
+fn nullable_terminal<'de, D: data_serialization::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<storage_contract::storage_lifecycle::TerminalStorageStatus>, D::Error> {
+    Option::deserialize(deserializer)
+}
+fn storage_snapshot(value: Value) -> Result<Snapshot, api::Error> {
+    let snapshot: Snapshot = decode(value)?;
+    if (snapshot.state == StorageState::TerminalManagement) != snapshot.terminal.is_some()
+        || snapshot.terminal.as_ref().is_some_and(|terminal| {
+            terminal.original_metadata_members == 0
+                || storage_contract::validate_id(&terminal.pool_id, "pool").is_err()
+                || terminal.authority_hash.len() != 64
+                || !terminal
+                    .authority_hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                || terminal.original_metadata_quorum != terminal.original_metadata_members / 2 + 1
+                || terminal.registered_directories != snapshot._disk_ids.len()
+                || (terminal.registrations
+                    == storage_contract::storage_lifecycle::TerminalRegistrations::EmptyRegistry)
+                    != (terminal.registered_directories == 0)
+                || snapshot.completion_available
+        })
+    {
+        return Err(invalid(ResponseError::Identity));
+    }
+    Ok(snapshot)
 }
 
 #[derive(Clone, Default)]
@@ -82,10 +113,12 @@ impl Model {
             && !self.unknown
             && !self.discovery_unknown
             && self.success.is_none()
-            && self
-                .snapshot
-                .as_ref()
-                .is_some_and(|s| matches!(s.state, StorageState::Pending | StorageState::Active))
+            && self.snapshot.as_ref().is_some_and(|s| {
+                matches!(
+                    s.state,
+                    StorageState::Pending | StorageState::Active | StorageState::TerminalManagement
+                )
+            })
     }
     fn can_set_root(&self) -> bool {
         !self.busy
@@ -93,10 +126,12 @@ impl Model {
             && !self.unknown
             && !self.discovery_unknown
             && self.success.is_none()
-            && self
-                .snapshot
-                .as_ref()
-                .is_some_and(|s| matches!(s.state, StorageState::Pending | StorageState::Active))
+            && self.snapshot.as_ref().is_some_and(|s| {
+                matches!(
+                    s.state,
+                    StorageState::Pending | StorageState::Active | StorageState::TerminalManagement
+                )
+            })
             && !self.discovery_root.is_empty()
     }
     fn can_activate(&self) -> bool {
@@ -193,7 +228,7 @@ pub(super) fn load(state: RwSignal<State>) {
     };
     spawn_local(async move {
         let snapshot =
-            api::validated_request("GET", "/api/admin/storage/status", None, decode::<Snapshot>)
+            api::validated_request("GET", "/api/admin/storage/status", None, storage_snapshot)
                 .await;
         if !accept_read_response(state, epoch, &snapshot) {
             return;
@@ -588,6 +623,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             Some(StorageState::Pending) => t("管理账户已就绪，尚未添加存储。选择发现目录内已挂载磁盘上的空子目录。", "Management is ready; storage has not been added. Choose an empty subdirectory on a mounted disk within the discovery directory."),
             Some(StorageState::Active) => t("存储池已激活。", "The storage pool is active."),
             Some(StorageState::RecoveryRequired) => t("存储需要恢复，请先核对原有激活结果。", "Storage needs recovery. Check the original activation outcome first."),
+            Some(StorageState::TerminalManagement) => t("最后一个元数据成员已退出。管理态保留历史与当前登记，普通存储读写已关闭；这不是首次初始化。", "The final metadata member has exited. Management retains history and current registrations; ordinary storage access is closed. This is not first-time initialization."),
             Some(StorageState::Unavailable) => t("存储状态不可用，不会重新初始化已有目录。", "Storage status is unavailable. Existing directories will not be reinitialized."),
         })}</p>
         <button type="button" class="zxs-button" disabled=move ||state.with(|s|!can_load(s)) on:click=move |_|load(state)>{t("刷新存储状态", "Refresh storage status")}</button>
@@ -595,7 +631,11 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         <label class="zxs-form-field"><span>{t("存储发现目录", "Storage discovery directory")}</span><input class="zxs-input" data-storage-discovery-root="" type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.can_set_root()) prop:value=move ||state.with(|s|s.admin_console.storage.discovery_input.clone()) on:input=move |event|state.update(|s|{if s.session_active() && s.admin_console.storage.can_set_root(){s.admin_console.storage.discovery_input=event_target_value(&event);}})/></label>
         <button type="button" class="zxs-button" data-storage-save-discovery-root="" disabled=move ||state.with(|s|!s.admin_console.storage.can_set_root()||s.admin_console.storage.discovery_input==s.admin_console.storage.discovery_root||s.admin_console.storage.discovery_input.is_empty()) on:click=move |_|save_discovery_root(state)>{t("保存发现目录", "Save discovery directory")}</button>
         <Show when=move ||state.with(|s|s.admin_console.storage.discovery_unknown)><p class="zxs-row" role="alert">{t("目录设置结果未知，请刷新状态核对后再继续。", "The directory setting outcome is unknown. Refresh status before continuing.")}</p></Show>
-        <Show when=move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().is_some_and(|s|matches!(s.state,StorageState::Pending|StorageState::Active))&&s.admin_console.storage.success.is_none())>
+        {move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().and_then(|snapshot|snapshot.terminal.clone())).map(|terminal|view!{
+            <p class="zxs-row">{format!("{}{} · {}{}/{}",t("保留登记目录：", "Retained registered directories: "),terminal.registered_directories,t("原固定元数据 N/Q：", "Original fixed metadata N/Q: "),terminal.original_metadata_members,terminal.original_metadata_quorum)}</p>
+            <p class="zxs-row">{t("磁盘内容与历史没有清理。新的元数据组需要基于这份已认证历史接续，不能使用首次激活或普通添加替代。", "Disk contents and history have not been cleared. A new metadata group must resume this authenticated history; initial activation and ordinary addition cannot replace that process.")}</p>
+        })}
+        <Show when=move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().is_some_and(|s|matches!(s.state,StorageState::Pending|StorageState::Active|StorageState::TerminalManagement))&&s.admin_console.storage.success.is_none())>
             <p class="zxs-row">{t("挂载目录与实际存储目录分开设置。仅使用当前已挂载文件系统和服务已有权限，不格式化、不自动挂载、不修改权限。", "Set the mount directory and actual storage directory separately. Only mounted filesystems and existing service permissions are used. No formatting, automatic mounting, or permission changes occur.")}</p>
             <div class="zxs-form-grid">{input(state,"browse",t("浏览目录", "Browse directory"))}</div>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) on:click=move |_|{let path=state.with_untracked(|s|s.admin_console.storage.browse_path.clone());browse(state,if path.is_empty(){state.with_untracked(|s|s.admin_console.storage.discovery_root.clone())}else{path})}>{t("浏览", "Browse")}</button>

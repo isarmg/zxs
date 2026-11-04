@@ -28,7 +28,13 @@ impl Model {
 }
 pub(in crate::admin) fn can_preview(state: &State) -> bool {
     let storage = &state.admin_console.storage;
-    state.session_active() && !storage.addition.blocks_edit() && !storage.lifecycle.blocks_edit()
+    state.session_active()
+        && storage
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.state == StorageState::Active)
+        && !storage.addition.blocks_edit()
+        && !storage.lifecycle.blocks_edit()
 }
 pub(in crate::admin) fn preview(
     state: RwSignal<State>,
@@ -211,7 +217,9 @@ fn validate_preview(preview: &ExitPreview) -> Result<(), api::Error> {
         || !digest(&preview.configuration_digest)
         || !digest(&preview.preview_digest)
         || !digest(&preview.snapshot_hash)
-        || preview.target_metadata_members == 0
+        || preview.original_metadata_members == 0
+        || (preview.authority == ExitAuthority::TerminalManagement)
+            != (preview.target_metadata_members == 0)
         || preview.target_metadata_members > preview.original_metadata_members
         || preview.original_metadata_members - preview.target_metadata_members > 1
     {
@@ -232,6 +240,9 @@ fn validate_status(status: &ExitStatus, expected: Option<OperationId>) -> Result
                 || result.kind != status.preview.request.action.result_kind()
                 || result.commit_state != storage_contract::CommitState::Published
                 || !digest(&result.request_digest)
+                || (status.preview.authority == ExitAuthority::TerminalManagement
+                    && result.result.get("authority_kind").and_then(Value::as_str)
+                        != Some("terminal-management"))
         })
     {
         return Err(invalid(ResponseError::Identity));
@@ -258,6 +269,7 @@ fn refresh_after_exit(state: RwSignal<State>) {
     state.update(|s| s.files.invalidate_disks());
     super::super::disks::load(state);
     crate::management::load(state);
+    super::load(state);
 }
 pub(super) fn load(state: RwSignal<State>) {
     let captured = state
@@ -389,6 +401,9 @@ pub(in crate::admin) fn view(state: RwSignal<State>) -> impl IntoView {
                     ExitAction::Deregister => t("注销仅移除 ZXS 登记，并在当前目录视图隐藏只由此登记持有的文件；历史与磁盘字节保留。不会擦除，也不会向目标写备份或恢复文件。", "Deregistration removes the ZXS registration and hides current files held exclusively by it. History and disk bytes remain. It does not erase data or write backup or recovery files to the target."),
                 }}</p>
                 <p class="zxs-row">{format!("{}{} → {}",t("元数据成员：", "Metadata members: "),preview.original_metadata_members,preview.target_metadata_members)}</p>
+                <Show when=move ||preview.authority==ExitAuthority::TerminalManagement>
+                    <p class="zxs-row">{t("这是最后一个元数据成员。完成后服务进入保留登记与历史的管理态，普通读写关闭；不会初始化一个零成员池。后续新组必须通过原认证历史接续。", "This is the final metadata member. Completion enters management with retained registrations and history, and closes ordinary storage access. It does not initialize a zero-member pool. A new group must resume from the authenticated original history.")}</p>
+                </Show>
                 <p class="zxs-row">{t("提交会冻结原代并准备真实退出证明；持有 I/O 尚未结束时需要继续同一操作。关闭页面不取消，不能把准备成功当作下线或注销完成。", "Submission fences the original generation and prepares real exit evidence. Outstanding I/O may require resuming this same operation. Closing the page does not cancel it; preparation is not completion.")}</p>
                 <label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|s.admin_console.storage.lifecycle.blocks_edit()) prop:checked=move ||state.with(|s|s.admin_console.storage.lifecycle.acknowledged) on:change=move |event|state.update(|s|{if s.session_active()&&!s.admin_console.storage.lifecycle.blocks_edit(){s.admin_console.storage.lifecycle.acknowledged=event_target_checked(&event);}})/>{t("我已核对目标、动作与影响，确认执行此操作。", "I reviewed the target, action and impact, and confirm this operation.")}</label>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.lifecycle.blocks_edit()||!s.admin_console.storage.lifecycle.acknowledged) on:click=move |_|submit(state,false)>{t("确认执行", "Confirm operation")}</button>

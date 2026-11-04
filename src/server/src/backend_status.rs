@@ -7,6 +7,7 @@ pub enum StorageState {
     Unavailable,
     Unconfigured,
     RecoveryRequired,
+    TerminalManagement,
 }
 impl StorageState {
     pub fn as_str(self) -> &'static str {
@@ -16,6 +17,7 @@ impl StorageState {
             Self::Unavailable => "unavailable",
             Self::Unconfigured => "unconfigured",
             Self::RecoveryRequired => "recovery_required",
+            Self::TerminalManagement => "terminal_management",
         }
     }
 }
@@ -55,7 +57,10 @@ impl From<StorageStatus> for StorageStatusResponse {
     fn from(status: StorageStatus) -> Self {
         Self {
             state: status.state().as_str(),
-            retryable: status.state() != StorageState::Ready,
+            retryable: !matches!(
+                status.state(),
+                StorageState::Ready | StorageState::TerminalManagement
+            ),
             recovering: match status {
                 StorageStatus::EmbeddedReady => None,
                 StorageStatus::Managed { recovering, .. } => Some(recovering),

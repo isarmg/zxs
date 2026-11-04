@@ -98,12 +98,7 @@ pub(super) fn predecessor_object(
             "Genesis has no predecessor archive",
         )
     })?;
-    let (_, intent) = generation
-        .portable
-        .archives()?
-        .pop()
-        .expect("invariant: generation archive");
-    let transition = object_hash(INTENT_KIND, &intent)?;
+    let transition = object_hash(INTENT_KIND, &generation.portable.intent()?)?;
     let disk = engine
         .config
         .metadata_members()
@@ -669,8 +664,11 @@ impl Engine {
                 .expect("invariant: fixed metadata membership");
             let source = ArchiveStore {
                 root: self.disk_resources.get(disk)?.root.private_child(
-                    &pending::member_directory(disk, &transition)
-                        .join(pending::CONTROL_ARCHIVE_DIRECTORY),
+                    &pending::member_directory(
+                        disk,
+                        &object_hash(INTENT_KIND, &generation.portable.intent()?)?,
+                    )
+                    .join(pending::CONTROL_ARCHIVE_DIRECTORY),
                 )?,
             };
             verify_root_copying(

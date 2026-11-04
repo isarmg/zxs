@@ -577,7 +577,7 @@ fn retained_exit_missing_prepared_authority_after_stop_cannot_fall_back_to_genes
 fn retained_exit_rereads_each_publication_prefix_before_bypassing_write_block() {
     let mut fixture = RetainedFixture::missing();
     let disk = &fixture.original.disks[2];
-    let path = log_path(disk);
+    let path = log_path(&fixture.engine.config, disk);
     let before_damage = fs::read(&path).unwrap();
     let mut reader = JournalFrameReader::new(before_damage.as_slice());
     let mut offset = 0;

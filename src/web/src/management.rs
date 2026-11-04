@@ -21,6 +21,7 @@ pub(crate) enum Storage {
     Unavailable,
     Unconfigured,
     RecoveryRequired,
+    TerminalManagement,
 }
 impl Storage {
     pub(crate) fn writable(self) -> bool {
@@ -36,6 +37,7 @@ impl Storage {
             Some("unavailable") => Self::Unavailable,
             Some("unconfigured") => Self::Unconfigured,
             Some("recovery_required") => Self::RecoveryRequired,
+            Some("terminal_management") => Self::TerminalManagement,
             _ => Self::Unknown,
         }
     }
@@ -57,6 +59,10 @@ impl Storage {
             Self::Unconfigured => t(
                 "尚未添加存储，请在管理页添加硬盘与存储目录",
                 "Storage has not been added. Add disks and storage directories in Administration",
+            ),
+            Self::TerminalManagement => t(
+                "最后一个元数据成员已退出，现为管理态；登记与历史仍保留，普通读写已关闭",
+                "The final metadata member has exited. Management retains registrations and history; ordinary storage access is closed",
             ),
             Self::RecoveryRequired => t(
                 "存储需要恢复；不会自动初始化或重置账户",

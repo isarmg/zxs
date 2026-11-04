@@ -693,10 +693,12 @@ impl PortableJoint {
     }
 }
 pub(in crate::engine::membership_transition) struct VerifiedProposal {
-    pub(in crate::engine::membership_transition) proposal: Proposal,
+    pub(in crate::engine::membership_transition::pending) proposal: Proposal,
     pub(in crate::engine::membership_transition) intent: TransitionIntent,
-    pub(in crate::engine::membership_transition) dependencies: BTreeMap<String, TargetDependency>,
-    pub(in crate::engine::membership_transition) data_disks: BTreeMap<String, data::DataDependency>,
+    pub(in crate::engine::membership_transition::pending) dependencies:
+        BTreeMap<String, TargetDependency>,
+    pub(in crate::engine::membership_transition::pending) data_disks:
+        BTreeMap<String, data::DataDependency>,
 }
 fn missing_member() -> Error {
     Error::new(

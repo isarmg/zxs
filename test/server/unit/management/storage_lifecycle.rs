@@ -13,10 +13,16 @@ struct Fixture {
     _temp: tempfile::TempDir,
 }
 fn fixture() -> Fixture {
+    fixture_with_metadata_members(3)
+}
+fn fixture_with_metadata_members(metadata_members: usize) -> Fixture {
     let temp = crate::tests::private_tempdir();
     let data = temp.path().join("system");
-    let original =
+    let mut original =
         Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+    for (index, disk) in original.disks.iter_mut().enumerate() {
+        disk.metadata_member = index < metadata_members;
+    }
     let mut engine = storage_engine::Engine::initialize(&data, original.clone()).unwrap();
     let repository = engine
         .create_repository(
@@ -249,7 +255,7 @@ fn published_exit_status_recovers_from_missing_management_completion_projection(
             .result
             .is_none()
     );
-    crate::lock(&f.backend.inner.state).backend = None;
+    crate::lock(&f.backend.inner.state).backend = BackendState::Unopened;
     let engine = storage_engine::Engine::open(&f.data).unwrap();
     let backend = Arc::new(EngineBackend::new(engine));
     backend
@@ -507,7 +513,7 @@ fn successive_http_exits_replay_old_receipts_and_recover_the_setup_configuration
     assert!(admits_configuration(&f.backend.inner.management_root, &current, &f.original).unwrap());
     assert_eq!(files(&moved), retained);
     drop(backend);
-    crate::lock(&f.backend.inner.state).backend = None;
+    crate::lock(&f.backend.inner.state).backend = BackendState::Unopened;
     let engine = storage_engine::Engine::open(&f.data).unwrap();
     assert!(engine.list_tree(&f.branch).unwrap().is_empty());
     assert!(engine.operation_record(offline.operation_id).is_ok());
@@ -559,5 +565,212 @@ fn exit_http_receipt_waits_for_final_publication_admission_after_persist() {
     assert_eq!(
         result.result.unwrap().operation_id,
         record.status.operation_id
+    );
+}
+
+fn terminal_commit(f: &Fixture, action: ExitAction) -> ExitStatus {
+    let preview: ExitPreview =
+        json_codec::from_value(command(f, "disk_exit_preview", json!(request(f, action))).unwrap())
+            .unwrap();
+    assert_eq!(preview.authority, ExitAuthority::TerminalManagement);
+    assert_eq!(
+        (
+            preview.original_metadata_members,
+            preview.target_metadata_members
+        ),
+        (1, 0)
+    );
+    json_codec::from_value(command(f, "disk_exit_commit", json!(ExitCommit { preview })).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn final_voter_deregistration_enters_real_management_and_keeps_data_only_registrations() {
+    let f = fixture_with_metadata_members(1);
+    let status = terminal_commit(&f, ExitAction::Deregister);
+    assert_eq!(status.state, ExitState::Completed);
+    assert_eq!(
+        status.result.as_ref().unwrap().result["authority_kind"],
+        "terminal-management"
+    );
+    assert_eq!(
+        f.backend.management_status().state(),
+        StorageState::TerminalManagement
+    );
+    assert!(f.backend.inner.backend().is_err());
+    let registrations = f.backend.disk_status(&f.identity).unwrap();
+    assert_eq!(registrations.len(), 2);
+    assert!(
+        registrations
+            .iter()
+            .all(|disk| !disk.online && !disk.metadata_member)
+    );
+    assert!(
+        registrations
+            .iter()
+            .all(|disk| disk.disk_id != f.original.disks[0].disk_id)
+    );
+    let observed = f
+        .backend
+        .inner
+        .terminal_storage_status(&f.identity)
+        .unwrap()
+        .unwrap();
+    let terminal = observed.terminal.unwrap();
+    assert_eq!(
+        terminal.registrations,
+        storage_contract::storage_lifecycle::TerminalRegistrations::RetainedRegistrations
+    );
+    assert_eq!(terminal.registered_directories, 2);
+    assert_eq!(
+        (
+            terminal.original_metadata_members,
+            terminal.original_metadata_quorum
+        ),
+        (1, 1)
+    );
+    let repeated: ExitStatus = json_codec::from_value(
+        command(
+            &f,
+            "disk_exit_commit",
+            json!(ExitCommit {
+                preview: status.preview.clone()
+            }),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(repeated.result, status.result);
+    assert!(
+        f.backend
+            .setup_operation("storage_activate", json!({}), None, Some(&f.identity))
+            .is_err()
+    );
+}
+
+#[test]
+fn final_voter_waits_for_real_backend_owners_and_keeps_the_original_operation() {
+    let f = fixture_with_metadata_members(1);
+    let held = f.backend.inner.addition_backend().unwrap();
+    let preview: ExitPreview = json_codec::from_value(
+        command(
+            &f,
+            "disk_exit_preview",
+            json!(request(&f, ExitAction::PlannedOffline)),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let operation = preview.request.operation_id;
+    assert_eq!(
+        command(
+            &f,
+            "disk_exit_commit",
+            json!(ExitCommit {
+                preview: preview.clone()
+            })
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::RecoveryRequired
+    );
+    assert!(matches!(
+        crate::lock(&f.backend.inner.state).backend,
+        BackendState::Draining(_)
+    ));
+    assert!(f.backend.inner.backend().is_err());
+    let saved = read_record(
+        &open(&f.backend.inner.management_root).unwrap().unwrap(),
+        operation,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(saved.status.operation_id, operation);
+    assert!(saved.status.result.is_none());
+    drop(held);
+    let completed: ExitStatus = json_codec::from_value(resume(&f, &saved).unwrap()).unwrap();
+    assert_eq!(completed.state, ExitState::Completed);
+    assert_eq!(completed.operation_id, operation);
+    assert_eq!(f.backend.disk_status(&f.identity).unwrap().len(), 3);
+}
+
+#[test]
+fn final_voter_resume_revalidates_revocation_and_cold_open_never_probes_stopped_root() {
+    let f = fixture_with_metadata_members(1);
+    let held = f.backend.inner.addition_backend().unwrap();
+    let preview: ExitPreview = json_codec::from_value(
+        command(
+            &f,
+            "disk_exit_preview",
+            json!(request(&f, ExitAction::Deregister)),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    command(
+        &f,
+        "disk_exit_commit",
+        json!(ExitCommit {
+            preview: preview.clone()
+        }),
+    )
+    .unwrap_err();
+    let directory = open(&f.backend.inner.management_root).unwrap().unwrap();
+    let mut saved = read_record(&directory, preview.request.operation_id)
+        .unwrap()
+        .unwrap();
+    crate::lock(&f.auth).logout(&f.token).unwrap();
+    drop(held);
+    assert_eq!(
+        resume(&f, &saved).unwrap_err().code,
+        ErrorCode::Unauthorized
+    );
+    let login = crate::lock(&f.auth)
+        .login("admin", "lifecycle-test-password")
+        .unwrap();
+    let identity = crate::lock(&f.auth).authenticate(&login.token).unwrap();
+    let completed: ExitStatus = json_codec::from_value(
+        f.backend
+            .storage_exit(
+                "disk_exit_resume",
+                json!(ExitResume {
+                    operation_id: preview.request.operation_id
+                }),
+                &identity,
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(completed.state, ExitState::Completed);
+    // Model a crash before the HTTP archive binding/receipt update became durable.
+    saved.archive = None;
+    save(&directory, &saved).unwrap();
+    crate::lock(&f.backend.inner.state).backend = BackendState::Unopened;
+    let root = &f.original.disks[0].root;
+    fs::rename(root, root.with_extension("retained")).unwrap();
+    fs::write(
+        root,
+        b"not a storage directory; terminal startup must not inspect it",
+    )
+    .unwrap();
+    assert!(f.backend.inner.recover_terminal().unwrap());
+    let status: ExitStatusResponse = json_codec::from_value(
+        f.backend
+            .storage_exit(
+                "disk_exit_status",
+                json!({"operation_id":saved.status.operation_id}),
+                &identity,
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status.operation.unwrap().state, ExitState::Completed);
+    assert_eq!(
+        fs::read(root).unwrap(),
+        b"not a storage directory; terminal startup must not inspect it"
+    );
+    assert_eq!(
+        f.backend.disk_status(&f.identity).unwrap_err().code,
+        ErrorCode::Unauthorized
     );
 }

@@ -24,7 +24,7 @@ mod integrity_scrub;
 mod operations;
 mod read_projection;
 mod storage_addition;
-mod storage_lifecycle;
+pub(crate) mod storage_lifecycle;
 mod wire;
 use wire::{current_entry_source, field};
 pub(crate) use wire::{error, error_response};
@@ -64,6 +64,7 @@ fn history_index_status(health: storage_engine::IndexHealth) -> crate::HistoryIn
 
 pub struct EngineBackend {
     engine: Mutex<AdmissionEngine>,
+    terminal_exit: Mutex<Option<storage_engine::TerminalDiskExit>>,
     #[cfg(test)]
     commit_preparation_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
     #[cfg(test)]
@@ -74,6 +75,7 @@ impl EngineBackend {
         report_recovery_warnings(&mut engine);
         Self {
             engine: Mutex::new(AdmissionEngine::new(engine)),
+            terminal_exit: Mutex::new(None),
             #[cfg(test)]
             commit_preparation_hook: Mutex::new(None),
             #[cfg(test)]
@@ -223,7 +225,7 @@ fn repository_in_state<'a>(
         )
     })
 }
-fn capture_event_page<'a>(
+pub(crate) fn capture_event_page<'a>(
     events: impl Iterator<Item = &'a storage_contract::Event>,
     published: u64,
     after: u64,
@@ -245,7 +247,7 @@ fn capture_event_page<'a>(
 fn repo_for_history<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, ApiError> {
     repo_for_history_in_state(engine.state(), id)
 }
-fn repo_for_history_in_state<'a>(
+pub(crate) fn repo_for_history_in_state<'a>(
     state: &'a storage_contract::State,
     id: &str,
 ) -> Result<&'a Repository, ApiError> {

@@ -58,8 +58,8 @@ fn reason_label(reason: DiskHealthUnavailable) -> String {
             "This device does not support the read-only health query.",
         ),
         DiskHealthUnavailable::ToolMissing => t(
-            "服务器未安装可用的 smartctl，无法读取 SMART。",
-            "No usable smartctl is installed on the server; SMART is unavailable.",
+            "服务器缺少此设备所需的查询支持，无法读取 SMART。",
+            "Required device-query support is unavailable on the server; SMART could not be read.",
         ),
         DiskHealthUnavailable::PermissionDenied => t(
             "服务没有读取设备健康信息的权限；不会自动提升权限。",
@@ -145,7 +145,7 @@ pub(super) fn presentation(health: &DiskHealth) -> Presentation {
             },
             fields: vec![
                 (t("检测设备", "Queried device"), device_path.clone()),
-                (t("来源", "Source"), "smartctl / SMART".into()),
+                (t("来源", "Source"), t("设备 SMART", "Device SMART")),
                 (
                     t("采样时间（UTC）", "Observed at (UTC)"),
                     utc_label(*observed_at_unix_ms),

@@ -141,6 +141,14 @@ impl WriterLocks {
         Ok(FileIdentity::from_fd(&*self.system)?)
     }
 
+    /// Management retains the pool writer, not any disk writer or I/O grant.
+    pub(crate) fn system_only(&self) -> Self {
+        Self {
+            system: Arc::clone(&self.system),
+            disks: BTreeMap::new(),
+        }
+    }
+
     pub(crate) fn retain(&self) -> Result<Self> {
         let _activity = self.activity()?;
         Ok(self.clone())

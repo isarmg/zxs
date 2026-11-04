@@ -16,6 +16,29 @@ impl EngineBackend {
         Ok(engine.config().clone())
     }
 
+    /// Current lifecycle projection only. Historical stopped paths are never
+    /// opened merely to check whether a fresh selection overlaps them.
+    pub(crate) fn addition_directory_scope(
+        &self,
+        identity: &Identity,
+    ) -> Result<(storage_contract::Config, Vec<std::path::PathBuf>), ApiError> {
+        let engine = crate::lock(&self.engine);
+        current_protected_identity(&engine, identity)?;
+        let enabled: std::collections::BTreeSet<_> = engine
+            .registered_disks()
+            .filter(|disk| disk.registration_mode == storage_engine::RegistrationMode::Enabled)
+            .map(|disk| disk.disk_id)
+            .collect();
+        let stopped = engine
+            .config()
+            .disks
+            .iter()
+            .filter(|disk| !enabled.contains(disk.disk_id.as_str()))
+            .map(|disk| disk.root.clone())
+            .collect();
+        Ok((engine.config().clone(), stopped))
+    }
+
     /// Metadata-only permanent receipt lookup. A pending Candidate is not success.
     pub(crate) fn storage_addition_result(
         &self,
@@ -219,12 +242,16 @@ fn published_result(
     if record.result().commit_state != storage_contract::CommitState::Published {
         return Ok(None);
     }
-    exact_result(
-        record.into_result(),
-        intent.status.operation_id,
-        intent.archive.as_ref(),
-    )
-    .map(Some)
+    if intent.status.preview.authority.is_terminal() {
+        crate::management::terminal_resume::exact_result(record.into_result(), intent).map(Some)
+    } else {
+        exact_result(
+            record.into_result(),
+            intent.status.operation_id,
+            intent.archive.as_ref(),
+        )
+        .map(Some)
+    }
 }
 
 fn exact_result(

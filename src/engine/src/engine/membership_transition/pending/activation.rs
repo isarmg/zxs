@@ -75,7 +75,15 @@ impl Generation {
     }
     fn result(&self) -> Result<OperationResult> {
         let effective = self.portable.effective_config()?;
-        let mut outcome = json_codec::json!({"generation": self.hash, "membership_epoch": self.membership_epoch().to_string(), "metadata_members": effective.metadata_members().len(), "topology_generation": self.base.topology_generation.checked_add(1).ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "topology generation exhausted"))?.to_string()});
+        let topology_steps = if self.portable.terminal_resume_core().is_some() {
+            2
+        } else {
+            1
+        };
+        let mut outcome = json_codec::json!({"generation": self.hash, "membership_epoch": self.membership_epoch().to_string(), "metadata_members": effective.metadata_members().len(), "topology_generation": self.base.topology_generation.checked_add(topology_steps).ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "topology generation exhausted"))?.to_string()});
+        if let Some(core) = self.portable.terminal_resume_core() {
+            outcome["terminal_authority"] = core.terminal().hash()?.into();
+        }
         if let Some(effect) = &self.intent.effect {
             outcome["disk_id"] = effect.disk_id.clone().into();
             outcome["slot_id"] = effect.slot_id.clone().into();
@@ -93,6 +101,9 @@ impl Generation {
                 Some(MembershipExitAction::PlannedOffline) => "disk-planned-offline",
                 Some(MembershipExitAction::Deregister) => "disk-deregister",
                 None if self.portable.is_abort() => "membership-add-cancelled",
+                None if self.portable.terminal_resume_core().is_some() => {
+                    "terminal-metadata-resume"
+                }
                 None => "membership-add",
             }
             .into(),
@@ -101,14 +112,21 @@ impl Generation {
             branch_id: None,
             commit_state: storage_contract::CommitState::Published,
             protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
-            current_health: storage_contract::CurrentHealth::Healthy,
+            current_health: if self.portable.terminal_resume_core().is_some() {
+                storage_contract::CurrentHealth::Unknown
+            } else {
+                storage_contract::CurrentHealth::Healthy
+            },
             request_digest: object_hash(INTENT_KIND, &self.intent)?,
             sequence: self.first_sequence()?,
             result: outcome,
         })
     }
     fn next_state(&self) -> Result<(State, OperationResult)> {
-        let mut next = (*self.base).clone();
+        let mut next = match self.portable.terminal_resume_core() {
+            Some(core) => (*core.management_state(&self.base)?).clone(),
+            None => (*self.base).clone(),
+        };
         let result = self.result()?;
         next.sequence = result.sequence;
         next.topology_generation = next
@@ -139,7 +157,7 @@ impl Generation {
                 &member_directory(disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY),
             )?,
             &self.portable.archive_hash()?,
-            &transition,
+            &self.portable.archive_transition()?,
             observe,
             maximum_objects,
         )
@@ -180,6 +198,8 @@ mod cancellation;
 mod local;
 mod publication;
 mod recovery;
+pub(in crate::engine) mod root_extension;
+pub(in crate::engine) mod terminal_resume;
 pub(crate) use local::verify_local_membership;
 pub(crate) use publication::predecessor_seal_matches;
 pub(crate) use recovery::{

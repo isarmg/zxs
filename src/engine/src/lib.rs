@@ -15,6 +15,10 @@ mod container_storage;
 mod degraded_recovery;
 mod disk;
 mod engine;
+pub use engine::{
+    TerminalMetadataResume, TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
+    TerminalMetadataResumeStatus,
+};
 mod file_stamp;
 mod historical_save;
 pub use engine::{
@@ -24,9 +28,10 @@ pub use engine::{
     ImpactPageSize, NamespaceDeregistrationPreview, NamespaceEntries, NamespaceOccurrenceImpact,
     NamespaceOccurrenceScan, NamespaceSnapshot, NamespaceSnapshotWitness, OccurrenceVisibility,
     PreparedDiskRegistry, RegisteredDisk, RegisteredHolders, RegistrationEffect, RegistrationMode,
-    RegistryExitEffect, RegistryExitRequest, TargetPlacementRole, VerifiedDiskRegistry,
-    VerifiedRegistryCandidate, VerifiedRegistryPublication, VersionDeregistrationImpact,
-    VersionImpactScan,
+    RegistryExitEffect, RegistryExitRequest, TargetPlacementRole, TerminalDiskExit,
+    TerminalManagement, TerminalManagementStatus, TerminalRegistrationState, TerminalRegistry,
+    VerifiedDiskRegistry, VerifiedRegistryCandidate, VerifiedRegistryPublication,
+    VersionDeregistrationImpact, VersionImpactScan,
 };
 pub use engine::{
     DirectoryHistoryRead, InitialActivationProbeGuard, PreparedWorkspaceCommit,

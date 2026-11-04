@@ -456,7 +456,7 @@ fn membership_joint_exit_target_preserves_exact_topology_and_requires_typed_effe
 }
 
 #[test]
-fn membership_joint_exit_last_voter_gap_does_not_write_a_fence() {
+fn membership_joint_exit_terminal_without_published_source_does_not_write_a_fence() {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([temp.path().join("data")]).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
@@ -470,7 +470,7 @@ fn membership_joint_exit_last_voter_gap_does_not_write_a_fence() {
         )
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::RecoveryRequired);
-    assert!(error.to_string().contains("terminal pool authority"));
+    assert!(error.to_string().contains("authenticated published source"));
     assert!(engine.membership_fence.is_none());
     assert!(!engine.is_read_only());
     assert_eq!(files(temp.path()), before);

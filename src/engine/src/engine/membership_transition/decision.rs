@@ -38,6 +38,10 @@ enum Choice {
         core_hash: String,
         acceptance_hash: String,
     },
+    TerminalResume {
+        core_hash: String,
+        acceptance_hash: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -61,6 +65,10 @@ impl DecisionRecord {
                 acceptance_hash,
             } => (proposal_hash, acceptance_hash),
             Choice::Abort {
+                core_hash,
+                acceptance_hash,
+            }
+            | Choice::TerminalResume {
                 core_hash,
                 acceptance_hash,
             } => (core_hash, acceptance_hash),
@@ -95,6 +103,22 @@ impl DecisionReceipt {
             return Err(Error::new(
                 ErrorCode::LogFork,
                 "joint decision evidence differs",
+            ));
+        }
+        Ok(())
+    }
+    pub(super) fn verify_terminal_resume(
+        &self,
+        transition: &str,
+        identity: &MemberIdentity,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<()> {
+        let expected = terminal_resume_record(transition, identity, core, acceptance)?;
+        if self.record != expected || self.record_hash != object_hash(DECISION_KIND, &expected)? {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "terminal resume decision evidence differs",
             ));
         }
         Ok(())
@@ -365,6 +389,28 @@ impl DecisionStore {
             fault,
         )
     }
+    /// The same immutable decision slot and synchronization implementation, but
+    /// an explicitly disjoint choice. Joint/Abort witnesses cannot be relabelled.
+    pub(super) fn terminal_resume_receipt(
+        &self,
+        core: &str,
+        acceptance: &str,
+        install: bool,
+    ) -> Result<DecisionReceipt> {
+        let record = terminal_resume_record(
+            &self.binding.transition_hash,
+            &self.binding.identity,
+            core,
+            acceptance,
+        )?;
+        self.select(
+            &record,
+            install,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
+    }
+
     /// Read every available old slot before the first new choice. An impossible
     /// Abort quorum must not consume remaining slots and prevent a future Joint.
     pub(super) fn can_choose_abort(&self, core: &str, acceptance: &str) -> Result<bool> {
@@ -722,3 +768,23 @@ fn injected_io() -> Error {
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/engine/membership_decision_tests.rs"]
 mod tests;
+
+fn terminal_resume_record(
+    transition: &str,
+    identity: &MemberIdentity,
+    core: &str,
+    acceptance: &str,
+) -> Result<DecisionRecord> {
+    validate_hash(transition)?;
+    validate_hash(core)?;
+    validate_hash(acceptance)?;
+    Ok(DecisionRecord {
+        format: DecisionFormat::Decision,
+        transition_hash: transition.to_owned(),
+        identity: identity.clone(),
+        choice: Choice::TerminalResume {
+            core_hash: core.to_owned(),
+            acceptance_hash: acceptance.to_owned(),
+        },
+    })
+}

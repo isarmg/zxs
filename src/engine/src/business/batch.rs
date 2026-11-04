@@ -1,10 +1,41 @@
 //! Atomic branch-scoped namespace edits. All baselines are checked before any
 //! publication; named branches retain their identities and gain subtree nodes.
 use super::*;
-use crate::DirectoryNamespaceView;
-use crate::engine::Prepared;
+use crate::engine::{CurrentBatchScope, Prepared};
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Initial-generation historical compositions and admitted current selections
+/// have different authority. A current selection never becomes an inactive
+/// historical edit merely because its selected tree differs from branch HEAD.
+enum BatchScope {
+    Initial(DirectoryBranch),
+    Current(CurrentBatchScope),
+}
+
+impl BatchScope {
+    fn branch(&self) -> &DirectoryBranch {
+        match self {
+            Self::Initial(branch) => branch,
+            Self::Current(scope) => scope.branch(),
+        }
+    }
+
+    fn is_active(&self, state: &State) -> bool {
+        let branch = self.branch();
+        if state.directory_selections.get(&branch.directory_id) != Some(&branch.directory_branch_id)
+        {
+            return false;
+        }
+        let selected = state.directory_tree_selections.get(&branch.directory_id);
+        match self {
+            Self::Initial(branch) => {
+                selected.unwrap_or(&branch.head_tree_id) == &branch.head_tree_id
+            }
+            Self::Current(scope) => selected.map(String::as_str) == Some(scope.selected_tree_id()),
+        }
+    }
+}
 
 struct CopiedFile {
     entry_id: String,
@@ -23,7 +54,7 @@ fn contains_key(scope: &str, path: &str) -> bool {
 /// unsupported combination before creating any nodes or preparing payloads.
 fn active_scopes(
     state: &State,
-    originals: &BTreeMap<String, DirectoryBranch>,
+    originals: &BTreeMap<String, BatchScope>,
     touched: &BTreeSet<String>,
     repository: &str,
     current: &[Entry],
@@ -31,16 +62,11 @@ fn active_scopes(
     let mut active = Vec::new();
     let mut paths = Vec::<String>::new();
     for id in touched {
-        let branch = &originals[id];
-        if state.directory_selections.get(&branch.directory_id) != Some(id)
-            || state
-                .directory_tree_selections
-                .get(&branch.directory_id)
-                .unwrap_or(&branch.head_tree_id)
-                != &branch.head_tree_id
-        {
+        let source = &originals[id];
+        if !source.is_active(state) {
             continue;
         }
+        let branch = source.branch();
         let path = if branch.directory_id == repository {
             String::new()
         } else {
@@ -72,65 +98,29 @@ fn active_scopes(
     }
     Ok(active)
 }
-/// Read projections carry no write authority. Bind each selected composition to
-/// the admitted owner before using its entries, and discard only path-local
-/// metadata absent from that projection. Immutable trees remain untouched.
-fn batch_scope(
-    engine: &Engine,
-    namespaces: &DirectoryNamespaceView,
-    branch: &DirectoryBranch,
-) -> Result<DirectoryBranch> {
-    let Some(current) = engine.admitted_current_namespaces()? else {
-        return Ok(branch.clone());
-    };
-    current.require_batch_scope(&engine.state, branch)?;
-    let mut scope = branch.clone();
-    scope.entries = namespaces.entries(&branch.directory_branch_id)?.to_vec();
-    let files = scope
-        .entries
-        .iter()
-        .filter(|entry| entry.kind == NamespaceEntryKind::File)
-        .map(|entry| entry.file_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let paths = scope
-        .entries
-        .iter()
-        .filter(|entry| entry.kind == NamespaceEntryKind::File)
-        .map(Entry::lookup_key)
-        .collect::<BTreeSet<_>>();
-    let directories = scope
-        .entries
-        .iter()
-        .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
-        .map(|entry| entry.entry_id.as_str())
-        .collect::<BTreeSet<_>>();
-    scope
-        .file_branches
-        .retain(|file, _| files.contains(file.as_str()));
-    scope
-        .inherited_files
-        .retain(|file, _| files.contains(file.as_str()));
-    scope
-        .file_contexts
-        .retain(|path, _| paths.contains(path.as_str()));
-    scope
-        .directory_refs
-        .retain(|id, _| directories.contains(id.as_str()));
-    Ok(scope)
+/// Only the registry admission boundary can construct a current batch source.
+/// Read-only DirectoryNamespaceView entries cannot confer this authority.
+fn batch_scope(engine: &Engine, branch: &DirectoryBranch) -> Result<BatchScope> {
+    match engine.admitted_current_namespaces()? {
+        Some(current) => current
+            .batch_scope(&engine.state, &branch.directory_branch_id)
+            .map(BatchScope::Current),
+        None => Ok(BatchScope::Initial(branch.clone())),
+    }
 }
 
 /// Batch sources refer to one original composition, not sequential intermediate
 /// paths. Assemble that final active view before freezing renamed directories.
 fn projected_active_entries(
     current: &[Entry],
-    originals: &BTreeMap<String, DirectoryBranch>,
+    originals: &BTreeMap<String, BatchScope>,
     projected: &BTreeMap<String, Vec<Entry>>,
     active: &[String],
     repository: &str,
 ) -> Result<Vec<Entry>> {
     let mut entries = current.to_vec();
     for id in active {
-        let branch = &originals[id];
+        let branch = originals[id].branch();
         let path = if branch.directory_id == repository {
             ""
         } else {
@@ -359,10 +349,9 @@ fn apply(
             "batch requires a bounded nonempty item list",
         ));
     }
-    // Both captures borrow this mutation's immutable engine input. The mutable
-    // draft below cannot turn an older Commit/DirectoryTree into current data.
+    // Capture the current owner from this mutation's immutable engine input.
+    // Each directory source is separately admitted before constructing drafts.
     let current = engine.namespace_snapshot(&repo.main_branch_id)?;
-    let namespaces = engine.directory_namespace_view()?;
     let current_parents = engine
         .admitted_current_namespaces()?
         .map(|_| current.entries());
@@ -413,7 +402,7 @@ fn apply(
                 ));
             }
             if !originals.contains_key(id) {
-                originals.insert(id.clone(), batch_scope(engine, &namespaces, branch)?);
+                originals.insert(id.clone(), batch_scope(engine, branch)?);
             }
         }
     }
@@ -427,14 +416,17 @@ fn apply(
                 "repository main branch missing",
             )
         })?;
-    let mut drafts = originals.clone();
+    let mut drafts = originals
+        .iter()
+        .map(|(id, source)| (id.clone(), source.branch().clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut touched = BTreeSet::new();
     let mut source_ranges = BTreeMap::<String, Vec<String>>::new();
     let mut mappings = BTreeSet::new();
     let mut planned = Vec::new();
     let mut deleted = Vec::<(String, DeletedPath)>::new();
     for (item, (source_path, target_path)) in request.items.iter().zip(&paths) {
-        let source_scope = &originals[&item.source.directory_branch_id];
+        let source_scope = originals[&item.source.directory_branch_id].branch();
         if !contains_key(
             &name_policy::path_key(&source_scope.path),
             source_path.key(),
@@ -518,7 +510,7 @@ fn apply(
         let Some((target, target_path)) = target_path else {
             continue;
         };
-        let target_original = &originals[&target.directory_branch_id];
+        let target_original = originals[&target.directory_branch_id].branch();
         if !contains_key(
             &name_policy::path_key(&target_original.path),
             target_path.key(),
@@ -560,8 +552,8 @@ fn apply(
         .map(|id| (id.clone(), drafts[id].entries.clone()))
         .collect::<BTreeMap<_, _>>();
     for (item, source, target, target_path) in &planned {
-        let source_scope = &originals[&item.source.directory_branch_id];
-        let target_scope = &originals[&target.directory_branch_id];
+        let source_scope = originals[&item.source.directory_branch_id].branch();
+        let target_scope = originals[&target.directory_branch_id].branch();
         let entries = projected
             .get_mut(&target.directory_branch_id)
             .expect("checked");
@@ -611,17 +603,7 @@ fn apply(
                 DirectoryBatchKind::Rename | DirectoryBatchKind::Move => {}
                 DirectoryBatchKind::Copy | DirectoryBatchKind::Delete => return None,
             }
-            if state.directory_selections.get(&source.directory_id)
-                != Some(&source.directory_branch_id)
-            {
-                return None;
-            }
-            if state
-                .directory_tree_selections
-                .get(&source.directory_id)
-                .unwrap_or(&source.head_tree_id)
-                != &source.head_tree_id
-            {
+            if !source.is_active(state) {
                 return None;
             }
             let entry = namespace::find_unordered_key(current.entries(), source_path.key())?;
@@ -673,7 +655,7 @@ fn apply(
     let mut directory_copies = BTreeMap::<(String, String, String), String>::new();
     let mut copy_receipts = Vec::new();
     for (item, source, target, target_path) in planned {
-        let source_scope = &originals[&item.source.directory_branch_id];
+        let source_scope = originals[&item.source.directory_branch_id].branch();
         let target_draft = drafts
             .get_mut(&target.directory_branch_id)
             .expect("checked");
@@ -1063,7 +1045,7 @@ fn apply(
     affected.extend(ancestors);
     let changes=affected.iter().map(|id| {let b=&state.directory_branches[id];json!({"directory_branch_id":id,"previous_tree_id":baseline_heads.get(id),"head_tree_id":b.head_tree_id,"path":b.path})}).collect::<Vec<_>>();
     let transfers=request.items.iter().zip(&paths).map(|(item,(source_path,_))| {
-        let source=&originals[&item.source.directory_branch_id];let e=namespace::find_unordered_key(&source.entries,source_path.key()).expect("source checked");
+        let source=originals[&item.source.directory_branch_id].branch();let e=namespace::find_unordered_key(&source.entries,source_path.key()).expect("source checked");
         json!({"source":item.source,"target":item.target,"file_id":e.file_id,"version_id":e.version_id,"physical_path":state.file_locations.get(&e.file_id)})
     }).collect::<Vec<_>>();
     Ok(

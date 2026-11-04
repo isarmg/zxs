@@ -16,6 +16,12 @@ impl Engine {
         let target = &fence.intent.target;
         if let Some(effect) = &fence.intent.effect {
             effect.validate(origin, target)?;
+            if effect.is_terminal() {
+                return Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "terminal management uses its independent system authority, not pending active members",
+                ));
+            }
             if !same_settings(origin, &self.config)
                 || origin.disks.len() != self.config.disks.len()
                 || origin.disks.iter().any(|old| {

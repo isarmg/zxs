@@ -15,7 +15,7 @@ fn at_key<'a>(entries: &'a [Entry], key: &str) -> Option<&'a Entry> {
         .map(|index| &entries[index])
 }
 
-fn descendants<'a>(entries: &'a [Entry], key: &str) -> &'a [Entry] {
+pub(super) fn descendants<'a>(entries: &'a [Entry], key: &str) -> &'a [Entry] {
     if key.is_empty() {
         return entries;
     }
@@ -26,7 +26,7 @@ fn descendants<'a>(entries: &'a [Entry], key: &str) -> &'a [Entry] {
     &entries[..end]
 }
 
-fn rebase(entries: &[Entry], from: &str, to: &str) -> Result<Vec<Entry>> {
+pub(super) fn rebase(entries: &[Entry], from: &str, to: &str) -> Result<Vec<Entry>> {
     let depth = if from.is_empty() {
         0
     } else {
@@ -68,7 +68,7 @@ fn current_path<'a>(owner: &'a [Entry], repository: &str, directory: &str) -> Re
         })
 }
 
-fn inherits(state: &State, branch: &str, ancestor: &str) -> bool {
+pub(super) fn inherits(state: &State, branch: &str, ancestor: &str) -> bool {
     let mut current = Some(branch);
     let mut seen = BTreeSet::new();
     while let Some(id) = current {
@@ -86,7 +86,7 @@ fn inherits(state: &State, branch: &str, ancestor: &str) -> bool {
     false
 }
 
-fn validate_context(
+pub(super) fn validate_context(
     state: &State,
     repository: &str,
     entry: &Entry,

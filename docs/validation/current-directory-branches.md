@@ -28,7 +28,7 @@ main 的新提交只替换准确目录 scope，保留当前投影中的兄弟。
 
 最多每个发生投影变化的引用节点新增一个 tree，没有正文复制、额外独立业务发布或删除既有 fsync 屏障。本次没有运行分配、吞吐或大规模基准，不能据此声称性能达标。
 
-历史 import/merge、显式旧 tree 写入和未闭合的跨 scope 操作仍按各自 gate 拒绝。当前 batch 若要求 selected tree 等于 branch head，会拒绝刚建立的独立 selection projection；应先完成该 batch 的独立来源证明，不能仅删除等式。本实现不扩大真实部署、凭据、权限或不可恢复删除范围。
+历史 import/merge、显式旧 tree 写入和未闭合的跨 scope 操作仍按各自 gate 拒绝。当前 batch 已有独立的 `CurrentBatchScope` 来源证明，可以继续编辑刚建立的 selection projection，并保留 branch HEAD 的 CAS 检查；准入与待验证回归见[当前批量编辑](current-namespace-batches.md)。本实现不扩大真实部署、凭据、权限或不可恢复删除范围。
 
 ## 待统一执行的测试
 

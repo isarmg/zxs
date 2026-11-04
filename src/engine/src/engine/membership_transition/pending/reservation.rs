@@ -1,6 +1,8 @@
 //! An atomic directory name is the first durable target binding. It contains the
 //! hash of the exact preparation, not a partially written JSON marker. Therefore
 //! a crash before the writer lock or pending seal never leaves anonymous debris.
+pub(in crate::engine::membership_transition) mod terminal_resume;
+
 use super::*;
 use std::collections::BTreeSet;
 

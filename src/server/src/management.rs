@@ -21,6 +21,9 @@ use std::{
 };
 
 mod disk_notes;
+mod terminal_backend;
+pub(crate) mod terminal_resume;
+use terminal_backend::BackendState;
 mod integrity_scrub;
 pub(crate) mod storage_addition;
 pub(crate) mod storage_configuration;
@@ -33,7 +36,7 @@ use startup_diagnostic::StartupDiagnostic;
 
 pub use crate::StorageState;
 struct State {
-    backend: Option<Arc<EngineBackend>>,
+    backend: BackendState,
     status: StorageState,
     admitted: bool,
     observed_at: std::time::Instant,
@@ -200,7 +203,7 @@ pub fn open_service_with_options(
             data_root: data_root.into(),
             management_root: management_root.into(),
             state: Mutex::new(State {
-                backend: None,
+                backend: BackendState::Unopened,
                 status: StorageState::Unavailable,
                 admitted: false,
                 observed_at: std::time::Instant::now(),
@@ -262,7 +265,19 @@ impl Inner {
     fn set(&self, backend: Option<Arc<EngineBackend>>, status: StorageState) {
         {
             let mut state = self.state.lock().expect("service state lock poisoned");
-            state.backend = backend;
+            if matches!(
+                state.backend,
+                BackendState::Draining(_)
+                    | BackendState::ChangingAuthority
+                    | BackendState::Terminal(_)
+                    | BackendState::MetadataResume(_)
+                    | BackendState::ResumeRecovery
+            ) {
+                // A recovery worker admitted before the exit cannot restore a
+                // dispatcher after terminal handover has frozen admission.
+                return;
+            }
+            state.backend = backend.map_or(BackendState::Unopened, BackendState::Engine);
             state.status = if self.stopping.load(Ordering::SeqCst) {
                 StorageState::Unavailable
             } else {
@@ -322,12 +337,23 @@ impl Inner {
         }
         if reopen {
             let mut state = crate::lock(&self.state);
+            if matches!(
+                state.backend,
+                BackendState::Draining(_)
+                    | BackendState::ChangingAuthority
+                    | BackendState::Terminal(_)
+                    | BackendState::MetadataResume(_)
+                    | BackendState::ResumeRecovery
+            ) {
+                self.recovering.store(false, Ordering::SeqCst);
+                return Ok(());
+            }
             state.status = state.effective_status();
             if state.status != StorageState::Ready {
                 state.admitted = false;
                 if state
                     .backend
-                    .as_ref()
+                    .engine()
                     .is_some_and(|backend| Arc::strong_count(backend) > 1)
                 {
                     self.recovering.store(false, Ordering::SeqCst);
@@ -338,7 +364,7 @@ impl Inner {
                     error.retryable = true;
                     return Err(error);
                 }
-                state.backend = None;
+                state.backend = BackendState::Unopened;
             }
         }
         let mut worker = crate::lock(&self.recovery_worker);
@@ -452,7 +478,10 @@ impl Inner {
         }
     }
     fn recover_once(self: &Arc<Self>) -> Result<(), ApiError> {
-        let existing = crate::lock(&self.state).backend.clone();
+        if self.recover_terminal()? {
+            return Ok(());
+        }
+        let existing = crate::lock(&self.state).backend.engine().cloned();
         let backend = if let Some(backend) = existing {
             backend
         } else {
@@ -538,6 +567,18 @@ impl Inner {
                     // coalescing worker touches the engine/data disks.
                     {
                         let mut state = crate::lock(&inner.state);
+                        if matches!(
+                            state.backend,
+                            BackendState::Draining(_)
+                                | BackendState::ChangingAuthority
+                                | BackendState::Terminal(_)
+                                | BackendState::MetadataResume(_)
+                                | BackendState::ResumeRecovery
+                        ) {
+                            // Current system credentials remain authoritative;
+                            // terminal historical evidence is never rewritten.
+                            return Ok(());
+                        }
                         state.admitted = false;
                         state.status = StorageState::RecoveryRequired;
                     }
@@ -582,14 +623,18 @@ impl Inner {
     fn backend(&self) -> Result<Arc<EngineBackend>, ApiError> {
         self.ensure_running()?;
         let state = crate::lock(&self.state);
-        state.backend.as_ref().filter(|_|state.admitted && state.status!=StorageState::Unavailable && state.observed_at.elapsed()<std::time::Duration::from_secs(15)).cloned().ok_or_else(||ApiError::new(::http::StatusCode::SERVICE_UNAVAILABLE,storage_contract::ErrorCode::StorageUnavailable,"storage is unavailable; inspect /api/system/storage and retry after correcting the fault"))
+        state.backend.active_engine().filter(|_|state.admitted && state.status!=StorageState::Unavailable && state.observed_at.elapsed()<std::time::Duration::from_secs(15)).cloned().ok_or_else(||ApiError::new(::http::StatusCode::SERVICE_UNAVAILABLE,storage_contract::ErrorCode::StorageUnavailable,"storage is unavailable; inspect /api/system/storage and retry after correcting the fault"))
     }
     /// Keep the engine lease inside one sample. The observer's idle interval
     /// must not look like an in-flight storage operation to recovery admission.
     fn observe_storage_once(&self) {
         let backend = {
             let state = crate::lock(&self.state);
-            state.backend.as_ref().filter(|_| state.admitted).cloned()
+            state
+                .backend
+                .active_engine()
+                .filter(|_| state.admitted)
+                .cloned()
         };
         let Some(backend) = backend.as_ref() else {
             *crate::lock(&self.disk_observation) = None;
@@ -601,7 +646,7 @@ impl Inner {
             if state.admitted
                 && state
                     .backend
-                    .as_ref()
+                    .engine()
                     .is_some_and(|current| Arc::ptr_eq(current, backend))
             {
                 state.observed_at = std::time::Instant::now();
@@ -657,6 +702,12 @@ impl Backend for ManagementBackend {
         identity: &Identity,
         operation_id: storage_contract::OperationId,
     ) -> Result<crate::OperationObservation, ApiError> {
+        if let Some(outcome) = self.inner.terminal_operation(identity, operation_id)? {
+            return Ok(crate::OperationObservation {
+                outcome,
+                health: None,
+            });
+        }
         self.inner.backend()?.operation(identity, operation_id)
     }
     fn operation_outcome(
@@ -664,6 +715,9 @@ impl Backend for ManagementBackend {
         identity: &Identity,
         operation_id: storage_contract::OperationId,
     ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        if let Some(outcome) = self.inner.terminal_operation(identity, operation_id)? {
+            return Ok(outcome);
+        }
         self.inner
             .backend()?
             .operation_outcome(identity, operation_id)
@@ -853,6 +907,9 @@ impl Backend for ManagementBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        if let Some(disks) = self.inner.terminal_disk_status(identity)? {
+            return Ok(disks);
+        }
         self.inner.backend()?.disk_status(identity)
     }
     fn disk_details(
@@ -860,6 +917,9 @@ impl Backend for ManagementBackend {
         identity: &Identity,
         slot: &str,
     ) -> Result<storage_contract::disk_details::DiskDetailsRecord, ApiError> {
+        if let Some(details) = self.terminal_disk_details(identity, slot)? {
+            return Ok(details);
+        }
         let backend = self.inner.backend()?;
         let (disk, directory, note) = {
             let _notes = crate::lock(&self.inner.disk_notes);
@@ -968,6 +1028,9 @@ impl Backend for ManagementBackend {
         slot: &str,
         request: storage_contract::disk_details::DiskNoteRequest,
     ) -> Result<storage_contract::disk_details::DiskNoteResponse, ApiError> {
+        if let Some(terminal) = self.inner.terminal(identity)? {
+            return self.update_terminal_disk_note(identity, &terminal, slot, request);
+        }
         let backend = self.inner.backend()?;
         // Queue before admission: a waiting mutation must see current credentials
         // and the registration that actually owns its persistent note filename.
@@ -1300,6 +1363,22 @@ impl Backend for ManagementBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        if let Some(terminal) = self.inner.terminal(identity)? {
+            return Ok(crate::TopologySnapshot {
+                generation: terminal.state().topology_generation,
+                slots: terminal
+                    .registered_disks()
+                    .map(|disk| crate::TopologySlot {
+                        slot_id: disk.slot_id.to_owned(),
+                        disk_id: disk.disk_id.to_owned(),
+                        level: disk.level,
+                        upstream_slot_id: disk.upstream_slot_id.map(str::to_owned),
+                        metadata_member: disk.metadata_member,
+                        binding_generation: disk.binding_generation,
+                    })
+                    .collect(),
+            });
+        }
         self.inner.backend()?.topology_snapshot(identity)
     }
     fn placement_snapshot(
@@ -1314,6 +1393,17 @@ impl Backend for ManagementBackend {
         identity: &crate::auth::Identity,
         after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
+        if let Some(terminal) = self.inner.terminal(identity)? {
+            let state = terminal.state();
+            let start = state
+                .events
+                .partition_point(|event| event.sequence <= after);
+            return crate::engine_backend::capture_event_page(
+                state.events[start..].iter(),
+                state.sequence,
+                after,
+            );
+        }
         self.inner.backend()?.event_page(identity, after)
     }
     fn activity_history(
@@ -1472,6 +1562,60 @@ impl Backend for ManagementBackend {
         } else if identity.is_none() && !matches!(action, "status" | "initialize") {
             return Err(ApiError::unauthorized());
         }
+        let _directory_lifecycle = if matches!(
+            action,
+            "storage_directories" | "inspect_storage_directory" | "set_discovery_root"
+        ) {
+            let gate = self.inner.storage_addition.try_lock().map_err(|_| {
+                ApiError::conflict(
+                    storage_contract::ErrorCode::StorageRetryRunning,
+                    "storage lifecycle selection is in progress",
+                )
+            })?;
+            // Cold terminal state is selected from SYSTEM before any directory
+            // browsing, including when its management owner has not opened yet.
+            if storage_engine::TerminalManagement::requires_management(&self.inner.data_root)
+                .map_err(crate::engine_backend::error)?
+                && crate::lock(&self.inner.state).backend.terminal().is_none()
+            {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::RecoveryRequired,
+                    "open the terminal management authority before selecting fresh directories",
+                ));
+            }
+            Some(gate)
+        } else {
+            None
+        };
+        let protected = {
+            let state = crate::lock(&self.inner.state);
+            matches!(
+                state.backend,
+                BackendState::Draining(_)
+                    | BackendState::ChangingAuthority
+                    | BackendState::Terminal(_)
+                    | BackendState::MetadataResume(_)
+                    | BackendState::ResumeRecovery
+            )
+        };
+        if protected
+            && (matches!(
+                action,
+                "recovery_status"
+                    | "restore_system"
+                    | "offline_check"
+                    | "recovery_preview"
+                    | "recovery_commit"
+            ) || (matches!(
+                action,
+                "storage_directories" | "inspect_storage_directory" | "set_discovery_root"
+            ) && crate::lock(&self.inner.state).backend.terminal().is_none()))
+        {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "continue the original storage authority operation; stopped directories cannot be probed by setup",
+            ));
+        }
         let mut setup = SetupRecovery::new(
             self.inner.data_root.clone(),
             self.inner.management_root.clone(),
@@ -1492,6 +1636,21 @@ impl Backend for ManagementBackend {
         .with_workspace_limits(self.inner.retained_workspace_limits)?;
         if self.inner.allow_development_setup {
             setup = setup.allow_development_mode();
+        }
+        if _directory_lifecycle.is_some() {
+            let owner_available = {
+                let state = crate::lock(&self.inner.state);
+                state.backend.active_engine().is_some() || state.backend.terminal().is_some()
+            };
+            if !owner_available
+                && setup.management_status()
+                    != crate::setup_recovery::InstallationState::ManagementReady
+            {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::RecoveryRequired,
+                    "open the existing pool authority before browsing storage directories",
+                ));
+            }
         }
         let permit = bootstrap
             .map(|token| setup.authorize_bootstrap(token))
@@ -1539,7 +1698,11 @@ impl Backend for ManagementBackend {
             );
         }
         if action == "storage_status" {
-            identity.as_ref().ok_or_else(ApiError::unauthorized)?;
+            let identity = identity.as_ref().ok_or_else(ApiError::unauthorized)?;
+            if let Some(status) = self.inner.terminal_storage_status(identity)? {
+                return Ok(json_codec::to_value(status)
+                    .expect("invariant: terminal storage status serializes"));
+            }
             return Ok(json_codec::to_value(setup.storage_status())
                 .expect("invariant: storage activation status serialization succeeds"));
         }
@@ -1549,14 +1712,44 @@ impl Backend for ManagementBackend {
                 .expect("invariant: discovery settings serialize"));
         }
         if action == "set_discovery_root" {
-            let _addition = self.inner.storage_addition.try_lock().map_err(|_| {
-                ApiError::conflict(
-                    storage_contract::ErrorCode::StorageRetryRunning,
-                    "storage addition admission is running",
-                )
-            })?;
             let request: storage_contract::storage_directories::SetDiscoveryRootRequest =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            if let Some(terminal) = self
+                .inner
+                .terminal(identity.as_ref().ok_or_else(ApiError::unauthorized)?)?
+            {
+                return setup
+                    .set_terminal_discovery_root(
+                        identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                        request,
+                        &terminal,
+                        |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
+                    )
+                    .map(|value| {
+                        json_codec::to_value(value)
+                            .expect("invariant: discovery settings serialize")
+                    });
+            }
+            let backend = crate::lock(&self.inner.state)
+                .backend
+                .active_engine()
+                .cloned();
+            if let Some(backend) = backend {
+                let (_, stopped) = backend.addition_directory_scope(
+                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                )?;
+                return setup
+                    .set_active_discovery_root(
+                        identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                        request,
+                        &stopped,
+                        |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
+                    )
+                    .map(|value| {
+                        json_codec::to_value(value)
+                            .expect("invariant: discovery settings serialize")
+                    });
+            }
             return setup
                 .set_discovery_root(
                     identity.as_ref().ok_or_else(ApiError::unauthorized)?,
@@ -1576,6 +1769,44 @@ impl Backend for ManagementBackend {
             }
             let request: Request =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            if let Some(terminal) = self
+                .inner
+                .terminal(identity.as_ref().ok_or_else(ApiError::unauthorized)?)?
+            {
+                let stopped: Vec<_> = terminal
+                    .original_configuration()
+                    .disks
+                    .iter()
+                    .map(|disk| disk.root.clone())
+                    .collect();
+                return crate::storage_directories::browse_fresh_within(
+                    &setup.discovery_root()?.discovery_root,
+                    &request.path,
+                    &stopped,
+                )
+                .map_err(ApiError::from)
+                .map(|value| {
+                    json_codec::to_value(value).expect("invariant: directory listing serializes")
+                });
+            }
+            let backend = crate::lock(&self.inner.state)
+                .backend
+                .active_engine()
+                .cloned();
+            if let Some(backend) = backend {
+                let (_, stopped) = backend.addition_directory_scope(
+                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                )?;
+                return crate::storage_directories::browse_fresh_within(
+                    &setup.discovery_root()?.discovery_root,
+                    &request.path,
+                    &stopped,
+                )
+                .map_err(ApiError::from)
+                .map(|value| {
+                    json_codec::to_value(value).expect("invariant: directory listing serializes")
+                });
+            }
             return crate::storage_directories::browse_within(
                 &setup.discovery_root()?.discovery_root,
                 &request.path,
@@ -1593,19 +1824,52 @@ impl Backend for ManagementBackend {
                 self.inner.data_root.clone(),
                 self.inner.management_root.clone(),
             ];
-            let backend = { crate::lock(&self.inner.state).backend.clone() };
+            if let Some(terminal) = self
+                .inner
+                .terminal(identity.as_ref().ok_or_else(ApiError::unauthorized)?)?
+            {
+                let stopped: Vec<_> = terminal
+                    .original_configuration()
+                    .disks
+                    .iter()
+                    .map(|disk| disk.root.clone())
+                    .collect();
+                return crate::storage_directories::inspect_fresh_within(
+                    &setup.discovery_root()?.discovery_root,
+                    &request,
+                    &excluded,
+                    &stopped,
+                )
+                .map_err(ApiError::from)
+                .map(|value| {
+                    json_codec::to_value(value).expect("invariant: directory selection serializes")
+                });
+            }
+            let backend = crate::lock(&self.inner.state)
+                .backend
+                .active_engine()
+                .cloned();
             if let Some(backend) = backend {
+                let (config, stopped) = backend.addition_directory_scope(
+                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                )?;
                 excluded.extend(
-                    backend
-                        .addition_configuration(
-                            identity
-                                .as_ref()
-                                .expect("invariant: authenticated directory inspection"),
-                        )?
+                    config
                         .disks
                         .into_iter()
+                        .filter(|disk| !stopped.contains(&disk.root))
                         .map(|disk| disk.root),
                 );
+                return crate::storage_directories::inspect_fresh_within(
+                    &setup.discovery_root()?.discovery_root,
+                    &request,
+                    &excluded,
+                    &stopped,
+                )
+                .map_err(ApiError::from)
+                .map(|value| {
+                    json_codec::to_value(value).expect("invariant: directory selection serializes")
+                });
             }
             return crate::storage_directories::inspect_within(
                 &setup.discovery_root()?.discovery_root,
@@ -1641,6 +1905,19 @@ impl Backend for ManagementBackend {
                 })
                 .map(|_| json!({"initialized":true,"storage_pending":true}));
         }
+        if matches!(
+            crate::lock(&self.inner.state).backend,
+            BackendState::Draining(_)
+                | BackendState::ChangingAuthority
+                | BackendState::Terminal(_)
+                | BackendState::MetadataResume(_)
+                | BackendState::ResumeRecovery
+        ) {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "terminal management requires an authenticated metadata resume; initial setup and disk restore cannot reset it",
+            ));
+        }
         // Keep typed admission before lifecycle changes; later execution owns
         // these same DTOs, not a second decode of the original JSON.
         let command = SetupCommand::parse(action, input)?;
@@ -1660,7 +1937,7 @@ impl Backend for ManagementBackend {
         let lifecycle = RecoveryPermit(&self.inner.recovering);
         {
             let mut state = crate::lock(&self.inner.state);
-            if let Some(backend) = &state.backend {
+            if let Some(backend) = state.backend.engine() {
                 if state.effective_status() == StorageState::Ready {
                     return Err(ApiError::conflict(
                         storage_contract::ErrorCode::StorageActive,
@@ -1677,7 +1954,7 @@ impl Backend for ManagementBackend {
                     error.retryable = true;
                     return Err(error);
                 }
-                state.backend = None;
+                state.backend = BackendState::Unopened;
                 state.status = StorageState::RecoveryRequired;
             }
         }

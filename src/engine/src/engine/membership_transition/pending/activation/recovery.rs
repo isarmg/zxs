@@ -2,6 +2,7 @@
 use super::*;
 
 mod restricted;
+pub(super) use restricted::verify_prepared_add;
 pub(crate) use restricted::{discover_startup, discover_startup_in_store};
 
 pub(crate) fn latest_restore_config(
@@ -318,12 +319,7 @@ fn admit_discovered(
         let attempt = (|| {
             let root = DiskRoot::open(&disk.root)?;
             let path = member_directory(disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY);
-            read_generation_base(
-                root.private_child(&path)?,
-                &portable.archive_hash()?,
-                &transition,
-                &intent,
-            )
+            portable.read_archive_base(root.private_child(&path)?)
         })();
         match attempt {
             Ok(value) => {
@@ -402,11 +398,8 @@ pub(crate) fn restore_anchor(
         })?;
     // Only this explicitly supplied retained root is an I/O authority here.
     // The saved configuration's other addresses are never recovery probes.
-    let (state, history) = read_generation_base(
+    let (state, history) = portable.read_archive_base(
         root.private_child(&member_directory(disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY))?,
-        &portable.archive_hash()?,
-        &transition,
-        &intent,
     )?;
     portable.verify_registry_source(&state)?;
     let generation = Arc::new(Generation {
@@ -471,7 +464,10 @@ impl Engine {
                 let parent = handle
                     .root
                     .private_child(&member_directory(disk, &transition))?;
-                if generation.portable.is_abort() {
+                if let Some(core) = generation.portable.terminal_resume_core() {
+                    core.verify_member(&handle.root, disk)?;
+                    require_abort_journal(&handle.root, disk, &generation.hash)?;
+                } else if generation.portable.is_abort() {
                     generation
                         .portable
                         .verify_abort_member(&handle.root, disk)?;
@@ -505,11 +501,8 @@ impl Engine {
                 if generation.portable.exit_registry().is_some() {
                     require_abort_journal(&handle.root, disk, &generation.hash)?;
                 }
-                read_generation_base(
+                generation.portable.read_archive_base(
                     parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
-                    &generation.portable.archive_hash()?,
-                    &transition,
-                    &generation.intent,
                 )?;
 
                 Ok(())
@@ -667,7 +660,14 @@ impl Engine {
     /// Routine open remains read-only at this boundary and never adopts pending roots.
     pub fn resume_membership_activation(root: &Path) -> Result<Self> {
         let (root, projected) = Self::recovery_projection(root, None)?;
-        let (config, bootstrap) = discover_startup(&root, projected)?;
+        let extension = super::root_extension::prepare_resume(&root, &projected)?;
+        let (config, bootstrap) = match &extension {
+            Some(extension) => (extension.config(), None),
+            None => {
+                let (config, bootstrap) = discover_startup(&root, projected)?;
+                (config, Some(bootstrap))
+            }
+        };
         if config.generation().is_none() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -702,6 +702,9 @@ impl Engine {
             }
         }
         let mut engine = Self::prepare_recovery_resources(root, config, resources)?;
+        if let Some(extension) = extension {
+            extension.publish(&engine)?;
+        }
         drop(bootstrap);
         engine.admit_disk_exit_io_exclusion()?;
         engine.promote_generation_resources()?;

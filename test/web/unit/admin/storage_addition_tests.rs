@@ -3,6 +3,7 @@ use super::*;
 fn preview() -> AdditionPreview {
     let selection = super::super::tests::candidate("/mnt/disk/new");
     AdditionPreview {
+        authority: AdditionAuthority::ActiveMembership,
         request: AdditionRequest {
             operation_id: "op_00000000000000000000000000000001".parse().unwrap(),
             additions: vec![DirectoryAddition {
@@ -163,4 +164,54 @@ fn cancelling_and_uncertain_cancel_keep_the_original_operation_locked() {
         model.status.unwrap().continuation,
         AdditionContinuation::Cancel
     );
+}
+
+fn terminal_preview() -> AdditionPreview {
+    let mut preview = preview();
+    preview.authority = AdditionAuthority::TerminalManagement {
+        terminal_authority_hash: "d".repeat(64),
+        terminal_operation_id: "op_00000000000000000000000000000002".parse().unwrap(),
+    };
+    preview.request.additions[0].metadata_member = true;
+    preview
+}
+
+#[test]
+fn metadata_resume_keeps_old_history_count_and_requires_an_actual_fresh_group() {
+    let mut preview = terminal_preview();
+    assert!(validate_preview(&preview).is_ok());
+    preview.target_metadata_members = 0;
+    assert!(validate_preview(&preview).is_err());
+    preview.target_metadata_members = 1;
+    preview.request.additions[0].metadata_member = false;
+    assert!(validate_preview(&preview).is_err());
+    let value = json!(terminal_preview());
+    let mut missing = value;
+    missing.as_object_mut().unwrap().remove("authority");
+    assert!(decode::<AdditionPreview>(missing).is_err());
+}
+
+#[test]
+fn terminal_resume_hides_unimplemented_cancellation_and_rejects_ordinary_add_receipts() {
+    let mut pending = status(
+        AdditionState::RecoveryRequired,
+        AdditionPhase::JointDecision,
+    );
+    pending.preview = terminal_preview();
+    assert!(validate_status(&pending, None).is_ok());
+    let mut model = Model::default();
+    accept(&mut model, pending.clone());
+    assert!(!can_cancel(&model));
+    assert!(model.blocks_edit());
+    pending.continuation = AdditionContinuation::Cancel;
+    assert!(validate_status(&pending, None).is_err());
+    let mut complete = status(AdditionState::Completed, AdditionPhase::Completed);
+    complete.preview = terminal_preview();
+    assert!(validate_status(&complete, None).is_err());
+    let result = complete.result.as_mut().unwrap();
+    result.kind = "terminal-metadata-resume".into();
+    result.result = json!({"terminal_authority":"d".repeat(64),"metadata_members":1});
+    assert!(validate_status(&complete, None).is_ok());
+    complete.result.as_mut().unwrap().result["terminal_authority"] = "e".repeat(64).into();
+    assert!(validate_status(&complete, None).is_err());
 }

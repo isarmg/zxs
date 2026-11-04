@@ -8,9 +8,18 @@ pub enum MembershipExitAction {
     PlannedOffline,
     Deregister,
 }
+/// A terminal handoff preserves the old fixed membership as historical proof.
+/// It never constructs an active configuration with no metadata voters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "kebab-case")]
+pub(super) enum ExitAuthority {
+    RetainedMetadata,
+    TerminalManagement,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct ExitEffect {
+    pub(super) authority: ExitAuthority,
     pub(super) action: MembershipExitAction,
     pub(super) disk_id: String,
     pub(super) slot_id: String,
@@ -18,6 +27,9 @@ pub(super) struct ExitEffect {
     pub(super) binding_generation: u64,
 }
 impl ExitEffect {
+    pub(super) fn is_terminal(&self) -> bool {
+        self.authority == ExitAuthority::TerminalManagement
+    }
     pub(super) fn identity(&self, pool_id: &str) -> crate::DiskRegistrationIdentity {
         crate::DiskRegistrationIdentity {
             pool_id: pool_id.to_owned(),
@@ -52,9 +64,17 @@ impl ExitEffect {
                 "exit effect changes its binding or pool settings",
             ));
         }
+        if self.is_terminal()
+            && (original.metadata_members().len() != 1 || !affected.metadata_member)
+        {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "terminal management must retire the exact final metadata voter",
+            ));
+        }
         for old in &original.disks {
             let mut expected = old.clone();
-            if old.disk_id == self.disk_id {
+            if old.disk_id == self.disk_id && !self.is_terminal() {
                 expected.metadata_member = false;
             }
             if !target
@@ -126,17 +146,18 @@ impl Engine {
                 )
             })?;
         let effect = ExitEffect {
+            authority: if disk.metadata_member && self.config.metadata_members().len() == 1 {
+                ExitAuthority::TerminalManagement
+            } else {
+                ExitAuthority::RetainedMetadata
+            },
             action,
             disk_id: disk.disk_id.clone(),
             slot_id: disk.slot_id.clone(),
             binding_generation: disk.binding_generation,
         };
-        disk.metadata_member = false;
-        if !target.disks.iter().any(|disk| disk.metadata_member) {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "terminal pool authority is not implemented; no stop or fence was written",
-            ));
+        if !effect.is_terminal() {
+            disk.metadata_member = false;
         }
         Ok((ValidatedConfig::try_from(target)?, effect))
     }
@@ -166,16 +187,23 @@ impl Engine {
                 )
             })?;
         let effect = ExitEffect {
+            authority: if disk.metadata_member && self.config.metadata_members().len() == 1 {
+                ExitAuthority::TerminalManagement
+            } else {
+                ExitAuthority::RetainedMetadata
+            },
             action,
             disk_id: disk.disk_id.clone(),
             slot_id: disk.slot_id.clone(),
             binding_generation: disk.binding_generation,
         };
-        disk.metadata_member = false;
-        if !target.disks.iter().any(|disk| disk.metadata_member) {
+        if !effect.is_terminal() {
+            disk.metadata_member = false;
+        }
+        if effect.is_terminal() && self.snapshot.is_none() && self.membership_fence.is_none() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                "terminal pool authority is not implemented; no exit fence was written",
+                "terminal management requires an authenticated published source; no fence was written",
             ));
         }
         self.begin_membership_handoff_with_effect(

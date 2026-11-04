@@ -19,6 +19,8 @@ use std::collections::BTreeMap;
 
 pub(in crate::engine) mod continuation;
 pub(in crate::engine) mod occurrence;
+pub(in crate::engine) mod terminal;
+mod terminal_resume;
 
 const REGISTRY_KIND: &str = "disk-lifecycle-registry";
 
@@ -403,6 +405,16 @@ impl VerifiedDiskRegistry {
         encode_registry(self.successor_state(request)?)
     }
     fn successor_state(&self, request: RegistryExitRequest) -> Result<RegistryState> {
+        let next = self.exiting_state(request)?;
+        if next.voters.is_empty() {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "an active registry requires at least one metadata voter",
+            ));
+        }
+        Ok(next)
+    }
+    fn exiting_state(&self, request: RegistryExitRequest) -> Result<RegistryState> {
         if self.state.pending_exit.is_some() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -441,12 +453,6 @@ impl VerifiedDiskRegistry {
             }
         }
         next.voters.remove(&request.target.disk_id);
-        if next.voters.is_empty() {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "terminal registry authority is not implemented",
-            ));
-        }
         next.pending_exit = Some(request);
         Ok(next)
     }

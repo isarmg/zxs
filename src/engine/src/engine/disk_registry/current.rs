@@ -8,9 +8,11 @@
 use super::{DiskRegistryCommitment, Engine};
 mod admission;
 mod batch;
+pub(crate) use batch::CurrentBatchScope;
 mod directory_branches;
 mod directory_metadata;
 mod file_branches;
+mod history_merges;
 mod new_scope;
 mod relocation;
 mod workspace;
@@ -193,6 +195,7 @@ impl CurrentNamespaces {
             || kind == "file.branch.select"
             || kind == "file.default.set"
             || kind == "file.branches.merge"
+            || kind == "file.history.merge"
             || kind == "directory.scope.initialize"
             || kind == "directory.namespace.batch"
             || kind == "directory.branch.rename"
@@ -496,6 +499,7 @@ impl CurrentNamespaces {
                 .collect(),
             storage_contract::MapChanges::All => next.directory_branches.iter().collect(),
         };
+        let history_sources = self.history_merge_sources(previous, next)?;
         for &(id, branch) in &changed_branches {
             if previous
                 .branches
@@ -512,7 +516,10 @@ impl CurrentNamespaces {
                     "publication changes a namespace with no retained writable registration",
                 ));
             }
-            let source = self.new_file_branch_source(previous, next, branch, commit)?;
+            let source = match history_sources.get(id) {
+                Some(owner) => Some(*owner),
+                None => self.new_file_branch_source(previous, next, branch, commit)?,
+            };
             let selection_source =
                 self.directory_selection_source(previous, next, branch, commit)?;
             let validation_scope = selection_source
@@ -631,10 +638,10 @@ impl CurrentNamespaces {
                 if !view.known_entries.contains(&entry.entry_id) {
                     Arc::make_mut(&mut view.known_entries).insert(entry.entry_id.clone());
                 }
-                if entry.kind == NamespaceEntryKind::File {
-                    if !view.known_files.contains(&entry.file_id) {
-                        Arc::make_mut(&mut view.known_files).insert(entry.file_id.clone());
-                    }
+                if entry.kind == NamespaceEntryKind::File
+                    && !view.known_files.contains(&entry.file_id)
+                {
+                    Arc::make_mut(&mut view.known_files).insert(entry.file_id.clone());
                 }
             }
         }

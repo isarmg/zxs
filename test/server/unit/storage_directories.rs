@@ -360,3 +360,104 @@ fn discovery_contract_default_and_strict_settings_fields_are_shared() {
         .is_err()
     );
 }
+
+#[test]
+fn stopped_paths_are_excluded_before_directory_io_but_same_filesystem_siblings_work() {
+    let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let root = tmp.path().join("directories");
+    private(&root);
+    let stopped = root.join("stopped");
+    // A stopped root need not exist or be a directory to be excluded.
+    std::fs::write(&stopped, b"must not be inspected as a directory").unwrap();
+    let fresh = root.join("fresh");
+    private(&fresh);
+    let listing = browse_fresh_within(
+        root.to_str().unwrap(),
+        root.to_str().unwrap(),
+        std::slice::from_ref(&stopped),
+    )
+    .unwrap();
+    assert!(
+        !listing
+            .entries
+            .iter()
+            .any(|entry| entry.path == stopped.to_str().unwrap())
+    );
+    assert!(
+        listing
+            .entries
+            .iter()
+            .any(|entry| entry.path == fresh.to_str().unwrap())
+    );
+    assert!(matches!(
+        browse_fresh_within(
+            root.to_str().unwrap(),
+            stopped.to_str().unwrap(),
+            std::slice::from_ref(&stopped)
+        ),
+        Err(Error::Overlap(_))
+    ));
+    let selected = inspect_fresh_within(
+        root.to_str().unwrap(),
+        &request(&fresh),
+        &[],
+        std::slice::from_ref(&stopped),
+    )
+    .unwrap();
+    assert!(
+        revalidate_fresh_within(
+            root.to_str().unwrap(),
+            &selected,
+            &[],
+            std::slice::from_ref(&stopped)
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        std::fs::read(stopped).unwrap(),
+        b"must not be inspected as a directory"
+    );
+}
+
+#[test]
+fn historical_mount_alias_filter_is_path_specific_not_a_whole_filesystem_ban() {
+    let inventory = parse_mounts(
+        "1 0 8:1 / / rw - ext4 /dev/root rw\n2 1 8:1 /data/old /alias rw - ext4 /dev/root rw\n",
+    )
+    .unwrap();
+    let paths = vec![PathBuf::from("/data/old")];
+    let guard = StoppedRoots::new(&paths, &inventory).unwrap();
+    assert!(matches!(
+        guard.check(Path::new("/alias/child"), true),
+        Err(Error::Overlap(_))
+    ));
+    assert!(matches!(
+        guard.check(Path::new("/data"), true),
+        Err(Error::Overlap(_))
+    ));
+    assert!(guard.check(Path::new("/data"), false).is_ok());
+    assert!(guard.check(Path::new("/data/fresh"), true).is_ok());
+}
+
+#[cfg(feature = "core")]
+#[test]
+fn pending_fresh_resume_reopens_held_scope_despite_enrollment_ctime_change() {
+    let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let root = tmp.path().join("discovery");
+    private(&root);
+    let fresh = root.join("fresh");
+    private(&fresh);
+    let selected =
+        inspect_fresh_within(root.to_str().unwrap(), &request(&fresh), &[], &[]).unwrap();
+    std::fs::write(fresh.join("preparation"), b"retained control preparation").unwrap();
+    let held = reopen_fresh_addition(&selected, &[]).unwrap();
+    assert_eq!(
+        identity(&held).unwrap().0.inode,
+        selected.root_identity.inode
+    );
+    drop(held);
+    std::fs::rename(&root, tmp.path().join("old-discovery")).unwrap();
+    private(&root);
+    private(&fresh);
+    assert!(reopen_fresh_addition(&selected, &[]).is_err());
+}

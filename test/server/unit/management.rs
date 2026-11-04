@@ -290,7 +290,15 @@ async fn blocked_replication_never_blocks_login_and_queued_sessions_revalidate()
         .login("admin", "a-long-test-password")
         .unwrap();
     let stale = shared.lock().unwrap().authenticate(&session.token).unwrap();
-    let engine = backend.inner.state.lock().unwrap().backend.clone().unwrap();
+    let engine = backend
+        .inner
+        .state
+        .lock()
+        .unwrap()
+        .backend
+        .engine()
+        .cloned()
+        .unwrap();
     let (held_tx, held_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let held_engine = engine.clone();
@@ -704,7 +712,7 @@ fn stale_readiness_retry_waits_for_existing_engine_holders() {
     let (backend, _auth) = open_service(&data, &management).unwrap();
     {
         let mut state = backend.inner.state.lock().unwrap();
-        state.backend = Some(held.clone());
+        state.backend = BackendState::Engine(held.clone());
         state.status = super::StorageState::Ready;
         state.admitted = true;
         state.observed_at = std::time::Instant::now() - std::time::Duration::from_secs(16);
@@ -1350,7 +1358,7 @@ fn anonymous_account_initialization_cannot_drain_or_detach_an_existing_backend()
             *crate::lock(&backend.inner.auth) = Some(Arc::new(Mutex::new(auth)));
             {
                 let mut state = crate::lock(&backend.inner.state);
-                state.backend = Some(existing);
+                state.backend = BackendState::Engine(existing);
                 state.status = status;
                 state.admitted = true;
                 state.observed_at = std::time::Instant::now();
@@ -1372,7 +1380,7 @@ fn anonymous_account_initialization_cannot_drain_or_detach_an_existing_backend()
                 assert!(state.admitted, "{status:?}, held={held}");
                 assert_eq!(state.status, status);
                 assert!(Arc::ptr_eq(
-                    state.backend.as_ref().unwrap(),
+                    state.backend.engine().unwrap(),
                     &weak.upgrade().unwrap()
                 ));
             }

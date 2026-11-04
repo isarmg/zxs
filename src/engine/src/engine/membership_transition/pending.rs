@@ -14,6 +14,7 @@ pub(super) mod admission;
 mod data;
 mod joint;
 pub(in crate::engine) mod reservation;
+pub(super) mod terminal_resume;
 pub use joint::{MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote};
 pub(super) const CONTROL_ARCHIVE_DIRECTORY: &str = "control-archive";
 const ENROLLMENT_KIND: &str = "membership-pending-member";
@@ -69,6 +70,12 @@ pub(super) struct MemberIdentity {
     simulation: bool,
 }
 impl MemberIdentity {
+    pub(in crate::engine::membership_transition) fn physical_identity(&self) -> FileIdentity {
+        FileIdentity {
+            device: self.device,
+            inode: self.inode,
+        }
+    }
     pub(super) fn verify_physical_root(&self, root: &DiskRoot) -> Result<()> {
         let physical = admission::verify_named_root(root)?;
         if physical.device != self.device || physical.inode != self.inode {

@@ -33,7 +33,7 @@ fn create_store(root: &Path) -> crate::Result<BootstrapStore> {
     open_store(root)
 }
 
-fn observe<'a>(
+pub(in crate::engine) fn observe<'a>(
     config: &ValidatedConfig,
     handles: impl Iterator<Item = &'a Arc<DiskHandle>>,
 ) -> crate::Result<Vec<RootObservation>> {
@@ -373,10 +373,11 @@ impl Engine {
         }
         let observations = observe(config, handles.iter())?;
         let mut store = open_store(&self.root)?;
-        let previous = store.reload(&config.pool_id).map_err(management_error)?;
-        let locator = store
-            .append_roots(&previous, observations)
-            .map_err(management_error)?;
-        store.sync_current(&locator).map_err(management_error)
+        crate::engine::membership_transition::pending::activation::root_extension::synchronize(
+            self,
+            config,
+            observations,
+            &mut store,
+        )
     }
 }

@@ -545,6 +545,9 @@ pub(crate) struct RecoveredDiskIo {
     _domains: Vec<Arc<DiskIoGate>>,
 }
 impl RecoveredDiskIo {
+    pub(crate) fn admit_terminal(stop: &crate::engine::VerifiedTerminalStop) -> Result<Self> {
+        Self::admit_identity(stop.identity())
+    }
     pub(crate) fn admit(stop: &crate::engine::RecoveredDiskStop) -> Result<Self> {
         Self::admit_identity(stop.identity())
     }

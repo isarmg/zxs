@@ -289,7 +289,9 @@ fn membership_registry_workspace_overlap_actual_d3_preserves_target_and_cold_res
         .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
         .unwrap();
     let joint = fixture.engine.resume_membership_joint_decision().unwrap();
-    assert!(joint.certificate.is_some());
+    assert!(joint.joint_quorum_accepted());
+    assert!(joint.certificate_hash.is_some());
+    assert_eq!(joint.certificate_members.len(), joint.union_members);
     fixture.engine.activate_pending_disk_exit().unwrap();
     let detached = fixture._temp.path().join("untouched-detached");
     std::fs::rename(&target.root, &detached).unwrap();
@@ -308,7 +310,7 @@ fn membership_registry_workspace_overlap_actual_d3_preserves_target_and_cold_res
     let moved = entry(&fixture, "after-exit/b");
     let system = fixture._temp.path().join("system");
     drop(fixture.engine);
-    let mut engine = Engine::open(&system, RecoveryMode::CompletePending).unwrap();
+    let mut engine = Engine::open(&system).unwrap();
     assert_eq!(
         engine
             .namespace_tree(&fixture.repo.main_branch_id)

@@ -9,6 +9,8 @@ const RECORD_DOMAIN: &str = "bootstrap-locator";
 enum RecordFormat {
     #[serialization(rename = "restrictive-bootstrap-locator")]
     RestrictiveLocator,
+    #[serialization(rename = "terminal-bootstrap-locator")]
+    TerminalLocator,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum HeadFormat {
@@ -127,6 +129,34 @@ impl Record {
         previous: &LoadedLocator,
         observations: Vec<RootObservation>,
     ) -> Result<Option<Self>> {
+        if previous.record.is_terminal() {
+            return Err(BootstrapError::ManagementOnly(
+                "terminal locator expansion requires authenticated metadata resumption",
+            ));
+        }
+        Self::extend_roots(previous, observations)
+    }
+
+    /// Construction is private to bootstrap. Only the separately authenticated
+    /// terminal-resume store entry point may persist this transition.
+    pub(super) fn resume_terminal(
+        previous: &LoadedLocator,
+        observations: Vec<RootObservation>,
+    ) -> Result<Self> {
+        if !previous.record.is_terminal() {
+            return Err(BootstrapError::ManagementOnly(
+                "terminal root expansion has no terminal predecessor",
+            ));
+        }
+        Self::extend_roots(previous, observations)?.ok_or(BootstrapError::ManagementOnly(
+            "terminal resumption must add a fresh metadata group",
+        ))
+    }
+
+    fn extend_roots(
+        previous: &LoadedLocator,
+        observations: Vec<RootObservation>,
+    ) -> Result<Option<Self>> {
         let mut record = previous.record.clone();
         for observation in observations {
             if observation.pool_id != record.pool_id {
@@ -163,6 +193,7 @@ impl Record {
             return Ok(None);
         }
         record.roots.sort_by(|a, b| a.disk_id.cmp(&b.disk_id));
+        record.format = RecordFormat::RestrictiveLocator;
         record.retained = record
             .roots
             .iter()
@@ -190,7 +221,48 @@ impl Record {
         operation_id: OperationId,
         intent_digest: IntentDigest,
     ) -> Result<Self> {
+        Self::stop_with_format(
+            previous,
+            target,
+            operation_id,
+            intent_digest,
+            RecordFormat::RestrictiveLocator,
+        )
+    }
+
+    pub(super) fn terminal_stop(
+        previous: &LoadedLocator,
+        target: &DiskRegistrationIdentity,
+        operation_id: OperationId,
+        intent_digest: IntentDigest,
+    ) -> Result<Self> {
+        if previous.record.retained.as_slice() != [target.disk_id.clone()] {
+            return Err(BootstrapError::ManagementOnly(
+                "terminal stop is not the final retained voter",
+            ));
+        }
+        Self::stop_with_format(
+            previous,
+            target,
+            operation_id,
+            intent_digest,
+            RecordFormat::TerminalLocator,
+        )
+    }
+
+    fn stop_with_format(
+        previous: &LoadedLocator,
+        target: &DiskRegistrationIdentity,
+        operation_id: OperationId,
+        intent_digest: IntentDigest,
+        format: RecordFormat,
+    ) -> Result<Self> {
         let source = &previous.record;
+        if source.is_terminal() {
+            return Err(BootstrapError::ManagementOnly(
+                "terminal locator cannot accept an unrelated stop",
+            ));
+        }
         let root = source
             .roots
             .iter()
@@ -216,6 +288,7 @@ impl Record {
             ));
         }
         let mut record = source.clone();
+        record.format = format;
         record.generation =
             source
                 .generation
@@ -233,6 +306,9 @@ impl Record {
         record.stops.sort_by(|a, b| a.disk_id.cmp(&b.disk_id));
         record.validate()?;
         Ok(record)
+    }
+    pub(super) fn is_terminal(&self) -> bool {
+        self.format == RecordFormat::TerminalLocator
     }
     pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
         let record: Self = decode_canonical(bytes, MAX_RECORD_BYTES)?;
@@ -272,7 +348,8 @@ impl Record {
         if self.generation == 0
             || self.roots.is_empty()
             || self.roots.len() > MAX_ROOTS
-            || self.stops.len() >= self.roots.len()
+            || self.stops.len() > self.roots.len()
+            || (!self.is_terminal() && self.stops.len() == self.roots.len())
         {
             return Err(BootstrapError::ManagementOnly(
                 "locator counts or generation exceed bounds",
@@ -311,7 +388,10 @@ impl Record {
             })
             .map(|root| root.disk_id.clone())
             .collect();
-        if retained.is_empty() || retained != self.retained {
+        if retained != self.retained
+            || (self.is_terminal() && (!retained.is_empty() || self.stops.is_empty()))
+            || (!self.is_terminal() && retained.is_empty())
+        {
             return Err(BootstrapError::ManagementOnly(
                 "retained roots differ from monotonic stop set",
             ));
@@ -358,6 +438,9 @@ impl Record {
             && self.roots.len() >= older.record.roots.len()
             && self.stops == older.record.stops;
         if self.previous.as_ref() != Some(&older.head)
+            || (older.record.is_terminal()
+                && (self.is_terminal() || !updates_roots || self.retained.is_empty()))
+            || (self.is_terminal() && !adds_stop)
             || !preserves_roots
             || !(adds_stop || updates_roots)
             || !older

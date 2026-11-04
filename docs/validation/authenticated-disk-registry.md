@@ -1,4 +1,14 @@
-# 登记对象图与 Candidate 绑定：实验验证范围
+# 登记对象图与 Candidate 绑定：阶段验证记录
+
+## 2026-11-04 当前源码更新
+
+以下旧阶段记录保留其当时的验证边界，不代表当前产品状态。当前阶段与实际 CI 结果见仓库根交接文档。
+
+主线 `4e80fc4a` 的 quality 作业报告借用式 `WriteProjection` 及相关类型没有生产消费者。下一源码批删除这份已被替代的原型，并将 occurrence 测试改为消费真实 `VerifiedOccurrenceMask::prepare_current_namespaces`、`CurrentNamespaces` 的 namespace/draft/upload/workspace 准入方法。真实上传分配新身份及持久 workspace 回执继续由 `current_namespace_tests` 验证；没有为了消除警告添加空调用、放宽检查或测试专用生产实现。历史 Commit/DirectoryTree 不转换为当前可写 scope，原始字节保持。
+
+本次只做源码修改及格式整理，尚未编译或执行这些修改后的测试；旧通过结果不能证明本次改动通过。
+
+## 早期基线记录
 
 状态：前一基线 `8b23ead0` 的 [GitHub 验证 41832402178](https://github.com/isarmg/zxs/actions/runs/41832402178) 已通过，覆盖原 8 组 `membership_registry_` 用例。本批按最新删除语义去掉恢复备份字段并新增用例，尚未编译或执行测试；前一结果不覆盖本次更改。本机仅作源码编辑、定向格式整理和差异检查，运行验证交由专用 GitHub 验证分支。生命周期执行入口仍未完成。
 
@@ -24,7 +34,7 @@
 1. occurrence mask 的内部语义验证和投影现已实现，见下节；现有 `RegistryExitEffect` 的普通准备入口仍只核对摘要格式，不自动认证 mask，不会实际改变文件列表或可写索引。原子发布入口必须显式消费相同 source 上取得的 mask 证明。mask 不包含未来 intent/registry/authority/Publication，后置完成证据不得回填已哈希根。
 2. 尚无真正生命周期 authority 与规定 D3 snapshot 的联合认证、D3 活动切换或从磁盘恢复当前 registry head。可搬运对象图和 seal 绑定验证不能替代这些条件。
 3. registry 内 pending exit 能阻止在这份提议图上继续跨代，但它尚未安装进运行池的持久操作预约；不能宣称已阻止所有运行时 Add/Restore 越过未完成生命周期。
-4. 内部 `WriteProjection` 与 occurrence 证明尚未接入 workspace、merge/rebase、HTTP/SMB 等真实消费者；bootstrap 禁探测策略、全部长期读写与维护资源关闭及永久主操作结果仍须接线。计划下线和注销执行入口继续拒绝，HTTP/Web 不开放成功路径。删除不再有目标恢复文件阶段，移除该要求不代表剩余协议已经闭合。
+4. 当时的内部借用式投影与 occurrence 证明尚未接入 workspace、merge/rebase、HTTP/SMB 等真实消费者；bootstrap 禁探测策略、全部长期读写与维护资源关闭及永久主操作结果仍须接线。计划下线和注销执行入口继续拒绝，HTTP/Web 不开放成功路径。删除不再有目标恢复文件阶段，移除该要求不代表剩余协议已经闭合。
 5. 最后 voter 的退出仍缺终止权威。当前准备明确报未实现，不能把至少保留一个 voter 固化为最终产品限制。Disable 后重新启用和完成后的下一次 registry 过渡也不在本批；删除不承诺可通过恢复备份还原登记。
 
 ## 内部 occurrence 与可写基线
@@ -33,9 +43,9 @@
 
 - `FrozenDetachSource` 只从同一已准入 Engine、完整相等的 registry base 和准确目标 identity 建立。必须有已发布 snapshot；Engine 借用冻结内容表。`RegistrySource` 格式不变，snapshot 已承诺持久 `business_generation`，不另增重复字段。尚未提供已激活后继 registry 的 source 准入或恢复入口。
 - mask 使用现有 metadata-map 分页，绑定前驱 registry、source、目标 identity；分别枚举 BranchHead、DirectoryHead、Commit、DirectoryTree。每个 scope 固定 head、owner、原 entries 摘要；隐藏项以规范路径为键，值为含 entry/file/version 的完整 entry 摘要。同一 scope 允许同 entry/file 身份的不同路径 alias，不能按 entry_id 或 file_id 合并它们的不同 version/occurrence。验证每个对象后，从同一冻结 preview 重算完整预期图；遗漏 scope/隐藏项、追加共享项、改 source/head/identity 后重哈希仍拒绝。
-- `VerifiedOccurrenceMask::project` 只接受准确 Detach successor 的 predecessor/source/target/mask/view 绑定，返回私有字段的 `WriteProjection`。`entries()` 和 `lookup()` 使用同一保留项集合；只修改共享 b 的 entries 副本不会携带隐藏 a。上传身份选择没有旧 HEAD/pending 回退，同名重建取得新 entry/file 身份。draft 检查拒绝隐藏/外来 scope 的旧身份及目标独占版本，但不替代现有 namespace、发布、配额和授权验证。
+- 当时的 `VerifiedOccurrenceMask::project` 只接受准确 Detach successor 的 predecessor/source/target/mask/view 绑定，返回私有字段的 `WriteProjection`。`entries()` 和 `lookup()` 使用同一保留项集合；只修改共享 b 的 entries 副本不会携带隐藏 a。上传身份选择没有旧 HEAD/pending 回退，同名重建取得新 entry/file 身份。draft 检查拒绝隐藏/外来 scope 的旧身份及目标独占版本，但不替代现有 namespace、发布、配额和授权验证。
 - namespace owner 仍登记时保留空目录；owner 被移除时只保留共享内容和必要目录，不能取得写能力。历史 scope 只供投影检查，原 Commit/DirectoryTree 字节不改写。同一 scope 的共享 alias 可继续原身份并修改版本；原隐藏路径在本片 draft 合同中只接受新身份，即使旧身份仍由其它 alias 保留。携带旧身份 rename 到该隐藏路径，以及跨 scope 保留身份的 merge/rebase 导入，仍需后续明确的 relocation/import 准入，不能绕过本片的严格 draft 检查。
-- `WorkspaceProjection` 只能从当前可写 branch projection 取得新 workspace ID，私有绑定 registry root/view、mask、scope、head、principal 和 fencing token。旧 ID、错 scope/head/view 的 proof 拒绝。它不安装 workspace，也不提供持久化、恢复、真实准入或写路由能力。
+- 当时的 `WorkspaceProjection` 只能从当前可写 branch projection 取得新 workspace ID，私有绑定 registry root/view、mask、scope、head、principal 和 fencing token。旧 ID、错 scope/head/view 的 proof 拒绝。它不安装 workspace，也不提供持久化、恢复、真实准入或写路由能力。
 
 新增 10 组测试接线在 `engine::disk_registry::published::occurrence::tests`，名称统一以 `membership_registry_occurrence_` 开始，已有 `membership_` 过滤可以选中。涵盖混合目录、共享/独占与多版本多 scope、空目录及 owner 移除、同名新身份、旧 pending 身份、重哈希差量、所有必要页的缺失/损坏、330 个文件 occurrence 的分页、旧 workspace proof、外来 source、未知字段及原 State/历史/物理文件不变。缺失 pending version 的夹具是额外异常向量，不是声称正常 admitted snapshot 已允许这种状态。
 

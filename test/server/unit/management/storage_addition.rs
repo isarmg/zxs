@@ -211,7 +211,7 @@ fn durable_pending_intent_blocks_a_different_plan_and_survives_reopen() {
     let (preview, target, _) = f
         .backend
         .prepare_addition(
-            &backend,
+            Some(&backend),
             &f.identity,
             request,
             f.discovery.to_str().unwrap(),
@@ -222,6 +222,7 @@ fn durable_pending_intent_blocks_a_different_plan_and_survives_reopen() {
         .create_child(&EntryName::new(DIRECTORY).unwrap())
         .unwrap();
     let record = StoredAddition {
+        source: AdditionSource::ActiveMembership,
         format: Format::Addition,
         principal: f.identity.principal.clone(),
         target,
@@ -254,7 +255,7 @@ fn durable_pending_intent_blocks_a_different_plan_and_survives_reopen() {
     assert_eq!(observed.state, AdditionState::RecoveryRequired);
     assert_eq!(observed.operation_id, record.status.operation_id);
     drop(backend);
-    crate::lock(&f.backend.inner.state).backend = None;
+    crate::lock(&f.backend.inner.state).backend = BackendState::Unopened;
     let reopened = storage_engine::Engine::open(&f.data).unwrap();
     let backend = Arc::new(EngineBackend::new(reopened));
     backend
@@ -307,7 +308,7 @@ fn pending_at(f: &Fixture, phase: AdditionPhase) -> StoredAddition {
     let (preview, target, directories) = f
         .backend
         .prepare_addition(
-            &backend,
+            Some(&backend),
             &f.identity,
             request,
             f.discovery.to_str().unwrap(),
@@ -318,6 +319,7 @@ fn pending_at(f: &Fixture, phase: AdditionPhase) -> StoredAddition {
         .create_child(&EntryName::new(DIRECTORY).unwrap())
         .unwrap();
     let mut record = StoredAddition {
+        source: AdditionSource::ActiveMembership,
         format: Format::Addition,
         principal: f.identity.principal.clone(),
         target,
@@ -387,7 +389,7 @@ fn resume(
     )
 }
 fn reopen(f: &Fixture) {
-    crate::lock(&f.backend.inner.state).backend = None;
+    crate::lock(&f.backend.inner.state).backend = BackendState::Unopened;
     let engine = storage_engine::Engine::open(&f.data).unwrap();
     let backend = Arc::new(EngineBackend::new(engine));
     backend

@@ -50,10 +50,10 @@ fn immutable_existing_bytes_keep_collision_and_leaf_absence_semantics() {
         assert_eq!(fs::read(&path).unwrap(), b"original");
     }
     let absent_parent = temporary.path().join("absent");
-    let error = root
-        .open_optional_read_regular(&absent_parent.join("object"))
-        .unwrap_err();
-    assert!(matches!(error, Error::Filesystem(_)));
+    assert!(matches!(
+        root.open_optional_read_regular(&absent_parent.join("object")),
+        Err(Error::Filesystem(_))
+    ));
     assert!(
         root.open_optional_read_regular(&temporary.path().join("absent-leaf"))
             .unwrap()

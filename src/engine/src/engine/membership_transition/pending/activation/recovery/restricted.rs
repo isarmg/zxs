@@ -59,8 +59,12 @@ fn discover_startup_with_io(
     projected: ValidatedConfig,
     io: &mut impl RootIo,
 ) -> Result<(ValidatedConfig, BootstrapStore)> {
+    let terminal = super::super::terminal_resume::completed_selector(root)?;
     let store = open_store(root)?;
     let config = discover_startup_in_store_with_io(&store, projected, io)?;
+    if let Some(terminal) = terminal {
+        terminal.verify_selected(&config)?;
+    }
     Ok((config, store))
 }
 
@@ -354,11 +358,25 @@ fn verify_held_generation(
     portable: PortableAuthority,
     held: Vec<HeldCandidate>,
 ) -> Result<RestrictedGenerationEvidence> {
+    verify_held_generation_from(portable, held, GenerationEvidenceSource::Markers)
+}
+
+#[derive(Clone, Copy)]
+enum GenerationEvidenceSource {
+    Markers,
+    PreparedRootExtension,
+}
+
+fn verify_held_generation_from(
+    portable: PortableAuthority,
+    held: Vec<HeldCandidate>,
+    source: GenerationEvidenceSource,
+) -> Result<RestrictedGenerationEvidence> {
     let intent = portable.intent()?;
     let hash = portable.hash()?;
     let transition = object_hash(INTENT_KIND, &intent)?;
     let effective = portable.effective_config()?;
-    let joint = if portable.is_abort() {
+    let joint = if portable.is_abort() || portable.terminal_resume_core().is_some() {
         None
     } else {
         Some(portable.add_joint()?.verify()?)
@@ -383,7 +401,8 @@ fn verify_held_generation(
         let result = (|| {
             if member.slot_id != held.disk.slot_id
                 || member.binding_generation != held.disk.binding_generation
-                || held.authority_hash.as_deref() != Some(hash.as_str())
+                || (matches!(source, GenerationEvidenceSource::Markers)
+                    && held.authority_hash.as_deref() != Some(hash.as_str()))
             {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
@@ -393,19 +412,45 @@ fn verify_held_generation(
             // The authenticated member supplies identity/role, never its address.
             let mut disk = member.clone();
             disk.root = held.disk.root.clone();
-            let saved: ValidatedConfig = held.root.read_json_observed(
-                &disk.root.join("metadata/pool-membership/config.json"),
-                &mut |_| Ok(()),
-            )?;
-            portable
-                .genesis_config()?
-                .verify_saved_metadata_membership(&saved)?;
+            let saved_path = disk.root.join("metadata/pool-membership/config.json");
+            let saved = match source {
+                GenerationEvidenceSource::Markers => {
+                    Some(held.root.open_read_regular(&saved_path)?)
+                }
+                GenerationEvidenceSource::PreparedRootExtension => {
+                    held.root.open_optional_read_regular(&saved_path)?
+                }
+            };
+            if let Some(saved) = saved {
+                let saved: ValidatedConfig = decode_strict(&read_file_bytes(saved, MAX_METADATA)?)?;
+                portable
+                    .genesis_config()?
+                    .verify_saved_metadata_membership(&saved)?;
+            } else if intent
+                .origin
+                .config()
+                .disks
+                .iter()
+                .any(|old| old.disk_id == disk.disk_id)
+            {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "retained Add member lost its saved genesis membership",
+                ));
+            }
+            // Before promotion a newly enrolled root has only its pending seal,
+            // certificate and complete archive. Those are verified below; a
+            // missing derived config must not count as a verified vote itself.
             let parent = held
                 .root
                 .private_child(&member_directory(&disk, &transition))?;
             match &joint {
                 None => {
-                    portable.verify_abort_member(&held.root, &disk)?;
+                    if let Some(core) = portable.terminal_resume_core() {
+                        core.verify_member(&held.root, &disk)?;
+                    } else {
+                        portable.verify_abort_member(&held.root, &disk)?;
+                    }
                     require_abort_journal(&held.root, &disk, &hash)?;
                 }
                 Some(verified) => {
@@ -439,11 +484,8 @@ fn verify_held_generation(
                     )?;
                 }
             }
-            let (state, history) = read_generation_base(
+            let (state, history) = portable.read_archive_base(
                 parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
-                &portable.archive_hash()?,
-                &transition,
-                &intent,
             )?;
             portable.verify_registry_source(&state)?;
             if config.is_none() {
@@ -493,6 +535,101 @@ fn verify_held_generation(
     }
     evidence.config = config.expect("invariant: fixed majority verified a generation archive");
     Ok(evidence)
+}
+
+/// Only the exact SYSTEM Add plan may select this authority before its first
+/// marker. Every vote still requires this root's own certificate, physical
+/// enrollment and complete archive. The locator supplies no vote or authority.
+pub(in crate::engine::membership_transition::pending::activation) fn verify_prepared_add(
+    locator: &LoadedLocator,
+    portable: PortableAuthority,
+    projected: &ValidatedConfig,
+) -> Result<ValidatedConfig> {
+    verify_prepared_add_with_io(locator, portable, projected, &mut NamedRootIo)
+}
+
+fn verify_prepared_add_with_io(
+    locator: &LoadedLocator,
+    portable: PortableAuthority,
+    projected: &ValidatedConfig,
+    io: &mut impl RootIo,
+) -> Result<ValidatedConfig> {
+    portable.add_joint()?.verify()?;
+    let intent = portable.intent()?;
+    if portable.is_abort()
+        || portable.is_exit()
+        || !portable.matches_metadata_projection(projected)?
+    {
+        return Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "prepared bootstrap extension is not this pool's pure Add authority",
+        ));
+    }
+    for stop in locator.stop_hints() {
+        portable.verify_bootstrap_stop(
+            &crate::DiskRegistrationIdentity {
+                pool_id: stop.pool_id.into(),
+                disk_id: stop.disk_id.into(),
+                slot_id: stop.slot_id.into(),
+                binding_generation: stop.binding_generation,
+            },
+            stop.operation_id,
+            &stop.intent_digest.to_string(),
+        )?;
+    }
+    let effective = portable.effective_config()?;
+    let bounded = locator.restrict_config(effective.clone(), &effective)?;
+    let hash = portable.hash()?;
+    let candidates = candidates(
+        locator.select(&bounded).map_err(management_error)?,
+        &bounded,
+    )?;
+    let mut held = Vec::with_capacity(candidates.len());
+    for ProbeCandidate { probe, disk } in candidates {
+        match io.stat(probe) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+            Ok(_) => (),
+        }
+        let root = io.open(probe)?;
+        if FileIdentity::from_fd(root.directory(root.path())?)? != probe.expected_identity() {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "prepared Add root differs from the exact extension observation",
+            ));
+        }
+        let disk = disk.ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "prepared Add probe is outside its authenticated target",
+            )
+        })?;
+        let marker = marker_path_at(&root, probe.path(), projected)?;
+        let authority_hash = marker.as_ref().map(PortableAuthority::hash).transpose()?;
+        if authority_hash
+            .as_deref()
+            .is_some_and(|marker| marker != hash && Some(marker) != intent.origin.predecessor())
+        {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "prepared Add root has an unrelated generation marker",
+            ));
+        }
+        held.push(HeldCandidate {
+            disk,
+            root,
+            authority_hash,
+        });
+    }
+    let evidence = verify_held_generation_from(
+        portable.clone(),
+        held,
+        GenerationEvidenceSource::PreparedRootExtension,
+    )?;
+    let config = locator.restrict_config(evidence.config, &effective)?;
+    portable
+        .restrict_io(config)?
+        .with_workspace_limits(Some(projected.effective_workspace_limits()))
 }
 
 fn verify_held_genesis(
@@ -581,3 +718,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../../../../../test/engine/unit/engine/membership_abort_recovery_tests.rs"]
 mod abort_tests;
+
+#[cfg(test)]
+#[path = "../../../../../../../../test/engine/unit/engine/membership_root_extension_tests.rs"]
+mod root_extension_tests;

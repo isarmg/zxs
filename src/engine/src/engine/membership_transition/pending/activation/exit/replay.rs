@@ -6,13 +6,13 @@ use crate::engine::membership_transition::archive::persistent::namespace_replay:
     VerifiedArchivePublication, replay_installed_publications,
 };
 
-struct NamespaceReplay {
+pub(in crate::engine::membership_transition) struct NamespaceReplay {
     state: Arc<State>,
     snapshot: Option<String>,
     view: Option<CurrentNamespaces>,
 }
 impl NamespaceReplay {
-    fn new() -> Self {
+    pub(in crate::engine::membership_transition) fn new() -> Self {
         Self {
             state: Arc::new(State {
                 topology_generation: 1,
@@ -22,7 +22,10 @@ impl NamespaceReplay {
             view: None,
         }
     }
-    fn advance(&mut self, publication: &VerifiedArchivePublication) -> Result<()> {
+    pub(in crate::engine::membership_transition) fn advance(
+        &mut self,
+        publication: &VerifiedArchivePublication,
+    ) -> Result<()> {
         let candidate = publication.candidate();
         if candidate.previous_snapshot != self.snapshot {
             return Err(Error::new(
@@ -57,9 +60,16 @@ impl NamespaceReplay {
         Ok(())
     }
     fn finish(self, generation: &Generation) -> Result<Option<CurrentNamespaces>> {
-        if self.snapshot != generation.snapshot()
+        self.finish_source(&generation.base, generation.snapshot().as_deref())
+    }
+    pub(in crate::engine::membership_transition) fn finish_source(
+        self,
+        source: &State,
+        snapshot: Option<&str>,
+    ) -> Result<Option<CurrentNamespaces>> {
+        if self.snapshot.as_deref() != snapshot
             || prepare_snapshot(&self.state, MAX_METADATA)?.hash
-                != prepare_snapshot(&generation.base, MAX_METADATA)?.hash
+                != prepare_snapshot(source, MAX_METADATA)?.hash
         {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,
@@ -136,7 +146,7 @@ impl Engine {
         replay_installed_publications(
             directory,
             &generation.portable.archive_hash()?,
-            &transition,
+            &generation.portable.archive_transition()?,
             |publication| replay.advance(publication),
         )?;
         replay.finish(generation)

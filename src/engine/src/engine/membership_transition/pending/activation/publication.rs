@@ -70,8 +70,31 @@ pub(in crate::engine::membership_transition) fn install_marker(
                 }
                 None => false,
             };
-        let seal = decode_seal(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
-        let current_seal = matches!(&seal.format, DiskSealFormat::MembershipGeneration { authority_hash } if authority_hash == &generation.hash);
+        let seal_bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+        let value: json_codec::Value = decode_strict(&seal_bytes)?;
+        let current_seal = if let Some(core) = generation.portable.terminal_resume_core()
+            && value.get("format").and_then(json_codec::Value::as_str) == Some("membership-pending")
+        {
+            let seal: PendingDiskSeal = json_codec::from_value(value)?;
+            let identity = FileIdentity::from_fd(root.directory(root.path())?)?;
+            if seal.identity
+                != admission::member_identity(&generation.intent.target, disk, identity)
+                || seal.transition_hash != object_hash(INTENT_KIND, &generation.intent)?
+                || seal.target_config_hash
+                    != object_hash("membership-target", &generation.intent.target)?
+                || seal.control_archive_root != generation.portable.archive_hash()?
+            {
+                return Err(Error::new(
+                    ErrorCode::DiskIdentityMismatch,
+                    "terminal pending seal differs from the exact activated group",
+                ));
+            }
+            core.verify_member(root, disk)?;
+            false
+        } else {
+            let seal = decode_seal(&seal_bytes)?;
+            matches!(&seal.format, DiskSealFormat::MembershipGeneration { authority_hash } if authority_hash == &generation.hash)
+        };
         let journal = directory.join("journal.bin");
         if root.open_optional_read_regular(&journal)?.is_none() {
             if current_marker || current_seal {
@@ -467,6 +490,10 @@ impl Engine {
             let parent = handle
                 .root
                 .private_child(&member_directory(disk, &transition))?;
+            if let Some(core) = generation.portable.terminal_resume_core() {
+                core.verify_member(&handle.root, disk)?;
+                continue;
+            }
             if generation.portable.is_abort() {
                 generation
                     .portable
@@ -533,7 +560,7 @@ impl Engine {
                     &handle.root,
                     disk,
                     &generation.portable.archive_hash()?,
-                    &generation.intent,
+                    &generation.portable.archive_intent()?,
                 )
                 .map_err(|error| {
                     let code = error.code();
@@ -604,6 +631,7 @@ impl Engine {
             let result = result.clone();
             self.restore_current_disk_exit()?;
             write_json(&self.root.join("config.json"), &self.config, true)?;
+            super::root_extension::complete(self)?;
             return Ok(result);
         }
         if self.disk_resources.handles().count() != self.config.io_disks().count()
@@ -642,6 +670,7 @@ impl Engine {
         #[cfg(feature = "fault-injection")]
         self.failpoint("before_membership_activation_projection")?;
         write_json(&self.root.join("config.json"), &self.config, true)?;
+        super::root_extension::complete(self)?;
         Ok(result)
     }
 }

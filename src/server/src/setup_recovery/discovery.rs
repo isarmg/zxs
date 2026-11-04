@@ -41,6 +41,49 @@ impl SetupRecovery {
         &self,
         identity: &Identity,
         request: SetDiscoveryRootRequest,
+        revalidate: impl FnMut(&Identity) -> Result<(), ApiError>,
+    ) -> Result<DiscoveryRootSettings, ApiError> {
+        self.set_discovery_root_with_authority(identity, request, None, &[], revalidate)
+    }
+
+    pub(crate) fn set_terminal_discovery_root(
+        &self,
+        identity: &Identity,
+        request: SetDiscoveryRootRequest,
+        terminal: &storage_engine::TerminalManagement,
+        revalidate: impl FnMut(&Identity) -> Result<(), ApiError>,
+    ) -> Result<DiscoveryRootSettings, ApiError> {
+        let stopped: Vec<_> = terminal
+            .original_configuration()
+            .disks
+            .iter()
+            .map(|disk| disk.root.clone())
+            .collect();
+        self.set_discovery_root_with_authority(
+            identity,
+            request,
+            Some(terminal),
+            &stopped,
+            revalidate,
+        )
+    }
+
+    pub(crate) fn set_active_discovery_root(
+        &self,
+        identity: &Identity,
+        request: SetDiscoveryRootRequest,
+        stopped: &[PathBuf],
+        revalidate: impl FnMut(&Identity) -> Result<(), ApiError>,
+    ) -> Result<DiscoveryRootSettings, ApiError> {
+        self.set_discovery_root_with_authority(identity, request, None, stopped, revalidate)
+    }
+
+    fn set_discovery_root_with_authority(
+        &self,
+        identity: &Identity,
+        request: SetDiscoveryRootRequest,
+        terminal: Option<&storage_engine::TerminalManagement>,
+        stopped: &[PathBuf],
         mut revalidate: impl FnMut(&Identity) -> Result<(), ApiError>,
     ) -> Result<DiscoveryRootSettings, ApiError> {
         revalidate(identity)?;
@@ -48,7 +91,9 @@ impl SetupRecovery {
         if !self.management_authority_present()? {
             return Err(ApiError::unauthorized());
         }
-        if activation::present(&self.data_root.join(activation::ACTIVATION_INTENT))? {
+        if terminal.is_none()
+            && activation::present(&self.data_root.join(activation::ACTIVATION_INTENT))?
+        {
             self.activation_admitted()?;
         }
         let current = self.discovery_root()?;
@@ -58,9 +103,10 @@ impl SetupRecovery {
                 "storage discovery settings changed; reload before saving",
             ));
         }
-        crate::storage_directories::validate_discovery_root(
+        crate::storage_directories::validate_fresh_discovery_root(
             &request.discovery_root,
             &[self.data_root.clone(), self.management_root.clone()],
+            stopped,
         )?;
         revalidate(identity)?;
         if current.discovery_root == request.discovery_root {

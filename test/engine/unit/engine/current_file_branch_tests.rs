@@ -375,10 +375,10 @@ fn disk_exit_current_file_create_select_default_merge_and_restart_preserve_histo
         canonical_json(&fixture.engine.state.versions).unwrap(),
         versions
     );
-    for (id, commit) in &old_commits {
+    for (id, commit) in old_commits.iter() {
         assert_eq!(fixture.engine.state.commits.get(id), Some(commit));
     }
-    for (id, tree) in &old_trees {
+    for (id, tree) in old_trees.iter() {
         assert_eq!(fixture.engine.state.directory_trees.get(id), Some(tree));
     }
     let mut bytes = Vec::new();
@@ -396,7 +396,7 @@ fn disk_exit_current_file_create_select_default_merge_and_restart_preserve_histo
     assert_eq!(files(&fixture.config.disks[0].root), target);
     let system = fixture.temp.path().join("system");
     drop(fixture.engine);
-    let mut engine = Engine::open(&system, RecoveryMode::CompletePending).unwrap();
+    let mut engine = Engine::open(&system).unwrap();
     assert_eq!(merge(&mut engine).unwrap(), result);
     assert!(
         engine
@@ -705,3 +705,9 @@ fn disk_exit_current_file_merge_rejects_unclosed_frozen_child_references() {
     assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
     assert_eq!(files(&fixture.config.disks[0].root), target);
 }
+
+#[path = "current_history_merge_tests.rs"]
+mod history_merge_tests;
+
+#[path = "current_selected_file_merge_tests.rs"]
+mod selected_merge_tests;
