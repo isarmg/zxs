@@ -100,6 +100,21 @@ for(const empty of [false,true])for(const phase of empty?['initial','refreshed',
     if(phase==='invalid-login'){f.status.attributes.role='alert';f.status.textContent='Enter your account name.';f.information.children=[f.status];f.status.parentElement=f.information;}
     assert.equal((await f.run()).valid,true,`${empty?'empty':'existing'} ${phase} six-row layout`);
 }
+// Reproduce the real error-only appearance leak. The panel-colored background
+// can look identical in a screenshot, but it is still an internal surface.
+f=fixture();f.phase='invalid-login';f.status.tagName='DIV';f.status.className='zxs-error zxs-row';
+f.status.attributes.role='alert';f.status.textContent='Enter your account name.';
+assert.equal((await f.run()).valid,true,'Unboxed ErrorState keeps the invalid-login gate passing');
+for(const change of [
+    e=>{e.style.backgroundColor='rgb(242, 242, 242)';},
+    e=>{e.style['--zxs-contour-extent']='18px';},
+    e=>{e.style.backgroundColor='rgb(242, 242, 242)';e.style['--zxs-contour-extent']='18px';},
+]) {
+    const previous={...f.status.style};change(f.status);const leaked=await f.run();
+    assert.equal(leaked.valid,false);assert.equal(leaked.noInternalBoxes,false,'Appearance leak must not be exempted for errors');
+    f.status.style=previous;
+}
+assert.equal((await f.run()).valid,true,'Restoring the anonymous override fixes only the leaked surface');
 f=fixture(true);f.status.textContent='请设置账户名和密码';f.submit.textContent='设置账户';assert.equal((await f.run()).valid,true,'Chinese setup hint and action');
 f=fixture(true);for(const input of [f.username,f.password])input.required=false;assert.equal((await f.run()).valid,true,'Setup admission belongs to the disabled submit, not browser required attributes');
 f=fixture();f.username.focused=true;f.username.style.borderBottomWidth='3px';assert.equal((await f.run()).valid,true,'Focused dashed underline retains the shared row target');
@@ -347,6 +362,24 @@ if(!process.argv.includes('--models-only')) {
     for(const text of ['请设置账户名和密码','Please set an account name and password.','设置账户','Set up account'])assert.ok(setupSource.includes(text));
     for(const marker of ['data-setup-check','data-setup-clear','data-setup-user','data-setup-password'])assert.ok(setupSource.includes(marker));
     assert.doesNotMatch(setupSource+loginSource,/data-setup-confirm|zxs-form-grid|<details|<summary/);
+    // Exact source guard, not a substitute CSS engine: three class selectors
+    // (0,3,0) outrank the appearance root + error selector (0,2,1), in either order.
+    const appearanceCss=readFileSync(new URL('../../../../src/web/public/styles/components/content-blocks.css',import.meta.url),'utf8');
+    assert.match(appearanceCss,/html:not\(\[data-zxs-appearance\]\), html\[data-zxs-appearance="content-blocks"\]/);
+    assert.match(appearanceCss,/\.zxs-error,\.zxs-empty,\.zxs-loading \{[^}]*background: var\(--zxs-bg-panel\);[^}]*--zxs-contour-extent: var\(--zxs-contour-notification\)/);
+    const strong='.authentication-shell .authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button)';
+    const weak=strong.replace('.authentication-shell ','');
+    const unboxedRule=css=>{
+        const line=css.split('\n').find(line=>line.startsWith(`${strong} {`));
+        return !!line&&['border: 0;','background: transparent;','box-shadow: none;',
+            '--zxs-contour-extent: 0px;','--zxs-contour-mode: none;','--zxs-contour-foreground: 0;'].every(declaration=>line.includes(declaration));
+    };
+    assert.equal(unboxedRule(authCss),true,'Anonymous override must beat either appearance-root selector');
+    assert.equal(unboxedRule(authCss.replace(strong,weak)),false,'The exact previous two-class rule must fail');
+    for(const declaration of ['background: transparent;','--zxs-contour-extent: 0px;']) {
+        const line=authCss.split('\n').find(line=>line.startsWith(`${strong} {`));
+        assert.equal(unboxedRule(authCss.replace(line,line.replace(declaration,''))),false,`Missing ${declaration} must fail`);
+    }
     assert.match(authCss,/width: min\(calc\(var\(--zxs-compact-row-height\) \* 9\), 100%\)/);
     assert.match(authCss,/grid-template-rows: repeat\(6, minmax\(var\(--zxs-compact-row-height\), max-content\)\)/);
     assert.match(authCss,/min-height: var\(--zxs-compact-row-height\)/);

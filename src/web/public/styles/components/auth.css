@@ -10,8 +10,9 @@
 .authentication-card .zxs-auth-label { display: flex; align-items: center; gap: 1ch; }
 .authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border-radius: 0; }
 /* The outer card is the only decorative box. Native text controls retain the
- * shared dashed underline and its thicker keyboard focus indicator. */
-.authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) { border: 0; background: transparent; box-shadow: none; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
+ * shared dashed underline and its thicker keyboard focus indicator. The shell
+ * scope outranks the appearance root plus .zxs-error, even when loaded earlier. */
+.authentication-shell .authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) { border: 0; background: transparent; box-shadow: none; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 .authentication-card .zxs-auth-information { display: grid; align-items: center; overflow-wrap: anywhere; }
 .authentication-card .zxs-error { margin: 0; padding: 0; font-size: inherit; }
 .authentication-card .zxs-request-id { margin: 0; font-size: inherit; }

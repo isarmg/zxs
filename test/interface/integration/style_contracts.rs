@@ -82,7 +82,7 @@ fn anonymous_forms_reuse_six_shared_height_rows_and_panel_contours() {
 #[test]
 fn anonymous_card_has_no_nested_decorative_surfaces_or_setup_explanation() {
     let css = include_str!("../../../src/web/public/styles/components/auth.css");
-    let rule = css.split(".authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) {")
+    let rule = css.split(".authentication-shell .authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) {")
         .nth(1).unwrap().split('}').next().unwrap();
     for property in [
         "border: 0;",
