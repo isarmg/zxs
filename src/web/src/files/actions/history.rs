@@ -798,8 +798,8 @@ fn inventory(state: &State, kind: review::Kind) -> Option<ReviewInventory> {
     match kind {
         review::Kind::Merge => Some(state.files.merge.as_ref()?.review_inventory()),
         review::Kind::Tags => Some(state.files.tag_edit.as_ref()?.review_inventory()),
-        review::Kind::Backup => {
-            unreachable!("invariant: backup drafts have no history selection review")
+        review::Kind::Backup | review::Kind::Placement => {
+            unreachable!("invariant: configuration drafts have no history selection review")
         }
     }
 }
@@ -808,7 +808,7 @@ fn review_current(state: &State, target: &Target, generation: u64, owner: Review
     let instance = match owner.kind {
         review::Kind::Merge => state.files.merge.as_ref().map(|draft| draft.instance()),
         review::Kind::Tags => state.files.tag_edit.as_ref().map(|draft| draft.instance()),
-        review::Kind::Backup => None,
+        review::Kind::Backup | review::Kind::Placement => None,
     };
     target.current(state)
         && state.files.file_history.ready()
@@ -833,7 +833,7 @@ fn begin_review(state: RwSignal<State>, owner: ReviewOwner) {
             match kind {
                 review::Kind::Merge => s.files.merge.as_mut()?.discard_review(),
                 review::Kind::Tags => s.files.tag_edit.as_mut()?.discard_review(),
-                review::Kind::Backup => {
+                review::Kind::Backup | review::Kind::Placement => {
                     unreachable!("invariant: selected history review is merge or tags")
                 }
             }
@@ -958,7 +958,9 @@ async fn collect_review(
     let nodes = match owner.kind {
         review::Kind::Merge => ReviewNodes::Merge(Vec::with_capacity(requested.node_ids.len())),
         review::Kind::Tags => ReviewNodes::Tags(Vec::with_capacity(requested.node_ids.len())),
-        review::Kind::Backup => unreachable!("invariant: backup selection is not a history review"),
+        review::Kind::Backup | review::Kind::Placement => {
+            unreachable!("invariant: configuration selection is not a history review")
+        }
     };
     let mut facts = ReviewFacts {
         nodes,

@@ -97,6 +97,7 @@ fn navigation_resets_only_location_owned_state() {
             batch: None,
             merge: None,
             backup: None,
+            placement: None,
             tag_edit: None,
             checked_nodes: crate::files::tags::tests::selection(&["old-node"]),
             publications: [(
@@ -134,7 +135,7 @@ fn navigation_resets_only_location_owned_state() {
         assert_eq!(model.history_generation, 12);
         assert!(model.checked_entries.is_empty() && model.checked_nodes.is_empty());
         assert!(model.batch.is_none() && model.merge.is_none());
-        assert!(model.backup.is_none() && model.tag_edit.is_none());
+        assert!(model.backup.is_none() && model.placement.is_none() && model.tag_edit.is_none());
 
         assert_eq!(model.disks, disks);
         assert!(model.disks_loaded && model.loading_disks);
