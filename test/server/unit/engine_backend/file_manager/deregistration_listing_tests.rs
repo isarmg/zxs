@@ -663,7 +663,10 @@ fn deregistered_scopes_project_payloads_but_keep_explicit_history() {
     assert_eq!(rows.len(), 2);
     for row in rows {
         let branch = row.branch;
-        assert_eq!(branch.entries, [fixture.retained.clone()]);
+        assert_eq!(
+            branch.entries.as_slice(),
+            std::slice::from_ref(&fixture.retained)
+        );
         assert!(!branch.file_branches.contains_key(&fixture.removed.file_id));
         assert!(!branch.file_contexts.contains_key("dir/a"));
         assert!(

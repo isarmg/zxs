@@ -59,7 +59,7 @@ fn selection(f: &Fixture, name: &str) -> CandidateSelection {
             mount_path: listing.mount_path,
             root_path: path.to_str().unwrap().into(),
         },
-        &[f.data.clone()],
+        std::slice::from_ref(&f.data),
     )
     .unwrap()
 }
@@ -111,7 +111,7 @@ fn existing_pool_accepts_data_only_then_mixed_addition_and_exact_replay() {
             mount_path: data_selection.mount_path,
             root_path: data_selection.root_path,
         },
-        &[f.data.clone()],
+        std::slice::from_ref(&f.data),
     )
     .unwrap();
     let mut mixed = request(data_selection, "N02", false);

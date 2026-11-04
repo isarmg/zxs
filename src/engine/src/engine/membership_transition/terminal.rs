@@ -373,9 +373,13 @@ impl Engine {
 
     pub(in crate::engine) fn prepare_terminal_authority(&mut self) -> Result<TerminalAuthority> {
         self.require_no_commit_preparation()?;
+        // Completed Exit generations retain their closed I/O owners here. They
+        // must survive this final-voter fence, not be mistaken for its activation.
         if !self.disk_exit_requires_management()
             || self.pending_membership.is_some()
-            || self.pending_disk_exit.is_some()
+            || self
+                .disk_exit_status()?
+                .is_none_or(|status| status.phase != DiskExitPhase::Fenced)
         {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,

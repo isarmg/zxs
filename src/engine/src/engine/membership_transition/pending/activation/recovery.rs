@@ -238,10 +238,19 @@ fn marker_path_at(
     let Some(file) = file else {
         if let Some(file) = root.open_optional_read_regular(&path.join("disk.json"))? {
             let bytes = read_file_bytes(file, MAX_METADATA)?;
-            let value: json_codec::Value = decode_strict(&bytes)?;
+            // This is the disk identity, not a generation marker. Preserve its
+            // concrete decode error so discovery cannot isolate it as a damaged
+            // marker or replace it with a generic genesis-recovery failure.
+            let identity_error = |source| {
+                Error::from(source).context(
+                    ErrorCode::DiskIdentityMismatch,
+                    "persisted disk identity cannot be decoded",
+                )
+            };
+            let value: json_codec::Value = decode_strict(&bytes).map_err(identity_error)?;
             if value.get("format").and_then(json_codec::Value::as_str) == Some("membership-pending")
             {
-                let _: PendingDiskSeal = decode_strict(&bytes)?;
+                let _: PendingDiskSeal = decode_strict(&bytes).map_err(identity_error)?;
                 return Ok(None);
             }
             let seal = decode_seal(&bytes)?;

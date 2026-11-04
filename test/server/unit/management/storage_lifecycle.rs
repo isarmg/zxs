@@ -407,7 +407,7 @@ fn successive_http_exits_replay_old_receipts_and_recover_the_setup_configuration
             mount_path: browsed.mount_path,
             root_path: added.to_str().unwrap().into(),
         },
-        &[f.data.clone()],
+        std::slice::from_ref(&f.data),
     )
     .unwrap();
     let addition = AdditionRequest {

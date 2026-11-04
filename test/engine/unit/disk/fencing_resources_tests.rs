@@ -180,11 +180,14 @@ fn engine_owner_drop_keeps_busy_tail_fenced_until_its_real_descriptor_closes() {
         excluded(&writer, true);
         assert_eq!(descriptors(path), 1);
         release.send(()).unwrap();
-        assert_eq!(reader.join().unwrap().unwrap(), b"data");
+        let error = reader.join().unwrap().unwrap_err();
+        assert_eq!(error.code(), ErrorCode::DiskUnavailable);
+        assert!(!error.is_retryable());
         assert!(binding.status().unwrap().drained());
         assert_eq!(descriptors(path), 0);
         assert_eq!(descriptors(root.path()), 0);
         excluded(&writer, false);
+        assert_eq!(fs::read(path).unwrap(), b"data");
     });
 }
 

@@ -146,6 +146,24 @@ impl Fixture {
         engine
             .select_file_branch(&first.file_id, &file_main, "admin", op())
             .unwrap();
+        let old_placements = engine.state.placements.clone();
+        assert_eq!(
+            old_placements[&first.version_id].target_copies,
+            shared_copies
+        );
+        // D04 has no backup successor. Change only the future copy policy while
+        // P01 can still satisfy it, then move the future route to D04.
+        engine
+            .update_protection_policy(ProtectionPolicyUpdate {
+                policy_id: &policy,
+                repository_id: &repository.repository_id,
+                path_prefix: "dir/live",
+                target_copies: 1,
+                expected_generation: 1,
+                principal: "admin",
+                operation_id: op(),
+            })
+            .unwrap();
         for (rule, path) in [(&hidden_rule, "dir/gone"), (&shared_rule, "dir/live")] {
             engine
                 .update_placement_rule(PlacementRuleUpdate {
@@ -159,17 +177,10 @@ impl Fixture {
                 })
                 .unwrap();
         }
-        engine
-            .update_protection_policy(ProtectionPolicyUpdate {
-                policy_id: &policy,
-                repository_id: &repository.repository_id,
-                path_prefix: "dir/live",
-                target_copies: 1,
-                expected_generation: 1,
-                principal: "admin",
-                operation_id: op(),
-            })
-            .unwrap();
+        assert_eq!(
+            engine.state.placements, old_placements,
+            "policy and route updates preserve every historical placement"
+        );
         save(
             &mut engine,
             &repository.main_branch_id,
@@ -177,6 +188,12 @@ impl Fixture {
             b"current retained",
         );
         let current = entry(&engine, &repository, "dir/live");
+        let current_placement = &engine.state.placements[&current.version_id];
+        assert_eq!(current_placement.target_copies, 1);
+        assert_eq!(current_placement.route_slot_ids, ["D04"]);
+        for (version, placement) in old_placements.iter() {
+            assert_eq!(&engine.state.placements[version], placement);
+        }
         Self {
             temp,
             engine,

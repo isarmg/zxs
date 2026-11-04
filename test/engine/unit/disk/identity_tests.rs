@@ -21,6 +21,9 @@ fn invalid_seals(original: &[u8]) -> Vec<Vec<u8>> {
     let mut wrong_format = seal.clone();
     wrong_format["format"] = json_codec::json!("unsupported-identity");
     invalid.push(canonical_json(&wrong_format).unwrap());
+    let mut incomplete_pending = seal.clone();
+    incomplete_pending["format"] = json_codec::json!("membership-pending");
+    invalid.push(canonical_json(&incomplete_pending).unwrap());
     for field in ["physical_device", "filesystem_uuid"] {
         let mut old_field = seal.clone();
         old_field[field] = json_codec::json!("must-not-be-ignored");

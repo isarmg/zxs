@@ -598,7 +598,8 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 t("从已认证的完整历史恢复当前池的新元数据组。选择全新空目录与槽位，所有新目录须保存元数据；保留原池身份、历史与现有登记，不初始化新池。同一文件系统中的不同目录允许使用，但不构成独立磁盘故障冗余。", "Restore a new metadata group for this pool from its authenticated complete history. Select fresh empty directories and slots; every new directory stores metadata. The existing pool identity, history and registrations are retained. Different directories on one filesystem are allowed, but do not provide independent disk-failure redundancy.")
             } else { t("向当前存储池登记目录。允许同一文件系统中的不同目录，但它们不提供独立磁盘故障冗余。新增目录不会自动搬移已有文件或改变现有放置规则。", "Register directories in the current pool. Different directories on one filesystem are allowed, but do not provide independent disk-failure redundancy. Adding directories does not move existing files or change placement rules.") })}</p>
             <For each=move ||state.with(|s|s.admin_console.storage.selections.clone()) key=|item|item.selection_id.clone() children=move |selection|{
-                let id=store_value(selection.selection_id);view!{<section class="zxs-frame zxs-stack"><h3 class="zxs-row">{selection.root_path}</h3><div class="zxs-form-grid">
+                let id = StoredValue::new(selection.selection_id);
+                view!{<section class="zxs-frame zxs-stack"><h3 class="zxs-row">{selection.root_path}</h3><div class="zxs-form-grid">
                     {field(state,id,"slot",t("新槽位（唯一）", "New slot (unique)"))}
                     {field(state,id,"level",t("层级（1 为主存储）", "Level (1 for primary storage)"))}
                     {field(state,id,"upstream",t("上游槽位（备份层必填）", "Upstream slot (required for backup tiers)"))}

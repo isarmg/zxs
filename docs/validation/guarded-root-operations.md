@@ -11,7 +11,8 @@
   的 `private_dir(root)` 也经过同一入口。
 - 一次调用只有一个普通 lease。相对路径打开、递归 mkdir、metadata、读字节、
   JSON 编解码、原子写、目录同步和 unlink 都借用该操作；内部不重新获取许可。
-  在开始后遇到 quiesce 的同步调用可以完成自己的有限工作和必要错误清理。
+  在开始后遇到 quiesce 的同步调用必须完成必要错误清理和已经开始的持久化尾部。
+  分块读取在已有取消点返回 `DiskUnavailable`，不能把已读到内存的字节当作成功。
   普通计数只在这些栈内资源销毁后退出，不在撤销通知时提前退出。
 - `open_leased_regular` 把同一操作的 lease 移入现有可撤销文件 owner，
   打开与交付之间不再获取第二份许可；若期间已撤销，文件不能逃逸注册。
@@ -96,8 +97,10 @@ UploadPreparation/OpenAt2Root；`archive/persistent.rs` 的私有目录用于归
 新增测试放在 `test/engine/unit/disk/root_operation_tests.rs`，经 owned 私有模块接线：
 
 - 所有普通根入口、派生根和 retained 根在 quiesce 后拒绝，且不改文件或创建锁。
+- 未撤销的真实同步读取返回正确值，返回前关闭文件 FD 并释放 ordinary 计数，根仍可继续使用。
 - barrier 暂停真实文件读取，检查其 FD 和 ordinary 计数仍在，控制回调不能进入；
-  正常返回及 observer 错误后检查 FD 已关闭，才允许控制读取。
+  quiesce 后读取返回 `DiskUnavailable`，observer 的具体错误不被取消替换。两种失败尾部
+  都先关闭 FD、释放 ordinary 计数，之后才允许唯一控制读取。
 - JSON 编码过程中启动 quiesce，后续嵌套 mkdir/原子写仍由原操作完成。
 - 真实平台 AtomicFile 先 stage/prepare，再制造 no-clobber 冲突；确认临时文件
   已 unlink、原文件保留、普通 owner 未退出时仍拒绝控制操作，退出后只允许一次。
@@ -121,6 +124,11 @@ UploadPreparation/OpenAt2Root；`archive/persistent.rs` 的私有目录用于归
 本批准备阶段只做源码编辑、直接 rustfmt 和 git diff 检查。没有在云电脑运行
 cargo/check/test/clippy，没有真实盘操作、部署或权限变更；测试用例尚未执行。
 必须由协调者对最终提交在 GitHub 验证，不能把此文档或静态审阅当作通过证据。
+
+主线 `f4cff1a3` 的 CI [41915719850](https://github.com/isarmg/zxs/actions/runs/41915719850)
+实际报告 fencing/owned 两个旧回归仍把 quiesce 后的读取预期为成功；本轮只修正这些结果预期，
+保留实际 FD、writer lock、普通责任及控制准入断言，另补未撤销读取成功的独立回归源码。
+取消实现及资源关闭条件未放宽。修补尚未执行，不能把此前失败记为通过。
 
 ## 仍然阻止生产下线的条件
 

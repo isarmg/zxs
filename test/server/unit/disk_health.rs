@@ -407,7 +407,7 @@ fn ata_fixture(health: AtaHealth) -> AtaSnapshot {
         identify[index * 2..index * 2 + 2].copy_from_slice(&word.to_le_bytes());
     }
     let model = b"ZXS SYNTHETIC OFFLINE DISK               ";
-    for (index, pair) in model.chunks_exact(2).enumerate() {
+    for (index, pair) in model.as_chunks::<2>().0.iter().enumerate() {
         identify[54 + index * 2] = pair[1];
         identify[55 + index * 2] = pair[0];
     }

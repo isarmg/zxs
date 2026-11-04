@@ -80,7 +80,31 @@ fn open_descriptors_for(path: &Path) -> usize {
 }
 
 #[test]
-fn synchronous_read_keeps_its_descriptor_and_count_until_success_or_error_tail() {
+fn synchronous_read_success_retires_its_descriptor_and_count_before_return() {
+    let (directory, handle) = disk();
+    let path = directory.path().join("value");
+    handle.root.write_json(&path, &17u64, false).unwrap();
+    let binding = handle.root.io_binding().unwrap();
+    let mut observations = 0;
+    let value = handle
+        .root
+        .read_json_observed::<u64>(&path, &mut |_| {
+            observations += 1;
+            assert_eq!(binding.status().unwrap().ordinary, 1);
+            assert_eq!(open_descriptors_for(&path), 1);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(value, 17);
+    assert!(observations > 0);
+    assert_eq!(binding.status().unwrap().ordinary, 0);
+    assert!(!binding.status().unwrap().quiescing);
+    assert_eq!(open_descriptors_for(&path), 0);
+    assert_eq!(handle.root.read_bytes(&path, 64).unwrap(), b"17");
+}
+
+#[test]
+fn synchronous_read_keeps_its_descriptor_and_count_until_cancellation_or_error_tail() {
     for reject in [false, true] {
         let (directory, handle) = disk();
         let path = directory.path().join("value");
@@ -116,9 +140,11 @@ fn synchronous_read_keeps_its_descriptor_and_count_until_success_or_error_tail()
             release.wait();
             let result = reader.join().unwrap();
             if reject {
-                assert_eq!(result.unwrap_err().code(), ErrorCode::ResourceLimit);
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), ErrorCode::ResourceLimit);
+                assert_eq!(error.message(), "observer stopped");
             } else {
-                assert_eq!(result.unwrap(), 17);
+                unavailable(result);
             }
             assert_eq!(open_descriptors_for(&path), 0);
             assert_eq!(binding.status().unwrap().ordinary, 0);

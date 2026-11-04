@@ -131,6 +131,112 @@ impl Live {
     }
 }
 
+#[test]
+fn terminal_preparation_preserves_prior_exit_guards_and_waits_for_its_own_tail() {
+    for action in [
+        MembershipExitAction::PlannedOffline,
+        MembershipExitAction::Deregister,
+    ] {
+        let mut live = Live::new(2, 0);
+        let first = live.config.disks[0].clone();
+        let original = live.engine.config.clone();
+        let mut old_seal = live.engine.disk_resources.get(&first).unwrap().seal.clone();
+        live.prior_exit(0, action);
+        assert!(live.engine.pending_disk_exit.is_some());
+        assert_eq!(
+            live.engine.disk_exit_status().unwrap().unwrap().phase,
+            crate::DiskExitPhase::Published
+        );
+        let parked = live.temp.path().join("prior-exit-absent");
+        fs::rename(&first.root, &parked).unwrap();
+        let prior_bytes = files(&parked);
+        // A different physical domain must still be excluded by the retained
+        // logical guard, not merely by an old handle to this particular inode.
+        old_seal.inode = old_seal.inode.checked_add(1).unwrap();
+        let mut terminal = live.prepare();
+        assert!(live.engine.pending_disk_exit.is_some());
+        assert_eq!(
+            live.engine.disk_exit_status().unwrap().unwrap().phase,
+            crate::DiskExitPhase::Fenced
+        );
+        assert!(matches!(
+            DiskIoBinding::new(&old_seal, &original),
+            Err(error) if error.code() == ErrorCode::DiskUnavailable
+        ));
+        let tail = terminal.binding.admit().unwrap();
+        assert_eq!(
+            terminal.complete(&mut live.engine).err().unwrap().code(),
+            ErrorCode::DiskUnavailable
+        );
+        let completion = live
+            .temp
+            .path()
+            .join("system/terminal-management")
+            .join(live.operation.to_string())
+            .join("complete.json");
+        assert!(!completion.exists());
+        assert!(live.engine.pending_disk_exit.is_some());
+        assert_eq!(files(&parked), prior_bytes);
+        assert!(!first.root.exists());
+        drop(tail);
+        let management = terminal.complete(&mut live.engine).unwrap();
+        assert_eq!(management.status().operation_id, live.operation);
+        assert_eq!(management.status().active_metadata_members, 0);
+        assert_eq!(management.status().original_metadata_members, 1);
+        assert_eq!(management.status().original_metadata_quorum, 1);
+        assert_eq!(management.registry().historical_topology().len(), 2);
+        assert_eq!(
+            management.registered_disks().len(),
+            usize::from(action == MembershipExitAction::PlannedOffline)
+        );
+        assert!(live.engine.pending_disk_exit.is_some());
+        assert!(matches!(
+            DiskIoBinding::new(&old_seal, &original),
+            Err(error) if error.code() == ErrorCode::DiskUnavailable
+        ));
+        assert_eq!(files(&parked), prior_bytes);
+        assert!(!first.root.exists());
+    }
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn terminal_preparation_cannot_replace_an_activating_ordinary_exit() {
+    let mut live = Live::new(2, 0);
+    live.engine
+        .begin_disk_exit(
+            &live.config.disks[0].disk_id,
+            MembershipExitAction::Deregister,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let archive = live
+        .engine
+        .build_managed_membership_control_archive()
+        .unwrap();
+    live.engine
+        .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+        .unwrap();
+    live.engine.resume_membership_joint_decision().unwrap();
+    live.engine.inject_fault_once("after_disk_exit_stop");
+    assert!(live.engine.activate_pending_disk_exit().is_err());
+    let status = live.engine.disk_exit_status().unwrap().unwrap();
+    assert_eq!(status.phase, crate::DiskExitPhase::Activating);
+    let before = files(live.temp.path());
+    assert_eq!(
+        live.engine
+            .prepare_terminal_disk_exit()
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::ConfigConflict
+    );
+    assert_eq!(live.engine.disk_exit_status().unwrap().unwrap(), status);
+    assert_eq!(files(live.temp.path()), before);
+    assert!(live.engine.pending_disk_exit.is_some());
+}
+
 struct Saved {
     temp: tempfile::TempDir,
     config: Config,
