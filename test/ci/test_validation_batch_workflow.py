@@ -72,95 +72,101 @@ class ValidationBatchWorkflow(unittest.TestCase):
         self.assertIn('    needs: [static, web-production]\n', jobs['browser-smoke'])
         self.assertNotRegex(jobs['browser-smoke'], r'(?m)^    if:')
 
-    def test_reuse_is_bound_to_one_parent_source_tree_and_exact_paths(self):
+    def test_reuse_is_bound_to_one_parent_non_web_source_and_exact_paths(self):
         script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
                                  .split('      - name:', 1)[0])
-        base = '01305735ce153015a08bf14c6920cdce40b8b79b'
-        parent = '6e6c1f2163b8a5c3c80ad8cc92577e18606222e5'
+        base = '72e7258be1d1a5d461476c259db5ec0eeec7e75f'
         self.assertIn(f'base={base}', script)
-        self.assertIn(f'expected_parent={parent}', script)
-        self.assertIn('fetch-depth: 6', self.batch)
+        self.assertIn('https://github.com/isarmg/zxs/actions/runs/41839207213', script)
+        self.assertIn('git show -s --format=%P HEAD', script)
+        self.assertIn('git diff --quiet "$base" HEAD -- src \':(exclude)src/web\'', script)
+        self.assertIn('git diff --quiet "$base" HEAD -- test ', script)
         self.assertIn('git diff --name-only --no-renames "$base" HEAD', script)
+        self.assertNotIn(':(exclude)test/engine', script)
+        self.assertNotIn(':(exclude)test/server', script)
         paths = [
             '.github/workflows/validate-ui-smb-history.yml',
-            'docs/tools/browser-smoke.md',
-            'docs/15-api-and-errors.md',
-            'test/tools/browser-smoke/runner/history_windows.rs',
+            'compliance/external-tests/integrated.json', 'compliance/rust-sources.json',
+            'docs/THIRD_PARTY_RUST_SOURCES.md', 'docs/components/interface/src/components.md',
+            'docs/components/web/public/styles.md', 'docs/tools/browser-smoke.md',
+            'src/web/public/styles/components/auth.css', 'src/web/src/setup.rs',
             'test/ci/test_validation_batch_workflow.py',
-            'test/ci/test_file_row_decoration.py',
-            'test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs',
-            'test/tools/browser-smoke/runner/main.rs',
-            'test/tools/browser-smoke/runner/file_row_pointer.js',
-            'test/tools/browser-smoke/unit/file_row_pointer_probe_test.mjs',
-            'test/server/integration/http_engine/directory_history.rs',
-            'test/tools/browser-smoke/runner/fixture.rs',
-            'test/tools/browser-smoke/runner/naming.rs',
-            'test/tools/browser-smoke/unit/fixture_tests.rs',
-            'docs/contracts/core.schema.json',
-            'docs/contracts/openapi.json',
-            'test/tools/contract-check/unit/history_window_tests.rs',
-            'test/tools/browser-smoke/runner/page_layout.rs',
-            'test/tools/browser-smoke/runner/file_row_layout.js',
-            'test/tools/browser-smoke/unit/file_row_layout_probe_test.mjs',
+            'test/interface/integration/style_contracts.rs',
+            'test/tools/browser-smoke/runner/auth_layout.js',
+            'test/tools/browser-smoke/runner/auth_layout.rs',
+            'test/tools/browser-smoke/runner/management.rs',
+            'test/tools/browser-smoke/unit/auth_layout_probe_test.mjs',
         ]
-        # Execute the actual gate with controlled git replies, not the product.
-        # Every unrelated file or mismatched commit/tree must restore coverage.
+        # Exercise the actual script with exact command replies in GitHub static.
+        # No changed dependency, native test, workflow or unrelated Web path may reuse.
         git = r'''git() {
-            if [ "$*" = "$TEST_GIT_FAIL" ]; then return 42; fi
             case "$*" in
-                "rev-parse HEAD^") printf '%s\n' "$TEST_PARENT" ;;
-                "rev-parse $expected_parent~4") printf '%s\n' "$base" ;;
-                "rev-parse HEAD:src") printf '%s\n' "$TEST_SOURCE" ;;
-                "rev-parse $base:src") printf '%s\n' baseline-source ;;
-                "diff --quiet $expected_parent HEAD -- test/engine test/server") return 0 ;;
-                "diff --name-only --no-renames $base HEAD") printf '%s\n' "$TEST_PATHS" ;;
+                "show -s --format=%P HEAD")
+                    [ "$TEST_GIT_FAIL" != parent ] || return 42
+                    printf '%s\n' "$TEST_PARENT" ;;
+                "diff --quiet $base HEAD -- src :(exclude)src/web")
+                    [ "$TEST_GIT_FAIL" != source ] || return 42
+                    return "$TEST_SOURCE_CHANGED" ;;
+                "diff --quiet $base HEAD -- test :(exclude)test/interface :(exclude)test/tools/browser-smoke :(exclude)test/ci/test_validation_batch_workflow.py")
+                    [ "$TEST_GIT_FAIL" != tests ] || return 42
+                    return "$TEST_TESTS_CHANGED" ;;
+                "diff --name-only --no-renames $base HEAD")
+                    [ "$TEST_GIT_FAIL" != paths ] || return 42
+                    printf '%s\n' "$TEST_PATHS" ;;
                 *) return 99 ;;
             esac
         }
         '''
-        cases = [
-            (parent, 'baseline-source', paths, True, ''),
-            ('another-parent', 'baseline-source', paths, False, ''),
-            (parent, 'changed-source', paths, False, ''),
-        ]
-        for extra in ['src/smb/src/client.rs', 'test/smb/unit/client/tests.rs',
-                      'test/interface/integration/style_contracts.rs',
-                      '.github/workflows/smb-sdk.yml', 'Cargo.lock',
+        cases = [(base, paths, 0, 0, True, '')]
+        for parent in ['another-parent', base + ' second-parent', '']:
+            cases.append((parent, paths, 0, 0, False, ''))
+        cases.extend([(base, paths, 1, 0, False, ''), (base, paths, 0, 1, False, '')])
+        for extra in ['src/smb/src/client.rs', 'src/platform/src/payload.rs',
+                      'src/web/Cargo.toml', 'src/web/src/unknown.rs',
+                      'test/engine/unit/tests.rs', 'test/server/unit/tests.rs',
+                      'test/platform/unit/payload/tests.rs', 'test/tools/contract-check/main.rs',
+                      '.github/workflows/ci.yml', '.github/workflows/smb-sdk.yml',
+                      'Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'rust-toolchain.toml',
+                      'docs/contracts/core.schema.json', 'tools/rust-sources/manage.py',
                       'docs/unrelated.md', 'test/tools/browser-smoke/runner/unknown.rs']:
-            cases.append((parent, 'baseline-source', paths + [extra], False, ''))
-        for failed in ['rev-parse HEAD^', f'rev-parse {parent}~4', 'rev-parse HEAD:src', f'rev-parse {base}:src',
-                       f'diff --name-only --no-renames {base} HEAD',
-                       f'diff --quiet {parent} HEAD -- test/engine test/server']:
-            cases.append((parent, 'baseline-source', paths, False, failed))
-        for parent, source, changed, expected, failed in cases:
-            with self.subTest(parent=parent, source=source, changed=changed, failed=failed):
+            cases.append((base, paths + [extra], 0, 0, False, ''))
+        for failed in ['parent', 'source', 'tests', 'paths']:
+            cases.append((base, paths, 0, 0, False, failed))
+        for parent, changed, source_changed, tests_changed, expected, failed in cases:
+            with self.subTest(parent=parent, changed=changed, failed=failed,
+                              source_changed=source_changed, tests_changed=tests_changed):
                 with tempfile.TemporaryDirectory() as directory:
                     output = Path(directory) / 'output'
-                    env = dict(os.environ, TEST_PARENT=parent, TEST_SOURCE=source,
-                               TEST_PATHS='\n'.join(changed), TEST_GIT_FAIL=failed,
+                    env = dict(os.environ, TEST_PARENT=parent, TEST_PATHS='\n'.join(changed),
+                               TEST_SOURCE_CHANGED=str(source_changed),
+                               TEST_TESTS_CHANGED=str(tests_changed), TEST_GIT_FAIL=failed,
                                GITHUB_OUTPUT=str(output))
                     subprocess.run(['bash', '-euo', 'pipefail', '-c', git + script],
                                    check=True, env=env, capture_output=True, text=True)
-                    self.assertEqual(output.read_text(), f'test_only_retry={str(expected).lower()}\n')
+                    self.assertEqual(output.read_text(), f'web_only_retry={str(expected).lower()}\n')
 
-    def test_retry_preserves_unrun_protocol_and_exact_head_browser(self):
-        condition = "if: needs.static.outputs.test_only_retry != 'true'"
-        self.assertEqual(self.batch.count(condition), 6)
-        self.assertIn("- name: Lint the changed contract validation target\n"
-                      "        if: needs.static.outputs.test_only_retry == 'true'\n"
-                      "        run: cargo clippy --locked --offline -p contract-check "
-                      "--all-targets -- -D warnings", self.batch)
+    def test_web_retry_keeps_all_changed_checks_and_full_fallback(self):
+        condition = "if: needs.static.outputs.web_only_retry != 'true'"
+        self.assertEqual(self.batch.count(condition), 2)
+        self.assertIn(f'  rust-http:\n    {condition}', self.batch)
+        self.assertIn(f'  smb-sdk:\n    {condition}', self.batch)
+        self.assertNotIn('test_only_retry', self.batch)
         for marker in ['Check affected native targets and no-core server',
                        'Exercise engine, server, client and wire unit contracts',
-                       'Exercise history integration', 'Exercise real HTTP routes']:
-            self.assertIn(f'- name: {marker}\n        {condition}', self.batch)
-        self.assertIn(f'name: Affected Web state and style contracts\n    {condition}', self.batch)
-        self.assertIn(f'  smb-sdk:\n    {condition}', self.batch)
-        for marker in ['Check changed wire contracts and SMB feature combinations',
+                       'Exercise history integration', 'Exercise real HTTP routes',
+                       'Check changed wire contracts and SMB feature combinations',
                        'Build production Web distribution',
                        'Exercise real login, setup, monitor, file rows and history flows']:
-            step = step_body(self.batch, marker)
-            self.assertNotIn(condition, step)
+            self.assertNotIn('if:', step_body(self.batch, marker))
+        parts = re.split(r'^  ([a-z][a-z-]+):$',
+                         self.batch.split('\njobs:\n', 1)[1], flags=re.MULTILINE)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        for name in ['static', 'web-tests', 'web-production', 'browser-smoke']:
+            self.assertNotRegex(jobs[name], r'(?m)^    if:')
+        browser_lint = step_body(self.batch, 'Lint the changed browser validation target')
+        self.assertIn("if: needs.static.outputs.web_only_retry == 'true'", browser_lint)
+        self.assertIn('cargo fmt -p browser-smoke -- --check', browser_lint)
+        self.assertIn('cargo clippy --locked --offline -p browser-smoke --all-targets -- -D warnings', browser_lint)
 
     def test_step_scope_stops_at_next_action_or_job(self):
         selected = "      - name: selected\n        run: keep-this\n"

@@ -672,6 +672,9 @@ fn lost_initialize_response(
                 if state["transportError"]==true && state["keyAbsent"]==true && state["passwordCleared"]==true {Ok(())}
                 else {Err(format!("account response loss not yet visible: {state}").into())}
             })?;
+            let previews = std::env::var_os("ZXS_LOGIN_PREVIEWS")
+                .map(|dir| std::path::PathBuf::from(dir).join("first-account-unknown"));
+            super::auth_layout::unconfirmed(browser, previews.as_deref())?;
             fixture.wait_state("unconfigured")?;
             fixture.no_storage()?;
             let authority=fs::read(fixture.pool.join("management-authority.json"))?;

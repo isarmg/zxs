@@ -47,7 +47,7 @@ function fixture(empty=false) {
     }
     if(empty){username.attributes['data-setup-user']='';password.attributes['data-setup-password']='';}
     const information=node('',244);information.className='zxs-auth-information';information.box=box(244,36);
-    const status=node(empty?'Please set an account name and password.':'',244,'SPAN');status.attributes.role='status';status.box=box(244,36);append(information,status);
+    const status=node(empty?'Set a name and password.':'',244,'SPAN');status.attributes.role='status';status.box=box(244,36);append(information,status);
     const actions=node('',280);actions.className='zxs-auth-actions';actions.box=box(280,36);
     const submit=node(empty?'Set up account':'Sign in',280,'BUTTON');submit.box=box(280,36);submit.type='submit';submit.className='zxs-button';submit.disabled=empty;
     const check=node('',280,'BUTTON'),clear=node('',280,'BUTTON');
@@ -121,12 +121,56 @@ f=fixture();f.username.focused=true;f.username.style.borderBottomWidth='3px';f.u
 // Preferred desktop 3:2 geometry never hides taller feedback; small viewports can grow naturally.
 for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
     f=fixture(true);f.innerWidth=width;f.innerHeight=height;f.root.clientWidth=width;f.root.scrollWidth=width;
-    if(width>416)f.card.style.aspectRatio='3 / 2';
+    if(width>416){f.card.style.aspectRatio='3 / 2';f.card.box=box(100,216,324,14);}
     assert.equal((await f.run()).valid,true,`Model viewport ${width}x${height}, not browser evidence`);
 }
+// Preserve the measured 72e7258b Chromium failure: 324x216 outer card, a
+// wrapped 48px fifth row, and all three actions 12px outside its bottom.
+// These rectangles replay the failure classification, not CSS layout itself.
+f=fixture(true);f.innerWidth=980;f.innerHeight=760;f.root.clientWidth=980;f.root.scrollWidth=980;
+f.card.style.aspectRatio='3 / 2';f.card.box=box(301,216,324,328);f.form.box=box(301,228,272,354);
+for(const [i,node] of [f.usernameLabel,f.username,f.passwordLabel,f.password].entries())node.box=box(301+i*36,36,272,354);
+f.information.box=box(445,48,272,354);f.status.box=box(445,48,272,354);
+f.status.textContent='Please set an account name and password.';f.actions.box=box(493,36,272,354);
+f.submit.box=box(493,36,160,354);f.check.box=box(493,36,36,523.59375);f.clear.box=box(493,36,36,569.1875);
+result=await f.run();assert.equal(result.valid,false);assert.equal(result.formPresent,false);
+assert.equal(result.normalGeometry,false);assert.equal(result.controls.slice(2).every(e=>!e.valid),true);
+f.card.box=box(301,228,324,328);result=await f.run();
+assert.equal(result.formPresent,true);assert.equal(result.valid,false,'Growing the healthy card cannot substitute for a concise single-row hint');
+assert.equal(result.normalGeometry,false);
+f.status.textContent='Set a name and password.';f.information.box=box(445,36,272,354);f.status.box=box(451,24,272,354);
+f.form.box=box(301,216,272,354);f.card.box=box(301,216,324,328);f.actions.box=box(481,36,272,354);
+for(const node of [f.submit,f.check,f.clear])node.box=box(481,36,node.box.width,node.box.x);
+result=await f.run();assert.equal(result.valid,true,JSON.stringify(result));assert.equal(result.normalGeometry,true);
+
 f=fixture();f.phase='invalid-login';f.status.attributes.role='alert';f.status.textContent='A long error wraps onto more lines.';f.status.box=box(244,108);f.information.box=box(244,108);f.information.children=[f.status];f.status.parentElement=f.information;
 for(const node of [f.actions,f.submit])node.box=box(352,36);f.form.box=box(100,288);f.card.box=box(100,288,292,14);
 assert.equal((await f.run()).valid,true,'Feedback grows within row five, never inserts a seventh row');
+f.innerWidth=980;f.innerHeight=760;f.root.clientWidth=980;f.root.scrollWidth=980;f.card.style.aspectRatio='3 / 2';f.card.box=box(100,288,324,14);
+assert.equal((await f.run()).valid,true,'Necessary desktop feedback grows beyond the preferred ratio');
+f.card.box=box(100,216,324,14);assert.equal((await f.run()).valid,false,'A fixed six-row minimum must not leave long feedback outside the card');
+f.card.box=box(100,288,324,14);
+const requestId=f.node('Request ID: setup-request',316,'P');requestId.className='zxs-request-id';requestId.box=box(316,24);f.append(f.status,requestId);
+assert.equal((await f.run()).valid,true,'Request identity stays fully inside the growing information row');
+requestId.box=box(352,24);result=await f.run();assert.equal(result.valid,false);assert.equal(result.informationValid,false);
+
+// Unconfirmed means the real response-loss fixture, not an empty installation.
+// Long feedback and the additional sign-in action must fit at every viewport.
+for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
+    f=fixture(true);f.expectedSetup='unconfirmed';f.phase='response-lost';f.innerWidth=width;f.innerHeight=height;
+    f.root.clientWidth=width;f.root.scrollWidth=width;f.information.attributes['data-setup-unknown']='';
+    f.status.attributes.role='alert';f.status.textContent='Outcome unconfirmed. Check setup status. Browser smoke: initialize response lost after successful initialization';
+    f.status.box=box(244,96);f.information.box=box(244,96);f.actions.box=box(340,72);
+    f.submit.box=box(340,36,140);f.check.box=box(340,36,44,186);f.clear.box=box(376,36,44,210);
+    const signIn=f.node('Try signing in',376,'BUTTON');signIn.box=box(376,36,160);signIn.className='zxs-button';signIn.attributes['data-setup-sign-in']='';
+    f.append(f.actions,signIn);f.actions.children=[f.submit,f.check,signIn,f.clear];
+    f.form.box=box(100,312);f.card.box=box(100,312,width>416?324:292,14);
+    if(width>416)f.card.style.aspectRatio='3 / 2';
+    result=await f.run();assert.equal(result.valid,true,`Unconfirmed ${width}x${height}: ${JSON.stringify(result)}`);
+    assert.equal(result.controls.length,6);assert.equal(result.actionsValid,true);
+    f.card.box=box(100,216,f.card.box.width,14);result=await f.run();
+    assert.equal(result.valid,false);assert.equal(result.formPresent,false);assert.equal(result.controls.slice(2).every(e=>!e.valid),true);
+}
 f=fixture();f.root.clientWidth=305;f.root.scrollWidth=305;f.card.box=box(100,216,277,14);f.header.box=box(14,44,96,195);f.language.box=box(14,44,44,195);f.theme.box=box(14,44,44,247);
 assert.equal((await f.run()).valid,true,'Content fits beside a classic scrollbar');
 f.clear.box=box(280,36,44,290); // Not in Existing form.
@@ -237,6 +281,7 @@ for(const [name,change] of [
     ['missing setup hint',f=>{f.information.children=[];}],
     ['empty setup hint',f=>{f.status.textContent='';}],
     ['old long setup hint',f=>{f.status.textContent='Ready to create the administrator account. No disks are required.';}],
+    ['previous wrapped setup hint',f=>{f.status.textContent='Please set an account name and password.';}],
     ['wrong setup state hint',f=>{f.status.textContent='An installation already exists. Sign in.';}],
     ['hidden setup hint',f=>{f.status.visible=false;}],
     ['duplicate setup hint',f=>{f.append(f.information,{...f.status});}],
@@ -346,6 +391,10 @@ if(!process.argv.includes('--models-only')) {
     assert.match(host,/"args": \[setup.name\(\), phase\]/);
     assert.match(host,/for phase in \["initial", "refreshed", setup.final_phase\(\)\]/);
     assert.match(host,/Self::Existing => "invalid-login"/);assert.match(host,/Self::Empty => "keyboard-focus"/);
+    assert.match(host,/Self::Unconfirmed => "response-lost"/);
+    assert.match(host,/pub\(super\) fn unconfirmed\(/);
+    assert.match(management,/super::auth_layout::unconfirmed\(browser, previews.as_deref\(\)\)/);
+    assert.match(management,/join\("first-account-unknown"\)/);
     assert.match(host,/browser.command\("POST", "\/refresh"/);
     assert.match(host,/:focus-visible/);assert.match(host,/\.zxs-auth-information \.zxs-error/);
     assert.ok(host.indexOf('window.scrollTo(0,0)')<host.indexOf('Duration::from_millis(150)'));
@@ -359,7 +408,8 @@ if(!process.argv.includes('--models-only')) {
     assert.ok(fresh.indexOf('super::auth_layout::first_account(')<fresh.indexOf('fixture.open(browser)?'));
     assert.ok(fresh.indexOf('super::auth_layout::first_account(')<fresh.indexOf('credentials('));
     assert.match(setupSource,/<form data-first-account-form=""/);assert.match(loginSource,/<form data-auth-form="login"/);
-    for(const text of ['请设置账户名和密码','Please set an account name and password.','设置账户','Set up account'])assert.ok(setupSource.includes(text));
+    for(const text of ['请设置账户名和密码','Set a name and password.','设置账户','Set up account'])assert.ok(setupSource.includes(text));
+    assert.doesNotMatch(setupSource,/Please set an account name and password\./);
     for(const marker of ['data-setup-check','data-setup-clear','data-setup-user','data-setup-password'])assert.ok(setupSource.includes(marker));
     assert.doesNotMatch(setupSource+loginSource,/data-setup-confirm|zxs-form-grid|<details|<summary/);
     // Exact source guard, not a substitute CSS engine: three class selectors
@@ -382,6 +432,8 @@ if(!process.argv.includes('--models-only')) {
     }
     assert.match(authCss,/width: min\(calc\(var\(--zxs-compact-row-height\) \* 9\), 100%\)/);
     assert.match(authCss,/grid-template-rows: repeat\(6, minmax\(var\(--zxs-compact-row-height\), max-content\)\)/);
+    assert.match(authCss,/\.authentication-card \{[^}]*aspect-ratio: 3 \/ 2; min-height: min-content;/);
+    assert.doesNotMatch(authCss,/min-height: calc\(var\(--zxs-compact-row-height\) \* 6\)/);
     assert.match(authCss,/min-height: var\(--zxs-compact-row-height\)/);
     assert.match(authCss,/aspect-ratio: 3 \/ 2/);assert.match(authCss,/aspect-ratio: auto/);
     assert.match(authCss,/--zxs-contour-extent: 48px/);

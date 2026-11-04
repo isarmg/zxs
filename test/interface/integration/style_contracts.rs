@@ -50,7 +50,7 @@ fn anonymous_forms_reuse_six_shared_height_rows_and_original_card_corner() {
         "grid-template-rows: repeat(6, minmax(var(--zxs-compact-row-height), max-content))"
     ));
     assert!(css.contains("width: min(calc(var(--zxs-compact-row-height) * 9), 100%)"));
-    assert!(css.contains("min-height: calc(var(--zxs-compact-row-height) * 6)"));
+    assert!(css.contains("aspect-ratio: 3 / 2; min-height: min-content;"));
     assert!(css.contains("--zxs-contour-extent: 48px"));
     for private_override in [
         "--zxs-contour-control:",
@@ -112,6 +112,8 @@ fn anonymous_card_has_no_nested_decorative_surfaces_or_setup_explanation() {
     assert!(!setup.contains("未设置账户时"));
     assert!(!setup.contains("confirmed:") && !setup.contains("data-setup-confirm"));
     assert!(setup.contains("请设置账户名和密码"));
+    assert!(setup.contains("Set a name and password."));
+    assert!(!setup.contains("Please set an account name and password."));
     for marker in [
         "data-first-account-form",
         "data-setup-user",

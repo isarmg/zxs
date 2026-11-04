@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
-      test_only_retry: ${{ steps.scope.outputs.test_only_retry }}
+      web_only_retry: ${{ steps.scope.outputs.web_only_retry }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,53 +30,45 @@ jobs:
           fetch-depth: 6
       - name: Bind validation to the pushed commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Scope the reviewed test-only retry
+      - name: Scope the reviewed Web-only retry
         id: scope
         run: |
-          # Success evidence: https://github.com/isarmg/zxs/actions/runs/41813864437
-          # Reuse Web/Samba/native units from the baseline, Engine integration
-          # from run 41817885256 and HTTP from 41820695812 only for this exact chain.
-          base=01305735ce153015a08bf14c6920cdce40b8b79b
-          expected_parent=6e6c1f2163b8a5c3c80ad8cc92577e18606222e5
+          # Native/HTTP/contracts/protocol/budget and real Samba succeeded here:
+          # https://github.com/isarmg/zxs/actions/runs/41839207213
+          base=72e7258be1d1a5d461476c259db5ec0eeec7e75f
           retry=false
-          if parent=$(git rev-parse HEAD^) && [ "$parent" = "$expected_parent" ] &&
-             ancestor=$(git rev-parse "$expected_parent~4") && [ "$ancestor" = "$base" ] &&
-             source=$(git rev-parse HEAD:src) && baseline_source=$(git rev-parse "$base:src") &&
-             [ "$source" = "$baseline_source" ] &&
-             changed=$(git diff --name-only --no-renames "$base" HEAD) &&
-             git diff --quiet "$expected_parent" HEAD -- test/engine test/server; then
+          if parents=$(git show -s --format=%P HEAD) && [ "$parents" = "$base" ] &&
+             git diff --quiet "$base" HEAD -- src ':(exclude)src/web' &&
+             git diff --quiet "$base" HEAD -- test ':(exclude)test/interface' ':(exclude)test/tools/browser-smoke' ':(exclude)test/ci/test_validation_batch_workflow.py' &&
+             changed=$(git diff --name-only --no-renames "$base" HEAD); then
             retry=true
             while IFS= read -r path; do
               case "$path" in
                 .github/workflows/validate-ui-smb-history.yml|\
+                compliance/external-tests/integrated.json|\
+                compliance/rust-sources.json|\
+                docs/THIRD_PARTY_RUST_SOURCES.md|\
+                docs/components/interface/src/components.md|\
+                docs/components/web/public/styles.md|\
                 docs/tools/browser-smoke.md|\
-                docs/15-api-and-errors.md|\
-                test/tools/browser-smoke/runner/history_windows.rs|\
+                src/web/public/styles/components/auth.css|\
+                src/web/src/setup.rs|\
                 test/ci/test_validation_batch_workflow.py|\
-                test/ci/test_file_row_decoration.py|\
-                test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs|\
-                test/tools/browser-smoke/runner/main.rs|\
-                test/tools/browser-smoke/runner/file_row_pointer.js|\
-                test/tools/browser-smoke/unit/file_row_pointer_probe_test.mjs|\
-                test/server/integration/http_engine/directory_history.rs|\
-                test/tools/browser-smoke/runner/fixture.rs|\
-                test/tools/browser-smoke/runner/naming.rs|\
-                test/tools/browser-smoke/unit/fixture_tests.rs|\
-                docs/contracts/core.schema.json|\
-                docs/contracts/openapi.json|\
-                test/tools/contract-check/unit/history_window_tests.rs|\
-                test/tools/browser-smoke/runner/page_layout.rs|\
-                test/tools/browser-smoke/runner/file_row_layout.js|\
-                test/tools/browser-smoke/unit/file_row_layout_probe_test.mjs) ;;
+                test/interface/integration/style_contracts.rs|\
+                test/tools/browser-smoke/runner/auth_layout.js|\
+                test/tools/browser-smoke/runner/auth_layout.rs|\
+                test/tools/browser-smoke/runner/management.rs|\
+                test/tools/browser-smoke/unit/auth_layout_probe_test.mjs) ;;
                 *) retry=false ;;
               esac
             done <<< "$changed"
           fi
-          echo "test_only_retry=$retry" >> "$GITHUB_OUTPUT"
+          echo "web_only_retry=$retry" >> "$GITHUB_OUTPUT"
       - name: Check source governance and tooling regressions
         run: bash .github/scripts/check.sh static
 
   rust-http:
+    if: needs.static.outputs.web_only_retry != 'true'
     name: Affected native Rust and real HTTP
     needs: static
     runs-on: ubuntu-24.04
@@ -95,21 +87,14 @@ jobs:
       - name: Format affected Rust packages
         run: cargo fmt -p platform-io -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p smb-vfs -p browser-smoke -p contract-check -- --check
       - name: Check affected native targets and no-core server
-        if: needs.static.outputs.test_only_retry != 'true'
         run: |
           cargo clippy --locked --offline -p platform-io -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p contract-check -p browser-smoke --all-targets -- -D warnings
           cargo clippy --locked --offline -p storage-server --no-default-features --all-targets -- -D warnings
-      - name: Lint the changed contract validation target
-        if: needs.static.outputs.test_only_retry == 'true'
-        run: cargo clippy --locked --offline -p contract-check --all-targets -- -D warnings
       - name: Exercise engine, server, client and wire unit contracts
-        if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p platform-io -p storage-engine -p storage-server -p storage-client -p storage-contract --lib
       - name: Exercise history integration
-        if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p storage-engine --test branch_alias_operations
       - name: Exercise real HTTP routes
-        if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p storage-server --test http_engine
       - name: Check changed wire contracts and SMB feature combinations
         run: |
@@ -119,7 +104,6 @@ jobs:
 
   web-tests:
     name: Affected Web state and style contracts
-    if: needs.static.outputs.test_only_retry != 'true'
     needs: static
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -225,6 +209,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y fonts-noto-cjk
+      - name: Lint the changed browser validation target
+        if: needs.static.outputs.web_only_retry == 'true'
+        run: |
+          cargo fmt -p browser-smoke -- --check
+          cargo clippy --locked --offline -p browser-smoke --all-targets -- -D warnings
       - name: Exercise real login, setup, monitor, file rows and history flows
         env:
           ZXS_SMOKE_SCREENSHOT: artifacts/batch-web.png
@@ -248,6 +237,6 @@ jobs:
           retention-days: 7
 
   smb-sdk:
-    if: needs.static.outputs.test_only_retry != 'true'
+    if: needs.static.outputs.web_only_retry != 'true'
     needs: static
     uses: ./.github/workflows/smb-sdk.yml

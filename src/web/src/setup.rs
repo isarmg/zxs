@@ -285,7 +285,7 @@ fn account_form(state: RwSignal<Model>) -> impl IntoView {
             <input id="zxs-setup-password" class="zxs-input" name="password" data-setup-password="" type="password" autocomplete="new-password" maxlength="1024" prop:value=move ||state.with(|s|s.password.clone()) disabled=move ||state.with(|s|s.pending) on:input=move |event|state.update(|s|{s.password=event_target_value(&event);s.failure=None;})/>
             <div class="zxs-auth-information" data-setup-unknown=move ||state.with(|s|s.unknown.then_some(""))>
                 {move ||feedback.get().map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
-                <Show when=move ||feedback.get().is_none()><span role="status">{t("请设置账户名和密码", "Please set an account name and password.")}</span></Show>
+                <Show when=move ||feedback.get().is_none()><span role="status">{t("请设置账户名和密码", "Set a name and password.")}</span></Show>
             </div>
             <div class="zxs-auth-actions">
                 <button type="submit" class="zxs-button" disabled=move ||state.with(|s|!can_initialize(s))>{t("设置账户", "Set up account")}</button>

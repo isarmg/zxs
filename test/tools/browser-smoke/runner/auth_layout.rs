@@ -5,36 +5,41 @@ use super::*;
 enum SetupState {
     Existing,
     Empty,
+    Unconfirmed,
 }
 impl SetupState {
     fn form(self) -> &'static str {
         match self {
             Self::Existing => ".authentication-card > form[data-auth-form='login']",
-            Self::Empty => ".authentication-card > form[data-first-account-form]",
+            Self::Empty | Self::Unconfirmed => {
+                ".authentication-card > form[data-first-account-form]"
+            }
         }
     }
     fn user(self) -> &'static str {
         match self {
             Self::Existing => "[name='username']",
-            Self::Empty => "[data-setup-user]",
+            Self::Empty | Self::Unconfirmed => "[data-setup-user]",
         }
     }
     fn password(self) -> &'static str {
         match self {
             Self::Existing => "[name='password']",
-            Self::Empty => "[data-setup-password]",
+            Self::Empty | Self::Unconfirmed => "[data-setup-password]",
         }
     }
     fn final_phase(self) -> &'static str {
         match self {
             Self::Existing => "invalid-login",
             Self::Empty => "keyboard-focus",
+            Self::Unconfirmed => "response-lost",
         }
     }
     fn name(self) -> &'static str {
         match self {
             Self::Existing => "existing",
             Self::Empty => "empty",
+            Self::Unconfirmed => "unconfirmed",
         }
     }
 }
@@ -45,6 +50,38 @@ pub(super) fn run(browser: &Browser, origin: &str, output: Option<&Path>) -> Res
 
 pub(super) fn first_account(browser: &Browser, origin: &str, output: Option<&Path>) -> Result<()> {
     run_with_setup(browser, origin, output, SetupState::Empty)
+}
+
+// Inspect the real lost-response fixture without reloading or replacing its
+// feedback. Its long transport error and fourth action must remain in flow.
+pub(super) fn unconfirmed(browser: &Browser, output: Option<&Path>) -> Result<()> {
+    with_cleanup(
+        || {
+            if let Some(dir) = output {
+                fs::create_dir_all(dir)?;
+            }
+            let mut evidence = Vec::new();
+            for (width, height) in [(320, 568), (390, 844), (980, 760), (1440, 900)] {
+                resize(browser, width, height)?;
+                capture(
+                    browser,
+                    SetupState::Unconfirmed,
+                    "response-lost",
+                    output,
+                    &mut evidence,
+                )?;
+            }
+            Ok(())
+        },
+        || {
+            browser.cdp("Emulation.clearDeviceMetricsOverride", json!({}))?;
+            Ok(())
+        },
+    )?;
+    println!(
+        "PASS unconfirmed account long feedback and all four actions inside six-row card at four viewports"
+    );
+    Ok(())
 }
 
 fn run_with_setup(
@@ -87,6 +124,59 @@ fn geometry(browser: &Browser, setup: SetupState, phase: &str) -> Result<Value> 
     )
 }
 
+fn resize(browser: &Browser, width: u32, height: u32) -> Result<()> {
+    browser.cdp(
+        "Emulation.setDeviceMetricsOverride",
+        json!({"width":width,"height":height,"deviceScaleFactor":1,"mobile":false}),
+    )?;
+    wait_for("anonymous fonts and viewport", || {
+        if browser.script(&format!("return innerWidth==={width} && innerHeight==={height} && document.fonts.status==='loaded'"))? == true {
+            Ok(())
+        } else {
+            Err("viewport or font loading pending".into())
+        }
+    })
+}
+
+fn capture(
+    browser: &Browser,
+    setup: SetupState,
+    phase: &str,
+    output: Option<&Path>,
+    evidence: &mut Vec<Value>,
+) -> Result<()> {
+    let geometry = geometry(browser, setup, phase)?;
+    let width = &geometry["viewport"]["width"];
+    let height = &geometry["viewport"]["height"];
+    if let Some(dir) = output {
+        let name = format!("login-{width}x{height}-{}-{phase}.png", setup.name());
+        let data = browser.command("GET", "/screenshot", None)?;
+        fs::write(
+            dir.join(&name),
+            STANDARD.decode(data.as_str().ok_or("missing login screenshot")?)?,
+        )?;
+    }
+    evidence.push(json!({"width":width,"height":height,"setup_state":setup.name(),"phase":phase,"geometry":geometry}));
+    // Persist before asserting so failed containment still retains its evidence.
+    if let Some(dir) = output {
+        fs::write(
+            dir.join("login-layout.json"),
+            json_codec::to_vec_pretty(
+                &json!({"renderer":"production WASM with real temporary server; CSS viewport sizes, not physical mobile devices","checks":evidence}),
+            )?,
+        )?;
+    }
+    accessibility::input_surfaces(browser)?;
+    if geometry["valid"] != true {
+        return Err(format!(
+            "anonymous {width}x{height}, setup {} {phase}: {geometry}",
+            setup.name()
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn check(browser: &Browser, origin: &str, output: Option<&Path>, setup: SetupState) -> Result<()> {
     if let Some(dir) = output {
         fs::create_dir_all(dir)?;
@@ -94,10 +184,7 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>, setup: SetupSta
     let mut evidence = Vec::new();
     for (width, height) in [(320, 568), (390, 844), (980, 760), (1440, 900)] {
         browser.command("POST", "/url", Some(json!({"url":origin})))?;
-        browser.cdp(
-            "Emulation.setDeviceMetricsOverride",
-            json!({"width":width,"height":height,"deviceScaleFactor":1,"mobile":false}),
-        )?;
+        resize(browser, width, height)?;
         for phase in ["initial", "refreshed", setup.final_phase()] {
             if phase == "refreshed" {
                 // Reload remounts the real app and re-reads setup status. Existing
@@ -138,34 +225,7 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>, setup: SetupSta
                     ))?;
                 }
             }
-            let geometry = geometry(browser, setup, phase)?;
-            if let Some(dir) = output {
-                let name = format!("login-{width}x{height}-{}-{phase}.png", setup.name());
-                let data = browser.command("GET", "/screenshot", None)?;
-                fs::write(
-                    dir.join(&name),
-                    STANDARD.decode(data.as_str().ok_or("missing login screenshot")?)?,
-                )?;
-            }
-            evidence.push(json!({"width":width,"height":height,"setup_state":setup.name(),"phase":phase,"geometry":geometry}));
-            // Persist real evidence before asserting, so a failed layout still
-            // leaves its screenshot and exact measurements in the CI artifact.
-            if let Some(dir) = output {
-                fs::write(
-                    dir.join("login-layout.json"),
-                    json_codec::to_vec_pretty(
-                        &json!({"renderer":"production WASM with real temporary server; CSS viewport sizes, not physical mobile devices","checks":evidence}),
-                    )?,
-                )?;
-            }
-            accessibility::input_surfaces(browser)?;
-            if geometry["valid"] != true {
-                return Err(format!(
-                    "anonymous {width}x{height}, setup {} {phase}: {geometry}",
-                    setup.name()
-                )
-                .into());
-            }
+            capture(browser, setup, phase, output, &mut evidence)?;
         }
     }
     Ok(())
