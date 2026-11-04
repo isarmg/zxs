@@ -20,7 +20,12 @@ fn fixture() -> (tempfile::TempDir, Config, Engine) {
     let mut target = config.clone();
     target.disks[2].metadata_member = false;
     engine
-        .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target).unwrap(),
+            None,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     (temp, config, engine)
 }
@@ -190,7 +195,12 @@ fn membership_archive_inspection_rejects_changed_journal_and_partial_fence() {
     engine.inject_fault_once("after_membership_fence_2");
     assert!(
         engine
-            .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+            .begin_membership_handoff_with_effect(
+                ValidatedConfig::try_from(target).unwrap(),
+                None,
+                "admin",
+                OperationId::generate().unwrap()
+            )
             .is_err()
     );
     assert_eq!(
@@ -309,4 +319,54 @@ fn membership_archive_stage_references_reject_unrelated_objects() {
         ErrorCode::PublicationInvalid
     );
     assert_eq!(bytes(&config), before);
+}
+
+#[test]
+fn membership_archive_journal_reader_retires_without_releasing_the_writer() {
+    let (_temp, config, engine) = fixture();
+    let disk = &config.disks[0];
+    let path = pending::activation::log_path(&engine.config, disk);
+    let before = fs::read(&path).unwrap();
+    let count = || {
+        fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|entry| match fs::read_link(entry) {
+                Ok(target) => target == path,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => panic!("cannot inspect test descriptor: {error}"),
+            })
+            .count()
+    };
+    let writer_descriptors = count();
+    assert!(writer_descriptors > 0);
+    let source = LiveSource {
+        engine: &engine,
+        members: engine.members(),
+        destination: None,
+        seals: BTreeMap::new(),
+        copied: BTreeSet::new(),
+    };
+    let mut journal = source.journal(disk).unwrap();
+    assert_eq!(count(), writer_descriptors + 1);
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    assert!(binding.status().unwrap().ordinary > 0);
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(count(), writer_descriptors);
+    assert_eq!(
+        journal.read(&mut [0; 1]).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(
+        source.journal(disk).err().unwrap().code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
 }

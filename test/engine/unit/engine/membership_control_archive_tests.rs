@@ -20,7 +20,12 @@ fn fixture() -> (tempfile::TempDir, Config, Engine, PathBuf) {
     let mut target = config.clone();
     target.disks[2].metadata_member = false;
     engine
-        .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target).unwrap(),
+            None,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let destination = temp.path().join("archive");
     private_dir(&destination).unwrap();
@@ -451,7 +456,12 @@ fn membership_control_archive_empty_genesis_and_nontrivial_metadata_prefix() {
     let mut target = config.clone();
     target.disks[2].metadata_member = false;
     engine
-        .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target).unwrap(),
+            None,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let path = temp.path().join("archive");
     private_dir(&path).unwrap();
@@ -561,7 +571,12 @@ fn membership_control_archive_preserves_reprotect_plan_and_original_snapshot() {
     let mut target = config.clone();
     target.disks[2].metadata_member = false;
     engine
-        .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target).unwrap(),
+            None,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let path = temp.path().join("archive");
     private_dir(&path).unwrap();

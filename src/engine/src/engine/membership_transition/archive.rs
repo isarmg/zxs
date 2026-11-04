@@ -5,7 +5,6 @@ use super::*;
 use crate::publication_evidence::{verified_graph_object_at, verified_publication_seal_at};
 use std::{
     collections::BTreeSet,
-    fs::File,
     io::{BufReader, Read},
 };
 
@@ -156,7 +155,7 @@ trait ControlSource {
     }
     fn seal(&mut self, candidate: &Candidate, publication: &Publication)
     -> Result<PublicationSeal>;
-    fn journal(&self, disk: &DiskConfig) -> Result<File>;
+    fn journal(&self, disk: &DiskConfig) -> Result<ReadFile>;
     fn observe(&mut self, bytes: usize) -> Result<()>;
 }
 struct LiveSource<'a> {
@@ -242,12 +241,12 @@ impl ControlSource for LiveSource<'_> {
         }
         Ok(seal)
     }
-    fn journal(&self, disk: &DiskConfig) -> Result<File> {
+    fn journal(&self, disk: &DiskConfig) -> Result<ReadFile> {
         self.engine
             .disk_resources
             .get(disk)?
             .root
-            .open_regular(&pending::activation::log_path(&self.engine.config, disk))
+            .open_read_regular(&pending::activation::log_path(&self.engine.config, disk))
     }
 }
 struct Inspection<'a, S> {

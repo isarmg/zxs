@@ -309,6 +309,44 @@ impl JointStore {
         }
         Ok(())
     }
+    /// Verify existing local bytes only. Discovery must not use the repairing
+    /// `verify_certificate` path, even when its journal already looks complete.
+    pub(in crate::engine::membership_transition::pending) fn verify_certificate_read_only(
+        &self,
+        expected: &str,
+        proposal_hash: &str,
+        local: &DiskConfig,
+    ) -> Result<()> {
+        let (_, votes) = verify_certificate_with(
+            &mut |kind, hash| self.load(kind, hash),
+            expected,
+            proposal_hash,
+        )?;
+        let vote = votes.get(&local.disk_id).ok_or_else(missing_member)?;
+        let scan = crate::journal::scan_joint_read_only_at(
+            &self.root,
+            &self.root.path().join("journal.bin"),
+        )?;
+        if scan.torn_tail || scan.records.len() != 1 {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "joint discovery requires an existing untorn singleton",
+            ));
+        }
+        let (record, frame_hash) = &scan.records[0];
+        if vote.receipt.disk_id != local.disk_id
+            || vote.receipt.slot_id != local.slot_id
+            || vote.identity.binding_generation != local.binding_generation
+            || &vote.receipt.record != record
+            || &vote.receipt.frame_hash != frame_hash
+        {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "certificate local vote differs from read-only journal observation",
+            ));
+        }
+        Ok(())
+    }
     pub(in crate::engine::membership_transition::pending) fn portable(
         &self,
         certificate_hash: &str,

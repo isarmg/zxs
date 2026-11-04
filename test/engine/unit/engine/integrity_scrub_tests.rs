@@ -1834,3 +1834,51 @@ fn idle_scrub_batch_drops_cancelled_disk_payload_without_dropping_other_copies()
         }
     }
 }
+
+#[test]
+fn scrub_metadata_journal_reader_closes_at_quiesce_while_writer_stays_owned() {
+    let (_temp, engine, _repository) = fixture();
+    let disk = engine.config.metadata_members().next().unwrap();
+    let path =
+        crate::engine::membership_transition::pending::activation::log_path(&engine.config, disk);
+    let before = fs::read(&path).unwrap();
+    let descriptors = || {
+        fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|entry| match fs::read_link(entry) {
+                Ok(target) => target == path,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => panic!("cannot inspect test descriptor: {error}"),
+            })
+            .count()
+    };
+    let writers = descriptors();
+    assert!(writers > 0);
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    let mut cancelled = false;
+    let outcome = engine.prepare_integrity_scrub().unwrap().run(
+        &IntegrityScrubCancellation::new(),
+        |_, _| panic!("empty repository has no body batches"),
+        |bytes| {
+            if bytes > 0 && !cancelled && descriptors() > writers {
+                assert_eq!(descriptors(), writers + 1);
+                assert!(binding.status().unwrap().ordinary > 0);
+                drop(binding.begin_quiesce().unwrap().unwrap());
+                assert!(binding.status().unwrap().drained());
+                assert_eq!(descriptors(), writers);
+                cancelled = true;
+            }
+        },
+        |_| {},
+    );
+    assert!(cancelled);
+    assert!(!engine.finish_integrity_scrub(outcome).is_healthy());
+    assert_eq!(fs::read(&path).unwrap(), before);
+}

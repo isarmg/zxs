@@ -1,6 +1,12 @@
 //! Read-only generation discovery/admission and explicit crash resume.
 use super::*;
 
+#[allow(
+    dead_code,
+    reason = "restricted read-only discovery awaits Engine startup integration"
+)]
+mod restricted;
+
 pub(crate) fn latest_restore_config(
     configs: &BTreeMap<String, (ValidatedConfig, usize)>,
 ) -> Result<ValidatedConfig> {
@@ -52,6 +58,12 @@ pub(crate) fn latest_restore_config(
 /// Read-only discovery. Config is a projection and cannot choose an authority.
 /// A conflicting or damaged visible marker never falls back to the old epoch.
 pub(crate) fn discover(config: ValidatedConfig) -> Result<ValidatedConfig> {
+    // Existing Engine/pure-add callers remain explicitly unrestricted. Never
+    // call this as fallback from bootstrap RestrictedProbes or a locator error.
+    discover_unrestricted_legacy(config)
+}
+
+fn discover_unrestricted_legacy(config: ValidatedConfig) -> Result<ValidatedConfig> {
     let mut selected: Option<PortableAuthority> = None;
     let mut pending = config.disks.clone();
     let mut visited = std::collections::BTreeSet::new();

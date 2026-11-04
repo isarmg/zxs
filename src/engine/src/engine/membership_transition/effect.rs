@@ -67,7 +67,8 @@ impl Engine {
     /// Prepare a lifecycle control decision, not a completed offline/delete action.
     /// The live registration and every historical route remain intact and business
     /// stays fenced. Lifecycle activation needs the separate registry/I/O protocol.
-    pub fn begin_membership_exit_preparation(
+    #[cfg(test)]
+    pub(super) fn begin_membership_exit_preparation(
         &mut self,
         disk_id: &str,
         action: MembershipExitAction,
@@ -98,7 +99,12 @@ impl Engine {
                 "terminal pool authority is not implemented; no exit fence was written",
             ));
         }
-        self.begin_membership_handoff_with_effect(target, Some(effect), principal, operation_id)
+        self.begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target)?,
+            Some(effect),
+            principal,
+            operation_id,
+        )
     }
 }
 

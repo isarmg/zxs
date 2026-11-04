@@ -117,3 +117,13 @@ fixture reads. Existing copy, repair and scrub regressions remain required.
 No local build or test was run. Destination writers, journal/maintenance handles,
 root descriptors and writer locks remain separate implementation work, so these
 changes still do not complete an administrative offline or deregistration.
+
+## Read-only journal consumers (source pending verification)
+
+Scrub metadata scanning and control-archive journal inspection now open their
+source journals through the root's owned read path. Control-archive journal copy
+inputs retain the same provenance. These changes do not revoke or release active
+journal writers, writer locks, destination archive publishers or root handles.
+Two new test sources compare actual read-descriptor closure with the still-held
+writer, require cancellation failure, and preserve the original journal bytes.
+All execution remains pending the next GitHub validation batch.

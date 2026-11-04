@@ -2,8 +2,8 @@ use super::*;
 use std::collections::BTreeSet;
 
 impl Engine {
-    /// The fence intentionally accepts a broader target. Pending enrollment is
-    /// narrower and never rewrites an unsupported intent to make it admissible.
+    /// Revalidate persisted intent against its exact original configuration.
+    /// Unsupported restored intents remain fenced; they are never rewritten.
     pub(super) fn validate_pending_target(&self) -> Result<Vec<DiskConfig>> {
         let fence = self.membership_fence.as_ref().ok_or_else(|| {
             Error::new(
@@ -29,61 +29,19 @@ impl Engine {
             }
             return Ok(Vec::new());
         }
-        if !same_settings(origin, target) || !same_settings(origin, &self.config) {
-            return Err(unsupported());
-        }
-        let old = origin
-            .disks
-            .iter()
-            .map(|disk| (disk.disk_id.as_str(), disk))
-            .collect::<BTreeMap<_, _>>();
-        let current = self
-            .config
-            .disks
-            .iter()
-            .map(|disk| (disk.disk_id.as_str(), disk))
-            .collect::<BTreeMap<_, _>>();
-        let next = target
-            .disks
-            .iter()
-            .map(|disk| (disk.disk_id.as_str(), disk))
-            .collect::<BTreeMap<_, _>>();
-        if old.len() != current.len()
-            || old.iter().any(|(id, disk)| {
-                current.get(id).is_none_or(|other| !same_disk(disk, other))
-                    || next.get(id).is_none_or(|other| !same_disk(disk, other))
+        if !same_settings(origin, &self.config)
+            || origin.disks.len() != self.config.disks.len()
+            || origin.disks.iter().any(|old| {
+                !self
+                    .config
+                    .disks
+                    .iter()
+                    .any(|current| same_disk(old, current))
             })
         {
             return Err(unsupported());
         }
-        let old_slots = origin
-            .disks
-            .iter()
-            .map(|disk| disk.slot_id.to_ascii_lowercase())
-            .collect::<BTreeSet<_>>();
-        let added = target
-            .disks
-            .iter()
-            .filter(|disk| !old.contains_key(disk.disk_id.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if added.is_empty()
-            || added.iter().any(|disk| {
-                disk.binding_generation != 1
-                    || old_slots.contains(&disk.slot_id.to_ascii_lowercase())
-            })
-        {
-            return Err(unsupported());
-        }
-        for disk in &target.disks {
-            if disk.root.starts_with(&self.root) || self.root.starts_with(&disk.root) {
-                return Err(Error::new(
-                    ErrorCode::UnsafePath,
-                    "pending storage directory overlaps the ZXS control-state directory",
-                ));
-            }
-        }
-        Ok(added)
+        validate_pure_add_target(origin, target, &self.root)
     }
 
     pub(super) fn admit_pending_members(
@@ -399,6 +357,63 @@ pub(super) fn member_identity(
         simulation: config.mode == Mode::Development,
     }
 }
+/// Pure structural admission before the first durable fence. No target root is
+/// inspected, and this proof does not establish directory readiness or an abort.
+pub(in crate::engine::membership_transition) fn validate_pure_add_target(
+    original: &ValidatedConfig,
+    target: &ValidatedConfig,
+    control_root: &Path,
+) -> Result<Vec<DiskConfig>> {
+    if !same_settings(original, target) {
+        return Err(unsupported());
+    }
+    let old = original
+        .disks
+        .iter()
+        .map(|disk| (disk.disk_id.as_str(), disk))
+        .collect::<BTreeMap<_, _>>();
+    let next = target
+        .disks
+        .iter()
+        .map(|disk| (disk.disk_id.as_str(), disk))
+        .collect::<BTreeMap<_, _>>();
+    if old
+        .iter()
+        .any(|(id, disk)| next.get(id).is_none_or(|other| !same_disk(disk, other)))
+    {
+        return Err(unsupported());
+    }
+    let old_slots = original
+        .disks
+        .iter()
+        .map(|disk| disk.slot_id.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let added = target
+        .disks
+        .iter()
+        .filter(|disk| !old.contains_key(disk.disk_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if added.is_empty()
+        || added.iter().any(|disk| {
+            disk.binding_generation != 1 || old_slots.contains(&disk.slot_id.to_ascii_lowercase())
+        })
+    {
+        return Err(unsupported());
+    }
+    if target
+        .disks
+        .iter()
+        .any(|disk| disk.root.starts_with(control_root) || control_root.starts_with(&disk.root))
+    {
+        return Err(Error::new(
+            ErrorCode::UnsafePath,
+            "pending storage directory overlaps the ZXS control-state directory",
+        ));
+    }
+    Ok(added)
+}
+
 fn unsupported() -> Error {
     Error::new(
         ErrorCode::ConfigConflict,

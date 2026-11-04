@@ -113,7 +113,7 @@ impl Engine {
         {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                "exit control preparation awaits authenticated registry, recovery material and persistent I/O closure; activation is not implemented",
+                "exit control preparation awaits authenticated registry, namespace projection and persistent I/O closure; activation is not implemented",
             ));
         }
         if self.config.generation().is_some() && self.membership_fence.is_none() {

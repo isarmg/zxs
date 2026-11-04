@@ -58,14 +58,24 @@ fn membership_fence_preserves_old_bytes_and_reopens_read_only() {
         .collect::<Vec<_>>();
     let operation = OperationId::generate().unwrap();
     let status = engine
-        .begin_membership_handoff(target.clone(), "admin", operation)
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target.clone()).unwrap(),
+            None,
+            "admin",
+            operation,
+        )
         .unwrap();
     assert!(status.quorum_fenced());
     assert!(status.all_members_fenced());
     assert!(engine.is_read_only());
     assert_eq!(
         engine
-            .begin_membership_handoff(target.clone(), "admin", operation)
+            .begin_membership_handoff_with_effect(
+                ValidatedConfig::try_from(target.clone()).unwrap(),
+                None,
+                "admin",
+                operation
+            )
             .unwrap(),
         status
     );
@@ -120,7 +130,12 @@ fn membership_fence_preserves_old_bytes_and_reopens_read_only() {
         );
         assert_eq!(
             opened
-                .begin_membership_handoff(target.clone(), "admin", operation)
+                .begin_membership_handoff_with_effect(
+                    ValidatedConfig::try_from(target.clone()).unwrap(),
+                    None,
+                    "admin",
+                    operation
+                )
                 .unwrap(),
             status
         );
@@ -136,7 +151,12 @@ fn membership_fence_resumes_partial_votes_without_lowering_original_quorum() {
         engine.inject_fault_once(&format!("after_membership_fence_{complete}"));
         assert_eq!(
             engine
-                .begin_membership_handoff(target.clone(), "admin", operation)
+                .begin_membership_handoff_with_effect(
+                    ValidatedConfig::try_from(target.clone()).unwrap(),
+                    None,
+                    "admin",
+                    operation
+                )
                 .unwrap_err()
                 .code(),
             ErrorCode::InjectedFailure
@@ -152,7 +172,12 @@ fn membership_fence_resumes_partial_votes_without_lowering_original_quorum() {
         assert_eq!(journal_bytes(&config), logs);
         assert!(
             reopened
-                .begin_membership_handoff(target, "admin", operation)
+                .begin_membership_handoff_with_effect(
+                    ValidatedConfig::try_from(target).unwrap(),
+                    None,
+                    "admin",
+                    operation
+                )
                 .unwrap()
                 .all_members_fenced()
         );
@@ -174,11 +199,21 @@ fn membership_fence_rejects_changed_intent_and_corrupt_object_before_recovery_wr
     let (temporary, config, target, mut engine) = fixture();
     let operation = OperationId::generate().unwrap();
     let status = engine
-        .begin_membership_handoff(target.clone(), "admin", operation)
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target.clone()).unwrap(),
+            None,
+            "admin",
+            operation,
+        )
         .unwrap();
     assert_eq!(
         engine
-            .begin_membership_handoff(target, "different", operation)
+            .begin_membership_handoff_with_effect(
+                ValidatedConfig::try_from(target).unwrap(),
+                None,
+                "different",
+                operation
+            )
             .unwrap_err()
             .code(),
         ErrorCode::IdempotencyKeyReused
@@ -206,7 +241,12 @@ fn membership_fence_rejects_changed_intent_and_corrupt_object_before_recovery_wr
 fn membership_fence_rejects_business_records_after_fence() {
     let (temporary, config, target, mut engine) = fixture();
     engine
-        .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target).unwrap(),
+            None,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     // The private wrapper rejects ordinary journal extensions even for callers
     // that bypass require_write (such as explicit degraded recovery).
@@ -253,7 +293,12 @@ fn membership_fence_survives_system_directory_loss_and_genesis() {
     let (temporary, config, target, mut engine) = fixture();
     let state = canonical_json(engine.state()).unwrap();
     let status = engine
-        .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target).unwrap(),
+            None,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     drop(engine);
     let restored = Engine::restore_from_disks(
@@ -276,7 +321,12 @@ fn membership_fence_survives_system_directory_loss_and_genesis() {
     target.disks[2].metadata_member = false;
     let mut empty = Engine::initialize(&temp.path().join("system"), config).unwrap();
     empty
-        .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+        .begin_membership_handoff_with_effect(
+            ValidatedConfig::try_from(target).unwrap(),
+            None,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     drop(empty);
     assert!(
@@ -298,7 +348,12 @@ fn membership_fence_append_failures_reopen_and_resume_exact_intent() {
                 .unwrap();
             assert!(
                 engine
-                    .begin_membership_handoff(target.clone(), "admin", operation)
+                    .begin_membership_handoff_with_effect(
+                        ValidatedConfig::try_from(target.clone()).unwrap(),
+                        None,
+                        "admin",
+                        operation
+                    )
                     .is_err()
             );
             assert!(engine.is_read_only());
@@ -323,7 +378,12 @@ fn membership_fence_append_failures_reopen_and_resume_exact_intent() {
             }
             assert!(
                 recovered
-                    .begin_membership_handoff(target, "admin", operation)
+                    .begin_membership_handoff_with_effect(
+                        ValidatedConfig::try_from(target).unwrap(),
+                        None,
+                        "admin",
+                        operation
+                    )
                     .unwrap()
                     .all_members_fenced()
             );
@@ -349,7 +409,12 @@ fn membership_fence_missing_votes_never_claim_a_lower_quorum() {
     engine.inject_fault_once("after_membership_fence_2");
     assert!(
         engine
-            .begin_membership_handoff(target.clone(), "admin", operation)
+            .begin_membership_handoff_with_effect(
+                ValidatedConfig::try_from(target.clone()).unwrap(),
+                None,
+                "admin",
+                operation
+            )
             .is_err()
     );
     assert!(engine.membership_fence_status().unwrap().quorum_fenced());
@@ -365,7 +430,12 @@ fn membership_fence_missing_votes_never_claim_a_lower_quorum() {
     assert!(recovered.is_read_only());
     assert!(
         recovered
-            .begin_membership_handoff(target, "admin", operation)
+            .begin_membership_handoff_with_effect(
+                ValidatedConfig::try_from(target).unwrap(),
+                None,
+                "admin",
+                operation
+            )
             .is_err()
     );
 }
@@ -375,7 +445,12 @@ fn membership_fence_rejects_a_conflicting_intent_or_wrong_prefix() {
     for alter_prefix in [false, true] {
         let (temporary, config, target, mut engine) = fixture();
         engine
-            .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+            .begin_membership_handoff_with_effect(
+                ValidatedConfig::try_from(target).unwrap(),
+                None,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
             .unwrap();
         let mut intent = engine.membership_fence.as_ref().unwrap().intent.clone();
         if alter_prefix {
@@ -419,5 +494,59 @@ fn membership_fence_rejects_a_conflicting_intent_or_wrong_prefix() {
         let before = journal_bytes(&config);
         assert!(Engine::open(&temporary.path().join("system")).is_err());
         assert_eq!(journal_bytes(&config), before);
+    }
+}
+
+#[test]
+fn membership_public_handoff_rejects_unfinishable_shape_before_any_fence() {
+    for case in 0..8 {
+        let (temp, original, _, mut engine) = fixture();
+        let mut target = original.clone();
+        let mut added = target.disks[0].clone();
+        added.disk_id = new_id("disk").unwrap();
+        added.slot_id = "P04".into();
+        added.root = temp.path().join("unopened-addition");
+        target.disks.push(added);
+        match case {
+            0 => {
+                target.disks.remove(2);
+            }
+            1 => target.disks[2].metadata_member = false,
+            2 => target.disks[0].root = temp.path().join("changed-existing-root"),
+            3 => target.disks[0].binding_generation += 1,
+            4 => target.disks[0].capacity_bytes = Some(10),
+            5 => target.max_entries += 1,
+            6 => target.disks[3].binding_generation = 2,
+            7 => target.disks[3].root = engine.root.join("nested-storage"),
+            _ => unreachable!(),
+        }
+        let target = ValidatedConfig::try_from(target).unwrap();
+        let before = objects(temp.path());
+        let state = canonical_json(engine.state()).unwrap();
+        let next_slot = engine.next_slot;
+        assert!(
+            engine
+                .begin_membership_handoff(
+                    (*target).clone(),
+                    "admin",
+                    OperationId::generate().unwrap()
+                )
+                .is_err(),
+            "case {case}"
+        );
+        assert!(engine.membership_fence_status().is_none(), "case {case}");
+        assert!(!engine.is_read_only(), "case {case}");
+        assert_eq!(engine.next_slot, next_slot);
+        assert_eq!(canonical_json(engine.state()).unwrap(), state);
+        assert_eq!(objects(temp.path()), before, "case {case}");
+        engine
+            .create_repository(
+                &RepositoryName::parse("still-writable").unwrap(),
+                "P01",
+                1,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
     }
 }

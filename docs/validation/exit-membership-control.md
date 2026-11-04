@@ -6,7 +6,7 @@
 
 ## 已实现的协议边界
 
-- 实验入口 `begin_membership_exit_preparation` 接受准确 disk_id、`PlannedOffline` 或 `Deregister`、actor 和 operation_id。不可变 intent 绑定退出类型、disk/slot/binding、原/目标配置和精确冻结边界。不同类型不能用同一操作幂等键互换。
+- 仅单元测试可调用的内部实验入口 `begin_membership_exit_preparation` 接受准确 disk_id、`PlannedOffline` 或 `Deregister`、actor 和 operation_id。不可变 intent 绑定退出类型、disk/slot/binding、原/目标配置和精确冻结边界。不同类型不能用同一操作幂等键互换。
 - 目标配置保留全部历史拓扑记录，仅将目标目录的未来 voter 标志移出投票集合。当前 Engine 配置、登记、内容可见性和历史 Placement 不变。非投票目录也可形成显式退出意图，但两侧投票集合保持不变。
 - 控制参与者为原与目标 voter 的并集。proposal 将 target dependencies 与 old-only dependencies 分页分开绑定；前驱 fence、原目录 seal、物理目录身份、控制归档、bootstrap、control receipt 和 acceptance 均按原准确身份检查。
 - `fenced-exit-control-decision` 是控制准备证书，不是下线、注销或新一代业务发布。原 pure-add intent/proposal 省略退出字段，保留现存对象的哈希表示；没有旧程序兼容或旧二进制测试。
@@ -17,9 +17,9 @@
 
 ## 不得越过的完成边界
 
-生产 `activate_pending_membership` 拒绝任何退出效果；代际 authority 验证也拒绝将退出控制证书解释为活动权威。若当前代际已有后续 fence，`resume_membership_activation` 在推广 seal 或执行恢复发布之前拒绝，避免把已有前驱 marker 当成下一次操作已经准备好。
+生产构建不提供退出准备写入口，避免在退出激活/取消尚未完成时写入不可完成的 fence。`activate_pending_membership` 拒绝任何退出效果；代际 authority 验证也拒绝将退出控制证书解释为活动权威。若当前代际已有后续 fence，`resume_membership_activation` 在推广 seal 或执行恢复发布之前拒绝，避免把已有前驱 marker 当成下一次操作已经准备好。
 
-本批不写注销恢复入口，不改变 registered/disabled/detached 状态，不筛选当前文件列表，不撤销目录 I/O，不关闭旧资源，也不产生退出成功的永久业务结果。删除登记最终不擦正文，独占文件退出当前列表且根目录保留可恢复登记材料；计划下线仍保留登记与内容可见性，禁止 I/O。这些生命周期效果必须由后续独立的 registry、恢复材料、持久 I/O 收束和认证发布闭环实现，本证书不能代替它们。
+本批不改变 registered/disabled/detached 状态，不筛选当前文件列表，不撤销目录 I/O，不关闭旧资源，也不产生退出成功的永久业务结果。删除登记最终不擦正文，目标独占文件退出当前列表，不创建或要求目标恢复文件/备份；共享内容和必要控制历史保留。计划下线仍保留登记与内容可见性，禁止 I/O。这些生命周期效果必须由后续独立的 registry、可写命名空间投影、持久 I/O 收束和认证发布闭环实现，本证书不能代替它们。
 
 当前运行时准备路径仍沿既有全原成员 fence/归档检查，并收集、复制、确认全部 union 的实际控制材料。因此尚不能在退出成员已经缺席时启动或完成这段准备；这是当前采集驱动的能力缺口，不是联合多数的最终协议规则。可搬运证书 verifier 已与此限制分离，不能把“缺一个 old-only”无条件判为票数不足。
 

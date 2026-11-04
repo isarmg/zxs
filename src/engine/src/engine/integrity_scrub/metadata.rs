@@ -125,7 +125,7 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
             Error::new(ErrorCode::RecoveryRequired, "metadata member has no admitted writer anchor; recover it before certifying its retained closure")
         })?;
         // No BufReader read-ahead: only the explicit one-byte probe may read beyond the captured frontier.
-        let mut reader = JournalFrameReader::new(self.root.open_regular(
+        let mut reader = JournalFrameReader::new(self.root.open_read_regular(
             &crate::engine::membership_transition::pending::activation::log_path(
                 &self.plan.config,
                 self.disk,

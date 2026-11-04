@@ -63,13 +63,8 @@ fn request(base: &VerifiedDiskRegistry, index: usize, detach: bool) -> RegistryE
     )
     .unwrap();
     let effect = if detach {
-        // Independent pre-publication reference vectors, not claimed capsule proofs.
+        // A pre-publication reference vector, not a verified occurrence projection.
         RegistryExitEffect::Detach {
-            prepared_capsule_hash: object_hash(
-                "prepared-capsule-vector",
-                &json!({"intent":intent_hash}),
-            )
-            .unwrap(),
             occurrence_mask_hash: object_hash(
                 "occurrence-mask-vector",
                 &json!({"intent":intent_hash,"generation":"2"}),
@@ -149,7 +144,11 @@ fn membership_registry_detach_uses_only_prepublication_dependencies_and_blocks_s
     let mut value = json_codec::to_value(detached).unwrap();
     assert!(value.get("publication_hash").is_none());
     assert!(value.get("committed_capsule_hash").is_none());
-    for field in ["publication_hash", "committed_capsule_hash"] {
+    for field in [
+        "publication_hash",
+        "prepared_capsule_hash",
+        "committed_capsule_hash",
+    ] {
         value[field] = json!("a".repeat(64));
         assert!(json_codec::from_value::<DetachedBinding>(value.clone()).is_err());
         value.as_object_mut().unwrap().remove(field);
@@ -167,6 +166,90 @@ fn membership_registry_detach_uses_only_prepublication_dependencies_and_blocks_s
             .is_err()
     );
     assert!(!engine.state.operations.contains_key(&request.operation_id));
+}
+
+#[test]
+fn membership_registry_detach_requires_only_occurrence_mask_and_rejects_recovery_fields() {
+    let (_temp, _engine, base) = fixture();
+    let request = request(&base, 2, true);
+    let value = json_codec::to_value(&request).unwrap();
+    let RegistryExitEffect::Detach {
+        occurrence_mask_hash,
+    } = &request.effect
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        value["effect"],
+        json!({"kind":"detach","occurrence_mask_hash":occurrence_mask_hash})
+    );
+    let decoded: RegistryExitRequest = decode_strict(&canonical_json(&value).unwrap()).unwrap();
+    assert_eq!(decoded, request);
+    base.prepare_exit(decoded).unwrap();
+    for field in [
+        "prepared_capsule_hash",
+        "committed_capsule_hash",
+        "recovery_capsule_hash",
+        "recovery_backup_hash",
+        "publication_hash",
+    ] {
+        for legacy_value in [json!("a".repeat(64)), json!(null)] {
+            let mut legacy = value.clone();
+            legacy["effect"][field] = legacy_value;
+            assert!(
+                decode_strict::<RegistryExitRequest>(&canonical_json(&legacy).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+    }
+    let mut missing = value.clone();
+    missing["effect"]
+        .as_object_mut()
+        .unwrap()
+        .remove("occurrence_mask_hash");
+    assert!(decode_strict::<RegistryExitRequest>(&canonical_json(&missing).unwrap()).is_err());
+    for hash in [
+        String::new(),
+        "ABCDEF".into(),
+        "a".repeat(63),
+        "A".repeat(64),
+    ] {
+        let mut invalid = request.clone();
+        invalid.effect = RegistryExitEffect::Detach {
+            occurrence_mask_hash: hash,
+        };
+        assert!(base.prepare_exit(invalid).is_err());
+    }
+}
+
+#[test]
+fn membership_registry_detach_preparation_needs_no_target_root_or_recovery_files() {
+    let (temp, mut engine, base) = fixture();
+    let before = files(temp.path());
+    let roots = (0..3)
+        .map(|n| temp.path().join(format!("unavailable-{n}")))
+        .collect();
+    engine.config = engine.config.clone().with_disk_roots(roots).unwrap();
+    let relocated = verify(&engine.prepare_disk_registry_base().unwrap());
+    assert_eq!(relocated.commitment(), base.commitment());
+    drop(engine);
+    // The preparation and reader have only registry bytes, with no target root
+    // or live Engine. This is not an activated removal or a content projection.
+    for index in [0, 2] {
+        let request = request(&relocated, index, true);
+        let prepared = relocated.prepare_exit(request.clone()).unwrap();
+        let map = objects(&prepared);
+        let next = relocated
+            .verify_successor(prepared.commitment(), |kind, hash| read(&map, kind, hash))
+            .unwrap();
+        assert_eq!(next.registration(&request.target).unwrap(), None);
+        assert_eq!(next.pending_exit(), Some(&request));
+        assert_eq!(
+            next.historical_topology().cloned().collect::<Vec<_>>(),
+            base.historical_topology().cloned().collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(files(temp.path()), before);
 }
 
 #[test]
@@ -471,7 +554,7 @@ fn membership_registry_publication_witness_is_independent_of_main_operation_succ
     let authority = object_hash("registry-authority-vector", next.commitment()).unwrap();
     let candidate = make_candidate(&next, &authority, OperationId::generate().unwrap());
     // Real durable journal frames verify the registry/receipt binding. The vector
-    // deliberately does not claim prescribed snapshot/D3 or capsule completion.
+    // deliberately does not claim prescribed snapshot/D3 or lifecycle completion.
     let (publication, seal) =
         publish_vector(&temp.path().join("vector"), engine.config(), &candidate);
     let encoded = canonical_json(&candidate).unwrap();

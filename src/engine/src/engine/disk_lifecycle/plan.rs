@@ -116,7 +116,7 @@ pub struct DeregistrationPreview<'a> {
 }
 impl Engine {
     /// Preview metadata effects without touching any disk, even an unavailable
-    /// target. This does not establish capsule durability, I/O quiescence,
+    /// target. This does not establish I/O quiescence,
     /// workspace safety, quorum viability or permission to execute a deletion.
     pub fn preview_disk_deregistration(
         &self,

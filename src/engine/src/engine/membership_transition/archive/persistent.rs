@@ -4,7 +4,10 @@ use super::*;
 use crate::metadata_map::{Encoder, ProofMeasure, Reference};
 use platform_io::fs_safety::linux::FileIdentity;
 use platform_io::fs_safety::{AdvisoryLock, RelativePath};
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 const ROOT_KIND: &str = "membership-control-archive";
 pub(super) const SEAL_KIND: &str = "membership-publication-seal";
@@ -243,7 +246,7 @@ impl ArchiveStore {
             &directory,
             handle
                 .root
-                .open_regular(&pending::activation::log_path(&engine.config, disk))?,
+                .open_read_regular(&pending::activation::log_path(&engine.config, disk))?,
             journal,
         )?;
         Ok(ArchivedMember {
@@ -261,7 +264,7 @@ impl ArchiveStore {
     fn copy_journal(
         &self,
         directory: &Path,
-        mut input: File,
+        mut input: ReadFile,
         expected: &MembershipJournalInspection,
     ) -> Result<()> {
         let path = directory.join("journal.bin");
@@ -377,8 +380,8 @@ impl ControlSource for ArchivedSource<'_> {
         verify_publication_seal(candidate, publication, &seal)?;
         Ok(seal)
     }
-    fn journal(&self, disk: &DiskConfig) -> Result<File> {
-        self.store.root.open_regular(
+    fn journal(&self, disk: &DiskConfig) -> Result<ReadFile> {
+        self.store.root.open_read_regular(
             &self
                 .store
                 .member_directory(disk, self.namespace.as_deref())
@@ -720,7 +723,7 @@ impl ArchiveStore {
         }
         self.copy_journal(
             &to,
-            source.root.open_regular(&from.join("journal.bin"))?,
+            source.root.open_read_regular(&from.join("journal.bin"))?,
             &member.journal,
         )
     }
@@ -1170,8 +1173,8 @@ impl ControlSource for ActiveObjects<'_> {
             .write_json(&publication_seal_path(self.disk, &hash), &seal, false)?;
         Ok(seal)
     }
-    fn journal(&self, disk: &DiskConfig) -> Result<File> {
-        self.store.root.open_regular(
+    fn journal(&self, disk: &DiskConfig) -> Result<ReadFile> {
+        self.store.root.open_read_regular(
             &self
                 .store
                 .member_directory(disk, self.namespace.as_deref())

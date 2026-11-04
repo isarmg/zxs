@@ -66,15 +66,12 @@ struct Registration {
 }
 
 /// All references precede the proposed registry in the hash dependency graph.
-/// No Publication or Committed capsule field exists in this schema.
+/// Detach binds an occurrence mask, not a target-side recovery backup.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum RegistryExitEffect {
     Disable,
-    Detach {
-        prepared_capsule_hash: String,
-        occurrence_mask_hash: String,
-    },
+    Detach { occurrence_mask_hash: String },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -92,11 +89,9 @@ impl RegistryExitRequest {
         digest(&self.request_digest)?;
         digest(&self.intent_hash)?;
         if let RegistryExitEffect::Detach {
-            prepared_capsule_hash,
             occurrence_mask_hash,
         } = &self.effect
         {
-            digest(prepared_capsule_hash)?;
             digest(occurrence_mask_hash)?;
         }
         Ok(())
@@ -154,7 +149,7 @@ struct RegistryState {
 }
 
 /// Authenticated registry graph only. It does not admit disk resources, choose a
-/// current head, prove capsule durability, or authorize any service or mutation.
+/// current head, prove lifecycle completion, or authorize any service or mutation.
 #[derive(Clone, Debug)]
 pub struct VerifiedDiskRegistry {
     commitment: DiskRegistryCommitment,
@@ -393,7 +388,7 @@ impl VerifiedDiskRegistry {
     }
     /// Authenticate actual publication evidence without consulting the main
     /// lifecycle operation result. This is registry/publication binding, not a
-    /// complete prescribed-D3, capsule-durability or serving-authority proof.
+    /// complete prescribed-D3, lifecycle-completion or serving-authority proof.
     pub fn verify_publication_binding(
         &self,
         candidate_bytes: &[u8],

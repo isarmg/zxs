@@ -167,19 +167,20 @@ impl Engine {
         principal: &str,
         operation_id: OperationId,
     ) -> Result<MembershipFenceStatus> {
+        let target = ValidatedConfig::try_from(target)?;
+        pending::admission::validate_pure_add_target(&self.config, &target, &self.root)?;
         self.begin_membership_handoff_with_effect(target, None, principal, operation_id)
     }
 
     fn begin_membership_handoff_with_effect(
         &mut self,
-        target: Config,
+        target: ValidatedConfig,
         effect: Option<ExitEffect>,
         principal: &str,
         operation_id: OperationId,
     ) -> Result<MembershipFenceStatus> {
         Self::require_actor(principal)?;
         self.require_no_commit_preparation()?;
-        let target = ValidatedConfig::try_from(target)?;
         validate_transition_target(&self.config, &target, effect.as_ref())?;
         if let Some(fence) = &self.membership_fence {
             if fence.intent.operation_id != operation_id

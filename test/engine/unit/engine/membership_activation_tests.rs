@@ -1449,3 +1449,94 @@ fn membership_activation_resume_rejects_missing_active_generation_namespace() {
     assert_eq!(error.code(), ErrorCode::RecoveryRequired);
     assert!(!missing.exists());
 }
+
+#[test]
+fn membership_activation_resume_missing_journals_cannot_replace_sealed_current_publication() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    write_body(
+        &mut fixture.engine,
+        &fixture.branch,
+        b"published before journal loss",
+    );
+    let members = fixture.engine.members();
+    let disk = &members[0];
+    let scan = scan_configured_at(
+        &fixture.engine.disk_resources.get(disk).unwrap().root,
+        disk,
+        &fixture.engine.config,
+    )
+    .unwrap();
+    let record = &scan.records.last().unwrap().0;
+    assert_eq!(record.record_type, RecordType::Publication);
+    let seals = members
+        .iter()
+        .map(|disk| {
+            let path = publication_seal_path(disk, &record.candidate_hash);
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    let journals = members
+        .iter()
+        .map(|disk| log_path(&fixture.engine.config, disk))
+        .collect::<Vec<_>>();
+    let Fixture { temp, engine, .. } = fixture;
+    drop(engine);
+    for path in &journals {
+        fs::remove_file(path).unwrap();
+    }
+    let error = match Engine::resume_membership_activation(&temp.path().join("system")) {
+        Ok(_) => panic!("resume must not reconstruct erased current decisions from seals"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert!(
+        error
+            .to_string()
+            .contains("journal history omits a sealed publication")
+    );
+    // Promotion can reinstall derived marker/archive material before this
+    // contradiction is checked. It must not create the missing journal leaves.
+    assert!(journals.iter().all(|path| !path.exists()));
+    for (path, bytes) in seals {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn membership_activation_resume_missing_replica_cannot_skip_another_members_real_fence() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    prepare_successor(&mut fixture.engine, fixture.temp.path(), "later-fence");
+    let members = fixture.engine.members();
+    let missing = log_path(&fixture.engine.config, &members[0]);
+    let fenced = log_path(&fixture.engine.config, &members[1]);
+    let scan = scan_configured_at(
+        &fixture.engine.disk_resources.get(&members[1]).unwrap().root,
+        &members[1],
+        &fixture.engine.config,
+    )
+    .unwrap();
+    assert!(
+        scan.records
+            .iter()
+            .any(|(record, _)| record.record_type == RecordType::MembershipFence)
+    );
+    let preserved = fs::read(&fenced).unwrap();
+    let Fixture { temp, engine, .. } = fixture;
+    drop(engine);
+    fs::remove_file(&missing).unwrap();
+    let error = match Engine::resume_membership_activation(&temp.path().join("system")) {
+        Ok(_) => panic!("a missing replica cannot authorize resuming across a real later fence"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert!(
+        error
+            .to_string()
+            .contains("current generation remains fenced")
+    );
+    assert!(!missing.exists());
+    assert_eq!(fs::read(fenced).unwrap(), preserved);
+}
