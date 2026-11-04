@@ -167,7 +167,7 @@ fn directory_exists_at(root: &DiskRoot, path: &Path) -> Result<bool> {
     match root.optional_metadata(path)? {
         None => Ok(false),
         Some(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            root.directory(path)?;
+            root.directory_identity(path)?;
             Ok(true)
         }
         Some(_) => Err(invalid(
@@ -284,7 +284,7 @@ fn named_containers(
             )
         })?;
         name_policy::validate_name(name)?;
-        disk.directory(&path)?;
+        disk.directory_identity(&path)?;
         if marker_matches_at(disk, &path.join(OWNER_MARKER), file_id, observe)? {
             reject_unsupported_container(disk, &path)?;
             if !directory_exists_at(disk, &path.join("versions"))? {
@@ -347,7 +347,7 @@ fn container_at(
             )
         })?;
         name_policy::validate_name(name)?;
-        disk.directory(&path)?;
+        disk.directory_identity(&path)?;
         if name == "namespace"
             && marker_matches_at(disk, &path.join(NAMESPACE_MARKER), file_id, observe)?
         {
@@ -376,7 +376,7 @@ fn file_exists_at(root: &DiskRoot, path: &Path) -> Result<bool> {
                 && !metadata.file_type().is_symlink()
                 && metadata.nlink() == 1 =>
         {
-            root.open_regular(path)?;
+            root.open_read_regular(path)?;
             Ok(true)
         }
         Some(_) => Err(invalid("version body must be one ordinary unlinked file")),
@@ -454,15 +454,16 @@ fn content_path_inner(
     Ok(target)
 }
 
-fn verify_body(root: &DiskRoot, path: &Path, version: &FileVersion) -> Result<fs::File> {
+fn verify_body(root: &DiskRoot, path: &Path, version: &FileVersion) -> Result<ReadFile> {
     if !file_exists_at(root, path)? {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentMissing,
             "version body is missing",
         ));
     }
-    let mut file = root.open_regular(path)?;
-    if file.metadata()?.len() != version.logical_size {
+    let mut file = root.open_read_regular(path)?;
+    let stamp = crate::file_stamp::FileStamp::from_metadata(&file.metadata()?);
+    if stamp.size != version.logical_size {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentCorrupt,
             "version body length differs",
@@ -492,6 +493,7 @@ fn verify_body(root: &DiskRoot, path: &Path, version: &FileVersion) -> Result<fs
     }
     if size != version.logical_size
         || ContentHash::from_digest(digest.finalize()) != version.content_hash
+        || crate::file_stamp::FileStamp::from_metadata(&file.metadata()?) != stamp
     {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentCorrupt,
@@ -535,6 +537,13 @@ pub(crate) fn install_version_content_at(
     let (version, copied, verified) = match content {
         PreparedContent::Verified(verified) => (verified.version(), None, Some(verified)),
         PreparedContent::Copied(copied) => {
+            validate_version(copied.version())?;
+            copied.check_at(
+                root,
+                &directory
+                    .join("content")
+                    .join(&copied.version().creation_name),
+            )?;
             let (version, file) = copied.into_parts();
             (version, Some(file), None)
         }
@@ -543,7 +552,7 @@ pub(crate) fn install_version_content_at(
     let source = directory.join("content").join(&version.creation_name);
     let name = &version.storage_name;
     let history = history_root(directory)?;
-    root.directory(history)?;
+    root.directory_identity(history)?;
     let stable = history.join("file-containers").join(&version.file_id);
     root.private_dir(&stable)?;
     let named = match container_at(root, history, &version.file_id, &mut |_| Ok(()))? {
@@ -582,14 +591,7 @@ pub(crate) fn install_version_content_at(
                     }
                 }
             };
-            let parent = root.directory(source_parent)?;
-            rustix::fs::unlinkat(
-                &parent,
-                source.file_name().expect("source name"),
-                rustix::fs::AtFlags::empty(),
-            )
-            .map_err(std::io::Error::from)?;
-            parent.sync_all()?;
+            root.remove_file_synced(&source)?;
         }
         // Retrying after an interrupted directory sync must complete durability
         // even when the exclusive move already made the target visible.
@@ -612,18 +614,7 @@ pub(crate) fn install_version_content_at(
             }
         }
     };
-    let from = root.directory(source.parent().expect("source parent"))?;
-    let to = root.directory(&versions)?;
-    rustix::fs::renameat_with(
-        &from,
-        source.file_name().expect("source name"),
-        &to,
-        name.as_str(),
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(std::io::Error::from)?;
-    from.sync_all()?;
-    to.sync_all()?;
+    root.rename_noreplace_synced(&source, &target)?;
     root.sync_dir(&named)?;
     Ok(target)
 }
@@ -764,16 +755,7 @@ fn synchronize_location(
     let Some(location) = location else {
         let target = current.parent().expect("container parent").join(name);
         if target != current {
-            let parent = root.directory(current.parent().expect("container parent"))?;
-            rustix::fs::renameat_with(
-                &parent,
-                current.file_name().expect("container name"),
-                &parent,
-                name,
-                rustix::fs::RenameFlags::NOREPLACE,
-            )
-            .map_err(std::io::Error::from)?;
-            parent.sync_all()?;
+            root.rename_noreplace_synced(&current, &target)?;
         }
         return Ok(target);
     };
@@ -796,17 +778,9 @@ fn synchronize_location(
         )?
     {
         let temporary_name = format!(".zxs-relocate-{}", new_id("req")?);
-        let parent = root.directory(stable)?;
-        rustix::fs::renameat_with(
-            &parent,
-            "namespace",
-            &parent,
-            temporary_name.as_str(),
-            rustix::fs::RenameFlags::NOREPLACE,
-        )
-        .map_err(std::io::Error::from)?;
-        parent.sync_all()?;
-        current = stable.join(temporary_name);
+        let temporary = stable.join(temporary_name);
+        root.rename_noreplace_synced(&namespace, &temporary)?;
+        current = temporary;
     }
     root.private_dir(&namespace)?;
     if !marker_matches_at(
@@ -821,19 +795,9 @@ fn synchronize_location(
     if target != current {
         if target.starts_with(&current) || current.starts_with(&target) {
             let temporary_name = format!(".zxs-relocate-{}", new_id("req")?);
-            let source = root.directory(current.parent().expect("current container parent"))?;
-            let destination = root.directory(stable)?;
-            rustix::fs::renameat_with(
-                &source,
-                current.file_name().expect("current container name"),
-                &destination,
-                temporary_name.as_str(),
-                rustix::fs::RenameFlags::NOREPLACE,
-            )
-            .map_err(std::io::Error::from)?;
-            source.sync_all()?;
-            destination.sync_all()?;
-            current = stable.join(temporary_name);
+            let temporary = stable.join(temporary_name);
+            root.rename_noreplace_synced(&current, &temporary)?;
+            current = temporary;
         }
         if path_directory_exists_at(root, &namespace, &target)? {
             // Only structural empty parents can be replaced. Validate all of
@@ -841,14 +805,7 @@ fn synchronize_location(
             let mut empty = Vec::new();
             collect_empty_directories(root, &target, 0, &mut empty)?;
             for directory in empty {
-                let parent = root.directory(directory.parent().expect("empty parent"))?;
-                rustix::fs::unlinkat(
-                    &parent,
-                    directory.file_name().expect("empty name"),
-                    rustix::fs::AtFlags::REMOVEDIR,
-                )
-                .map_err(std::io::Error::from)?;
-                parent.sync_all()?;
+                root.remove_empty_directory_synced(&directory)?;
             }
         }
         let destination_parent = target.parent().expect("canonical location parent");
@@ -865,18 +822,7 @@ fn synchronize_location(
             root.write_json(&current.join(OWNER_MARKER), &file_id, false)?;
         }
         root.sync_dir(&current)?;
-        let source = root.directory(current.parent().expect("current container parent"))?;
-        let destination = root.directory(destination_parent)?;
-        rustix::fs::renameat_with(
-            &source,
-            current.file_name().expect("current container name"),
-            &destination,
-            target.file_name().expect("target container name"),
-            rustix::fs::RenameFlags::NOREPLACE,
-        )
-        .map_err(std::io::Error::from)?;
-        source.sync_all()?;
-        destination.sync_all()?;
+        root.rename_noreplace_synced(&current, &target)?;
     }
     root.sync_dir(&namespace)?;
     root.sync_dir(stable)?;
@@ -889,14 +835,7 @@ fn synchronize_location(
                 break;
             }
             let ancestor = parent.parent().expect("namespace ancestor").to_path_buf();
-            let held = root.directory(&ancestor)?;
-            rustix::fs::unlinkat(
-                &held,
-                parent.file_name().expect("empty namespace parent"),
-                rustix::fs::AtFlags::REMOVEDIR,
-            )
-            .map_err(std::io::Error::from)?;
-            held.sync_all()?;
+            root.remove_empty_directory_synced(&parent)?;
             parent = ancestor;
         }
     }
@@ -912,7 +851,7 @@ fn collect_empty_directories(
     if depth > 33 {
         return Err(invalid("container namespace exceeds the path depth limit"));
     }
-    disk.directory(root)?;
+    disk.directory_identity(root)?;
     for entry in disk.entries(root)? {
         let entry = entry?;
         let path = root.join(entry.as_path());

@@ -213,7 +213,7 @@ fn pending_reuse_and_creation_require_file_and_directory_fences() {
 fn pending_writer_cannot_append_business_records_or_a_second_binding() {
     let (_temp, disk, root, directory) = setup();
     let opened = OpenJournal::scan_directory(
-        root.directory(&directory).unwrap(),
+        root.journal_directory(&directory).unwrap(),
         JournalNamespace::Pending,
     )
     .unwrap();
@@ -362,11 +362,13 @@ fn joint_pending_and_active_namespaces_are_exhaustively_disjoint() {
         assert_eq!(std::fs::read(directory.join("journal.bin")).unwrap(), bytes);
     }
     std::fs::write(directory.join("journal.bin"), joint_bytes).unwrap();
-    let (mut writer, _) =
-        OpenJournal::scan_directory(root.directory(&directory).unwrap(), JournalNamespace::Joint)
-            .unwrap()
-            .into_writer()
-            .unwrap();
+    let (mut writer, _) = OpenJournal::scan_directory(
+        root.journal_directory(&directory).unwrap(),
+        JournalNamespace::Joint,
+    )
+    .unwrap()
+    .into_writer()
+    .unwrap();
     for (kind, mode) in [
         (RecordType::MembershipControlBootstrap, AppendMode::Joint),
         (RecordType::MembershipJointAccept, AppendMode::Pending),

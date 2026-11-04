@@ -18,10 +18,7 @@ pub(crate) struct PendingJournal {
 
 enum PendingState {
     Scanned(OpenJournal),
-    Synchronized {
-        writer: JournalWriter,
-        directory: std::fs::File,
-    },
+    Synchronized(JournalWriter),
 }
 
 impl PendingJournal {
@@ -69,7 +66,7 @@ impl PendingJournal {
         object_hash: &str,
         namespace: JournalNamespace,
     ) -> Result<Self> {
-        let opened = OpenJournal::scan_directory(root.directory(directory)?, namespace)?;
+        let opened = OpenJournal::scan_directory(root.journal_directory(directory)?, namespace)?;
         if opened.scan.records.iter().any(|(record, _)| {
             record.sequence != sequence
                 || record.candidate_hash != candidate_hash
@@ -101,7 +98,7 @@ impl PendingJournal {
             {
                 Ok(())
             }
-            Some(PendingState::Synchronized { .. }) => Ok(()),
+            Some(PendingState::Synchronized(_)) => Ok(()),
             _ => Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "membership journal is not a complete synchronized singleton",
@@ -116,7 +113,7 @@ impl PendingJournal {
                 "pending journal I/O failed; reopen before synchronization",
             )
         })?;
-        let (mut writer, directory) = match state {
+        let mut writer = match state {
             PendingState::Scanned(opened) => {
                 #[cfg(feature = "fault-injection")]
                 let opened = {
@@ -124,24 +121,21 @@ impl PendingJournal {
                     opened.opening_fault = self.opening_fault.take();
                     opened
                 };
-                let directory = opened.directory.try_clone()?;
-                (opened.into_writer()?.0, directory)
+                opened.into_writer()?.0
             }
-            PendingState::Synchronized { writer, directory } => {
-                sync_open_journal(
-                    &writer.file,
-                    &directory,
+            PendingState::Synchronized(mut writer) => {
+                writer.io.synchronize(
                     #[cfg(feature = "fault-injection")]
                     self.opening_fault.take(),
                 )?;
-                (writer, directory)
+                writer
             }
         };
         #[cfg(feature = "fault-injection")]
         {
             writer.fault = self.fault.take();
         }
-        verify_named_singleton(&writer.file, &directory)?;
+        writer.io.verify_singleton()?;
         writer.repair_torn_tail()?;
         let (kind, mode) = match self.namespace {
             JournalNamespace::Pending => {
@@ -160,29 +154,11 @@ impl PendingJournal {
             &self.object_hash,
             mode,
         )?;
-        verify_named_singleton(&writer.file, &directory)?;
         // Retain the same descriptors and verified singleton. A repeated call must fence
         // both the file and its directory again before returning the existing receipt.
-        self.state = Some(PendingState::Synchronized { writer, directory });
+        self.state = Some(PendingState::Synchronized(writer));
         Ok(receipt)
     }
-}
-
-fn verify_named_singleton(file: &std::fs::File, directory: &std::fs::File) -> Result<()> {
-    use platform_io::fs_safety::linux::FileIdentity;
-    let named = open_existing_journal(directory, &journal_name())?.ok_or_else(|| {
-        Error::new(
-            ErrorCode::LogFork,
-            "membership journal name disappeared before receipt",
-        )
-    })?;
-    if FileIdentity::from_fd(&named)? != FileIdentity::from_fd(file)? {
-        return Err(Error::new(
-            ErrorCode::LogFork,
-            "membership journal name changed before receipt",
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

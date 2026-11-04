@@ -1634,3 +1634,6 @@ fn system_clock_version_time_validates_calendar_boundary() {
         Err(Error::Clock(_))
     ));
 }
+
+#[path = "io_tail_tests.rs"]
+mod io_tail_tests;

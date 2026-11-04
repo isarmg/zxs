@@ -162,10 +162,12 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
     let config = Config::development([temp.path().join("disk")]).unwrap();
     let disk = config.disks[0].clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
-    engine.journals.get_mut(&disk.disk_id).unwrap().file = std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/full")
-        .unwrap();
+    engine
+        .journals
+        .get_mut(&disk.disk_id)
+        .unwrap()
+        .io
+        .inject_full_device();
     let error = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("failed").unwrap(),
@@ -409,12 +411,10 @@ fn leftover_created_leaf_requires_both_opening_durability_fences() {
         let parent = path.parent().unwrap();
         std::fs::remove_file(&path).unwrap();
         sync_dir(parent).unwrap();
-        let held = DiskRoot::open(&disk.root).unwrap();
-        let directory = held.directory(parent).unwrap();
-        let file = create_journal(&directory, &journal_name()).unwrap();
-        let error = sync_open_journal(&file, &directory, Some(fault)).unwrap_err();
+        let mut creating = OpenJournal::scan(&disk).unwrap();
+        creating.opening_fault = Some(fault);
+        let error = creating.into_writer().err().unwrap();
         assert!(error.source().is_some());
-        drop(file);
         assert!(path.is_file());
 
         let mut opened = OpenJournal::scan(&disk).unwrap();

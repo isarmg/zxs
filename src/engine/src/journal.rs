@@ -1,8 +1,10 @@
 use crate::{disk::*, *};
 use data_serialization::{Deserialize, Serialize};
+#[cfg(test)]
+use std::io::Write;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
 };
 pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -128,7 +130,7 @@ pub(crate) fn scan_configured_at(
     )
 }
 pub(crate) fn scan_path_at(root: &DiskRoot, path: &Path) -> Result<Scan> {
-    match root.open_optional_regular(path)? {
+    match root.open_optional_read_regular(path)? {
         Some(file) => scan_frames(BufReader::new(file)),
         None => Ok(Scan {
             records: Vec::new(),
@@ -142,7 +144,7 @@ mod pending;
 pub(crate) use pending::PendingJournal;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum JournalNamespace {
+pub(crate) enum JournalNamespace {
     Active,
     Pending,
     Joint,
@@ -165,8 +167,7 @@ impl JournalNamespace {
 /// Existing bytes stay untouched until recovery has accepted the publication prefix.
 pub(crate) struct OpenJournal {
     namespace: JournalNamespace,
-    directory: std::fs::File,
-    file: Option<std::fs::File>,
+    io: JournalIo,
     pub scan: Scan,
     #[cfg(feature = "fault-injection")]
     opening_fault: Option<OpeningFault>,
@@ -178,10 +179,9 @@ impl OpenJournal {
     }
     #[cfg(test)]
     pub(crate) fn scan_at(root: &DiskRoot, d: &DiskConfig) -> Result<Self> {
-        Self::scan_directory(
-            root.directory(log_path(d).parent().expect("journal parent"))?,
-            JournalNamespace::Active,
-        )
+        let io = root.journal_directory(log_path(d).parent().expect("journal parent"))?;
+        io.require_genesis()?;
+        Self::scan_directory(io, JournalNamespace::Active)
     }
     pub(crate) fn scan_configured_at(
         root: &DiskRoot,
@@ -189,25 +189,15 @@ impl OpenJournal {
         config: &ValidatedConfig,
     ) -> Result<Self> {
         let path = crate::engine::membership_transition::pending::activation::log_path(config, d);
-        Self::scan_directory(
-            root.directory(path.parent().expect("invariant: journal parent"))?,
-            JournalNamespace::Active,
-        )
+        let io = root.journal_directory(path.parent().expect("invariant: journal parent"))?;
+        io.require_configured(config)?;
+        Self::scan_directory(io, JournalNamespace::Active)
     }
-    fn scan_directory(directory: std::fs::File, namespace: JournalNamespace) -> Result<Self> {
-        let file = open_existing_journal(&directory, &journal_name())?;
-        let scan = match &file {
-            Some(file) => scan_frames_namespace(BufReader::new(file), namespace)?,
-            None => Scan {
-                records: Vec::new(),
-                valid_bytes: 0,
-                torn_tail: false,
-            },
-        };
+    fn scan_directory(mut io: JournalIo, namespace: JournalNamespace) -> Result<Self> {
+        let scan = io.scan(namespace)?;
         Ok(Self {
             namespace,
-            directory,
-            file,
+            io,
             scan,
             #[cfg(feature = "fault-injection")]
             opening_fault: None,
@@ -215,15 +205,9 @@ impl OpenJournal {
     }
     /// Transfer the scanned history to recovery; only the current slot is
     /// duplicated for the writer's independently mutable receipt tail.
-    pub(crate) fn into_writer(self) -> Result<(JournalWriter, Vec<(Record, String)>)> {
-        let file = match self.file {
-            Some(file) => file,
-            None => create_journal(&self.directory, &journal_name())?,
-        };
+    pub(crate) fn into_writer(mut self) -> Result<(JournalWriter, Vec<(Record, String)>)> {
         // A surviving leaf may come from a failed creation before its directory fence.
-        sync_open_journal(
-            &file,
-            &self.directory,
+        self.io.finish_open(
             #[cfg(feature = "fault-injection")]
             self.opening_fault,
         )?;
@@ -235,7 +219,7 @@ impl OpenJournal {
         Ok((
             JournalWriter {
                 namespace: self.namespace,
-                file,
+                io: self.io,
                 records: tail,
                 state: if self.scan.torn_tail {
                     WriterState::TornTail(self.scan.valid_bytes)
@@ -388,6 +372,22 @@ fn scan_frames_namespace(reader: impl Read, namespace: JournalNamespace) -> Resu
         torn_tail: reader.torn_tail,
     })
 }
+pub(crate) fn scan_frames_observed(
+    reader: impl Read,
+    namespace: JournalNamespace,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Scan> {
+    let mut reader = JournalFrameReader::with_namespace(reader, namespace);
+    let mut records = Vec::new();
+    while let Some(record) = reader.next_record_observed(observe)? {
+        records.push(record);
+    }
+    Ok(Scan {
+        records,
+        valid_bytes: reader.valid_bytes,
+        torn_tail: reader.torn_tail,
+    })
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AppendMode {
     Live,
@@ -413,7 +413,7 @@ pub enum JournalFault {
 /// The Engine owns this descriptor and its current decision-slot receipts.
 pub(crate) struct JournalWriter {
     namespace: JournalNamespace,
-    file: std::fs::File,
+    io: JournalIo,
     records: Vec<(Record, String)>,
     state: WriterState,
     #[cfg(feature = "fault-injection")]
@@ -426,49 +426,23 @@ pub(crate) enum OpeningFault {
     DirectorySync,
 }
 
-fn sync_open_journal(
-    file: &std::fs::File,
-    parent: &std::fs::File,
-    #[cfg(feature = "fault-injection")] fault: Option<OpeningFault>,
-) -> Result<()> {
-    #[cfg(feature = "fault-injection")]
-    if fault == Some(OpeningFault::FileSync) {
-        return Err(std::io::Error::from_raw_os_error(5).into());
-    }
-    file.sync_data()?;
-    #[cfg(feature = "fault-injection")]
-    if fault == Some(OpeningFault::DirectorySync) {
-        return Err(std::io::Error::from_raw_os_error(5).into());
-    }
-    parent.sync_all()?;
-    Ok(())
-}
-
-fn journal_name() -> platform_io::fs_safety::EntryName {
+pub(crate) fn journal_name() -> platform_io::fs_safety::EntryName {
     platform_io::fs_safety::EntryName::new("journal.bin")
         .expect("invariant: journal has one fixed entry name")
 }
 
-fn create_synced_journal(parent: &std::fs::File) -> Result<std::fs::File> {
-    let file = create_journal(parent, &journal_name())?;
-    sync_open_journal(
-        &file,
-        parent,
-        #[cfg(feature = "fault-injection")]
-        None,
-    )?;
-    Ok(file)
-}
 impl JournalWriter {
     #[cfg(test)]
     pub(crate) fn create(d: &DiskConfig) -> Result<Self> {
         Self::create_at(&DiskRoot::open(&d.root)?, d)
     }
     pub(crate) fn create_at(root: &DiskRoot, d: &DiskConfig) -> Result<Self> {
-        let directory = root.directory(log_path(d).parent().expect("journal parent"))?;
+        let mut io = root.journal_directory(log_path(d).parent().expect("journal parent"))?;
+        io.require_genesis()?;
+        io.create()?;
         Ok(Self {
             namespace: JournalNamespace::Active,
-            file: create_synced_journal(&directory)?,
+            io,
             records: Vec::new(),
             state: WriterState::Ready,
             #[cfg(feature = "fault-injection")]
@@ -501,6 +475,7 @@ impl JournalWriter {
         Ok(())
     }
     pub(crate) fn repair_torn_tail(&mut self) -> Result<()> {
+        self.io.check_writer()?;
         match self.state {
             WriterState::Ready => Ok(()),
             WriterState::RecoveryRequired => Err(Error::new(
@@ -509,8 +484,7 @@ impl JournalWriter {
             )),
             WriterState::TornTail(valid_bytes) => {
                 self.state = WriterState::RecoveryRequired;
-                self.file.set_len(valid_bytes)?;
-                self.file.sync_data()?;
+                self.io.repair(valid_bytes)?;
                 self.state = WriterState::Ready;
                 Ok(())
             }
@@ -560,6 +534,7 @@ impl JournalWriter {
                 "record belongs to another journal namespace",
             ));
         }
+        self.io.check_writer()?;
         if self.state == WriterState::RecoveryRequired
             || (mode == AppendMode::Live && self.needs_recovery())
         {
@@ -574,6 +549,9 @@ impl JournalWriter {
                 && record.candidate_hash == candidate
                 && record.object_hash == object
         }) {
+            if self.namespace != JournalNamespace::Active {
+                self.io.verify_singleton()?;
+            }
             return Ok(Receipt {
                 disk_id: d.disk_id.clone(),
                 slot_id: d.slot_id.clone(),
@@ -606,24 +584,22 @@ impl JournalWriter {
         bytes.extend(payload);
         let hash = blake3::hash(&bytes);
         bytes.extend(hash.as_bytes());
-        if mode != AppendMode::Live {
-            self.repair_torn_tail()?;
-        }
+        let repair = match self.state {
+            WriterState::TornTail(valid_bytes) => Some(valid_bytes),
+            WriterState::Ready => None,
+            WriterState::RecoveryRequired => {
+                unreachable!("invariant: failed writer rejected before framing")
+            }
+        };
         // A partial write, failed sync, or unwind leaves the writer unusable until recovery.
         self.state = WriterState::RecoveryRequired;
-        #[cfg(feature = "fault-injection")]
-        let fault = self.fault.take();
-        #[cfg(feature = "fault-injection")]
-        if matches!(fault, Some(JournalFault::PartialWrite)) {
-            self.file.write_all(&bytes[..bytes.len() / 2])?;
-            return Err(std::io::Error::from_raw_os_error(28).into());
-        }
-        self.file.write_all(&bytes)?;
-        #[cfg(feature = "fault-injection")]
-        if matches!(fault, Some(JournalFault::Sync)) {
-            return Err(std::io::Error::from_raw_os_error(5).into());
-        }
-        self.file.sync_data()?;
+        self.io.append(
+            &bytes,
+            repair,
+            self.namespace,
+            #[cfg(feature = "fault-injection")]
+            self.fault.take(),
+        )?;
         if self
             .records
             .last()

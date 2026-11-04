@@ -6,6 +6,8 @@
 //! normal builds retain real file ownership and fail-closed accounting.
 mod upload;
 pub(crate) use upload::{UploadFinish, UploadIo};
+mod journal;
+pub(crate) use journal::JournalIo;
 
 use super::DiskSeal;
 use super::fencing::{FenceDescriptor, FenceOwner};

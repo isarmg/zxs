@@ -1671,3 +1671,74 @@ fn membership_activation_resume_missing_replica_cannot_skip_another_members_real
     assert!(!missing.exists());
     assert_eq!(fs::read(fenced).unwrap(), preserved);
 }
+
+#[test]
+fn journal_writers_keep_original_authority_across_real_generation_activation() {
+    let mut fixture = Fixture::new();
+    let disk = fixture.engine.config.disks[0].clone();
+    let old_config = fixture.engine.config.clone();
+    let old = Arc::clone(fixture.engine.disk_resources.get(&disk).unwrap());
+    let opened =
+        crate::journal::OpenJournal::scan_configured_at(&old.root, &disk, &old_config).unwrap();
+    let (mut stale_writer, _) = opened.into_writer().unwrap();
+    let record = stale_writer.records().last().unwrap().0.clone();
+    let stale_scan =
+        crate::journal::OpenJournal::scan_configured_at(&old.root, &disk, &old_config).unwrap();
+
+    fixture.engine.activate_pending_membership().unwrap();
+    let current = Arc::clone(fixture.engine.disk_resources.get(&disk).unwrap());
+    let old_path = crate::journal::log_path(&disk);
+    let old_bytes = fs::read(&old_path).unwrap();
+    assert_eq!(
+        stale_writer
+            .append(
+                &disk,
+                record.record_type,
+                record.sequence,
+                &record.candidate_hash,
+                &record.object_hash,
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::ConfigConflict,
+    );
+    assert!(
+        matches!(stale_scan.into_writer(), Err(error) if error.code() == ErrorCode::ConfigConflict)
+    );
+    assert!(matches!(
+        crate::journal::OpenJournal::scan_configured_at(&current.root, &disk, &old_config),
+        Err(error) if error.code() == ErrorCode::ConfigConflict
+    ));
+    assert!(matches!(
+        crate::journal::JournalWriter::create_at(&current.root, &disk),
+        Err(error) if error.code() == ErrorCode::ConfigConflict
+    ));
+    assert!(matches!(
+        crate::journal::OpenJournal::scan_configured_at(&old.root, &disk, &fixture.engine.config),
+        Err(error) if error.code() == ErrorCode::ConfigConflict
+    ));
+    // Historical reads remain valid under the retained root. Only writable
+    // journal ownership is tied to the authority that selected that namespace.
+    assert!(
+        !crate::journal::scan_configured_at(&old.root, &disk, &old_config)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(fs::read(&old_path).unwrap(), old_bytes);
+    fixture
+        .engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("generation-owned").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(fs::read(&old_path).unwrap(), old_bytes);
+    let binding = current.root.io_binding().unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    assert!(descriptor_numbers(&old_path).is_empty());
+}

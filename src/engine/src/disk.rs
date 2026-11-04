@@ -13,7 +13,7 @@ use std::{
 
 mod admission;
 pub use admission::DiskFile;
-pub(crate) use admission::{DiskIoBinding, DiskIoLease, UploadFinish, UploadIo};
+pub(crate) use admission::{DiskIoBinding, DiskIoLease, JournalIo, UploadFinish, UploadIo};
 mod owned;
 pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
 mod fencing;
@@ -369,19 +369,60 @@ pub(crate) fn full_copy(
 }
 
 /// Owns the freshly written, verified and synced output until installation.
-#[derive(Debug)]
 pub(crate) struct VerifiedCopy<'a> {
-    file: File,
+    file: ReadFile,
     version: &'a FileVersion,
     checksums: ChecksumManifest,
+    stamp: crate::file_stamp::FileStamp,
+}
+
+impl std::fmt::Debug for VerifiedCopy<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VerifiedCopy")
+            .field("version", &self.version)
+            .field("stamp", &self.stamp)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> VerifiedCopy<'a> {
+    fn new(
+        file: ReadFile,
+        version: &'a FileVersion,
+        checksums: ChecksumManifest,
+    ) -> std::result::Result<Self, CopyFailure> {
+        let stamp = crate::file_stamp::FileStamp::from_metadata(&file.metadata()?);
+        Ok(Self {
+            file,
+            version,
+            checksums,
+            stamp,
+        })
+    }
+
     pub(crate) fn checksums(&self) -> &ChecksumManifest {
         &self.checksums
     }
 
-    pub(crate) fn into_parts(self) -> (&'a FileVersion, File) {
+    pub(crate) fn check_at(&self, root: &DiskRoot, path: &Path) -> Result<()> {
+        use crate::file_stamp::FileStamp;
+        if FileStamp::from_metadata(&self.file.metadata()?) != self.stamp
+            || FileStamp::from_metadata(&root.open_read_regular(path)?.metadata()?) != self.stamp
+        {
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "copied payload changed before installation",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn version(&self) -> &'a FileVersion {
+        self.version
+    }
+
+    pub(crate) fn into_parts(self) -> (&'a FileVersion, ReadFile) {
         (self.version, self.file)
     }
 }
@@ -431,11 +472,7 @@ pub(crate) fn verified_full_copy<'a>(
         max_bytes,
         Some(version),
     )
-    .map(|(_, _, checksums, file)| VerifiedCopy {
-        file,
-        version,
-        checksums,
-    })
+    .and_then(|(_, _, checksums, file)| VerifiedCopy::new(file.into(), version, checksums))
 }
 
 pub(crate) fn verified_full_copy_at<'a>(
@@ -445,30 +482,7 @@ pub(crate) fn verified_full_copy_at<'a>(
     version: &'a FileVersion,
     max_bytes: u64,
 ) -> std::result::Result<VerifiedCopy<'a>, CopyFailure> {
-    let parent = destination
-        .parent()
-        .expect("invariant: payload destination has a parent");
-    root.private_dir(parent)?;
-    let directory = root.directory(parent)?;
-    let name = EntryName::new(
-        destination
-            .file_name()
-            .expect("invariant: payload destination has a name"),
-    )
-    .map_err(fs_error)?;
-    full_copy_checked(
-        source,
-        &directory,
-        &name,
-        version.checksum_chunk_bytes,
-        max_bytes,
-        Some(version),
-    )
-    .map(|(_, _, checksums, file)| VerifiedCopy {
-        file,
-        version,
-        checksums,
-    })
+    root.verified_copy(source, destination, version, max_bytes)
 }
 
 fn full_copy_to_path(
@@ -621,9 +635,10 @@ fn full_copy_checked_observed(
             let mut used = 0;
             while used < buf.len() {
                 observe(FullCopyProgress::Check)?;
+                let end = used + (buf.len() - used).min(64 * 1024);
                 let n = std::os::unix::fs::FileExt::read_at(
                     source,
-                    &mut buf[used..],
+                    &mut buf[used..end],
                     size + used as u64,
                 )
                 .map_err(|error| CopyFailure::Source(error.into()))?;
@@ -647,8 +662,10 @@ fn full_copy_checked_observed(
                     "file exceeds configured maximum",
                 )));
             }
-            observe(FullCopyProgress::Check)?;
-            target.write_all(&buf[..used])?;
+            for block in buf[..used].chunks(64 * 1024) {
+                observe(FullCopyProgress::Check)?;
+                target.write_all(block)?;
+            }
             full.update(&buf[..used]);
             chunks.push(*blake3::hash(&buf[..used]).as_bytes());
         }

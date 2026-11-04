@@ -240,6 +240,24 @@ impl DiskRoot {
         self.io_binding()?.admit()
     }
 
+    /// Explicit bootstrap provenance, never a fallback after failed admission.
+    /// The shared binding also fences aliases created before the root was bound.
+    fn optional_io_lease(&self) -> Result<Option<DiskIoLease>> {
+        self.binding().map(DiskIoBinding::admit).transpose()
+    }
+
+    /// Transfer this exact opening responsibility into the journal's private
+    /// composite owner. Neither its descriptor nor its lease escapes separately.
+    pub(crate) fn journal_directory(&self, path: &Path) -> Result<JournalIo> {
+        let operation = self.operation()?;
+        let parent = operation.directory(path)?;
+        let RootOperation {
+            directory, lease, ..
+        } = operation;
+        drop(directory);
+        JournalIo::new(parent, lease)
+    }
+
     /// Opening and the real file lifetime share the same admitted operation.
     /// Legacy raw-file entry points still need migration before offline is safe.
     pub(crate) fn open_leased_regular(&self, path: &Path) -> Result<DiskFile> {
@@ -259,10 +277,55 @@ impl DiskRoot {
     /// Preserve this root's already established provenance. Bootstrap roots are
     /// explicitly unbound; a managed root never falls back after admission fails.
     pub(crate) fn open_read_regular(&self, path: &Path) -> Result<ReadFile> {
-        match self.binding() {
-            Some(_) => self.open_leased_regular(path).map(Into::into),
-            None => self.open_regular(path).map(Into::into),
-        }
+        let operation = self.operation()?;
+        let file = operation.open_regular(path)?;
+        operation.into_read_file(file)
+    }
+
+    pub(crate) fn open_optional_read_regular(&self, path: &Path) -> Result<Option<ReadFile>> {
+        let operation = self.operation()?;
+        let file = operation.open_optional_regular(path)?;
+        file.map(|file| operation.into_read_file(file)).transpose()
+    }
+
+    /// Copy, error cleanup and publication share one operation. Only the synced
+    /// file survives, with that same admission transferred into a revocable owner.
+    pub(crate) fn verified_copy<'a>(
+        &self,
+        source: impl std::os::unix::fs::FileExt,
+        destination: &Path,
+        version: &'a FileVersion,
+        max_bytes: u64,
+    ) -> std::result::Result<VerifiedCopy<'a>, CopyFailure> {
+        let operation = self.operation()?;
+        let parent = destination
+            .parent()
+            .expect("invariant: payload destination has a parent");
+        operation.private_dir(parent)?;
+        let directory = operation.directory(parent)?;
+        let name = EntryName::new(
+            destination
+                .file_name()
+                .expect("invariant: payload destination has a name"),
+        )
+        .map_err(fs_error)?;
+        let (_, _, checksums, file) = full_copy_checked_observed(
+            &source,
+            &directory,
+            &name,
+            version.checksum_chunk_bytes,
+            max_bytes,
+            Some(version),
+            &mut |progress| match progress {
+                FullCopyProgress::Check => operation.check_running(),
+                // Once the name changes, its directory barrier still belongs
+                // to this operation even if cancellation has just arrived.
+                FullCopyProgress::Created { .. } | FullCopyProgress::Published => Ok(()),
+            },
+        )?;
+        drop(directory);
+        let file = operation.into_read_file(file)?;
+        VerifiedCopy::new(file, version, checksums)
     }
 
     /// Admit a private descendant and retain that exact directory descriptor.
@@ -290,10 +353,7 @@ impl DiskRoot {
     /// A bound root never falls back to bootstrap access on admission failure.
     fn operation(&self) -> Result<RootOperation<'_>> {
         let directory = self.directory.access()?;
-        let lease = match self.binding() {
-            Some(binding) => Some(binding.admit()?),
-            None => None,
-        };
+        let lease = self.optional_io_lease()?;
         Ok(RootOperation {
             root: self,
             directory,
@@ -413,6 +473,34 @@ impl DiskRoot {
         self.operation()?.remove_file(path)
     }
 
+    /// Both directory descriptors and all durability tails stay inside one
+    /// admitted operation. No pathname mutation can outlive its writer fence.
+    pub(crate) fn rename_noreplace_synced(&self, from: &Path, to: &Path) -> Result<()> {
+        self.operation()?
+            .rename_noreplace_synced(from, to, RenameSyncOrder::SourceFirst)
+    }
+
+    /// Synchronize the destination before the source-name removal. Publication
+    /// and proof quarantine retain this order if cancellation follows rename.
+    pub(crate) fn rename_noreplace_destination_first_synced(
+        &self,
+        from: &Path,
+        to: &Path,
+    ) -> Result<()> {
+        self.operation()?
+            .rename_noreplace_synced(from, to, RenameSyncOrder::DestinationFirst)
+    }
+
+    pub(crate) fn remove_file_synced(&self, path: &Path) -> Result<()> {
+        self.operation()?
+            .remove_synced(path, rustix::fs::AtFlags::empty())
+    }
+
+    pub(crate) fn remove_empty_directory_synced(&self, path: &Path) -> Result<()> {
+        self.operation()?
+            .remove_synced(path, rustix::fs::AtFlags::REMOVEDIR)
+    }
+
     pub(crate) fn available(&self) -> Result<u64> {
         self.operation()?.available()
     }
@@ -446,7 +534,33 @@ struct RootOperation<'a> {
     lease: Option<DiskIoLease>,
 }
 
+enum RenameSyncOrder {
+    SourceFirst,
+    DestinationFirst,
+}
+
 impl RootOperation<'_> {
+    fn into_read_file(self, file: File) -> Result<ReadFile> {
+        let Self {
+            directory, lease, ..
+        } = self;
+        // Late registration can finalize synchronously. Close the root borrow
+        // before transferring this operation, never its actual file lifetime.
+        drop(directory);
+        let file = match lease {
+            Some(lease) => ReadFile::from(lease.hold(file)),
+            None => ReadFile::from(file),
+        };
+        file.check_running()?;
+        Ok(file)
+    }
+
+    fn check_running(&self) -> Result<()> {
+        match &self.lease {
+            Some(lease) => lease.check_running(),
+            None => Ok(()),
+        }
+    }
     fn held(&self) -> &OpenAt2Root {
         self.directory
             .as_ref()
@@ -582,6 +696,14 @@ impl RootOperation<'_> {
         Ok((self.open_relative_directory(parent.as_ref())?, name))
     }
 
+    fn private_parent(&self, path: &Path) -> Result<(File, EntryName)> {
+        let (_, name) = self.root.relative(path)?.split_parent();
+        let parent = path
+            .parent()
+            .expect("invariant: relative child has a parent");
+        Ok((self.directory(parent)?, name))
+    }
+
     fn read_bytes(&self, path: &Path, maximum: usize) -> Result<Vec<u8>> {
         read_file_bytes(self.open_regular(path)?, maximum)
     }
@@ -687,6 +809,43 @@ impl RootOperation<'_> {
         rustix::fs::unlinkat(&parent, name.as_os_str(), rustix::fs::AtFlags::empty())
             .map_err(std::io::Error::from)?;
         Ok(())
+    }
+
+    fn rename_noreplace_synced(
+        &self,
+        from: &Path,
+        to: &Path,
+        order: RenameSyncOrder,
+    ) -> Result<()> {
+        let (source, from_name) = self.private_parent(from)?;
+        let (destination, to_name) = self.private_parent(to)?;
+        self.check_running()?;
+        rustix::fs::renameat_with(
+            &source,
+            from_name.as_os_str(),
+            &destination,
+            to_name.as_os_str(),
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        // Cancellation cannot skip a committed rename's durability tail.
+        let (first, second) = match order {
+            RenameSyncOrder::SourceFirst => (&source, &destination),
+            RenameSyncOrder::DestinationFirst => (&destination, &source),
+        };
+        first.sync_all()?;
+        if from.parent() != to.parent() {
+            second.sync_all()?;
+        }
+        self.check_running()
+    }
+
+    fn remove_synced(&self, path: &Path, flags: rustix::fs::AtFlags) -> Result<()> {
+        let (parent, name) = self.private_parent(path)?;
+        self.check_running()?;
+        rustix::fs::unlinkat(&parent, name.as_os_str(), flags).map_err(std::io::Error::from)?;
+        parent.sync_all()?;
+        self.check_running()
     }
 
     fn available(&self) -> Result<u64> {

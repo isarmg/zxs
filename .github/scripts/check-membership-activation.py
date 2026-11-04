@@ -4,12 +4,16 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE = ROOT / "target/membership-validation"
+# The last green activation group took 214s. A stuck group must leave evidence
+# and allow the remaining suites to run, rather than consume the entire job.
+GROUP_TIMEOUT_SECONDS = 600
 GROUPS = (
     ("activation", "membership_activation_", ()),
     ("membership", "membership_", ("--skip", "membership_activation_")),
@@ -42,6 +46,19 @@ IO_ENGINE_GROUPS = (
     ("writer-fencing", "disk::fencing::tests::", ()),
     ("workspace-commit", "engine::workspace_commit::tests::", ()),
     ("workspace-inventory-fencing", "engine::workspace_storage::inventory::tests::", ()),
+    ("container-storage", "container_storage::tests::", ()),
+    ("journal-owned-resources", "disk::admission::journal::tests::", ()),
+    ("journal-regressions", "journal::", ()),
+    ("publication", "engine::publication::", ()),
+    ("publication-evidence", "publication_evidence::tests::", ()),
+)
+IO_BLOCKING_PROBES = (
+    ("container-blocking-tails", "container_storage::tests::io_tail_tests::",
+     "test/engine/unit/container_storage/io_tails.c", "io_tails.so"),
+    ("publication-blocking-tails", "engine::publication::io_tail_tests::",
+     "test/engine/unit/engine/publication/io_tails.c", "publication_io_tails.so"),
+    ("journal-blocking-tails", "disk::admission::journal::blocked_io_tests::",
+     "test/engine/unit/journal/journal_io_tails.c", "journal_io_tails.so"),
 )
 IO_PLATFORM_GROUPS = (
     ("platform-payload", "payload::tests::", ()),
@@ -93,11 +110,26 @@ def build(package):
     return Path(executables.pop())
 
 
-def run_group(binary, label, test_filter, extra):
-    command = [str(binary), test_filter, *extra, "--test-threads=1", "--nocapture"]
+def build_io_interposer(label, source, filename):
+    output = ROOT / "target/membership-probes" / filename
+    output.parent.mkdir(parents=True, exist_ok=True)
+    command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
+               "-o", str(output), source, "-ldl"]
+    with (EVIDENCE / f"{label}-build.log").open("w") as log:
+        subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
+    with output.open("rb") as source:
+        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    return output, digest
+
+
+def run_group(binary, label, test_filter, extra, env=None):
+    command = ["timeout", "--signal=TERM", "--kill-after=15s",
+               f"{GROUP_TIMEOUT_SECONDS}s", str(binary), test_filter, *extra,
+               "--test-threads=1", "--nocapture"]
     # A renamed/removed test group must fail rather than silently run zero tests.
     inventory = subprocess.run([str(binary), test_filter, *extra, "--list"],
-                               cwd=ROOT, text=True, capture_output=True, check=True)
+                               cwd=ROOT, text=True, capture_output=True, check=True,
+                               env=env, timeout=30)
     tests = [line for line in inventory.stdout.splitlines() if line.endswith(": test")]
     if not tests:
         raise RuntimeError(f"empty test group: {label} ({test_filter})")
@@ -105,13 +137,13 @@ def run_group(binary, label, test_filter, extra):
         log.write("Command: " + " ".join(command) + "\n")
         with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True,
-                              encoding="utf-8") as process:
+                              encoding="utf-8", env=env) as process:
             for line in process.stdout:
                 log.write(line)
                 print(line, end="", flush=True)
             status = process.wait()
     return {"group": label, "filter": test_filter, "listed_tests": len(tests),
-            "exit_code": status}
+            "exit_code": status, "timeout_seconds": GROUP_TIMEOUT_SECONDS}
 
 
 def main():
@@ -135,6 +167,14 @@ def main():
             for label, test_filter, extra in groups:
                 result = run_group(binary, label, test_filter, extra)
                 summary["groups"].append({"package": package, **result})
+            if package == "storage-engine" and options.disk_io:
+                summary["interposers"] = {}
+                for label, test_filter, source, filename in IO_BLOCKING_PROBES:
+                    interposer, digest = build_io_interposer(label, source, filename)
+                    summary["interposers"][label] = digest
+                    result = run_group(binary, label, test_filter, ("--ignored",),
+                                       env={**os.environ, "LD_PRELOAD": str(interposer)})
+                    summary["groups"].append({"package": package, **result})
         return int(any(group["exit_code"] != 0 for group in summary["groups"]))
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         summary["error"] = str(error)

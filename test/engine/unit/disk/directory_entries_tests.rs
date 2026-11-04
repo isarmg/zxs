@@ -116,8 +116,14 @@ fn a_stream_opened_before_quiesce_cannot_escape_late_registration() {
     drop(binding.begin_quiesce().unwrap().unwrap());
     assert_eq!(binding.status().unwrap().ordinary, 1);
 
+    // Match the production entries() transfer: release the root descriptor
+    // borrow before late registration can retire its final ordinary lease.
+    let RootOperation {
+        directory, lease, ..
+    } = operation;
+    drop(directory);
     assert!(matches!(
-        DiskDirectoryEntries::new(entries, operation.lease),
+        DiskDirectoryEntries::new(entries, lease),
         Err(error) if error.code() == ErrorCode::DiskUnavailable
     ));
     assert_eq!(open_descriptors_for(&path), 0);
@@ -140,7 +146,7 @@ fn derived_root_and_parent_cursors_keep_the_same_revocation_domain() {
     let (_directory, handle, path) = disk();
     let binding = handle.root.io_binding().unwrap();
     let child = handle.root.private_child(&path).unwrap();
-    // The retained root FD is explicitly outside this iterator-only slice.
+    // The child root shares the same final closure as both directory cursors.
     let retained_root_descriptors = open_descriptors_for(&path);
     assert_eq!(retained_root_descriptors, 1);
     let mut parent_entries = handle.root.entries(&path).unwrap();
@@ -149,8 +155,13 @@ fn derived_root_and_parent_cursors_keep_the_same_revocation_domain() {
     assert_eq!(binding.status().unwrap().ordinary, 2);
 
     drop(binding.begin_quiesce().unwrap().unwrap());
-    assert_eq!(open_descriptors_for(&path), retained_root_descriptors);
+    assert_eq!(open_descriptors_for(&path), 0);
     assert!(binding.status().unwrap().drained());
+    assert_eq!(open_descriptors_for(handle.root.path()), 0);
+    assert!(matches!(
+        child.entries(&path),
+        Err(error) if error.code() == ErrorCode::DiskUnavailable
+    ));
     assert_cancelled(parent_entries.next().unwrap().unwrap_err());
     assert_cancelled(child_entries.next().unwrap().unwrap_err());
     assert!(parent_entries.next().is_none());
