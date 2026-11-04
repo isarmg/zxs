@@ -41,6 +41,7 @@ fn every_bound_root_entry_rejects_before_opening_or_mutating() {
     unavailable(root.open_regular(&file));
     unavailable(root.open_optional_regular(&file));
     unavailable(root.open_leased_regular(&file));
+    unavailable(root.open_read_regular(&file));
     unavailable(root.private_directory(&child));
     unavailable(root.lock_file());
     unavailable(root.optional_metadata(directory.path()));

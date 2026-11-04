@@ -41,6 +41,12 @@ impl MetadataMembership {
     }
 
     pub(super) fn verify_candidate(&self, candidate: &Candidate) -> Result<()> {
+        if candidate.registry().is_some() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "lifecycle candidate requires authenticated registry serving authority",
+            ));
+        }
         let actual: BTreeSet<_> = candidate.metadata_disk_ids.iter().collect();
         if candidate.pool_id != self.pool_id
             || actual.len() != candidate.metadata_disk_ids.len()

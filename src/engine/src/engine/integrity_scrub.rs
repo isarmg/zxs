@@ -153,7 +153,7 @@ pub struct IntegrityScrubBatch {
     baseline: std::sync::Arc<State>,
     config: ValidatedConfig,
     _lease: super::ReadLease,
-    payloads: Vec<(String, Result<std::fs::File>)>,
+    payloads: Vec<(String, Result<crate::ReadFile>)>,
     layout_bytes_read: usize,
 }
 

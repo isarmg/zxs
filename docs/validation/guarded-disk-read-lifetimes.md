@@ -96,3 +96,24 @@ local. A new source/clone test checks cancellation and failed reopen. Destinatio
 writers and legacy raw repair probes remain separate, unfinished coverage; this
 change does not claim a complete write-side drain. Source inspection and direct
 formatting only, pending GitHub execution with the other affected groups.
+
+## Scrub and existing-payload read ownership (source pending verification)
+
+The payload-opening helpers used by degraded recovery, repair verification and
+scrub now retain `ReadFile` ownership rather than returning a raw `File`.
+`DiskRoot::open_read_regular` preserves the root's already established provenance:
+a bound managed root must obtain its gate; an explicitly unbound bootstrap or
+offline root remains local. Admission failure cannot select the unbound branch.
+Checksum reads and retained `VerifiedExisting` body proofs use the same owner.
+Their identity comparison uses guarded device/inode metadata without exposing a
+descriptor. Disk-local repair source matching is also leased.
+
+Four new test sources cover all three payload-opening consumers, a retained
+existing-body proof, cancellation during verification, and an idle scrub batch
+whose revoked source closes without cancelling the other two copies. The file
+consumer tests check real `/proc/self/fd` closure and unchanged fixture bytes.
+Root admission tests also cover rejected managed opens and explicit unbound
+fixture reads. Existing copy, repair and scrub regressions remain required.
+No local build or test was run. Destination writers, journal/maintenance handles,
+root descriptors and writer locks remain separate implementation work, so these
+changes still do not complete an administrative offline or deregistration.

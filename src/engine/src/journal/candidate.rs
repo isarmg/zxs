@@ -22,7 +22,36 @@ pub(crate) struct CandidateData {
 #[derive(Clone, Debug)]
 pub(crate) struct Candidate {
     data: CandidateData,
-    generation: Option<String>,
+    binding: CandidateBinding,
+}
+#[derive(Clone, Debug)]
+enum CandidateBinding {
+    Genesis,
+    Membership(String),
+    Registry {
+        authority_hash: String,
+        commitment: crate::DiskRegistryCommitment,
+    },
+}
+#[derive(Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct LifecycleCandidate {
+    format: LifecycleFormat,
+    authority_hash: String,
+    registry: crate::DiskRegistryCommitment,
+    decision: CandidateData,
+}
+#[derive(Serialize)]
+struct LifecycleCandidateRef<'a> {
+    format: LifecycleFormat,
+    authority_hash: &'a str,
+    registry: &'a crate::DiskRegistryCommitment,
+    decision: &'a CandidateData,
+}
+#[derive(Serialize, Deserialize)]
+enum LifecycleFormat {
+    #[serialization(rename = "disk-lifecycle-candidate")]
+    DiskLifecycle,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -45,6 +74,7 @@ enum GenerationFormat {
 #[derive(Deserialize)]
 #[serialization(untagged)]
 enum StoredCandidate {
+    Lifecycle(LifecycleCandidate),
     Generation(GenerationCandidate),
     Original(CandidateData),
 }
@@ -52,11 +82,27 @@ impl Candidate {
     pub(crate) fn new(data: CandidateData, generation: Option<&str>) -> Self {
         Self {
             data,
-            generation: generation.map(str::to_owned),
+            binding: match generation {
+                None => CandidateBinding::Genesis,
+                Some(hash) => CandidateBinding::Membership(hash.to_owned()),
+            },
         }
     }
     pub(crate) fn generation(&self) -> Option<&str> {
-        self.generation.as_deref()
+        match &self.binding {
+            CandidateBinding::Genesis => None,
+            CandidateBinding::Membership(hash)
+            | CandidateBinding::Registry {
+                authority_hash: hash,
+                ..
+            } => Some(hash),
+        }
+    }
+    pub(crate) fn registry(&self) -> Option<&crate::DiskRegistryCommitment> {
+        match &self.binding {
+            CandidateBinding::Registry { commitment, .. } => Some(commitment),
+            CandidateBinding::Genesis | CandidateBinding::Membership(_) => None,
+        }
     }
 }
 impl Deref for Candidate {
@@ -75,11 +121,21 @@ impl Serialize for Candidate {
         &self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        match &self.generation {
-            None => self.data.serialize(serializer),
-            Some(authority_hash) => GenerationCandidateRef {
+        match &self.binding {
+            CandidateBinding::Genesis => self.data.serialize(serializer),
+            CandidateBinding::Membership(authority_hash) => GenerationCandidateRef {
                 format: GenerationFormat::MembershipGeneration,
                 authority_hash,
+                decision: &self.data,
+            }
+            .serialize(serializer),
+            CandidateBinding::Registry {
+                authority_hash,
+                commitment,
+            } => LifecycleCandidateRef {
+                format: LifecycleFormat::DiskLifecycle,
+                authority_hash,
+                registry: commitment,
                 decision: &self.data,
             }
             .serialize(serializer),
@@ -91,14 +147,27 @@ impl<'de> Deserialize<'de> for Candidate {
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
         match StoredCandidate::deserialize(deserializer)? {
+            StoredCandidate::Lifecycle(stored) => {
+                if !valid_authority_hash(&stored.authority_hash) {
+                    return Err(data_serialization::de::Error::custom(
+                        "invalid lifecycle authority hash",
+                    ));
+                }
+                stored
+                    .registry
+                    .validate()
+                    .map_err(data_serialization::de::Error::custom)?;
+                Ok(Self {
+                    data: stored.decision,
+                    binding: CandidateBinding::Registry {
+                        authority_hash: stored.authority_hash,
+                        commitment: stored.registry,
+                    },
+                })
+            }
             StoredCandidate::Original(data) => Ok(Self::new(data, None)),
             StoredCandidate::Generation(stored) => {
-                if stored.authority_hash.len() != 64
-                    || !stored
-                        .authority_hash
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                {
+                if !valid_authority_hash(&stored.authority_hash) {
                     return Err(data_serialization::de::Error::custom(
                         "invalid membership generation hash",
                     ));
@@ -107,4 +176,11 @@ impl<'de> Deserialize<'de> for Candidate {
             }
         }
     }
+}
+
+fn valid_authority_hash(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }

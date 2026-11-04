@@ -243,3 +243,13 @@ scrub 按确切旧 publication 的序号顺序恢复已承认不可用的副本�
 退出意图显式区分计划下线和注销，绑定准确目录身份；目标投票集合变化不删除历史拓扑记录。退出控制 proposal 分页保存 target 与 old-only 依赖，真实票按两侧身份分别计数。可搬运证书验证接受达到固定 oldQ/newQ 的真实子集，不强制每个退出成员投票；实际本地准入仍要求该成员自己的日志。
 
 此阶段只扩展控制证据，不能生成可激活的 membership authority。原当前登记、内容可见性与资源保持不变，永久下线/删除结果不得提前出现。当前 fence、归档和运行时同步驱动仍暂需原全员，缺席退出的采集路径尚未完成；不能把实现限制提升为联合多数公理。最后 voter 的退出还需独立终止权威。准确行为、未实现闭环和待执行测试见[退出成员联合控制准备](../validation/exit-membership-control.md)。
+
+## 登记对象图与服务权威分离
+
+生命周期登记采用独立内容寻址根，分别分页绑定历史拓扑、当前 Enabled/Disabled 登记、投票身份和 Detached 审计。历史拓扑保留原 pool/disk/slot/binding；当前路径投影不是身份，也不参与这一登记根。Disabled 保留登记与逻辑内容，Detached 提议移除当前登记，但两者都不改写原 Placement 或旧 Candidate。
+
+登记根绑定准确源快照、成员 authority、前驱根及 checked view generation。后继验证只允许所绑定退出意图的规定差量；未终结 pending exit 不能在同一认证登记链上跳过。Detached 仅引用前驱、意图、Prepared capsule 和 occurrence mask 等已经存在的材料，不包含同次 Publication 或 Committed capsule。实际发布和恢复完成证据在后置收据中关联，不能回填已哈希根。
+
+新的 `disk-lifecycle-candidate` 显式绑定 authority hash 与 registry commitment。既有 Candidate 原表示不变。当前实现提供对象图和 Candidate/Publication 绑定的窄证明，尚未把它们接为当前服务权威；普通成员准入拒绝新格式，避免以相同 voter 集合越过登记和 I/O 边界。独立的 D3 发布证明不以 D5 主操作成功为前提，也不能冒充完整生命周期已完成。
+
+只有后续规定 snapshot、联合 authority、持久停止策略、registry-bound WriteProjection、目标恢复证明和资源关闭共同闭合后，才可将这类登记用于活动读写。当前纯准备不会替换现有 `CurrentDiskRegistry`、隐藏文件或停止磁盘 I/O。[验证范围与剩余条件](../validation/authenticated-disk-registry.md) 明确区分对象图证明和真实执行。

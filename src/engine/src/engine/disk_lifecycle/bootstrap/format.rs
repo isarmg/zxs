@@ -222,10 +222,7 @@ impl Record {
             Some(head)
                 if head.pool_id == self.pool_id
                     && head.generation.checked_add(1) == Some(self.generation)
-                    && self.stops.len() as u64 + 1 == self.generation =>
-            {
-                ()
-            }
+                    && self.stops.len() as u64 + 1 == self.generation => {}
             _ => {
                 return Err(BootstrapError::ManagementOnly(
                     "locator predecessor or stop sequence differs",

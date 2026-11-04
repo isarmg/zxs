@@ -1217,9 +1217,17 @@ fn generic_managed_copy_source_cannot_escape_its_read_gate() {
         panic!("published replica lost its managed provenance");
     };
     let binding = owner.root.io_binding().unwrap();
+    let before_operations = binding.status().unwrap().ordinary;
+    let before_descriptors = payload_descriptor_count(source.path());
     let mut original = source.open().unwrap();
     let mut duplicate = original.try_clone().unwrap();
-    assert!(binding.status().unwrap().ordinary >= 2);
+    // A cloned descriptor retains the same operation, while both real resources
+    // remain independently revocable. Operation count is not an FD count.
+    assert_eq!(binding.status().unwrap().ordinary, before_operations + 1);
+    assert_eq!(
+        payload_descriptor_count(source.path()),
+        before_descriptors + 2
+    );
     let mut first = [0; 1];
     original.read_exact(&mut first).unwrap();
     assert_eq!(first, [b'o']);
@@ -1234,6 +1242,7 @@ fn generic_managed_copy_source_cannot_escape_its_read_gate() {
         source.open().err().unwrap().code(),
         ErrorCode::DiskUnavailable
     );
+    assert_eq!(payload_descriptor_count(source.path()), 0);
     for file in [&mut original, &mut duplicate] {
         assert!(matches!(
             file.verify_full(expectation),
@@ -1245,4 +1254,115 @@ fn generic_managed_copy_source_cannot_escape_its_read_gate() {
             std::io::ErrorKind::PermissionDenied
         );
     }
+}
+
+fn payload_descriptor_count(path: &std::path::Path) -> usize {
+    fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|entry| match fs::read_link(entry) {
+            Ok(target) => target == path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => panic!("cannot inspect test descriptor: {error}"),
+        })
+        .count()
+}
+
+#[test]
+fn raw_payload_helpers_now_retire_real_files_on_idle_quiesce() {
+    use std::io::Seek;
+    for mode in 0..3 {
+        let (_temp, engine, id) = committed_fixture();
+        let disk = &engine.config.disks[0];
+        let owner = engine.disk_resources.get(disk).unwrap();
+        let version = &engine.state.versions[&id];
+        let directory = version_dir(disk, &version.history_tree_id, &id);
+        let path = crate::container_storage::content_path_at(
+            &owner.root,
+            &directory,
+            version,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let mut file = match mode {
+            0 => owner.open_payload(&directory, version).unwrap().0,
+            1 => owner.verify_payload(&directory, version).unwrap(),
+            _ => open_payload_file_observed_at(&owner.root, &directory, version, &mut |_| Ok(()))
+                .unwrap(),
+        };
+        file.rewind().unwrap();
+        let mut body = Vec::new();
+        file.read_to_end(&mut body).unwrap();
+        assert_eq!(body, b"original");
+        assert!(payload_descriptor_count(&path) > 0);
+        let binding = owner.root.io_binding().unwrap();
+        drop(binding.begin_quiesce().unwrap().unwrap());
+        assert!(binding.status().unwrap().drained());
+        assert_eq!(payload_descriptor_count(&path), 0);
+        assert_eq!(
+            file.metadata().unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            owner
+                .open_payload(&directory, version)
+                .err()
+                .unwrap()
+                .code(),
+            ErrorCode::DiskUnavailable
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+    }
+}
+
+#[test]
+fn existing_payload_proof_cannot_sync_or_reopen_after_quiesce() {
+    let (_temp, engine, id) = committed_fixture();
+    let disk = &engine.config.disks[0];
+    let owner = engine.disk_resources.get(disk).unwrap();
+    let version = &engine.state.versions[&id];
+    let directory = version_dir(disk, &version.history_tree_id, &id);
+    let proof = VerifiedExisting::read_at(&owner.root, &directory, version).unwrap();
+    proof
+        .sync_at(&owner.root, &directory, proof.path())
+        .unwrap();
+    let path = proof.path().to_owned();
+    assert!(payload_descriptor_count(&path) > 0);
+    let binding = owner.root.io_binding().unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(payload_descriptor_count(&path), 0);
+    assert_eq!(
+        proof
+            .sync_at(&owner.root, &directory, &path)
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert_eq!(fs::read(path).unwrap(), b"original");
+}
+
+#[test]
+fn payload_verification_cancellation_cannot_return_a_verified_file() {
+    let (_temp, engine, id) = committed_fixture();
+    let disk = &engine.config.disks[0];
+    let owner = engine.disk_resources.get(disk).unwrap();
+    let version = &engine.state.versions[&id];
+    let directory = version_dir(disk, &version.history_tree_id, &id);
+    let (file, _, manifest) = owner.open_payload(&directory, version).unwrap();
+    let binding = owner.root.io_binding().unwrap();
+    let mut observed = 0;
+    let result = verify_open_payload_observed(file, manifest, version, &mut |bytes| {
+        observed += bytes;
+        if bytes > 0 {
+            drop(binding.begin_quiesce().unwrap().unwrap());
+        }
+        Ok(())
+    });
+    assert_eq!(observed, 8);
+    assert!(
+        matches!(result, Err(Error::Contract(storage_contract::Error::Io { source, .. }))
+        if source.kind() == std::io::ErrorKind::PermissionDenied)
+    );
+    assert!(binding.status().unwrap().drained());
 }

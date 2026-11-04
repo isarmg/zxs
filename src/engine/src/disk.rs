@@ -642,7 +642,7 @@ pub(crate) fn verify_payload(directory: &Path, version: &FileVersion) -> Result<
 pub(crate) fn open_payload(
     directory: &Path,
     version: &FileVersion,
-) -> Result<(File, ChecksumManifest)> {
+) -> Result<(ReadFile, ChecksumManifest)> {
     let directory = absolute_path(directory)?;
     let history = directory.parent().and_then(Path::parent).ok_or_else(|| {
         Error::new(
@@ -659,12 +659,12 @@ pub(crate) fn open_payload_at(
     root: &DiskRoot,
     directory: &Path,
     version: &FileVersion,
-) -> Result<(File, Vec<u8>, ChecksumManifest)> {
+) -> Result<(ReadFile, Vec<u8>, ChecksumManifest)> {
     let checks = read_authenticated_checksums_at(root, directory, version)?;
     let manifest = decode_authenticated_checksums(&checks, version)?;
     let path =
         crate::container_storage::content_path_at(root, directory, version, &mut |_| Ok(()))?;
-    let file = root.open_regular(&path)?;
+    let file = root.open_read_regular(&path)?;
     if file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
             ErrorCode::ChecksumMismatch,
@@ -700,7 +700,7 @@ pub(crate) fn read_authenticated_checksums_at(
     version: &FileVersion,
 ) -> Result<Vec<u8>> {
     let length = checksum_manifest_length(version)?;
-    let mut file = root.open_regular(&directory.join("checksums.bin"))?;
+    let mut file = root.open_read_regular(&directory.join("checksums.bin"))?;
     if file.metadata()?.len() != length as u64 {
         return Err(Error::new(
             ErrorCode::ChecksumMismatch,
@@ -708,7 +708,9 @@ pub(crate) fn read_authenticated_checksums_at(
         ));
     }
     let mut checks = vec![0; length];
-    file.read_exact(&mut checks)?;
+    if read_observed_fill(&mut file, &mut checks, &mut |_| Ok(()))? != length {
+        return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+    }
     if file.read(&mut [0; 1])? != 0
         || blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash
     {
@@ -765,8 +767,8 @@ pub(crate) fn open_payload_file_observed_at(
     directory: &Path,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<File> {
-    let file = root.open_regular(&crate::container_storage::content_path_at(
+) -> Result<ReadFile> {
+    let file = root.open_read_regular(&crate::container_storage::content_path_at(
         root, directory, version, observe,
     )?)?;
     if file.metadata()?.len() != version.logical_size {
@@ -778,7 +780,7 @@ pub(crate) fn open_payload_file_observed_at(
     Ok(file)
 }
 
-pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Result<File> {
+pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Result<ReadFile> {
     let (file, manifest) = open_payload(directory, version)?;
     verify_open_payload(file, manifest, version, usize::MAX, &mut |_| Ok(()))
 }
@@ -790,28 +792,28 @@ pub(crate) fn verify_payload_held_with(
     directory: &Path,
     version: &FileVersion,
     mut checkpoint: impl FnMut() -> Result<()>,
-) -> Result<File> {
+) -> Result<ReadFile> {
     checkpoint()?;
     let (file, manifest) = open_payload(directory, version)?;
     verify_open_payload_observed(file, manifest, version, &mut |_| checkpoint())
 }
 
 pub(crate) fn verify_open_payload_observed(
-    file: File,
+    file: ReadFile,
     manifest: ChecksumManifest,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<File> {
+) -> Result<ReadFile> {
     verify_open_payload(file, manifest, version, 64 * 1024, observe)
 }
 
 fn verify_open_payload(
-    mut file: File,
+    mut file: ReadFile,
     manifest: ChecksumManifest,
     version: &FileVersion,
     maximum_read: usize,
     observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<File> {
+) -> Result<ReadFile> {
     let mut full = blake3::Hasher::new();
     let mut buffer = vec![0u8; manifest.chunk_bytes as usize];
     let mut remaining = manifest.logical_size;
@@ -852,7 +854,7 @@ pub(crate) struct VerifiedExisting<'a> {
     version: &'a FileVersion,
     directory: PathBuf,
     path: PathBuf,
-    file: File,
+    file: ReadFile,
 }
 impl<'a> VerifiedExisting<'a> {
     #[cfg(test)]
@@ -902,8 +904,8 @@ impl<'a> VerifiedExisting<'a> {
             "invariant: install consumes its admitted directory"
         );
         if path != self.path
-            || FileIdentity::from_fd(root.open_regular(path)?)?
-                != FileIdentity::from_fd(&self.file)?
+            || FileIdentity::from_metadata(&root.open_read_regular(path)?.metadata()?)
+                != FileIdentity::from_metadata(&self.file.metadata()?)
         {
             return Err(Error::new(
                 ErrorCode::PreparationStale,

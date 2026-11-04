@@ -19,10 +19,12 @@ mod file_stamp;
 mod historical_save;
 pub use engine::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
-    DiskRegistrationIdentity, FrozenDeregistrationBoundary, ImpactPage, ImpactPageSize,
-    NamespaceDeregistrationPreview, NamespaceOccurrenceImpact, NamespaceOccurrenceScan,
-    OccurrenceVisibility, RegisteredDisk, RegisteredHolders, RegistrationEffect,
-    TargetPlacementRole, VersionDeregistrationImpact, VersionImpactScan,
+    DiskRegistrationIdentity, DiskRegistryCommitment, FrozenDeregistrationBoundary,
+    HistoricalDiskDefinition, ImpactPage, ImpactPageSize, NamespaceDeregistrationPreview,
+    NamespaceOccurrenceImpact, NamespaceOccurrenceScan, OccurrenceVisibility, PreparedDiskRegistry,
+    RegisteredDisk, RegisteredHolders, RegistrationEffect, RegistrationMode, RegistryExitEffect,
+    RegistryExitRequest, TargetPlacementRole, VerifiedDiskRegistry, VerifiedRegistryCandidate,
+    VerifiedRegistryPublication, VersionDeregistrationImpact, VersionImpactScan,
 };
 pub use engine::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod history_package;

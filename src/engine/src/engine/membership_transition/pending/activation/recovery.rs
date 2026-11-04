@@ -443,6 +443,53 @@ impl Engine {
     }
 }
 
+/// Missing *parents* are expected only before this root's marker/seal promotion.
+/// A published/current marker or seal cannot use that absence to erase a fence.
+fn activation_namespace_present(
+    root: &DiskRoot,
+    disk: &DiskConfig,
+    config: &ValidatedConfig,
+) -> Result<bool> {
+    let generation = config.generation().expect("invariant: activation has a generation");
+    let parent = disk.root.join("metadata/membership-generations");
+    if root.optional_metadata(&parent)?.is_some()
+        && root.optional_metadata(&generation_directory(disk, &generation.hash))?.is_some()
+    {
+        return Ok(true);
+    }
+    let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+    let expected = identity_at(config, disk, &root.directory(root.path())?)?;
+    predecessor_seal_matches(config, disk, root, &bytes, &expected)?;
+    let value: json_codec::Value = decode_strict(&bytes)?;
+    if value.get("format").and_then(json_codec::Value::as_str) != Some("membership-pending") {
+        let seal = decode_seal(&bytes)?;
+        if seal.format == expected.format {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                format!("active generation namespace is missing for {}", disk.disk_id),
+            ));
+        }
+    }
+    let membership = disk.root.join("metadata/pool-membership");
+    if root.optional_metadata(&membership)?.is_some()
+        && let Some(file) = root.open_optional_regular(&disk.root.join(GENERATION_FILE))?
+    {
+        let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+        portable.intent()?;
+        let hash = portable.hash()?;
+        if Some(hash.as_str()) != generation.intent.origin.predecessor() {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                format!("prepared generation marker lacks its namespace for {}", disk.disk_id),
+            ));
+        }
+    }
+    // The admitted seal is the exact predecessor (or this operation's pending
+    // seal), and no current marker exists here. Explicit promotion will create
+    // this new namespace; do not create it just to perform the read-only check.
+    Ok(false)
+}
+
 impl Engine {
     /// Explicit retry after a crash during prepared markers or seal promotion.
     /// Routine open remains read-only at this boundary and never adopts pending roots.
@@ -461,8 +508,14 @@ impl Engine {
         // A completed predecessor marker is not an activation request for the
         // next fenced operation. Reject before promoting or repairing any root.
         for disk in config.metadata_members() {
-            let scan =
-                crate::journal::scan_configured_at(&resources.get(disk)?.root, disk, &config)?;
+            let held = &resources.get(disk)?.root;
+            if !activation_namespace_present(held, disk, &config)? {
+                continue;
+            }
+            let scan = crate::journal::scan_configured_at(held, disk, &config).map_err(|error| {
+                let code = error.code();
+                error.context(code, format!("inspect activation journal for {}", disk.disk_id))
+            })?;
             if scan
                 .records
                 .iter()

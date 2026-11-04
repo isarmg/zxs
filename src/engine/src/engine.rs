@@ -10,7 +10,12 @@ use std::{
 mod config;
 pub use config::ValidatedConfig;
 mod disk_registry;
-pub use disk_registry::{DiskRegistrationIdentity, RegisteredDisk};
+pub use disk_registry::{
+    DiskRegistrationIdentity, DiskRegistryCommitment, HistoricalDiskDefinition,
+    PreparedDiskRegistry, RegisteredDisk, RegistrationMode, RegistryExitEffect,
+    RegistryExitRequest, VerifiedDiskRegistry, VerifiedRegistryCandidate,
+    VerifiedRegistryPublication,
+};
 mod disk_lifecycle;
 pub use disk_lifecycle::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,

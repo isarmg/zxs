@@ -531,9 +531,10 @@ fn membership_activation_workspace_alias_projection_rejects_ambiguous_owner_and_
         ))
         .unwrap()
         .insert(nested.clone());
-    engine.config = engine
-        .config
-        .clone()
+    // Install only the deliberately changed cache on a fresh typed projection;
+    // with_generation correctly refuses overwriting an already admitted epoch.
+    engine.config = ValidatedConfig::try_from(engine.config().clone())
+        .unwrap()
         .with_generation(Arc::new(generation))
         .unwrap();
     file.source_path = nested

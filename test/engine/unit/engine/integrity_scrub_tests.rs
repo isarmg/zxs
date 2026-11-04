@@ -540,7 +540,8 @@ fn payload_cancellation_is_observed_between_bounded_reads() {
         }
         cancellation.checkpoint()
     })
-    .unwrap_err();
+    .err()
+    .unwrap();
     assert_eq!(error.code(), ErrorCode::OperationAborted);
     assert_eq!(checkpoints, 3);
     assert!(
@@ -1797,4 +1798,39 @@ fn scheduled_real_purge_supersession_revokes_before_finish_without_a_metadata_fa
         engine.finish_integrity_scrub(outcome).completion,
         IntegrityScrubCompletion::Superseded
     ));
+}
+
+#[test]
+fn idle_scrub_batch_drops_cancelled_disk_payload_without_dropping_other_copies() {
+    let (_temp, mut engine, repository) = fixture();
+    let id = save(&mut engine, &repository, b"held scrub body");
+    let plan = engine.prepare_integrity_scrub().unwrap();
+    let IntegrityScrubBatchAdmission::Ready(batch) =
+        engine.admit_integrity_scrub_batch(&plan, &id).unwrap()
+    else {
+        panic!("current fixture was superseded");
+    };
+    let disk = &engine.config.disks[0];
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    assert!(binding.status().unwrap().ordinary > 0);
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(batch.payloads.len(), 3);
+    for (slot, file) in &batch.payloads {
+        let file = file.as_ref().unwrap();
+        if slot == &disk.slot_id {
+            assert_eq!(
+                file.metadata().unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        } else {
+            assert_eq!(file.metadata().unwrap().len(), 15);
+        }
+    }
 }

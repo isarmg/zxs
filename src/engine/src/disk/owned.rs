@@ -140,6 +140,15 @@ impl DiskRoot {
         Ok(file)
     }
 
+    /// Preserve this root's already established provenance. Bootstrap roots are
+    /// explicitly unbound; a managed root never falls back after admission fails.
+    pub(crate) fn open_read_regular(&self, path: &Path) -> Result<ReadFile> {
+        match &self.io {
+            Some(_) => self.open_leased_regular(path).map(Into::into),
+            None => self.open_regular(path).map(Into::into),
+        }
+    }
+
     /// Admit a private descendant and retain that exact directory descriptor.
     /// Its diagnostic path remains relative to this held resource, not a fresh
     /// named-path root; enumeration can reopen only "." beneath the admitted FD.
@@ -616,11 +625,15 @@ impl DiskHandle {
         &self,
         directory: &Path,
         version: &FileVersion,
-    ) -> Result<(File, Vec<u8>, ChecksumManifest)> {
+    ) -> Result<(ReadFile, Vec<u8>, ChecksumManifest)> {
         open_payload_at(&self.root, directory, version)
     }
 
-    pub(crate) fn verify_payload(&self, directory: &Path, version: &FileVersion) -> Result<File> {
+    pub(crate) fn verify_payload(
+        &self,
+        directory: &Path,
+        version: &FileVersion,
+    ) -> Result<ReadFile> {
         let (file, _, manifest) = self.open_payload(directory, version)?;
         verify_open_payload(file, manifest, version, usize::MAX, &mut |_| Ok(()))
     }

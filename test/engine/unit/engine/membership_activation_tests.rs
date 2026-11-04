@@ -1425,3 +1425,21 @@ fn membership_activation_successor_missing_ancestor_archive_is_isolated_without_
 
 #[path = "membership_data_addition_tests.rs"]
 mod data_additions;
+
+#[test]
+fn membership_activation_resume_rejects_missing_active_generation_namespace() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    let generation = fixture.engine.config.generation_hash().unwrap().to_owned();
+    let disk = fixture.engine.config.metadata_members().next().unwrap().clone();
+    let missing = generation_directory(&disk, &generation);
+    fs::remove_dir_all(&missing).unwrap();
+    let system = fixture.temp.path().join("system");
+    drop(fixture.engine);
+    let error = match Engine::resume_membership_activation(&system) {
+        Ok(_) => panic!("missing active namespace must not be initialized by resume"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert!(!missing.exists());
+}

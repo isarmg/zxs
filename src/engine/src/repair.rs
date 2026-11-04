@@ -58,7 +58,7 @@ impl Engine {
                 crate::container_storage::content_path_at(root, &directory, version, &mut |_| {
                     Ok(())
                 })?;
-            if matching(root.open_regular(&source), version)? {
+            if matching(root.open_leased_regular(&source), version)? {
                 return Ok(Some(ReadSource::on_disk(owner, source)));
             }
         }
@@ -84,7 +84,7 @@ impl Engine {
                 let entry = entry?;
                 let path = directory.join(entry.as_path());
                 if path.extension().is_some_and(|suffix| suffix == "full")
-                    && matching(root.open_regular(&path), version)?
+                    && matching(root.open_leased_regular(&path), version)?
                 {
                     return Ok(Some(ReadSource::on_disk(owner, path)));
                 }
@@ -137,7 +137,7 @@ impl Engine {
                 // Quarantine is an inspection bundle, independently of the
                 // live container layout used by the original version.
                 let source = path.join("content").join(&version.creation_name);
-                if matching(root.open_regular(&source), version)? {
+                if matching(root.open_leased_regular(&source), version)? {
                     return Ok(Some(ReadSource::on_disk(owner, source)));
                 }
             }

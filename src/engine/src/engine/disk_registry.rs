@@ -1,18 +1,27 @@
 //! Current registration provenance, deliberately separate from physical health.
 //!
-//! Today only the Engine's admitted configuration supplies registrations. Its
-//! supported generations preserve existing slot/disk/binding identities. This is
-//! NOT a certified lifecycle registry: detach/rebind needs a new authority layer,
-//! not a caller-provided set of supposedly registered slots.
+//! The active borrowed view still comes from the Engine's admitted configuration.
+//! The separately authenticated proposed graph below is not active service
+//! authority; no caller-provided collection can replace current registrations.
 use super::{Engine, ValidatedConfig};
 use crate::DiskConfig;
+use data_serialization::{Deserialize, Serialize};
+
+mod published;
+pub use published::{
+    DiskRegistryCommitment, HistoricalDiskDefinition, PreparedDiskRegistry, RegistrationMode,
+    RegistryExitEffect, RegistryExitRequest, VerifiedDiskRegistry, VerifiedRegistryCandidate,
+    VerifiedRegistryPublication,
+};
 
 /// Exact logical registration identity. A path is not a binding identity.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub struct DiskRegistrationIdentity {
     pub pool_id: String,
     pub disk_id: String,
     pub slot_id: String,
+    #[serialization(with = "storage_contract::u64_string")]
     pub binding_generation: u64,
 }
 
