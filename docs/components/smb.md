@@ -116,9 +116,31 @@ socket 使用服务进程拥有的 `0700` 运行目录，例如 `/zxs/run`，soc
 
 1. socket 的绝对路径。
 2. Samba 可信进程连接时的 UID；这个身份是进程代理的信任边界。
-3. `--smb-user SambaAccount` 指定一个精确 Samba 认证 account_name；不能重复或含 `=`，不接受多账户映射。ZXS 唯一管理员须已初始化，用户名无需与 Samba 相同。
+3. `--smb-user SambaAccount` 指定首次初始化的精确 Samba 认证 account_name。可重复传入 `--smb-allowed-user OtherAccount` 增加已预置候选，合计最多 16 个，不能重复（忽略 ASCII 大小写）、为 root 或含 `=`。任何时刻仍只有一个生效账号，全部绑定同一 ZXS 管理员，不支持多用户权限映射。ZXS 唯一管理员须已初始化，用户名无需与 Samba 相同。
 
-可信 Samba 进程必须在模拟远程用户前建立受保护连接。目标环境需要验证其实际回调时机与 UID；不能为了让连接成功而把 socket 或目录改成所有用户可读写。Samba 必须配置 `map to guest = Never`、`restrict anonymous = 2`、`guest ok = no`、`guest only = no`，并将 `valid users` 限于该唯一账户；不得配置 `force user`。参考[部署样例](../../deploy/samba/smb.conf.example)，部署者独立准备 Samba 凭据，不自动创建或重置密码。
+可信 Samba 进程必须在模拟远程用户前建立受保护连接。目标环境需要验证其实际回调时机与 UID；不能为了让连接成功而把 socket 或目录改成所有用户可读写。Samba 必须配置 `map to guest = Never`、`restrict anonymous = 2`、`guest ok = no`、`guest only = no`，并将每个 ZXS 共享的 `valid users` 限于这组预置候选账户；不得配置 `force user`。参考[部署样例](../../deploy/samba/smb.conf.example)，部署者独立准备 Samba 凭据，不自动创建或重置密码。
+
+<a id="smb-account-settings"></a>
+
+### Web 中的 SMB 账户与密码
+
+账户设置显示当前生效的 SMB 账号、已预置候选和改密可用性，提供真实账号选择及独立改密表单。`GET/POST /api/smb/account` 与 `POST /api/smb/password` 均要求当前管理员会话，写请求沿用同源、CSRF、限流及提交前会话复核；数据盘离线不阻止这项系统盘管理功能。
+
+账号保存请求携带候选 username、读取时的 expected_generation 和当前 Web 管理密码。Web 密码只用于确认本次绑定变更，不作为 Samba 密码使用或保存。候选必须由主机管理员事先准备 Unix/Samba 账户、独立密码及每个共享的 valid users；ZXS 不读取或改写主机 passdb、smb.conf，也不自行证明外部配置已正确。缺失预置时不会创建账号，Samba 登录仍会失败。选择后的绑定真实参与每次新连接和 RPC 授权，不只是页面保存名称。
+
+当前绑定和单调 generation 存在系统盘 `--management-root/smb-account/selection.json`（公开 Rust 配置按 SMB spool 的父目录定位）；采用私有目录、独占进程锁和原子文件/目录同步，成功持久化后才发布内存状态。已有状态缺失、格式不支持或生效账号不再属于启动候选时停止 SMB 桥接，管理 HTTP 保持可用，不重置为 --smb-user。初次创建目录后的中断也需要明确恢复，不借重试初始化覆盖证据。
+
+账号状态 GET 读取独立已提交快照，不等待慢 SMB 操作或切换写锁，也不把该展示快照作为授权证明。切换待提交期间显示旧账号及其代际；持久化成功后更新，发布不确定时返回恢复错误。
+
+账号切换先等已准入 RPC 和改密结束，再持久化新代并关闭旧 ZXS RPC 连接。旧代会话即使切回原名也不能复活，未保存工作文件按既有断线恢复规则保留，Web 会话不撤销。已返回给 SMB 客户端的数据或缓存不能追回。改密也携带 expected_generation，过期表单在发送密码前拒绝。发布不确定时服务端阻断该绑定直至恢复；浏览器阻止盲目重复保存，须先刷新读取有效账号。刷新请求进行中禁止账号及密码提交；未保存选择不能误改另一账号的密码。
+
+改密仅支持已存在的本机 Samba 账户：ZXS 须以非 root 账户运行，系统有 `/usr/bin/smbpasswd`，Samba 须在 `127.0.0.1:445` 接受本机客户端。执行固定客户端远程改密模式 `-s -r 127.0.0.1 -U <既有账号>`，客户端配置强制 SMB3、签名和加密，不执行 shell、不读取部署者 passdb、不使用 sudo，并拒绝带 setuid/setgid 的改密客户端。临时文件只保存固定的非秘密客户端策略；当前、新密码及确认值仅经子进程 stdin 传入，不进入参数、环境、日志或 ZXS 持久状态。浏览器到 Web 的 HTTP 仍有既有明文风险，应使用 HTTPS 或受控可信网络。
+
+本入口拒绝包含域分隔符等解释歧义的账号，仅支持 1–255 字节 ASCII 字母、数字、下划线、点和连字符；其他既有 SMB 账号仍可正常使用，但其密码须在主机管理。密码必须为 1–255 个 UTF-8 字节且不含控制字符，避免 Samba 4.22 `smbpasswd` 的固定确认缓冲区截断；Samba 密码策略仍由 Samba 判定。单次最多一个改密进程，15 秒等待上限；提交后取消 HTTP 不丢弃子进程回收和结果等待。失败、超时或响应丢失不能证明密码没变，页面阻止重复提交，须先在 SMB 客户端核实当前可用密码，再手动解锁。成功不会撤销 Web 会话，也不保证已建立 SMB 连接立即失效。
+
+**账号设置只在已预置候选中切换，不创建或重命名系统账户。** 非特权 ZXS 没有 Unix 账户管理权或 Samba 凭据库写权。增加候选须由主机管理员协调 Unix 账户、Samba 凭据、所有共享白名单和 ZXS 启动参数，再重启加载候选；切换候选无需重启。设计边界、同步预算与替代方案见 [ADR 0011](../adr/0011-smb-account-selection.md)。
+
+此接口的单元及路由测试不替代目标 Debian Samba 的实际改密和重新认证验收。
 
 socket 已存在时服务端拒绝覆盖，启动时不会删除未知对象。正常退出或任务取消时，会关闭所有活跃 RPC socket，让阻塞读取退出；只在路径仍对应自身绑定的 device/inode 时移除 socket。服务崩溃遗留的 socket 须由管理员确认后清理。
 

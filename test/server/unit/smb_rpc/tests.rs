@@ -848,7 +848,7 @@ fn fixture_configure(
         max_file_bytes: 4096,
         authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
         backend: backend.clone(),
-        username: "alice".into(),
+        account: account_authority(&spool),
         auth: crate::lock(&auth).reader(),
         spool,
         file_writers: Mutex::new(BTreeSet::new()),
@@ -874,7 +874,9 @@ fn repository(shared: &Shared) -> String {
 }
 
 fn session(shared: Arc<Shared>, branch: &str) -> Session {
+    let account_generation = shared.account.read().unwrap().selection().generation;
     Session {
+        account_generation,
         identity: identity(&shared),
         shared,
         branch: branch.into(),
@@ -1952,7 +1954,7 @@ async fn cancellation_closes_blocked_rpc_sessions_and_removes_its_socket() {
     let server_socket = socket.clone();
     let server_spool = temp.path().join("management/smb-spool");
     let repository = repository(&shared);
-    let username = shared.username.clone();
+    let username = shared.account.read().unwrap().selection().username.clone();
     let auth = temp.auth.clone();
     let backend = shared.backend.clone();
     let server = tokio::spawn(async move {
@@ -1962,6 +1964,7 @@ async fn cancellation_closes_blocked_rpc_sessions_and_removes_its_socket() {
                 spool_dir: server_spool,
                 allowed_uid: smb_protocol::protocol::effective_uid(),
                 username,
+                additional_users: Vec::new(),
                 spool_limits: crate::SpoolLimits::default(),
             },
             auth,
@@ -2787,4 +2790,16 @@ fn session_drop_after_writer_poison_retains_work_and_other_owners() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| next.reserve_paths(&["new"])))
             .is_err()
     );
+}
+
+fn account_authority(spool: &Path) -> Arc<crate::smb_account_binding::Authority> {
+    crate::smb_account_binding::Authority::open(&crate::SmbConfig {
+        socket: spool.join("unused.sock"),
+        spool_dir: spool.to_path_buf(),
+        allowed_uid: 0,
+        username: "alice".into(),
+        additional_users: vec!["bob".into()],
+        spool_limits: crate::SpoolLimits::default(),
+    })
+    .unwrap()
 }

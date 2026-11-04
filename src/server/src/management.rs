@@ -861,6 +861,43 @@ impl Backend for ManagementBackend {
                 )
             })?
             .to_owned();
+        let hardware = match directory.as_ref() {
+            Some(directory) => {
+                crate::disk_hardware::observe(&disk.root, std::os::fd::AsFd::as_fd(directory))
+            }
+            None => crate::disk_hardware::HardwareObservation::unknown(),
+        };
+        let health = match directory.as_ref() {
+            Some(directory) => {
+                crate::disk_hardware::health::observe(&disk.root, directory, &hardware)
+            }
+            None => storage_contract::disk_details::DiskHealth::Unavailable {
+                reason: storage_contract::disk_details::DiskHealthUnavailable::MappingUnknown,
+            },
+        };
+        // SMART runs outside engine/auth locks; revalidate authorization and the
+        // current registration before publishing an observation on this card.
+        backend.with_disk_registration(identity, slot, |current, engine| {
+            if current.disk_id != disk.disk_id || current.root != disk.root {
+                return Err(ApiError::invalid(
+                    "disk registration changed during observation",
+                ));
+            }
+            if let Some(directory) = directory.as_ref() {
+                use std::os::unix::fs::MetadataExt;
+                let current = engine
+                    .open_disk_observation_directory(&current.slot_id)
+                    .map_err(ApiError::invalid_source)?;
+                let held = directory.metadata().map_err(ApiError::invalid_source)?;
+                let now = current.metadata().map_err(ApiError::invalid_source)?;
+                if (held.dev(), held.ino()) != (now.dev(), now.ino()) {
+                    return Err(ApiError::invalid(
+                        "registered directory changed during observation",
+                    ));
+                }
+            }
+            Ok(())
+        })?;
         let crate::disk_hardware::HardwareObservation {
             model,
             serial,
@@ -869,12 +906,7 @@ impl Backend for ManagementBackend {
             mount_path,
             filesystem_uuid,
             mapping,
-        } = match directory {
-            Some(directory) => {
-                crate::disk_hardware::observe(&disk.root, std::os::fd::AsFd::as_fd(&directory))
-            }
-            None => crate::disk_hardware::HardwareObservation::unknown(),
-        };
+        } = hardware;
         let mapping = match mapping {
             crate::disk_hardware::HardwareMapping::Single => {
                 storage_contract::disk_details::DiskMapping::Single
@@ -897,6 +929,7 @@ impl Backend for ManagementBackend {
             device_path,
             filesystem_uuid,
             mapping,
+            health,
             note,
         })
     }

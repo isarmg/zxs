@@ -68,7 +68,7 @@ struct ObservationPaths<'a> {
     filesystem_uuids: &'a Path,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct RootMount {
     id: u64,
     major: u32,
@@ -473,3 +473,6 @@ fn invalid(path: &Path, detail: &'static str) -> ObservationError {
 #[cfg(test)]
 #[path = "../../../test/server/unit/disk_hardware.rs"]
 mod tests;
+
+#[path = "disk_health.rs"]
+pub(crate) mod health;

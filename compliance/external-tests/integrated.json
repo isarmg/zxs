@@ -23,7 +23,7 @@
         },
         {
           "path": "test/interface/integration/style_contracts.rs",
-          "sha256": "8fd0d1992ba4013ee7482c05d10d6fd6ebfa7ee82f6a4795456bc7d5b93c3fd4",
+          "sha256": "b174016da71f802bb0fc7469a32dcadd917e25972f7e2c88436f9030493532f7",
           "source": "src/interface/tests/style_contracts.rs",
           "source_sha256_before": "82c878873c25b7f1a59261e4a577dd68c5cc0dd48eb986cb32b221f33f2826b8"
         },

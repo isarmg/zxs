@@ -106,7 +106,7 @@ fn reopen(fixture: &Fixture) -> (Arc<Shared>, Arc<EngineBackend>) {
         max_file_bytes: 4096,
         authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
         backend: backend.clone(),
-        username: "alice".into(),
+        account: account_authority(&spool),
         auth: crate::lock(&fixture.auth).reader(),
         spool,
         file_writers: Mutex::new(BTreeSet::new()),

@@ -663,6 +663,7 @@ async fn shutdown_closes_idle_smb_and_http_listener_while_http_request_is_stalle
                     spool_dir: bridge_spool,
                     allowed_uid: smb_protocol::protocol::effective_uid(),
                     username: "alice".into(),
+                    additional_users: Vec::new(),
                     spool_limits: crate::SpoolLimits::default(),
                 },
                 auth,

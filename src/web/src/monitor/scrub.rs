@@ -191,17 +191,17 @@ fn latest(status: &Status) -> String {
 }
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
-        <article class="zxs-content-panel zxs-frame zxs-frame--inset" data-integrity-scrub="" aria-busy=move ||state.with(|s|s.monitor.scrub.loading).to_string() aria-label=t("完整性巡检", "Full integrity scan")>
-            <h2>{t("完整性巡检", "Full integrity scan")}</h2>
-            <p>{t("以下为最后查询的巡检状态；存储就绪和写入成功不等于全池完整性检查。", "This is the last queried scan status; storage readiness and successful writes are not full-pool integrity checks.")}</p>
+        <article class="zxs-content-panel zxs-frame zxs-stack" data-integrity-scrub="" aria-busy=move ||state.with(|s|s.monitor.scrub.loading).to_string() aria-label=t("完整性巡检", "Full integrity scan")>
+            <h2 class="zxs-row">{t("完整性巡检", "Full integrity scan")}</h2>
+            <p class="zxs-row">{t("以下为最后查询的巡检状态；存储就绪和写入成功不等于全池完整性检查。", "This is the last queried scan status; storage readiness and successful writes are not full-pool integrity checks.")}</p>
             {move || state.with(|s| s.monitor.scrub.failure.clone()).map(|error| view! { <ErrorState message=error.message request_id=error.request_id/> })}
-            <p role="status" data-integrity-freshness=move || state.with(|s| freshness_key(s.monitor.scrub.observation.as_ref()))>{move || state.with(|s| freshness(s.monitor.scrub.observation.as_ref()))}</p>
+            <p class="zxs-row" role="status" data-integrity-freshness=move || state.with(|s| freshness_key(s.monitor.scrub.observation.as_ref()))>{move || state.with(|s| freshness(s.monitor.scrub.observation.as_ref()))}</p>
             {move || state.with(|s| s.monitor.scrub.observation.as_ref().map(|status| view! {
-                <p>{phase(status)}</p>
-                <p>{format!("{}: {}", t("最后完整成功", "Last complete success"), status.last_complete_success_at.as_deref().unwrap_or("—"))}</p>
-                <p>{latest(status)}</p>
+                <p class="zxs-row">{phase(status)}</p>
+                <p class="zxs-row">{format!("{}: {}", t("最后完整成功", "Last complete success"), status.last_complete_success_at.as_deref().unwrap_or("—"))}</p>
+                <p class="zxs-row">{latest(status)}</p>
             }))}
-            <p>{t("实际读取含元数据与验证开销，预期正文不是总 I/O，不能据此计算总完成百分比。调度间隔不是完成时限；新鲜度从扫描开始计。", "Actual reads include metadata and verification. Expected payload is not total I/O or a completion percentage. The scheduling interval is not a deadline; freshness starts when scanning begins.")}</p>
+            <p class="zxs-row">{t("实际读取含元数据与验证开销，预期正文不是总 I/O，不能据此计算总完成百分比。调度间隔不是完成时限；新鲜度从扫描开始计。", "Actual reads include metadata and verification. Expected payload is not total I/O or a completion percentage. The scheduling interval is not a deadline; freshness starts when scanning begins.")}</p>
         </article>
     }
 }

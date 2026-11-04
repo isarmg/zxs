@@ -8,6 +8,7 @@ use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
 mod errors;
+mod workspace_feedback;
 pub(crate) use errors::{ErrorContext, fail, fail_in};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -15,7 +16,6 @@ pub(crate) enum Page {
     #[default]
     Files,
     Details,
-    Health,
     Admin,
     Status,
     History,
@@ -51,12 +51,14 @@ pub(crate) struct State {
     // Only a settled sign-out/new session clears this non-idempotent fence.
     pub password_change: PasswordChangeState,
     pub password_failure: Option<Feedback>,
+    pub smb_account: crate::smb_account::Model,
     pub page: Page,
     pub login_in_flight: bool,
     pub errors: Vec<errors::ErrorNotice>,
     // Stable dismissal identity, independent of retry request IDs and list order.
     pub(crate) next_error_id: u64,
-    pub notice: String,
+    pub session_notice: String,
+    pub(crate) notices: workspace_feedback::Notices,
     pub files: files::Model,
     pub monitor: monitor::Model,
     pub management: management::Model,
@@ -89,6 +91,7 @@ impl State {
             || self.management.retrying
             || self.management.retry_unknown
             || self.admin_console.reload_blocked()
+            || self.smb_account.reload_blocked()
             || files::pending(self)
     }
 
@@ -154,8 +157,14 @@ pub(crate) fn operation_id(state: RwSignal<State>) -> Option<String> {
     }
 }
 
+pub(crate) fn file_operation_id(state: RwSignal<State>) -> Option<String> {
+    let id = operation_id(state)?;
+    state.update(|s| s.notices.begin_operation(id.clone()));
+    Some(id)
+}
+
 pub(crate) fn set_notice(state: RwSignal<State>, notice: String) {
-    state.update(|s| s.notice = notice);
+    state.update(|s| s.set_file_notice(notice));
 }
 
 pub fn app() -> impl IntoView {
@@ -218,7 +227,7 @@ pub fn app() -> impl IntoView {
     view! {
         <AppShell product="zxs" session=session.into() pending_logout=logout_pending.into() on_logout=Callback::new(move |_|logout(state)) on_account=Callback::new(move |_|navigate(state,Page::Account)) on_restore=Callback::new(move |_|restore_session(state)) login=login>
             {workspace(state)}
-            <Show when=move ||state.with(|s|!s.notice.is_empty())><p class="zxs-status zxs-row" role="status" aria-live="polite">{move ||state.with(|s|s.notice.clone())}</p></Show>
+            {workspace_feedback::view(state)}
             <Show when=move ||state.with(|s|!s.errors.is_empty())>
                 <aside class="zxs-error-center zxs-stack" aria-label=t("请求错误","Request errors")>
                     {move ||state.with(|s|s.errors.clone()).into_iter().map(move |error| {
@@ -238,14 +247,17 @@ pub fn app() -> impl IntoView {
 }
 pub(crate) fn navigate(state: RwSignal<State>, page: Page) {
     state.update(|s| {
-        s.page = page;
+        s.change_page(page);
     });
     match page {
-        Page::Health => management::load(state),
         Page::Status => monitor::load(state),
         Page::History => history::load(state),
-        Page::Admin => admin::load_disks(state),
-        Page::Details | Page::Account | Page::Files => {}
+        Page::Admin => {
+            management::load(state);
+            admin::load_disks(state);
+        }
+        Page::Account => crate::smb_account::load(state),
+        Page::Details | Page::Files => {}
     }
 }
 fn header_refreshing(state: &State) -> bool {
@@ -257,7 +269,20 @@ fn header_refreshing(state: &State) -> bool {
         Page::Status => monitor::refreshing(state),
         Page::History => state.activity.loading,
         Page::Admin => admin::disks_refreshing(state),
-        Page::Health | Page::Account => false,
+        Page::Account => false,
+    }
+}
+
+fn header_refresh_disabled(state: &State) -> bool {
+    match state.page {
+        // A listing refresh may replace a pending selected-file history read.
+        // Busy presentation must not remove that cancellation path.
+        Page::Files => state.files.loading || state.files.loading_disks,
+        Page::Details => header_refreshing(state) || state.files.selected.is_none(),
+        Page::Status => monitor::refreshing(state) || !state.session_active(),
+        Page::History => state.activity.loading,
+        Page::Admin => !admin::can_load_disks(state),
+        _ => true,
     }
 }
 
@@ -265,18 +290,18 @@ fn workspace(state: RwSignal<State>) -> impl IntoView {
     let page = Memo::new(move |_| state.with(|s| s.page));
     view! {
         <HeaderNavigation label=t("主导航","Main navigation")>
-            {[ (Page::Files,t("文件","Files")), (Page::Details,t("详情","Details")), (Page::Status,t("状态","Status")), (Page::History,t("历史记录","History")), (Page::Health,t("管理健康","Management health")) ].into_iter().map(move |(page,title)|view! {
+            {[ (Page::Files,t("文件","Files")), (Page::Details,t("详情","Details")), (Page::Status,t("状态","Status")), (Page::History,t("历史记录","History")) ].into_iter().map(move |(page,title)|view! {
                 <button class="zxs-button" aria-current=move ||(state.with(|s|s.page==page)).then_some("page") on:click=move |_|navigate(state,page)>{title}</button>
             }).collect_view()}
             <Show when=move ||state.with(|s|s.session_active())><button class="zxs-button" aria-current=move ||state.with(|s|(s.page==Page::Admin).then_some("page")) on:click=move |_|navigate(state,Page::Admin)>{t("系统管理","Administration")}</button></Show>
         </HeaderNavigation>
         <HeaderActions><div class="zxs-header-tools zxs-flow">
             <Show when=move ||state.with(|s|matches!(s.page,Page::Files|Page::Details|Page::Status|Page::History|Page::Admin))>
-                <button class="zxs-button zxs-header-refresh" type="button" aria-busy=move ||state.with(header_refreshing).to_string() aria-label=t("刷新","Refresh") title=t("刷新","Refresh") disabled=move ||state.with(|s|match s.page{Page::Files=>header_refreshing(s),Page::Details=>header_refreshing(s)||s.files.selected.is_none(),Page::Status=>monitor::refreshing(s)||!s.session_active(),Page::History=>s.activity.loading,Page::Admin=>!admin::can_load_disks(s),_=>true}) on:click=move |_|match state.with_untracked(|s|s.page){Page::Files|Page::Details=>if state.with_untracked(|s|s.files.slot.is_empty()){files::load_disks(state)}else{files::load_entries(state)},Page::Status=>monitor::load(state),Page::History=>history::load(state),Page::Admin=>admin::load_disks(state),_=>{}}><FileIcon name="refresh"/></button>
+                <button class="zxs-button zxs-header-refresh" type="button" aria-busy=move ||state.with(header_refreshing).to_string() aria-label=t("刷新","Refresh") title=t("刷新","Refresh") disabled=move ||state.with(header_refresh_disabled) on:click=move |_|match state.with_untracked(|s|s.page){Page::Files|Page::Details=>if state.with_untracked(|s|s.files.slot.is_empty()){files::load_disks(state)}else{files::load_entries(state)},Page::Status=>monitor::load(state),Page::History=>history::load(state),Page::Admin=>admin::load_disks(state),_=>{}}><FileIcon name="refresh"/></button>
             </Show>
         </div></HeaderActions>
-        <Show when=move ||state.with(|s|s.page!=Page::Health&&!s.management.storage.writable())>{management::summary(state)}</Show>
-        {move ||match page.get() { Page::Health=>management::view(state).into_any(),Page::Admin=>admin::view(state).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
+        <Show when=move ||state.with(|s|s.page!=Page::Admin&&!s.management.storage.writable())>{management::summary(state)}</Show>
+        {move ||match page.get() { Page::Admin=>admin::view(state).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
     }
 }
 fn session_view(state: &State) -> SessionView {
@@ -301,7 +326,7 @@ fn session_view(state: &State) -> SessionView {
                 if state.authenticated {
                     String::new()
                 } else {
-                    state.notice.clone()
+                    state.session_notice.clone()
                 }
             }),
         request_id: state
@@ -321,6 +346,8 @@ fn begin_login(state: &mut State) -> Option<u64> {
         return None;
     }
     state.files.cancel_history();
+    state.notices.clear();
+    state.session_notice.clear();
     state.login_in_flight = true;
     state.session_epoch += 1;
     state.login_failure = None;
@@ -336,6 +363,7 @@ fn begin_restore(state: &mut State) -> Option<u64> {
         return None;
     }
     state.files.cancel_history();
+    state.notices.clear();
     state.session_transition = SessionTransition::Restoring;
     state.session_epoch += 1;
     state.session_failure = None;
@@ -377,6 +405,7 @@ pub(crate) fn begin_logout(state: &mut State) -> Option<u64> {
         return None;
     }
     state.files.cancel_history();
+    state.notices.clear();
     state.session_transition = SessionTransition::LoggingOut;
     state.session_epoch += 1;
     api::invalidate_session_work();
@@ -427,7 +456,7 @@ fn end_session(state: RwSignal<State>, notice: String) {
     state.set(State {
         session_epoch,
         page: Page::Files,
-        notice,
+        session_notice: notice,
         ..Default::default()
     });
 }
@@ -460,7 +489,7 @@ fn account(state: RwSignal<State>) -> impl IntoView {
             complete_password_change(state, result);
         });
     });
-    view! { <section class="zxs-content-stack zxs-stack"><p class="zxs-row">{t("修改密码后，该账号的全部会话将失效。","Changing the password signs this account out on all devices.")}</p><Show when=move ||state.with(|s|s.password_unknown())><p class="zxs-row" role="alert">{t("改密结果未知，已禁用重复提交。请先退出登录，再核实可用的密码；不会自动重试改密。","The password change outcome is unknown; repeat submission is disabled. Sign out, then verify which password works. The change will not be retried automatically.")}</p></Show><AccountPage username_value=username.into() pending=pending.into() remote_failure=failure.into() on_submit=change/></section> }
+    view! { <section class="zxs-content-stack zxs-stack"><h2 class="zxs-row">{t("Web 账号与密码","Web account and password")}</h2><p class="zxs-row">{t("修改密码后，该账号的全部会话将失效。","Changing the password signs this account out on all devices.")}</p><Show when=move ||state.with(|s|s.password_unknown())><p class="zxs-row" role="alert">{t("改密结果未知，已禁用重复提交。请先退出登录，再核实可用的密码；不会自动重试改密。","The password change outcome is unknown; repeat submission is disabled. Sign out, then verify which password works. The change will not be retried automatically.")}</p></Show><AccountPage username_value=username.into() pending=pending.into() remote_failure=failure.into() on_submit=change/>{crate::smb_account::view(state)}</section> }
 }
 fn complete_password_change(state: RwSignal<State>, result: Result<Value, api::Error>) {
     match result {

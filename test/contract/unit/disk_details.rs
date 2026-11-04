@@ -13,6 +13,9 @@ fn details() -> DiskDetailsRecord {
         device_path: None,
         filesystem_uuid: None,
         mapping: DiskMapping::Unknown,
+        health: DiskHealth::Unavailable {
+            reason: DiskHealthUnavailable::MappingUnknown,
+        },
         note: "自由备注\n第二行 <script>not executable</script>".into(),
     }
 }
@@ -95,4 +98,65 @@ fn note_command_requires_all_strings_and_allows_plain_multiline_text() {
     let mut extra = value;
     extra["physical_slot"] = json!("5");
     assert!(json_codec::from_value::<DiskNoteRequest>(extra).is_err());
+}
+
+#[test]
+fn smart_health_requires_observation_and_explicit_nullable_metrics() {
+    let source = DiskHealth::Smart {
+        observed_at_unix_ms: u64::MAX,
+        device_path: "/dev/nvme0n1".into(),
+        assessment: DiskHealthAssessment::Passed,
+        temperature_celsius: None,
+        power_on_hours: Some(u64::MAX),
+    };
+    let value = json_codec::to_value(&source).unwrap();
+    assert_eq!(value["observed_at_unix_ms"], u64::MAX.to_string());
+    assert_eq!(
+        json_codec::from_value::<DiskHealth>(value.clone()).unwrap(),
+        source
+    );
+    for field in [
+        "state",
+        "observed_at_unix_ms",
+        "device_path",
+        "assessment",
+        "temperature_celsius",
+        "power_on_hours",
+    ] {
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            json_codec::from_value::<DiskHealth>(missing).is_err(),
+            "{field}"
+        );
+    }
+    for (field, invalid) in [
+        ("assessment", json!("unknown")),
+        ("assessment", json!({"passed":null})),
+        ("observed_at_unix_ms", json!(42)),
+        ("power_on_hours", json!(42)),
+        ("temperature_celsius", json!(2147483648_i64)),
+        ("extra", json!(true)),
+    ] {
+        let mut bad = value.clone();
+        bad[field] = invalid;
+        assert!(
+            json_codec::from_value::<DiskHealth>(bad).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn health_is_required_and_unavailable_is_not_a_smart_result() {
+    let mut value = json_codec::to_value(details()).unwrap();
+    value.as_object_mut().unwrap().remove("health");
+    assert!(json_codec::from_value::<DiskDetailsRecord>(value).is_err());
+    for value in [
+        json!({"state":"unavailable"}),
+        json!({"state":"unavailable","reason":"healthy"}),
+        json!({"state":"unavailable","reason":"tool_missing","assessment":"passed"}),
+    ] {
+        assert!(json_codec::from_value::<DiskHealth>(value).is_err());
+    }
 }

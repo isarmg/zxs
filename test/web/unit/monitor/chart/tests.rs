@@ -79,7 +79,7 @@ fn chart_projection_reuses_admitted_history_across_resize_and_unrelated_updates(
         let before = samples.get();
         for i in 0..20 {
             state.update(|s| {
-                s.notice = i.to_string();
+                s.session_notice = i.to_string();
                 s.monitor.history_loading = i % 2 == 0;
             });
             assert_eq!(samples.get(), before);

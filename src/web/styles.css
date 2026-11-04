@@ -7,7 +7,8 @@
 
 @font-face { font-family: ZxsUI; src: url("./fonts/interface-regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
 @font-face { font-family: ZxsUI; src: url("./fonts/interface-bold.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
-html { min-width: 320px; font-family: var(--zxs-font-ui); font-size: 14px; color: var(--zxs-text-primary); background: var(--zxs-bg-page); }
+/* Let a classic vertical scrollbar reduce the layout viewport below 320px. */
+html { min-width: 0; font-family: var(--zxs-font-ui); font-size: 14px; color: var(--zxs-text-primary); background: var(--zxs-bg-page); }
 body { margin: 0; }
 #root { min-height: 100dvh; }
 .zxs-app-shell :where(a,button,input,select,textarea) { touch-action: manipulation; }

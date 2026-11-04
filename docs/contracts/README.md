@@ -91,7 +91,8 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 
 Production 在现有 seal 校验成功后，持有同一个只读登记目录 FD，
 通过该 FD 的 Linux mount ID、sysfs 和已有 `/dev/disk/by-uuid` 链接提供尽力观察；
-不会在校验后重新按路径打开，目录替换或失去 seal 不会把承载系统盘误标成该登记盘。
+硬件采集始终沿持有 FD，发布前另经引擎重新验证登记与 seal 并比较目录 inode；
+目录替换或失去 seal 不会把承载系统盘误标成该登记盘。
 当前型号和序列号支持可唯一关联的 NVMe 控制器；其他设备这两项可为 `null`。
 `capacity_bytes` 为整块设备或 NVMe 命名空间容量，不是文件系统可用空间、分区容量或控制器总容量。
 复杂/多设备关联标为 `multiple`；无法确定、缺失或读取失败标为 `unknown` 或对应字段 `null`，不猜单块硬盘。
@@ -113,3 +114,36 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 更换 `disk_id` 不自动继承旧盘备注；旧记录保留但不投影给新登记盘。
 它只在系统管理盘本地持久，**不修改 `disk.json`、不进入核心复制日志，也不是数据盘灾备副本**；
 恢复/替换整个系统管理目录时，需要用户自身对该目录的备份。
+
+### 每目录设备健康观察
+
+`DiskDetailsRecord.health` 必填，`state=unavailable` 携带封闭的 `reason`；
+`state=smart` 携带 `observed_at_unix_ms`（十进制 u64 字符串）、查询整盘的
+`device_path`、设备总体报告 `assessment=passed|warning|failed`、必填可空的
+`temperature_celsius`（i32）和 `power_on_hours`（十进制 u64 字符串）。
+整盘查询路径与卡片顶层的挂载分区路径分开，缺少总体报告为 `incomplete_output`，
+退出码零、目录在线、容量充足和全局恢复完成都不能替代设备健康报告。
+当前预故障属性越阈值归 `failed`，既往越阈值或错误/自检日志位归 `warning`，不静默丢失告警。
+
+可选原生采集固定调用 `/usr/sbin/smartctl --json --health --attributes`，仅直接 NVMe
+命名空间或 sysfs 标为 ATA 的 SAT 设备，显式指定协议，不运行 shell、不使用 sudo、
+不启用 SMART、不启动自检、不改变设备设置。ATA 加 `--nocheck=standby,3,3`，
+休眠/待机报告为 `low_power`，不支持电源检查也拒绝继续；NVMe 只读取日志，
+不发送电源状态更改命令。缺工具、权限不足、不支持的设备、变化的身份、超时和无效结果均不可用。
+复杂多设备映射不猜测单盘，不向真实设备发命令。SMART 是设备自报观察，不是物理可靠性保证；NVMe 数据可能由控制器统一报告，不证明不同命名空间是独立硬盘。
+
+采集持有只读、不可跟随符号链接的块设备 FD，通过 `/proc/<pid>/fd/<fd>` 交给子进程，
+防止设备路径替换；同时持有 sysfs 设备 inode，在查询前后核对 inode、设备号、挂载 ID、
+目录到整盘的关系和依赖数。结果返回前再次核对当前管理员授权、登记身份、seal 和目录 inode。
+进程级只允许一个采集线程/子进程，无等待队列；stdout 上限 64 KiB，子进程期限 2 秒，
+HTTP 侧等候上限 3 秒。超限/超时终止并回收子进程；若内核 I/O 无法中断，唯一线程继续持有
+采集槽，后续请求返回 `busy`，不积累线程。每次刷新重新观察，无持久健康缓存或后台轮询。
+
+默认 systemd 示例的 `DevicePolicy=closed` 和空 capabilities 不授予原始设备查询能力，
+因此通常显示权限不可用；本功能不修改服务权限，也不会安装 smartmontools。
+设备/控制器 ioctl 仍可能因宿主策略被拒绝，作为查询失败呈现。真实设备验收须由操作者另行授权，
+自动测试只使用合成 JSON、临时 sysfs 夹具及不接触设备的假命令。
+
+smartctl 的只读选项、电源检查及退出位语义依据
+[smartmontools 官方手册](https://github.com/smartmontools/smartmontools/blob/master/smartmontools/smartctl.8.in)。
+本实现不自动扫描设备，也不执行手册中的写设置或自检命令。

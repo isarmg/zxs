@@ -27,11 +27,13 @@ mod auth_layout;
 mod contour_evidence;
 mod contours;
 mod diagnostics;
+mod disk_health;
 mod error_feedback;
 mod file_pagination;
 mod file_rows;
 mod fixture;
 use fixture::seed_files;
+mod feedback_lifecycle;
 mod fonts;
 mod history_cancellation;
 mod history_windows;
@@ -41,6 +43,7 @@ mod management;
 mod metadata;
 mod naming;
 mod note_recovery;
+mod page_layout;
 mod server_launcher;
 mod session_delivery;
 use metadata::{assert_metadata_only, metadata_edit, open_fixture_directory};
@@ -330,12 +333,14 @@ fn exercise(
         println!("PASS real browser screenshot saved to {}", path.display());
     }
     file_viewports::run(browser, viewport_previews.as_deref())?;
+    page_layout::files(browser)?;
     let current_history = session_delivery::begin_paused_history(browser)?;
     session_delivery::finish(current_history, true)?;
     history_windows::run(browser)?;
     assert_metadata_only(browser)?;
     note_recovery::run(browser)?;
     metadata_edit(browser)?;
+    feedback_lifecycle::run(browser)?;
     browser.click(&browser.button("History", "历史记录")?)?;
     wait_for("seeded file in activity history", || {
         if browser.script("return Array.from(document.querySelectorAll('.zxs-history-path')).some(e=>e.textContent.includes('browser-smoke.txt'))")? == true { Ok(()) } else { Err("history missing seeded file".into()) }
@@ -344,10 +349,12 @@ fn exercise(
     browser.css(".zxs-monitor-page .zxs-metric-card")?;
     assert_metadata_only(browser)?;
     println!("PASS monitor status page retains real telemetry controls");
+    page_layout::status(browser)?;
     history_cancellation::monitor_range(browser)?;
     accessibility::run(browser)?;
     admin_language::run(browser)?;
     metadata::disk_notes(browser)?;
+    disk_health::run(browser)?;
     single_account::run(browser, password)?;
     // Language reload intentionally resets file navigation and selection. Restore
     // the seeded directory AND selected file required by the logout write/metadata fences.

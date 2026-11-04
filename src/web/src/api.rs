@@ -51,6 +51,8 @@ thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credenti
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid SMB account response: {0}")]
+    SmbAccount(#[source] json_codec::Error),
     #[error("invalid workspace capacity: {0}")]
     WorkspaceCapacity(#[source] json_codec::Error),
     #[error("invalid disk list: {0}")]

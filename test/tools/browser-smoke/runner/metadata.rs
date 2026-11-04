@@ -251,6 +251,7 @@ pub(super) fn disk_notes(browser: &Browser) -> Result<()> {
             // Never change the registered identity or note returned by the server.
             for(const field of ['model','serial','capacity_bytes','device_path','filesystem_uuid'])value[field]=null;
             value.mapping='unknown';
+            value.health={state:'unavailable',reason:'mapping_unknown'};
             return new Response(JSON.stringify(value),{status:200,headers:{'Content-Type':'application/json'}});
         };return true;
     "#)?;

@@ -263,10 +263,10 @@ pub(super) fn history_navigation_allowed(state: RwSignal<State>) -> bool {
         return true;
     }
     state.update(|s| {
-        s.notice = t(
+        s.set_file_notice(t(
             "请先保存或取消当前编辑，再切换历史页面。",
             "Save or cancel the current edit before changing history pages.",
-        );
+        ));
     });
     false
 }
@@ -439,10 +439,10 @@ impl Draft {
             })
         {
             self.state.update(|state| {
-                state.notice = t(
+                state.set_file_notice(t(
                     "历史依据已改变；请取消当前编辑，刷新后重新核对。",
                     "The history basis changed. Cancel this edit, refresh, and review it again.",
-                );
+                ));
             });
             return;
         }

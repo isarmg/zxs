@@ -118,6 +118,9 @@ async fn system_samba_real_engine_fixture() {
     let username = std::env::var("ZXS_SMB_E2E_USER")
         .expect("explicit existing isolated Unix account required");
     smb_protocol::protocol::validate_username(&username).unwrap();
+    let additional_username = std::env::var("ZXS_SMB_E2E_NEXT_USER")
+        .expect("explicit second existing isolated Unix account required");
+    smb_protocol::protocol::validate_username(&additional_username).unwrap();
     let engine_uid = smb_protocol::protocol::effective_uid();
     assert_ne!(
         engine_uid, 0,
@@ -129,19 +132,55 @@ async fn system_samba_real_engine_fixture() {
     let socket = temp.path().join("rpc/smb.sock");
     let config = crate::SmbConfig {
         socket: socket.clone(),
-        spool_dir: temp.path().join("system-samba-spool"),
+        spool_dir: temp.path().join("system-samba-state/smb-spool"),
         // Samba connects before impersonating the independent authenticated user.
         allowed_uid: 0,
         username,
+        additional_users: vec![additional_username],
         spool_limits: crate::SpoolLimits {
             bytes_per_account: 16 * 1024 * 1024,
             bytes_total: 64 * 1024 * 1024,
             recovery_reserve_bytes: 1,
         },
     };
+    // Real HTTP password boundary under the same non-root service identity.
+    // Credentials are synthetic and remain in this private temporary fixture.
+    let mut web_auth = AuthStore::initialize(
+        &temp.path().join("smb-web-auth"),
+        "webadmin",
+        "synthetic-web-test-password",
+    )
+    .unwrap();
+    let web_token = web_auth
+        .login("webadmin", "synthetic-web-test-password")
+        .unwrap()
+        .token;
+    let mut web_config = crate::ServerConfig::new(&temp.path().join("smb-web-management"));
+    web_config.smb = Some(config.clone());
+    let web_config = web_config.admit().unwrap();
+    let runtime =
+        crate::ManagementRuntime::start(shared.backend.clone(), web_auth, &web_config).unwrap();
+    let account = runtime.smb_account.clone().unwrap();
+    let web = crate::router_shared(
+        runtime.backend,
+        runtime.auth,
+        web_config.clone(),
+        runtime.telemetry,
+        crate::http_spool::HttpSpool::open_blocking(&web_config),
+        runtime.smb_account,
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let web_port = listener.local_addr().unwrap().port();
+    let web_server = tokio::spawn(async move { http_routing::serve(listener, web).await });
     let auth = temp.auth.clone();
     let backend = shared.backend.clone();
-    let server = tokio::spawn(async move { serve(config, auth, backend, 4096).await });
+    let server = tokio::spawn(async move {
+        let mut shutdown = ConnectionShutdown::new();
+        let result = serve_owned(config, auth, backend, 4096, shutdown.registry(), account).await;
+        shutdown.finish().await?;
+        result
+    });
     tokio::time::timeout(Duration::from_secs(10), async {
         while !socket.exists() {
             assert!(!server.is_finished(), "RPC startup failed");
@@ -152,6 +191,8 @@ async fn system_samba_real_engine_fixture() {
     .unwrap();
     let ready = json!({
         "engine_uid": engine_uid,
+        "password_http_port": web_port,
+        "password_http_token": web_token,
         "allowed_peer_uid": 0,
         "socket": socket,
         "repository_id": repository,
@@ -200,6 +241,8 @@ async fn system_samba_real_engine_fixture() {
         "client did not delete its published file"
     );
     verify_body(&shared, &branch, "report.txt", b"old");
+    web_server.abort();
+    assert!(web_server.await.unwrap_err().is_cancelled());
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
     let receipt = json!({"real_engine":true,"published_upload_and_rename_verified":true,"original_body_preserved":true,"old_tree_authority_revoked_then_restored":true,"new_tree_binding_disabled_then_restored":true,"published_delete_verified":true});

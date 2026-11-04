@@ -2,6 +2,7 @@
 """Real apt smbd + loadable VFS + real engine, isolated loopback fixture only."""
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -66,13 +67,49 @@ def assert_owner_mode(path, uid, mode):
         raise RuntimeError(f"unexpected isolated fixture ownership/mode: {path}")
 
 
+def password_request(port, token, method, path, payload=None):
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise RuntimeError("invalid fixture HTTP port")
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=25)
+    try:
+        body = None if payload is None else json.dumps(payload)
+        connection.request(method, path, body, {"Authorization": "Bearer " + token,
+                                               "Content-Type": "application/json"})
+        response = connection.getresponse()
+        data = response.read(4097)
+        if len(data) > 4096:
+            raise RuntimeError("oversized password API response")
+        if response.status != 200:
+            # Do not attach request, body or token to failures or artifacts.
+            raise RuntimeError(f"password API returned HTTP {response.status}")
+        return json.loads(data)
+    finally:
+        connection.close()
+
+
+def revoked_account_tree_read(output, returncode, destination):
+    """A known live tree must reject this post-switch read, not merely disconnect somewhere."""
+    # Closing the old ZXS RPC transport can surface EIO/EPIPE through the Samba
+    # VFS, rather than an authorization status. Do not accept arbitrary errors.
+    allowed = {"NT_STATUS_IO_DEVICE_ERROR", "NT_STATUS_CONNECTION_DISCONNECTED", "NT_STATUS_ACCESS_DENIED"}
+    failures = [status for line in output.splitlines() if "report.txt" in line
+                for status in re.findall(r"\bNT_STATUS_[A-Z_]+\b", line)]
+    if returncode != 0 or not failures or any(status not in allowed for status in failures):
+        raise RuntimeError("existing account tree did not reject the specific post-switch read")
+    if destination.exists() and destination.stat().st_size != 0:
+        raise RuntimeError("revoked account tree returned file bytes after the switch")
+    return sorted(set(failures))
+
+
 def run(args):
     args.output.unlink(missing_ok=True)  # A failed rerun must not retain a prior success receipt.
     if os.geteuid() != 0 or os.environ.get("ZXS_ISOLATED_SAMBA_TEST") != "1":
         raise RuntimeError("requires explicit isolated Debian fixture, never a user host")
     engine_user = pwd.getpwnam("zxs-engine-test")
     smb_user = pwd.getpwnam("zxs-smb-test")
-    if 0 in (engine_user.pw_uid, smb_user.pw_uid) or engine_user.pw_uid == smb_user.pw_uid:
+    next_user = pwd.getpwnam("zxs-smb-next-test")
+    account_uids = (engine_user.pw_uid, smb_user.pw_uid, next_user.pw_uid)
+    if 0 in account_uids or len(set(account_uids)) != 3:
         raise RuntimeError("engine and Samba accounts must be distinct non-root identities")
     target = json.loads((ROOT / ".github/samba-debian-target.json").read_text())
     for package in ("samba", "samba-common-bin", "smbclient"):
@@ -101,13 +138,20 @@ def run(args):
         engine_work.mkdir(mode=0o700)
         os.chown(engine_work, engine_user.pw_uid, engine_user.pw_gid)
         password = secrets.token_hex(24)
+        new_password = secrets.token_hex(24)
+        next_password = secrets.token_hex(24)
+        web_token = ""
         auth = work / "auth"
         auth.write_text(f"username = {smb_user.pw_name}\npassword = {password}\n")
         auth.chmod(0o600)
+        next_auth = work / "next-auth"
+        next_auth.write_text(f"username = {next_user.pw_name}\npassword = {next_password}\n")
+        next_auth.chmod(0o600)
         bad_auth = work / "bad-auth"
         bad_auth.write_text(f"username = {smb_user.pw_name}\npassword = definitely-wrong\n")
         bad_auth.chmod(0o600)
-        environment = {**os.environ, "ZXS_SMB_E2E_DIR": str(engine_work), "ZXS_SMB_E2E_USER": smb_user.pw_name}
+        environment = {**os.environ, "ZXS_SMB_E2E_DIR": str(engine_work), "ZXS_SMB_E2E_USER": smb_user.pw_name,
+                       "ZXS_SMB_E2E_NEXT_USER": next_user.pw_name}
         for stale in ("LD_LIBRARY_PATH", "ZXS_SAMBA_ROOT", "ZXS_SMB_SDK_SOURCE", "ZXS_SMB_SDK_BUILD"):
             environment.pop(stale, None)
         children = []
@@ -119,6 +163,7 @@ def run(args):
                 children.append(fixture)
                 wait_file(engine_work / "ready.json", fixture)
                 ready = json.loads((engine_work / "ready.json").read_text())
+                web_token = ready["password_http_token"]
                 for name in ("empty", "private", "state", "cache", "lock", "pid", "ncalrpc"):
                     (work / name).mkdir(mode=0o700)
                 (work / "empty").chmod(0o555)
@@ -141,7 +186,7 @@ map to guest = Never
 restrict anonymous = 2
 interfaces = 127.0.0.1
 bind interfaces only = yes
-smb ports = 44545
+smb ports = 44545 445
 server min protocol = SMB3_00
 server signing = mandatory
 smb encrypt = required
@@ -166,7 +211,7 @@ path = {work}/empty
 vfs objects = zxs
 zxs:socket = {ready['socket']}
 zxs:repository = {ready['repository_id']}
-valid users = {smb_user.pw_name}
+valid users = {smb_user.pw_name} {next_user.pw_name}
 guest ok = no
 read only = no
 smb encrypt = required
@@ -188,6 +233,9 @@ force user = {smb_user.pw_name}
                                stdout=daemon_log, stderr=subprocess.STDOUT, check=True)
                 subprocess.run(["smbpasswd", "-s", "-a", smb_user.pw_name, "-c", str(config)],
                     input=f"{password}\n{password}\n", text=True, env=environment,
+                    stdout=daemon_log, stderr=subprocess.STDOUT, check=True)
+                subprocess.run(["smbpasswd", "-s", "-a", next_user.pw_name, "-c", str(config)],
+                    input=f"{next_password}\n{next_password}\n", text=True, env=environment,
                     stdout=daemon_log, stderr=subprocess.STDOUT, check=True)
                 daemon = subprocess.Popen(["smbd", "--foreground", "--no-process-group", "--configfile", str(config)],
                     env=environment, stdout=daemon_log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -214,6 +262,74 @@ force user = {smb_user.pw_name}
                         raise RuntimeError("apt smbd/VFS handshake failed:\n" + probe.stdout)
                     time.sleep(0.2)
                 result["checks"].append("authenticated-encrypted-signed-handshake")
+                account = password_request(ready["password_http_port"], web_token, "GET", "/api/smb/account")
+                if account != {"state": "configured", "username": smb_user.pw_name,
+                               "generation": "1", "candidates": [smb_user.pw_name, next_user.pw_name], "password_change": "available"}:
+                    raise RuntimeError("SMB account API differs from configured non-root fixture")
+                changed = password_request(ready["password_http_port"], web_token, "POST", "/api/smb/password",
+                                           {"expected_generation": account["generation"], "current_password": password, "new_password": new_password})
+                if changed != {"changed": True}:
+                    raise RuntimeError("SMB password API did not confirm exact success")
+                client("ls", credential=auth, succeeds=False)
+                auth.write_text(f"username = {smb_user.pw_name}\npassword = {new_password}\n")
+                client("ls")
+                if password_request(ready["password_http_port"], web_token, "GET", "/api/smb/account") != account:
+                    raise RuntimeError("SMB password change altered Web session/account state")
+                result["checks"].extend(["http-smb-password-changed", "old-smb-password-rejected",
+                                         "new-smb-password-authenticated", "web-session-preserved"])
+
+                # Both accounts are already provisioned and allowed by Samba.
+                # Only the durable ZXS binding decides which may open this share.
+                for username, credential, previous_credential, expected_generation in (
+                        (next_user.pw_name, next_auth, auth, "1"),
+                        (smb_user.pw_name, auth, next_auth, "2")):
+                    # Authenticate and read on this exact tree before changing
+                    # the binding. The local marker runs after the read finishes.
+                    tree_ready = work / f"account-tree-{expected_generation}-ready"
+                    before_switch = work / f"account-tree-{expected_generation}-before.bin"
+                    after_switch = work / f"account-tree-{expected_generation}-after.bin"
+                    previous_tree = subprocess.Popen(base + ["-A", str(previous_credential)], env=environment,
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, start_new_session=True)
+                    children.append(previous_tree)
+                    previous_tree.stdin.write(f'get report.txt "{before_switch}"\n!touch ' + shlex.quote(str(tree_ready)) + "\n")
+                    previous_tree.stdin.flush()
+                    wait_file(tree_ready, previous_tree, timeout=30)
+                    if before_switch.read_bytes() != b"old":
+                        raise RuntimeError("existing account tree did not read the known body before switching")
+                    saved = password_request(ready["password_http_port"], web_token, "POST", "/api/smb/account",
+                        {"username": username, "expected_generation": expected_generation,
+                         "administrator_password": "synthetic-web-test-password"})
+                    if saved["username"] != username or saved["generation"] != str(int(expected_generation) + 1):
+                        raise RuntimeError("SMB account selection did not confirm the requested generation")
+                    if password_request(ready["password_http_port"], web_token, "GET", "/api/smb/account") != saved:
+                        raise RuntimeError("SMB account selection readback differs")
+                    denial, _ = previous_tree.communicate(f'get report.txt "{after_switch}"\nquit\n', timeout=30)
+                    statuses = revoked_account_tree_read(denial, previous_tree.returncode, after_switch)
+                    active_body = work / f"account-tree-{expected_generation}-active.bin"
+                    client(f'get report.txt "{active_body}"', credential=credential)
+                    if active_body.read_bytes() != b"old":
+                        raise RuntimeError("selected account cannot read the same body after switching")
+                    if daemon.poll() is not None or fixture.poll() is not None:
+                        raise RuntimeError("account switch denial coincided with a fixture/service exit")
+                    result.setdefault("account_existing_trees", []).append({
+                        "previous_generation": expected_generation, "selected_generation": saved["generation"],
+                        "before_body_verified": True, "post_switch_read_statuses": statuses,
+                        "post_switch_bytes": 0, "selected_account_body_verified": True})
+                    # Prove the old password still authenticates independently of
+                    # the ZXS share; a login failure is not binding-revocation proof.
+                    ipc = subprocess.run([base[0], "//127.0.0.1/IPC$", *base[2:], "-A", str(previous_credential), "-c", "quit"],
+                        env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+                    if ipc.returncode != 0:
+                        raise RuntimeError("previous account no longer authenticates to Samba")
+                    previous = subprocess.run(base + ["-A", str(previous_credential), "-c", "ls"],
+                        env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+                    if previous.returncode == 0 or "NT_STATUS_UNSUCCESSFUL" not in previous.stdout:
+                        raise RuntimeError("previous account was not rejected by ZXS connect hook")
+                result["checks"].extend(["http-smb-account-selected", "previous-account-authenticates-but-share-denied",
+                                         "selected-account-authenticated", "account-switch-back-next-generation",
+                                         "account-switch-existing-tree-read-revoked"])
+
                 client("ls", credential=bad_auth, succeeds=False)
                 client("ls", credential=None, succeeds=False)
                 client("ls")
@@ -292,6 +408,10 @@ force user = {smb_user.pw_name}
                     if not (work / name).exists():
                         continue
                     text = (work / name).read_text(errors="replace").replace(password, "[redacted]")
+                    text = text.replace(new_password, "[redacted]").replace(next_password, "[redacted]")
+                    text = text.replace("synthetic-web-test-password", "[redacted]")
+                    if web_token:
+                        text = text.replace(web_token, "[redacted]")
                     (args.output.parent / name).write_text(text)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
 

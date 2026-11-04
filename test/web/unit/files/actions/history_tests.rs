@@ -244,7 +244,7 @@ fn an_active_existing_editor_preserves_its_window_and_requires_a_later_refresh()
     assert!(!state.files.file_history.ready());
     assert!(!state.files.history_loading);
     assert!(state.files.checked_nodes.contains("kept"));
-    assert!(!state.notice.is_empty());
+    assert!(state.notices.message().is_some());
 }
 
 #[test]

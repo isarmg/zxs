@@ -92,9 +92,12 @@ struct Args {
     pub(crate) smb_socket: Option<PathBuf>,
     #[arg(long, requires = "smb_socket")]
     pub(crate) smb_peer_uid: Option<u32>,
-    /// Exact authenticated Samba account bound to the sole current ZXS account.
+    /// Initial authenticated Samba account; saved selection takes precedence on restart.
     #[arg(long, requires = "smb_socket", value_parser = parse_smb_user)]
     pub(crate) smb_user: Option<String>,
+    /// Additional existing Samba accounts provisioned in passdb and every share valid users.
+    #[arg(long = "smb-allowed-user", requires = "smb_socket", value_parser = parse_smb_user)]
+    pub(crate) smb_allowed_users: Vec<String>,
     /// SMB admitted private-copy extents, including retained disconnected descriptors.
     #[arg(long, default_value_t = 107_374_182_400)]
     pub(crate) smb_spool_bytes_per_account: u64,
@@ -197,6 +200,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
         smb_socket,
         smb_peer_uid,
         smb_user,
+        smb_allowed_users,
         smb_spool_bytes_per_account,
         smb_spool_bytes_total,
         smb_spool_recovery_reserve_bytes,
@@ -244,6 +248,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
             socket,
             allowed_uid,
             username,
+            additional_users: smb_allowed_users,
         });
     }
     let (backend, auth) = storage_server::management::open_service_with_options(

@@ -94,7 +94,8 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
                 "SMB bridge requires authenticated sessions, durable generation writes and verified range reads",
             ));
         }
-        if username != shared.username {
+        let binding = shared.account.read()?;
+        if username != binding.selection().username {
             return Err(ApiError::forbidden());
         }
         let mut identity = shared.auth.sole_identity()?;
@@ -123,6 +124,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         Ok((
             Session {
                 shared: shared.clone(),
+                account_generation: binding.selection().generation,
                 identity,
                 branch,
                 handles: BTreeMap::new(),
@@ -170,6 +172,9 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         };
         match session.dispatch(request) {
             Ok((result, fd)) => send_success(&mut stream, result, fd, operation_id)?,
+            // Repository binding errors remain ordinary business errors so
+            // callers can finish close/recovery exchanges. Account selection
+            // separately shuts down registered connections and fences every RPC.
             Err(error) => stream.send(&response_error(error.error, error.operation_id), None)?,
         }
     }
@@ -306,7 +311,16 @@ pub async fn serve(
     max_file_bytes: u64,
 ) -> io::Result<()> {
     let mut shutdown = ConnectionShutdown::new();
-    let result = serve_owned(config, auth, backend, max_file_bytes, shutdown.registry()).await;
+    let account = crate::smb_account_binding::Authority::open(&config).map_err(io::Error::other)?;
+    let result = serve_owned(
+        config,
+        auth,
+        backend,
+        max_file_bytes,
+        shutdown.registry(),
+        account,
+    )
+    .await;
     shutdown.finish().await?;
     result
 }
@@ -345,6 +359,7 @@ pub(crate) async fn serve_owned(
     backend: Arc<dyn Backend>,
     max_file_bytes: u64,
     workers: ConnectionRegistry,
+    account: Arc<crate::smb_account_binding::Authority>,
 ) -> io::Result<()> {
     // The reader must not extend the credential file lock. The listener owns
     // the real store, including when serve() receives its last strong reference.
@@ -355,6 +370,7 @@ pub(crate) async fn serve_owned(
         spool_dir,
         allowed_uid,
         username,
+        additional_users: _,
         spool_limits,
     } = config;
     smb_protocol::protocol::validate_username(&username)?;
@@ -373,12 +389,13 @@ pub(crate) async fn serve_owned(
         max_file_bytes,
         authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
         backend,
-        username,
+        account: account.clone(),
         auth: crate::lock(&auth_owner).reader(),
         spool,
         file_writers: Mutex::new(BTreeSet::new()),
         namespace_operations: Mutex::new(BTreeSet::new()),
     });
+    account.attach_connections(&connections);
     workers.attach_connections(Arc::clone(&connections));
     let admission = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let mut next_connection = 1u64;

@@ -1,7 +1,9 @@
 use super::*;
 use http_routing::{body::Body, http::Request};
 use service_stack::ServiceExt;
-use storage_contract::disk_details::{DiskMapping, DiskNoteRequest};
+use storage_contract::disk_details::{
+    DiskHealth, DiskHealthUnavailable, DiskMapping, DiskNoteRequest,
+};
 
 struct Fixture {
     backend: Arc<ManagementBackend>,
@@ -77,6 +79,12 @@ fn development_has_no_hardware_probe_target_but_keeps_registration_and_notes() {
     assert_eq!(details.slot_id, "P01");
     assert_eq!(details.disk_id, fixture.disk_id);
     assert_eq!(details.root_path, fixture.disk_root.to_str().unwrap());
+    assert_eq!(
+        details.health,
+        DiskHealth::Unavailable {
+            reason: DiskHealthUnavailable::MappingUnknown
+        }
+    );
     assert_eq!(details.mapping, DiskMapping::Unknown);
     assert_eq!(details.mount_path, None);
     assert_eq!(details.device_path, None);
@@ -253,6 +261,10 @@ async fn disk_card_http_roundtrip_preserves_cas_identity_authentication_and_body
     assert_eq!(status, http::StatusCode::OK, "{details}");
     assert_eq!(details["disk_id"], fixture.disk_id);
     assert_eq!(details["mapping"], "unknown");
+    assert_eq!(
+        details["health"],
+        json!({"state":"unavailable","reason":"mapping_unknown"})
+    );
     let body = json_codec::to_string(&command(&fixture, "", "remark\n<text>")).unwrap();
     let (status, saved) =
         http_request(&app, "PUT", note_path, Some(&fixture.token), body.clone()).await;
@@ -362,6 +374,12 @@ fn unavailable_production_registration_never_observes_replacement_filesystem_or_
             .backend
             .disk_details(&fixture.identity, "P01")
             .unwrap();
+        assert_eq!(
+            details.health,
+            DiskHealth::Unavailable {
+                reason: DiskHealthUnavailable::MappingUnknown
+            }
+        );
         assert_eq!(details.mapping, DiskMapping::Unknown);
         assert_eq!(details.device_path, None);
         assert_eq!(details.mount_path, None);

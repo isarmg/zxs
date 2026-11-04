@@ -77,22 +77,25 @@ pub(crate) fn load_disks(state: RwSignal<State>) {
 
 pub(crate) fn open_disk(state: RwSignal<State>, slot: String) {
     state.update(|s| {
+        s.notices.leave();
         s.files.navigate(Navigation::Disk(slot));
-        s.page = crate::ui::Page::Files;
+        s.change_page(crate::ui::Page::Files);
     });
     load_entries(state);
 }
 pub(crate) fn go_root(state: RwSignal<State>) {
     state.update(|s| {
+        s.notices.leave();
         s.files.navigate(Navigation::Root);
-        s.page = crate::ui::Page::Files;
+        s.change_page(crate::ui::Page::Files);
     });
     load_disks(state);
 }
 pub(crate) fn go_directory(state: RwSignal<State>, directory: String) {
     state.update(|s| {
+        s.notices.leave();
         s.files.navigate(Navigation::Directory(directory));
-        s.page = crate::ui::Page::Files;
+        s.change_page(crate::ui::Page::Files);
     });
     load_entries(state);
 }
@@ -108,6 +111,7 @@ pub(crate) fn reload_entries(state: RwSignal<State>) {
 
 pub(crate) fn search(state: RwSignal<State>, query: String) {
     state.update(|s| {
+        s.notices.leave();
         s.files.cancel_listing();
         s.files.reset_page();
         s.files.query = query;
@@ -154,6 +158,7 @@ pub(crate) fn change_page(state: RwSignal<State>, next: bool) {
         return;
     };
     state.update(|s| {
+        s.notices.leave();
         s.files.cursor = Some(cursor);
         s.files.next_cursor = None;
         s.files.previous_cursor = None;
@@ -242,10 +247,10 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
                 s.files.reset_page();
                 s.files.entries = Default::default();
                 s.files.loaded = false;
-                s.notice = t(
+                s.set_file_notice(t(
                     "目录已改变，已返回第一页。",
                     "The folder changed. Returned to the first page.",
-                );
+                ));
             });
             request_page(state, true);
             return;
@@ -308,7 +313,7 @@ fn apply_page(state: &mut State, page: Page, requested: Option<&Entry>) {
     {
         state.files.reconcile_selection(page.selected);
         if state.page == crate::ui::Page::Details && state.files.selected.is_none() {
-            state.page = crate::ui::Page::Files;
+            state.change_page(crate::ui::Page::Files);
         }
     } else {
         state.files.prune_checked_entries();
@@ -331,9 +336,10 @@ fn current_listing(
 }
 pub(crate) fn select_entry(state: RwSignal<State>, entry: Entry) {
     state.update(|s| {
+        s.notices.leave();
         s.files.clear_selection();
         s.files.selected = Some(entry.clone());
-        s.page = crate::ui::Page::Details;
+        s.change_page(crate::ui::Page::Details);
     });
     if super::super::model::file_kind(&entry) {
         load_file_history(state);

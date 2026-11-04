@@ -14,6 +14,7 @@ mod http_disk_details;
 mod http_integrity_scrub;
 mod http_job;
 mod http_shutdown;
+mod http_smb_account;
 mod http_spool;
 #[cfg(feature = "core")]
 pub mod integrity_scrub;
@@ -26,6 +27,7 @@ pub use shutdown::ShutdownSignal;
 pub mod setup_recovery;
 pub use http_boundary::ApiError;
 mod periodic_worker;
+mod smb_account_binding;
 pub mod smb_rpc;
 mod spool_budget;
 mod telemetry;
@@ -1590,8 +1592,10 @@ pub struct SmbConfig {
     pub spool_dir: PathBuf,
     pub allowed_uid: u32,
     pub spool_limits: SpoolLimits,
-    /// The single non-guest account authenticated by Samba.
+    /// Initial non-guest Samba account; persisted selection overrides it on restart.
     pub username: String,
+    /// Additional existing Samba accounts provisioned for every ZXS share.
+    pub additional_users: Vec<String>,
 }
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -1661,6 +1665,9 @@ impl ServerConfig {
                 "SMB requires one explicit authenticated Samba username",
             ));
         }
+        if let Some(smb) = &self.smb {
+            smb_account_binding::candidates(smb)?;
+        }
         let external_origin = self
             .external_origin
             .as_deref()
@@ -1710,6 +1717,8 @@ struct AppState {
     #[cfg(feature = "core")]
     recovery_attempts: Arc<Mutex<HashMap<String, http_auth::Attempts>>>,
     password_slots: Arc<tokio::sync::Semaphore>,
+    smb_password_slots: Arc<tokio::sync::Semaphore>,
+    smb_account: Option<Arc<smb_account_binding::Authority>>,
     authorization_slots: Arc<tokio::sync::Semaphore>,
     backend_slots: Arc<tokio::sync::Semaphore>,
     management_slots: Arc<tokio::sync::Semaphore>,
@@ -1755,6 +1764,7 @@ pub fn router(
         config,
         runtime.telemetry,
         spool_budget,
+        runtime.smb_account,
     )
     .map(|router| router.layer(http_routing::Extension(shutdown)))
 }
@@ -1762,6 +1772,7 @@ pub fn router(
 /// Common initialization for embedded routers and the network server. Callers
 /// validate first; serve binds HTTP before starting background management work.
 struct ManagementRuntime {
+    smb_account: Option<Arc<smb_account_binding::Authority>>,
     backend: Arc<dyn Backend>,
     auth: Arc<Mutex<AuthStore>>,
     telemetry: Arc<telemetry::Telemetry>,
@@ -1772,6 +1783,20 @@ impl ManagementRuntime {
         auth: AuthStore,
         config: &ServerConfig,
     ) -> Result<Self, ApiError> {
+        let smb_account =
+            config
+                .smb
+                .as_ref()
+                .and_then(|smb| match smb_account_binding::Authority::open(smb) {
+                    Ok(authority) => Some(authority),
+                    Err(error) => {
+                        tracing::error!(
+                            error = ?error,
+                            "SMB account binding unavailable; management HTTP remains available"
+                        );
+                        None
+                    }
+                });
         let telemetry = telemetry::Telemetry::start(
             backend.clone(),
             &config
@@ -1787,6 +1812,7 @@ impl ManagementRuntime {
             auth: lock(&auth).reader(),
         });
         Ok(Self {
+            smb_account,
             backend,
             auth,
             telemetry,
@@ -1800,6 +1826,7 @@ fn router_shared(
     config: Arc<AdmittedServerConfig>,
     telemetry: Arc<telemetry::Telemetry>,
     spool_budget: Arc<http_spool::HttpSpool>,
+    smb_account: Option<Arc<smb_account_binding::Authority>>,
 ) -> Result<Router, ApiError> {
     let static_etags = config.web_dir.as_ref().and_then(|root| {
         match web_assets::static_etags(root) {
@@ -1818,6 +1845,7 @@ fn router_shared(
     let web_assets_available = static_etags.is_some();
     let auth_reader = lock(&auth).reader();
     let state = AppState {
+        smb_account,
         auth_reader,
         backend,
         auth,
@@ -1831,6 +1859,7 @@ fn router_shared(
         #[cfg(feature = "core")]
         recovery_attempts: Arc::new(Mutex::new(HashMap::new())),
         password_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+        smb_password_slots: Arc::new(tokio::sync::Semaphore::new(1)),
         authorization_slots: Arc::new(tokio::sync::Semaphore::new(8)),
         backend_slots: Arc::new(tokio::sync::Semaphore::new(HTTP_BACKEND_SLOTS)),
         management_slots: Arc::new(tokio::sync::Semaphore::new(2)),
@@ -1854,6 +1883,11 @@ fn router_shared(
         .route("/api/auth/me", get(me))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/password", post(change_password))
+        .route(
+            "/api/smb/account",
+            get(http_smb_account::account).post(http_smb_account::select_account),
+        )
+        .route("/api/smb/password", post(http_smb_account::change_password))
         .route(
             "/api/repositories",
             get(repositories).post(http_create_repository::create),
@@ -2061,6 +2095,7 @@ pub async fn serve_with_shutdown(
     }
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let ManagementRuntime {
+        smb_account,
         backend,
         auth,
         telemetry,
@@ -2071,11 +2106,19 @@ pub async fn serve_with_shutdown(
     let smb_max_file_bytes = config.max_upload_bytes;
     let bridge_auth = auth.clone();
     let spool_config = Arc::clone(&config);
-    let app = router_shared(backend.clone(), auth, config, telemetry, spool_budget)?;
+    let bridge_account = smb_account.clone();
+    let app = router_shared(
+        backend.clone(),
+        auth,
+        config,
+        telemetry,
+        spool_budget,
+        smb_account,
+    )?;
     let http = |stopped| http_shutdown::serve(listener, app, stopped);
     let smb_connections = management_shutdown.smb_connections();
     let bridge = async move {
-        if let Some(smb) = smb {
+        if let (Some(smb), Some(bridge_account)) = (smb, bridge_account) {
             let run = async move {
                 smb_rpc::serve_owned(
                     smb,
@@ -2083,6 +2126,7 @@ pub async fn serve_with_shutdown(
                     backend,
                     smb_max_file_bytes,
                     smb_connections,
+                    bridge_account,
                 )
                 .await
                 .map_err(|source| {

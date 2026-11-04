@@ -503,7 +503,7 @@ fn shared_window_index_preserves_note_refresh_keys_and_replaces_old_positions() 
         });
         for i in 0..20 {
             state.update(|s| {
-                s.notice = i.to_string();
+                s.session_notice = i.to_string();
                 s.files.checked_nodes = crate::files::tags::tests::selection(&["node-1"]);
             });
             assert_eq!(records.with(|index| index.snapshot.nodes().len()), count);

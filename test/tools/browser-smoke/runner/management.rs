@@ -87,7 +87,7 @@ pub(super) fn run(
     browser.click(&browser.button("Status", "状态")?)?;
     browser.css(".zxs-monitor-page [data-metric='cpu']")?;
     browser.css(".zxs-monitor-page [data-metric='memory']")?;
-    browser.click(&browser.button("Management health", "管理健康")?)?;
+    browser.click(&browser.button("Administration", "系统管理")?)?;
     browser.script("window.__managementRetryStatus = null; const original = window.fetch; window.fetch = async function(...args) { const response = await Reflect.apply(original, this, args); const input = args[0]; const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname; if (path === '/api/system/storage/retry') { window.__managementRetryStatus = response.status; window.fetch = original; } return response; }; return true")?;
     browser.click(&browser.button("Retry opening data storage", "重试打开数据存储")?)?;
     wait_for("actual authenticated storage retry response", || {

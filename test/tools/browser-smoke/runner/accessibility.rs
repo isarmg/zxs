@@ -33,7 +33,7 @@ fn restore_decoration(browser: &Browser) -> Result<()> {
     }
 }
 
-fn select_theme(browser: &Browser, theme: &str) -> Result<()> {
+pub(super) fn select_theme(browser: &Browser, theme: &str) -> Result<()> {
     if browser.script("return document.documentElement.dataset.zxsTheme")? != theme {
         let (en, zh) = if theme == "dark" {
             ("Switch to dark mode", "切换到深色模式")
@@ -79,7 +79,15 @@ fn check(browser: &Browser) -> Result<()> {
         }
         browser.click(&trigger)?;
         visible_menu(browser, false, theme, "normal paint")?;
+        black_select_borders(browser, theme)?;
         browser.keys(&trigger, "\u{e00c}")?; // Escape.
+        browser.keys(&trigger, "\u{e015}")?; // ArrowDown reopens with keyboard focus.
+        visible_menu(browser, false, theme, "keyboard reopen")?;
+        black_select_borders(browser, theme)?;
+        if browser.script("const e=document.querySelector('.zxs-history-toolbar .zxs-select-trigger'),s=getComputedStyle(e);return document.activeElement===e&&e.matches(':focus-visible')&&parseFloat(s.outlineWidth)>0&&s.outlineStyle!=='none'&&!!document.getElementById(e.getAttribute('aria-activedescendant'))")? != true {
+            return Err(format!("Select keyboard focus or active option lost in {theme}").into());
+        }
+        browser.keys(&trigger, "\u{e00c}")?;
 
         browser.click(&trigger)?;
         visible_menu(browser, false, theme, "before decoration injection")?;
@@ -106,8 +114,10 @@ fn check(browser: &Browser) -> Result<()> {
             );
         }
         visible_menu(browser, true, theme, "unsupported inset shadow")?;
+        black_select_borders(browser, theme)?;
         restore_decoration(browser)?;
         visible_menu(browser, false, theme, "after decoration restoration")?;
+        black_select_borders(browser, theme)?;
         browser.keys(&trigger, "\u{e00c}")?;
     }
     Ok(())
@@ -139,3 +149,22 @@ fn visible_menu(browser: &Browser, fallback: bool, theme: &str, mode: &str) -> R
         }
     })
 }
+
+fn black_select_borders(browser: &Browser, theme: &str) -> Result<()> {
+    wait_for("actual pure-black Select border paint", || {
+        let evidence = browser.command(
+            "POST",
+            "/execute/async",
+            Some(json!({"script": include_str!("select_borders.js"), "args": []})),
+        )?;
+        if evidence["valid"] == true {
+            Ok(())
+        } else {
+            Err(format!("Select border paint in {theme}: {evidence}").into())
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "../unit/select_borders_tests.rs"]
+mod tests;

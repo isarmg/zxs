@@ -151,6 +151,14 @@ fn validate_content_view(value: &Value) -> Result {
 
 fn semantics(name: &str, value: &Value) -> Result {
     match name {
+        "SmbAccountStatus" => {
+            let _: storage_contract::smb_account::SmbAccountStatus =
+                json_codec::from_value(value.clone())?;
+        }
+        "DiskHealth" => {
+            let _: storage_contract::disk_details::DiskHealth =
+                json_codec::from_value(value.clone())?;
+        }
         "DiskDetailsRecord" => {
             let _: storage_contract::disk_details::DiskDetailsRecord =
                 json_codec::from_value(value.clone())?;

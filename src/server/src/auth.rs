@@ -825,6 +825,23 @@ impl AuthStore {
         Ok(LoginChallenge::new(administrator, username))
     }
 
+    /// Confirm a password proof without issuing a session or changing authority.
+    pub(crate) fn revalidate_password_proof(
+        &self,
+        caller: &Identity,
+        verified: &VerifiedLogin,
+    ) -> Result<(), ApiError> {
+        self.revalidate_identity(caller)?;
+        let administrator = &self.database()?.administrator;
+        if administrator.username != verified.username
+            || administrator.generation != verified.generation
+            || administrator.password_hash != verified.password_hash
+        {
+            return Err(ApiError::unauthorized());
+        }
+        Ok(())
+    }
+
     pub(crate) fn finish_login(
         &mut self,
         verified: VerifiedLogin,

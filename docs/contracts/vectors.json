@@ -3190,7 +3190,11 @@
         "device_path": null,
         "filesystem_uuid": null,
         "mapping": "unknown",
-        "note": "自由备注\n第二行 <text>"
+        "note": "自由备注\n第二行 <text>",
+        "health": {
+          "state": "unavailable",
+          "reason": "mapping_unknown"
+        }
       }
     },
     {
@@ -3221,6 +3225,254 @@
         "format": "disk-note",
         "disk_id": "disk_00000000000000000000000000000001",
         "note": "系统盘备注"
+      }
+    },
+    {
+      "name": "disk-health-mapping_unknown",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "mapping_unknown"
+      }
+    },
+    {
+      "name": "disk-health-multiple_devices",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "multiple_devices"
+      }
+    },
+    {
+      "name": "disk-health-unsupported_device",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "unsupported_device"
+      }
+    },
+    {
+      "name": "disk-health-tool_missing",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "tool_missing"
+      }
+    },
+    {
+      "name": "disk-health-permission_denied",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "permission_denied"
+      }
+    },
+    {
+      "name": "disk-health-device_changed",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "device_changed"
+      }
+    },
+    {
+      "name": "disk-health-busy",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "busy"
+      }
+    },
+    {
+      "name": "disk-health-timed_out",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "timed_out"
+      }
+    },
+    {
+      "name": "disk-health-low_power",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "low_power"
+      }
+    },
+    {
+      "name": "disk-health-query_failed",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "query_failed"
+      }
+    },
+    {
+      "name": "disk-health-invalid_output",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "invalid_output"
+      }
+    },
+    {
+      "name": "disk-health-incomplete_output",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "unavailable",
+        "reason": "incomplete_output"
+      }
+    },
+    {
+      "name": "disk-health-smart-passed",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-smart-failed",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "failed",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-null-metrics",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": null,
+        "power_on_hours": null
+      }
+    },
+    {
+      "name": "disk-health-smart-warning",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "warning",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "smb-disabled",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "disabled"
+      }
+    },
+    {
+      "name": "smb-configured-available",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available"
+      }
+    },
+    {
+      "name": "smb-configured-client_unavailable",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "client_unavailable"
+      }
+    },
+    {
+      "name": "smb-configured-unsupported_account_name",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "unsupported_account_name"
+      }
+    },
+    {
+      "name": "smb-configured-requires_unprivileged_service",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "requires_unprivileged_service"
+      }
+    },
+    {
+      "name": "smb-selection",
+      "schema": "SmbAccountSelectionRequest",
+      "value": {
+        "username": "fixture-next",
+        "expected_generation": "2",
+        "administrator_password": "synthetic-web-password"
+      }
+    },
+    {
+      "name": "smb-password-change",
+      "schema": "SmbPasswordChangeRequest",
+      "value": {
+        "expected_generation": "2",
+        "current_password": "synthetic-old-smb",
+        "new_password": "synthetic-new-smb"
+      }
+    },
+    {
+      "name": "smb-changed",
+      "schema": "SmbPasswordChangeResponse",
+      "value": {
+        "changed": true
       }
     }
   ],
@@ -13547,7 +13799,11 @@
         "capacity_bytes": null,
         "device_path": null,
         "mapping": "unknown",
-        "note": "自由备注\n第二行 <text>"
+        "note": "自由备注\n第二行 <text>",
+        "health": {
+          "state": "unavailable",
+          "reason": "mapping_unknown"
+        }
       }
     },
     {
@@ -13565,7 +13821,11 @@
         "device_path": null,
         "filesystem_uuid": null,
         "mapping": "unknown",
-        "note": "自由备注\n第二行 <text>"
+        "note": "自由备注\n第二行 <text>",
+        "health": {
+          "state": "unavailable",
+          "reason": "mapping_unknown"
+        }
       }
     },
     {
@@ -13583,7 +13843,11 @@
         "device_path": null,
         "filesystem_uuid": null,
         "mapping": "physical",
-        "note": "自由备注\n第二行 <text>"
+        "note": "自由备注\n第二行 <text>",
+        "health": {
+          "state": "unavailable",
+          "reason": "mapping_unknown"
+        }
       }
     },
     {
@@ -13616,6 +13880,484 @@
         "disk_id": "disk_00000000000000000000000000000001",
         "note": "retain bytes"
       }
+    },
+    {
+      "name": "disk-health-missing-state",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-missing-observed_at_unix_ms",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-missing-device_path",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "assessment": "passed",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-missing-assessment",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-missing-temperature_celsius",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-missing-power_on_hours",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": 36
+      }
+    },
+    {
+      "name": "disk-health-invalid-observed_at_unix_ms",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": 123,
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-invalid-power_on_hours",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": 36,
+        "power_on_hours": 123
+      }
+    },
+    {
+      "name": "disk-health-invalid-assessment",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "unknown",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-invalid-temperature_celsius",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": 2147483648,
+        "power_on_hours": "18446744073709551615"
+      }
+    },
+    {
+      "name": "disk-health-invalid-extra",
+      "schema": "DiskHealth",
+      "layer": "schema",
+      "value": {
+        "state": "smart",
+        "observed_at_unix_ms": "1793750000000",
+        "device_path": "/dev/nvme0n1",
+        "assessment": "passed",
+        "temperature_celsius": 36,
+        "power_on_hours": "18446744073709551615",
+        "extra": true
+      }
+    },
+    {
+      "name": "smb-selection-missing-username",
+      "schema": "SmbAccountSelectionRequest",
+      "value": {
+        "expected_generation": "2",
+        "administrator_password": "synthetic-web-password"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-selection-missing-expected_generation",
+      "schema": "SmbAccountSelectionRequest",
+      "value": {
+        "username": "fixture-next",
+        "administrator_password": "synthetic-web-password"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-selection-missing-administrator_password",
+      "schema": "SmbAccountSelectionRequest",
+      "value": {
+        "username": "fixture-next",
+        "expected_generation": "2"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-selection-unknown-field",
+      "schema": "SmbAccountSelectionRequest",
+      "value": {
+        "username": "fixture-next",
+        "expected_generation": "2",
+        "administrator_password": "synthetic-web-password",
+        "extra": true
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-password-change-missing-expected_generation",
+      "schema": "SmbPasswordChangeRequest",
+      "value": {
+        "current_password": "synthetic-old-smb",
+        "new_password": "synthetic-new-smb"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-password-change-missing-current_password",
+      "schema": "SmbPasswordChangeRequest",
+      "value": {
+        "expected_generation": "2",
+        "new_password": "synthetic-new-smb"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-password-change-missing-new_password",
+      "schema": "SmbPasswordChangeRequest",
+      "value": {
+        "expected_generation": "2",
+        "current_password": "synthetic-old-smb"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-password-change-unknown-field",
+      "schema": "SmbPasswordChangeRequest",
+      "value": {
+        "expected_generation": "2",
+        "current_password": "synthetic-old-smb",
+        "new_password": "synthetic-new-smb",
+        "extra": true
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-changed-missing-changed",
+      "schema": "SmbPasswordChangeResponse",
+      "value": {},
+      "layer": "schema"
+    },
+    {
+      "name": "smb-changed-unknown-field",
+      "schema": "SmbPasswordChangeResponse",
+      "value": {
+        "changed": true,
+        "extra": true
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-missing-state",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-missing-username",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-missing-generation",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-missing-candidates",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-missing-password_change",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ]
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-invalid-generation-2",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": 2,
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-invalid-generation-02",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "02",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-invalid-generation-18446744073709551616",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551616",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-invalid-password_change-unknown",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "unknown"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-invalid-state-unknown",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "unknown",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-invalid-candidates-[4]",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          4
+        ],
+        "password_change": "available"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-configured-invalid-extra-True",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "configured",
+        "username": "fixture-smb",
+        "generation": "18446744073709551615",
+        "candidates": [
+          "fixture-smb",
+          "fixture-next"
+        ],
+        "password_change": "available",
+        "extra": true
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-disabled-unknown-field",
+      "schema": "SmbAccountStatus",
+      "value": {
+        "state": "disabled",
+        "username": "fixture-smb"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-SmbAccountSelectionRequest-invalid-generation-2",
+      "schema": "SmbAccountSelectionRequest",
+      "value": {
+        "username": "fixture-next",
+        "expected_generation": 2,
+        "administrator_password": "synthetic-web-password"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-SmbAccountSelectionRequest-invalid-generation-02",
+      "schema": "SmbAccountSelectionRequest",
+      "value": {
+        "username": "fixture-next",
+        "expected_generation": "02",
+        "administrator_password": "synthetic-web-password"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-SmbAccountSelectionRequest-invalid-generation-18446744073709551616",
+      "schema": "SmbAccountSelectionRequest",
+      "value": {
+        "username": "fixture-next",
+        "expected_generation": "18446744073709551616",
+        "administrator_password": "synthetic-web-password"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-SmbPasswordChangeRequest-invalid-generation-2",
+      "schema": "SmbPasswordChangeRequest",
+      "value": {
+        "expected_generation": 2,
+        "current_password": "synthetic-old-smb",
+        "new_password": "synthetic-new-smb"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-SmbPasswordChangeRequest-invalid-generation-02",
+      "schema": "SmbPasswordChangeRequest",
+      "value": {
+        "expected_generation": "02",
+        "current_password": "synthetic-old-smb",
+        "new_password": "synthetic-new-smb"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-SmbPasswordChangeRequest-invalid-generation-18446744073709551616",
+      "schema": "SmbPasswordChangeRequest",
+      "value": {
+        "expected_generation": "18446744073709551616",
+        "current_password": "synthetic-old-smb",
+        "new_password": "synthetic-new-smb"
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "smb-changed-false",
+      "schema": "SmbPasswordChangeResponse",
+      "value": {
+        "changed": false
+      },
+      "layer": "schema"
     }
   ],
   "canonical": [

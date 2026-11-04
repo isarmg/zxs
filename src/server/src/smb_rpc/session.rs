@@ -3,6 +3,7 @@ use super::*;
 
 pub(super) struct Session {
     pub(super) shared: Arc<Shared>,
+    pub(super) account_generation: u64,
     pub(super) identity: Identity,
     pub(super) branch: String,
     pub(super) handles: BTreeMap<u64, Handle>,
@@ -142,7 +143,12 @@ impl Session {
             }
             _ => None,
         };
-        let result = self.dispatch_request(request);
+        let account = self.shared.account.clone();
+        let result = (|| {
+            let binding = account.read()?;
+            binding.require_generation(self.account_generation)?;
+            self.dispatch_request(request)
+        })();
         // Dirty can create a new generation and submit it for write-through.
         // Report that generation, not the previously published operation.
         if let Some(handle) = dirty_handle

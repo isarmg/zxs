@@ -20,6 +20,9 @@
 .zxs-file-table th { color: var(--zxs-block-muted); white-space: nowrap; }
 .zxs-file-table td { white-space: nowrap; }
 .zxs-file-table tbody tr:last-child > td { border-block-end: 0; }
+/* Pagination owns this separator once, including an empty table. */
+.zxs-file-pagination { border-block-start: var(--zxs-control-border-width) solid var(--zxs-block-border); }
+.zxs-file-list-panel:has(.zxs-file-pagination) .zxs-file-table:not(:has(> tbody > tr)) > thead > tr:last-child > th { border-block-end: 0; }
 .zxs-app-shell .zxs-file-table tbody .zxs-button { min-height: calc(var(--zxs-file-row-height) - 2px); height: calc(var(--zxs-file-row-height) - 2px); padding: 0; font-size: inherit; white-space: nowrap; }
 .zxs-file-list-panel .zxs-entry-actions { flex-wrap: nowrap; }
 .zxs-file-table td:first-child { min-width: 10rem; overflow-wrap: anywhere; }

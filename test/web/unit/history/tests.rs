@@ -47,7 +47,7 @@ fn unrelated_updates_do_not_reproject_history_and_filters_preserve_order() {
         for i in 0..100 {
             state.update(|s| {
                 s.management.loading = i % 2 == 0;
-                s.notice = i.to_string();
+                s.session_notice = i.to_string();
                 s.activity.loading = i % 2 == 0;
             });
             assert_eq!(events.with_untracked(Vec::len), 200);

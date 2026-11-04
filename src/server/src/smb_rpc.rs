@@ -70,7 +70,7 @@ impl Serialize for Reply {
 
 struct Shared {
     backend: Arc<dyn Backend>,
-    username: String,
+    account: Arc<crate::smb_account_binding::Authority>,
     auth: AuthReader,
     spool: PathBuf,
     budget: Arc<budget::Budget>,

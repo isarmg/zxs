@@ -35,6 +35,9 @@ pub fn LoginPage(
                         IntoRender::into_render({ t("登录", "Sign in") })
                     },
                 ),
+                web_interface::html::div()
+                    .class("zxs-form-grid")
+                    .child((
                 web_interface::html::label()
                     .child((
                         web_interface::html::span().child(
@@ -80,6 +83,7 @@ pub fn LoginPage(
                             ),
                     ))
                     .class("zxs-form-field"),
+                    )),
                 IntoRender::into_render({
                     move || {
                         failure.get().map(|(message, id)| {

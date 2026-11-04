@@ -105,14 +105,8 @@ fn accept_status(s: &mut State, value: &Value) -> bool {
     // not any outstanding data mutation's outcome.
     s.management.retry_unknown = false;
     let load_files = needs_disk_refresh(s, was_readable);
-    // The workspace already renders recovery controls above file pages. Keep
-    // active editor owners there: switching pages would destroy pending text.
-    if !s.management.storage.readable()
-        && s.files.history_editors == 0
-        && matches!(s.page, crate::ui::Page::Files | crate::ui::Page::Details)
-    {
-        s.page = crate::ui::Page::Health;
-    }
+    // Recovery remains available in Administration and above blocked pages.
+    // A global status refresh never replaces the current page or its draft owners.
     load_files
 }
 
@@ -218,7 +212,7 @@ fn retry(state: RwSignal<State>) {
 }
 pub(crate) fn summary(state: RwSignal<State>) -> impl IntoView {
     view! {
-        <section class="zxs-content-panel zxs-stack" aria-label=t("管理服务健康","Management health")>
+        <section class="zxs-content-panel zxs-stack" aria-label=t("存储与认证状态","Storage and authentication status")>
             <p class="zxs-row" role="status">{move ||state.with(|s|s.management.storage.label())}</p>
             <Show when=move ||state.with(|s|s.management.auth_recovery)><p class="zxs-row">{t("认证状态需要本地恢复。不会因数据盘故障创建新管理员或清空凭据。","Authentication requires local recovery. A disk failure never creates a new administrator or clears credentials.")}</p></Show>
             <Show when=move ||state.with(|s|s.management.storage==Storage::Unconfigured)><p class="zxs-row">{t("请在服务器本地使用受保护的设置流程，选择预先允许的硬盘 ID。此页面不接受任意磁盘路径，也不会自动初始化现有数据。","Use the protected setup flow on the server with preapproved disk IDs. This page accepts no arbitrary disk paths and never initializes existing data automatically.")}</p></Show>
@@ -229,8 +223,14 @@ pub(crate) fn summary(state: RwSignal<State>) -> impl IntoView {
         </section>
     }
 }
-pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
-    view! { <section class="zxs-content-stack zxs-stack">{summary(state)}<p class="zxs-row">{t("存储故障不会影响管理页面。恢复磁盘挂载后可重试；重试不会格式化磁盘。硬件采样可在“状态”中查看。","Storage faults do not prevent management access. Restore the disk mounts and retry; retry does not format disks. Hardware telemetry is available under Status.")}</p></section> }
+pub(crate) fn recovery(state: RwSignal<State>) -> impl IntoView {
+    view! {
+        <section class="zxs-stack zxs-management-recovery">
+            <h2 class="zxs-row">{t("全局存储与认证恢复","Storage and authentication recovery")}</h2>
+            {summary(state)}
+            <p class="zxs-row">{t("这里显示全局服务状态，不代表硬盘健康。存储故障不影响管理访问；恢复磁盘挂载后可重试打开，重试不会格式化磁盘。各目录所属设备的健康信息显示在下面的目录信息块中。","This is global service status, not disk health. Management remains accessible during storage faults. Restore disk mounts before retrying; retry does not format disks. Device health appears in the corresponding directory card below.")}</p>
+        </section>
+    }
 }
 #[cfg(test)]
 #[path = "../../../test/web/unit/management/tests.rs"]

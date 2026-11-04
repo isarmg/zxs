@@ -10,7 +10,8 @@
 }
 
 [data-zxs-scope] {
-  min-width: 320px;
+  /* A 320px outer viewport can have a narrower scrollable content area. */
+  min-width: 0;
   min-height: 100%;
   font-family: var(--zxs-font-ui, ui-monospace, monospace);
   font-size: var(--zxs-font-size-body, 1rem);

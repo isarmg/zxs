@@ -142,7 +142,7 @@ pub fn AccountPage(
                                                 ))
                                                 .class("zxs-form-field"),
                                         ))
-                                        .class("zxs-account-fields"),
+                                        .class("zxs-account-fields zxs-form-grid"),
                                     IntoRender::into_render({
                                         move || {
                                             failure
@@ -229,7 +229,7 @@ pub fn AccountPage(
                                 )
                         },
                     )
-                    .class("zxs-content-panel zxs-frame zxs-stack")
+                    .class("zxs-content-panel zxs-stack")
             },
         )
         .class("zxs-content-stack zxs-account-page zxs-stack")

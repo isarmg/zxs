@@ -8,6 +8,7 @@ mod management;
 mod monitor;
 mod polling;
 mod setup;
+mod smb_account;
 mod snapshot;
 mod ui;
 

@@ -120,15 +120,15 @@ fn failed_repository_admission_does_not_leak_session_slots() {
 
 #[test]
 fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_during_recovery() {
-    let (temp, mut shared, _backend, _branch) = fixture();
+    let (temp, shared, _backend, _branch) = fixture();
     let repository = repository(&shared);
-    Arc::get_mut(&mut shared).unwrap().username = "samba-owner".into();
+    shared.account.select(1, "bob", || Ok(())).unwrap();
     let (wrong, response) = connect(shared.clone(), "alice", &repository);
     assert!(
         matches!(response, Response::Error { code, .. } if code == storage_contract::ErrorCode::Forbidden)
     );
     disconnect(wrong, false);
-    let (mut live, response) = connect(shared.clone(), "samba-owner", &repository);
+    let (mut live, response) = connect(shared.clone(), "bob", &repository);
     assert!(matches!(response, Response::Ok { result } if result["principal"] == "alice"));
 
     temp.auth
@@ -146,7 +146,7 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     assert!(
         matches!(live.wire.receive::<Response>().unwrap().0, Response::Error { code, .. } if code == storage_contract::ErrorCode::RecoveryRequired)
     );
-    let (rejected, response) = connect(shared.clone(), "samba-owner", &repository);
+    let (rejected, response) = connect(shared.clone(), "bob", &repository);
     assert!(
         matches!(response, Response::Error { code, .. } if code == storage_contract::ErrorCode::RecoveryRequired)
     );
@@ -165,7 +165,7 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
         )
         .unwrap(),
     );
-    let (restored, response) = connect(shared.clone(), "samba-owner", &repository);
+    let (restored, response) = connect(shared.clone(), "bob", &repository);
     assert!(matches!(response, Response::Ok { result } if result["principal"] == "restored-owner"));
     disconnect(restored, false);
 }
@@ -181,6 +181,7 @@ async fn listener_survives_bad_clients_and_joins_the_next_authenticated_connecti
         spool_dir: temp.path().join("listener-spool"),
         allowed_uid: rustix::process::geteuid().as_raw(),
         username: "alice".into(),
+        additional_users: Vec::new(),
         spool_limits: crate::SpoolLimits::default(),
     };
     let mut shutdown = ConnectionShutdown::new();
@@ -192,6 +193,7 @@ async fn listener_survives_bad_clients_and_joins_the_next_authenticated_connecti
         shared.backend.clone(),
         4096,
         shutdown.registry(),
+        shared.account.clone(),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -254,4 +256,39 @@ async fn listener_survives_bad_clients_and_joins_the_next_authenticated_connecti
         .unwrap()
         .unwrap();
     drop(client);
+}
+
+#[test]
+fn selecting_another_account_revokes_original_session_even_after_switching_back() {
+    let (_temp, shared, _backend, _branch) = fixture();
+    let repository = repository(&shared);
+    let (mut old, response) = connect(shared.clone(), "alice", &repository);
+    assert!(matches!(response, Response::Ok { .. }));
+    shared.account.select(1, "bob", || Ok(())).unwrap();
+    let (denied, response) = connect(shared.clone(), "alice", &repository);
+    assert!(
+        matches!(response,Response::Error{code,..} if code==storage_contract::ErrorCode::Forbidden)
+    );
+    disconnect(denied, false);
+    let (new, response) = connect(shared.clone(), "bob", &repository);
+    assert!(matches!(response, Response::Ok { .. }));
+    disconnect(new, true);
+    shared.account.select(2, "alice", || Ok(())).unwrap();
+    old.wire
+        .send(
+            &Request::<String>::Stat {
+                path: "report.txt".into(),
+            },
+            None,
+        )
+        .unwrap();
+    let (response, _) = old.wire.receive::<Response>().unwrap();
+    assert!(
+        matches!(response,Response::Error{code,..} if code==storage_contract::ErrorCode::SmbRebindRequired)
+    );
+    disconnect(old, false);
+    assert_eq!(
+        shared.authenticated_sessions.available_permits(),
+        MAX_AUTHENTICATED_SESSIONS
+    );
 }

@@ -947,7 +947,7 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
         });
         let shared = Arc::new(Shared {
             backend: backend.clone(),
-            username: original.username.clone(),
+            account: original.account.clone(),
             auth: original.auth.clone(),
             spool: original.spool.clone(),
             budget: original.budget.clone(),
@@ -1043,7 +1043,7 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         });
         let shared = Arc::new(Shared {
             backend: backend.clone(),
-            username: original.username.clone(),
+            account: original.account.clone(),
             auth: original.auth.clone(),
             spool: original.spool.clone(),
             budget: original.budget.clone(),
@@ -1952,7 +1952,7 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
             });
             let shared = Arc::new(Shared {
                 backend: backend.clone(),
-                username: original.username.clone(),
+                account: original.account.clone(),
                 auth: original.auth.clone(),
                 spool: original.spool.clone(),
                 budget: original.budget.clone(),

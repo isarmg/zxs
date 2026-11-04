@@ -38,6 +38,7 @@ impl State {
         {
             return;
         }
+        self.notices.clear_success();
         if error.status == 401 {
             self.authenticated = false;
         }

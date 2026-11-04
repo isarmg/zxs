@@ -89,7 +89,7 @@ pub(crate) fn submit(
     }) {
         return;
     }
-    let Some(id) = crate::ui::operation_id(state) else {
+    let Some(id) = crate::ui::file_operation_id(state) else {
         return;
     };
     body["operation_id"] = id.clone().into();

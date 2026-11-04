@@ -16,5 +16,6 @@
 | [0008：工作区生命周期与永久操作事实分离](0008-workspace-lifecycle-separation.md) | 已采纳有限空 Aborted 原路径完整清单冷存；一般历史退休未实现 | 第 10、11、19 章及 SMB，永久事实与字节保留不变 |
 | [0009：有界文件历史窗口与完整历史分离](0009-bounded-file-history-windows.md) | 已采纳 A，当前根窗口协议已接线；跨端验收与资源测量分别验证 | 第 06、15、19 章及当前有界文件历史 HTTP 契约；永久历史保留不变 |
 | [0010：SMB 写入准入分代与有界额度授予](0010-smb-write-generations-and-extent-grants.md) | 已采纳，当前源码设计；发布阶段与保存回执不变 | 第 10、11 章及 [SMB 组件](../components/smb.md) |
+| [0011：预置 Samba 账号的持久单一绑定](0011-smb-account-selection.md) | 已采纳，当前源码设计；不提升 Web 权限 | [SMB 组件](../components/smb.md)、API 与 Web 账户设置 |
 
 决策文档只保留当前背景、选择、代价、替代方案与关联规则，不追加实施进度或构建日志。

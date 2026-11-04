@@ -223,7 +223,7 @@ pub(crate) struct Attempts {
 }
 
 /// Charge all keys atomically. Rejected requests never poison another budget.
-fn admit_attempts<const N: usize>(
+pub(crate) fn admit_attempts<const N: usize>(
     attempts: &Mutex<HashMap<String, Attempts>>,
     keys: [String; N],
     capacity_message: &str,
@@ -255,7 +255,7 @@ fn admit_attempts<const N: usize>(
     Ok(())
 }
 
-fn client_ip(request: &Request, config: &ServerConfig) -> Result<IpAddr, ApiError> {
+pub(crate) fn client_ip(request: &Request, config: &ServerConfig) -> Result<IpAddr, ApiError> {
     let peer = request
         .extensions()
         .get::<http_routing::extract::ConnectInfo<SocketAddr>>()

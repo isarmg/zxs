@@ -5,7 +5,14 @@
 .zxs-button:disabled { opacity: .6; cursor: not-allowed; }
 .zxs-danger,.zxs-error { color: var(--zxs-text-danger,#b91c1c); }
 .zxs-input { width: 100%; box-sizing: border-box; }
-.zxs-form-field { display: grid; gap: .4rem; margin-block: 1rem; }
+/* A field group owns one surface; every row shares responsive label/input tracks. */
+.zxs-form-grid { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; max-width: 100%; gap: 0; border: 1px solid var(--zxs-block-muted,currentColor); background: var(--zxs-bg-panel,#fff); --zxs-contour-extent: var(--zxs-contour-control,22px); --zxs-contour-mode: clip; --zxs-contour-foreground: 1; }
+.zxs-form-field { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,2fr); align-items: center; column-gap: .75rem; min-width: 0; width: 100%; margin: 0; }
+.zxs-form-grid > .zxs-form-field { padding: .25rem var(--zxs-list-content-inset,.75rem); }
+.zxs-form-field > span { min-width: 0; overflow-wrap: anywhere; }
+.zxs-form-grid .zxs-form-field > .zxs-input:not(.zxs-select-trigger) { min-width: 0; max-width: 100%; border: 0; border-bottom: 1px dashed var(--zxs-block-muted,currentColor); background: transparent; padding-inline: 0; --zxs-contour-extent: 0px; --zxs-contour-foreground: 0; }
+.zxs-form-grid .zxs-form-field > .zxs-input:not(.zxs-select-trigger):focus-visible { outline: 2px solid var(--zxs-focus,Highlight); outline-offset: -2px; }
+.zxs-form-grid .zxs-form-field > .zxs-input:disabled { opacity: .6; cursor: not-allowed; }
 .zxs-dialog { width: min(36rem,calc(100% - 3rem)); max-height: calc(100dvh - 3rem); overflow: auto; padding: 1rem; border: 0; border-radius: 0; color: var(--zxs-text-primary,#18181b); background: var(--zxs-bg-panel,#fff); --zxs-contour-extent: var(--zxs-contour-dialog); }
 .zxs-dialog::backdrop { background: rgb(0 0 0 / .6); }
 .zxs-dialog-heading { justify-content: space-between; }

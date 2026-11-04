@@ -72,6 +72,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "const p=window.__zxsHistoryCancellation.pending;return p.length===1&&p[0].ready&&!p[0].signal.aborted",
             )?;
             browser.click(&browser.button("Files", "文件")?)?;
+            check(
+                browser,
+                "Files refresh stays enabled while selected-file history is busy",
+                "const refresh=document.querySelector('.zxs-header-refresh');return !refresh.disabled&&refresh.getAttribute('aria-busy')==='true'",
+            )?;
             browser.click(&browser.button("Refresh", "刷新")?)?;
             check(
                 browser,

@@ -1,4 +1,5 @@
 //! Informational hardware observations and CAS-protected, system-disk notes.
+mod health;
 use crate::{
     api, format,
     ui::{State, accept_read_response},
@@ -28,6 +29,8 @@ pub enum DecodeError {
     },
     #[error("duplicate or empty disk identity in the disk listing")]
     DiskList,
+    #[error("invalid device-health observation: {0}")]
+    Health(#[source] health::InvalidHealth),
 }
 
 fn invalid(source: DecodeError) -> api::Error {
@@ -84,6 +87,7 @@ fn read_details(slot: &str, value: Value) -> Result<DiskDetailsRecord, api::Erro
     let record = DiskDetailsRecord::deserialize(value)
         .map_err(|source| invalid(DecodeError::Json(source)))?;
     identity("slot_id", slot, &record.slot_id)?;
+    health::validate(&record).map_err(|source| invalid(DecodeError::Health(source)))?;
     Ok(record)
 }
 
@@ -125,6 +129,8 @@ pub(super) struct Model {
     loaded: bool,
     generation: u64,
     next_owner: u64,
+    // An invalidated response may still occupy the server's single SMART reader.
+    details_read: Option<u64>,
     error: Option<api::Error>,
 }
 impl Model {
@@ -140,17 +146,16 @@ fn complete_list(
     epoch: u64,
     generation: u64,
     result: Result<BTreeMap<String, String>, api::Error>,
-) {
+) -> Option<Vec<String>> {
     if !accept_read_response(state, epoch, &result) {
-        return;
+        return None;
     }
-    let slots = state
+    state
         .try_update(|s| {
             let model = &mut s.admin_console.disks;
             if model.generation != generation {
-                return Vec::new();
+                return None;
             }
-            model.loading = false;
             match result {
                 Ok(disks) => {
                     model.cards.retain(|slot, _| disks.contains_key(slot));
@@ -166,22 +171,33 @@ fn complete_list(
                     }
                     model.loaded = true;
                     model.error = None;
-                    model.cards.keys().cloned().collect()
+                    Some(model.cards.keys().cloned().collect())
                 }
                 Err(error) => {
+                    model.loading = false;
                     model.error = Some(error);
-                    Vec::new()
+                    None
                 }
             }
         })
-        .unwrap_or_default();
-    for slot in slots {
-        load_card(state, slot);
+        .flatten()
+}
+
+fn current_list(state: &State, epoch: u64, generation: u64) -> bool {
+    state.session_active()
+        && state.session_epoch == epoch
+        && state.admin_console.disks.generation == generation
+}
+
+fn finish_list(state: &mut State, epoch: u64, generation: u64) {
+    if state.session_epoch == epoch && state.admin_console.disks.generation == generation {
+        state.admin_console.disks.loading = false;
     }
 }
 
 pub(crate) fn refreshing(state: &State) -> bool {
     state.admin_console.disks.loading
+        || state.admin_console.disks.details_read.is_some()
         || state
             .admin_console
             .disks
@@ -211,7 +227,25 @@ pub(crate) fn load(state: RwSignal<State>) {
     };
     spawn_local(async move {
         let result = api::validated_request("GET", "/api/admin/disks", None, read_list).await;
-        complete_list(state, epoch, generation, result);
+        let Some(slots) = complete_list(state, epoch, generation, result) else {
+            return;
+        };
+        // The server bounds native device queries to one worker. Read cards in
+        // order rather than making every later directory race into Busy.
+        for slot in slots {
+            if !state
+                .try_with_untracked(|s| current_list(s, epoch, generation))
+                .unwrap_or(false)
+            {
+                return;
+            }
+            if let Some((epoch, generation)) =
+                state.try_update(|s| begin_details(s, &slot)).flatten()
+            {
+                read_card(state, slot, epoch, generation).await;
+            }
+        }
+        state.try_update(|s| finish_list(s, epoch, generation));
     });
 }
 
@@ -226,7 +260,11 @@ fn complete_details(
         return;
     }
     state.update(|s| {
-        let Some(card) = s.admin_console.disks.cards.get_mut(slot) else {
+        let model = &mut s.admin_console.disks;
+        if model.details_read == Some(generation) {
+            model.details_read = None;
+        }
+        let Some(card) = model.cards.get_mut(slot) else {
             return;
         };
         if card.generation != generation {
@@ -249,6 +287,9 @@ fn begin_details(state: &mut State, slot: &str) -> Option<(u64, u64)> {
         return None;
     }
     let model = &mut state.admin_console.disks;
+    if model.details_read.is_some() {
+        return None;
+    }
     let card = model.cards.get_mut(slot)?;
     if card.loading || card.draft.as_ref().is_some_and(|draft| draft.saving) {
         return None;
@@ -256,25 +297,30 @@ fn begin_details(state: &mut State, slot: &str) -> Option<(u64, u64)> {
     card.loading = true;
     model.next_owner += 1;
     card.generation = model.next_owner;
+    model.details_read = Some(card.generation);
     Some((state.session_epoch, card.generation))
 }
 
 fn load_card(state: RwSignal<State>, slot: String) {
-    let captured = state.try_update(|s| begin_details(s, &slot)).flatten();
-    let Some((epoch, generation)) = captured else {
+    if state.with_untracked(refreshing) {
+        return;
+    }
+    let Some((epoch, generation)) = state.try_update(|s| begin_details(s, &slot)).flatten() else {
         return;
     };
-    spawn_local(async move {
-        let expected = slot.clone();
-        let result = api::validated_request(
-            "GET",
-            &format!("/api/admin/disks/{}/details", api::segment(&slot)),
-            None,
-            move |value| read_details(&expected, value),
-        )
-        .await;
-        complete_details(state, epoch, &slot, generation, result);
-    });
+    spawn_local(read_card(state, slot, epoch, generation));
+}
+
+async fn read_card(state: RwSignal<State>, slot: String, epoch: u64, generation: u64) {
+    let expected = slot.clone();
+    let result = api::validated_request(
+        "GET",
+        &format!("/api/admin/disks/{}/details", api::segment(&slot)),
+        None,
+        move |value| read_details(&expected, value),
+    )
+    .await;
+    complete_details(state, epoch, &slot, generation, result);
 }
 
 fn edit(state: RwSignal<State>, slot: &str) {
@@ -463,8 +509,11 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
     view! {
         <section class="zxs-frame zxs-stack zxs-disk-management-card" data-slot=slot.get_value() aria-busy=move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_some_and(|card|card.loading)).to_string()>
             <h3 class="zxs-row">{slot.get_value()}</h3>
-            <button class="zxs-button" disabled=move ||busy.get()||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_some_and(|card|card.loading)) on:click=move |_|load_card(state,slot.get_value())>{t("刷新硬盘信息","Refresh disk information")}</button>
+            <button class="zxs-button" disabled=move ||busy.get()||state.with(refreshing) on:click=move |_|load_card(state,slot.get_value())>{t("刷新硬盘信息","Refresh disk information")}</button>
             {move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).and_then(|card|card.error.clone())).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
+            <Show when=move ||details.get().is_some()&&state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_some_and(|card|card.error.is_some()))>
+                <p class="zxs-row" role="status">{t("刷新未成功，以下保留上次读取的信息，不代表当前状态。","Refresh failed. The last successful information is shown below and does not represent current status.")}</p>
+            </Show>
             {move ||details.get().map(|record| {
                 let fields = [
                     (t("型号","Model"), optional(record.model.as_deref())),
@@ -474,9 +523,20 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
                     (t("挂载目录","Mount directory"), optional(record.mount_path.as_deref())),
                     (t("登记存储目录","Registered storage directory"), record.root_path.clone()),
                     (t("文件系统 UUID","Filesystem UUID"), optional(record.filesystem_uuid.as_deref())),
-                    (t("ZXS 登记磁盘 ID（非文件系统 UUID）","ZXS registered disk ID (not filesystem UUID)"), record.disk_id.clone()),
+                    ("zxs ID".to_owned(), record.disk_id.clone()),
                 ];
-                view! {<div class="zxs-stack">{fields.into_iter().map(|(label,value)|view!{<p class="zxs-row"><span>{label}{": "}</span><code>{value}</code></p>}).collect_view()}<p class="zxs-row">{mapping_label(record.mapping)}</p></div>}
+                let health = health::presentation(&record.health);
+                view! {
+                    <div class="zxs-stack">
+                        {fields.into_iter().map(|(label,value)|view!{<p class="zxs-row"><span>{label}{": "}</span><code>{value}</code></p>}).collect_view()}
+                        <p class="zxs-row">{mapping_label(record.mapping)}</p>
+                    </div>
+                    <section class="zxs-stack zxs-disk-health" data-zxs-disk-health=health.state aria-label=t("目录所属设备的健康信息","Directory device health")>
+                        <p class="zxs-row" role="status">{health.status}</p>
+                        {health.fields.into_iter().map(|(label,value)|view!{<p class="zxs-row"><span>{label}{": "}</span><span>{value}</span></p>}).collect_view()}
+                        <p class="zxs-row">{t("SMART 是设备当时的报告，不保证没有故障，也不代表目录数据完整性或副本独立性。","SMART is the device's report at the observation time. It does not guarantee fault-free hardware, directory data integrity, or independent copies.")}</p>
+                    </section>
+                }
             })}
             <Show when=move ||details.get().is_some()>
                 <p class="zxs-row">{t("备注","Note")}</p>
@@ -486,7 +546,7 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
                 </Show>
             </Show>
             <Show when=move ||editing.get()>
-                <label class="zxs-stack"><span class="zxs-row">{t("备注（支持多行）","Note (multiple lines supported)")}</span>
+                <div class="zxs-form-grid"><label class="zxs-form-field"><span class="zxs-row">{t("备注（支持多行）","Note (multiple lines supported)")}</span>
                     {web_interface::html::custom("textarea")
                         .class("zxs-input")
                         .attr("rows", "4")
@@ -497,7 +557,7 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
                             let input = event_target::<web_sys::HtmlTextAreaElement>(&event);
                             change_note(state, &slot.get_value(), input.value());
                         })}
-                </label>
+                </label></div>
                 <p class="zxs-row">{t("备注保存在系统盘，绑定此登记磁盘；空文本可清空备注。","Notes are stored on the system disk for this registered disk. Save empty text to clear the note.")}</p>
                 <Show when=move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_some_and(|card|card.draft.as_ref().zip(card.details.as_ref()).is_some_and(|(draft,record)|draft.request.expected_disk_id!=record.disk_id||draft.request.expected_note!=record.note)))>
                     <p class="zxs-row" role="status">{t("读取依据已改变，编辑文本已保留；取消编辑后可重新编辑最新备注。","The read baseline changed; your text is preserved. Cancel editing to start again from the latest note.")}</p>
@@ -510,9 +570,9 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
 }
 
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
-    view! {<section class="zxs-stack zxs-disk-management" aria-busy=move ||state.with(|s|s.admin_console.disks.loading).to_string() aria-label=t("硬盘信息与备注","Disk information and notes")>
-        <h2 class="zxs-row">{t("硬盘信息与备注","Disk information and notes")}</h2>
-        <p class="zxs-row">{t("P01、B01 是逻辑角色，不是机箱盘位。身份字段仅供辨认，不参与存储准入。","P01 and B01 are logical roles, not chassis bays. Identity fields are informational and do not control storage admission.")}</p>
+    view! {<section class="zxs-stack zxs-disk-management" aria-busy=move ||state.with(|s|s.admin_console.disks.loading).to_string() aria-label=t("登记目录、磁盘健康与备注","Registered directories, disk health and notes")>
+        <h2 class="zxs-row">{t("登记目录、磁盘健康与备注","Registered directories, disk health and notes")}</h2>
+        <p class="zxs-row">{t("P01、B01 是登记目录的逻辑角色，不是机箱盘位。同一磁盘上的多个目录会显示同一设备的健康信息。身份与健康信息仅供观察，不参与存储准入。","P01 and B01 are logical directory roles, not chassis bays. Directories on the same disk report that same device. Identity and health are observations, not storage admission criteria.")}</p>
         {move ||state.with(|s|s.admin_console.disks.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
         <Show when=move ||state.with(|s|s.admin_console.disks.loaded&&s.admin_console.disks.cards.is_empty())><EmptyState message=t("没有已登记的硬盘。","No disks are registered.")/></Show>
         <For each=move ||state.with(|s|s.admin_console.disks.cards.keys().cloned().collect::<Vec<_>>()) key=|slot|slot.clone() children=move |slot|card(state,slot)/>

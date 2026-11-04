@@ -421,10 +421,10 @@ fn complete_nodes(
         state.files.history_loading = false;
         state.files.history_cancellation = None;
         state.files.file_history.invalidate();
-        state.notice = t(
+        state.set_file_notice(t(
             "请完成或取消当前编辑，然后刷新历史。",
             "Finish or cancel the current edit, then refresh history.",
-        );
+        ));
         return Ok(false);
     }
     let result = result.and_then(|page| {

@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("system_samba_gate", ROOT / ".github/scripts/check-system-samba.py")
@@ -79,10 +79,78 @@ class SystemSambaGate(unittest.TestCase):
         self.assertIn('allowed_uid: 0,', fixture)
         self.assertIn('engine_uid, 0,', fixture)
 
+    def test_password_api_targets_only_loopback_and_redacts_failure_body(self):
+        connection = Mock()
+        response = Mock(status=200)
+        response.read.return_value = b'{"changed":true}'
+        connection.getresponse.return_value = response
+        with patch.object(GATE.http.client, "HTTPConnection", return_value=connection) as client:
+            result = GATE.password_request(12345, "synthetic-token", "POST", "/api/smb/password",
+                                           {"current_password": "old", "new_password": "new"})
+        self.assertEqual(result, {"changed": True})
+        client.assert_called_once_with("127.0.0.1", 12345, timeout=25)
+        connection.close.assert_called_once()
+        response.status = 502
+        response.read.return_value = b'synthetic-secret-must-not-be-reported'
+        with patch.object(GATE.http.client, "HTTPConnection", return_value=connection):
+            with self.assertRaisesRegex(RuntimeError, "^password API returned HTTP 502$"):
+                GATE.password_request(12345, "synthetic-token", "POST", "/api/smb/password")
+        for port in (True, "12345", 0, 65536):
+            with self.assertRaisesRegex(RuntimeError, "invalid fixture HTTP port"):
+                GATE.password_request(port, "token", "GET", "/api/smb/account")
+
+    def test_real_password_gate_requires_old_rejection_and_new_authentication(self):
+        script = (ROOT / ".github/scripts/check-system-samba.py").read_text()
+        for marker in ("http-smb-password-changed", "old-smb-password-rejected",
+                       "new-smb-password-authenticated", "web-session-preserved"):
+            self.assertIn(marker, script)
+        self.assertIn('smb ports = 44545 445', script)
+        self.assertIn('client("ls", credential=auth, succeeds=False)', script)
+        self.assertIn('.replace(new_password, "[redacted]")', script)
+        self.assertIn('.replace(web_token, "[redacted]")', script)
+        fixture = (ROOT / "test/server/unit/smb_rpc/system_samba_tests.rs").read_text()
+        self.assertIn('crate::ManagementRuntime::start(shared.backend.clone(), web_auth, &web_config)', fixture)
+        self.assertIn('runtime.smb_account', fixture)
+        self.assertIn('"password_http_port": web_port', fixture)
+
+    def test_account_selection_gate_requires_real_new_and_old_authentication(self):
+        script = (ROOT / ".github/scripts/check-system-samba.py").read_text()
+        for marker in ("http-smb-account-selected", "previous-account-authenticates-but-share-denied",
+                       "selected-account-authenticated", "account-switch-back-next-generation"):
+            self.assertIn(marker, script)
+        self.assertIn('valid users = {smb_user.pw_name} {next_user.pw_name}', script)
+        self.assertIn('"//127.0.0.1/IPC$"', script)
+        self.assertIn('previous.returncode == 0 or "NT_STATUS_UNSUCCESSFUL" not in previous.stdout', script)
+        self.assertIn('.replace(next_password, "[redacted]")', script)
+
+    def test_existing_tree_gate_requires_specific_read_failure_and_no_returned_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "download.bin"
+            for status in ("NT_STATUS_IO_DEVICE_ERROR", "NT_STATUS_CONNECTION_DISCONNECTED", "NT_STATUS_ACCESS_DENIED"):
+                output = f"{status} opening remote file report.txt"
+                self.assertEqual(GATE.revoked_account_tree_read(output, 0, target), [status])
+                target.write_bytes(b"")
+                self.assertEqual(GATE.revoked_account_tree_read(output, 0, target), [status])
+            for output, code in (("connection lost", 0),
+                                 ("NT_STATUS_LOGON_FAILURE opening remote file report.txt", 0),
+                                 ("NT_STATUS_CONNECTION_DISCONNECTED unrelated operation", 0),
+                                 ("NT_STATUS_ACCESS_DENIED opening remote file report.txt", 1),
+                                 ("NT_STATUS_UNSUCCESSFUL opening remote file report.txt", 0)):
+                with self.subTest(output=output, code=code), self.assertRaises(RuntimeError):
+                    GATE.revoked_account_tree_read(output, code, target)
+            target.write_bytes(b"o")
+            with self.assertRaisesRegex(RuntimeError, "returned file bytes"):
+                GATE.revoked_account_tree_read("NT_STATUS_ACCESS_DENIED opening remote file report.txt", 0, target)
+        script = (ROOT / ".github/scripts/check-system-samba.py").read_text()
+        self.assertLess(script.index('wait_file(tree_ready, previous_tree'), script.index('saved = password_request'))
+        self.assertIn('before_switch.read_bytes() != b"old"', script)
+        self.assertIn('active_body.read_bytes() != b"old"', script)
+        self.assertIn('account-switch-existing-tree-read-revoked', script)
+
     def test_validation_docs_distinguish_image_accounts_from_host_accounts(self):
         dockerfile = (ROOT / ".github/containers/debian13-runtime.Dockerfile").read_text()
         document = (ROOT / "docs/validation/debian13-system-samba.md").read_text()
-        for account in ("zxs-engine-test", "zxs-smb-test"):
+        for account in ("zxs-engine-test", "zxs-smb-test", "zxs-smb-next-test"):
             self.assertRegex(dockerfile, rf"useradd[^\n]+{account}")
             self.assertIn(f"`{account}`", document)
         self.assertIn("运行镜像预建", document)

@@ -18,7 +18,7 @@ mod view;
 pub(crate) use actions::{load_disks, load_entries, pending, poll};
 pub(crate) use detail::page as details;
 pub use history::DecodeError as FileHistoryError;
-pub(crate) use model::{FileOperation, Model};
+pub(crate) use model::{FileOperation, Model, SaveStatus, publication_notice};
 pub use page::DecodeError as DirectoryPageError;
 pub(crate) use view::view;
 

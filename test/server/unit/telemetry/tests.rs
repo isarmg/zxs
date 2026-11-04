@@ -789,6 +789,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
         config.admit().unwrap(),
         service.clone(),
         spool_budget,
+        None,
     )
     .unwrap();
     let started = Arc::new(tokio::sync::Semaphore::new(0));

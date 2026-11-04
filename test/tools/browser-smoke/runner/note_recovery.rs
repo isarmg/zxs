@@ -63,7 +63,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                         if browser.script(r#"
                         const p=window.__zxsNoteRecovery;
                         const retry=Array.from(document.querySelectorAll('button')).find(e=>['Retry opening data storage','重试打开数据存储'].includes(e.textContent.trim()));
-                        const health=Array.from(document.querySelectorAll('section')).find(e=>['Management health','管理服务健康'].includes(e.getAttribute('aria-label')));
+                        const health=Array.from(document.querySelectorAll('section')).find(e=>['Storage and authentication status','存储与认证状态'].includes(e.getAttribute('aria-label')));
                         const active=Array.from(document.querySelectorAll('[aria-current=page]')).some(e=>['Details','详情'].includes(e.textContent.trim()));
                         return p.health.includes(p.storage)&&p.input.isConnected&&p.input.disabled
                             &&p.input.value===p.writes[0].note&&p.writes.length===1

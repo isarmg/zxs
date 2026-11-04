@@ -718,7 +718,7 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
         });
         let shared = Arc::new(Shared {
             backend: backend.clone(),
-            username: original.username.clone(),
+            account: original.account.clone(),
             auth: original.auth.clone(),
             spool: original.spool.clone(),
             budget: Arc::clone(&original.budget),

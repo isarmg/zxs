@@ -40,7 +40,7 @@ fn content_and_account_completion_require_the_original_active_session() {
         assert!(!current_session(state, 5));
         state.with_untracked(|s| {
             assert_eq!(s.session_epoch, 6);
-            assert_eq!(s.notice, "Password changed");
+            assert_eq!(s.session_notice, "Password changed");
             assert!(!s.authenticated);
         });
     });
@@ -70,7 +70,7 @@ fn shell_identity_does_not_change_with_file_progress() {
     let session = session_view(&state);
     state.login_in_flight = true;
     state.password_change = crate::ui::PasswordChangeState::Pending;
-    state.notice = "saving".into();
+    state.session_notice = "saving".into();
     assert_eq!(session_view(&state), session);
     assert_eq!(session.phase, SessionPhase::Authenticated);
 }
@@ -353,7 +353,7 @@ fn exact_password_confirmation_and_unauthorized_logout_settle_the_session() {
         state.with_untracked(|s| {
             assert!(!s.authenticated);
             assert_eq!(s.password_change, PasswordChangeState::Idle);
-            assert!(!s.notice.is_empty());
+            assert!(!s.session_notice.is_empty());
         });
         state.update(|s| {
             s.authenticated = true;
@@ -540,4 +540,36 @@ fn refresh_indicator_follows_only_the_current_pages_active_read() {
     assert!(!header_refreshing(&state));
     state.page = Page::Account;
     assert!(!header_refreshing(&state));
+}
+
+#[test]
+fn files_refresh_can_replace_history_while_preserving_the_busy_indicator() {
+    let mut state = State::default();
+    assert_eq!(state.page, Page::Files);
+    assert!(!header_refresh_disabled(&state));
+    state.files.history_loading = true;
+    assert!(header_refreshing(&state));
+    assert!(
+        !header_refresh_disabled(&state),
+        "returning to Files must allow refresh to replace pending history"
+    );
+    state.files.loading = true;
+    assert!(header_refresh_disabled(&state));
+    state.files.loading = false;
+    state.files.loading_disks = true;
+    assert!(header_refresh_disabled(&state));
+    state.files.loading_disks = false;
+    assert!(!header_refresh_disabled(&state));
+    state.page = Page::Details;
+    state.files.selected = Some(crate::files::test_entries::entry(
+        json!({"kind":"file","file_id":"file-1"}),
+    ));
+    assert!(header_refresh_disabled(&state));
+    state.files.history_loading = false;
+    assert!(!header_refresh_disabled(&state));
+    state.files.selected = None;
+    assert!(
+        header_refresh_disabled(&state),
+        "details require a selection"
+    );
 }

@@ -43,7 +43,7 @@ fn session_restoration_is_visually_empty() {
 }
 
 #[test]
-fn anonymous_forms_keep_visible_controls_and_isolated_login_rows() {
+fn anonymous_forms_keep_visible_controls_and_content_driven_layout() {
     let css = include_str!("../../../src/web/public/styles/components/auth.css");
     assert!(!css.contains("border-bottom: 1px solid transparent"));
     assert!(css.contains(".authentication-card .zxs-input { min-width: 0; border: 1px solid"));
@@ -52,6 +52,19 @@ fn anonymous_forms_keep_visible_controls_and_isolated_login_rows() {
     assert!(!css.contains(".authentication-card .zxs-error {"));
     assert!(css.contains(".authentication-language { justify-self: end; }"));
     assert!(css.contains(".authentication-card .zxs-stack:not(details)"));
+    for obsolete in [
+        "grid-row:",
+        "grid-template-rows: auto minmax",
+        "380px",
+        "28rem",
+        "100cqw",
+        "display: contents",
+    ] {
+        assert!(
+            !css.contains(obsolete),
+            "obsolete fixed login constraint: {obsolete}"
+        );
+    }
 }
 
 #[test]
@@ -96,7 +109,8 @@ fn header_icons_follow_menu_text_without_shrinking_hit_targets() {
 fn administration_refresh_lives_in_header_without_loading_copy() {
     let ui = include_str!("../../../src/web/src/ui.rs");
     let disks = include_str!("../../../src/web/src/admin/disks.rs");
-    assert!(ui.contains("Page::Admin=>!admin::can_load_disks(s)"));
+    assert!(ui.contains("Page::Admin => !admin::can_load_disks(state)"));
+    assert!(ui.contains("disabled=move ||state.with(header_refresh_disabled)"));
     assert!(ui.contains("Page::Admin=>admin::load_disks(state)"));
     assert!(!disks.contains("Refresh disk list"));
     assert!(!disks.contains("LoadingState"));
@@ -136,7 +150,7 @@ fn details_remove_return_row_and_its_exclusive_code() {
 }
 
 #[test]
-fn main_navigation_places_health_immediately_before_administration() {
+fn main_navigation_has_no_separate_health_page() {
     let ui = include_str!("../../../src/web/src/ui.rs");
     let navigation = ui
         .split("<HeaderNavigation ")
@@ -145,8 +159,11 @@ fn main_navigation_places_health_immediately_before_administration() {
         .split("</HeaderNavigation>")
         .next()
         .unwrap();
+    assert!(!navigation.contains("Page::Health"));
+    let admin = include_str!("../../../src/web/src/admin/mod.rs");
+    assert!(admin.contains("crate::management::recovery(state)"));
     let mut last = 0;
-    for page in ["Files", "Details", "Status", "History", "Health", "Admin"] {
+    for page in ["Files", "Details", "Status", "History", "Admin"] {
         let position = navigation.find(&format!("Page::{page}")).unwrap();
         assert!(position > last, "{page} is not in the requested DOM order");
         last = position;
@@ -211,4 +228,42 @@ fn empty_folder_message_is_rendered_inside_pagination() {
         pagination.contains("s.files.loaded&&s.files.entries.is_empty()&&s.files.query.is_empty()")
     );
     assert!(view.contains("No files match your search."));
+}
+
+#[test]
+fn shared_form_groups_align_fields_without_individual_input_boxes() {
+    let css = include_str!("../../../src/web/public/styles/components/base.css");
+    assert!(css.contains(".zxs-form-grid {"));
+    assert!(css.contains(".zxs-form-field {"));
+    assert!(css.contains("align-items: center; column-gap:"));
+    assert!(css.contains("border: 0; border-bottom: 1px dashed"));
+    assert!(css.contains("outline-offset: -2px"));
+    assert!(!css.contains(".zxs-form-field + .zxs-form-field"));
+    let login = include_str!("../../../src/interface/src/components/login.rs");
+    let account = include_str!("../../../src/interface/src/components/account.rs");
+    assert!(login.contains(".class(\"zxs-form-grid\")"));
+    assert!(account.contains(".class(\"zxs-account-fields zxs-form-grid\")"));
+    let account_css =
+        include_str!("../../../src/web/public/styles/components/account-settings.css");
+    assert!(!account_css.contains("grid-template-columns"));
+    assert!(!account_css.contains("36rem"));
+}
+
+#[test]
+fn smb_selection_and_passwords_share_aligned_form_groups() {
+    let smb = include_str!("../../../src/web/src/smb_account.rs");
+    let binding = smb
+        .split("<div class=\"zxs-form-grid\">")
+        .nth(1)
+        .expect("SMB binding uses the shared field group")
+        .split("</form>")
+        .next()
+        .unwrap();
+    assert!(binding.contains("<div class=\"zxs-form-field\"><span"));
+    assert!(binding.contains("<Select show_label=false"));
+    assert!(binding.contains("name=\"smb_binding_administrator_password\""));
+    assert_eq!(smb.matches("<div class=\"zxs-form-grid\">").count(), 2);
+    let css = include_str!("../../../src/web/public/styles/components/base.css");
+    assert!(css.contains(".zxs-input:not(.zxs-select-trigger)"));
+    assert!(css.contains("border: 0; border-bottom: 1px dashed"));
 }

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     api,
-    files::model::{FileOperation, NamespaceAction, SaveStatus, join_path},
+    files::model::{FileOperation, NamespaceAction, join_path},
     ui::{ErrorContext, State, current_session, fail_in, set_notice},
 };
 use json_codec::{Value, json};
@@ -32,7 +32,7 @@ pub(crate) fn namespace(
             format!("{}/namespace", disk_path(&snapshot.files.slot)),
         ))
     })?;
-    let id = crate::ui::operation_id(state)?;
+    let id = crate::ui::file_operation_id(state)?;
     body["operation_id"] = id.clone().into();
     state.update(|s| {
         s.files.mutation_pending = true;
@@ -65,7 +65,20 @@ pub(crate) fn directory_branch(
     if !state.with_untracked(write_allowed) {
         return None;
     }
-    let operation_id = crate::ui::operation_id(state)?;
+    let operation_id = crate::ui::file_operation_id(state)?;
+    state.update(|s| {
+        s.notices.operation_success(if select {
+            t(
+                "已恢复此目录的文件分支组合，目录外文件保持不变。",
+                "Restored this folder’s file branch combination; files outside the folder were left unchanged.",
+            )
+        } else {
+            t(
+                "目录分支组合已登记，尚未切换。",
+                "The folder branch combination was registered without switching to it.",
+            )
+        });
+    });
     let slot = state.with_untracked(|s| s.files.slot.clone());
     let action = if select {
         "directory-select"
@@ -88,23 +101,7 @@ pub(crate) fn directory_branch(
         }
         match result {
             Ok(value) => {
-                let status = record_receipt(state, &operation_id, value);
-                if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
-                    set_notice(
-                        state,
-                        if select {
-                            t(
-                                "已恢复此目录的文件分支组合，目录外文件保持不变。",
-                                "Restored this folder’s file branch combination; files outside the folder were left unchanged.",
-                            )
-                        } else {
-                            t(
-                                "目录分支组合已登记，尚未切换。",
-                                "The folder branch combination was registered without switching to it.",
-                            )
-                        },
-                    );
-                }
+                record_receipt(state, &operation_id, value);
             }
             Err(error) => {
                 record_failure(state, epoch, &operation_id, error);
@@ -196,7 +193,7 @@ fn record_mutation(
     if !state.with_untracked(write_allowed) {
         return None;
     }
-    let operation_id = crate::ui::operation_id(state)?;
+    let operation_id = crate::ui::file_operation_id(state)?;
     body["operation_id"] = operation_id.clone().into();
     let epoch = state.with_untracked(|s| s.session_epoch);
     state.update(|s| s.files.mutation_pending = true);
@@ -241,7 +238,7 @@ pub(crate) fn update_note(
     if id.is_empty() || !state.with_untracked(history_write_allowed) {
         return None;
     }
-    let operation_id = crate::ui::operation_id(state)?;
+    let operation_id = crate::ui::file_operation_id(state)?;
     let endpoint = format!(
         "/api/file-manager/{collection}/{}/metadata",
         api::segment(&id)
@@ -353,7 +350,7 @@ fn file_mutation(
     if !state.with_untracked(history_write_allowed) {
         return None;
     }
-    let id = crate::ui::operation_id(state)?;
+    let id = crate::ui::file_operation_id(state)?;
     if action == "select"
         && let Some((repository, path)) = state.with_untracked(|s| {
             s.files
@@ -401,7 +398,7 @@ fn record_failure(state: RwSignal<State>, epoch: u64, id: &str, error: api::Erro
     if !unknown {
         // This is a rejected HTTP request, not a server staging receipt.
         // Present its actual error without claiming any content was retained.
-        set_notice(state, String::new());
+        state.update(|s| s.notices.clear_operation_notice(id));
     }
     fail_in(state, epoch, ErrorContext::Operation(id.to_owned()), error);
 }

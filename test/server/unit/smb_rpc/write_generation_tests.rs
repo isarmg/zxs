@@ -444,13 +444,15 @@ mod measurement {
             max_file_bytes: limit,
             authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
             backend: base.backend.clone(),
-            username: "alice".into(),
+            account: base.account.clone(),
             auth: base.auth.clone(),
             spool,
             file_writers: Mutex::new(BTreeSet::new()),
             namespace_operations: Mutex::new(BTreeSet::new()),
         });
+        let account_generation = shared.account.read().unwrap().selection().generation;
         Session {
+            account_generation,
             identity: identity(&shared),
             shared,
             branch: branch.into(),

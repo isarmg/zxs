@@ -14,8 +14,12 @@ fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
             password_change: PasswordChangeState::Unknown,
             principal: "administrator".into(),
             page: Page::Details,
-            notice: "unconfirmed save".into(),
             ..Default::default()
+        });
+        state.update(|s| {
+            s.notices.begin_operation("unconfirmed".into());
+            s.notices
+                .record_operation(9, "unconfirmed", crate::files::SaveStatus::Unknown);
         });
         // All three production actions execute their synchronous transition,
         // but the existing inactive-session gates admit no browser request.
@@ -43,7 +47,10 @@ fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
             assert_eq!(s.session_transition, SessionTransition::LoggingOut);
             assert_eq!(s.password_change, PasswordChangeState::Unknown);
             assert_eq!(s.principal, "administrator");
-            assert_eq!(s.notice, "unconfirmed save");
+            assert_eq!(
+                s.notices.message(),
+                Some(crate::files::publication_notice(crate::files::SaveStatus::Unknown).as_str())
+            );
             assert!(!super::super::write_allowed(s));
         });
     });
@@ -651,4 +658,51 @@ fn malformed_page_never_installs_partial_entries_context_or_writeability() {
     assert_eq!(state.files.entries.as_ref(), &[old]);
     assert_eq!(state.files.repository_id, "retained-context");
     assert!(!state.files.writable);
+}
+
+#[test]
+fn file_navigation_discards_success_and_late_feedback_but_preserves_receipts() {
+    use crate::files::{FileOperation, SaveStatus};
+    let actions: [fn(RwSignal<State>); 5] = [
+        |state| open_disk(state, "P02".into()),
+        go_root,
+        |state| go_directory(state, "other".into()),
+        |state| search(state, "query".into()),
+        |state| {
+            select_entry(
+                state,
+                crate::files::test_entries::entry(json_codec::json!({})),
+            )
+        },
+    ];
+    for action in actions {
+        Owner::new().with(|| {
+            // Inactive-session admission avoids network work while exercising
+            // the exact navigation transitions used by the browser controls.
+            let state = RwSignal::new(State::default());
+            state.update(|s| {
+                s.files
+                    .operations
+                    .push(FileOperation::unknown("recover-original"));
+                s.notices.begin_operation("restore".into());
+                s.notices.operation_success("Restored this folder".into());
+                s.notices
+                    .record_operation(0, "restore", SaveStatus::Published);
+            });
+            assert!(state.with_untracked(|s| s.notices.message().is_some()));
+            action(state);
+            state.update(|s| {
+                s.notices
+                    .record_operation(0, "restore", SaveStatus::Published)
+            });
+            state.with_untracked(|s| {
+                assert!(s.notices.message().is_none());
+                assert_eq!(
+                    s.files.operations,
+                    [FileOperation::unknown("recover-original")]
+                );
+                assert!(super::super::pending(s));
+            });
+        });
+    }
 }

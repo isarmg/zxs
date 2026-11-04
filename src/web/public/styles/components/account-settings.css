@@ -1,12 +1,5 @@
-/* Account-specific column placement; shared roles own every control dimension. */
+/* Shared form groups own field geometry, alignment and the only input border. */
 .zxs-header-actions .zxs-account-entry,
 .zxs-header-actions .zxs-account-entry:hover { text-decoration: none; }
-.zxs-account-page > .zxs-content-panel { width: min(100%,36rem); }
-.zxs-account-fields { display: grid; grid-template-columns: max-content minmax(0,1fr); align-items: center; min-width: 0; gap: var(--zxs-block-gap) 0; }
-.zxs-account-form .zxs-form-field { display: contents; margin: 0; }
-.zxs-account-form .zxs-form-field > span { display: flex; align-items: center; }
+.zxs-account-page > .zxs-content-panel { min-width: 0; }
 .zxs-account-form > .zxs-actions { justify-content: flex-start; }
-@media (max-width: 48rem) {
-  .zxs-account-fields { grid-template-columns: minmax(0,1fr); gap: 0; }
-  .zxs-account-form .zxs-form-field { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; gap: 0; }
-}

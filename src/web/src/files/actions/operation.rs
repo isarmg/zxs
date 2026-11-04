@@ -2,10 +2,7 @@
 use super::browse::reload_entries;
 use crate::{
     api,
-    files::{
-        FileOperation,
-        model::{SaveStatus, publication_notice},
-    },
+    files::{FileOperation, model::SaveStatus},
     ui::{ErrorContext, State, current_session, fail_in},
 };
 use json_codec::Value;
@@ -31,7 +28,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         s.files.operations.truncate(100);
         reload_scope = crate::files::batch::settle_operation(&mut s.files, &id, status);
         crate::files::review::settle(&mut s.files, &id, status);
-        s.notice = publication_notice(status);
+        s.notices.record_operation(s.session_epoch, &id, status);
     });
     if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         reload_entries(state);

@@ -385,6 +385,7 @@ async fn recovery_preview_http_parses_ids_before_lifecycle_and_keeps_auth_preced
         config.admit().unwrap(),
         telemetry,
         spool,
+        None,
     )
     .unwrap();
     let token = fixture

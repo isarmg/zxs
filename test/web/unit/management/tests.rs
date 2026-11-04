@@ -209,7 +209,7 @@ fn an_already_ready_retry_response_retains_refresh_demand_for_the_following_stat
 }
 
 #[test]
-fn automatic_health_navigation_preserves_registered_editors_and_unknown_operations() {
+fn global_status_changes_preserve_the_current_page_editors_and_unknown_operations() {
     for page in [crate::ui::Page::Files, crate::ui::Page::Details] {
         for storage in ["unavailable", "recovery_required"] {
             let mut state = State {
@@ -236,10 +236,10 @@ fn automatic_health_navigation_preserves_registered_editors_and_unknown_operatio
             assert!(!state.management.storage.writable());
             assert!(crate::files::pending(&state));
             assert_eq!(state.files.operations[0].id(), "original");
-            // Once the editor is explicitly closed, ordinary automatic health navigation remains.
+            // Closing the editor does not make a later status poll take over navigation.
             state.files.history_editors = 0;
             accept_status(&mut state, &response);
-            assert_eq!(state.page, crate::ui::Page::Health);
+            assert_eq!(state.page, page);
         }
     }
 }

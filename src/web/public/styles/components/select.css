@@ -6,17 +6,23 @@
   --zxs-contour-extent: calc(var(--zxs-select-row-height, 36px) / 2);
   --zxs-contour-mode: clip;
 }
-.zxs-select-trigger.zxs-input { border: var(--zxs-control-border-width) solid var(--zxs-block-border); background: var(--zxs-bg-panel); text-decoration: none; }
-.zxs-select-trigger:disabled { opacity: .6; cursor: not-allowed; }
+.zxs-select-trigger.zxs-input { border: var(--zxs-control-border-width) solid #000; background: var(--zxs-bg-panel); text-decoration: none; }
+/* Anonymous setup also uses Select inside the higher-specificity auth form.
+ * Override only its border color, retaining the auth dimensions/background. */
+:root .zxs-select .zxs-select-trigger.zxs-input { border-color: #000; }
+.zxs-select-trigger:disabled { opacity: 1; cursor: not-allowed; }
+.zxs-select-trigger:disabled :is(.zxs-select-value, .zxs-select-arrow) { opacity: .6; }
 :root .zxs-select .zxs-select-trigger:focus-visible { outline: 2px solid var(--zxs-focus, Highlight); outline-offset: 3px; }
 .zxs-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zxs-select-trigger .zxs-select-arrow { display: block; flex: none; width: 1em; height: 1em; fill: none; transform-origin: center; }
 .zxs-select-trigger[aria-expanded=true] .zxs-select-arrow { transform: rotate(90deg); }
-.zxs-select-panel {
+/* Match the shared frame specificity so its theme border cannot replace the
+ * Select border. G4 reads this author color for its image and foreground paint. */
+.zxs-select .zxs-select-panel {
   position: fixed; inset: auto; margin: 0; padding: 0; box-sizing: border-box;
   min-width: 0; max-width: calc(100vw - 16px); overflow: auto; overscroll-behavior: contain;
   color: var(--zxs-text-primary, #18181b); background: var(--zxs-bg-panel, #fff);
-  border: 1px solid var(--zxs-block-border, currentColor); font: inherit; font-size: var(--zxs-compact-font-size);
+  border: var(--zxs-control-border-width) solid #000; font: inherit; font-size: var(--zxs-compact-font-size);
   --zxs-contour-extent: var(--zxs-contour-panel, 18px);
   --zxs-contour-mode: clip;
   --zxs-contour-foreground: 1;

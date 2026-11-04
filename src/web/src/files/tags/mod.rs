@@ -236,7 +236,7 @@ pub(crate) fn toggle(state: RwSignal<State>, id: String, checked: bool) {
         }
         match checked_selection(s, &id, false) {
             Ok(selected) => s.files.checked_nodes = selected,
-            Err(error) => s.notice = error,
+            Err(error) => s.set_file_notice(error),
         }
     });
 }
@@ -247,7 +247,7 @@ pub(crate) fn edit_node(state: RwSignal<State>, id: String) {
             state.update(|s| s.files.checked_nodes = selected);
             start(state);
         }
-        Err(error) => state.update(|s| s.notice = error),
+        Err(error) => state.update(|s| s.set_file_notice(error)),
     }
 }
 pub(crate) fn start(state: RwSignal<State>) {

@@ -58,7 +58,7 @@ fn unrelated_updates_and_query_changes_do_not_reproject_a_server_page() {
             assert_eq!(rows.with_untracked(Vec::len), size);
             for i in 0..100 {
                 state.update(|s| {
-                    s.notice = i.to_string();
+                    s.session_notice = i.to_string();
                     s.files.selected = Some(s.files.entries[i % size].clone());
                     s.files.checked_entries.insert(i.to_string());
                     s.files.file_history =

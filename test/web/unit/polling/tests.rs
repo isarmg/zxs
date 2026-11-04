@@ -44,7 +44,6 @@ fn every_page_retains_management_admission_but_only_status_polls_telemetry() {
     for page in [
         crate::ui::Page::Files,
         crate::ui::Page::Details,
-        crate::ui::Page::Health,
         crate::ui::Page::Admin,
         crate::ui::Page::Status,
         crate::ui::Page::History,

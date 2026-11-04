@@ -90,7 +90,7 @@ fn start(state: RwSignal<State>, repository: String, path: String) {
     if state.with_untracked(|s| !s.session_active() || actions::pending(s)) {
         return;
     }
-    let Some(id) = crate::ui::operation_id(state) else {
+    let Some(id) = crate::ui::file_operation_id(state) else {
         return;
     };
     let epoch = state.with_untracked(|s| s.session_epoch);

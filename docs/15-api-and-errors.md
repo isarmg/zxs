@@ -49,6 +49,9 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/auth/me` | 当前有效会话；返回 principal/csrf_token |
 | `POST /api/auth/logout` | 持久撤销当前会话；返回 logged_out |
 | `POST /api/auth/password` | 验证 current_password 并设置 new_password；返回 changed/reauthentication_required，撤销全部会话 |
+| `GET /api/smb/account` | 返回 state=disabled，或 state=configured、username、generation（十进制字符串）、candidates、password_change（available/client_unavailable/unsupported_account_name/requires_unprivileged_service）；只描述配置与客户端前置条件，不承诺 smbd 正在运行 |
+| `POST /api/smb/account` | 严格 username/expected_generation/administrator_password 请求；只选服务器预置候选，验证当前 Web 管理密码后持久化新绑定并关闭旧 RPC 连接；返回当前账号状态，过时代际拒绝，不创建或改名系统账户 |
+| `POST /api/smb/password` | 严格 expected_generation/current_password/new_password 请求，不接受账号或目标主机；仅明确成功返回 changed=true；不撤销 Web 会话，不创建/改名 Samba 账户 |
 | `GET /api/file-manager/disks` | 可见磁盘目录入口及只读状态 |
 | `GET /api/file-manager/disks/{slot}/entries?path={path}` | 有界当前目录页、后代文件数与稳定目录分支摘要 |
 | `POST /api/file-manager/disks/{slot}/namespace` | 准备并提交当前目录的创建、重命名或删除 |

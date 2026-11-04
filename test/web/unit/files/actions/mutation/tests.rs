@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::SaveStatus;
 
 #[test]
 fn business_mutations_require_an_active_session_before_browser_work() {
@@ -71,6 +72,7 @@ fn failed_editor_requests_record_only_their_original_outcome() {
             (500, SaveStatus::Unknown),
         ] {
             let state = RwSignal::new(State::default());
+            state.update(|s| s.notices.begin_operation("original".into()));
             record_failure(
                 state,
                 0,
@@ -95,9 +97,12 @@ fn failed_editor_requests_record_only_their_original_outcome() {
                 );
                 assert!(s.errors[0].feedback.message.contains("request failed"));
                 if expected == SaveStatus::Unknown {
-                    assert_eq!(s.notice, crate::files::model::publication_notice(expected));
+                    assert_eq!(
+                        s.notices.message(),
+                        Some(crate::files::model::publication_notice(expected).as_str())
+                    );
                 } else {
-                    assert!(s.notice.is_empty());
+                    assert!(s.notices.message().is_none());
                 }
             });
         }
@@ -108,6 +113,7 @@ fn failed_editor_requests_record_only_their_original_outcome() {
 fn published_reconciliation_failure_keeps_the_original_operation_pending() {
     Owner::new().with(|| {
         let state = RwSignal::new(State::default());
+        state.update(|s| s.notices.begin_operation("published-original".into()));
         record_failure(
             state,
             0,
@@ -129,7 +135,7 @@ fn published_reconciliation_failure_keeps_the_original_operation_pending() {
             assert_eq!(s.errors.len(), 1);
             assert_eq!(s.errors[0].feedback.request_id.as_deref(), Some("published-request"));
             assert!(s.errors[0].feedback.message.contains("already published"));
-            assert_eq!(s.notice, crate::files::model::publication_notice(SaveStatus::Unknown));
+            assert_eq!(s.notices.message(), Some(crate::files::model::publication_notice(SaveStatus::Unknown).as_str()));
         });
     });
 }

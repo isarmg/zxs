@@ -123,6 +123,7 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 | `/healthz`、`/readyz`、`/api/capabilities` | GET，存活、就绪、实际能力 |
 | `/api/auth/login`、`/api/auth/me`、`/api/auth/logout` | POST 登录、GET 当前会话、POST 撤销 |
 | `/api/auth/password` | POST 校验当前密码并更新本账号密码，撤销原有会话 |
+| `/api/smb/account`、`/api/smb/password` | GET 显示生效 SMB 账号、代际、预置候选及客户端可用性；账号 POST 校验当前 Web 管理密码后持久切换候选并撤销旧 RPC 连接；密码 POST 校验代际及当前 Samba 密码后改密，不创建/改名系统账号 |
 | `/api/file-manager/disks`、`/disks/{slot}/entries` | GET 独立磁盘目录、文件列表与冻结目录分支组成 |
 | `/api/file-manager/disks/{slot}/write-sessions`、`/namespace` | POST 当前文件上传会话、仅创建目录（重命名/删除使用带身份和子树前置条件的 namespace-batch） |
 | `/api/file-manager/disks/{slot}/directory-branches`、`/directory-select` | POST 登记或选择目录分支的完整冻结子树 |

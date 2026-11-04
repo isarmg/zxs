@@ -605,6 +605,7 @@ fn application(root: &Path, store: AuthStore) -> (Router, Arc<Mutex<AuthStore>>)
         config.admit().unwrap(),
         runtime.telemetry,
         spool,
+        runtime.smb_account,
     )
     .unwrap();
     (app, auth)

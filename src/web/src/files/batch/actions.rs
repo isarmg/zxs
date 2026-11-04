@@ -96,7 +96,7 @@ pub(super) fn open_draft(state: RwSignal<State>, mut draft: Draft) {
     draft.loading = false;
     state.update(|s| {
         s.files.batch = Some(draft);
-        s.page = crate::ui::Page::Files;
+        s.change_page(crate::ui::Page::Files);
     });
     load_sources(state);
 }
@@ -471,7 +471,7 @@ pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
     }) else {
         return;
     };
-    let Some(operation_id) = crate::ui::operation_id(state) else {
+    let Some(operation_id) = crate::ui::file_operation_id(state) else {
         return;
     };
     let Some(registration) = state
@@ -763,7 +763,7 @@ pub(super) fn submit(state: RwSignal<State>) {
             return;
         }
     };
-    let Some(id) = crate::ui::operation_id(state) else {
+    let Some(id) = crate::ui::file_operation_id(state) else {
         return;
     };
     body["operation_id"] = id.clone().into();

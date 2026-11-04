@@ -53,7 +53,9 @@ fn position(
         .inner_height()?
         .as_f64()
         .expect("invariant: innerHeight is a browser number");
-    let panel_width = bounds.width().max(180.0).min((width - 16.0).max(0.0));
+    // Both boxes include their borders; keep the popup aligned with its trigger.
+    // Only the existing viewport inset can reduce an oversized trigger width.
+    let panel_width = bounds.width().min((width - 16.0).max(0.0));
     let left = bounds.left().min(width - panel_width - 8.0).max(8.0);
     let below = height - bounds.bottom() - 12.0;
     let above = bounds.top() - 12.0;

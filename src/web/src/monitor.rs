@@ -515,13 +515,13 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 {move ||state.with(|s|s.monitor.failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
                 {move ||state.with(|s|s.monitor.history_failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
                 {scrub::view(state)}
-                <article class="zxs-content-panel zxs-frame zxs-frame--inset" aria-label=t("持久工作区证据配额", "Retained workspace evidence capacity")>
-                    <h2>{t("持久工作区证据配额", "Retained workspace evidence capacity")}</h2>
+                <article class="zxs-content-panel zxs-frame zxs-stack" aria-label=t("持久工作区证据配额", "Retained workspace evidence capacity")>
+                    <h2 class="zxs-row">{t("持久工作区证据配额", "Retained workspace evidence capacity")}</h2>
                     {move || state.with(|s| s.monitor.capacity_failure.as_ref().map(feedback)).map(|failure| view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
-                    <p role="status">{move || state.with(|s| capacity_warning(s.monitor.capacity.as_ref()))}</p>
-                    <p>{move || state.with(|s| format!("{}：{}", t("全池", "Pool"), capacity_summary(s.monitor.capacity.as_ref().map(|capacity| &capacity.global))))}</p>
-                    <p>{move || state.with(|s| format!("{}：{}", t("当前账户", "Current account"), capacity_summary(s.monitor.capacity.as_ref().map(|capacity| &capacity.principal))))}</p>
-                    <p>{t("仅经核验的普通空中止记录退出驻留计数；完整清单仍可查询并累计占用元数据额度。已提交、含请求或正文的记录继续驻留；冷存不等于删除或无限历史。元数据额度不是磁盘剩余空间。", "Only verified empty ordinary aborted records leave the resident count. Full manifests remain queryable and charged to cumulative metadata. Committed records and records with request or payload evidence remain resident. Cold storage is not deletion or unlimited history; metadata quota is not free disk space.")}</p>
+                    <p class="zxs-row" role="status">{move || state.with(|s| capacity_warning(s.monitor.capacity.as_ref()))}</p>
+                    <p class="zxs-row">{move || state.with(|s| format!("{}：{}", t("全池", "Pool"), capacity_summary(s.monitor.capacity.as_ref().map(|capacity| &capacity.global))))}</p>
+                    <p class="zxs-row">{move || state.with(|s| format!("{}：{}", t("当前账户", "Current account"), capacity_summary(s.monitor.capacity.as_ref().map(|capacity| &capacity.principal))))}</p>
+                    <p class="zxs-row">{t("仅经核验的普通空中止记录退出驻留计数；完整清单仍可查询并累计占用元数据额度。已提交、含请求或正文的记录继续驻留；冷存不等于删除或无限历史。元数据额度不是磁盘剩余空间。", "Only verified empty ordinary aborted records leave the resident count. Full manifests remain queryable and charged to cumulative metadata. Committed records and records with request or payload evidence remain resident. Cold storage is not deletion or unlimited history; metadata quota is not free disk space.")}</p>
                 </article>
                 {move || state.with(|s| disk_sampling_notice(&s.monitor.snapshot)).map(|message| view!{<p class="zxs-row" role="status">{message}</p>})}
                 <div class="zxs-metric-grid zxs-surface-start"><For each=move ||available_metrics.get() key=Metric::key children=move |metric|metric_card(state,metric)/></div>

@@ -241,3 +241,24 @@ fn listen_defaults_to_all_ipv4_interfaces_and_accepts_explicit_addresses() {
         );
     }
 }
+
+#[test]
+fn smb_candidates_are_explicit_repeatable_and_require_bridge_configuration() {
+    let args = Args::try_parse_from([
+        "zxs",
+        "--smb-socket",
+        "/run/zxs/smb.sock",
+        "--smb-peer-uid",
+        "0",
+        "--smb-user",
+        "initial",
+        "--smb-allowed-user",
+        "second",
+        "--smb-allowed-user",
+        "third",
+    ])
+    .unwrap();
+    assert_eq!(args.smb_user.as_deref(), Some("initial"));
+    assert_eq!(args.smb_allowed_users, ["second", "third"]);
+    assert!(Args::try_parse_from(["zxs", "--smb-allowed-user", "second"]).is_err());
+}

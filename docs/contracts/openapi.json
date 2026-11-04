@@ -7119,6 +7119,148 @@
           }
         }
       }
+    },
+    "/api/smb/account": {
+      "get": {
+        "operationId": "getSmbAccount",
+        "description": "读取已提交的 SMB 配置快照，不等待正在进行的 SMB 操作或账号切换。配置绑定需要恢复时明确拒绝。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmbAccountStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化认证、Origin/CSRF、准入限流、配置、代际冲突或外部操作错误；失败不证明变更未发生。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "selectSmbAccount",
+        "description": "通过当前 Web 管理密码确认，在预置候选中持久选择生效账号；expected_generation 防止过时修改。保存会撤销旧代 ZXS SMB RPC 连接，Web 会话保持有效。结果未知时先 GET 读回，不盲目重试；不创建 Unix/Samba 账号或修改 valid users。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmbAccountStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化认证、Origin/CSRF、准入限流、配置、代际冲突或外部操作错误；失败不证明变更未发生。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmbAccountSelectionRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": false,
+            "description": "使用 zxs_session cookie 时必填；与当前会话派生值精确匹配。Bearer 认证不要求此头。",
+            "schema": {
+              "$ref": "#/components/schemas/AuthenticationToken"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "cookie 变更请求必须携带并精确匹配部署 origin；Bearer 请求若携带也须匹配。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/smb/password": {
+      "post": {
+        "operationId": "changeSmbPassword",
+        "description": "只允许非 root 服务使用固定本机 Samba 客户端修改当前绑定账号密码，客户端不可带 setuid/setgid。提交受绑定代际、当前会话和有界执行限制。外部失败或超时返回非自动重试的结果未知错误，必须核实有效密码；重复提交不具备操作幂等性。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmbPasswordChangeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化认证、Origin/CSRF、准入限流、配置、代际冲突或外部操作错误；失败不证明变更未发生。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmbPasswordChangeRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": false,
+            "description": "使用 zxs_session cookie 时必填；与当前会话派生值精确匹配。Bearer 认证不要求此头。",
+            "schema": {
+              "$ref": "#/components/schemas/AuthenticationToken"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "cookie 变更请求必须携带并精确匹配部署 origin；Bearer 请求若携带也须匹配。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -12954,6 +13096,9 @@
           },
           "note": {
             "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/DiskHealth"
           }
         },
         "required": [
@@ -12967,7 +13112,8 @@
           "device_path",
           "filesystem_uuid",
           "mapping",
-          "note"
+          "note",
+          "health"
         ],
         "additionalProperties": false,
         "description": "只读身份展示；root_path是ZXS登记目录，mount_path为实际挂载目录，filesystem_uuid仅为文件系统UUID。容量为唯一可关联整块设备或NVMe命名空间字节数，不是文件系统可用量。未知字段为null，不影响存储准入。note是独立系统盘的普通文本备注。"
@@ -13033,6 +13179,212 @@
         ],
         "additionalProperties": false,
         "description": "management_root/disk-notes/<disk_id>.json当前持久化格式；不写入data disk.json或核心日志，非灾备副本。"
+      },
+      "DiskHealth": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "unavailable"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "mapping_unknown",
+                  "multiple_devices",
+                  "unsupported_device",
+                  "tool_missing",
+                  "permission_denied",
+                  "device_changed",
+                  "busy",
+                  "timed_out",
+                  "low_power",
+                  "query_failed",
+                  "invalid_output",
+                  "incomplete_output"
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "smart"
+              },
+              "observed_at_unix_ms": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "device_path": {
+                "type": "string"
+              },
+              "assessment": {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "warning",
+                  "failed"
+                ]
+              },
+              "temperature_celsius": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              },
+              "power_on_hours": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UInt64"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "observed_at_unix_ms",
+              "device_path",
+              "assessment",
+              "temperature_celsius",
+              "power_on_hours"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "本次设备报告，不是健康保证或副本独立性证明；无总体 SMART 结果返回 unavailable，不能由退出码零推断通过。"
+      },
+      "SmbPasswordChangeAvailability": {
+        "type": "string",
+        "enum": [
+          "available",
+          "client_unavailable",
+          "unsupported_account_name",
+          "requires_unprivileged_service"
+        ]
+      },
+      "SmbAccountStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "disabled"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "configured"
+              },
+              "username": {
+                "type": "string"
+              },
+              "generation": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "password_change": {
+                "$ref": "#/components/schemas/SmbPasswordChangeAvailability"
+              }
+            },
+            "required": [
+              "state",
+              "username",
+              "generation",
+              "candidates",
+              "password_change"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "已提交的 ZXS SMB 单一绑定及改密客户端前置条件。候选由部署者显式预置，最多 16 个；该响应不证明 smbd 在线或 Unix/passdb/各共享 valid users 配置一致。"
+      },
+      "SmbAccountSelectionRequest": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "必须匹配服务端已预置候选；不接受创建或重命名账户。"
+          },
+          "expected_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "administrator_password": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true,
+            "description": "当前 Web 管理员密码，1–1024 个 UTF-8 字节；字符数不能替代字节上限。"
+          }
+        },
+        "required": [
+          "username",
+          "expected_generation",
+          "administrator_password"
+        ],
+        "additionalProperties": false,
+        "description": "严格 JSON 请求，最多 16384 字节。提交点重新检查当前 Web 会话、密码证明及绑定代际。"
+      },
+      "SmbPasswordChangeRequest": {
+        "type": "object",
+        "properties": {
+          "expected_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "current_password": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true,
+            "description": "当前 SMB 密码，1–255 个 UTF-8 字节且不能包含 Unicode 控制字符；不按字符数代替字节上限。"
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true,
+            "description": "新 SMB 密码，1–255 个 UTF-8 字节且不能包含 Unicode 控制字符，另受 Samba 策略约束。"
+          }
+        },
+        "required": [
+          "expected_generation",
+          "current_password",
+          "new_password"
+        ],
+        "additionalProperties": false,
+        "description": "严格 JSON 请求，最多 4096 字节；只修改所选生效账号的独立 Samba 密码，不修改 Web 密码。"
+      },
+      "SmbPasswordChangeResponse": {
+        "type": "object",
+        "properties": {
+          "changed": {
+            "const": true
+          }
+        },
+        "required": [
+          "changed"
+        ],
+        "additionalProperties": false,
+        "description": "本机 Samba 改密客户端成功退出后返回；不保证已建立的 SMB 连接立即失效，不撤销 Web 会话。"
       }
     }
   }

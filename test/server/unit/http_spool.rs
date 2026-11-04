@@ -660,6 +660,7 @@ async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending(
         config.clone().admit().unwrap(),
         runtime.telemetry,
         spool.clone(),
+        runtime.smb_account,
     )
     .unwrap();
     let (started, waiting) = tokio::sync::oneshot::channel();

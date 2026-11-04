@@ -13,6 +13,9 @@ fn record(slot: &str, disk_id: &str, note: &str) -> DiskDetailsRecord {
         device_path: None,
         filesystem_uuid: None,
         mapping: DiskMapping::Unknown,
+        health: storage_contract::disk_details::DiskHealth::Unavailable {
+            reason: storage_contract::disk_details::DiskHealthUnavailable::MappingUnknown,
+        },
         note: note.into(),
     }
 }
@@ -512,4 +515,174 @@ fn disk_refresh_pending_covers_details_and_stops_on_success_or_error() {
             assert!(state.with_untracked(can_load));
         });
     }
+}
+
+#[test]
+fn each_directory_keeps_its_own_health_result_and_a_failed_refresh_preserves_only_last_observation()
+{
+    use storage_contract::disk_details::{DiskHealth, DiskHealthAssessment, DiskHealthUnavailable};
+    Owner::new().with(|| {
+        let state = RwSignal::new(ready_state());
+        let mut one = record("P01", "disk-one", "original");
+        one.mapping = DiskMapping::Single;
+        one.health = DiskHealth::Smart {
+            observed_at_unix_ms: 1_700_000_000_000,
+            device_path: "/dev/sda".into(),
+            assessment: DiskHealthAssessment::Failed,
+            temperature_celsius: Some(55),
+            power_on_hours: None,
+        };
+        let mut two = record("B01", "disk-two", "second");
+        two.mapping = DiskMapping::Multiple;
+        two.health = DiskHealth::Unavailable {
+            reason: DiskHealthUnavailable::MultipleDevices,
+        };
+        state.update(|s| {
+            s.admin_console.disks.cards.insert(
+                "B01".into(),
+                Card {
+                    disk_id: "disk-two".into(),
+                    generation: 2,
+                    loading: true,
+                    ..Default::default()
+                },
+            );
+        });
+        complete_details(state, 7, "P01", 5, Ok(one.clone()));
+        complete_details(state, 7, "B01", 2, Ok(two.clone()));
+        state.with_untracked(|s| {
+            assert_eq!(
+                s.admin_console.disks.cards["P01"].details.as_deref(),
+                Some(&one)
+            );
+            assert_eq!(
+                s.admin_console.disks.cards["B01"].details.as_deref(),
+                Some(&two)
+            );
+        });
+        let (_, generation) = state
+            .try_update(|s| begin_details(s, "P01"))
+            .flatten()
+            .unwrap();
+        complete_details(state, 7, "P01", generation, Err(error(503)));
+        state.with_untracked(|s| {
+            let first = &s.admin_console.disks.cards["P01"];
+            assert_eq!(first.details.as_deref(), Some(&one));
+            assert_eq!(first.error.as_ref().unwrap().status, 503);
+            assert_eq!(
+                s.admin_console.disks.cards["B01"].details.as_deref(),
+                Some(&two)
+            );
+        });
+    });
+}
+
+#[test]
+fn bulk_details_are_planned_once_and_keep_the_refresh_fence_until_the_last_card() {
+    Owner::new().with(|| {
+        let mut initial = ready_state();
+        initial.admin_console.disks.loading = true;
+        initial.admin_console.disks.generation = 4;
+        let state = RwSignal::new(initial);
+        let slots = complete_list(
+            state,
+            7,
+            4,
+            Ok(BTreeMap::from([
+                ("P01".into(), "disk-one".into()),
+                ("B01".into(), "disk-two".into()),
+                ("C01".into(), "disk-three".into()),
+            ])),
+        )
+        .unwrap();
+        assert_eq!(slots, ["B01", "C01", "P01"]);
+        for slot in slots {
+            assert!(state.with_untracked(|s| current_list(s, 7, 4)));
+            assert!(state.with_untracked(refreshing));
+            let (epoch, generation) = state
+                .try_update(|s| begin_details(s, &slot))
+                .flatten()
+                .unwrap();
+            assert_eq!(
+                state.with_untracked(|s| s
+                    .admin_console
+                    .disks
+                    .cards
+                    .values()
+                    .filter(|card| card.loading)
+                    .count()),
+                1
+            );
+            let id = state.with_untracked(|s| s.admin_console.disks.cards[&slot].disk_id.clone());
+            complete_details(state, epoch, &slot, generation, Ok(record(&slot, &id, "")));
+            assert!(
+                state.with_untracked(refreshing),
+                "the bulk owner survives gaps between cards"
+            );
+        }
+        state.update(|s| finish_list(s, 7, 4));
+        assert!(!state.with_untracked(refreshing));
+        state.update(|s| {
+            s.admin_console.disks.loading = true;
+            s.admin_console.disks.generation = 5;
+        });
+        assert!(!state.with_untracked(|s| current_list(s, 7, 4)));
+        state.update(|s| finish_list(s, 7, 4));
+        assert!(
+            state.with_untracked(refreshing),
+            "an old bulk owner cannot release a newer read"
+        );
+    });
+}
+
+#[test]
+fn note_save_invalidates_display_but_not_the_in_flight_device_query_slot() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(ready_state());
+        edit(state, "P01");
+        change_note(state, "P01", "new note".into());
+        let (epoch, generation) = state
+            .try_update(|s| begin_details(s, "P01"))
+            .flatten()
+            .unwrap();
+        let (_, owner, _) = state
+            .try_update(|s| begin_save(s, "P01"))
+            .flatten()
+            .unwrap();
+        complete_save(
+            state,
+            epoch,
+            "P01",
+            owner,
+            Ok(DiskNoteResponse {
+                slot_id: "P01".into(),
+                disk_id: "disk-one".into(),
+                note: "new note".into(),
+            }),
+        );
+        assert!(state.with_untracked(refreshing));
+        assert!(
+            state
+                .try_update(|s| begin_details(s, "P01"))
+                .flatten()
+                .is_none()
+        );
+        complete_details(
+            state,
+            epoch,
+            "P01",
+            generation,
+            Ok(record("P01", "disk-one", "old note")),
+        );
+        assert!(!state.with_untracked(refreshing));
+        assert_eq!(
+            state.with_untracked(|s| s.admin_console.disks.cards["P01"]
+                .details
+                .as_ref()
+                .unwrap()
+                .note
+                .clone()),
+            "new note"
+        );
+    });
 }
