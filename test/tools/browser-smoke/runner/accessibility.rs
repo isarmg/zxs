@@ -128,7 +128,7 @@ fn check(browser: &Browser) -> Result<()> {
 /// Observe real text controls without adding, disabling or restyling product DOM.
 pub(super) fn input_surfaces(browser: &Browser) -> Result<()> {
     wait_for(
-        "native text fields have only a dashed underline and no stale G4 paint",
+        "native text fields follow their scoped line and focus policy with no stale G4 paint",
         || {
             let evidence = browser.script(include_str!("input_surfaces.js"))?;
             if evidence["valid"] == true {

@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn historical_merge_inputs_require_explicit_source_and_current_head() {
+    let source =
+        json_codec::json!({"branch_id":"branch","source_node_id":"old","expected_node_id":"head"});
+    assert!(
+        decode_strict::<crate::FileHistoryMergeInput>(&json_codec::to_vec(&source).unwrap())
+            .is_ok()
+    );
+    for invalid in [
+        json_codec::json!(["branch", "old", "head"]),
+        json_codec::json!({"branch_id":"branch","expected_node_id":"head"}),
+        json_codec::json!({"branch_id":"branch","source_node_id":"old","expected_node_id":"head","extra":0}),
+    ] {
+        assert!(json_codec::from_value::<crate::FileHistoryMergeInput>(invalid).is_err());
+    }
+}
+
+#[test]
 fn named_wire_records_require_objects_at_every_nesting_level() {
     let merge = json_codec::json!({"branch_id":"branch", "expected_node_id":"node"});
     assert!(decode_strict::<crate::FileMergeInput>(&json_codec::to_vec(&merge).unwrap()).is_ok());

@@ -58,6 +58,47 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
         panic!("node request must produce a node page");
     };
     assert_eq!(nodes.len(), 2);
+    let directory = storage_engine::directory_history::DirectoryHistoryRequest::parse(
+        &repository.repository_id,
+        &repository.repository_id,
+        storage_engine::directory_history::DirectoryHistoryCollection::Nodes,
+        std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+    let directory = engine
+        .capture_directory_history(directory, HistoryWindowCancellation::new())
+        .unwrap()
+        .page()
+        .unwrap();
+    assert!(
+        directory.nodes.len() >= 3,
+        "root scope plus two writes are real directory snapshots"
+    );
+    let ids = directory
+        .nodes
+        .iter()
+        .map(|node| node.tree_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let edges = directory
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            node.parent_tree_id
+                .as_deref()
+                .map(|parent| (parent, node.tree_id.as_str()))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        edges.len() >= 2,
+        "the browser fixture must exercise actual SVG parent edges"
+    );
+    assert!(edges.iter().all(|(parent, _)| ids.contains(parent)));
+    for node in &directory.nodes {
+        assert_eq!(
+            node.parent_tree_id,
+            engine.state().directory_trees[&node.tree_id].parent_tree_id
+        );
+    }
     let HistoryWindowPage::Branches { branches, page, .. } = engine
         .capture_history_window(
             HistoryWindowRequest {

@@ -1,7 +1,7 @@
 use super::*;
 use web_interface::components::{Select, SelectOption};
 
-const SELECTED_ROWS: usize = super::super::page::PAGE_SIZE;
+pub(super) const SELECTED_ROWS: usize = super::super::page::PAGE_SIZE;
 
 fn cancel(state: &mut State, instance: u64) {
     if !actions::pending(state)
@@ -20,7 +20,7 @@ fn cancel(state: &mut State, instance: u64) {
     }
 }
 
-fn move_selected_page(state: RwSignal<State>, instance: u64, next: bool) {
+pub(super) fn move_selected_page(state: RwSignal<State>, instance: u64, next: bool) {
     state.update(|s| {
         if let Some(draft) = s
             .files
@@ -28,7 +28,7 @@ fn move_selected_page(state: RwSignal<State>, instance: u64, next: bool) {
             .as_mut()
             .filter(|draft| draft.instance == instance)
         {
-            if next && (draft.selected_page + 1) * SELECTED_ROWS < draft.selected.len() {
+            if next && (draft.selected_page + 1) * SELECTED_ROWS < draft.input_count() {
                 draft.selected_page += 1;
             } else if !next && draft.selected_page > 0 {
                 draft.selected_page -= 1;
@@ -68,7 +68,9 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 .unwrap_or_default()
         })
     });
-    let disabled = Signal::derive(move || state.with(|s| !actions::history_write_allowed(s)));
+    let disabled = Signal::derive(move || {
+        state.with(|s| !actions::history_write_allowed(s) || actions::history_aux_loading(s))
+    });
     let navigation_disabled =
         Signal::derive(move || state.with(|s| !actions::history_navigation_ready(s)));
     let review_needed = Signal::derive(move || {
@@ -85,7 +87,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 .file_history
                 .nodes()
                 .iter()
-                .filter(|node| node.visible_content())
+                .filter(|node| result_available(node))
                 .enumerate()
                 .map(|(index, node)| SelectOption::new(node.id(), node_label(node, index)))
                 .collect::<Vec<_>>();
@@ -163,7 +165,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     <h3 class="zxs-row">{t("合并文件分支","Merge file branches")}</h3>
                     <button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|state.update(|s|cancel(s,instance))>{t("取消","Cancel")}</button>
                 </div>
-                <p class="zxs-row">{t("保留分支采用结果节点，其余参与分支保留原节点并变为只读别名。可分页浏览本文件任一历史节点；换页不会清除所选依据。","The surviving branch adopts the result node; other selected branches retain their nodes as read-only aliases. Browse any history node of this file across pages; page changes preserve selected bases.")}</p>
+                <Show when=move ||state.with(|s|s.files.merge.as_ref().is_some_and(|draft|!draft.historical()))><p class="zxs-row">{t("保留分支采用结果节点，其余参与分支保留原节点并变为只读别名。可分页浏览本文件任一历史节点；换页不会清除所选依据。","The surviving branch adopts the result node; other selected branches retain their nodes as read-only aliases. Browse any history node of this file across pages; page changes preserve selected bases.")}</p></Show>
                 <Show when=move ||review_needed.get()>
                     <p class="zxs-row" role="status">{review_required()}</p>
                     <button class="zxs-button" disabled=move ||navigation_disabled.get() on:click=move |_|actions::review_history_merge(state,instance)>{t("读取全部所选依据以重新审阅","Load all selected bases for review")}</button>
@@ -179,6 +181,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                         <button class="zxs-button" disabled=move ||navigation_disabled.get() on:click=move |_|accept_review(state,instance)>{t("接受重新审阅的全部依据","Accept every reviewed base")}</button>
                     </div>
                 </Show>
+                <Show when=move ||state.with(|s|s.files.merge.as_ref().is_some_and(Draft::historical))>{graph::view(state,instance)}</Show>
+                <Show when=move ||state.with(|s|s.files.merge.as_ref().is_some_and(|draft|!draft.historical()))>
                 <fieldset class="zxs-review-choices">
                     <legend class="zxs-row">{t("本页可写分支","Writable branches on this page")}</legend>
                     {move ||branches.get().into_iter().map(move |branch|{
@@ -213,8 +217,9 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     <label class="zxs-form-field"><span class="zxs-row">{t("精确历史节点 ID","Exact history node ID")}</span><input class="zxs-input zxs-input--compact" aria-label=t("精确历史节点 ID","Exact history node ID") maxlength=256 prop:value=move ||state.with(|s|s.files.merge.as_ref().map(|draft|draft.anchor.clone()).unwrap_or_default()) on:input=move |event|state.update(|s|{if let Some(draft)=s.files.merge.as_mut().filter(|draft|draft.instance==instance){draft.anchor=event_target_value(&event);}})/></label>
                     <button class="zxs-button" disabled=move ||navigation_disabled.get() on:click=move |_|{let id=state.with_untracked(|s|s.files.merge.as_ref().map(|draft|draft.anchor.trim().to_owned()).unwrap_or_default());if !id.is_empty(){actions::anchor_history_node(state,id);}}>{t("定位节点","Locate node")}</button>
                 </div>
+                </Show>
                 <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|review::error_text(s,review::Kind::Merge))}</p>
-                <button class="zxs-button" disabled=move ||disabled.get()||review_needed.get() on:click=move |_|submit(state,instance)>{t("确认合并所选分支","Confirm merge of selected branches")}</button>
+                <button class="zxs-button" disabled=move ||disabled.get()||review_needed.get()||state.with(|s|s.files.merge.as_ref().is_none_or(|draft|!draft.ready_to_submit())) on:click=move |_|submit(state,instance)>{move ||state.with(|s|if s.files.merge.as_ref().is_some_and(Draft::historical){t("确认创建合并分支","Create merged branch")}else{t("确认合并所选分支","Confirm merge of selected branches")})}</button>
             </section>
         }}/>
     }

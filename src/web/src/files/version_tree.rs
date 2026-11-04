@@ -4,7 +4,7 @@ use super::{
     actions, branch,
     history::{FileNode, NodeKind, ParentEndpoint, ParentSet},
     history_index::HistoryIndex,
-    inline,
+    inline, merge,
     model::Model,
 };
 use crate::ui::State;
@@ -724,6 +724,52 @@ fn window(state: RwSignal<State>) -> impl IntoView {
     }
 }
 
+/// Reuse only the ancestry layout and measured connector geometry. Directory
+/// callers supply their own real tree identities and cards, never FileNodes.
+pub(super) fn ancestry_graph<N>(
+    records: Memo<Vec<(String, u64, Vec<String>)>>,
+    render: impl Fn(String) -> N + Copy + Send + Sync + 'static,
+) -> impl IntoView
+where
+    N: IntoView + 'static,
+{
+    let tree = Memo::new(move |_| {
+        let versions = records
+            .get()
+            .into_iter()
+            .map(|(id, sequence, parents)| Version {
+                id,
+                sequence,
+                parents,
+            })
+            .collect::<Vec<_>>();
+        layout(&versions)
+    });
+    let geometry = RwSignal::new(Geometry::default());
+    let root = NodeRef::<html::Div>::new();
+    let links = NodeRef::<svg::Svg>::new();
+    observe(root, links, tree, geometry);
+    view! {
+        <div class="zxs-version-tree-scroll" aria-label=t("目录分支树","Folder branch tree")>
+            <div class="zxs-version-tree-canvas" node_ref=root>
+                <svg node_ref=links class="zxs-version-tree-links" aria-hidden="true" focusable="false"
+                    viewBox=move ||geometry.with(|g|format!("0 0 {} {}",g.width.max(1.),g.height.max(1.))) preserveAspectRatio="none">
+                    <defs><marker id="zxs-directory-arrow" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 Z"/></marker></defs>
+                    <For each=move ||geometry.with(|g|g.paths.keys().cloned().collect::<Vec<_>>()) key=|edge|edge.clone() children=move |(parent,child)| {
+                        let key=StoredValue::new((parent.clone(),child.clone()));
+                        view!{<path class="zxs-version-tree-edge" data-parent-tree=parent data-child-tree=child d=move ||geometry.with(|g|key.with_value(|key|g.path(key))) marker-end="url(#zxs-directory-arrow)" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>}
+                    }/>
+                </svg>
+                <For each=move ||tree.with(|tree|tree.levels.iter().enumerate().map(|(depth,ids)|(depth,ids.clone())).collect::<Vec<_>>()) key=|level|level.0 children=move |(depth,_)| {
+                    view!{<div class="zxs-version-tree-level" data-version-depth=depth.to_string()>
+                        <For each=move ||tree.with(|tree|tree.levels.get(depth).cloned().unwrap_or_default()) key=|id|id.clone() children=render/>
+                    </div>}
+                }/>
+            </div>
+        </div>
+    }
+}
+
 fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String) -> impl IntoView {
     let id = StoredValue::new(version_id);
     let version = Memo::new(move |_| {
@@ -784,6 +830,7 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
                 <Show when=move ||can_modify.get() fallback=move ||view!{<span class="zxs-row">{t("只读","Read only")}</span>}>
                 <button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|super::tags::edit_node(state,id.get_value())>{t("编辑标签","Edit tags")}</button>
                 {branch::control(state,t("创建分支","Create branch"),branch::Target::HistoryNode(id.get_value()),disabled)}
+                {merge::node_control(state,id.get_value())}
                 </Show>
             </div>
             <div class="zxs-version-parents zxs-stack">

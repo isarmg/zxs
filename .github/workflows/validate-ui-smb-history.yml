@@ -1,0 +1,196 @@
+name: UI SMB and history validation batch
+
+on:
+  push:
+    branches: [validation/ui-smb-history-20261104]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-ui-smb-history-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  static:
+    name: Batch source governance and tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bind validation to the pushed commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Check source governance and tooling regressions
+        run: bash .github/scripts/check.sh static
+
+  rust-http:
+    name: Affected native Rust and real HTTP
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Format affected Rust packages
+        run: cargo fmt -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p smb-vfs -p browser-smoke -- --check
+      - name: Check affected native targets and no-core server
+        run: |
+          cargo clippy --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol --all-targets -- -D warnings
+          cargo clippy --locked --offline -p storage-server --no-default-features --all-targets -- -D warnings
+      - name: Exercise engine, server, client and wire unit contracts
+        run: cargo test --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract --lib
+      - name: Exercise history integration and real HTTP routes
+        run: |
+          cargo test --locked --offline -p storage-engine --test branch_alias_operations
+          cargo test --locked --offline -p storage-server --test http_engine
+      - name: Check changed wire contracts and SMB feature combinations
+        run: |
+          bash .github/scripts/check.sh contracts
+          bash .github/scripts/check.sh smb-protocol
+          python3 .github/scripts/check-smb-budget-io.py
+
+  web-tests:
+    name: Affected Web state and style contracts
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain and WASM target
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - name: Check Web source formatting and release WASM lint
+        run: |
+          cargo fmt -p web-app -p web-interface -- --check
+          cargo clippy --locked --offline -p web-app --target wasm32-unknown-unknown --release -- -D warnings
+      - name: Exercise login, history and shared style contracts
+        run: cargo test --locked --offline -p web-app -p web-interface
+
+  web-production:
+    name: Exact-head production WASM for browser validation
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain and WASM target
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - name: Cache locally compiled Rust build helpers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/rust-build-tools
+          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
+          restore-keys: |
+            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build production Web distribution
+        run: bash .github/scripts/check.sh web-production
+      - name: Retain production assets for this exact run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-dist
+          path: build/web/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain generated browser template fixture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: csr-template-fixture
+          path: target/csr-template-check/output/
+          if-no-files-found: error
+          retention-days: 7
+
+  browser-smoke:
+    name: Real Chrome with production WASM and host server
+    needs: web-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ZXS_REQUIRE_BROWSER: '1'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Fetch production Web assets from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist
+          path: build/web
+      - name: Fetch browser template fixture from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: csr-template-fixture
+          path: target/csr-template-check/output
+      - name: Verify sandboxed Chrome and matching ChromeDriver
+        run: |
+          chrome="$(command -v google-chrome)"
+          driver="$(command -v chromedriver)"
+          "$chrome" --version
+          "$driver" --version
+          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
+          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
+          test "$chrome_major" = "$driver_major"
+          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
+          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
+      - name: Install CJK fonts for screenshots
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
+      - name: Exercise real login, setup, monitor, file rows and history flows
+        env:
+          ZXS_SMOKE_SCREENSHOT: artifacts/batch-web.png
+          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
+          ZXS_LOGIN_PREVIEWS: artifacts/login-previews
+        run: bash .github/scripts/check.sh browser-smoke
+      - name: Retain real screenshots and geometry for this batch
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: batch-browser-evidence-${{ github.sha }}
+          path: |
+            artifacts/batch-web.png
+            artifacts/login-previews/
+            artifacts/viewport-previews/
+            artifacts/browser-smoke/diagnostics/*.png
+            artifacts/browser-smoke/diagnostics/*.json
+            target/csr-template-check/output/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  smb-sdk:
+    needs: static
+    uses: ./.github/workflows/smb-sdk.yml

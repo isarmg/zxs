@@ -39,6 +39,23 @@ impl FileBranchMergeRequest<'_> {
     }
 }
 
+pub struct FileHistoryMergeRequest<'a> {
+    pub file_id: &'a str,
+    pub inputs: &'a [storage_contract::FileHistoryMergeInput],
+    pub chosen_node_id: &'a str,
+    pub name: &'a storage_contract::BranchName,
+    pub location: Option<&'a FileLocation>,
+    pub principal: &'a str,
+    pub operation_id: OperationId,
+}
+
+impl FileHistoryMergeRequest<'_> {
+    pub(super) fn body(&self) -> Value {
+        json!({"file_id":self.file_id,"inputs":self.inputs,"chosen_node_id":self.chosen_node_id,
+            "name":self.name.as_str(),"location":self.location})
+    }
+}
+
 /// Only new mutations check the current path. Exact replay is resolved first
 /// by mutate using the complete request body and immutable operation actor.
 pub(super) fn validate_location(

@@ -127,8 +127,45 @@ async fn system_samba_real_engine_fixture() {
         "real engine must run as its private service user"
     );
     let (temp, shared, _backend, branch) = fixture();
-    binding_tests::rebind(&shared, &branch, true);
     let repository = repository(&shared);
+    // Default-share writes add a separate disk-root namespace. Keep all later
+    // revocation operations attached to this exact existing named repository.
+    let rebind = |enabled| {
+        let administrator = identity(&shared);
+        let binding = shared
+            .backend
+            .smb_binding_status(&administrator, &repository)
+            .unwrap();
+        shared
+            .backend
+            .update_smb_binding(
+                &administrator,
+                crate::UpdateSmbBinding {
+                    repository: &repository,
+                    branch: &branch,
+                    enabled,
+                    expected_history_generation: binding.history_generation,
+                    operation: storage_contract::OperationId::generate().unwrap(),
+                },
+            )
+            .unwrap();
+    };
+    rebind(true);
+    let named = shared
+        .backend
+        .repository_snapshot(&identity(&shared), &repository)
+        .unwrap();
+    let (selection_repository, default_main, default_draft) = directory_fixture(&shared);
+    assert_eq!(selection_repository, repository);
+    select_directory(&shared, &repository, &default_draft);
+    {
+        let mut selected = session(shared.clone(), &branch);
+        let (opened, file) = open_file(&mut selected, true);
+        file.write_all_at(b"new", 0).unwrap();
+        selected.dirty(opened.handle).unwrap();
+        selected.close(opened.handle, false).unwrap();
+    }
+    select_directory(&shared, &repository, &default_main);
     let socket = temp.path().join("rpc/smb.sock");
     let config = crate::SmbConfig {
         socket: socket.clone(),
@@ -196,6 +233,7 @@ async fn system_samba_real_engine_fixture() {
         "allowed_peer_uid": 0,
         "socket": socket,
         "repository_id": repository,
+        "default_named_path": format!("{}/{}", named.primary_slot_id, named.name),
         "branch_id": branch,
         "payload": std::str::from_utf8(PAYLOAD).unwrap(),
     });
@@ -205,10 +243,29 @@ async fn system_samba_real_engine_fixture() {
         &json_codec::to_vec(&ready).unwrap(),
     )
     .unwrap();
+    marker(&root, "default-switch", &server).await;
+    select_directory(&shared, &repository, &default_draft);
+    publish_marker(&directory, "default-switched");
+    marker(&root, "default-restore", &server).await;
+    select_directory(&shared, &repository, &default_main);
+    publish_marker(&directory, "default-restored");
     marker(&root, "uploaded", &server).await;
     verify_body(&shared, &branch, "kept.txt", PAYLOAD);
     verify_body(&shared, &branch, "report.txt", b"old");
-    binding_tests::rebind(&shared, &branch, false);
+    let default_root = shared
+        .backend
+        .repositories_snapshot(&identity(&shared))
+        .unwrap()
+        .into_iter()
+        .find(|repository| repository.file_manager_root && repository.primary_slot_id == "P01")
+        .expect("default SMB write did not create its internal root");
+    verify_body(
+        &shared,
+        &default_root.main_branch_id,
+        "default-kept.txt",
+        PAYLOAD,
+    );
+    rebind(false);
     // Replace only this fixture's sole authority: an already-authenticated Alice
     // session must now return Unauthorized/EACCES independently of stale binding.
     crate::lock(&temp.auth).replace_authority(
@@ -222,7 +279,7 @@ async fn system_samba_real_engine_fixture() {
     publish_marker(&directory, "revoked");
     marker(&root, "denied", &server).await;
     crate::lock(&temp.auth).replace_authority(AuthStore::open(&temp.path().join("auth")).unwrap());
-    binding_tests::rebind(&shared, &branch, true);
+    rebind(true);
     publish_marker(&directory, "enabled");
     marker(&root, "done", &server).await;
     let tree = shared
@@ -241,11 +298,26 @@ async fn system_samba_real_engine_fixture() {
         "client did not delete its published file"
     );
     verify_body(&shared, &branch, "report.txt", b"old");
+    assert!(
+        shared
+            .backend
+            .tree_snapshot(
+                &identity(&shared),
+                crate::ReadTree {
+                    branch: &default_root.main_branch_id,
+                    commit: None,
+                }
+            )
+            .unwrap()
+            .entries
+            .is_empty(),
+        "default share did not delete its published file"
+    );
     web_server.abort();
     assert!(web_server.await.unwrap_err().is_cancelled());
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
-    let receipt = json!({"real_engine":true,"published_upload_and_rename_verified":true,"original_body_preserved":true,"old_tree_authority_revoked_then_restored":true,"new_tree_binding_disabled_then_restored":true,"published_delete_verified":true});
+    let receipt = json!({"real_engine":true,"published_upload_and_rename_verified":true,"original_body_preserved":true,"old_tree_authority_revoked_then_restored":true,"new_tree_binding_disabled_then_restored":true,"published_delete_verified":true,"default_namespace_verified":true,"default_branch_switch_verified":true});
     platform_io::fs_safety::AtomicFile::create(
         &directory,
         &platform_io::fs_safety::EntryName::new("verified.json").unwrap(),

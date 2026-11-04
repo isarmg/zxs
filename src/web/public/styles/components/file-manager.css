@@ -13,24 +13,41 @@
 .zxs-inline-edit > .zxs-inline-input,.zxs-inline-branch > .zxs-branch-name { flex: 0 1 16rem; width: min(16rem,100%); }
 .zxs-file-search { flex: 1 1 auto; min-width: 0; max-width: 100%; }
 .zxs-file-list-panel { --zxs-file-row-height: var(--zxs-compact-row-height); --zxs-file-icon-size: 1em; }
-.zxs-file-list-panel .zxs-table-scroll { min-width: 0; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; --zxs-contour-extent: 0px; }
+.zxs-file-list-panel .zxs-table-scroll { container-type: inline-size; --zxs-file-scroll-left: 0px; min-width: 0; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; --zxs-contour-extent: 0px; }
 .zxs-file-table { width: 100%; border-collapse: collapse; text-align: start; }
-.zxs-file-table :is(th,td) { box-sizing: border-box; height: var(--zxs-file-row-height); padding: 0 var(--zxs-list-content-inset); border-block-end: var(--zxs-control-border-width) solid var(--zxs-block-border); font: inherit; font-weight: 400; text-align: inherit; vertical-align: middle; }
+.zxs-file-table :is(th,td) { box-sizing: border-box; height: var(--zxs-file-row-height); padding: 0 var(--zxs-list-content-inset); border: 0; font: inherit; font-weight: 400; text-align: inherit; vertical-align: middle; }
 .zxs-file-table th { color: var(--zxs-block-muted); white-space: nowrap; }
 .zxs-file-table td { white-space: nowrap; }
-.zxs-file-table tbody tr:last-child > td { border-block-end: 0; }
-/* Pagination owns this separator once, including an empty table. */
-.zxs-file-pagination { border-block-start: var(--zxs-control-border-width) solid var(--zxs-block-border); }
-.zxs-file-list-panel:has(.zxs-file-pagination) .zxs-file-table:not(:has(> tbody > tr)) > thead > tr:last-child > th { border-block-end: 0; }
+/* Each line belongs to one row boundary, inset by the shared frame corner.
+ * Absolute decoration keeps native table sizing and hit targets unchanged.
+ * The query container is the visible scrollport, not the wider native table;
+ * one scroll offset keeps the lines and G4 fill anchored to that viewport. */
+.zxs-file-table tr { position: relative; isolation: isolate; }
+/* Clip decoration only. A stale offset during resize must not contribute to
+ * scrollWidth or prevent the native scrollport from clamping back to zero. */
+.zxs-file-row-decoration { display: block; position: absolute; inset: 0; overflow: clip; z-index: -1; pointer-events: none; }
+.zxs-file-row-decoration::after,.zxs-file-pagination::before { position: absolute; inset-inline: var(--zxs-contour-panel); border-block-end: var(--zxs-control-border-width) solid var(--zxs-block-border); pointer-events: none; }
+.zxs-file-row-decoration::after { inset-block-end: 0; left: calc(var(--zxs-file-scroll-left) + var(--zxs-contour-panel)); right: auto; width: calc(100cqw - var(--zxs-contour-panel) * 2); }
+.zxs-file-table:has(> tbody > tr) > thead > tr > th > .zxs-file-row-decoration::after,
+.zxs-file-table > tbody > tr:not(:last-child) > td > .zxs-file-row-decoration::after,
+.zxs-file-pagination::before { content: ""; }
+/* Pagination owns the final line, even for an empty table. The transparent
+ * border retains its original layout height; the inset line paints over it. */
+.zxs-file-pagination { position: relative; border-block-start: var(--zxs-control-border-width) solid transparent; }
+.zxs-file-pagination::before { inset-block-start: calc(0px - var(--zxs-control-border-width)); }
 .zxs-app-shell .zxs-file-table tbody .zxs-button { min-height: calc(var(--zxs-file-row-height) - 2px); height: calc(var(--zxs-file-row-height) - 2px); padding: 0; font-size: inherit; white-space: nowrap; }
 .zxs-file-list-panel .zxs-entry-actions { flex-wrap: nowrap; }
 .zxs-file-table td:first-child { min-width: 10rem; overflow-wrap: anywhere; }
 /* Selection describes the checked batch rows, never the last detail viewed.
  * Touch taps must not leave a sticky emulated hover after navigation. */
 .zxs-file-table tbody tr { background: transparent; }
-.zxs-file-table tr[aria-selected=true] { background: var(--zxs-bg-page); }
+/* A block inside the first cell paints the visible row with shared G4 corners.
+ * Table rows cannot host G4 paint themselves. The layer never clips controls
+ * or intercepts clicks, and only its opacity changes on hover/selection. */
+.zxs-file-row-surface { display: block; position: absolute; inset-block: 0; left: var(--zxs-file-scroll-left); width: 100cqw; pointer-events: none; background: var(--zxs-bg-page); opacity: 0; --zxs-contour-extent: var(--zxs-contour-panel); }
+.zxs-file-table tr[aria-selected=true] > td > .zxs-file-row-decoration > .zxs-file-row-surface { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
-  .zxs-file-table tbody tr:hover { background: var(--zxs-bg-page); }
+  .zxs-file-table tbody tr:hover > td > .zxs-file-row-decoration > .zxs-file-row-surface { opacity: 1; }
 }
 .zxs-disk-table tbody tr[data-online=true] { cursor: pointer; }
 .zxs-file-name { width: 100%; max-width: min(24rem,100%); }

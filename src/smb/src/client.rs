@@ -432,21 +432,44 @@ impl WriteSequence {
 }
 
 impl Client {
+    pub fn connect_default(socket: &Path, username: &str) -> io::Result<Self> {
+        crate::protocol::validate_username(username)?;
+        Self::connect_default_stream(UnixStream::connect(socket)?, username)
+    }
+    fn connect_default_stream(stream: UnixStream, username: &str) -> io::Result<Self> {
+        Self::negotiate(
+            stream,
+            Request::HelloDefault {
+                protocol: PROTOCOL.into(),
+                capabilities: REQUIRED_CAPABILITIES
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect(),
+                username: username.into(),
+            },
+        )
+    }
     pub fn connect(socket: &Path, username: &str, repository_id: &str) -> io::Result<Self> {
         crate::protocol::validate_username(username)?;
         Self::connect_stream(UnixStream::connect(socket)?, username, repository_id)
     }
     fn connect_stream(stream: UnixStream, username: &str, repository_id: &str) -> io::Result<Self> {
+        Self::negotiate(
+            stream,
+            Request::Hello {
+                protocol: PROTOCOL.into(),
+                capabilities: REQUIRED_CAPABILITIES
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect(),
+                username: username.into(),
+                repository_id: repository_id.into(),
+            },
+        )
+    }
+    fn negotiate(stream: UnixStream, hello: Request) -> io::Result<Self> {
         let client = Self(Arc::new(Mutex::new(Some(FrameStream::new(stream)?))));
-        let result = client.call(Request::Hello {
-            protocol: PROTOCOL.into(),
-            capabilities: REQUIRED_CAPABILITIES
-                .iter()
-                .map(|value| (*value).into())
-                .collect(),
-            username: username.into(),
-            repository_id: repository_id.into(),
-        })?;
+        let result = client.call(hello)?;
         if result.get("protocol").and_then(Value::as_str) != Some(PROTOCOL)
             || !result
                 .get("capabilities")

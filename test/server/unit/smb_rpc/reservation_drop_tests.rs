@@ -44,3 +44,48 @@ fn reservation_drop_releases_only_its_operation() {
         BTreeSet::from([other])
     );
 }
+
+#[test]
+fn namespace_admission_keeps_operation_reserved_until_budget_cleanup_finishes() {
+    for unwind in [false, true] {
+        let (_temp, shared, _backend, _branch) = super::super::tests::fixture();
+        let identity = shared.auth.sole_identity().unwrap();
+        let operation_id = OperationId::generate().unwrap();
+        let admission = NamespaceAdmission::acquire(&shared, &identity, operation_id).unwrap();
+        let record = shared.spool.join(format!("{operation_id}.budget.json"));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let worker = {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                budget::persist::pause_at(budget::persist::Point::BeforeRemove, barrier);
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _admission = admission;
+                    if unwind {
+                        panic!("unwind namespace admission");
+                    }
+                }))
+            })
+        };
+        barrier.wait();
+        // The real lease is cleaning up its durable record. A concurrent
+        // request must still fail at the operation registry, not race into the
+        // charged budget source and report SmbSpoolUnavailable.
+        let conflict = OperationReservation::acquire(&shared, operation_id)
+            .err()
+            .map(|error| error.code);
+        let retained = record.try_exists();
+        // Release cleanup before assertions so a regression cannot strand it.
+        barrier.wait();
+        let dropped = worker.join().unwrap();
+        assert_eq!(dropped.is_err(), unwind);
+        assert_eq!(
+            conflict,
+            Some(storage_contract::ErrorCode::RecoveryRequired)
+        );
+        assert!(retained.unwrap());
+        assert!(!record.try_exists().unwrap());
+        let next = NamespaceAdmission::acquire(&shared, &identity, operation_id).unwrap();
+        drop(next);
+        assert!(!record.try_exists().unwrap());
+    }
+}

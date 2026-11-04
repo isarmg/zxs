@@ -663,6 +663,15 @@ impl Backend for EngineBackend {
         let current = current_protected_identity(&engine, identity)?;
         Ok(engine.workspace_capacity(&current.principal))
     }
+    fn resolve_smb_path(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        file_manager::resolve_smb_path(&mut engine, &current, request)
+    }
     fn smb_binding_status(
         &self,
         identity: &crate::auth::Identity,
@@ -967,6 +976,18 @@ impl Backend for EngineBackend {
             .expect("invariant: service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         application::Application::new(&mut engine, &current).merge_file_branches(request)
+    }
+    fn merge_file_history(
+        &self,
+        identity: &Identity,
+        request: crate::MergeFileHistory,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        application::Application::new(&mut engine, &current).merge_file_history(request)
     }
     fn update_file_node_tags(
         &self,
@@ -1397,6 +1418,56 @@ impl Backend for EngineBackend {
                 },
             ),
         })
+    }
+    fn file_history_source(
+        &self,
+        identity: &Identity,
+        request: storage_contract::file_history_merge::FileHistorySourceRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::file_history_merge::FileHistorySource, ApiError> {
+        let read = {
+            let engine = self
+                .engine
+                .lock()
+                .expect("invariant: service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            engine
+                .capture_file_history_source(request, cancellation)
+                .map_err(error)?
+        };
+        let result = read.source().map_err(error);
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        engine.recheck_file_history_source(&read).map_err(error)?;
+        result
+    }
+    fn directory_history(
+        &self,
+        identity: &Identity,
+        request: storage_contract::directory_history::DirectoryHistoryRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, ApiError> {
+        let read = {
+            let engine = self
+                .engine
+                .lock()
+                .expect("invariant: service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            engine
+                .capture_directory_history(request, cancellation)
+                .map_err(error)?
+        };
+        let page = read.page().map_err(error);
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        engine.recheck_directory_history(&read).map_err(error)?;
+        page
     }
     fn history_window(
         &self,

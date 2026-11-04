@@ -39,3 +39,20 @@ impl From<SmbBindingStatus> for SmbBindingResponse {
         }
     }
 }
+
+/// A displayed primary-disk path; the share root and disk roots are virtual.
+pub struct ResolveSmbPath {
+    pub slot_id: String,
+    pub path: name_policy::LookupPath,
+    pub intent: SmbPathIntent,
+}
+#[derive(Debug)]
+pub enum SmbPathIntent {
+    Lookup,
+    CreateFile,
+    CreateDirectory(storage_contract::OperationId),
+}
+pub struct SmbPathLocation {
+    pub repository: storage_contract::Repository,
+    pub relative_path: String,
+}

@@ -3,8 +3,10 @@
 pub mod api_path;
 pub mod client_protocol;
 mod content_hash;
+pub mod directory_history;
 pub mod disk_details;
 pub mod encoding;
+pub mod file_history_merge;
 pub mod history_window;
 mod integer_json;
 pub mod smb_account;

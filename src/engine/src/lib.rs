@@ -17,7 +17,7 @@ mod disk;
 mod engine;
 mod file_stamp;
 mod historical_save;
-pub use engine::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
+pub use engine::{DirectoryHistoryRead, PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod history_package;
 mod journal;
 #[cfg(feature = "fault-injection")]
@@ -32,19 +32,20 @@ mod state_projection;
 mod wire;
 pub use business::{
     DirectoryBranchPreview, DirectoryDefaultSelection, FileBranchMergeRequest,
-    FileDefaultSelection, FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest,
-    NamespaceTree, PreparedUpload, UploadPreparation, validate_branch_name,
+    FileDefaultSelection, FileHistoryMergeRequest, FileNodeProjectionRequest, FileNodeSummary,
+    FileNodeTagsUpdateRequest, NamespaceTree, PreparedUpload, UploadPreparation,
+    validate_branch_name,
 };
 pub use degraded_recovery::RecoveryPlan;
 pub use disk::{offline_check, offline_export};
 pub use engine::{
     ContentReadPlan, DiskObservation, DiskObservationFailure, DiskObservationPlan,
-    DiskObservationStage, Engine, HistoryWindowCancellation, HistoryWindowRead, IndexFailure,
-    IndexFailureStage, IndexHealth, IntegrityScrubArea, IntegrityScrubBatch,
-    IntegrityScrubBatchAdmission, IntegrityScrubCancellation, IntegrityScrubCompletion,
-    IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport,
-    IntegrityScrubSchedule, IntegrityScrubTarget, MetadataMemberProbe, MetadataView,
-    ObservedDiskStatus, OpenedContent, OperationReadObservation, OperationReadPlan,
+    DiskObservationStage, Engine, FileHistorySourceRead, HistoryWindowCancellation,
+    HistoryWindowRead, IndexFailure, IndexFailureStage, IndexHealth, IntegrityScrubArea,
+    IntegrityScrubBatch, IntegrityScrubBatchAdmission, IntegrityScrubCancellation,
+    IntegrityScrubCompletion, IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan,
+    IntegrityScrubReport, IntegrityScrubSchedule, IntegrityScrubTarget, MetadataMemberProbe,
+    MetadataView, ObservedDiskStatus, OpenedContent, OperationReadObservation, OperationReadPlan,
     OperationRecord, RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure,
     RecoveryWarnings, RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory,
     WorkspaceInventoryRecord, WorkspaceReadPlan,

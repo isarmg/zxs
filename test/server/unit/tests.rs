@@ -182,6 +182,13 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn resolve_smb_path(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn smb_binding_status(
         &self,
         _identity: &crate::auth::Identity,
@@ -1459,6 +1466,13 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             identity: &crate::auth::Identity,
         ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
             self.delegate.workspace_capacity(identity)
+        }
+        fn resolve_smb_path(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ResolveSmbPath,
+        ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+            self.delegate.resolve_smb_path(identity, request)
         }
         fn smb_binding_status(
             &self,

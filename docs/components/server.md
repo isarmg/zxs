@@ -427,3 +427,7 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 ### 传输与 SMB 资源异常析构
 
 传输 permit、上传 claim、SMB 文件占用及 namespace 操作占用的析构不恢复中毒登记表：保留原占用及中毒围栏并记录异常，不由析构发布、Abort 或删除工作正文／持久化证据。传输计数异常使用明确失败状态停止新准入，不归零。HTTP 连接登记表中毒时只允许关闭全部已登记 socket；响应流中毒时只允许取走正文资源并取消计时器，不恢复轮询。清理策略不取代原存储任务的完成等待，也不扩大普通请求的中毒恢复权限。
+
+历史节点合并使用 `POST /api/file-manager/files/{file}/merge-history`（客户端 `merge_file_history`）。输入为 `{branch_id,source_node_id,expected_node_id}`，可选择同一分支的不同历史节点，包括只读合并别名；`chosen_node_id` 选择同文件结果，`name` 明确新结果分支名，`confirmed:true` 明确提交。一次 mutation 派生并合并新分支，全部原分支、较新 head 和当前路径引用保持不变；不自动切换默认分支、不复制正文。辅助分支以 operation ID 和输入序号稳定命名，冲突原子拒绝。客户端便捷方法不发送位置条件；需要路径约束时通过 `request` 成对发送 repository_id/path。重试保持全部输入与 operation_id，详见[历史节点合并](../15-api-and-errors.md#历史节点合并)。
+
+目录详情树使用 `GET /api/repositories/{repo}/directories/{directory}/history` 与 `/history/branches`。两路只读、禁止自动初始化 scope，使用共享 DTO 校验、取消 token、response 持有 admission permit、查询前后当前权限和 root 重查。默认 64、最大 128 行，1 MiB JSON 上限。目录身份为 entry_id（根为 repo ID），不是显示路径；只读备份也能查看。详见[目录只读历史窗口](../15-api-and-errors.md#目录只读历史窗口)。

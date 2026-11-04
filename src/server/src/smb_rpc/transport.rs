@@ -1,6 +1,22 @@
 //! Private socket lifecycle, peer admission and framed connection serving.
 use super::*;
 
+enum ConnectionSession {
+    Repository(Session),
+    Default(default_share::DefaultShare),
+}
+impl ConnectionSession {
+    fn dispatch(
+        &mut self,
+        request: Request,
+    ) -> Result<(Reply, Option<OwnedFd>), session::DispatchError> {
+        match self {
+            Self::Repository(session) => session.dispatch(request),
+            Self::Default(session) => session.dispatch(request),
+        }
+    }
+}
+
 struct SocketGuard {
     path: PathBuf,
     identity: (u64, u64),
@@ -74,14 +90,19 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         ));
     }
     let setup = (|| {
-        let Request::Hello {
-            protocol,
-            capabilities,
-            username,
-            repository_id,
-        } = request
-        else {
-            return Err(ApiError::unauthorized());
+        let (protocol, capabilities, username, repository) = match request {
+            Request::Hello {
+                protocol,
+                capabilities,
+                username,
+                repository_id,
+            } => (protocol, capabilities, username, Some(repository_id)),
+            Request::HelloDefault {
+                protocol,
+                capabilities,
+                username,
+            } => (protocol, capabilities, username, None),
+            _ => return Err(ApiError::unauthorized()),
         };
         if protocol != PROTOCOL {
             return Err(ApiError::invalid("unsupported SMB bridge protocol"));
@@ -100,43 +121,53 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         }
         let mut identity = shared.auth.sole_identity()?;
         let permit = acquire_session_permit(&shared)?;
-        let repo = shared
-            .backend
-            .repository_snapshot(&identity, &repository_id)?;
-        if !repo.smb_enabled {
-            return Err(ApiError::new(
-                ::http::StatusCode::CONFLICT,
-                storage_contract::ErrorCode::SmbRebindRequired,
-                "repository requires an explicit SMB binding after history migration",
-            ));
-        }
-        let branch = repo.main_branch_id;
-        identity.smb_binding = Some(crate::auth::SmbBinding {
-            repository_id,
-            branch_id: branch.clone(),
-            generation: repo.smb_binding_generation,
-        });
         let max_file_bytes = shared
             .backend
             .capabilities()?
             .max_upload_bytes()
             .min(shared.max_file_bytes);
-        Ok((
-            Session {
+        let principal = identity.principal.clone();
+        let (session, branch) = if let Some(repository) = repository {
+            let repo = shared.backend.repository_snapshot(&identity, &repository)?;
+            if !repo.smb_enabled {
+                return Err(ApiError::new(
+                    ::http::StatusCode::CONFLICT,
+                    storage_contract::ErrorCode::SmbRebindRequired,
+                    "repository requires an explicit SMB binding after history migration",
+                ));
+            }
+            let branch = repo.main_branch_id;
+            identity.smb_binding = Some(crate::auth::SmbBinding {
+                repository_id: repo.repository_id,
+                branch_id: branch.clone(),
+                generation: repo.smb_binding_generation,
+            });
+            let session = Session {
                 shared: shared.clone(),
                 account_generation: binding.selection().generation,
                 identity,
-                branch,
+                branch: branch.clone(),
                 handles: BTreeMap::new(),
                 next_handle: 1,
                 writer_locks: BTreeSet::new(),
                 max_file_bytes,
                 read_cache: None,
-            },
-            permit,
-        ))
+            };
+            (ConnectionSession::Repository(session), Some(branch))
+        } else {
+            (
+                ConnectionSession::Default(default_share::DefaultShare::new(
+                    shared.clone(),
+                    identity,
+                    binding.selection().generation,
+                    max_file_bytes,
+                )?),
+                None,
+            )
+        };
+        Ok((session, permit, principal, branch))
     })();
-    let (mut session, _permit) = match setup {
+    let (mut session, _permit, principal, branch) = match setup {
         Ok(session) => session,
         Err(error) => {
             stream.send(&response_error(error, None), None)?;
@@ -147,7 +178,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         &Response::Ok {
             result: json!({
                 "protocol":PROTOCOL,"capabilities":REQUIRED_CAPABILITIES,
-                "principal":session.identity.principal,"main_branch_id":session.branch
+                "principal":principal,"main_branch_id":branch
             }),
         },
         None,

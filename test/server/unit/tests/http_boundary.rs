@@ -557,6 +557,13 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         panic!("private workspace capacity panic detail")
     }
+    fn resolve_smb_path(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        panic!("private SMB binding panic detail")
+    }
     fn smb_binding_status(
         &self,
         _identity: &crate::auth::Identity,
@@ -659,6 +666,13 @@ impl Backend for PanickingBackend {
         _request: crate::MergeFileBranches,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private directory scope panic detail")
+    }
+    fn merge_file_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MergeFileHistory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private file history merge panic detail")
     }
     fn update_file_node_tags(
         &self,
@@ -826,6 +840,22 @@ impl Backend for PanickingBackend {
         _repository_id: &str,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         panic!("private default directory branch panic detail")
+    }
+    fn file_history_source(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::file_history_merge::FileHistorySourceRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::file_history_merge::FileHistorySource, crate::ApiError> {
+        panic!("private file history source panic detail")
+    }
+    fn directory_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::directory_history::DirectoryHistoryRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, crate::ApiError> {
+        panic!("private directory history panic detail")
     }
     fn history_window(
         &self,
@@ -1108,6 +1138,21 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             "/api/file-manager/files/file/nodes/node",
             Some(json!({"note":"","operation_id":"op_00000000000000000000000000000000"})),
         ),
+        (
+            "GET",
+            "/api/repositories/repo_00000000000000000000000000000000/directories/entry_00000000000000000000000000000000/history",
+            None,
+        ),
+        (
+            "GET",
+            "/api/repositories/repo_00000000000000000000000000000000/directories/entry_00000000000000000000000000000000/history/branches",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/merge-history/source?node_id=ver_00000000000000000000000000000000&history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            None,
+        ),
         ("GET", "/api/repositories/repo/backup-configuration", None),
         (
             "PUT",
@@ -1121,6 +1166,13 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             "/api/file-manager/files/file/merge",
             Some(
                 json!({"inputs":[],"chosen_node_id":"node","surviving_branch_id":"branch","confirmed":true,"operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/merge-history",
+            Some(
+                json!({"inputs":[],"chosen_node_id":"node","name":"Historical result","confirmed":true,"operation_id":"op_00000000000000000000000000000000"}),
             ),
         ),
         (

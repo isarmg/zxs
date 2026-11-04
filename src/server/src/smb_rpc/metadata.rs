@@ -12,6 +12,12 @@ impl Session {
     }
 
     pub(super) fn stat(&self, path: &str) -> Result<Value, ApiError> {
+        self.stat_typed(path).map(|result| {
+            json_codec::to_value(result).expect("invariant: stat metadata serializes")
+        })
+    }
+
+    pub(super) fn stat_typed(&self, path: &str) -> Result<StatResult, ApiError> {
         let result = if path.is_empty() || path == "." {
             self.authorize_binding()?;
             StatResult {
@@ -47,7 +53,7 @@ impl Session {
                 mtime,
             }
         };
-        Ok(json_codec::to_value(result).expect("invariant: stat metadata serializes"))
+        Ok(result)
     }
 
     /// last_head advances only through the existing publication confirmation.

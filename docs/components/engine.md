@@ -164,3 +164,12 @@ cargo check --locked --offline -p storage-engine
 `cargo test -p storage-engine --lib engine::observations` 覆盖损坏 seal、未知/成功零容量区分及错误投影；零容量用 Linux nsfs 的实际 `fstatvfs` 成功样本，不伪装设备已满。独立错误测试位于同一测试模块，但默认忽略：先用 `cargo test -p storage-engine --lib --no-run` 构建，再将 Cargo 输出的测试二进制路径传给 `bash test/engine/unit/engine/observations/run-io-faults.sh <binary> <output-dir>`。runner 以进程局部 read interposer 注入 seal EACCES，以 strace 注入实际 fstatfs EIO，并检查 trace 的 INJECTED 证据；不修改生产业务函数或系统 ptrace 策略。仅在原本允许 ptrace 的 Linux CI/宿主运行；环境拒绝时明确记为未完成，不能算测试通过。容量 syscall 失败保留原 metadata epoch，seal 失败撤销旧 epoch；两者不是写入准入测试或物理掉盘验收。
 
 CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从本轮 Cargo JSON 中只选择唯一且 build-finished 成功的 storage-engine libtest，不按 target 文件名猜旧二进制；构建警告、丢失/重复 artifact、空测试、少/多注入命中或 ptrace 拒绝均失败，不降级跳过。runner 验证一次 seal EACCES 命中和两次容量 EIO 命中（sample 与 status 各一次），日志输出独立测试结果及 syscall trace。该入口需要宿主已有 `cc` 和 `strace`；机械负测试为 `python3 -m unittest discover -s test/ci -p test_disk_observation_io.py`，不执行真实 ptrace。
+
+### 目录历史只读查询
+
+`capture_directory_history` 捕获共享业务元数据与精确 history manifest root，`DirectoryHistoryRead::page` 在锁外按稳定目录身份筛选真实树/分支，`recheck_directory_history` 在返回前校验当前 root 与选择。复用文件历史的有界 stable-key selector；节点只投影 `parent_tree_id`，不把 composition 的子目录引用画为祖先。pending 分支只共享已有 head。当前目录未初始化时读取不产生 mutation；rename/delete/recreate 按 entry 身份隔离。参见[目录只读历史窗口](../15-api-and-errors.md#目录只读历史窗口)。
+
+历史文件节点合并复用单次 mutation 与 `FileBranchMerge`，显式 `MergeResultPolicy::AlwaysNewNode` 保证新 `fmeta` 节点继承选择的正文与标签，所有原节点父关系不变；当前-head `/merge` 保留 `ReuseChosenInput` 规则。无需新增持久格式或迁移。
+
+
+新增历史合并祖先验证共用 `business/file_ancestry`：同快照 scoped 图一次构建，merge provenance 扫描一次，BFS visited 去重，按唯一节点/边计费。来源解析先做明确作者/所有候选 head 的廉价证明，再多起点搜索；写入按 reviewed head 分组，多来源共享遍历，全部预验证先于任何派生。全局扫描 header、原始父记录、图容量和累计搜索工作均有独立硬上限；取消覆盖读侧每步。chosen 标签继承也借用单一 base parent 并共用写预算。此优化不改变旧 `/merge` 祖先规则或其资源策略，不把命名、分支派生、健康检查、发布成本声称为常数。数值与失败语义见[历史节点合并](../15-api-and-errors.md#历史节点合并)。

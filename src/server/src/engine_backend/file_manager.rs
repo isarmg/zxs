@@ -153,6 +153,50 @@ fn resolve_existing<'a>(
     };
     Ok(Some((repo, relative)))
 }
+/// Use exactly the displayed primary-disk namespace, including its named
+/// repositories. Never merge histories or route a backup disk to its primary.
+pub(super) fn resolve_smb_path(
+    engine: &mut Engine,
+    identity: &Identity,
+    request: crate::ResolveSmbPath,
+) -> Result<crate::SmbPathLocation, ApiError> {
+    let disk = disk(engine, &request.slot_id)?;
+    if disk.level != 1 {
+        return Err(ApiError::new(
+            ::http::StatusCode::FORBIDDEN,
+            storage_contract::ErrorCode::DiskReadOnly,
+            "default SMB shares expose primary directories, not backup snapshots",
+        ));
+    }
+    let create = !matches!(request.intent, crate::SmbPathIntent::Lookup);
+    let access = if create {
+        DiskAccess::Create
+    } else {
+        DiskAccess::Read
+    };
+    let value = request.path.as_str();
+    if let Some((repository, relative)) = resolve_existing(engine, &request.slot_id, value, access)?
+    {
+        return Ok(crate::SmbPathLocation {
+            repository,
+            relative_path: relative.into(),
+        });
+    }
+    if !create {
+        return Err(empty_directory());
+    }
+    if let crate::SmbPathIntent::CreateDirectory(operation) = request.intent {
+        admit_root_operation(engine, &request.slot_id, value, operation)?;
+    }
+    // Only a missing creation path requires strict display spelling. Existing
+    // NFC entries remain reachable by canonically equivalent lookup names.
+    name_policy::PortablePath::parse(value).map_err(ApiError::invalid_source)?;
+    Ok(crate::SmbPathLocation {
+        repository: create_disk_root(engine, identity, &request.slot_id)?,
+        relative_path: value.into(),
+    })
+}
+
 fn empty_directory() -> ApiError {
     ApiError::new(
         ::http::StatusCode::NOT_FOUND,
@@ -183,14 +227,21 @@ fn resolve<'a>(
         return Err(empty_directory());
     }
 
-    let repo = engine
+    Ok((create_disk_root(engine, identity, slot)?, value))
+}
+
+fn create_disk_root(
+    engine: &mut Engine,
+    identity: &Identity,
+    slot: &str,
+) -> Result<Repository, ApiError> {
+    engine
         .create_disk_root(
             slot,
             &identity.principal,
             storage_contract::OperationId::generate().map_err(ApiError::contract_input)?,
         )
-        .map_err(error)?;
-    Ok((repo, value))
+        .map_err(error)
 }
 
 pub(super) fn file_repo<'a>(engine: &'a Engine, file: &str) -> Result<&'a Repository, ApiError> {

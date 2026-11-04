@@ -28,6 +28,7 @@ const makeControl = (tag = 'INPUT', type = 'text') => {
             if (selector === ':disabled') return this.disabled || this.inheritedDisabled;
             assert.equal(selector, ':focus-visible'); return this.focusVisible;
         },
+        closest(selector) { assert.equal(selector, '.authentication-shell .authentication-card'); return this.anonymous ? {} : null; },
         querySelectorAll(selector) { assert.equal(selector, '[data-zxs-contour-decoration]'); return this.decorations; },
     };
 };
@@ -97,9 +98,9 @@ for (const property of ['backgroundImage', 'borderImageSource']) {
     check(`stale G4 ${property}`, f => { f.input.style[property] = 'url("blob:stale-g4")'; }, false, 'noImages');
 }
 check('rectangular keyboard outline', f => { f.input.focusVisible = true; Object.assign(f.input.style, {borderBottomWidth: '3px', outlineWidth: '2px', outlineStyle: 'solid'}); }, false, 'noOutline');
-check('solid bottom is not dashed', f => { f.input.style.borderBottomStyle = 'solid'; }, false, 'dashedBottom');
-check('transparent bottom is not visible', f => { f.input.style.borderBottomColor = 'rgba(0, 0, 0, 0)'; }, false, 'dashedBottom');
-check('modern transparent bottom is not visible', f => { f.input.style.borderBottomColor = 'rgb(0 0 0 / 0%)'; }, false, 'dashedBottom');
+check('solid bottom is not dashed', f => { f.input.style.borderBottomStyle = 'solid'; }, false, 'bottomStyle');
+check('transparent bottom is not visible', f => { f.input.style.borderBottomColor = 'rgba(0, 0, 0, 0)'; }, false, 'bottomStyle');
+check('modern transparent bottom is not visible', f => { f.input.style.borderBottomColor = 'rgb(0 0 0 / 0%)'; }, false, 'bottomStyle');
 check('missing bottom', f => { f.input.style.borderBottomWidth = '0px'; }, false, 'bottomWidth');
 check('unfocused thick bottom', f => { f.input.style.borderBottomWidth = '3px'; }, false, 'bottomWidth');
 check('focus without thicker bottom', f => { f.input.focusVisible = true; }, false, 'bottomWidth');
@@ -120,4 +121,14 @@ check('right viewport overflow', f => { f.input.box = box(100, 240); }, false, '
 check('classic scrollbar is not available content width', f => { f.clientWidth = 305; f.innerWidth = 320; f.input.box = box(20, 290); }, false, 'withinViewport');
 check('detached visible candidate', f => { f.input.isConnected = false; }, false, 'connected');
 check('no current text controls cannot silently pass', f => { f.controls = []; }, false);
+const anonymous=f=>{f.input.anonymous=true;f.input.style.borderBottomWidth='0px';f.input.style.borderBottomStyle='none';};
+check('anonymous idle input is unlined', anonymous, true);
+check('anonymous keyboard focus is solid', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='solid';}, true);
+check('anonymous policy does not relax other controls', f=>{anonymous(f);f.textarea.style.borderBottomWidth='0px';}, false);
+check('anonymous idle dashed line is rejected', f=>{anonymous(f);f.input.style.borderBottomWidth='1px';f.input.style.borderBottomStyle='dashed';}, false, 'bottomWidth');
+check('anonymous zero-width dashed style is rejected', f=>{anonymous(f);f.input.style.borderBottomStyle='dashed';}, false, 'bottomStyle');
+check('anonymous solid line at rest is rejected', f=>{anonymous(f);f.input.style.borderBottomWidth='1px';f.input.style.borderBottomStyle='solid';}, false, 'bottomWidth');
+check('anonymous missing keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;}, false, 'bottomWidth');
+check('anonymous dashed keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='dashed';}, false, 'bottomStyle');
+check('anonymous transparent keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='solid';f.input.style.borderBottomColor='transparent';}, false, 'bottomStyle');
 console.log(`PASS ${cases} text input observer model cases; no browser rendering executed`);

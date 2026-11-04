@@ -730,3 +730,44 @@ fn ffi_errno_translation_keeps_typed_validation_sources() {
         libc::ENOMEM
     );
 }
+
+#[test]
+fn default_client_negotiates_explicit_default_mode_without_repository_identity() {
+    for accepted in [true, false] {
+        let (client, server) = UnixStream::pair().unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut stream = FrameStream::new(server).unwrap();
+            let (request, fd) = stream.receive::<Request>().unwrap();
+            assert!(fd.is_none());
+            assert!(
+                matches!(request, Request::HelloDefault { protocol, capabilities, username }
+                if protocol == PROTOCOL && capabilities == REQUIRED_CAPABILITIES && username == "alice")
+            );
+            stream.send(&Response::Ok { result: json_codec::json!({
+                "protocol":PROTOCOL, "capabilities": if accepted { &REQUIRED_CAPABILITIES[..] } else { &[] },
+            }) }, None).unwrap();
+            assert_eq!(
+                stream.receive::<Request>().unwrap_err().kind(),
+                io::ErrorKind::UnexpectedEof
+            );
+        });
+        let result = Client::connect_default_stream(client, "alice");
+        if accepted {
+            drop(result.unwrap());
+        } else {
+            assert_eq!(result.err().unwrap().kind(), io::ErrorKind::InvalidData);
+        }
+        worker.join().unwrap();
+    }
+}
+
+#[test]
+fn default_client_rejects_invalid_username_before_connecting() {
+    assert_eq!(
+        Client::connect_default(Path::new("/nonexistent-zxs-test-socket"), "")
+            .err()
+            .unwrap()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+}

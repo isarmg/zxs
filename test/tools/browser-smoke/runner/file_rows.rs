@@ -15,6 +15,7 @@ fn assert_retained_row(snapshot: Value) -> Result<()> {
         "checkboxSame",
         "checked",
         "rowSelected",
+        "rowSurfaceShown",
         "focused",
     ]
     .iter()
@@ -39,6 +40,30 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             if browser.script("const check=document.querySelector('.zxs-entry-checkbox'),row=check.closest('tr');return !check.checked&&row.getAttribute('aria-selected')==='false'&&!row.matches(':hover')&&getComputedStyle(row).backgroundColor==='rgba(0, 0, 0, 0)'")? == true { Ok(()) } else { Err("detail entry leaked into checkbox selection or resting background".into()) }
         },
     )?;
+    let pointer = browser.script("const row=document.querySelector('.zxs-entry-checkbox').closest('tr');row.scrollIntoView({block:'center'});const r=row.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}")?;
+    browser.cdp(
+        "Input.dispatchMouseEvent",
+        json!({"type":"mouseMoved","x":pointer["x"],"y":pointer["y"]}),
+    )?;
+    wait_for("pointer hover shows the shared rounded row surface", || {
+        if browser.script("const row=document.querySelector('.zxs-entry-checkbox').closest('tr'),surface=row.querySelector('.zxs-file-row-surface');return row.matches(':hover')&&getComputedStyle(surface).opacity==='1'&&surface.dataset.zxsContourState==='paint'")? == true {
+            Ok(())
+        } else {
+            Err("file hover did not reveal G4 row surface".into())
+        }
+    })?;
+    page_layout::file_row_geometry(browser)?;
+    browser.cdp(
+        "Input.dispatchMouseEvent",
+        json!({"type":"mouseMoved","x":0,"y":0}),
+    )?;
+    wait_for("leaving an unchecked row clears its hover", || {
+        if browser.script("const row=document.querySelector('.zxs-entry-checkbox').closest('tr');return !row.matches(':hover')&&getComputedStyle(row.querySelector('.zxs-file-row-surface')).opacity==='0'")? == true {
+            Ok(())
+        } else {
+            Err("file row retained a stale hover".into())
+        }
+    })?;
     let initial = browser.script("const check=document.querySelector('.zxs-entry-checkbox');return {checked:check?.checked,disabled:check?.disabled,batchOpen:!!document.querySelector('.zxs-batch-editor')}")?;
     println!("INFO file_rows entry: {initial}");
     if initial["checked"] != false || initial["disabled"] != false || initial["batchOpen"] != false
@@ -53,7 +78,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     let checkbox = browser.element("xpath", "//tr[.//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']]//input[@type='checkbox']")?;
     browser.click(&checkbox)?;
     wait_for("checked file row retains its DOM and focus", || {
-        let snapshot = browser.script("const s=window.__zxsFileRow;return {rowConnected:s.row.isConnected,buttonSame:s.row.querySelector('.zxs-file-name')===s.button,checkboxSame:s.row.querySelector('.zxs-entry-checkbox')===s.check,checked:s.check.checked,rowSelected:s.row.getAttribute('aria-selected')==='true',focused:document.activeElement===s.check}")?;
+        let snapshot = browser.script("const s=window.__zxsFileRow;return {rowConnected:s.row.isConnected,buttonSame:s.row.querySelector('.zxs-file-name')===s.button,checkboxSame:s.row.querySelector('.zxs-entry-checkbox')===s.check,checked:s.check.checked,rowSelected:s.row.getAttribute('aria-selected')==='true',rowSurfaceShown:getComputedStyle(s.row.querySelector('.zxs-file-row-surface')).opacity==='1',focused:document.activeElement===s.check}")?;
         assert_retained_row(snapshot)
     })?;
     let search = browser.css(".zxs-file-search input")?;

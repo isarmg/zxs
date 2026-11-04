@@ -309,6 +309,14 @@ impl<'a> Query<'a> {
     }
 
     pub(super) fn branch_summary(&self, branch: &'a crate::Branch) -> Result<HistoryBranchSummary> {
+        self.branch_summary_with_entry_checkpoint(branch, || Ok(()))
+    }
+
+    pub(super) fn branch_summary_with_entry_checkpoint(
+        &self,
+        branch: &'a crate::Branch,
+        mut entry_checkpoint: impl FnMut() -> Result<()>,
+    ) -> Result<HistoryBranchSummary> {
         self.cancel.checkpoint()?;
         let commit = self
             .state
@@ -317,6 +325,7 @@ impl<'a> Query<'a> {
             .expect("invariant: admitted branch head has a commit");
         let mut visible = None;
         for entry in &commit.entries {
+            entry_checkpoint()?;
             self.cancel.checkpoint()?;
             if entry.kind == crate::NamespaceEntryKind::File && entry.file_id == self.scope().file {
                 visible = Some(entry.version_id.as_str());

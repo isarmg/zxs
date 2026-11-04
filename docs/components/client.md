@@ -49,3 +49,9 @@ HTTP 回归使用临时目录和本机随机端口，不访问已运行用户池
 | `configure_backups` | 固定原 scope 与**自身 `generation`**（不是 `effective_generation`）；总份数包含主盘，备份前缀原样发送，代数编码为规范十进制字符串 |
 
 `merge_file_branches` 与 `update_file_node_tags` 不发送 `repository_id/path` 条件；核心将这一缺省位置明确绑定为 `location:null` 的摘要，不能将其理解成对某个逻辑路径的条件写入。需要位置约束时，通过 `request` 同时发送这两个字段，并在重试时保持它们不变。详见[请求摘要与幂等](../15-api-and-errors.md#s15-07)。目录分支合并待用户确认，暂不实现且无业务入口。
+
+历史节点合并使用 `POST /api/file-manager/files/{file}/merge-history`（客户端 `merge_file_history`）。输入为 `{branch_id,source_node_id,expected_node_id}`，可选择同一分支的不同历史节点，包括只读合并别名；`chosen_node_id` 选择同文件结果，`name` 明确新结果分支名，`confirmed:true` 明确提交。一次 mutation 派生并合并新分支，全部原分支、较新 head 和当前路径引用保持不变；不自动切换默认分支、不复制正文。辅助分支以 operation ID 和输入序号稳定命名，冲突原子拒绝。客户端便捷方法不发送位置条件；需要路径约束时通过 `request` 成对发送 repository_id/path。重试保持全部输入与 operation_id，详见[历史节点合并](../15-api-and-errors.md#历史节点合并)。
+
+`Client::directory_history(&DirectoryHistoryRequest)` 读取目录节点或分支页，使用共享 `route/query_fields` 形成请求，并以 `DirectoryHistoryPage::validate` 校验响应。调用方在节点/分支页之间保持同一精确 root，root 改变后重取而不拼接。目录树不提供修改授权或目录合并。详见[目录只读历史窗口](../15-api-and-errors.md#目录只读历史窗口)。
+
+`Client::file_history_source(&FileHistorySourceRequest)` 按需解析旧节点的真实来源分支，返回已有 `HistoryBranchSummary`，node_id 是提交时的 reviewed head。它只服务用户点选，普通历史页面无需调用；字段由 `storage_contract::file_history_merge` 统一解析与验收。

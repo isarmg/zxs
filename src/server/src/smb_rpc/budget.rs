@@ -539,7 +539,7 @@ impl Drop for Lease {
             }
             Ok(true) => {}
         }
-        match fs::remove_file(record_path(&self.source)) {
+        match persist::remove(&self.source) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {

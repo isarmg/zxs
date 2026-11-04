@@ -27,6 +27,8 @@ fn url_normalization_cannot_escape_the_api_boundary() {
 fn query_values_and_ordinary_encoded_names_remain_data() {
     for value in [
         "/api/system/status",
+        "/api/repositories/repo_00000000000000000000000000000000/directories/entry_00000000000000000000000000000000/history?limit=64",
+        "/api/repositories/repo_00000000000000000000000000000000/directories/entry_00000000000000000000000000000000/history/branches?limit=64",
         "/api/files/%E6%96%87%E4%BB%B6",
         "/api/files?path=a/../b&name=%2f%2e%5c",
         "/api/files?path=./relative",

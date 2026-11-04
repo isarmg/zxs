@@ -182,6 +182,14 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.workspace_capacity(identity)
     }
+    fn resolve_smb_path(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        self.enter();
+        self.inner.resolve_smb_path(identity, request)
+    }
     fn smb_binding_status(
         &self,
         identity: &crate::auth::Identity,

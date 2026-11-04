@@ -4,7 +4,7 @@ use super::*;
 fn row_identity_selection_and_focus_are_independent_required_conditions() {
     let good = json!({
         "rowConnected":true, "buttonSame":true, "checkboxSame":true,
-        "checked":true, "rowSelected":true, "focused":true
+        "checked":true, "rowSelected":true, "rowSurfaceShown":true, "focused":true
     });
     assert!(assert_retained_row(good.clone()).is_ok());
     for key in [
@@ -13,6 +13,7 @@ fn row_identity_selection_and_focus_are_independent_required_conditions() {
         "checkboxSame",
         "checked",
         "rowSelected",
+        "rowSurfaceShown",
         "focused",
     ] {
         let mut bad = good.clone();
@@ -29,7 +30,7 @@ fn row_identity_selection_and_focus_are_independent_required_conditions() {
 fn an_unchecked_row_reports_selection_failure_without_claiming_dom_or_focus_loss() {
     let snapshot = json!({
         "rowConnected":true, "buttonSame":true, "checkboxSame":true,
-        "checked":false, "rowSelected":false, "focused":true
+        "checked":false, "rowSelected":false, "rowSurfaceShown":false, "focused":true
     });
     let error = assert_retained_row(snapshot).unwrap_err().to_string();
     assert!(error.contains("\"checked\":false"));

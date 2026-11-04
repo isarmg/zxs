@@ -17,9 +17,10 @@ class PageRows(unittest.TestCase):
 
     def test_pagination_owns_one_line_even_with_no_body_rows(self):
         css = (ROOT / 'src/web/public/styles/components/file-manager.css').read_text()
-        self.assertIn('.zxs-file-pagination { border-block-start: var(--zxs-control-border-width) solid var(--zxs-block-border); }', css)
-        self.assertIn('.zxs-file-table tbody tr:last-child > td { border-block-end: 0; }', css)
-        self.assertIn('.zxs-file-list-panel:has(.zxs-file-pagination) .zxs-file-table:not(:has(> tbody > tr)) > thead > tr:last-child > th { border-block-end: 0; }', css)
+        self.assertIn('.zxs-file-pagination { position: relative; border-block-start: var(--zxs-control-border-width) solid transparent; }', css)
+        self.assertIn('.zxs-file-pagination::before { content: ""; }', css)
+        self.assertIn('.zxs-file-table > tbody > tr:not(:last-child) > td > .zxs-file-row-decoration::after,', css)
+        self.assertIn('.zxs-file-table:has(> tbody > tr) > thead > tr > th > .zxs-file-row-decoration::after,', css)
         self.assertNotIn('border-block-start: 0', css)
 
     def test_disk_id_label_changes_without_changing_the_identity_value(self):

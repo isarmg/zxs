@@ -129,6 +129,7 @@ pub(crate) fn node(value: Value) -> FileNode {
     FileNode {
         id,
         version,
+        branch: text(&value, "branch_id"),
         sequence: number(&value, "sequence", 0),
         kind,
         note,

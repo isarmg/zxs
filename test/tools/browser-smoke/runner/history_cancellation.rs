@@ -144,6 +144,22 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     Ok(())
 }
 
+// Loading is exposed through aria-busy, without transient loading text.
+const MONITOR_HISTORY_PENDING: &str = r#"
+    const p=window.__zxsMonitorCancellation.pending;
+    const charts=Array.from(document.querySelectorAll('.zxs-monitor-page .zxs-metric-chart'));
+    return p.length===21&&p.slice(0,-1).every(r=>r.delivered&&r.signal.aborted)
+        &&p.at(-1).ready&&!p.at(-1).delivered&&!p.at(-1).signal.aborted
+        &&charts.length>0&&charts.every(e=>e.getAttribute('aria-busy')==='true');
+"#;
+const MONITOR_HISTORY_SETTLED: &str = r#"
+    const p=window.__zxsMonitorCancellation.pending;
+    const charts=Array.from(document.querySelectorAll('.zxs-monitor-page .zxs-metric-chart'));
+    return p.length===21&&p.every(r=>r.delivered)
+        &&p.slice(0,-1).every(r=>r.signal.aborted)&&!p.at(-1).signal.aborted
+        &&charts.length>0&&charts.every(e=>e.getAttribute('aria-busy')==='false');
+"#;
+
 // Reuse the real status page and Select: no test-only product entry point.
 pub(super) fn monitor_range(browser: &Browser) -> Result<()> {
     browser.script(
@@ -207,14 +223,14 @@ pub(super) fn monitor_range(browser: &Browser) -> Result<()> {
             check(
                 browser,
                 "late cancelled monitor reads do not settle current range",
-                "const p=window.__zxsMonitorCancellation.pending;return p.slice(0,-1).every(r=>r.delivered)&&!p.at(-1).signal.aborted&&Array.from(document.querySelectorAll('.zxs-chart-empty')).some(e=>/Loading history|正在读取历史/.test(e.textContent))",
+                MONITOR_HISTORY_PENDING,
             )?;
             browser
                 .script("window.__zxsMonitorCancellation.pending.at(-1).release();return true")?;
             check(
                 browser,
                 "current monitor history settles after delayed delivery",
-                "return window.__zxsMonitorCancellation.pending.at(-1).delivered&&!Array.from(document.querySelectorAll('.zxs-chart-empty')).some(e=>/Loading history|正在读取历史/.test(e.textContent))",
+                MONITOR_HISTORY_SETTLED,
             )?;
             check(
                 browser,

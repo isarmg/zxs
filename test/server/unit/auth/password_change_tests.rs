@@ -149,6 +149,13 @@ impl crate::Backend for UnusedBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn resolve_smb_path(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn smb_binding_status(
         &self,
         _identity: &crate::auth::Identity,

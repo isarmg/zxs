@@ -41,9 +41,12 @@ mod verified_chunk;
 mod web_assets;
 
 mod backend_file_history;
+mod bounded_history_http;
 mod history_window_encode;
 mod history_window_http;
 mod history_window_query;
+mod http_directory_history;
+mod http_file_history_source;
 pub use backend_file_history::{
     ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
     HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
@@ -60,8 +63,9 @@ mod backend_note;
 mod http_note;
 pub use backend_note::{NoteTarget, UpdateNote};
 mod backend_file_merge;
+mod http_file_history_merge;
 mod http_file_merge;
-pub use backend_file_merge::MergeFileBranches;
+pub use backend_file_merge::{MergeFileBranches, MergeFileHistory};
 mod backend_file_tags;
 mod http_file_metadata;
 mod http_file_tags;
@@ -118,7 +122,9 @@ pub use backend_archive::ArchiveBranch;
 pub use backend_create_branch::CreateBranch;
 mod backend_smb_binding;
 mod http_archive;
-pub use backend_smb_binding::{SmbBindingStatus, UpdateSmbBinding};
+pub use backend_smb_binding::{
+    ResolveSmbPath, SmbBindingStatus, SmbPathIntent, SmbPathLocation, UpdateSmbBinding,
+};
 mod http_smb_binding;
 use http_smb_binding::{smb_binding, update_smb_binding};
 mod backend_comparison;
@@ -475,6 +481,13 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, ApiError>;
+    /// Resolve the default share's displayed disk path with file-manager
+    /// ownership rules, preserving named repositories and existing roots.
+    fn resolve_smb_path(
+        &self,
+        identity: &Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, ApiError>;
     fn smb_binding_status(
         &self,
         identity: &Identity,
@@ -563,6 +576,13 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: MergeFileBranches,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn merge_file_history(
+        &self,
+        _identity: &Identity,
+        _request: MergeFileHistory,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn update_file_node_tags(
         &self,
         identity: &Identity,
@@ -683,6 +703,22 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         repository_id: &str,
     ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
+    fn file_history_source(
+        &self,
+        _identity: &Identity,
+        _request: storage_contract::file_history_merge::FileHistorySourceRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::file_history_merge::FileHistorySource, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn directory_history(
+        &self,
+        _identity: &Identity,
+        _request: storage_contract::directory_history::DirectoryHistoryRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn history_window(
         &self,
         identity: &Identity,
@@ -994,6 +1030,14 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.backend.workspace_capacity(&self.current(identity)?)
     }
+    fn resolve_smb_path(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        self.backend
+            .resolve_smb_path(&self.current(identity)?, request)
+    }
     fn smb_binding_status(
         &self,
         identity: &crate::auth::Identity,
@@ -1122,6 +1166,14 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.backend
             .merge_file_branches(&self.current(identity)?, request)
+    }
+    fn merge_file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MergeFileHistory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .merge_file_history(&self.current(identity)?, request)
     }
     fn update_file_node_tags(
         &self,
@@ -1304,6 +1356,24 @@ impl Backend for AuthorizedBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.backend
             .default_directory_branch(&self.current(identity)?, repository_id)
+    }
+    fn file_history_source(
+        &self,
+        identity: &Identity,
+        request: storage_contract::file_history_merge::FileHistorySourceRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::file_history_merge::FileHistorySource, ApiError> {
+        self.backend
+            .file_history_source(&self.current(identity)?, request, cancellation)
+    }
+    fn directory_history(
+        &self,
+        identity: &Identity,
+        request: storage_contract::directory_history::DirectoryHistoryRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, ApiError> {
+        self.backend
+            .directory_history(&self.current(identity)?, request, cancellation)
     }
     fn history_window(
         &self,
@@ -1901,6 +1971,14 @@ fn router_shared(
         .route(
             "/api/repositories/{repo}/default-branch",
             get(default_branch).put(http_default_directory::select),
+        )
+        .route(
+            "/api/repositories/{repo}/directories/{directory}/history",
+            get(http_directory_history::nodes),
+        )
+        .route(
+            "/api/repositories/{repo}/directories/{directory}/history/branches",
+            get(http_directory_history::branches),
         )
         .route(
             "/api/repositories/{repo}/directory-scopes",

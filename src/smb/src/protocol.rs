@@ -63,6 +63,13 @@ pub fn effective_uid() -> u32 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request<O = String> {
+    /// The service resolves the ordinary disk namespace; no opaque repository
+    /// identity is supplied by the Samba configuration.
+    HelloDefault {
+        protocol: String,
+        capabilities: Vec<String>,
+        username: String,
+    },
     Hello {
         protocol: String,
         capabilities: Vec<String>,
@@ -143,6 +150,15 @@ impl Request<String> {
         self,
     ) -> storage_contract::Result<Request<storage_contract::OperationId>> {
         Ok(match self {
+            Self::HelloDefault {
+                protocol,
+                capabilities,
+                username,
+            } => Request::HelloDefault {
+                protocol,
+                capabilities,
+                username,
+            },
             Self::Hello {
                 protocol,
                 capabilities,

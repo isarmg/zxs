@@ -1,4 +1,4 @@
-//! Durable ownership records: exclusive creation and atomic high-water growth.
+//! Ownership records: exclusive creation, atomic high-water growth and cleanup.
 use super::{ApiError, File, Owner, Path, Write, fs, record_path};
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -37,4 +37,8 @@ pub(super) fn grow(root: &Path, source: &Path, owner: &Owner) -> Result<(), ApiE
     File::open(root)
         .and_then(|directory| directory.sync_all())
         .map_err(ApiError::io)
+}
+
+pub(super) fn remove(source: &Path) -> std::io::Result<()> {
+    fs::remove_file(record_path(source))
 }

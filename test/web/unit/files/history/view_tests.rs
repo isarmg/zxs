@@ -55,6 +55,7 @@ fn an_old_fragment_key_cannot_act_on_a_replacement_fragment() {
 
 fn node(ordinal: u64) -> FileNode {
     FileNode {
+        branch: None,
         id: format!("fmeta_{ordinal:032x}"),
         version: Some(format!("ver_{ordinal:032x}")),
         sequence: ordinal,

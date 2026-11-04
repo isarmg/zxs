@@ -10,8 +10,11 @@ use crate::{api, ui::State};
 use json_codec::{Value, json};
 use std::collections::BTreeMap;
 use web_interface::{i18n::t, prelude::*};
+mod graph;
 pub(in crate::files) mod selection;
+mod source;
 mod view;
+pub(crate) use graph::{node_control, start_history};
 use selection::{ChosenNode, ReviewInventory, SelectedBranch, check_request, check_selection};
 pub(crate) use view::{history, view};
 
@@ -37,11 +40,16 @@ pub(crate) struct Draft {
     selected_page: usize,
     anchor: String,
     resolved: Option<ResolvedReview>,
+    historical: Option<graph::Selection>,
 }
 pub(crate) fn available(model: &Model) -> bool {
     !model.history_loading && model.file_history.ready()
 }
 impl Draft {
+    pub(crate) fn historical(&self) -> bool {
+        self.historical.is_some()
+    }
+
     pub(crate) fn instance(&self) -> u64 {
         self.instance
     }
@@ -65,11 +73,30 @@ impl Draft {
     }
 
     pub(crate) fn review_inventory(&self) -> ReviewInventory {
+        if let Some(selection) = &self.historical {
+            return selection.inventory(self);
+        }
         ReviewInventory {
             instance: self.instance,
             node_ids: self.chosen.iter().map(|node| node.id.clone()).collect(),
             branch_ids: self.selected.keys().cloned().collect(),
         }
+    }
+
+    fn ready_to_submit(&self) -> bool {
+        if let Some(selection) = &self.historical {
+            selection.ready(self)
+        } else {
+            self.selected.len() >= 2
+                && self.chosen.is_some()
+                && self.selected.contains_key(&self.survivor)
+        }
+    }
+
+    fn input_count(&self) -> usize {
+        self.historical
+            .as_ref()
+            .map_or(self.selected.len(), |selection| selection.sources.len())
     }
 
     pub(crate) fn discard_review(&mut self) {
@@ -89,9 +116,12 @@ impl Draft {
             .map(|branch| (branch.id.as_str(), branch))
             .collect::<BTreeMap<_, _>>();
         let mut selected = BTreeMap::new();
-        for id in self.selected.keys() {
+        for id in &self.review_inventory().branch_ids {
             let branch = branches.get(id.as_str()).ok_or_else(unavailable_branch)?;
             selected.insert(id.clone(), (**branch).clone());
+        }
+        if let Some(selection) = &self.historical {
+            selection.validate_nodes(nodes)?;
         }
         let chosen = self
             .chosen
@@ -99,7 +129,7 @@ impl Draft {
             .map(|chosen| {
                 nodes
                     .iter()
-                    .find(|node| node.id == chosen.id)
+                    .find(|node| *node == chosen)
                     .cloned()
                     .ok_or_else(missing_node)
             })
@@ -110,8 +140,20 @@ impl Draft {
         reviewed.chosen = chosen.clone();
         reviewed.max_entries = max_entries;
         reviewed.resolved = None;
-        check_request(&payload(&reviewed), selected.len(), max_entries)
+        check_request(&payload(&reviewed), reviewed.input_count(), max_entries)
             .map_err(|error| error.to_string())?;
+        if self.historical.is_some()
+            && self.root == root
+            && self
+                .selected
+                .iter()
+                .all(|(id, previous)| selected.get(id) == Some(previous))
+        {
+            self.selected = selected;
+            self.chosen = chosen;
+            self.max_entries = max_entries;
+            return Ok(());
+        }
         self.resolved = Some(ResolvedReview {
             root,
             selected,
@@ -174,6 +216,7 @@ pub(crate) fn start(state: RwSignal<State>) {
             selected_page: 0,
             anchor: String::new(),
             resolved: None,
+            historical: None,
         };
         Some(draft)
     }) else {
@@ -213,6 +256,9 @@ fn review_required() -> String {
     )
 }
 fn payload(draft: &Draft) -> Value {
+    if let Some(selection) = &draft.historical {
+        return selection.payload(draft);
+    }
     let inputs = draft
         .selected
         .values()
@@ -221,6 +267,13 @@ fn payload(draft: &Draft) -> Value {
     json!({"inputs":inputs,"chosen_node_id":draft.chosen.as_ref().map(|node|node.id.as_str()).unwrap_or(""),"surviving_branch_id":draft.survivor,"repository_id":draft.repository,"path":draft.path,"confirmed":true})
 }
 fn request(draft: &Draft) -> Result<Value, String> {
+    if let Some(selection) = &draft.historical {
+        selection.validate(draft)?;
+        let body = payload(draft);
+        check_request(&body, draft.input_count(), draft.max_entries)
+            .map_err(|error| error.to_string())?;
+        return Ok(body);
+    }
     if draft.selected.len() < 2 {
         return Err(t(
             "至少选择两个可写文件分支。",
@@ -289,9 +342,17 @@ fn select_branch(state: RwSignal<State>, instance: u64, id: String, checked: boo
     }
 }
 
+fn result_available(node: &FileNode) -> bool {
+    node.visible_content()
+        && !matches!(
+            node.content_state(),
+            Some(storage_contract::ContentState::Purged | storage_contract::ContentState::Migrated)
+        )
+}
+
 fn choose_node(state: RwSignal<State>, instance: u64, id: String) {
     let result = state.try_update(|s| {
-        if actions::pending(s) {
+        if !actions::history_write_allowed(s) {
             return Ok(());
         }
         let Some(draft) = s.files.merge.as_mut() else {
@@ -303,24 +364,22 @@ fn choose_node(state: RwSignal<State>, instance: u64, id: String) {
         if s.files.file_history.root() != Some(draft.root()) || !s.files.file_history.ready() {
             return Err(review_required());
         }
-        let chosen = s
-            .files
-            .file_history
-            .node(&id)
-            .and_then(ChosenNode::capture)
-            .or_else(|| {
-                draft
-                    .chosen
-                    .as_ref()
-                    .filter(|chosen| chosen.id == id)
-                    .cloned()
-            })
-            .ok_or_else(missing_node)?;
+        let chosen = match s.files.file_history.node(&id) {
+            Some(node) => result_available(node)
+                .then(|| ChosenNode::capture(node))
+                .flatten(),
+            None => draft
+                .chosen
+                .as_ref()
+                .filter(|chosen| chosen.id == id)
+                .cloned(),
+        }
+        .ok_or_else(missing_node)?;
         let mut candidate = draft.clone();
         candidate.chosen = Some(chosen);
         check_selection(
             &payload(&candidate),
-            candidate.selected.len(),
+            candidate.input_count(),
             candidate.max_entries,
         )
         .map_err(|error| error.to_string())?;
@@ -355,7 +414,7 @@ fn choose_survivor(state: RwSignal<State>, instance: u64, id: String) {
         candidate.survivor = id;
         check_selection(
             &payload(&candidate),
-            candidate.selected.len(),
+            candidate.input_count(),
             candidate.max_entries,
         )
         .map_err(|error| error.to_string())?;
@@ -405,6 +464,9 @@ fn accept_review(state: RwSignal<State>, instance: u64) {
 }
 
 fn submit(state: RwSignal<State>, instance: u64) {
+    if state.with_untracked(actions::history_aux_loading) {
+        return;
+    }
     if !state.with_untracked(|s| {
         s.files
             .merge
@@ -432,8 +494,13 @@ fn submit(state: RwSignal<State>, instance: u64) {
             review::Kind::Merge,
             "POST",
             format!(
-                "/api/file-manager/files/{}/merge",
-                api::segment(&draft.file)
+                "/api/file-manager/files/{}/{}",
+                api::segment(&draft.file),
+                if draft.historical() {
+                    "merge-history"
+                } else {
+                    "merge"
+                }
             ),
             body,
         ),

@@ -30,6 +30,8 @@ mod binding_tests;
 mod bounded_lifecycle_tests;
 #[path = "close_tests.rs"]
 mod close_tests;
+#[path = "default_share_tests.rs"]
+mod default_share_tests;
 #[path = "directory_tests.rs"]
 mod directory_tests;
 #[path = "mtime_tests.rs"]
@@ -295,6 +297,13 @@ impl Backend for LostCommitReply {
         identity: &crate::auth::Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.inner.workspace_capacity(identity)
+    }
+    fn resolve_smb_path(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        self.inner.resolve_smb_path(identity, request)
     }
     fn smb_binding_status(
         &self,
@@ -810,6 +819,14 @@ fn fixture_configure(
             request_digest: None,
         })
         .unwrap();
+    let (fixture, shared, backend) = fixture_backend(temp, engine);
+    (fixture, shared, backend, repo.main_branch_id)
+}
+
+fn fixture_backend(
+    temp: tempfile::TempDir,
+    engine: Engine,
+) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
     let auth = Arc::new(Mutex::new(
         AuthStore::initialize(&temp.path().join("auth"), "alice", "long-test-password").unwrap(),
     ));
@@ -854,12 +871,7 @@ fn fixture_configure(
         file_writers: Mutex::new(BTreeSet::new()),
         namespace_operations: Mutex::new(BTreeSet::new()),
     });
-    (
-        Fixture { auth, root: temp },
-        shared,
-        backend,
-        repo.main_branch_id,
-    )
+    (Fixture { auth, root: temp }, shared, backend)
 }
 fn identity(shared: &Shared) -> Identity {
     shared.auth.sole_identity().unwrap()

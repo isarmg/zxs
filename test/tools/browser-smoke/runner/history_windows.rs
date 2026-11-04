@@ -126,6 +126,13 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         };
         window.fetch=async function(...args){
             const request=args[0],url=new URL(typeof request==='string'?request:request.url,location.href);
+            if(request.method==='GET'&&/^\/api\/file-manager\/files\/[^/]+\/merge-history\/source$/.test(url.pathname)){
+                if(url.searchParams.get('history_root')!==p.root)throw new Error('source resolution used a stale synthetic root');
+                const actual=new URL(url);actual.searchParams.set('history_root',p.actualRoot);
+                const response=await original.call(this,new Request(actual,request));if(!response.ok)return response;
+                const body=await response.json();body.history_root=p.root;
+                return new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json'}});
+            }
             if(request.method!=='GET'||!/^\/api\/file-manager\/files\/[^/]+\/history(?:\/|$)/.test(url.pathname))return original.apply(this,args);
             const incoming=url.searchParams.get('cursor'),payload=incoming?decode(incoming):null;
             const requestedRoot=url.searchParams.get('history_root')||payload?.history_root;
@@ -263,11 +270,17 @@ fn exercise(browser: &Browser) -> Result<()> {
     )?;
     browser.script("window.__zxsHistoryWindows.reviewing=false;Array.from(document.querySelectorAll('.zxs-tag-review button')).find(button=>['Cancel','取消'].includes(button.textContent.trim())).click();return true")?;
     merge_review(browser)?;
+    graph_merge_review(browser)?;
     fields_and_cancellation(browser)
 }
 
 fn merge_review(browser: &Browser) -> Result<()> {
-    click(browser, "Merge file branches", "合并文件分支")?;
+    click(browser, "Merge branches", "合并分支")?;
+    click(
+        browser,
+        "Instead merge current branches and close the other inputs",
+        "改为合并当前分支并结束其他参与分支",
+    )?;
     check(
         browser,
         "genuine branch basis is available",
@@ -332,12 +345,56 @@ fn merge_review(browser: &Browser) -> Result<()> {
     )?;
     check(
         browser,
-        "merge root basis is accepted without submitting a write",
-        "return Array.from(document.querySelectorAll('.zxs-merge-review button')).some(button=>['Confirm merge of selected branches','确认合并所选分支'].includes(button.textContent.trim())&&!button.disabled)",
+        "merge root basis is accepted but one input still cannot be submitted",
+        "return Array.from(document.querySelectorAll('.zxs-merge-review button')).some(button=>['Confirm merge of selected branches','确认合并所选分支'].includes(button.textContent.trim())&&button.disabled)",
     )?;
     captured_merge_selection(browser)?;
     browser.script("window.__zxsHistoryWindows.reviewing=false;Array.from(document.querySelectorAll('.zxs-merge-review button')).find(button=>['Cancel','取消'].includes(button.textContent.trim())).click();return true")?;
     Ok(())
+}
+
+fn graph_merge_review(browser: &Browser) -> Result<()> {
+    click(browser, "Merge branches", "合并分支")?;
+    click(browser, "Locate current node", "定位当前节点")?;
+    graph(browser, 1)?;
+    check(
+        browser,
+        "graph merge starts without preselected inputs or raw ID fields",
+        "const panel=document.querySelector('.zxs-merge-review');return panel.querySelector('[data-history-merge-steps]')&&!panel.querySelector('input[aria-label=\"Exact history node ID\"],input[aria-label=\"精确历史节点 ID\"]')&&document.querySelectorAll('[data-history-merge-input][aria-pressed=true]').length===0",
+    )?;
+    browser.script("const p=window.__zxsHistoryWindows;document.querySelector('[data-history-merge-input=\"'+p.current+'\"]').click();return true")?;
+    check(
+        browser,
+        "one source cannot choose or submit a result",
+        "const p=window.__zxsHistoryWindows,input=document.querySelector('[data-history-merge-input=\"'+p.current+'\"]');return input?.getAttribute('aria-pressed')==='true'&&!input.disabled&&Array.from(document.querySelectorAll('[data-history-merge-result]')).every(button=>button.disabled)&&Array.from(document.querySelectorAll('.zxs-merge-review button')).some(button=>['Create merged branch','确认创建合并分支'].includes(button.textContent.trim())&&button.disabled)",
+    )?;
+    click(browser, "Next history page", "下一页历史")?;
+    graph(browser, 2)?;
+    browser.script("const p=window.__zxsHistoryWindows;document.querySelector('[data-history-merge-input=\"'+p.older+'\"]').click();return true")?;
+    check(
+        browser,
+        "historical inputs keep source bases across graph pages",
+        "const p=window.__zxsHistoryWindows,button=document.querySelector('[data-history-merge-result=\"'+p.older+'\"]');return button&&!button.disabled&&/2\\s*(input nodes|个输入节点)/.test(document.querySelector('.zxs-merge-review').textContent)",
+    )?;
+    browser.script("const p=window.__zxsHistoryWindows;document.querySelector('[data-history-merge-result=\"'+p.older+'\"]').click();return true")?;
+    check(
+        browser,
+        "selected old result enables explicit creation without switching default",
+        "const p=window.__zxsHistoryWindows,button=document.querySelector('[data-history-merge-result=\"'+p.older+'\"]');return button.getAttribute('aria-pressed')==='true'&&Array.from(document.querySelectorAll('.zxs-merge-review button')).some(button=>['Create merged branch','确认创建合并分支'].includes(button.textContent.trim())&&!button.disabled)",
+    )?;
+    click(browser, "Previous history page", "上一页历史")?;
+    graph(browser, 1)?;
+    check(
+        browser,
+        "chosen result survives leaving its page",
+        "return Array.from(document.querySelectorAll('.zxs-merge-review button')).some(button=>['Show chosen result node','查看所选结果节点'].includes(button.textContent.trim())&&!button.disabled)",
+    )?;
+    browser.script("Array.from(document.querySelectorAll('.zxs-merge-review button')).find(button=>['Cancel','取消'].includes(button.textContent.trim())).click();return true")?;
+    check(
+        browser,
+        "cancelling graph merge removes only its selection controls",
+        "return !document.querySelector('.zxs-merge-review')&&!document.querySelector('[data-history-merge-input]')&&document.querySelectorAll('.zxs-version-node').length===32",
+    )
 }
 
 fn captured_merge_selection(browser: &Browser) -> Result<()> {

@@ -43,7 +43,7 @@ fn session_restoration_is_visually_empty() {
 }
 
 #[test]
-fn anonymous_forms_reuse_six_shared_height_rows_and_panel_contours() {
+fn anonymous_forms_reuse_six_shared_height_rows_and_original_card_corner() {
     let css = include_str!("../../../src/web/public/styles/components/auth.css");
     assert!(css.contains("aspect-ratio: 3 / 2;"));
     assert!(css.contains(
@@ -51,7 +51,7 @@ fn anonymous_forms_reuse_six_shared_height_rows_and_panel_contours() {
     ));
     assert!(css.contains("width: min(calc(var(--zxs-compact-row-height) * 9), 100%)"));
     assert!(css.contains("min-height: calc(var(--zxs-compact-row-height) * 6)"));
-    assert!(css.contains("--zxs-contour-extent: var(--zxs-contour-panel)"));
+    assert!(css.contains("--zxs-contour-extent: 48px"));
     for private_override in [
         "--zxs-contour-control:",
         "--zxs-contour-panel:",
@@ -67,6 +67,16 @@ fn anonymous_forms_reuse_six_shared_height_rows_and_panel_contours() {
         );
     }
     assert!(css.contains(".authentication-card { aspect-ratio: auto; }"));
+    assert!(css.contains(".authentication-shell .authentication-card input.zxs-input {"));
+    assert!(
+        css.contains(
+            "padding: 0; border: 0; border-radius: 0; background: transparent; outline: 0;"
+        )
+    );
+    assert!(css.contains(
+        "input.zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }"
+    ));
+    assert!(!css.contains("dashed"));
     let login = include_str!("../../../src/interface/src/components/login.rs");
     let setup = include_str!("../../../src/web/src/setup.rs");
     for source in [login, setup] {
@@ -136,6 +146,17 @@ fn file_rows_use_checked_selection_and_pointer_capable_hover() {
     assert!(!view.contains("selected: Memo<Option<String>>"));
     assert!(css.contains(".zxs-file-table tbody tr { background: transparent; }"));
     assert!(css.contains("@media (hover: hover) and (pointer: fine)"));
+    assert!(css.contains("inset-inline: var(--zxs-contour-panel);"));
+    assert!(css.contains("--zxs-contour-extent: var(--zxs-contour-panel);"));
+    assert!(css.contains("tr[aria-selected=true] > td > .zxs-file-row-decoration > .zxs-file-row-surface { opacity: 1; }"));
+    assert!(css.contains(
+        "tr:hover > td > .zxs-file-row-decoration > .zxs-file-row-surface { opacity: 1; }"
+    ));
+    assert_eq!(
+        view.matches("<span class=\"zxs-file-row-surface\" aria-hidden=\"true\"></span>")
+            .count(),
+        2
+    );
 }
 
 #[test]

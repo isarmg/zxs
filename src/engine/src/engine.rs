@@ -36,8 +36,12 @@ pub(crate) use workspace_commit::native_workspace_commit_completed;
 pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
+mod directory_history;
+#[path = "engine/history_window/selection.rs"]
+mod history_selection;
+pub use directory_history::DirectoryHistoryRead;
 mod history_window;
-pub use history_window::{HistoryWindowCancellation, HistoryWindowRead};
+pub use history_window::{FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead};
 mod recovery;
 use recovery::RecoveryMode;
 mod recovery_checkpoint;

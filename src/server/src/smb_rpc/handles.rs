@@ -1,6 +1,34 @@
 //! Descriptor creation, immutable reads and handle admission.
 use super::*;
 
+pub(super) struct OpenOptions {
+    writable: bool,
+    create: bool,
+    truncate: bool,
+    exclusive: bool,
+    write_through: bool,
+}
+impl OpenOptions {
+    pub(super) fn parse(
+        writable: bool,
+        create: bool,
+        truncate: bool,
+        exclusive: bool,
+        write_through: bool,
+    ) -> Result<Self, ApiError> {
+        if !writable && (create || truncate) {
+            return Err(ApiError::invalid("read handle cannot create or truncate"));
+        }
+        Ok(Self {
+            writable,
+            create,
+            truncate,
+            exclusive,
+            write_through,
+        })
+    }
+}
+
 impl Session {
     pub(super) fn open(
         &mut self,
@@ -11,6 +39,29 @@ impl Session {
         exclusive: bool,
         write_through: bool,
     ) -> Result<(Value, Option<OwnedFd>), ApiError> {
+        self.open_typed(
+            path,
+            OpenOptions::parse(writable, create, truncate, exclusive, write_through)?,
+        )
+        .map(|(result, descriptor)| {
+            (
+                json_codec::to_value(result).expect("invariant: open metadata serializes"),
+                descriptor,
+            )
+        })
+    }
+    pub(super) fn open_typed(
+        &mut self,
+        path: String,
+        options: OpenOptions,
+    ) -> Result<(OpenResult, Option<OwnedFd>), ApiError> {
+        let OpenOptions {
+            writable,
+            create,
+            truncate,
+            exclusive,
+            write_through,
+        } = options;
         let lookup = if path.is_empty() {
             self.authorize_binding()?;
             None
@@ -113,11 +164,7 @@ impl Session {
                 workspace_id: None,
                 mtime: smb_protocol::protocol::FileMtime::NotFile {},
             };
-            return Ok((
-                json_codec::to_value(result)
-                    .expect("invariant: internal JSON serialization succeeds"),
-                Some(fd),
-            ));
+            return Ok((result, Some(fd)));
         }
         let path = path.expect("invariant: a file handle has an admitted entry path");
         let mtime = match version.as_deref() {
@@ -269,9 +316,6 @@ impl Session {
             }
             result?
         } else {
-            if create || truncate {
-                return Err(ApiError::invalid("read handle cannot create or truncate"));
-            }
             let version_id = version.as_deref().ok_or_else(|| {
                 ApiError::new(
                     ::http::StatusCode::NOT_FOUND,
@@ -323,10 +367,7 @@ impl Session {
             workspace_id,
             mtime,
         };
-        Ok((
-            json_codec::to_value(result).expect("invariant: internal JSON serialization succeeds"),
-            Some(fd),
-        ))
+        Ok((result, Some(fd)))
     }
     pub(super) fn authorize_read(&self, handle: u64) -> Result<Value, ApiError> {
         match self.handles.get(&handle) {

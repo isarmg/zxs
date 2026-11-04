@@ -270,6 +270,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | 已实现入口 | 写入基线与结果 |
 | --- | --- |
 | `POST /api/file-manager/files/{file}/merge` | 每个公共文件分支 `expected_node_id`、结果 `chosen_node_id`、归属 `surviving_branch_id` 与 `confirmed:true`；只推进参与引用，被合并分支成为只读历史别名 |
+| `POST /api/file-manager/files/{file}/merge-history` | 历史来源 `inputs:[{branch_id,source_node_id,expected_node_id}]`、结果 `chosen_node_id`、新结果分支名 `name` 与 `confirmed:true`；单次原子派生并合并，保留全部原分支和默认引用 |
 | `POST /api/file-manager/files/{file}/tags` | 每个显式 `source_node_id` 与所关联分支当前 `expected_node_id`，按 `add/remove` 增量创建继承标签的元数据子节点；最多16标签、每项128 UTF-8字节；历史源不推进分支head |
 | `PATCH /api/file-manager/files/{file}/nodes/{node}` | 路径、标签与合并节点的独立128字节备注；不修改正文备注或正文proof |
 | `GET/PUT /api/repositories/{repo}/backup-configuration` | GET返回自身与有效策略代数、scope身份及实际备份路线，不返回账户权限投影；PUT固定 `expected_scope_id`/`expected_generation`、含主盘总份数和每个备份slot的用户逻辑前缀，并回填可用历史版本 |
@@ -406,3 +407,31 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 文件列表的分支切换只发起 GET 读取，不产生 operation_id、不改变默认命名空间或 SMB。目录预览使用 entries 的 `directory_branch_id` 与 `expected_tree_id` 成对查询，返回 `preview: true`、`writable: false`；游标绑定预览身份，历史读取使用冻结节点而不是当前路径选择。离开预览目录范围或切换硬盘结束预览。
 
 右侧“设为默认分支”才发起上述显式 PUT。请求固定当前命名空间 head 及已浏览树／节点，拒绝过期视图；成功后回到默认视图。拒绝保留预览，不确定结果保留原 operation_id 并查询回执，不能生成另一请求掩盖发布状态。预览不授予重命名、删除、写入或批量修改权限。已有低层 select 接口仍是明确的持久化选择命令，不是 Web 浏览接口。
+
+### 历史节点合并
+
+`merge-history` 的来源节点与分支 CAS head 分开：`source_node_id` 是实际参与合并的旧节点，`expected_node_id` 是用户审阅时该来源分支的当前 head。允许同一原分支的不同历史节点以及归档分支、只读合并别名；节点必须属于同一文件及来源分支的历史，重复来源节点、跨文件或跨分支历史明确拒绝。至少两个不同来源，数量仍受核心 `max_entries` 和 HTTP 1 MiB JSON 上限约束。
+
+`name` 指定一个全新可写结果分支，不接受 `surviving_branch_id`，不静默选择现有归属。服务端在同一次 mutation 内为首个来源创建该名称的分支，其余来源创建 `history-merge-<operation_id>-<从2开始的输入序号>` 分支，随后复用文件合并逻辑。辅助名称公开用于解释来源，遵守同一命名与冲突约束；任意命名冲突或其他前置失败都不留下派生分支。原分支的 head、可写状态及路径默认引用不变；新结果需显式切换后才成为当前文件。
+
+`chosen_node_id` 可为同文件任意健康节点。始终新建继承其正文与标签的 `fmeta_` 合并节点（`reused_node:false`），不新增正文版本、不改变任何原节点的父边。独立合并记录保留全部派生分支与来源节点，新节点连接参与来源及所选结果来源。返回既有合并结果字段，并增加 `name` 与 `source_inputs`，后者按请求顺序保存原分支、历史节点和审阅 head。
+
+请求摘要为 `file.history.merge`、actor 与完整 `{file_id,inputs,chosen_node_id,name,location}`；`repository_id/path` 必须成对提供，省略则摘要明确绑定 `location:null`。重试必须保留原 operation_id 和全部输入；相同请求永久重放，不重复派生分支。确认、鉴权及撤权检查仍适用于重放。此接口不改变既有 `/merge` 的当前 head 合并语义，也不引入磁盘格式迁移。
+
+### 目录只读历史窗口
+
+`GET /api/repositories/{repo}/directories/{directory}/history` 读取真实 `DirectoryTree` 节点，`.../history/branches` 读取真实 `DirectoryBranch` 摘要。`directory` 是目录条目的稳定 `entry_id`，根目录为 `repository_id`；路径仅是节点保存的历史属性，不能替代身份。改名沿用身份与历史，删除仍可读取已记录历史，同路径重建是新的身份，不混入旧图。读取不会调用目录 scope 初始化、生成节点或改变默认选择；没有记录的现存目录返回真实空数组。只读备份浏览可用同一仓库/目录身份读取，不能由此获得目录修改权限。
+
+两路返回 `DirectoryHistoryPage`：`identity:{repository_id,directory_id,history_tree_id,history_root,collection,limit}`、`current:{directory_branch_id,tree_id}`、`nodes`、`branches`、`page:{previous_cursor,next_cursor}`。非目标集合为空数组；没有当前选择时 current 两字段为 null。节点包含 `tree_id,directory_branch_id,parent_tree_id,parent_endpoint,commit_id,path,sequence`；父边仅来自真实 `parent_tree_id`，在页内为 `in_window`，页外为 `outside_window`，根节点两个父字段均为 null。子目录 composition 引用不是历史父边。分支包含 `directory_branch_id,name,parent_branch_id,head_tree_id,materialized,current,sequence`；`materialized:false` 的新分支可以共用同一个真实 head，不能据此伪造新节点。
+
+`limit` 默认 64、最大 128，`sequence` 为十进制字符串；顺序按 sequence 降序再按 ID 升序。`cursor` 是最多 4096 字节的不透明游标，绑定仓库、稳定目录身份、集合、limit 和 exact `history_root`；调用方不可改写游标或跨集合复用。节点路支持 `anchor_tree_id` 从指定真实节点开始，不能与 cursor 同用。`history_root` 可显式提供；续页即使不传 root 也由 cursor 约束。root 变化返回 `HISTORY_CHANGED` (409)，必须重取当前窗口，不混接旧根。非法 scope/query/cursor 为 400，目录身份不存在为 `DIRECTORY_NOT_FOUND` (404)。取消沿既有 `OPERATION_ABORTED` (400)。
+
+每页最多 128 行和 1 MiB 编码 JSON；借用共享 metadata projection，选择扫描真实目录头并在每步检查取消，额外保留 O(limit) 行，不宣称查询 CPU 为 O(limit)。服务端在查询前后重查当前鉴权和 exact root，编码与响应持有同一 admission slot。客户端与浏览器复用 `storage_contract::directory_history::DirectoryHistoryRequest` 和 `DirectoryHistoryPage::validate`，校验稳定身份、root、集合预算、顺序、父边端点与前进游标。这里不提供或宣称目录合并。
+
+历史合并点选来源时，如普通历史摘要没有可证明的 `branch_id`，可按需请求 `GET /api/file-manager/files/{file}/merge-history/source?node_id=...&history_root=...`。返回 `FileHistorySource {file_id,source_node_id,history_root,branch:HistoryBranchSummary}`；branch.node_id 是非空、同次读取的当前 CAS head。服务端校验同文件节点，沿真实父关系寻找独立分支，或使用不可变 metadata/path 节点的明确归属；归档和只读合并别名仍能作来源。没有独立归属返回 `FILE_BRANCH_REQUIRED` (400)，必须先由用户明确从节点创建分支，不能猜当前分支。root 变化返回 `HISTORY_CHANGED` (409)。
+
+该查询只在显式选择来源时进行，不增加普通历史页的全图遍历。先检查明确作者与所有候选的 `head == source`，只有需要祖先证明才构建一次请求内索引。所有候选 head 进入同一 BFS，visited 去重，每个唯一节点及唯一父边只扩展一次；diamond 共享祖先不按路径重复遍历，候选顺序不会让某个独立 DFS 阻断后续来源。索引只属于当前同一快照，不跨 root 缓存。
+
+祖先索引硬上限：同文件 65,536 个节点、262,144 条不同父边；扫描所有文件的 version/path/metadata/merge header 合计不超过 1,048,576，原始 parent record 合计不超过 1,048,576（重复记录不重复增加 distinct edge，但扫描仍计费）。来源候选分支 header、查 head 与最终 branch summary 投影所需 commit entry（包括明确作者/直接 head 成功路径）共享 1,048,576 上限。read 每步检查取消，查询为 O(上述全局 header + parent record + scoped graph 的索引/遍历工作)，不宣称 O(scoped) 或常数 CPU。全局索引容量不足或搜索不完整，明确 `RESOURCE_LIMIT_EXCEEDED` (429)，不能报“无来源”。响应最多 64 KiB，读取前后重查当前鉴权与 exact root。
+
+`merge-history` 在派生分支前，对相同 snapshot 完成 CAS、归属与有界祖先预验证；所有输入与 chosen 必须属于同一 history，混用返回 FILE_NODE_NOT_FOUND。`head == source` 与不可变节点明确作者不需要建图；其余来源按 reviewed head 分组，共用一次索引，一次 BFS 同时验证该 head 的所有来源。写请求累计搜索上限为 262,144 次唯一-per-head 节点访问与 1,048,576 次唯一-per-head 父边访问；chosen 标签继承只借用原始 first base parent，不克隆宽父数组，也共用该工作预算。前置预算失败不派生分支、不记录新回执、不发布状态。此处有界的是新增祖先搜索和标签继承，不改变旧分支命名/派生、路径核验、正文健康检查和持久发布的全局扫描或 I/O 成本，也不宣称整个合并耗时为常数。

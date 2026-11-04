@@ -27,9 +27,11 @@ mod auth_layout;
 mod contour_evidence;
 mod contours;
 mod diagnostics;
+mod directory_history;
 mod disk_health;
 mod error_feedback;
 mod file_pagination;
+mod file_row_visual;
 mod file_rows;
 mod fixture;
 use fixture::seed_files;
@@ -303,6 +305,8 @@ fn exercise(
     }
     println!("PASS login and three real disk directories");
     browser.click(&disk)?;
+    browser.css(".zxs-file-table tbody .zxs-file-icon--folder")?;
+    file_row_visual::run(browser, &[0], "folder")?;
     open_fixture_directory(browser)?;
     assert_metadata_only(browser)?;
     println!("PASS engine-seeded file browsing in the real server namespace");
@@ -341,6 +345,7 @@ fn exercise(
     note_recovery::run(browser)?;
     metadata_edit(browser)?;
     feedback_lifecycle::run(browser)?;
+    directory_history::run(browser)?;
     browser.click(&browser.button("History", "历史记录")?)?;
     wait_for("seeded file in activity history", || {
         if browser.script("return Array.from(document.querySelectorAll('.zxs-history-path')).some(e=>e.textContent.includes('browser-smoke.txt'))")? == true { Ok(()) } else { Err("history missing seeded file".into()) }

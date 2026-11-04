@@ -7802,6 +7802,391 @@
           }
         }
       }
+    },
+    "/api/file-manager/files/{file}/merge-history": {
+      "post": {
+        "operationId": "mergeFileHistory",
+        "description": "用户明确确认历史来源、结果节点和新分支名后，在一次原子操作中派生独立分支并合并。inputs 的 source_node_id 是所选历史节点，expected_node_id 是来源分支当前 head；允许同一分支不同节点及归档/只读别名来源，拒绝重复 source_node_id 和跨分支历史。全部原分支及目录默认引用保持不变；首个派生分支以 name 命名并承接结果，其余来源分支名为 history-merge-<operation_id>-<从2开始的输入序号>，合并后冻结为只读别名。结果正文需健康；始终创建新的 fmeta 合并节点，reused_node=false，原节点父边不变；不创建正文版本，不自动切换默认分支。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "operation_id": {
+                    "$ref": "#/components/schemas/OperationId"
+                  },
+                  "repository_id": {
+                    "$ref": "#/components/schemas/RepositoryId"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "inputs": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/FileHistoryMergeInput"
+                    },
+                    "minItems": 2
+                  },
+                  "chosen_node_id": {
+                    "$ref": "#/components/schemas/FileNodeId"
+                  },
+                  "confirmed": {
+                    "const": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "x-maxUtf8Bytes": 128,
+                    "description": "全新结果分支名称；必须合法且不与该文件已有分支重名。"
+                  }
+                },
+                "required": [
+                  "operation_id",
+                  "inputs",
+                  "chosen_node_id",
+                  "name",
+                  "confirmed"
+                ],
+                "additionalProperties": false,
+                "dependentRequired": {
+                  "repository_id": [
+                    "path"
+                  ],
+                  "path": [
+                    "repository_id"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "operation_id": {
+                      "$ref": "#/components/schemas/OperationId"
+                    },
+                    "operation_kind": {
+                      "type": "string"
+                    },
+                    "request_digest": {
+                      "$ref": "#/components/schemas/Hash"
+                    },
+                    "state": {
+                      "enum": [
+                        "completed",
+                        "in_doubt"
+                      ]
+                    },
+                    "commit_state": {
+                      "type": "string"
+                    },
+                    "protection_at_publish": {
+                      "type": "string"
+                    },
+                    "publication_sequence": {
+                      "$ref": "#/components/schemas/UInt64"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "operation_id",
+                    "operation_kind",
+                    "request_digest",
+                    "state",
+                    "commit_state",
+                    "result",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；不确定结果使用原 operation_id 查询或重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "NAME_COLLISION：同一文件已有规范化同名分支，整笔不修改。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/directories/{directory}/history": {
+      "get": {
+        "operationId": "listDirectoryHistoryNodes",
+        "description": "Read-only real immutable DirectoryTree history or DirectoryBranch summaries, scoped to repository and stable directory identity (entry_id; repository_id at root). No scope initialization, selection change or write privilege required. Historical paths never identify a scope: rename preserves history, delete retains recorded history, path recreation has another identity. Nodes have only actual parent_tree_id edges; pending branches can share one head without new nodes. Non-target collection array is empty. Sorted by descending sequence then ID. Current exact history_root and collection/limit-bound opaque cursors; HISTORY_CHANGED requires refresh, not page mixing. At most 128 records and 1 MiB encoded JSON; cancellable O(total directory headers) scans with O(limit) retained rows.",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "directory",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DirectoryId"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 64,
+              "minimum": 1,
+              "maximum": 128
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          },
+          {
+            "name": "anchor_tree_id",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/DirectoryTreeId"
+            },
+            "description": "Start at this real tree node. Cannot accompany cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One bounded exact-root page. An unrecorded existing directory returns empty arrays.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryHistoryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, ID, cursor, decimal limit or cancellation."
+          },
+          "401": {
+            "description": "Missing, invalid or revoked administrator session."
+          },
+          "404": {
+            "description": "Repository or stable directory identity not found in this repository."
+          },
+          "409": {
+            "description": "HISTORY_CHANGED: exact current history root no longer matches."
+          },
+          "413": {
+            "description": "Request exceeds HTTP limits."
+          },
+          "500": {
+            "description": "Invalid admitted state, missing root evidence or encoded response exceeds budget."
+          },
+          "503": {
+            "description": "Backend admission capacity reached."
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/directories/{directory}/history/branches": {
+      "get": {
+        "operationId": "listDirectoryHistoryBranches",
+        "description": "Read-only real immutable DirectoryTree history or DirectoryBranch summaries, scoped to repository and stable directory identity (entry_id; repository_id at root). No scope initialization, selection change or write privilege required. Historical paths never identify a scope: rename preserves history, delete retains recorded history, path recreation has another identity. Nodes have only actual parent_tree_id edges; pending branches can share one head without new nodes. Non-target collection array is empty. Sorted by descending sequence then ID. Current exact history_root and collection/limit-bound opaque cursors; HISTORY_CHANGED requires refresh, not page mixing. At most 128 records and 1 MiB encoded JSON; cancellable O(total directory headers) scans with O(limit) retained rows.",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "directory",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DirectoryId"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 64,
+              "minimum": 1,
+              "maximum": 128
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One bounded exact-root page. An unrecorded existing directory returns empty arrays.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryHistoryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, ID, cursor, decimal limit or cancellation."
+          },
+          "401": {
+            "description": "Missing, invalid or revoked administrator session."
+          },
+          "404": {
+            "description": "Repository or stable directory identity not found in this repository."
+          },
+          "409": {
+            "description": "HISTORY_CHANGED: exact current history root no longer matches."
+          },
+          "413": {
+            "description": "Request exceeds HTTP limits."
+          },
+          "500": {
+            "description": "Invalid admitted state, missing root evidence or encoded response exceeds budget."
+          },
+          "503": {
+            "description": "Backend admission capacity reached."
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/merge-history/source": {
+      "get": {
+        "operationId": "resolveFileHistoryMergeSource",
+        "description": "On-demand read-only proof that an independent same-file branch contains source node in its ancestry (or owns its immutable metadata/path node). Exact current history_root is mandatory. Does not change ordinary history page cost, create branches or guess current branch. Response branch.node_id is the current CAS head, including archived or merged read-only sources. Missing source ownership returns FILE_BRANCH_REQUIRED, caller may explicitly create a branch from that node. Check all direct head/author proofs first. Otherwise build one same-snapshot index bounded to 65536 scoped nodes and 262144 distinct edges; global metadata headers and raw parent records are each capped at 1048576. Candidate branch headers plus head-lookup commit entries are capped at 1048576. Multi-source BFS expands each unique node/edge once, avoiding diamond path amplification and per-candidate starvation. Global budget exhaustion is RESOURCE_LIMIT_EXCEEDED, never a false absent result. Cancellation, current auth and exact root recheck before response.",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proven source branch; branch.node_id is non-null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileHistorySource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid fields, cancelled operation, or FILE_BRANCH_REQUIRED when no independent source branch exists."
+          },
+          "401": {
+            "description": "Unauthenticated or revoked session."
+          },
+          "404": {
+            "description": "Unknown file/node or node outside file."
+          },
+          "409": {
+            "description": "HISTORY_CHANGED; refresh the current window."
+          },
+          "429": {
+            "description": "RESOURCE_LIMIT_EXCEEDED; ancestry frontier/visit budget exhausted."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -14350,6 +14735,288 @@
           "discovery_root"
         ],
         "additionalProperties": false
+      },
+      "FileHistoryMergeInput": {
+        "type": "object",
+        "properties": {
+          "branch_id": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "expected_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "source_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          }
+        },
+        "required": [
+          "branch_id",
+          "expected_node_id",
+          "source_node_id"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryHistoryIdentity": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "collection": {
+            "type": "string",
+            "enum": [
+              "nodes",
+              "branches"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128
+          }
+        },
+        "required": [
+          "repository_id",
+          "directory_id",
+          "history_tree_id",
+          "history_root",
+          "collection",
+          "limit"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryHistoryCurrent": {
+        "type": "object",
+        "properties": {
+          "directory_branch_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryBranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "directory_branch_id",
+          "tree_id"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryHistoryNode": {
+        "type": "object",
+        "properties": {
+          "tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "parent_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "in_window",
+              "outside_window",
+              null
+            ]
+          },
+          "commit_id": {
+            "$ref": "#/components/schemas/CommitId"
+          },
+          "path": {
+            "type": "string",
+            "description": "Historical path, not scope identity. Empty for repository root."
+          },
+          "sequence": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Canonical unsigned 64-bit decimal string."
+          }
+        },
+        "required": [
+          "tree_id",
+          "directory_branch_id",
+          "parent_tree_id",
+          "parent_endpoint",
+          "commit_id",
+          "path",
+          "sequence"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryHistoryBranch": {
+        "type": "object",
+        "properties": {
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "x-maxUtf8Bytes": 128
+          },
+          "parent_branch_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryBranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "head_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "materialized": {
+            "type": "boolean"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "sequence": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Canonical unsigned 64-bit decimal string."
+          }
+        },
+        "required": [
+          "directory_branch_id",
+          "name",
+          "parent_branch_id",
+          "head_tree_id",
+          "materialized",
+          "current",
+          "sequence"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryHistoryPage": {
+        "type": "object",
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/DirectoryHistoryIdentity"
+          },
+          "current": {
+            "$ref": "#/components/schemas/DirectoryHistoryCurrent"
+          },
+          "nodes": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/DirectoryHistoryNode"
+            }
+          },
+          "branches": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/DirectoryHistoryBranch"
+            }
+          },
+          "page": {
+            "type": "object",
+            "properties": {
+              "previous_cursor": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "pattern": "^[0-9a-f]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "next_cursor": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "pattern": "^[0-9a-f]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "previous_cursor",
+              "next_cursor"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "identity",
+          "current",
+          "nodes",
+          "branches",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "FileHistorySource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "source_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "branch": {
+            "$ref": "#/components/schemas/HistoryBranchSummary"
+          }
+        },
+        "required": [
+          "file_id",
+          "source_node_id",
+          "history_root",
+          "branch"
+        ]
       }
     }
   }

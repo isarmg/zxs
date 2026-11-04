@@ -12,8 +12,13 @@ mod batch_planning_scenarios;
 mod copy_alias_scenarios;
 #[path = "branch_alias_operations/deletion_rebase_scenarios.rs"]
 mod deletion_rebase_scenarios;
+#[path = "branch_alias_operations/file_history_merge_scenarios.rs"]
+mod file_history_merge_scenarios;
 #[path = "branch_alias_operations/file_merge_scenarios.rs"]
 mod file_merge_scenarios;
+
+#[path = "branch_alias_operations/directory_history_scenarios.rs"]
+mod directory_history_scenarios;
 
 struct Pool {
     _temporary: tempfile::TempDir,

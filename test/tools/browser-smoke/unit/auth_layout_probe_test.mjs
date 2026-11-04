@@ -32,9 +32,9 @@ function fixture(empty=false) {
         contains(child){for(let n=child;n;n=n.parentElement)if(n===this)return true;return false;}});
     const append=(parent,...children)=>{parent.children.push(...children);for(const child of children)child.parentElement=parent;};
     const root=node('',0,'HTML');root.scrollWidth=320;root.clientWidth=320;
-    const card=node('',100);card.className='authentication-card';card.box=box(100,216,292,14);card.style['--zxs-contour-extent']='18px';
-    card.style.borderImageSource='url("blob:fill")';card.style.borderImageSlice='48.7805% fill';
-    card.style.borderImageWidth='20px';card.style.borderImageOutset='2px';card.style.borderImageRepeat='stretch';card.dataset.zxsContourState='paint';
+    const card=node('',100);card.className='authentication-card';card.box=box(100,216,292,14);card.style['--zxs-contour-extent']='48px';
+    card.style.borderImageSource='url("blob:fill")';card.style.borderImageSlice='49.5050% fill';
+    card.style.borderImageWidth='50px';card.style.borderImageOutset='2px';card.style.borderImageRepeat='stretch';card.dataset.zxsContourState='paint';
     const header=node('',14);header.className='authentication-language';header.box=box(14,44,96,210);append(root,header,card);
     const language=node('Language',14,'BUTTON'),theme=node('Theme',14,'BUTTON');language.box=box(14,44,44,210);theme.box=box(14,44,44,262);append(header,language,theme);
     const form=node('',100,'FORM');form.box=box(100,216);form.attributes[empty?'data-first-account-form':'data-auth-form']=empty?'':'login';append(card,form);
@@ -43,7 +43,7 @@ function fixture(empty=false) {
     username.name='username';username.autocomplete='username';password.name='password';password.type='password';password.autocomplete=empty?'new-password':'current-password';
     for(const [input,label,key] of [[username,usernameLabel,'username'],[password,passwordLabel,'password']]){
         input.box.height=36;input.box.bottom=input.box.y+36;input.id=`zxs-${empty?'setup':'login'}-${key}`;input.required=true;input.labels=[label];label.htmlFor=input.id;label.control=input;
-        input.className='zxs-input';input.style.borderBottomWidth='1px';input.style.borderBottomStyle='dashed';
+        input.className='zxs-input';
     }
     if(empty){username.attributes['data-setup-user']='';password.attributes['data-setup-password']='';}
     const information=node('',244);information.className='zxs-auth-information';information.box=box(244,36);
@@ -58,7 +58,7 @@ function fixture(empty=false) {
     append(form,usernameLabel,username,passwordLabel,password,information,actions);
     let decoded=0;
     const f={root,card,header,language,theme,form,usernameLabel,username,passwordLabel,password,information,status,actions,submit,check,clear,node,append,expectedSetup:empty?'empty':'existing',phase:'initial',innerWidth:320,innerHeight:568,
-        decoded:()=>decoded,onDecode:()=>{},fillShape:'round',fillAlpha:255,fillColor:[242,242,242],tileWidth:41,tileHeight:41};
+        decoded:()=>decoded,onDecode:()=>{},fillShape:'round',fillAlpha:255,fillColor:[242,242,242],tileWidth:101,tileHeight:101};
     class Image {
         naturalWidth=f.tileWidth;naturalHeight=f.tileHeight;
         async decode(){decoded++;f.onDecode(this.src);if(this.src==='blob:broken')throw new Error('image decode failed');}
@@ -94,7 +94,7 @@ function fixture(empty=false) {
 let f=fixture(),result=await f.run();assert.equal(result.valid,true,JSON.stringify(result));
 f=fixture(true);result=await f.run();assert.equal(result.valid,true,JSON.stringify(result));
 assert.equal(result.controls.length,5);assert.equal(result.sixRows,true);assert.equal(result.sharedRowHeight,36);
-assert.equal(result.controls[0].paint.property,'input-underline');assert.equal(result.outerPaint.edgeFill.every(Boolean),true);
+assert.equal(result.controls[0].paint.property,'unlined-input');assert.equal(result.outerPaint.edgeFill.every(Boolean),true);
 for(const empty of [false,true])for(const phase of empty?['initial','refreshed','keyboard-focus']:['initial','refreshed','invalid-login']) {
     f=fixture(empty);f.phase=phase;
     if(phase==='invalid-login'){f.status.attributes.role='alert';f.status.textContent='Enter your account name.';f.information.children=[f.status];f.status.parentElement=f.information;}
@@ -117,7 +117,7 @@ for(const change of [
 assert.equal((await f.run()).valid,true,'Restoring the anonymous override fixes only the leaked surface');
 f=fixture(true);f.status.textContent='请设置账户名和密码';f.submit.textContent='设置账户';assert.equal((await f.run()).valid,true,'Chinese setup hint and action');
 f=fixture(true);for(const input of [f.username,f.password])input.required=false;assert.equal((await f.run()).valid,true,'Setup admission belongs to the disabled submit, not browser required attributes');
-f=fixture();f.username.focused=true;f.username.style.borderBottomWidth='3px';assert.equal((await f.run()).valid,true,'Focused dashed underline retains the shared row target');
+f=fixture();f.username.focused=true;f.username.style.borderBottomWidth='3px';f.username.style.borderBottomStyle='solid';assert.equal((await f.run()).valid,true,'Focused solid underline retains the shared row target');
 // Preferred desktop 3:2 geometry never hides taller feedback; small viewports can grow naturally.
 for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
     f=fixture(true);f.innerWidth=width;f.innerHeight=height;f.root.clientWidth=width;f.root.scrollWidth=width;
@@ -196,8 +196,8 @@ for(const empty of [false,true])for(const [name,change] of [
     ['hidden panel',f=>{f.card.visible=false;}],
     ['hidden header',f=>{f.header.visible=false;}],
     ['wrong desktop ratio',f=>{f.innerWidth=980;f.card.style.aspectRatio='1 / 1';}],
-    ['independent corner token',f=>{f.card.style['--zxs-contour-panel']='42px';}],
-    ['missing shared corner',f=>{f.root.style['--zxs-contour-panel']='';}],
+    ['wrong original corner',f=>{f.card.style['--zxs-contour-extent']='42px';}],
+    ['shared content corner instead of original',f=>{f.card.style['--zxs-contour-extent']='18px';}],
     ['zero outer corner',f=>{f.card.style['--zxs-contour-extent']='0px';}],
     ['input side box',f=>{f.username.style.borderRightWidth='1px';}],
     ['input background',f=>{f.username.style.backgroundColor='rgb(255, 255, 255)';}],
@@ -208,12 +208,13 @@ for(const empty of [false,true])for(const [name,change] of [
     ['hint outline box',f=>{f.information.style.outlineWidth='3px';f.information.style.outlineStyle='solid';}],
     ['input shadow box',f=>{f.username.style.boxShadow='0 0 0 1px black';}],
     ['input contour',f=>{f.username.style['--zxs-contour-extent']='18px';}],
-    ['missing underline',f=>{f.username.style.borderBottomWidth='0px';}],
+    ['unexpected resting underline',f=>{f.username.style.borderBottomWidth='1px';}],
     ['wrong normal underline width',f=>{f.username.style.borderBottomWidth='2px';}],
     ['wrong focused underline width',f=>{f.username.focused=true;}],
     ['small toolbar target',f=>{f.language.box=box(14,43,44,210);}],
-    ['solid underline',f=>{f.username.style.borderBottomStyle='solid';}],
-    ['transparent underline',f=>{f.username.style.borderBottomColor='transparent';}],
+    ['resting dashed style',f=>{f.username.style.borderBottomStyle='dashed';}],
+    ['focused dashed underline',f=>{f.username.focused=true;f.username.style.borderBottomWidth='3px';f.username.style.borderBottomStyle='dashed';}],
+    ['transparent focused underline',f=>{f.username.focused=true;f.username.style.borderBottomWidth='3px';f.username.style.borderBottomStyle='solid';f.username.style.borderBottomColor='transparent';}],
     ['label border',f=>{f.usernameLabel.style.borderBottomWidth='1px';}],
     ['form border',f=>{f.form.style.borderTopWidth='1px';}],
     ['hint box',f=>{f.information.style.backgroundColor='white';}],
@@ -269,11 +270,11 @@ for(const empty of [false,true]) {
 }
 
 // The borderless outer panel is a decoded compact fill, not a dark ring.
-f=fixture();result=await f.run();assert.equal(result.outerPaint.property,'outer-fill');assert.equal(result.outerPaint.width,41);assert.equal(result.outerPaint.height,41);
+f=fixture();result=await f.run();assert.equal(result.outerPaint.property,'outer-fill');assert.equal(result.outerPaint.width,101);assert.equal(result.outerPaint.height,101);
 assert.deepEqual(Array.from(result.outerPaint.center),[242,242,242,255]);assert.ok(result.outerPaint.corners.every(a=>a===0));assert.equal(result.outerPaint.transparentMargin,true);
 f=fixture();f.fillAlpha=200;assert.equal((await f.run()).valid,true,'Fill alpha threshold remains inclusive');
 f=fixture();f.card.style['--zxs-bg-panel']='#252c31';f.root.style['--zxs-bg-panel']='#252c31';f.fillColor=[37,44,49];assert.equal((await f.run()).valid,true,'Actual dark-theme fill is compared with its own shared panel token');
-f=fixture();f.submit.focused=true;f.submit.style.borderBottomWidth='3px';f.submit.style.borderBottomStyle='dashed';assert.equal((await f.run()).valid,true,'Action keyboard focus is a dashed underline, not a decorative box');
+f=fixture();f.submit.focused=true;f.submit.style.borderBottomWidth='3px';f.submit.style.borderBottomStyle='solid';assert.equal((await f.run()).valid,true,'Action keyboard focus is a solid underline, not a decorative box');
 for(const [name,change] of [
     ['blank pixels',f=>{f.fillShape='blank';}],
     ['ring without fill',f=>{f.fillShape='ring';}],
@@ -322,11 +323,10 @@ for(const [name,change] of [
     ...['opacity','backgroundColor','backgroundImage','borderImageSlice','borderImageWidth','borderImageOutset','borderImageRepeat',
         'outlineWidth','outlineStyle','outlineColor','outlineOffset','boxShadow','transform','filter','clipPath','maskImage','display','visibility',
         ...['Top','Right','Bottom','Left'].flatMap(side=>['Width','Style','Color'].map(part=>`border${side}${part}`)),
-        '--zxs-contour-extent','--zxs-bg-panel','--zxs-compact-row-height','--zxs-contour-panel'].map(property=>
+        '--zxs-contour-extent','--zxs-bg-panel','--zxs-compact-row-height'].map(property=>
         [`host ${property} changed`,f=>{f.card.style[property]='changed';}]),
     ['root row changed',f=>{f.root.style['--zxs-compact-row-height']='40px';}],
     ['root fill changed',f=>{f.root.style['--zxs-bg-panel']='#ffffff';}],
-    ['root corner changed',f=>{f.root.style['--zxs-contour-panel']='20px';}],
 ]) {
     f=fixture();f.onDecode=()=>change(f);result=await f.run();assert.equal(result.valid,false,`decode: ${name}`);
 }
@@ -384,13 +384,16 @@ if(!process.argv.includes('--models-only')) {
     assert.match(authCss,/grid-template-rows: repeat\(6, minmax\(var\(--zxs-compact-row-height\), max-content\)\)/);
     assert.match(authCss,/min-height: var\(--zxs-compact-row-height\)/);
     assert.match(authCss,/aspect-ratio: 3 \/ 2/);assert.match(authCss,/aspect-ratio: auto/);
-    assert.match(authCss,/--zxs-contour-extent: var\(--zxs-contour-panel\)/);
+    assert.match(authCss,/--zxs-contour-extent: 48px/);
+    assert.doesNotMatch(authCss,/dashed/);
+    assert.match(authCss,/\.authentication-shell \.authentication-card input\.zxs-input \{[^}]*border: 0;[^}]*background: transparent;[^}]*outline: 0;/);
+    assert.match(authCss,/input\.zxs-input:focus-visible \{ border-bottom: 3px solid var\(--zxs-focus,Highlight\)/);
     assert.doesNotMatch(authCss,/--zxs-contour-(?:panel|control|notification|dialog):/);
     assert.match(geometryCss,/--zxs-contour-control: calc\(var\(--zxs-compact-row-height\) \/ 2\)/);
     assert.match(geometryCss,/--zxs-contour-panel: var\(--zxs-contour-control\)/);
     assert.match(geometryCss,/\.zxs-app-shell \.zxs-frame \{[^}]*--zxs-contour-extent: var\(--zxs-contour-panel\)/);
     assert.match(paintSource,/let margin = 2\.0;/);assert.match(paintSource,/let size = extent \* 2\.0 \+ 1\.0 \+ margin \* 2\.0;/);
     assert.match(paintSource,/slice: Some\(extent \+ margin\)/);
-    console.log('PASS auth-layout source wiring, four-viewport driver and shared geometry contracts (not browser acceptance)');
+    console.log('PASS auth-layout source wiring, four-viewport driver and scoped geometry contracts (not browser acceptance)');
 }
-console.log(`PASS ${observations} ${process.argv.includes('--models-only')?'models-only ':''}auth-layout six-row/state/accessibility/shared-geometry and live G4 fill classification (unit models only; no browser rendering)`);
+console.log(`PASS ${observations} ${process.argv.includes('--models-only')?'models-only ':''}auth-layout six-row/state/accessibility/original-corner and live G4 fill classification (unit models only; no browser rendering)`);

@@ -333,6 +333,50 @@ impl Client {
         self.request("POST", &format!("/api/file-manager/files/{}/merge", segment(file)),
             Some(&json!({"inputs":inputs,"chosen_node_id":chosen_node,"surviving_branch_id":surviving_branch,"confirmed":true,"operation_id":operation_id}))).await
     }
+    /// Read one immutable directory-history page without changing its selection.
+    pub async fn directory_history(
+        &self,
+        request: &storage_contract::directory_history::DirectoryHistoryRequest,
+    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, Error> {
+        let mut query = url_encoding::form::Serializer::new(String::new());
+        for (key, value) in request.query_fields() {
+            query.append_pair(&key, &value);
+        }
+        let route = format!("{}?{}", request.route(), query.finish());
+        let page: storage_contract::directory_history::DirectoryHistoryPage =
+            json_codec::from_value(self.request("GET", &route, None).await?)?;
+        page.validate(request)?;
+        Ok(page)
+    }
+    pub async fn file_history_source(
+        &self,
+        request: &storage_contract::file_history_merge::FileHistorySourceRequest,
+    ) -> Result<storage_contract::file_history_merge::FileHistorySource, Error> {
+        let query = url_encoding::form::Serializer::new(String::new())
+            .extend_pairs(request.query_fields())
+            .finish();
+        let result: storage_contract::file_history_merge::FileHistorySource =
+            json_codec::from_value(
+                self.request("GET", &format!("{}?{query}", request.route()), None)
+                    .await?,
+            )?;
+        result.validate(request)?;
+        Ok(result)
+    }
+    /// Merge reviewed historical nodes onto a new named branch, preserving all source heads.
+    /// Calling this method submits `confirmed: true`; obtain user confirmation first.
+    /// No repository/path precondition is sent. Preserve all inputs for a retry.
+    pub async fn merge_file_history(
+        &self,
+        file: &str,
+        inputs: &[storage_contract::FileHistoryMergeInput],
+        chosen_node: &str,
+        name: &str,
+        operation_id: &str,
+    ) -> Result<Value, Error> {
+        self.request("POST", &format!("/api/file-manager/files/{}/merge-history", segment(file)),
+            Some(&json!({"inputs":inputs,"chosen_node_id":chosen_node,"name":name,"confirmed":true,"operation_id":operation_id}))).await
+    }
     /// Apply tag deltas to explicit source nodes with their expected branch heads.
     /// No repository/path precondition is sent. Preserve all inputs for a retry.
     pub async fn update_file_node_tags(

@@ -30,7 +30,9 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             const template=state.template,base=template.entries[0],directory=url.searchParams.get('path');
             if(!base||url.searchParams.get('limit')!=='200')throw new Error('invalid pagination fixture request');
             const join=(parent,name)=>parent?parent+'/'+name:name;
-            const entry=(name,id)=>({...base,entry_id:id,name,path:join(directory,name),repository_path:join(template.context.repository_path,name)});
+            // One synthetic 999 PiB size label widens only the 200-entry page. Navigation/search
+            // remove it through normal product rendering, without injected CSS.
+            const entry=(name,id)=>({...base,entry_id:id,name,path:join(directory,name),repository_path:join(template.context.repository_path,name),size:id==='fixture-199'?'1124774006935781376':base.size});
             const all=Array.from({length:205},(_,i)=>entry('paged-'+String(i).padStart(3,'0')+'.txt','fixture-'+i));
             const found=query.startsWith('slow')?[entry('stale-response.txt','fixture-0')]:all.filter(e=>e.name.includes(query));
             const offset=cursor==='synthetic-next'?200:0;
@@ -59,6 +61,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "select all is page-local",
                 "return document.querySelectorAll('.zxs-entry-checkbox:checked').length===200",
             )?;
+            let before_page = page_layout::file_row_shrink_start(browser)?;
             let next = browser.button("Next page", "下一页")?;
             browser.click(&next)?;
             check(
@@ -66,6 +69,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "next page replaces rows and clears checks",
                 "return document.querySelectorAll('.zxs-file-table tbody tr').length===5&&document.querySelector('.zxs-file-name').textContent.trim()==='paged-200.txt'&&document.querySelectorAll('.zxs-entry-checkbox:checked').length===0",
             )?;
+            page_layout::file_row_shrink_finish(browser, before_page, "pagination")?;
+            // Synthetic response, real product DOM: first/middle/last rows at
+            // desktop and narrow widths, with no cloned or restyled elements.
+            page_layout::file_row_sizes(browser)?;
+            file_row_visual::run(browser, &[0, 2, 4], "file")?;
             let previous = browser.button("Previous page", "上一页")?;
             browser.click(&previous)?;
             check(
@@ -80,12 +88,14 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "changed snapshot restarts the first page",
                 "return !window.__zxsPaging.staleNext&&window.__zxsPaging.calls.at(-1).cursor===null&&document.querySelectorAll('.zxs-file-table tbody tr').length===200&&document.querySelector('.zxs-file-name').textContent.trim()==='paged-000.txt'",
             )?;
+            let before_query = page_layout::file_row_shrink_start(browser)?;
             search(browser, "paged-204")?;
             check(
                 browser,
                 "search finds an entry outside the loaded page",
                 "return document.querySelectorAll('.zxs-file-table tbody tr').length===1&&document.querySelector('.zxs-file-name').textContent.trim()==='paged-204.txt'&&window.__zxsPaging.calls.at(-1).cursor===null&&document.activeElement===document.querySelector('.zxs-file-search input')",
             )?;
+            page_layout::file_row_shrink_finish(browser, before_query, "search")?;
             search(browser, "slow-query")?;
             check(
                 browser,
@@ -135,10 +145,15 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             Ok(())
         },
         || {
-            browser.script("if(window.__zxsPaging){window.__zxsPaging.restore();delete window.__zxsPaging;}return true")?;
+            let restore = browser.script("if(window.__zxsPaging){window.__zxsPaging.restore();delete window.__zxsPaging;}return true");
+            let metrics = browser.cdp("Emulation.clearDeviceMetricsOverride", json!({}));
+            restore?;
+            metrics?;
             Ok(())
         },
     )?;
+    // The real disk-directory rows have no pagination footer.
+    page_layout::file_row_sizes(browser)?;
     browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
     open_fixture_directory(browser)?;
     println!(

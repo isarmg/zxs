@@ -85,6 +85,31 @@ pub(crate) fn node_parents(state: &State, node: &str) -> Vec<String> {
     parents
 }
 
+pub(crate) fn belongs_to_branch(state: &State, branch: &str, head: &str, source: &str) -> bool {
+    if state
+        .file_metadata_nodes
+        .get(source)
+        .is_some_and(|n| n.branch_id == branch)
+        || state
+            .file_path_nodes
+            .get(source)
+            .is_some_and(|n| n.branch_id == branch)
+    {
+        return true;
+    }
+    let mut todo = vec![head.to_owned()];
+    let mut visited = BTreeSet::new();
+    while let Some(node) = todo.pop() {
+        if node == source {
+            return true;
+        }
+        if visited.insert(node.clone()) {
+            todo.extend(node_parents(state, &node));
+        }
+    }
+    false
+}
+
 /// Ordinary child nodes inherit their first parent's immutable tag snapshot.
 /// A merge revision stores the explicitly selected result node's tags.
 pub(crate) fn node_tags(state: &State, node: &str) -> BTreeSet<String> {

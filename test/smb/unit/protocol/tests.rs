@@ -567,3 +567,31 @@ fn typed_response_envelope_keeps_owned_success_and_error_wire_bytes() {
         assert!(matches!(storage_contract::decode_strict::<Response>(expected).unwrap(), Response::Error { .. }));
     }
 }
+
+#[test]
+fn default_hello_is_explicit_and_cannot_carry_a_repository_override() {
+    let request: Request = Request::HelloDefault {
+        protocol: PROTOCOL.into(),
+        capabilities: REQUIRED_CAPABILITIES
+            .iter()
+            .map(|value| (*value).into())
+            .collect(),
+        username: "alice".into(),
+    };
+    let value = json_codec::to_value(&request).unwrap();
+    assert_eq!(value["op"], "hello_default");
+    assert!(value.get("repository_id").is_none());
+    let parsed = json_codec::from_value::<Request>(value.clone()).unwrap();
+    assert!(matches!(
+        parsed.parse_operation_id().unwrap(),
+        Request::HelloDefault { .. }
+    ));
+    let mut injected = value.clone();
+    injected["repository_id"] = "repository".into();
+    assert!(json_codec::from_value::<Request>(injected).is_err());
+    for required in ["protocol", "capabilities", "username"] {
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove(required);
+        assert!(json_codec::from_value::<Request>(missing).is_err());
+    }
+}

@@ -73,6 +73,40 @@ fn upload_arguments(workspace: &str, item: &str, path: &str, source: &UploadSour
         "fd": source.file.as_raw_fd(), "size": source.size, "hash": source.hash})
 }
 
+fn recorded_directory_request() -> storage_contract::directory_history::DirectoryHistoryRequest {
+    storage_contract::directory_history::DirectoryHistoryRequest::parse(
+        "repo_00000000000000000000000000000000",
+        "entry_00000000000000000000000000000000",
+        storage_contract::directory_history::DirectoryHistoryCollection::Nodes,
+        std::collections::BTreeMap::from([("limit".into(), "7".into())]),
+    )
+    .unwrap()
+}
+fn recorded_directory_page() -> storage_contract::directory_history::DirectoryHistoryPage {
+    use storage_contract::directory_history::*;
+    DirectoryHistoryPage {
+        identity: DirectoryHistoryIdentity {
+            repository_id: "repo_00000000000000000000000000000000".into(),
+            directory_id: "entry_00000000000000000000000000000000".into(),
+            history_tree_id: "history_00000000000000000000000000000000".into(),
+            history_root: storage_contract::history_window::HistoryRoot::parse(&"1".repeat(64))
+                .unwrap(),
+            collection: DirectoryHistoryCollection::Nodes,
+            limit: 7,
+        },
+        current: DirectoryHistoryCurrent {
+            directory_branch_id: None,
+            tree_id: None,
+        },
+        nodes: vec![],
+        branches: vec![],
+        page: DirectoryHistoryPagination {
+            previous_cursor: None,
+            next_cursor: None,
+        },
+    }
+}
+
 fn recorded_history_request() -> storage_contract::history_window::HistoryWindowRequest {
     use storage_contract::history_window::*;
     HistoryWindowRequest {
@@ -567,6 +601,21 @@ impl Backend for RecordingBackend {
         self.record("workspace_capacity", Some(identity), Value::Null)?;
         Ok(recorded_capacity())
     }
+    fn resolve_smb_path(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        self.record(
+            "resolve_smb_path",
+            Some(identity),
+            json!({"slot_id":request.slot_id,"path":request.path.as_str(),"intent":format!("{:?}", request.intent)}),
+        )?;
+        Ok(crate::SmbPathLocation {
+            repository: recorded_repository("repository"),
+            relative_path: request.path.as_str().to_owned(),
+        })
+    }
     fn smb_binding_status(
         &self,
         identity: &crate::auth::Identity,
@@ -728,6 +777,21 @@ impl Backend for RecordingBackend {
         Ok(recorded_operation(
             request.operation_id,
             "merge_file_branches",
+        ))
+    }
+    fn merge_file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MergeFileHistory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "merge_file_history",
+            Some(identity),
+            json!({"file_id":request.file_id,"inputs":request.inputs,"chosen_node_id":request.chosen_node_id,"name":request.name.as_str(),"confirmed":request.confirmed,"location":request.location,"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "merge_file_history",
         ))
     }
     fn update_file_node_tags(
@@ -1095,6 +1159,34 @@ impl Backend for RecordingBackend {
             }),
             directory_branches: vec![],
         })
+    }
+    fn file_history_source(
+        &self,
+        identity: &Identity,
+        request: storage_contract::file_history_merge::FileHistorySourceRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::file_history_merge::FileHistorySource, ApiError> {
+        *self.history_cancellation.lock().unwrap() = Some(cancellation);
+        self.record(
+            "file_history_source",
+            Some(identity),
+            json!({"route":request.route(),"query":request.query_fields()}),
+        )?;
+        Err(sentinel_error("file_history_source"))
+    }
+    fn directory_history(
+        &self,
+        identity: &Identity,
+        request: storage_contract::directory_history::DirectoryHistoryRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, ApiError> {
+        *self.history_cancellation.lock().unwrap() = Some(cancellation);
+        self.record(
+            "directory_history",
+            Some(identity),
+            json!({"route":request.route(),"query":request.query_fields()}),
+        )?;
+        Ok(recorded_directory_page())
     }
     fn history_window(
         &self,
@@ -1653,6 +1745,15 @@ impl Fixture {
                 }),
             ),
             (
+                "resolve_smb_path",
+                backend.resolve_smb_path(identity, crate::ResolveSmbPath {
+                    slot_id: "P01".into(), path: name_policy::LookupPath::parse("file.txt").unwrap(), intent: crate::SmbPathIntent::Lookup,
+                }).map(|location| {
+                    assert_eq!(location.repository.repository_id, "repository");
+                    json!({"returned_by":"resolve_smb_path"})
+                }),
+            ),
+            (
                 "smb_binding_status",
                 backend
                     .smb_binding_status(identity, "repository")
@@ -1802,6 +1903,7 @@ impl Fixture {
             }),
             ("merge_file_branches", {backend.merge_file_branches(identity,crate::MergeFileBranches {file_id:"file".into(),inputs:vec![storage_contract::FileMergeInput {branch_id:"branch".into(),expected_node_id:"head".into()}],chosen_node_id:"chosen".into(),surviving_branch_id:"branch".into(),confirmed:true,location:None,operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_branches"));json!({"returned_by":"merge_file_branches"})})}),
             ("merge_file_branches", {backend.merge_file_branches(identity,crate::MergeFileBranches {file_id:"file".into(),inputs:vec![storage_contract::FileMergeInput {branch_id:"branch".into(),expected_node_id:"head".into()}],chosen_node_id:"chosen".into(),surviving_branch_id:"branch".into(),confirmed:true,location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_branches"));json!({"returned_by":"merge_file_branches"})})}),
+            ("merge_file_history", {backend.merge_file_history(identity,crate::MergeFileHistory {file_id:"file".into(),inputs:vec![storage_contract::FileHistoryMergeInput {branch_id:"branch".into(),source_node_id:"old".into(),expected_node_id:"head".into()}],chosen_node_id:"old".into(),name:storage_contract::BranchName::parse("History result").unwrap(),confirmed:true,location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_history"));json!({"returned_by":"merge_file_history"})})}),
             ("update_file_node_tags", {backend.update_file_node_tags(identity,crate::UpdateFileNodeTags {file_id:"file".into(),targets:vec![storage_contract::FileTagTarget {branch_id:"branch".into(),expected_node_id:"head".into(),source_node_id:"source".into()}],add:vec!["added".into()],remove:vec!["removed".into()],location:None,operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"update_file_node_tags"));json!({"returned_by":"update_file_node_tags"})})}),
             ("update_file_node_tags", {backend.update_file_node_tags(identity,crate::UpdateFileNodeTags {file_id:"file".into(),targets:vec![storage_contract::FileTagTarget {branch_id:"branch".into(),expected_node_id:"head".into(),source_node_id:"source".into()}],add:vec!["added".into()],remove:vec!["removed".into()],location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"update_file_node_tags"));json!({"returned_by":"update_file_node_tags"})})}),
             ("create_disk_directory", {backend.create_disk_directory(identity,crate::CreateDiskDirectory {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/folder").unwrap(),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"create_disk_directory"));json!({"returned_by":"create_disk_directory"})})}),
@@ -1937,6 +2039,12 @@ impl Fixture {
                     assert_eq!(versions[0].logical_size, u64::MAX);
                     assert_eq!(versions[0].file_id, "file");
                     json!({"returned_by":"file_history"})
+                }),
+            ),
+            (
+                "directory_history",
+                backend.directory_history(identity,recorded_directory_request(),storage_contract::history_window::HistoryWindowCancellation::new()).map(|page|{
+                    assert_eq!(page,recorded_directory_page());json!({"returned_by":"directory_history"})
                 }),
             ),
             (
@@ -2301,6 +2409,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository"}),
         json!({"repository_id":"repository"}),
         Value::Null,
+        json!({"slot_id":"P01","path":"file.txt","intent":"Lookup"}),
         json!({"repository_id":"repository"}),
         json!({"repository_id":"repository","branch_id":"branch","enabled":false,"expected_history_generation":"7","operation_id":"op_00000000000000000000000000000000"}),
         json!({"id":"policy"}),
@@ -2320,6 +2429,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"target":"Node { file: \"file\", node: \"node\" }","note":"","operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":null,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","inputs":[{"branch_id":"branch","source_node_id":"old","expected_node_id":"head"}],"chosen_node_id":"old","name":"History result","confirmed":true,"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","targets":[{"branch_id":"branch","expected_node_id":"head","source_node_id":"source"}],"add":["added"],"remove":["removed"],"location":null,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","targets":[{"branch_id":"branch","expected_node_id":"head","source_node_id":"source"}],"add":["added"],"remove":["removed"],"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"slot_id":"P01","path":"Café/folder","key":"café/folder","operation_id":"op_00000000000000000000000000000000"}),
@@ -2350,6 +2460,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository"}),
         json!({"file_id":"file","location":{"repository_id":"repository","path":"Café/report.txt","key":"café/report.txt"}}),
         json!({"file_id":"file"}),
+        json!({"route":recorded_directory_request().route(),"query":recorded_directory_request().query_fields()}),
         json!({"file_id":"file_00000000000000000000000000000000",
             "collection":{"kind":"nodes"},
             "location":{"repository_id":"repo_00000000000000000000000000000000","path":"Café/report.txt","key":"café/report.txt"},
@@ -2804,4 +2915,53 @@ fn recorded_merge_link(operation_id: storage_contract::OperationId) -> storage_c
         author: "author".into(),
         operation_id,
     }
+}
+
+#[test]
+fn historical_source_override_preserves_request_identity_and_revocation() {
+    let fixture = Fixture::new();
+    let request = storage_contract::file_history_merge::FileHistorySourceRequest::parse(
+        "file_00000000000000000000000000000000",
+        "ver_00000000000000000000000000000000",
+        &"a".repeat(64),
+    )
+    .unwrap();
+    let cancellation = storage_contract::history_window::HistoryWindowCancellation::new();
+    let error = fixture
+        .backend
+        .file_history_source(&fixture.identity, request.clone(), cancellation.clone())
+        .unwrap_err();
+    assert_error(error, "file_history_source");
+    let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
+    assert_eq!(calls.len(), 1);
+    assert_identity(calls[0].identity.as_ref(), &fixture.identity);
+    assert_eq!(
+        calls[0].arguments,
+        json!({"route":request.route(),"query":request.query_fields()})
+    );
+    cancellation.cancel();
+    assert!(
+        fixture
+            .probe
+            .history_cancellation
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .is_cancelled()
+    );
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
+    assert_eq!(
+        fixture
+            .backend
+            .file_history_source(
+                &fixture.identity,
+                request,
+                storage_contract::history_window::HistoryWindowCancellation::new()
+            )
+            .unwrap_err()
+            .status,
+        401
+    );
+    assert!(fixture.probe.calls.lock().unwrap().is_empty());
 }

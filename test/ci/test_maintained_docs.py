@@ -12,6 +12,7 @@ class MaintainedDocs(unittest.TestCase):
     def test_samba_export_is_consistent_and_outside_private_service_directories(self):
         samba = configparser.ConfigParser(interpolation=None, delimiters=('=',), strict=False)
         samba.read(ROOT / 'deploy/samba/smb.conf.example')
+        self.assertNotIn('zxs:repository', samba['zxs'])
         export = PurePosixPath(samba['zxs']['path'])
         self.assertTrue(export.is_absolute())
         self.assertNotIn('..', export.parts)

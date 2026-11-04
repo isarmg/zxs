@@ -245,3 +245,51 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/engine/history_window_read_tests.rs"]
 mod tests;
+
+/// An on-demand ancestry proof. Does not project or alter ordinary history pages.
+pub struct FileHistorySourceRead {
+    read: HistoryWindowRead,
+    request: storage_contract::file_history_merge::FileHistorySourceRequest,
+}
+impl FileHistorySourceRead {
+    pub fn source(&self) -> Result<storage_contract::file_history_merge::FileHistorySource> {
+        self.read.cancellation.checkpoint()?;
+        let preparation = self
+            .read
+            .preparation
+            .lock()
+            .expect("invariant: history preparation lock poisoned");
+        let PagePreparation::Pending { view, .. } = &*preparation else {
+            unreachable!("invariant: source-only read never prepares an ordinary history page");
+        };
+        let query = query::Query::new_with_owner(
+            view,
+            &self.read.request,
+            &self.read.context,
+            &self.read.cancellation,
+            Some(&self.read.owner_version),
+        )?;
+        let branch = super::merge_source::resolve(&query, self.request.node_id.as_str())?;
+        let result = storage_contract::file_history_merge::FileHistorySource {
+            file_id: self.request.file_id.clone(),
+            source_node_id: self.request.node_id.clone(),
+            history_root: self.read.history_root,
+            branch,
+        };
+        result.validate(&self.request)?;
+        Ok(result)
+    }
+}
+impl Engine {
+    pub fn capture_file_history_source(
+        &self,
+        request: storage_contract::file_history_merge::FileHistorySourceRequest,
+        cancellation: HistoryWindowCancellation,
+    ) -> Result<FileHistorySourceRead> {
+        let read = self.capture_history_window(request.history_request(), cancellation)?;
+        Ok(FileHistorySourceRead { read, request })
+    }
+    pub fn recheck_file_history_source(&self, read: &FileHistorySourceRead) -> Result<()> {
+        self.recheck_history_window(&read.read)
+    }
+}

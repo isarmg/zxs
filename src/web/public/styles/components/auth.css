@@ -1,16 +1,17 @@
-/* Six authentication rows use the same row height and panel contour as the
- * signed-in content. Longer feedback grows in flow; no row is clipped. */
+/* Six authentication rows retain shared row height and the original 48px G4
+ * card corner. Longer feedback grows in flow; no row is clipped. */
 .authentication-shell { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; justify-items: center; align-items: start; gap: 1rem; min-height: 100dvh; padding: 24px; box-sizing: border-box; color: var(--zxs-text-primary,#18181b); background: var(--zxs-bg-page,#fafafa); font-family: var(--zxs-font-ui,monospace); line-height: var(--zxs-line-height-body,1.5); }
 .authentication-language { justify-self: end; }
 .authentication-content { display: grid; align-self: center; justify-items: stretch; gap: 1rem; width: min(calc(var(--zxs-compact-row-height) * 9), 100%); min-width: 0; }
-.authentication-card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; width: 100%; min-width: 0; aspect-ratio: 3 / 2; min-height: calc(var(--zxs-compact-row-height) * 6); padding: 0 var(--zxs-contour-text-inset); box-sizing: border-box; color: var(--zxs-text-primary); background: var(--zxs-bg-panel,#fff); border: 0; border-radius: 0; --zxs-contour-extent: var(--zxs-contour-panel); }
+.authentication-card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; width: 100%; min-width: 0; aspect-ratio: 3 / 2; min-height: calc(var(--zxs-compact-row-height) * 6); padding: 0 var(--zxs-contour-text-inset); box-sizing: border-box; color: var(--zxs-text-primary); background: var(--zxs-bg-panel,#fff); border: 0; border-radius: 0; --zxs-contour-extent: 48px; }
 .authentication-card > form { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(6, minmax(var(--zxs-compact-row-height), max-content)); margin: 0; padding: 0; min-width: 0; font-size: max(1rem, 16px); font-weight: 400; line-height: 1.5; }
 .authentication-card > form > * { box-sizing: border-box; min-width: 0; min-height: var(--zxs-compact-row-height); margin: 0; }
 .authentication-card :is(label, input, button) { font: inherit; }
 .authentication-card .zxs-auth-label { display: flex; align-items: center; gap: 1ch; }
-.authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border-radius: 0; }
-/* The outer card is the only decorative box. Native text controls retain the
- * shared dashed underline and its thicker keyboard focus indicator. The shell
+.authentication-shell .authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border: 0; border-radius: 0; background: transparent; outline: 0; }
+.authentication-shell .authentication-card input.zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }
+/* The outer card is the only decorative box. Inputs have no resting line;
+ * keyboard focus uses a solid underline. The shell
  * scope outranks the appearance root plus .zxs-error, even when loaded earlier. */
 .authentication-shell .authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) { border: 0; background: transparent; box-shadow: none; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 .authentication-card .zxs-auth-information { display: grid; align-items: center; overflow-wrap: anywhere; }
@@ -18,7 +19,7 @@
 .authentication-card .zxs-request-id { margin: 0; font-size: inherit; }
 .authentication-card .zxs-auth-actions { display: flex; flex-wrap: wrap; align-items: center; column-gap: 1ch; }
 .authentication-card .zxs-button { display: inline-flex; align-items: center; justify-content: center; gap: 1ch; min-width: var(--zxs-compact-row-height); min-height: var(--zxs-compact-row-height); padding: 0; box-sizing: border-box; }
-.authentication-card .zxs-button:focus-visible { outline: 0; border-bottom: 3px dashed var(--zxs-focus); }
+.authentication-shell .authentication-card .zxs-button:focus-visible { outline: 0; border-bottom: 3px solid var(--zxs-focus,Highlight); }
 .authentication-card .zxs-button svg { width: 1em; height: 1em; }
 .zxs-login-controls { display: flex; align-items: center; gap: 8px; }
 .zxs-login-controls > button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 44px; padding: 0 8px; line-height: 1; }

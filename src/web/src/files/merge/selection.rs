@@ -15,6 +15,10 @@ impl SelectedBranch {
         if !branch.writable() {
             return None;
         }
+        Self::capture_reference(branch)
+    }
+
+    pub(in crate::files) fn capture_reference(branch: &FileBranch) -> Option<Self> {
         branch.head().map(|head| Self {
             id: branch.id().to_owned(),
             name: branch.name().to_owned(),

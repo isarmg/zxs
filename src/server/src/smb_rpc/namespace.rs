@@ -40,15 +40,22 @@ impl Drop for OperationReservation {
     }
 }
 
-impl Session {
-    pub(super) fn namespace(
-        &mut self,
+pub(super) struct NamespaceInput {
+    kind: NamespaceOperation,
+    path: String,
+    destination: Option<String>,
+    replace: bool,
+    change: storage_contract::NamespaceOperation,
+    source_path: name_policy::LookupPath,
+    destination_path: Option<name_policy::PortablePath>,
+}
+impl NamespaceInput {
+    pub(super) fn parse(
         kind: NamespaceOperation,
         path: String,
         destination: Option<String>,
         replace: bool,
-        operation_id: OperationId,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<Self, ApiError> {
         let (change, source_path, destination_path) = match kind {
             NamespaceOperation::Mkdir => {
                 let path = name_policy::PortablePath::parse(&path)
@@ -92,14 +99,35 @@ impl Session {
                 "only rename accepts a destination or replacement",
             ));
         }
-        let _operation = OperationReservation::acquire(&self.shared, operation_id)?;
+        Ok(Self {
+            kind,
+            path,
+            destination,
+            replace,
+            change,
+            source_path,
+            destination_path,
+        })
+    }
+}
+
+pub(super) struct NamespaceAdmission {
+    record: PathBuf,
+    _budget: budget::Lease,
+    // Fields drop in declaration order. Keep the operation reserved until its
+    // budget lease has removed or retained the durable recovery evidence.
+    reservation: OperationReservation,
+}
+impl NamespaceAdmission {
+    pub(super) fn acquire(
+        shared: &Arc<Shared>,
+        identity: &Identity,
+        operation_id: OperationId,
+    ) -> Result<Self, ApiError> {
+        let reservation = OperationReservation::acquire(shared, operation_id)?;
         // Namespace is not a replay API. An existing operation or recovery
         // record must be reconciled, not staged into a new workspace.
-        match self
-            .shared
-            .backend
-            .operation_outcome(&self.identity, operation_id)
-        {
+        match shared.backend.operation_outcome(identity, operation_id) {
             Ok(_) => {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::OperationIdConflict,
@@ -111,10 +139,7 @@ impl Session {
                     || error.code == storage_contract::ErrorCode::OperationNotFound => {}
             Err(error) => return Err(error),
         }
-        let record = self
-            .shared
-            .spool
-            .join(format!("{operation_id}.namespace.json"));
+        let record = shared.spool.join(format!("{operation_id}.namespace.json"));
         match fs::symlink_metadata(&record) {
             Ok(_) => {
                 return Err(ApiError::conflict(
@@ -125,12 +150,50 @@ impl Session {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(ApiError::io(error)),
         }
-        let _budget = self.shared.budget.reserve(
-            &self.identity.principal,
-            &self.shared.spool.join(operation_id.to_string()),
+        let budget = shared.budget.reserve(
+            &identity.principal,
+            &shared.spool.join(operation_id.to_string()),
             0,
             0,
         )?;
+        Ok(Self {
+            record,
+            _budget: budget,
+            reservation,
+        })
+    }
+}
+
+impl Session {
+    pub(super) fn namespace(
+        &mut self,
+        kind: NamespaceOperation,
+        path: String,
+        destination: Option<String>,
+        replace: bool,
+        operation_id: OperationId,
+    ) -> Result<Value, ApiError> {
+        let input = NamespaceInput::parse(kind, path, destination, replace)?;
+        let admission = NamespaceAdmission::acquire(&self.shared, &self.identity, operation_id)?;
+        self.namespace_admitted(input, admission)
+    }
+
+    pub(super) fn namespace_admitted(
+        &mut self,
+        input: NamespaceInput,
+        admission: NamespaceAdmission,
+    ) -> Result<Value, ApiError> {
+        let NamespaceInput {
+            kind,
+            path,
+            destination,
+            replace,
+            change,
+            source_path,
+            destination_path,
+        } = input;
+        let operation_id = admission.reservation.operation_id;
+        let record = &admission.record;
         let mut affected = vec![path.as_str()];
         if let Some(target) = destination.as_deref() {
             affected.push(target);
@@ -154,7 +217,7 @@ impl Session {
             // fail, the workspace still has a recoverable association. A record
             // is not proof that staging or submission started; never replay it.
             write_namespace_record(
-                &record,
+                record,
                 &json!({
                     "format":"smb-protocol-namespace","principal":self.identity.principal,
                     "branch_id":self.branch,"kind":kind,"path":path,
@@ -282,14 +345,14 @@ impl Session {
                 .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })();
         if result.is_ok() {
-            cleanup_namespace_record(&record);
+            cleanup_namespace_record(record);
         } else if !submission_started && let Some(workspace) = pending_workspace {
             match self
                 .shared
                 .backend
                 .abort_workspace(&self.identity, &workspace)
             {
-                Ok(_) if record_durable => cleanup_namespace_record(&record),
+                Ok(_) if record_durable => cleanup_namespace_record(record),
                 Ok(_) => {
                     tracing::warn!(%operation_id, workspace, path=%record.display(), "SMB namespace record durability failed; retaining available recovery evidence after abort")
                 }

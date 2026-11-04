@@ -7,6 +7,8 @@ mod directory;
 mod directory_preview;
 pub use directory_preview::{DirectoryBranchPreview, DirectoryDefaultSelection};
 mod file;
+pub(crate) mod file_ancestry;
+mod file_history_merges;
 pub(crate) mod file_merges;
 mod file_metadata;
 pub(crate) mod file_nodes;
@@ -21,7 +23,10 @@ mod workspace;
 pub(crate) use ancestry::descendant_commits;
 pub(crate) use directory::context_key_from_key;
 pub use file_nodes::{FileNodeProjectionRequest, FileNodeSummary};
-pub use file_requests::{FileBranchMergeRequest, FileDefaultSelection, FileNodeTagsUpdateRequest};
+pub use file_requests::{
+    FileBranchMergeRequest, FileDefaultSelection, FileHistoryMergeRequest,
+    FileNodeTagsUpdateRequest,
+};
 pub use namespace::NamespaceTree;
 pub(crate) use namespace::{
     apply_namespace, apply_workspace_namespace, deletion_record, ensure_parents, find_unordered,

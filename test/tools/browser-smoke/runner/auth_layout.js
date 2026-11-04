@@ -30,9 +30,8 @@ const outerFill=async node=>{
         const css=getComputedStyle(node);
         return {...Object.fromEntries(properties.map(name=>[name,css[name]])),
             extent:css.getPropertyValue('--zxs-contour-extent'),color:css.getPropertyValue('--zxs-bg-panel'),
-            row:css.getPropertyValue('--zxs-compact-row-height'),panel:css.getPropertyValue('--zxs-contour-panel'),
+            row:css.getPropertyValue('--zxs-compact-row-height'),
             rootRow:getComputedStyle(document.documentElement).getPropertyValue('--zxs-compact-row-height'),
-            rootPanel:getComputedStyle(document.documentElement).getPropertyValue('--zxs-contour-panel'),
             rootColor:getComputedStyle(document.documentElement).getPropertyValue('--zxs-bg-panel')};
     };
     const css=snapshot(),box=rect(node),parent=node.parentElement,state=node.dataset.zxsContourState;
@@ -85,13 +84,11 @@ const within=e=>{const r=rect(e);return r.width>0&&r.height>0&&r.x>=0&&r.right<=
 const separate=list=>list.every((r,i)=>!i||r.y>=list[i-1].bottom-.5);
 const headerNode=document.querySelector('.authentication-language'),header=rect(headerNode),panel=rect(card);
 const panelStyle=getComputedStyle(card),rootStyle=getComputedStyle(document.documentElement);
-const corner={extent:panelStyle.getPropertyValue('--zxs-contour-extent').trim(),
-    token:panelStyle.getPropertyValue('--zxs-contour-panel').trim(),
-    shared:rootStyle.getPropertyValue('--zxs-contour-panel').trim()};
+const corner={extent:panelStyle.getPropertyValue('--zxs-contour-extent').trim(),original:48};
 const rowHeightToken=panelStyle.getPropertyValue('--zxs-compact-row-height').trim();
 const sharedRowHeight=Number.parseFloat(rootStyle.getPropertyValue('--zxs-compact-row-height'));
 const rowHeightValid=rowHeightToken===rootStyle.getPropertyValue('--zxs-compact-row-height').trim()&&sharedRowHeight>0;
-const sharedCorner=corner.token!==''&&corner.token===corner.shared&&parseFloat(corner.extent)===sharedRowHeight/2;
+const restoredCorner=parseFloat(corner.extent)===corner.original;
 const compact=innerWidth<=416||innerHeight<=480;
 const aspect=panelStyle.aspectRatio.split('/').map(Number);
 const preferredRatio=compact?panelStyle.aspectRatio==='auto':aspect.length===2&&aspect[0]/aspect[1]===1.5;
@@ -102,7 +99,7 @@ const headerControls=[...headerNode.querySelectorAll('button')];
 const headerTargets=headerControls.length===2&&headerControls.every(e=>present(e)&&within(e)
     &&rect(e).height>=44&&rect(e).width>=44&&inside(rect(e),header));
 const outerPaint=await outerFill(card);
-const outerFrame=outerPaint.valid&&sharedCorner;
+const outerFrame=outerPaint.valid&&restoredCorner;
 const semanticChildren=[...card.children].filter(e=>!e.matches('svg[data-zxs-contour-decoration="foreground"]'));
 const formPresent=forms.length===1&&forms[0]===form&&present(form)&&form.parentElement===card
     &&semanticChildren.length===1&&semanticChildren[0]===form&&within(form)&&inside(rect(form),panel);
@@ -113,23 +110,24 @@ const controls=form?[...form.querySelectorAll('input,textarea,button')]:[];
 const noSurface=e=>{
     const css=getComputedStyle(e),focus=e.tagName==='BUTTON'&&e.matches(':focus-visible');
     return sides.every(side=>parseFloat(css[`border${side}Width`])===(focus&&side==='Bottom'?3:0))
-        &&(!focus||css.borderBottomStyle==='dashed'&&!transparent(css.borderBottomColor))
+        &&(!focus||css.borderBottomStyle==='solid'&&!transparent(css.borderBottomColor))
         &&css.backgroundImage==='none'&&css.borderImageSource==='none'&&transparent(css.backgroundColor)
         &&css.boxShadow==='none'&&noOutline(css)&&parseFloat(css.getPropertyValue('--zxs-contour-extent'))===0
         &&e.querySelectorAll('svg[data-zxs-contour-decoration]').length===0;
 };
-const underline=e=>{
+const unlinedInput=e=>{
     const css=getComputedStyle(e);
     return ['Top','Right','Left'].every(side=>parseFloat(css[`border${side}Width`])===0)
-        &&parseFloat(css.borderBottomWidth)===(e.matches(':focus-visible')?3:1)&&css.borderBottomStyle==='dashed'&&!transparent(css.borderBottomColor)
+        &&parseFloat(css.borderBottomWidth)===(e.matches(':focus-visible')?3:0)
+        &&(e.matches(':focus-visible')?css.borderBottomStyle==='solid'&&!transparent(css.borderBottomColor):css.borderBottomStyle==='none')
         &&css.backgroundImage==='none'&&css.borderImageSource==='none'&&transparent(css.backgroundColor)
         &&css.boxShadow==='none'&&noOutline(css)&&parseFloat(css.getPropertyValue('--zxs-contour-extent'))===0
         &&e.querySelectorAll('svg[data-zxs-contour-decoration]').length===0;
 };
 const name=e=>(e.getAttribute('aria-label')||e.textContent).trim();
 const visible=controls.map(e=>{
-    const r=rect(e),input=e.tagName==='INPUT',paint={property:input?'input-underline':'unboxed-action',
-        valid:input?underline(e):e.tagName==='BUTTON'&&noSurface(e)&&name(e).length>0};
+    const r=rect(e),input=e.tagName==='INPUT',paint={property:input?'unlined-input':'unboxed-action',
+        valid:input?unlinedInput(e):e.tagName==='BUTTON'&&noSurface(e)&&name(e).length>0};
     return {name:e.name||name(e),rect:r,rendered:present(e),painted:paint.valid,paint,
         valid:present(e)&&r.height>=sharedRowHeight&&r.width>=sharedRowHeight&&within(e)&&inside(r,panel)&&paint.valid};
 });
@@ -186,5 +184,5 @@ return {valid:allowedPhases.includes(phase)&&formPresent&&sixRows&&fieldsValid&&
     viewport:{width:innerWidth,height:innerHeight,clientWidth:layoutWidth,scrollbarWidth:innerWidth-layoutWidth},
     documentWidth:document.documentElement.scrollWidth,header,headerTargets,headerControls:headerControls.map(rect),panel,expectedSetup,phase,formPresent,sixRows,fieldsValid,
     stateValid,informationValid,actionsValid,noInternalBoxes,rowGeometry,rows:rowBoxes,controls:visible,
-    outerFrame,outerPaint,sharedCorner,corner,rowHeightValid,rowHeightToken,sharedRowHeight,preferredRatio,aspectRatio:panelStyle.aspectRatio,panelGeometry};
+    outerFrame,outerPaint,restoredCorner,corner,rowHeightValid,rowHeightToken,sharedRowHeight,preferredRatio,aspectRatio:panelStyle.aspectRatio,panelGeometry};
 })().then(done,error=>done({valid:false,error:String(error)}));

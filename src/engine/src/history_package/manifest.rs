@@ -670,7 +670,7 @@ impl HistoryManifest {
                 || inputs.len() != event.input_branch_ids.len()
                 || event.input_branch_ids.len() != event.input_node_ids.len()
                 || !inputs.contains(&event.surviving_branch_id)
-                || event.reused_node != event.input_node_ids.contains(&event.chosen_node_id)
+                || (event.reused_node && !event.input_node_ids.contains(&event.chosen_node_id))
                 || event.reused_node != (event.result_node_id == event.chosen_node_id)
             {
                 return Err(invalid("file merge provenance identity or result differs"));

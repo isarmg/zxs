@@ -34,7 +34,7 @@ pub(super) fn nodes(nodes: Vec<HistoryNodeSummary>, edges: Vec<HistoryGraphEdge>
                 kind,
                 sequence,
                 current: _,
-                branch_id: _,
+                branch_id,
                 path,
                 previous_path,
                 note,
@@ -58,6 +58,7 @@ pub(super) fn nodes(nodes: Vec<HistoryNodeSummary>, edges: Vec<HistoryGraphEdge>
             FileNode {
                 id: node_id.to_string(),
                 version: Some(version_id.to_string()),
+                branch: branch_id.map(|id| id.to_string()),
                 sequence,
                 kind,
                 body_note: (kind == NodeKind::Content).then(|| note.clone()),

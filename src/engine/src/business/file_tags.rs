@@ -12,31 +12,6 @@ struct TagChange {
     advance: bool,
 }
 
-fn belongs_to_branch(state: &State, branch: &str, head: &str, source: &str) -> bool {
-    if state
-        .file_metadata_nodes
-        .get(source)
-        .is_some_and(|n| n.branch_id == branch)
-        || state
-            .file_path_nodes
-            .get(source)
-            .is_some_and(|n| n.branch_id == branch)
-    {
-        return true;
-    }
-    let mut todo = vec![head.to_owned()];
-    let mut visited = BTreeSet::new();
-    while let Some(node) = todo.pop() {
-        if node == source {
-            return true;
-        }
-        if visited.insert(node.clone()) {
-            todo.extend(file_nodes::node_parents(state, &node));
-        }
-    }
-    false
-}
-
 impl Engine {
     pub fn update_file_node_tags(
         &mut self,
@@ -96,7 +71,7 @@ impl Engine {
                         return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict, "tag target head changed"));
                     }
                     let version = file_nodes::node_version(state,file,&target.source_node_id)?;
-                    if !belongs_to_branch(state,&target.branch_id,&head,&target.source_node_id) {
+                    if !file_nodes::belongs_to_branch(state,&target.branch_id,&head,&target.source_node_id) {
                         return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound, "tag target node is outside the selected branch"));
                     }
                     let old = file_nodes::node_tags(state,&target.source_node_id);

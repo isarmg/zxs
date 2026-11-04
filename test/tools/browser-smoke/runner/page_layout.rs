@@ -43,33 +43,7 @@ pub(super) fn files(browser: &Browser) -> Result<()> {
                     for (width, height) in VIEWS {
                         viewport(browser, width, height)?;
                         accessibility::input_surfaces(browser)?;
-                        let geometry=browser.script(r#"
-                        const nav=document.querySelector('.zxs-file-pagination'),panel=nav.closest('.zxs-file-list-panel');
-                        const table=panel.querySelector('table'),scroll=table.parentElement;
-                        const edge=table.querySelector('tbody tr:last-child')||table.querySelector('thead tr:last-child');
-                        const line=getComputedStyle(nav);
-                        const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const context=canvas.getContext('2d');
-                        const color=value=>{context.clearRect(0,0,1,1);context.fillStyle=value;context.fillRect(0,0,1,1);return [...context.getImageData(0,0,1,1).data].join(',');};
-                        return {lineWidth:parseFloat(line.borderTopWidth),lineStyle:line.borderTopStyle,lineColor:color(line.borderTopColor),
-                            expectedColor:color(line.getPropertyValue('--zxs-block-border').trim()),duplicate:[...edge.children].some(e=>parseFloat(getComputedStyle(e).borderBottomWidth)!==0),
-                            gap:nav.getBoundingClientRect().top-scroll.getBoundingClientRect().bottom,
-                            documentWidth:document.documentElement.scrollWidth};
-                    "#)?;
-                        if geometry["lineWidth"] != 1
-                            || geometry["lineStyle"] != "solid"
-                            || geometry["lineColor"] != geometry["expectedColor"]
-                            || geometry["lineColor"] == "0,0,0,0"
-                            || geometry["duplicate"] != false
-                            || geometry["gap"].as_f64().is_none_or(|gap| gap.abs() > 0.5)
-                            || geometry["documentWidth"]
-                                .as_u64()
-                                .is_none_or(|w| w > u64::from(width) + 1)
-                        {
-                            return Err(format!(
-                                "file separator {theme} {width}x{height} empty={empty}: {geometry}"
-                            )
-                            .into());
-                        }
+                        file_row_geometry(browser)?;
                     }
                 }
             }
@@ -87,10 +61,118 @@ pub(super) fn files(browser: &Browser) -> Result<()> {
         },
     )?;
     println!(
-        "PASS single file-pagination separator with nonempty and empty real results in both themes at four viewports"
+        "PASS inset file-row and pagination separators with shared G4 row surfaces, nonempty and empty real results in both themes at four viewports"
     );
     Ok(())
 }
+// Also called with the five-row synthetic page to cover first, middle and last.
+pub(super) fn file_row_geometry(browser: &Browser) -> Result<()> {
+    wait_for("inset file separators and shared G4 row surfaces", || {
+        let geometry = browser.script(include_str!("file_row_layout.js"))?;
+        if geometry["valid"] == true {
+            Ok(())
+        } else {
+            Err(format!("file row decoration: {geometry}").into())
+        }
+    })
+}
+
+pub(super) fn file_row_sizes(browser: &Browser) -> Result<()> {
+    with_cleanup(
+        || {
+            let mut overflow = false;
+            for (width, height) in VIEWS {
+                viewport(browser, width, height)?;
+                for end in [false, true, false] {
+                    let metrics = browser.script(&format!("const s=document.querySelector('.zxs-file-list-panel .zxs-table-scroll');const maximum=s.scrollWidth-s.clientWidth;s.scrollLeft={end}?maximum:0;return {{maximum,left:s.scrollLeft}}"))?;
+                    overflow |= metrics["maximum"].as_f64().is_some_and(|value| value > 1.0);
+                    file_row_geometry(browser)?;
+                }
+            }
+            if !overflow {
+                return Err("file-row viewport fixture never exercised horizontal overflow".into());
+            }
+            file_row_resize(browser)?;
+            Ok(())
+        },
+        || {
+            browser.cdp("Emulation.clearDeviceMetricsOverride", json!({}))?;
+            Ok(())
+        },
+    )
+}
+
+// The pagination fixture removes a genuinely wider nowrap size cell through a
+// real page/query update. Measure actual table widths instead of assuming that
+// fewer rows necessarily make a native table narrower.
+pub(super) fn file_row_shrink_start(browser: &Browser) -> Result<Value> {
+    viewport(browser, 320, 568)?;
+    let before = browser.script("const s=document.querySelector('.zxs-file-list-panel .zxs-table-scroll');s.scrollLeft=s.scrollWidth-s.clientWidth;return {width:s.querySelector('table').getBoundingClientRect().width,left:s.scrollLeft,client:s.clientWidth,viewport:innerWidth}")?;
+    if before["left"].as_f64().is_none_or(|left| left <= 0.0) {
+        return Err(
+            format!("file-row shrink fixture did not start right-scrolled: {before}").into(),
+        );
+    }
+    file_row_geometry(browser)?;
+    Ok(before)
+}
+
+pub(super) fn file_row_shrink_finish(browser: &Browser, before: Value, action: &str) -> Result<()> {
+    // No scroll assignment here: clearing the old page may naturally move to
+    // zero before the shorter result arrives. Both zero and the new right edge
+    // are valid, but decoration may never retain the old scrollable width.
+    // The page scrollbar may disappear with fewer rows; compare the unchanged
+    // outer viewport rather than assuming an unchanged content clientWidth.
+    wait_for(
+        "page/query shrink naturally clamps horizontal scrolling",
+        || {
+            let after = browser.script(&format!("const s=document.querySelector('.zxs-file-list-panel .zxs-table-scroll'),width=s.querySelector('table').getBoundingClientRect().width,maximum=Math.max(0,width-s.clientWidth),offset=parseFloat(getComputedStyle(s).getPropertyValue('--zxs-file-scroll-left'));return {{valid:width<{}-1&&innerWidth==={}&&s.scrollWidth<=Math.ceil(width)+1&&s.scrollLeft>=0&&s.scrollLeft<=maximum+.5&&s.scrollLeft<{}-.5&&Math.abs(offset-s.scrollLeft)<.01,width,maximum,left:s.scrollLeft,scroll:s.scrollWidth,client:s.clientWidth,offset}}",before["width"],before["viewport"],before["left"]))?;
+            if after["valid"] != true {
+                return Err(
+                    format!("file-row {action} shrink: before={before}, after={after}").into(),
+                );
+            }
+            file_row_geometry(browser)
+        },
+    )
+}
+
+fn file_row_resize(browser: &Browser) -> Result<()> {
+    viewport(browser, 320, 568)?;
+    if browser.script("const s=document.querySelector('.zxs-file-list-panel .zxs-table-scroll');s.scrollLeft=s.scrollWidth-s.clientWidth;return s.scrollLeft>0")? != true {
+        return Err("file-row resize fixture must start at an overflowing right edge".into());
+    }
+    file_row_geometry(browser)?;
+    // Do not set scrollLeft after expanding. Decoration must not retain phantom
+    // overflow, and the browser must clamp the real scroll position by itself.
+    viewport(browser, 1440, 900)?;
+    wait_for(
+        "right-scrolled list expands without retained overflow or blank space",
+        || {
+            let metrics = browser.script("const s=document.querySelector('.zxs-file-list-panel .zxs-table-scroll'),t=s.querySelector('table');return {valid:Math.abs(s.scrollLeft)<.01&&s.scrollWidth<=s.clientWidth+1&&t.getBoundingClientRect().width<=s.clientWidth+1,left:s.scrollLeft,scroll:s.scrollWidth,client:s.clientWidth}")?;
+            if metrics["valid"] != true {
+                return Err(format!("file-row resize retained scroll overflow: {metrics}").into());
+            }
+            file_row_geometry(browser)
+        },
+    )?;
+    browser.cdp(
+        "Emulation.setDeviceMetricsOverride",
+        json!({"width":320,"height":568,"deviceScaleFactor":2,"mobile":false}),
+    )?;
+    browser.script("document.querySelector('.zxs-file-list-panel .zxs-table-scroll').scrollLeft=.5;return true")?;
+    wait_for(
+        "high-DPI native fractional scroll offset is preserved",
+        || {
+            let metrics = browser.script("const s=document.querySelector('.zxs-file-list-panel .zxs-table-scroll'),offset=parseFloat(getComputedStyle(s).getPropertyValue('--zxs-file-scroll-left'));return {valid:devicePixelRatio===2&&s.scrollLeft>0&&!Number.isInteger(s.scrollLeft)&&Math.abs(offset-s.scrollLeft)<.01,left:s.scrollLeft,offset}")?;
+            if metrics["valid"] != true {
+                return Err(format!("fractional file-row scroll offset: {metrics}").into());
+            }
+            file_row_geometry(browser)
+        },
+    )
+}
+
 fn range_menu(browser: &Browser, theme: &str, width: u32) -> Result<()> {
     let trigger = browser.css(".zxs-monitor-range .zxs-select-trigger")?;
     with_cleanup(

@@ -694,3 +694,63 @@ async fn api_errors_keep_request_identity_separate_from_message_and_source() {
         server.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn typed_directory_history_rejects_cross_scope_response_before_returning_it() {
+    use storage_contract::directory_history::*;
+    let repo = "repo_00000000000000000000000000000000";
+    let directory = "entry_00000000000000000000000000000000";
+    let request = DirectoryHistoryRequest::parse(
+        repo,
+        directory,
+        DirectoryHistoryCollection::Nodes,
+        std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+    let page = json_codec::json!({"identity":{"repository_id":repo,"directory_id":directory,"history_tree_id":"history_00000000000000000000000000000000","history_root":"a".repeat(64),"collection":"nodes","limit":64},"current":{"directory_branch_id":null,"tree_id":null},"nodes":[],"branches":[],"page":{"previous_cursor":null,"next_cursor":null}});
+    for valid in [true, false] {
+        let mut body = page.clone();
+        if !valid {
+            body["identity"]["directory_id"] = "entry_11111111111111111111111111111111".into();
+        }
+        let body = json_codec::to_vec(&body).unwrap();
+        let mut response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).into_bytes();
+        response.extend_from_slice(&body);
+        let (client, server) = reply(response).await;
+        let result = client.directory_history(&request).await;
+        if valid {
+            assert_eq!(result.unwrap().identity.directory_id, directory);
+        } else {
+            assert!(matches!(result, Err(Error::Contract(_))));
+        }
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn historical_source_client_requires_a_proven_nonempty_head_and_exact_root() {
+    use storage_contract::file_history_merge::*;
+    let file = "file_00000000000000000000000000000000";
+    let node = "ver_00000000000000000000000000000000";
+    let request = FileHistorySourceRequest::parse(file, node, &"a".repeat(64)).unwrap();
+    let source = json_codec::json!({"file_id":file,"source_node_id":node,"history_root":"a".repeat(64),"branch":{"branch_id":"br_00000000000000000000000000000000","name":"Old source","head_commit_id":"commit_00000000000000000000000000000000","fork_commit_id":"commit_00000000000000000000000000000000","node_id":node,"state":"archived","branch_kind":"file","generation":"7","current":false,"read_only":true,"alias_of":null,"content":{"version_id":node,"source":{"kind":"owned"},"stored_state":"AVAILABLE"}}});
+    for change in [None, Some("root"), Some("head")] {
+        let mut value = source.clone();
+        match change {
+            Some("root") => value["history_root"] = "b".repeat(64).into(),
+            Some("head") => value["branch"]["node_id"] = json_codec::Value::Null,
+            _ => {}
+        }
+        let body = json_codec::to_vec(&value).unwrap();
+        let mut response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).into_bytes();
+        response.extend_from_slice(&body);
+        let (client, server) = reply(response).await;
+        let result = client.file_history_source(&request).await;
+        if change.is_none() {
+            assert!(result.unwrap().branch.read_only);
+        } else {
+            assert!(matches!(result, Err(Error::Contract(_))));
+        }
+        server.await.unwrap();
+    }
+}

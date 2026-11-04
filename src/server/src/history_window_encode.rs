@@ -391,8 +391,12 @@ fn validate(page: &HistoryWindowPage) -> Result<(), ApiError> {
 
 pub(crate) fn encode(page: &HistoryWindowPage) -> Result<Vec<u8>, ApiError> {
     validate(page)?;
-    let mut buffer = PageBuffer::new(MAX_HISTORY_RESPONSE_BYTES);
-    json_codec::to_writer(&mut buffer, page).map_err(bounded_error)?;
+    encode_bounded(page, MAX_HISTORY_RESPONSE_BYTES)
+}
+
+pub(crate) fn encode_bounded(value: &impl Serialize, maximum: usize) -> Result<Vec<u8>, ApiError> {
+    let mut buffer = PageBuffer::new(maximum);
+    json_codec::to_writer(&mut buffer, value).map_err(bounded_error)?;
     Ok(buffer.bytes)
 }
 

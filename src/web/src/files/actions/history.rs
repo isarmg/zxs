@@ -1060,7 +1060,17 @@ async fn collect_review_branches(
             .map_err(api::Error::from)?;
         for branch in projected.branches() {
             if remaining.remove(branch.id())
-                && let Some(branch) = SelectedBranch::capture(branch)
+                && let Some(branch) = if owner.kind == review::Kind::Merge
+                    && state.with_untracked(|s| {
+                        s.files
+                            .merge
+                            .as_ref()
+                            .is_some_and(|draft| draft.historical())
+                    }) {
+                    SelectedBranch::capture_reference(branch)
+                } else {
+                    SelectedBranch::capture(branch)
+                }
             {
                 facts.branches.push(branch);
             }

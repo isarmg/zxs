@@ -219,16 +219,23 @@ unsafe extern "C" fn connect(
             ))
         }?;
         // SAFETY: SDK parameter lookup uses static NUL-terminated keys and returns a borrowed NUL-
-        // terminated string or null; text validates the latter.
+        // terminated string or null; null explicitly selects the default namespace.
         let repository = unsafe {
-            text(sdk::lp_parm_const_string(
+            sdk::lp_parm_const_string(
                 service,
                 c"zxs".as_ptr(),
                 c"repository".as_ptr(),
                 std::ptr::null(),
-            ))
-        }?;
-        let client = Client::connect(&PathBuf::from(socket), &samba_username, repository)?;
+            )
+        };
+        let client = if repository.is_null() {
+            Client::connect_default(&PathBuf::from(socket), &samba_username)?
+        } else {
+            // SAFETY: The SDK returns a borrowed NUL-terminated parameter for
+            // the live service, checked non-null above.
+            let repository = unsafe { text(repository) }?;
+            Client::connect(&PathBuf::from(socket), &samba_username, repository)?
+        };
         let boxed = Box::new(Context {
             samba_username,
             client,

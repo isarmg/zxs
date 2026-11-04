@@ -76,6 +76,14 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_file_merge::submit),
         )
         .route(
+            "/api/file-manager/files/{file}/merge-history/source",
+            get(http_file_history_source::read),
+        )
+        .route(
+            "/api/file-manager/files/{file}/merge-history",
+            post(http_file_history_merge::submit),
+        )
+        .route(
             "/api/file-manager/files/{file}/tags",
             post(http_file_tags::submit),
         )

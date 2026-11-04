@@ -28,6 +28,7 @@ pub(crate) fn draft() -> Draft {
         selected_page: 0,
         anchor: String::new(),
         resolved: None,
+        historical: None,
     }
 }
 

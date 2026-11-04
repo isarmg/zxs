@@ -20,12 +20,13 @@ use std::{
 };
 pub use storage_contract::history_window::HistoryWindowCancellation;
 use storage_contract::history_window::*;
+mod merge_source;
 mod nodes;
 mod projection;
 mod query;
 mod read;
-mod selection;
-pub use read::HistoryWindowRead;
+use super::history_selection as selection;
+pub use read::{FileHistorySourceRead, HistoryWindowRead};
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/history_window_oracle_tests.rs"]

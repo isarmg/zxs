@@ -19,7 +19,9 @@
     # Only the socket is runtime state; ZXS retains SMB data separately under
     # its system-disk --management-root/smb-spool, never beside this socket.
     zxs:socket = /zxs/run/smb.sock
-    zxs:repository = repo_REPLACE_WITH_REPOSITORY_ID
+    # Omit zxs:repository to share the default primary-disk directories.
+    # Paths are always P01/..., P02/...; existing named repositories remain
+    # directories within their primary. Backup snapshots are not exposed here.
     valid users = zxs-owner
     guest ok = no
     guest only = no

@@ -1257,3 +1257,236 @@ async fn typed_backup_routes_preserve_wire_admission_digest_and_permanent_receip
     assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
     assert_eq!(rejected["error"]["code"], "CONFIG_CONFLICT");
 }
+
+#[tokio::test]
+async fn historical_merge_preserves_source_default_and_replays_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "report.txt", b"base").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let file = listing["entries"][0]["file_id"].as_str().unwrap();
+    let base = listing["entries"][0]["version_id"].as_str().unwrap();
+    let repo = listing["context"]["repository_id"].as_str().unwrap();
+    let source = branch(&app, &token, file, base, "Source").await;
+    select(&app, &token, file, &source).await;
+    manager_upload(&app, &token, "report.txt", b"middle").await;
+    let middle_history = history(&app, &token, file).await;
+    let middle = middle_history["identity"]["context"]["current_node_id"]
+        .as_str()
+        .unwrap();
+    manager_upload(&app, &token, "report.txt", b"newer stays current").await;
+    let before = history(&app, &token, file).await;
+    let head = before["identity"]["context"]["current_node_id"]
+        .as_str()
+        .unwrap();
+    let operation = new_id("op").unwrap();
+    let inputs = json!([
+        {"branch_id":source,"source_node_id":base,"expected_node_id":head},
+        {"branch_id":source,"source_node_id":middle,"expected_node_id":head}
+    ]);
+    let request = json!({"inputs":inputs,"chosen_node_id":middle,"name":"Historical result","confirmed":true,"repository_id":repo,"path":"report.txt","operation_id":operation});
+    let route = format!("/api/file-manager/files/{file}/merge-history");
+    for consent in [Value::Null, json!(false), json!("true")] {
+        let mut invalid = request.clone();
+        invalid["confirmed"] = consent;
+        assert_eq!(
+            send(&app, Some(&token), "POST", &route, Some(invalid))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(history(&app, &token, file).await, before);
+    }
+    let mut stale = request.clone();
+    stale["inputs"][0]["expected_node_id"] = base.into();
+    let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(stale)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(rejected["error"]["code"], "FILE_BRANCH_CONFLICT");
+    assert_eq!(history(&app, &token, file).await, before);
+    let mut wrong_path = request.clone();
+    wrong_path["path"] = "missing.txt".into();
+    assert_eq!(
+        send(&app, Some(&token), "POST", &route, Some(wrong_path))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(history(&app, &token, file).await, before);
+    let merged = success(&app, &token, "POST", &route, Some(request.clone())).await;
+    assert_eq!(merged["operation_kind"], "file.history.merge");
+    let result_node = merged["result"]["node_id"].as_str().unwrap();
+    assert!(result_node.starts_with("fmeta_"));
+    assert_ne!(result_node, middle);
+    assert_ne!(result_node, base);
+    assert_eq!(merged["result"]["reused_node"], false);
+    assert_eq!(merged["result"]["version_id"], middle);
+    assert_eq!(merged["result"]["source_inputs"], inputs);
+    assert_eq!(merged["result"]["name"], "Historical result");
+    assert_eq!(merged["result"]["directory_branch_ids"], json!([]));
+    assert_eq!(merged["request_digest"], storage_contract::object_hash("request", &json!({
+        "kind":"file.history.merge","principal":"admin","body":{
+            "file_id":file,"inputs":inputs,"chosen_node_id":middle,"name":"Historical result",
+            "location":{"repository_id":repo,"path":"report.txt"}
+        }
+    })).unwrap());
+    let result_branch = merged["result"]["branch_id"].as_str().unwrap().to_owned();
+    assert_ne!(result_branch, source);
+    let after = history(&app, &token, file).await;
+    assert_eq!(after["identity"]["context"]["current_node_id"], head);
+    assert_eq!(
+        after["identity"]["context"]["selected_branch_id"],
+        before["identity"]["context"]["selected_branch_id"]
+    );
+    let branches = history_related(&app, &token, file, &after, "branches", None).await;
+    let original = branches["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["branch_id"] == source)
+        .unwrap();
+    assert_eq!(original["node_id"], head);
+    assert_eq!(original["read_only"], false);
+    let new = branches["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["branch_id"] == result_branch)
+        .unwrap();
+    assert_eq!(new["name"], "Historical result");
+    assert_eq!(new["node_id"], result_node);
+    assert_eq!(new["read_only"], false);
+    assert_eq!(
+        success(&app, &token, "POST", &route, Some(request.clone())).await["result"],
+        merged["result"]
+    );
+    assert_eq!(history(&app, &token, file).await, after);
+    for field in ["name", "path"] {
+        let mut changed = request.clone();
+        changed[field] = "different".into();
+        let (status, error) = send(&app, Some(&token), "POST", &route, Some(changed)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    }
+    let revoked = revoked_session(&app).await;
+    assert_eq!(
+        send(&app, Some(&revoked), "POST", &route, Some(request.clone()))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    drop(app);
+    let system = root.path().join("system");
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    assert_eq!(
+        success(&app, &token, "POST", &route, Some(request)).await["result"],
+        merged["result"]
+    );
+    assert_eq!(history(&app, &token, file).await, after);
+    select(&app, &token, file, &result_branch).await;
+    assert_eq!(
+        history(&app, &token, file).await["identity"]["context"]["current_node_id"],
+        result_node
+    );
+}
+
+#[tokio::test]
+async fn historical_source_http_resolves_old_other_branch_and_requires_exact_root() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "report.txt", b"base").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let file = listing["entries"][0]["file_id"].as_str().unwrap();
+    let base = listing["entries"][0]["version_id"].as_str().unwrap();
+    let left = branch(&app, &token, file, base, "Left").await;
+    select(&app, &token, file, &left).await;
+    manager_upload(&app, &token, "report.txt", b"left ancestor").await;
+    let old = history(&app, &token, file).await;
+    let ancestor = old["identity"]["context"]["current_node_id"]
+        .as_str()
+        .unwrap();
+    manager_upload(&app, &token, "report.txt", b"left later").await;
+    let later = history(&app, &token, file).await;
+    let head = later["identity"]["context"]["current_node_id"]
+        .as_str()
+        .unwrap();
+    let right = branch(&app, &token, file, base, "Right").await;
+    select(&app, &token, file, &right).await;
+    manager_upload(&app, &token, "report.txt", b"right later").await;
+    let before = history(&app, &token, file).await;
+    let request = storage_contract::file_history_merge::FileHistorySourceRequest::parse(
+        file,
+        ancestor,
+        before["identity"]["history_root"].as_str().unwrap(),
+    )
+    .unwrap();
+    let query = url_encoding::form::Serializer::new(String::new())
+        .extend_pairs(request.query_fields())
+        .finish();
+    let route = format!("{}?{query}", request.route());
+    let source: storage_contract::file_history_merge::FileHistorySource =
+        json_codec::from_value(success(&app, &token, "GET", &route, None).await).unwrap();
+    source.validate(&request).unwrap();
+    assert_eq!(source.branch.branch_id.as_str(), left);
+    assert_eq!(source.branch.node_id.as_ref().unwrap().as_str(), head);
+    assert_eq!(
+        history(&app, &token, file).await,
+        before,
+        "on-demand provenance cannot change ordinary pages"
+    );
+    assert_eq!(
+        send(&app, None, "GET", &route, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let revoked = revoked_session(&app).await;
+    assert_eq!(
+        send(&app, Some(&revoked), "GET", &route, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "GET",
+            &format!("{route}&unexpected=true"),
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "GET",
+            &format!("{}?node_id={ancestor}", request.route()),
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    manager_upload(&app, &token, "report.txt", b"new root").await;
+    let (status, error) = send(&app, Some(&token), "GET", &route, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "HISTORY_CHANGED");
+}

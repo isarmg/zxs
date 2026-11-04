@@ -128,6 +128,13 @@ impl Session {
                 error: ApiError::invalid_source(error),
                 operation_id: None,
             })?;
+        self.dispatch_admitted(request)
+    }
+
+    pub(super) fn dispatch_admitted(
+        &mut self,
+        request: Request<OperationId>,
+    ) -> Result<(Reply, Option<OwnedFd>), DispatchError> {
         let is_namespace = matches!(&request, Request::Namespace { .. });
         let dirty_handle = match &request {
             Request::Dirty { handle } => Some(*handle),
@@ -174,7 +181,9 @@ impl Session {
         request: Request<OperationId>,
     ) -> Result<(Reply, Option<OwnedFd>), ApiError> {
         let value = match request {
-            Request::Hello { .. } => return Err(ApiError::invalid("hello is allowed only once")),
+            Request::Hello { .. } | Request::HelloDefault { .. } => {
+                return Err(ApiError::invalid("hello is allowed only once"));
+            }
             Request::Open {
                 path,
                 writable,

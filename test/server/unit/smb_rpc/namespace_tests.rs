@@ -489,6 +489,13 @@ impl Backend for NamespaceFailure {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.inner.workspace_capacity(identity)
     }
+    fn resolve_smb_path(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        self.inner.resolve_smb_path(identity, request)
+    }
     fn smb_binding_status(
         &self,
         identity: &crate::auth::Identity,
@@ -1480,6 +1487,13 @@ impl Backend for PreparationFailure {
         identity: &crate::auth::Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.inner.workspace_capacity(identity)
+    }
+    fn resolve_smb_path(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        self.inner.resolve_smb_path(identity, request)
     }
     fn smb_binding_status(
         &self,

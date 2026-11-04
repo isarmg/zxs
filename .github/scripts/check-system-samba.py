@@ -214,6 +214,18 @@ def read_account_tree_before_switch(previous_tree, before_switch, tree_ready):
         raise RuntimeError("existing account tree did not read the known body before switching")
 
 
+def read_default_tree(process, remote, destination, marker, expected):
+    """Read on one already connected default tree, fencing each stdin command."""
+    process.stdin.write(f'get "{remote}" "{destination}"\n')
+    process.stdin.flush()
+    wait_file(destination, process, timeout=30)
+    process.stdin.write("!touch " + shlex.quote(str(marker)) + "\n")
+    process.stdin.flush()
+    wait_file(marker, process, timeout=30)
+    if destination.read_bytes() != expected:
+        raise RuntimeError("default tree did not read the expected selected branch body")
+
+
 def run(args):
     args.output.unlink(missing_ok=True)  # A failed rerun must not retain a prior success receipt.
     if os.geteuid() != 0 or os.environ.get("ZXS_ISOLATED_SAMBA_TEST") != "1":
@@ -338,6 +350,24 @@ use sendfile = no
 store dos attributes = no
 ea support = no
 follow symlinks = no
+[default]
+path = {work}/empty
+vfs objects = zxs
+zxs:socket = {ready['socket']}
+valid users = {smb_user.pw_name} {next_user.pw_name}
+guest ok = no
+read only = no
+smb encrypt = required
+oplocks = no
+level2 oplocks = no
+kernel oplocks = no
+durable handles = no
+aio read size = 1
+aio write size = 1
+use sendfile = no
+store dos attributes = no
+ea support = no
+follow symlinks = no
 [forced]
 copy = zxs
 force user = {smb_user.pw_name}
@@ -354,8 +384,9 @@ force user = {smb_user.pw_name}
                     env=environment, stdout=daemon_log, stderr=subprocess.STDOUT, start_new_session=True)
                 children.append(daemon)
                 base = ["smbclient", "//127.0.0.1/zxs", "-p", "44545", "--client-protection=encrypt", "-m", "SMB3"]
-                def client(command, *, credential=auth, succeeds=True):
-                    completed = subprocess.run(base + (["-A", str(credential)] if credential else ["-N"]) + ["-c", command],
+                def client(command, *, credential=auth, succeeds=True, share="zxs"):
+                    target = [base[0], f"//127.0.0.1/{share}", *base[2:]]
+                    completed = subprocess.run(target + (["-A", str(credential)] if credential else ["-N"]) + ["-c", command],
                         env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
                     if (completed.returncode == 0) != succeeds:
                         raise RuntimeError(f"unexpected SMB result for {command}: {completed.returncode}\n{completed.stdout}")
@@ -465,6 +496,37 @@ force user = {smb_user.pw_name}
                 result["checks"].append("read-existing-file")
                 payload = work / "payload.bin"
                 payload.write_bytes(ready["payload"].encode("utf-8"))
+                default_listing = client("ls", share="default")
+                if not re.search(r"^\s*P01\s+D\s", default_listing, re.MULTILINE):
+                    raise RuntimeError("default share did not expose the stable primary-disk root")
+                default_original = work / "default-original.bin"
+                client(f'get "{ready["default_named_path"]}/report.txt" "{default_original}"', share="default")
+                if default_original.read_bytes() != b"old":
+                    raise RuntimeError("default share did not preserve the existing named repository")
+                default_base = [base[0], "//127.0.0.1/default", *base[2:]]
+                default_session = subprocess.Popen(default_base + ["-A", str(auth)], env=environment,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, start_new_session=True)
+                children.append(default_session)
+                # Deliberately use a lower-case parent slot on the same live tree.
+                default_remote = ready["default_named_path"].replace("P01/", "p01/", 1) + "/report.txt"
+                read_default_tree(default_session, default_remote, work / "default-before.bin",
+                                  work / "default-before-ready", b"old")
+                publish_marker(engine_work, "default-switch")
+                wait_file(engine_work / "default-switched", fixture)
+                read_default_tree(default_session, default_remote, work / "default-selected.bin",
+                                  work / "default-selected-ready", b"new")
+                publish_marker(engine_work, "default-restore")
+                wait_file(engine_work / "default-restored", fixture)
+                read_default_tree(default_session, default_remote, work / "default-restored.bin",
+                                  work / "default-restored-ready", b"old")
+                result["checks"].extend(["default-share-live-branch-switch", "default-share-canonical-parent-path"])
+                default_received = work / "default-received.bin"
+                client(f'put "{payload}" P01/default-upload.txt; get P01/default-upload.txt "{default_received}"; rename P01/default-upload.txt P01/default-kept.txt', share="default")
+                if default_received.read_bytes() != payload.read_bytes():
+                    raise RuntimeError("default share download differs from uploaded bytes")
+                result["checks"].extend(["default-share-primary-root", "default-share-existing-named-repository",
+                                         "default-share-put-get-rename"])
                 received = work / "received.bin"
                 client(f'put "{payload}" upload.txt; get upload.txt "{received}"; rename upload.txt kept.txt')
                 if received.read_bytes() != payload.read_bytes():
@@ -495,11 +557,18 @@ force user = {smb_user.pw_name}
                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
                 if new_tree.returncode == 0 or "NT_STATUS_UNSUCCESSFUL" not in new_tree.stdout:
                     raise RuntimeError("revoked new tree was not rejected by connect hook: " + new_tree.stdout)
+                default_denial, _ = default_session.communicate("ls\nquit\n", timeout=30)
+                if default_session.returncode != 0 or "NT_STATUS_ACCESS_DENIED" not in default_denial:
+                    raise RuntimeError("revoked existing default tree did not produce ACCESS_DENIED: " + default_denial)
+                result["revoked_default_tree"] = {"authority_revoked": True,
+                    "returncode": default_session.returncode, "output": default_denial}
+                result["checks"].append("default-share-live-authority-revoked")
                 result["revoked_existing_tree"] = {"authority_revoked": True, "returncode": session.returncode, "output": denial}
                 result["revoked_new_tree"] = new_tree.stdout
                 publish_marker(engine_work, "denied")
                 wait_file(engine_work / "enabled", fixture)
                 client("del kept.txt")
+                client("del P01/default-kept.txt", share="default")
                 publish_marker(engine_work, "done")
                 wait_file(engine_work / "verified.json", fixture)
                 if fixture.wait(timeout=30) != 0:

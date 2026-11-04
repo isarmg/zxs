@@ -226,6 +226,14 @@ impl Backend for BackendProbe {
         self.wait()?;
         Ok(probe_capacity())
     }
+    fn resolve_smb_path(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn smb_binding_status(
         &self,
         _identity: &crate::auth::Identity,
@@ -340,6 +348,14 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn merge_file_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MergeFileHistory,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -532,6 +548,24 @@ impl Backend for BackendProbe {
         _identity: &crate::auth::Identity,
         _repository_id: &str,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn file_history_source(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::file_history_merge::FileHistorySourceRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::file_history_merge::FileHistorySource, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn directory_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::directory_history::DirectoryHistoryRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -1050,6 +1084,8 @@ fn workspace_body(method: &str, path: &str) -> Value {
         json!({"kind":"delete","items":[],"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/merge") {
         json!({"inputs":[],"chosen_node_id":"node","surviving_branch_id":"branch","confirmed":true,"operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path.ends_with("/merge-history") {
+        json!({"inputs":[],"chosen_node_id":"node","name":"Historical result","confirmed":true,"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/tags") {
         json!({"targets":[],"add":[],"remove":[],"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path == "/api/file-manager/disks/P01/namespace" {
@@ -1152,10 +1188,23 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
         "GET",
         "/api/files/file_00000000000000000000000000000000/history/versions/ver_00000000000000000000000000000000/sources?history_root=0000000000000000000000000000000000000000000000000000000000000000",
     ),
+    (
+        "GET",
+        "/api/repositories/repo_00000000000000000000000000000000/directories/entry_00000000000000000000000000000000/history",
+    ),
+    (
+        "GET",
+        "/api/repositories/repo_00000000000000000000000000000000/directories/entry_00000000000000000000000000000000/history/branches",
+    ),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/merge-history/source?node_id=ver_00000000000000000000000000000000&history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ),
     ("POST", "/api/file-manager/files/file/metadata"),
     ("POST", "/api/file-manager/versions/version/metadata"),
     ("PATCH", "/api/file-manager/files/file/nodes/node"),
     ("POST", "/api/file-manager/files/file/merge"),
+    ("POST", "/api/file-manager/files/file/merge-history"),
     ("POST", "/api/file-manager/files/file/tags"),
     ("POST", "/api/file-manager/disks/P01/namespace"),
     ("POST", "/api/file-manager/disks/P01/write-sessions"),

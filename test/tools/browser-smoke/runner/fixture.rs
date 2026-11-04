@@ -120,6 +120,15 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         PRINCIPAL,
         storage_engine::OperationId::generate().unwrap(),
     )?;
+    // Real directory history must exist before the content writes, so the
+    // browser can verify actual parent connectors rather than a lone snapshot.
+    // This is an explicit mutation of this private, test-owned pool only.
+    engine.initialize_directory_scope(
+        &repository.repository_id,
+        None,
+        PRINCIPAL,
+        storage_engine::OperationId::generate().unwrap(),
+    )?;
     for payload in PAYLOADS {
         let workspace = engine.create_workspace(&repository.main_branch_id, PRINCIPAL)?;
         engine.stage_bytes(&workspace.workspace_id, FILE, payload.as_bytes())?;

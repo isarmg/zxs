@@ -778,6 +778,13 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.inner.backend()?.workspace_capacity(identity)
     }
+    fn resolve_smb_path(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveSmbPath,
+    ) -> Result<crate::SmbPathLocation, crate::ApiError> {
+        self.inner.backend()?.resolve_smb_path(identity, request)
+    }
     fn smb_binding_status(
         &self,
         identity: &crate::auth::Identity,
@@ -1022,6 +1029,13 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.merge_file_branches(identity, request)
     }
+    fn merge_file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MergeFileHistory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.merge_file_history(identity, request)
+    }
     fn update_file_node_tags(
         &self,
         identity: &crate::auth::Identity,
@@ -1208,6 +1222,26 @@ impl Backend for ManagementBackend {
         self.inner
             .backend()?
             .default_directory_branch(identity, repository_id)
+    }
+    fn file_history_source(
+        &self,
+        identity: &Identity,
+        request: storage_contract::file_history_merge::FileHistorySourceRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::file_history_merge::FileHistorySource, crate::ApiError> {
+        self.inner
+            .backend()?
+            .file_history_source(identity, request, cancellation)
+    }
+    fn directory_history(
+        &self,
+        identity: &crate::auth::Identity,
+        request: storage_contract::directory_history::DirectoryHistoryRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, crate::ApiError> {
+        self.inner
+            .backend()?
+            .directory_history(identity, request, cancellation)
     }
     fn history_window(
         &self,

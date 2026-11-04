@@ -52,6 +52,24 @@ fn disk_observation_message(
     })
 }
 
+// The interface's two supported languages use LTR scrolling. CSS supplies the
+// live scrollport width; one inherited offset anchors every row decoration
+// without changing native table scroll, focus or hit testing. The view owns
+// this listener, so it is removed with the scroll container.
+fn sync_row_viewport(event: web_sys::Event) {
+    let scroll = event_target::<web_sys::HtmlElement>(&event);
+    // The stable web-sys getter returns i32, while CSSOM scrollLeft is a double.
+    // Read the native number so high-DPI/zoomed scrolling keeps subpixel offsets.
+    let left = js_sys::Reflect::get(scroll.as_ref(), &"scrollLeft".into())
+        .expect("invariant: an element exposes its native scrollLeft property")
+        .as_f64()
+        .expect("invariant: CSSOM scrollLeft is a number");
+    scroll
+        .style()
+        .set_property("--zxs-file-scroll-left", &format!("{left}px"))
+        .expect("invariant: a pixel scroll offset is a valid CSS custom property");
+}
+
 fn disk_roots(state: RwSignal<State>) -> impl IntoView {
     view! {
         <p class="zxs-row">{t("选择一个硬盘目录查看文件。","Choose a disk directory to browse its files.")}</p>
@@ -60,16 +78,16 @@ fn disk_roots(state: RwSignal<State>) -> impl IntoView {
                 DiskRoots::Empty => return view!{<EmptyState message=t("没有可访问的硬盘目录。","No disk directories are available.")/>}.into_any(),
                 DiskRoots::Disks(disks) => disks,
             };
-            view!{<div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush" aria-label=t("硬盘目录","Disk directories")><div class="zxs-table-scroll">
+            view!{<div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush" aria-label=t("硬盘目录","Disk directories")><div class="zxs-table-scroll" on:scroll=sync_row_viewport>
                 <table class="zxs-table zxs-file-table zxs-disk-table">
-                    <thead><tr><th scope="col">{t("名称","Name")}</th><th scope="col">{t("访问权限","Access")}</th><th scope="col">{t("可用空间","Available space")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
+                    <thead><tr><th scope="col"><span class="zxs-file-row-decoration" aria-hidden="true"></span>{t("名称","Name")}</th><th scope="col">{t("访问权限","Access")}</th><th scope="col">{t("可用空间","Available space")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
                     <tbody>{disks.into_iter().map(move |disk|{
                         let id=disk.slot_id;let data_slot=id.clone();let row_slot=id.clone();let name_slot=id.clone();let action_slot=id.clone();
                         let online=disk.online;let writable=disk.writable;
                         let available=disk_available_space(disk.available_bytes);
                         let observation=disk_observation_message(disk.observation_failure);
                         view!{<tr data-online=online.to_string() on:click=move |_|{if online{actions::open_disk(state,row_slot.clone());}}>
-                            <td><button class="zxs-button zxs-file-name zxs-disk-entry" data-slot=data_slot disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,name_slot.clone());}><FileIcon name="folder"/><span>{id}</span></button></td>
+                            <td><span class="zxs-file-row-decoration" aria-hidden="true"><span class="zxs-file-row-surface" aria-hidden="true"></span></span><button class="zxs-button zxs-file-name zxs-disk-entry" data-slot=data_slot disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,name_slot.clone());}><FileIcon name="folder"/><span>{id}</span></button></td>
                             <td>{if online{if writable{t("可读写","Read and write")}else{t("只读","Read only")}}else{t("离线","Offline")}}</td>
                             <td title=observation>{available}</td>
                             <td><div class="zxs-entry-actions zxs-flow"><button class="zxs-button" disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,action_slot.clone());}>{t("打开","Open")}</button></div></td>
@@ -168,7 +186,7 @@ fn file_table(state: RwSignal<State>) -> impl IntoView {
     let disabled = Memo::new(move |_| state.with(|s| !actions::write_allowed(s)));
     view! {
         <div aria-busy=move ||state.with(|s|s.files.loading).to_string()>
-            <div class="zxs-table-scroll"><table class="zxs-table zxs-file-table" aria-label=t("文件列表：每页最多 200 项","Files: up to 200 entries per page")><thead><tr><th scope="col"><label class="zxs-file-check zxs-flow"><input type="checkbox" aria-label=t("选择本页全部条目（最多 200 项）","Select all entries on this page (up to 200)") disabled=move ||disabled.get() prop:checked=move ||rows.with(|rows|!rows.is_empty()&&state.with(|s|rows.iter().all(|row|s.files.checked_entries.contains(&row.check_id)))) on:change=move |event|{
+            <div class="zxs-table-scroll" on:scroll=sync_row_viewport><table class="zxs-table zxs-file-table" aria-label=t("文件列表：每页最多 200 项","Files: up to 200 entries per page")><thead><tr><th scope="col"><span class="zxs-file-row-decoration" aria-hidden="true"></span><label class="zxs-file-check zxs-flow"><input type="checkbox" aria-label=t("选择本页全部条目（最多 200 项）","Select all entries on this page (up to 200)") disabled=move ||disabled.get() prop:checked=move ||rows.with(|rows|!rows.is_empty()&&state.with(|s|rows.iter().all(|row|s.files.checked_entries.contains(&row.check_id)))) on:change=move |event|{
                 let checked=event_target_checked(&event);
                 rows.with_untracked(|rows|state.update(|s|{for row in rows {if row.current_entry(s).is_some(){if checked{s.files.checked_entries.insert(row.check_id.clone());}else{s.files.checked_entries.remove(&row.check_id);}}}}));
             }/><span>{t("名称","Name")}</span></label></th><th scope="col">{t("类型","Type")}</th><th scope="col">{t("大小","Size")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
@@ -211,7 +229,7 @@ fn file_row(
     });
     view! {
         <tr class:is-selected=move ||checked.get() aria-selected=move ||checked.get().to_string() on:click=move |_|activate_row(state,row,false)>
-            <td><div class="zxs-file-select-name zxs-flow"><input class="zxs-entry-checkbox" type="checkbox" aria-label=move ||row.with(|row|format!("{} {}",t("选择","Select"),row.name)) disabled=move ||disabled.get() prop:checked=move ||checked.get() on:click=move |event|event.stop_propagation() on:change=move |event|{
+            <td><span class="zxs-file-row-decoration" aria-hidden="true"><span class="zxs-file-row-surface" aria-hidden="true"></span></span><div class="zxs-file-select-name zxs-flow"><input class="zxs-entry-checkbox" type="checkbox" aria-label=move ||row.with(|row|format!("{} {}",t("选择","Select"),row.name)) disabled=move ||disabled.get() prop:checked=move ||checked.get() on:click=move |event|event.stop_propagation() on:change=move |event|{
                 let checked=event_target_checked(&event);
                 row.with_untracked(|row|state.update(|s|{if row.current_entry(s).is_some(){if checked{s.files.checked_entries.insert(row.check_id.clone());}else{s.files.checked_entries.remove(&row.check_id);}}}));
             }/><button class="zxs-button zxs-file-name" title=move ||row.with(|row|row.name.clone()) on:click=move |event|{event.stop_propagation();activate_row(state,row,true)}>{move ||row.with(|row|view!{<FileIcon name=if row.directory{"folder"}else{"file"}/>})}<span>{move ||row.with(|row|row.name.clone())}</span></button></div></td>

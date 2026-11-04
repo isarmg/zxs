@@ -5,9 +5,10 @@ use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Barrier};
 
 #[derive(Clone, Copy, PartialEq)]
-pub(super) enum Point {
+pub(in crate::smb_rpc) enum Point {
     Before,
     After,
+    BeforeRemove,
 }
 thread_local! {
     static PAUSE: RefCell<Option<(Point, Arc<Barrier>)>> = const { RefCell::new(None) };
@@ -18,7 +19,7 @@ thread_local! {
 pub(in crate::smb_rpc) fn record_writes() -> (usize, usize) {
     (CREATES.get(), GROWS.get())
 }
-pub(super) fn pause_at(point: Point, barrier: Arc<Barrier>) {
+pub(in crate::smb_rpc) fn pause_at(point: Point, barrier: Arc<Barrier>) {
     PAUSE.with(|slot| *slot.borrow_mut() = Some((point, barrier)));
 }
 fn pause(point: Point) {
@@ -48,4 +49,9 @@ pub(super) fn grow(root: &Path, source: &Path, owner: &Owner) -> Result<(), ApiE
     let result = persistence::grow(root, source, owner);
     pause(Point::After);
     result
+}
+
+pub(super) fn remove(source: &Path) -> std::io::Result<()> {
+    pause(Point::BeforeRemove);
+    persistence::remove(source)
 }

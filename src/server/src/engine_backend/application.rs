@@ -306,6 +306,29 @@ impl<'a> Application<'a> {
             .map_err(error)
     }
 
+    pub fn merge_file_history(
+        &mut self,
+        command: crate::MergeFileHistory,
+    ) -> Result<storage_engine::OperationResult, ApiError> {
+        self.authorize_file(&command.file_id)?;
+        if !command.confirmed {
+            return Err(ApiError::invalid(
+                "confirm the historical sources, result and new branch name before merging",
+            ));
+        }
+        self.engine
+            .merge_file_history(storage_engine::FileHistoryMergeRequest {
+                file_id: &command.file_id,
+                inputs: &command.inputs,
+                chosen_node_id: &command.chosen_node_id,
+                name: &command.name,
+                location: command.location.as_ref(),
+                principal: &self.identity.principal,
+                operation_id: command.operation_id,
+            })
+            .map_err(error)
+    }
+
     /// Destructive purge/clear and split plans retain owner, digest and domain
     /// checks at execution time, even when prepared by a different adapter.
     pub fn commit_plan(

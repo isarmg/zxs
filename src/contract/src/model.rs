@@ -400,6 +400,15 @@ pub struct FileMergeInput {
     pub expected_node_id: String,
 }
 
+/// A frozen historical source, separate from its branch's current CAS head.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct FileHistoryMergeInput {
+    pub branch_id: String,
+    pub source_node_id: String,
+    pub expected_node_id: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct FileTagTarget {

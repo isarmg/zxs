@@ -38,6 +38,7 @@ pub(crate) enum ParentSet {
 pub(crate) struct FileNode {
     pub(super) id: String,
     pub(super) version: Option<String>,
+    pub(super) branch: Option<String>,
     pub(super) sequence: u64,
     pub(super) kind: NodeKind,
     pub(super) note: String,
@@ -57,6 +58,10 @@ impl FileNode {
 
     pub(crate) fn version_id(&self) -> Option<&str> {
         self.version.as_deref()
+    }
+
+    pub(crate) fn branch_id(&self) -> Option<&str> {
+        self.branch.as_deref()
     }
 
     pub(crate) fn sequence(&self) -> u64 {

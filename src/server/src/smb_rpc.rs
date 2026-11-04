@@ -27,6 +27,7 @@ const MAX_AUTHENTICATED_SESSIONS: usize = 8;
 const MAX_HANDLES: usize = 1024;
 
 mod budget;
+mod default_share;
 mod directory;
 mod handles;
 mod metadata;
