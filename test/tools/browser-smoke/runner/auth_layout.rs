@@ -6,11 +6,14 @@ enum SetupState {
     Existing,
     Empty,
     Unconfirmed,
+    RateLimited,
 }
 impl SetupState {
     fn form(self) -> &'static str {
         match self {
-            Self::Existing => ".authentication-card > form[data-auth-form='login']",
+            Self::Existing | Self::RateLimited => {
+                ".authentication-card > form[data-auth-form='login']"
+            }
             Self::Empty | Self::Unconfirmed => {
                 ".authentication-card > form[data-first-account-form]"
             }
@@ -18,13 +21,13 @@ impl SetupState {
     }
     fn user(self) -> &'static str {
         match self {
-            Self::Existing => "[name='username']",
+            Self::Existing | Self::RateLimited => "[name='username']",
             Self::Empty | Self::Unconfirmed => "[data-setup-user]",
         }
     }
     fn password(self) -> &'static str {
         match self {
-            Self::Existing => "[name='password']",
+            Self::Existing | Self::RateLimited => "[name='password']",
             Self::Empty | Self::Unconfirmed => "[data-setup-password]",
         }
     }
@@ -33,6 +36,7 @@ impl SetupState {
             Self::Existing => "invalid-login",
             Self::Empty => "keyboard-focus",
             Self::Unconfirmed => "response-lost",
+            Self::RateLimited => "status-rejected",
         }
     }
     fn name(self) -> &'static str {
@@ -40,6 +44,7 @@ impl SetupState {
             Self::Existing => "existing",
             Self::Empty => "empty",
             Self::Unconfirmed => "unconfirmed",
+            Self::RateLimited => "rate-limited",
         }
     }
 }
@@ -55,6 +60,14 @@ pub(super) fn first_account(browser: &Browser, origin: &str, output: Option<&Pat
 // Inspect the real lost-response fixture without reloading or replacing its
 // feedback. Its long transport error and fourth action must remain in flow.
 pub(super) fn unconfirmed(browser: &Browser, output: Option<&Path>) -> Result<()> {
+    feedback_layout(browser, SetupState::Unconfirmed, output)
+}
+
+pub(super) fn rate_limited(browser: &Browser, output: Option<&Path>) -> Result<()> {
+    feedback_layout(browser, SetupState::RateLimited, output)
+}
+
+fn feedback_layout(browser: &Browser, setup: SetupState, output: Option<&Path>) -> Result<()> {
     with_cleanup(
         || {
             if let Some(dir) = output {
@@ -63,13 +76,7 @@ pub(super) fn unconfirmed(browser: &Browser, output: Option<&Path>) -> Result<()
             let mut evidence = Vec::new();
             for (width, height) in [(320, 568), (390, 844), (980, 760), (1440, 900)] {
                 resize(browser, width, height)?;
-                capture(
-                    browser,
-                    SetupState::Unconfirmed,
-                    "response-lost",
-                    output,
-                    &mut evidence,
-                )?;
+                capture(browser, setup, setup.final_phase(), output, &mut evidence)?;
             }
             Ok(())
         },
@@ -79,7 +86,8 @@ pub(super) fn unconfirmed(browser: &Browser, output: Option<&Path>) -> Result<()
         },
     )?;
     println!(
-        "PASS unconfirmed account long feedback and all four actions inside six-row card at four viewports"
+        "PASS anonymous {} complete feedback and all actions inside six-row card at four viewports",
+        setup.name()
     );
     Ok(())
 }

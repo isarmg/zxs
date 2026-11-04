@@ -58,6 +58,17 @@ await context.window.fetch('/api/setup/initialize',{method:'POST'});assert.equal
 queued=response(503,'unavailable');assert.equal(await context.window.fetch('/api/setup/status',{method:'GET'}),queued);assert.equal(probe.reads[1].status,503);count++;
 assert.throws(()=>evaluate('REAUTHORIZE_PROBE',context),/already installed/);count++;
 probe.restore();assert.equal(context.window.fetch,original);assert.equal(context.window.__zxsSetupRecheck,undefined);count++;
+// The new-document observer reads real response status/body without replacing
+// responses, and observes only same-origin setup status GETs.
+queued=response(200,'empty');evaluate('SETUP_STATUS_OBSERVER',context);
+const statuses=context.window.__zxsSetupStatus;
+assert.equal(await context.window.fetch('/api/setup/status'),queued);assert.equal(statuses.reads[0].status,200);assert.equal(statuses.reads[0].state,'empty');count++;
+queued={status:429,clone:()=>({json:async()=>({error:{code:'RESOURCE_LIMIT_EXCEEDED',request_id:'req-observed'}})})};
+assert.equal(await context.window.fetch('/api/setup/status'),queued);assert.equal(statuses.reads[1].status,429);assert.equal(statuses.reads[1].code,'RESOURCE_LIMIT_EXCEEDED');assert.equal(statuses.reads[1].requestId,'req-observed');count++;
+await context.window.fetch('http://other.invalid/api/setup/status');await context.window.fetch('/api/setup/status',{method:'POST'});assert.equal(statuses.reads.length,2);count++;
+statuses.restore();assert.equal(context.window.fetch,original);assert.equal(context.window.__zxsSetupStatus,undefined);count++;
+assert.match(rust,/for _ in 0\.\.3/);assert.match(rust,/read\["status"\] == 429 && read\["code"\] == "RESOURCE_LIMIT_EXCEEDED"/);
+assert.match(rust,/read\["status"\] != 200 \|\| read\["state"\] != "empty"/);assert.match(rust,/setup rate-limit feedback lost its actual request identity/);count++;
 assert.match(rust,/s\.reads\.every\(r=>r\.status===200&&r\.state==='empty'\)/);assert.match(rust,/e === s\.identity/);count++;
 assert.match(rust,/repeat_unknown_initialize\(browser,3\)/);assert.match(rust,/repeat_unknown_initialize\(browser,6\)/);count++;
 assert.match(rust,/state\["setupPosts"\] != json!\(\["\/api\/setup\/initialize"\]\)/);count++;

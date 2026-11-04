@@ -128,16 +128,16 @@ pub(super) fn run(
     })
 }
 
-pub(super) fn setup(
+// Reload coverage consumes the public setup rate budget. Keep it on a separate
+// real daemon so account creation retains its own unchanged production limit.
+fn first_account_layout(
     browser: &Browser,
     daemon: &Path,
     web: Option<&Path>,
     root: &Path,
-    password: &str,
 ) -> Result<()> {
-    let fixture = SetupFixture::new(root, "fresh-web-setup")?;
+    let fixture = SetupFixture::new(root, "first-account-layout")?;
     let server = fixture.launch(daemon, web, "server.log")?;
-    let storage = fixture.root.join("storage-parent/selected-storage");
     server.finish(|| {
         let previews = std::env::var_os("ZXS_LOGIN_PREVIEWS")
             .map(|dir| std::path::PathBuf::from(dir).join("first-account"));
@@ -147,6 +147,107 @@ pub(super) fn setup(
             &format!("http://127.0.0.1:{}", fixture.port),
             previews.as_deref(),
         )?;
+        let rejected = std::env::var_os("ZXS_LOGIN_PREVIEWS")
+            .map(|dir| std::path::PathBuf::from(dir).join("first-account-rate-limited"));
+        rate_limited_layout(browser, &fixture, rejected.as_deref())
+    })
+}
+
+const SETUP_STATUS_OBSERVER: &str = r#"
+(() => {
+const original=window.fetch;
+const state=window.__zxsSetupStatus={reads:[],restore:()=>{window.fetch=original;delete window.__zxsSetupStatus;}};
+window.fetch=async function(...args){
+  const input=args[0],url=new URL(typeof input==='string'?input:input.url,location.href);
+  const method=(args[1]?.method||input.method||'GET').toUpperCase();
+  const response=await Reflect.apply(original,this,args);
+  if(url.origin===location.origin&&url.pathname==='/api/setup/status'&&method==='GET'){
+    const body=await response.clone().json();
+    state.reads.push({status:response.status,state:body.state,code:body.error?.code,requestId:body.error?.request_id});
+  }
+  return response;
+};
+})();
+"#;
+
+fn rate_limited_layout(
+    browser: &Browser,
+    fixture: &SetupFixture,
+    output: Option<&Path>,
+) -> Result<()> {
+    let installed = browser.cdp(
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({"source":SETUP_STATUS_OBSERVER}),
+    )?;
+    let identifier = installed["identifier"]
+        .as_str()
+        .ok_or("missing setup status observer identifier")?;
+    with_cleanup(
+        || {
+            // Do not assume the next read is number eleven. Each fresh document
+            // must obtain an actual Empty response or the exact rate rejection.
+            let mut reads = Vec::new();
+            for _ in 0..3 {
+                fixture.visit(browser)?;
+                wait_for("real setup status response", || {
+                    if browser.script("return window.__zxsSetupStatus.reads.length === 1")? == true
+                    {
+                        Ok(())
+                    } else {
+                        Err("setup status response not observed exactly once".into())
+                    }
+                })?;
+                let read = browser.script("return window.__zxsSetupStatus.reads[0]")?;
+                reads.push(read.clone());
+                if let Some(dir) = output {
+                    fs::create_dir_all(dir)?;
+                    fs::write(
+                        dir.join("setup-status.json"),
+                        json_codec::to_vec_pretty(&reads)?,
+                    )?;
+                }
+                if read["status"] == 429 && read["code"] == "RESOURCE_LIMIT_EXCEEDED" {
+                    browser.css("form[data-auth-form='login'] .zxs-request-id code")?;
+                    let request_id = json_codec::to_string(&read["requestId"])?;
+                    if browser.script(&format!("const e=document.querySelector('form[data-auth-form=login] .zxs-request-id code');return typeof {request_id} === 'string' && {request_id}.length>0 && e.textContent === {request_id}"))? != true {
+                        return Err("setup rate-limit feedback lost its actual request identity".into());
+                    }
+                    return super::auth_layout::rate_limited(browser, output);
+                }
+                if read["status"] != 200 || read["state"] != "empty" {
+                    return Err(
+                        format!("unexpected setup response before rate limit: {read}").into(),
+                    );
+                }
+            }
+            Err("setup status did not reach its rate limit within three fresh visits".into())
+        },
+        || {
+            let removed = browser.cdp(
+                "Page.removeScriptToEvaluateOnNewDocument",
+                json!({"identifier":identifier}),
+            );
+            let restored = browser
+                .script("if(window.__zxsSetupStatus)window.__zxsSetupStatus.restore();return true");
+            removed?;
+            restored?;
+            Ok(())
+        },
+    )
+}
+
+pub(super) fn setup(
+    browser: &Browser,
+    daemon: &Path,
+    web: Option<&Path>,
+    root: &Path,
+    password: &str,
+) -> Result<()> {
+    first_account_layout(browser, daemon, web, root)?;
+    let fixture = SetupFixture::new(root, "fresh-web-setup")?;
+    let server = fixture.launch(daemon, web, "server.log")?;
+    let storage = fixture.root.join("storage-parent/selected-storage");
+    server.finish(|| {
         fixture.open(browser)?;
         browser.keys(&browser.css("[data-setup-user]")?, "fresh-admin")?;
         reauthorize_identity(browser, "fresh-admin")?;

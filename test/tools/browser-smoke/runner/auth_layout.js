@@ -73,7 +73,8 @@ const outerFill=async node=>{
         expected,center,wrongColorPixels,bodyFilled,edgeFill,corners,transparentMargin};
 };
 // The installation fixture is authoritative; never infer state from absent fields.
-const expectedFormSelector=expectedSetup==='existing'?'form[data-auth-form="login"]'
+const rateLimited=expectedSetup==='rate-limited';
+const expectedFormSelector=expectedSetup==='existing'||rateLimited?'form[data-auth-form="login"]'
     :['empty','unconfirmed'].includes(expectedSetup)?'form[data-first-account-form]':null;
 const forms=[...card.querySelectorAll('form')];
 const form=expectedFormSelector?card.querySelector(expectedFormSelector):null;
@@ -152,7 +153,7 @@ if(sixRows) {
     const signIns=[...actions.querySelectorAll('[data-setup-sign-in]')],unconfirmed=expectedSetup==='unconfirmed';
     const buttons=[...actions.querySelectorAll('button')];
     const statuses=[...information.querySelectorAll('[role=status]')],alerts=[...information.querySelectorAll('[role=alert]')];
-    const errorPhase=(expectedSetup==='existing'&&phase==='invalid-login')||unconfirmed;
+    const errorPhase=(expectedSetup==='existing'&&phase==='invalid-login')||unconfirmed||rateLimited;
     informationValid=errorPhase?alerts.length===1&&statuses.length===0&&present(alerts[0])&&within(alerts[0])
             &&inside(rect(alerts[0]),rect(information))&&alerts[0].textContent.trim().length>0
         :expectedSetup==='existing'?statuses.length===1&&present(statuses[0])&&alerts.length===0
@@ -162,15 +163,19 @@ if(sixRows) {
             &&['请设置账户名和密码','Set a name and password.'].includes(statuses[0].textContent.trim());
     if(unconfirmed)informationValid&&=information.hasAttribute('data-setup-unknown')
         &&/Outcome unconfirmed\. Check setup status\.|结果未确认，请检查设置状态。/.test(alerts[0]?.textContent||'');
-    informationValid&&=[...information.querySelectorAll('.zxs-request-id')].every(e=>present(e)&&within(e)
+    const requestIds=[...information.querySelectorAll('.zxs-request-id')];
+    informationValid&&=[...requestIds,...requestIds.flatMap(e=>[...e.querySelectorAll('code')])].every(e=>present(e)&&within(e)
         &&inside(rect(e),rect(information))&&e.textContent.trim().length>0);
+    if(rateLimited)informationValid&&=alerts[0]?.textContent.includes('RESOURCE_LIMIT_EXCEEDED')
+        &&requestIds.length===1&&requestIds[0].querySelectorAll('code').length===1;
     actionsValid=submit.length===1&&buttons.every(e=>e.parentElement===actions&&present(e)&&e.tabIndex>=0)
         &&actions.children.length===buttons.length&&controls.length===inputs.length+buttons.length
         &&buttons.every((e,i)=>buttons.slice(i+1).every(other=>{
             const a=rect(e),b=rect(other);return a.right<=b.x+.5||b.right<=a.x+.5||a.bottom<=b.y+.5||b.bottom<=a.y+.5;
         }));
-    if(expectedSetup==='existing')stateValid=user.required&&password.required&&password.autocomplete==='current-password'&&setupMarkers.length===0
-        &&checks.length===0&&clears.length===0&&buttons.length===1&&submit.length===1&&!submit[0].disabled
+    if(expectedSetup==='existing'||rateLimited)stateValid=user.required&&password.required&&password.autocomplete==='current-password'&&setupMarkers.length===0
+        &&checks.length===(rateLimited?1:0)&&clears.length===0&&buttons.length===(rateLimited?2:1)&&submit.length===1&&!submit[0].disabled
+        &&checks.every(e=>!e.disabled&&e.type==='button'&&e.getAttribute('aria-label')?.trim()&&e.getAttribute('title')?.trim())
         &&['登录','Sign in'].includes(submit[0].textContent.trim());
     if(expectedSetup==='empty'||unconfirmed)stateValid=password.autocomplete==='new-password'&&setupMarkers.length===2
         &&setupMarkers[0]===user&&setupMarkers[1]===password&&user.hasAttribute('data-setup-user')&&password.hasAttribute('data-setup-password')
@@ -181,14 +186,14 @@ if(sixRows) {
         &&[checks[0],clears[0]].every(e=>!e.disabled&&e.type==='button'&&e.getAttribute('aria-label')?.trim()&&e.getAttribute('title')?.trim());
 }
 const allowedPhases=expectedSetup==='existing'?['initial','refreshed','invalid-login']
-    :expectedSetup==='unconfirmed'?['response-lost']:['initial','refreshed','keyboard-focus'];
+    :expectedSetup==='unconfirmed'?['response-lost']:rateLimited?['status-rejected']:['initial','refreshed','keyboard-focus'];
 const rowGeometry=sixRows&&rows.every(e=>present(e)&&within(e)&&inside(rect(e),rect(form))
         &&rect(e).height>=sharedRowHeight&&parseFloat(getComputedStyle(e).minHeight)>=sharedRowHeight)&&separate(rowBoxes)
     &&rowBoxes.slice(0,4).every(r=>Math.abs(r.height-sharedRowHeight)<=.5)
     &&Math.abs(rowBoxes[1].x-rowBoxes[3].x)<=1&&Math.abs(rowBoxes[1].width-rowBoxes[3].width)<=1;
 // Healthy desktop forms must actually fit six shared rows and 3:2, not merely
 // declare a preferred ratio. Necessary errors and narrow layouts may grow.
-const normalGeometry=compact||expectedSetup==='unconfirmed'||phase==='invalid-login'
+const normalGeometry=compact||expectedSetup==='unconfirmed'||rateLimited||phase==='invalid-login'
     ||(sixRows&&rowBoxes.every(r=>Math.abs(r.height-sharedRowHeight)<=.5)
         &&Math.abs(panel.height-panel.width/1.5)<=.5);
 return {valid:allowedPhases.includes(phase)&&formPresent&&sixRows&&fieldsValid&&stateValid&&informationValid&&actionsValid

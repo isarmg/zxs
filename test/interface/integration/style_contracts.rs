@@ -50,7 +50,8 @@ fn anonymous_forms_reuse_six_shared_height_rows_and_original_card_corner() {
         "grid-template-rows: repeat(6, minmax(var(--zxs-compact-row-height), max-content))"
     ));
     assert!(css.contains("width: min(calc(var(--zxs-compact-row-height) * 9), 100%)"));
-    assert!(css.contains("aspect-ratio: 3 / 2; min-height: min-content;"));
+    assert!(css.contains("aspect-ratio: 3 / 2; min-height: max-content;"));
+    assert!(!css.contains("min-height: min-content;"));
     assert!(css.contains("--zxs-contour-extent: 48px"));
     for private_override in [
         "--zxs-contour-control:",

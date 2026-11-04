@@ -154,6 +154,26 @@ const requestId=f.node('Request ID: setup-request',316,'P');requestId.className=
 assert.equal((await f.run()).valid,true,'Request identity stays fully inside the growing information row');
 requestId.box=box(352,24);result=await f.run();assert.equal(result.valid,false);assert.equal(result.informationValid,false);
 
+// 90410707 captured a login form with two actions and this exact 429 text/ID.
+// Its PNG shows a 324x216 card; no failure-page DOM rectangles were captured.
+// The row rectangles below model the visible overflow, not measured browser data.
+f=fixture();f.expectedSetup='rate-limited';f.phase='status-rejected';f.innerWidth=1440;f.innerHeight=857;
+f.root.clientWidth=1440;f.root.scrollWidth=1440;f.card.style.aspectRatio='3 / 2';
+f.card.box=box(350,216,324,558);f.form.box=box(350,396,272,584);
+for(const [i,node] of [f.usernameLabel,f.username,f.passwordLabel,f.password].entries())node.box=box(350+i*36,36,272,584);
+f.information.box=box(494,216,272,584);f.status.box=box(494,216,272,584);f.status.tagName='DIV';f.status.className='zxs-error zxs-row';f.status.attributes.role='alert';
+f.status.textContent='RESOURCE_LIMIT_EXCEEDED · too many setup attempts; retry after 60 seconds (retryable; check the original save status before retrying)';
+const rateId=f.node('Request ID: req_00000000000000000000000000000013',638,'P');rateId.className='zxs-request-id';rateId.box=box(638,72,272,584);
+const rateCode=f.node('req_00000000000000000000000000000013',662,'CODE');rateCode.box=box(662,48,272,584);f.append(rateId,rateCode);f.append(f.status,rateId);
+f.actions.box=box(710,36,272,584);f.submit.box=box(710,36,92.8,584);f.check.box=box(710,36,36,686.4);f.append(f.actions,f.check);
+result=await f.run();assert.equal(result.valid,false);assert.equal(result.formPresent,false);
+assert.equal(result.informationValid,true);assert.equal(result.stateValid,true);assert.equal(result.controls.slice(2).every(e=>!e.valid),true);
+f.card.box=box(350,396,324,558);result=await f.run();assert.equal(result.valid,true,JSON.stringify(result));
+assert.equal(result.controls.length,4,'Rate-limited login keeps two inputs, Sign in and Check, not setup actions');
+rateCode.box=box(710,48,272,584);assert.equal((await f.run()).informationValid,false,'The actual request identity may not overflow its information row');rateCode.box=box(662,48,272,584);
+f.check.disabled=true;assert.equal((await f.run()).stateValid,false,'The rate-limit retry must remain usable');f.check.disabled=false;
+f.status.textContent='An unrelated server failure';assert.equal((await f.run()).informationValid,false,'An arbitrary error is not rate-limit evidence');
+
 // Unconfirmed means the real response-loss fixture, not an empty installation.
 // Long feedback and the additional sign-in action must fit at every viewport.
 for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
@@ -392,9 +412,12 @@ if(!process.argv.includes('--models-only')) {
     assert.match(host,/for phase in \["initial", "refreshed", setup.final_phase\(\)\]/);
     assert.match(host,/Self::Existing => "invalid-login"/);assert.match(host,/Self::Empty => "keyboard-focus"/);
     assert.match(host,/Self::Unconfirmed => "response-lost"/);
+    assert.match(host,/Self::RateLimited => "status-rejected"/);
     assert.match(host,/pub\(super\) fn unconfirmed\(/);
     assert.match(management,/super::auth_layout::unconfirmed\(browser, previews.as_deref\(\)\)/);
     assert.match(management,/join\("first-account-unknown"\)/);
+    assert.match(management,/join\("first-account-rate-limited"\)/);
+    assert.match(management,/super::auth_layout::rate_limited\(browser, output\)/);
     assert.match(host,/browser.command\("POST", "\/refresh"/);
     assert.match(host,/:focus-visible/);assert.match(host,/\.zxs-auth-information \.zxs-error/);
     assert.ok(host.indexOf('window.scrollTo(0,0)')<host.indexOf('Duration::from_millis(150)'));
@@ -403,10 +426,15 @@ if(!process.argv.includes('--models-only')) {
     assert.ok(host.indexOf('dir.join("login-layout.json")')<host.indexOf('if geometry["valid"] != true'));
     assert.match(host,/Emulation.clearDeviceMetricsOverride/);
     assert.match(management,/join\("first-account"\)/);
+    const layout=management.slice(management.indexOf('fn first_account_layout('),management.indexOf('pub(super) fn setup('));
     const fresh=management.slice(management.indexOf('pub(super) fn setup('),management.indexOf('struct SetupFixture'));
-    assert.ok(fresh.indexOf('fixture.visit(browser)?')<fresh.indexOf('super::auth_layout::first_account('));
-    assert.ok(fresh.indexOf('super::auth_layout::first_account(')<fresh.indexOf('fixture.open(browser)?'));
-    assert.ok(fresh.indexOf('super::auth_layout::first_account(')<fresh.indexOf('credentials('));
+    assert.match(layout,/SetupFixture::new\(root, "first-account-layout"\)/);
+    assert.match(fresh,/SetupFixture::new\(root, "fresh-web-setup"\)/);
+    assert.ok(layout.indexOf('fixture.visit(browser)?')<layout.indexOf('super::auth_layout::first_account('));
+    assert.doesNotMatch(layout,/fixture.authorize|credentials\(|\/api\/setup\/initialize/);
+    assert.ok(fresh.indexOf('first_account_layout(browser, daemon, web, root)?')<fresh.indexOf('SetupFixture::new('));
+    assert.ok(fresh.indexOf('SetupFixture::new(')<fresh.indexOf('fixture.open(browser)?'));
+    assert.ok(fresh.indexOf('fixture.open(browser)?')<fresh.indexOf('credentials('));
     assert.match(setupSource,/<form data-first-account-form=""/);assert.match(loginSource,/<form data-auth-form="login"/);
     for(const text of ['请设置账户名和密码','Set a name and password.','设置账户','Set up account'])assert.ok(setupSource.includes(text));
     assert.doesNotMatch(setupSource,/Please set an account name and password\./);
@@ -432,7 +460,8 @@ if(!process.argv.includes('--models-only')) {
     }
     assert.match(authCss,/width: min\(calc\(var\(--zxs-compact-row-height\) \* 9\), 100%\)/);
     assert.match(authCss,/grid-template-rows: repeat\(6, minmax\(var\(--zxs-compact-row-height\), max-content\)\)/);
-    assert.match(authCss,/\.authentication-card \{[^}]*aspect-ratio: 3 \/ 2; min-height: min-content;/);
+    assert.match(authCss,/\.authentication-card \{[^}]*aspect-ratio: 3 \/ 2; min-height: max-content;/);
+    assert.doesNotMatch(authCss,/min-height: min-content;/);
     assert.doesNotMatch(authCss,/min-height: calc\(var\(--zxs-compact-row-height\) \* 6\)/);
     assert.match(authCss,/min-height: var\(--zxs-compact-row-height\)/);
     assert.match(authCss,/aspect-ratio: 3 \/ 2/);assert.match(authCss,/aspect-ratio: auto/);

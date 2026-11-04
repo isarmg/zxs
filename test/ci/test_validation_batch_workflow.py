@@ -76,7 +76,10 @@ class ValidationBatchWorkflow(unittest.TestCase):
         script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
                                  .split('      - name:', 1)[0])
         base = '72e7258be1d1a5d461476c259db5ec0eeec7e75f'
+        expected_parent = '90410707850443016397d9022251c97594abb607'
         self.assertIn(f'base={base}', script)
+        self.assertIn(f'expected_parent={expected_parent}', script)
+        self.assertIn('git show -s --format=%P "$expected_parent"', script)
         self.assertIn('https://github.com/isarmg/zxs/actions/runs/41839207213', script)
         self.assertIn('git show -s --format=%P HEAD', script)
         self.assertIn('git diff --quiet "$base" HEAD -- src \':(exclude)src/web\'', script)
@@ -96,6 +99,7 @@ class ValidationBatchWorkflow(unittest.TestCase):
             'test/tools/browser-smoke/runner/auth_layout.rs',
             'test/tools/browser-smoke/runner/management.rs',
             'test/tools/browser-smoke/unit/auth_layout_probe_test.mjs',
+            'test/tools/browser-smoke/unit/setup_lifecycle_probe_test.mjs',
         ]
         # Exercise the actual script with exact command replies in GitHub static.
         # No changed dependency, native test, workflow or unrelated Web path may reuse.
@@ -104,6 +108,9 @@ class ValidationBatchWorkflow(unittest.TestCase):
                 "show -s --format=%P HEAD")
                     [ "$TEST_GIT_FAIL" != parent ] || return 42
                     printf '%s\n' "$TEST_PARENT" ;;
+                "show -s --format=%P $expected_parent")
+                    [ "$TEST_GIT_FAIL" != ancestor ] || return 42
+                    printf '%s\n' "$TEST_ANCESTOR" ;;
                 "diff --quiet $base HEAD -- src :(exclude)src/web")
                     [ "$TEST_GIT_FAIL" != source ] || return 42
                     return "$TEST_SOURCE_CHANGED" ;;
@@ -117,10 +124,13 @@ class ValidationBatchWorkflow(unittest.TestCase):
             esac
         }
         '''
-        cases = [(base, paths, 0, 0, True, '')]
-        for parent in ['another-parent', base + ' second-parent', '']:
-            cases.append((parent, paths, 0, 0, False, ''))
-        cases.extend([(base, paths, 1, 0, False, ''), (base, paths, 0, 1, False, '')])
+        cases = [(expected_parent, base, paths, 0, 0, True, '')]
+        for parent in ['another-parent', expected_parent + ' second-parent', '']:
+            cases.append((parent, base, paths, 0, 0, False, ''))
+        for ancestor in ['another-base', base + ' second-parent', '']:
+            cases.append((expected_parent, ancestor, paths, 0, 0, False, ''))
+        cases.extend([(expected_parent, base, paths, 1, 0, False, ''),
+                      (expected_parent, base, paths, 0, 1, False, '')])
         for extra in ['src/smb/src/client.rs', 'src/platform/src/payload.rs',
                       'src/web/Cargo.toml', 'src/web/src/unknown.rs',
                       'test/engine/unit/tests.rs', 'test/server/unit/tests.rs',
@@ -129,15 +139,15 @@ class ValidationBatchWorkflow(unittest.TestCase):
                       'Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'rust-toolchain.toml',
                       'docs/contracts/core.schema.json', 'tools/rust-sources/manage.py',
                       'docs/unrelated.md', 'test/tools/browser-smoke/runner/unknown.rs']:
-            cases.append((base, paths + [extra], 0, 0, False, ''))
-        for failed in ['parent', 'source', 'tests', 'paths']:
-            cases.append((base, paths, 0, 0, False, failed))
-        for parent, changed, source_changed, tests_changed, expected, failed in cases:
-            with self.subTest(parent=parent, changed=changed, failed=failed,
+            cases.append((expected_parent, base, paths + [extra], 0, 0, False, ''))
+        for failed in ['parent', 'ancestor', 'source', 'tests', 'paths']:
+            cases.append((expected_parent, base, paths, 0, 0, False, failed))
+        for parent, ancestor, changed, source_changed, tests_changed, expected, failed in cases:
+            with self.subTest(parent=parent, ancestor=ancestor, changed=changed, failed=failed,
                               source_changed=source_changed, tests_changed=tests_changed):
                 with tempfile.TemporaryDirectory() as directory:
                     output = Path(directory) / 'output'
-                    env = dict(os.environ, TEST_PARENT=parent, TEST_PATHS='\n'.join(changed),
+                    env = dict(os.environ, TEST_PARENT=parent, TEST_ANCESTOR=ancestor, TEST_PATHS='\n'.join(changed),
                                TEST_SOURCE_CHANGED=str(source_changed),
                                TEST_TESTS_CHANGED=str(tests_changed), TEST_GIT_FAIL=failed,
                                GITHUB_OUTPUT=str(output))
