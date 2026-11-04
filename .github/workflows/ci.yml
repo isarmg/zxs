@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    # This one temporary branch has its own bounded validation workflow.
+    # These two exact temporary branches have bounded validation workflows.
     # Main, other branches, tags, PRs and dispatch retain the existing full gates.
-    branches-ignore: [validation/ui-smb-history-20261104]
+    branches-ignore: [validation/ui-smb-history-20261104, verify/placement-object-20261104]
     tags: ['**']
   pull_request:
   workflow_dispatch:

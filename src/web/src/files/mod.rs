@@ -11,6 +11,7 @@ mod merge;
 mod model;
 mod naming;
 mod page;
+mod placement;
 mod review;
 mod rows;
 mod tags;

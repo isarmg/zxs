@@ -124,6 +124,7 @@ pub(crate) struct Model {
     pub batch: Option<super::batch::Draft>,
     pub merge: Option<super::merge::Draft>,
     pub backup: Option<super::backup::Draft>,
+    pub placement: Option<super::placement::Draft>,
     pub tag_edit: Option<super::tags::Draft>,
     pub checked_nodes: super::tags::Selection,
     pub publications: super::review::Publications,
@@ -225,6 +226,7 @@ impl Model {
         self.cancel_history();
         self.merge = None;
         self.backup = None;
+        self.placement = None;
         self.tag_edit = None;
         self.checked_nodes.clear();
         self.selected = None;

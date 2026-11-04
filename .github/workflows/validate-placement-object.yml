@@ -1,0 +1,103 @@
+name: Directory primary placement validation
+
+on:
+  push:
+    branches: [verify/placement-object-20261104]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-placement-object-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  static:
+    name: Placement source and workflow contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bind validation to the pushed commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Check focused source and workflow contracts
+        run: |
+          python3 .github/scripts/check-workflows.py
+          python3 .github/scripts/check-architecture.py
+          python3 tools/rust-sources/manage.py verify
+          python3 tools/rust-sources/architecture.py verify
+          python3 tools/rust-sources/documentation.py verify
+          python3 -m unittest discover -s test/ci -p 'test_*validation*workflow.py'
+
+  native:
+    name: Placement engine and real HTTP
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Format affected native packages
+        run: cargo fmt -p storage-contract -p storage-engine -p storage-server -- --check
+      - name: Exercise five primary-placement engine contracts
+        run: |
+          set -euo pipefail
+          cargo test --locked --offline -p storage-engine --lib placement_configuration | tee "$RUNNER_TEMP/placement-engine.txt"
+          grep -E '^test result: ok\. 5 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/placement-engine.txt"
+      - name: Exercise strict HTTP request shape
+        run: |
+          set -euo pipefail
+          cargo test --locked --offline -p storage-server --lib http_placement_configuration | tee "$RUNNER_TEMP/placement-http-shape.txt"
+          grep -E '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/placement-http-shape.txt"
+      - name: Exercise real authenticated HTTP placement writes
+        run: |
+          set -euo pipefail
+          cargo test --locked --offline -p storage-server --test http_engine placement_configuration | tee "$RUNNER_TEMP/placement-http.txt"
+          grep -E '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/placement-http.txt"
+      - name: Lint affected native targets and no-core server
+        run: |
+          cargo clippy --locked --offline -p storage-contract -p storage-engine -p storage-server --all-targets -- -D warnings
+          cargo clippy --locked --offline -p storage-server --no-default-features --all-targets -- -D warnings
+
+  web:
+    name: Placement Web state and release WASM
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain and WASM target
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - name: Format Web package
+        run: cargo fmt -p web-app -- --check
+      - name: Exercise six placement editor lifecycle contracts
+        run: |
+          set -euo pipefail
+          cargo test --locked --offline -p web-app --lib placement_configuration | tee "$RUNNER_TEMP/placement-web.txt"
+          grep -E '^test result: ok\. 6 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/placement-web.txt"
+      - name: Lint release WASM and native Web targets
+        run: |
+          cargo clippy --locked --offline -p web-app --all-targets -- -D warnings
+          cargo clippy --locked --offline -p web-app --target wasm32-unknown-unknown --release -- -D warnings
+      - name: Build release WASM
+        run: cargo build --locked --offline -p web-app --target wasm32-unknown-unknown --release

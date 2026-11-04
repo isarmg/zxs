@@ -24,6 +24,10 @@ mod historical_save;
 pub use historical_save::HistoricalSaveOptions;
 mod file_location;
 pub use file_location::FileLocation;
+mod placement_configuration;
+pub use placement_configuration::{
+    PlacementConfigurationSnapshot, PlacementScope, PrimaryPlacementBlock, PrimaryPlacementTarget,
+};
 mod backup_configuration;
 pub use backup_configuration::{BackupConfigurationSnapshot, BackupScope};
 mod branch_name;

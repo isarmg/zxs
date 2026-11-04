@@ -21,10 +21,10 @@ class ValidationBatchWorkflow(unittest.TestCase):
         self.normal = (ROOT / '.github/workflows/ci.yml').read_text()
         self.batch = (ROOT / '.github/workflows/validate-ui-smb-history.yml').read_text()
 
-    def test_only_one_branch_uses_the_batch_and_tags_keep_normal_ci(self):
+    def test_each_temporary_branch_uses_its_own_batch_and_tags_keep_normal_ci(self):
         normal_trigger = self.normal.split('\npermissions:', 1)[0]
         batch_trigger = self.batch.split('\npermissions:', 1)[0]
-        self.assertIn(f'    branches-ignore: [{BRANCH}]', normal_trigger)
+        self.assertIn(f'    branches-ignore: [{BRANCH}, verify/placement-object-20261104]', normal_trigger)
         self.assertIn("    tags: ['**']", normal_trigger)
         self.assertIn('  pull_request:\n  workflow_dispatch:', normal_trigger)
         self.assertIn(f'    branches: [{BRANCH}]', batch_trigger)
