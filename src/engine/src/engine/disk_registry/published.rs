@@ -15,6 +15,12 @@ use crate::{
 use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[allow(
+    dead_code,
+    reason = "occurrence proofs await atomic lifecycle publication and consumer wiring"
+)]
+pub(in crate::engine) mod occurrence;
+
 const REGISTRY_KIND: &str = "disk-lifecycle-registry";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,6 +196,9 @@ impl Engine {
     /// Pure preparation from the admitted authority and published metadata. No
     /// filesystem reads or writes and no replacement of the live registry.
     pub fn prepare_disk_registry_base(&self) -> Result<PreparedDiskRegistry> {
+        encode_registry(self.disk_registry_base_state())
+    }
+    fn disk_registry_base_state(&self) -> RegistryState {
         let mut topology = BTreeMap::new();
         let mut registrations = BTreeMap::new();
         let mut voters = BTreeMap::new();
@@ -221,7 +230,7 @@ impl Engine {
                 voters.insert(disk.disk_id.clone(), identity);
             }
         }
-        encode_registry(RegistryState {
+        RegistryState {
             source: RegistrySource {
                 pool_id: self.config.pool_id.clone(),
                 membership_authority: self.config.generation_hash().map(str::to_owned),
@@ -236,7 +245,7 @@ impl Engine {
             voters,
             detached: BTreeMap::new(),
             pending_exit: None,
-        })
+        }
     }
 }
 

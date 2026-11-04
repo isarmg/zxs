@@ -49,6 +49,12 @@ jobs:
       - name: Compile unit-test binaries once and run affected groups
         if: ${{ !cancelled() }}
         run: python3 .github/scripts/check-membership-activation.py --disk-io
+      - name: Check bounded abort protocol model
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          python3 test/models/membership_handoff_abort_model.py -v \
+            2>&1 | tee target/membership-validation/abort-model.log
       - name: Check hook-free production and Clippy
         if: ${{ !cancelled() }}
         run: |

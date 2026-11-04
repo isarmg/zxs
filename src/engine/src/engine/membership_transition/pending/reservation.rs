@@ -213,19 +213,18 @@ impl Engine {
         let preparations = self.read_source_preparations()?;
         let saved = preparations.get(&operation_id);
         // Compare the complete request independently of the later frozen prefix.
-        if let Some(saved) = saved {
-            if saved.operation_id != operation_id
+        if let Some(saved) = saved
+            && (saved.operation_id != operation_id
                 || saved.principal != principal
                 || object_hash("membership-preparation-origin", &saved.origin)?
                     != object_hash("membership-preparation-origin", origin)?
                 || object_hash("membership-target", &saved.target)?
-                    != object_hash("membership-target", target)?
-            {
-                return Err(Error::new(
-                    ErrorCode::IdempotencyKeyReused,
-                    "membership operation already reserves another source, actor or target",
-                ));
-            }
+                    != object_hash("membership-target", target)?)
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "membership operation already reserves another source, actor or target",
+            ));
         }
         let mut identities = BTreeSet::new();
         for handle in self.disk_resources.handles() {
@@ -291,15 +290,14 @@ impl Engine {
                 .map(|root| (root.disk_id.clone(), root.identity.clone()))
                 .collect(),
         };
-        if let Some(saved) = saved {
-            if object_hash("membership-source-preparation", saved)?
+        if let Some(saved) = saved
+            && object_hash("membership-source-preparation", saved)?
                 != object_hash("membership-source-preparation", &source)?
-            {
-                return Err(Error::new(
-                    ErrorCode::DiskIdentityMismatch,
-                    "source preparation identity set differs",
-                ));
-            }
+        {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "source preparation identity set differs",
+            ));
         }
         self.persist_source_preparation(&source)?;
         self.reserve_target_roots(roots)

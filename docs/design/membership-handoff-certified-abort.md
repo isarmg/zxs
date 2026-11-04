@@ -1,0 +1,168 @@
+# 尚未形成旧侧多数的 handoff：certified abort 设计
+
+状态：**设计和纯状态模型，未实现生产路径，未执行测试，未允许部署**。只读源码基线 `3305c192`，2026-11-04。范围只限 pure-add；不修改原 Candidate、TransitionIntent、FrozenArchive、旧 journal 字节，不增加旧版本兼容/迁移。
+
+## 1. 结论及真正边界
+
+采用**唯一 AbortCore + 任意固定旧多数的独立 witness**，不把具体投票子集哈希进 generation identity。
+
+- 旧成员集合 O、N、Q=floor(N/2)+1 来自 intent.origin.config，在线数、可用探针、新成员都不能改 Q。
+- 每旧成员、每 intent 只有一个不可覆盖 decision slot。slot 只可选择 Joint 或 AbortCore G，两者不能分到两个可共存文件、按 proposal/证书/取消请求另开目录。
+- 取得 Q 个真实旧成员的持久 Abort(G) 可认证取消。尚无 JointQ **不是充分条件**：N=4/Q=3、已有2票 Joint，剩余2票仍不足 AbortQ。
+- 已有 JointQ，不论新Q、certificate 或首 publication 是否完成，都不能取消。目标在此以后永久失效仍可能阻断，本设计不能宣称闭合任意时刻的永久冻结。
+- AbortQ 否决原 intent，但不抹除旧 fence。新 authority 的有效集合为原旧成员集，在**新 generation journal** 发布唯一 cancellation Candidate 后才恢复普通写。
+- 取消证书不依赖新增根，也不重新跟随被否决 target 的路径。旧 fence/FrozenArchive 的既有安全要求不降低。
+- witness 不预先固定投票子集：某个已投 Abort 的旧根失联，只要其它可用旧根总数仍能形成同 G 的 Q，即可补充不同成员的同 G 证据。旧成员变动、计划改投不是所需操作。
+- 原新增根上的 reservation、pending seal、新盘投票等保留。清理/重用是另一个明确操作，不能以取消名义删除。
+
+**可用性分层**：已有完整 F 时，认证 Abort 只需 Q 个合格旧根及 F 的可验证副本，不人为要求所有旧根可用。尚未形成 F 时，当前完整归档实现要求全部旧成员精确 journal；本轮不能靠多数推断缺失归档。取消代的首 publication 仍遵守现系统全部配置成员及数据/工作区恢复要求，AbortQ 不是「全部旧资源已恢复」。因此可以先报告 AbortCertified，再保持写阻塞等待旧资源；这不是固定 voter 子集引入的额外永久依赖。
+
+## 2. 固定基线的精确源码落点
+
+行号均相对 3305c192，用 `git show 3305c192:<path>` 复核。
+
+| 文件/方法 | 当前事实 | 本设计需要的修改 |
+|---|---|---|
+| `membership_transition.rs:178` `begin_membership_handoff_with_effect` | newroot 预留先于 fence；intent 含原/目标、物理根、boundary/sequence | cancel 仅使用已承认 I；不重新准备/打开新增根，拒绝 effect |
+| 同文件 `:331` `persist_membership_fence`、`:374` `admit_membership_fence` | fence 失败仍阻写；同 intent 重放；恢复拒绝冻结点后的原代决定 | 保留旧 fence，取消恢复检查统一 slot；不能直接清 membership_fence |
+| `archive.rs:435` `inspect_membership_metadata_archive` | 全部旧成员完整 fence、精确 publication chain | 保留，不缩为任意 Q |
+| `archive/persistent.rs:431,627` build/verify_current_fence | 全旧 journal 独立复制；检查 held source 与 fence 相等 | 可复用 F；认证路径在持有并验证完整 F 后不要求失败新增根 |
+| `pending.rs:349,354` member_directory/admit_member_directory | `metadata/membership-pending/<I>` 需 enrollment 绑定 target/archive | 早期 abort 不能依赖该尚未形成的目录；统一 decision 独立于 enrollment |
+| `pending/joint/store.rs:177` `JointStore::open` | 当前 joint 子目录 binding 绑 proposal/identity | 投票迁至统一 DecisionStore；joint 只承载 proposal/依赖/certificate，不再保留第二种可授权 vote 路由 |
+| `pending/joint.rs:376` `joint_decision` | 检查全部 control，逐个写 Joint singleton | 正常写/恢复先看旧 decision，尊重部分 Abort，不能用现 status 缓存替代读回 |
+| `journal/pending.rs:44,109`；`journal.rs:147,169,554` | Joint namespace 只收 JointAccept；singleton 禁第二帧；同步后收据 | 选定方案用原子不可覆盖 DecisionRecord 替换 Joint 投票 singleton；bootstrap/active journal 不变 |
+| `pending/joint/store.rs:585` `verify_certificate_with` | pure-add 全目标票 + 独立 oldQ/newQ | 新协议 Joint 证据必须来自共享槽，不能承认另一份旧式 journal 投票 |
+| `activation/authority.rs:7,98,252,384` | node 只含 joint/archive，hash 包含整个 node；lineage/verify_candidate 使用 intent.target | 拆 **core 与 evidence**，显式 Add/AbortedAdd outcome；按 effective_config 链接 |
+| `activation.rs:22,72,112,177` | Generation、fence+1、membership-add 永久结果、prescribed first candidate | 同 operation_id + 原 I digest 的永久 membership-add-cancelled；使用新 G/旧有效集合 |
+| `activation/publication.rs:4,202,315,455` | marker→推广→新代日志→首 publication；失败 blocked | 同 G 的不同有效 witness 不冲突；取消只推广旧根；少数 Joint 不覆盖 |
+| `activation/recovery.rs` discover/admit_discovered/restore_anchor/verify_root_membership | Config 非 authority；读取 portable/head/local journal | 选择 core G，验证 detached evidence，按 effective_config，不访问已取消 target，不回退旧代写 |
+| `archive.rs:75` `FrozenEpoch::read`、`activation/local.rs` | predecessor.target、portable load、精确历史 inclusion | predecessor.effective_config；增加 evidence resolver，保留原 Candidate 精确纳入证明 |
+
+上述路径均位于 `src/engine/src/engine/membership_transition/`，首两行父文件另计。`disk_registry/**`、`disk_lifecycle/**` 不改；受限 discovery 的并行作者需要后续对接 outcome/core API，不能在本轮跨区修改。
+
+### 当前 pure-add 有无「不同多数证书产生不同 G」漏洞？
+
+本次限定审阅中**没有发现该漏洞存在于当前可激活 pure-add**，依据明确：
+
+- `pending/joint/store.rs:603`：effect.is_none() 时要求 `votes.len()==verified.dependencies.len()`；每票身份/acceptance/真实 singleton 语义确定；完整成员集合与 canonical map 使证书确定，不是任意多数子集。
+- 同函数随后仍独立验证原Q和目标Q，不因全集省掉分母约束。
+- ExitControl 的 effect!=None 可仅含双多数，但 `activation/authority.rs:99` 的 AuthorityNode::intent 显式拒绝 effect，尚不能创建生命周期 generation。
+- 因此不能把「任意多数导致 G 分叉」错误地报告为当前 pure-add 漏洞；它是新 abort/未来 exit 激活**若直接复用当前完整 node 哈希**会引入的安全反例。未来 exit 也须采用稳定 core，不能拿可变 exit certificate 的哈希当 generation ID。
+
+## 3. Schema 和无环依赖
+
+用已有 canonical JSON、BLAKE3 域分离 object_hash、有界严格解析和 typed identity，不使用签名字符串。
+
+### 不变身份和 core
+
+- `I=H("membership-transition",原 TransitionIntent)`；原字节不改。
+- `F=H("membership-control-archive",原 ArchiveRoot)`；其完整原日志、Candidate、snapshot/history 闭包不改。F 引 I，不引本次取消。
+- `AbortCore {format:"membership-abort-generation",transition_hash:I,archive:ArchiveRoot}`。
+- `G=H("membership-generation",AbortCore)`。
+  - old config、predecessor、fence/boundary、operation、actor 从 I 严格派生；有效配置严格等于 I.origin.config，不能调用方指定。
+  - 不包含 vote 子集、certificate hash、online count、取消时间、随机数或 reason。
+  - 同 I 的精确 F 来自固定原 journal 字节、固定 publication closure 和确定 map 编码。若出现不同 F，不能作为同 G 继续投；必须报告 exact-frozen-archive 冲突，不做语义近似。
+- 当前 pure-add 的 **core 仍是已有 AuthorityNode{joint,archive} 原始字节**，旧 G 不重算、不增加 wrapper。新增 AbortCore 是当前模型中明确的新 outcome，不是旧格式迁移/兼容别名。
+
+### 成员选择和 witness
+
+- `AbortAcceptance {core_hash:G,identity,original_seal_hash,original_fence:Receipt}`，`X_i=H("membership-abort-acceptance",...)`。
+- `DecisionRecord {format:"fenced-membership-decision",transition_hash:I,identity,choice}`，
+  `choice=Joint{proposal_hash:P,acceptance_hash:J_i}|Abort{core_hash:G,acceptance_hash:X_i}`。
+- `D_i=H("membership-decision",DecisionRecord)`；`DecisionReceipt{identity,record_hash:D_i,record}`。
+- `AbortCertificate {format:"fenced-handoff-abort-certificate",core_hash:G,votes:Reference}`；`C=H("membership-abort-certificate",...)`。
+  - 对任意至少Q个不同、完整原成员身份的有效同G vote 验证；voters 必须是 O 的真子集/全集，不能重复、重标、混新成员、按 online 降Q。
+  - 同G可以有 C1≠C2；这是合法证据差异，不是 authority 分叉。
+- `PortableAbortEvidence {core_hash:G,certificate_hash:C,objects:exact referenced closure}`；删除无关对象、缺页不靠另一源掩盖。
+- `AuthorityEntry {core:VerifiedAuthorityCore,evidence:AuthorityEvidence}`；evidence 为 AddEmbedded 或 Abort(PortableAbortEvidence)。这是内存/portable envelope，不是计算 G 的对象。
+- `PortableAuthority` 持有 head core、完整 predecessor core map、所有 Abort core 的 evidence map。evidence map 必须恰覆盖需要证据的 core 集；已有 Add core 原内嵌证明仍按原规则验证。
+
+依赖为：历史 predecessor/config/Candidate → I → F → AbortCore/G → X_i → D_i → votes map → C → portable evidence/envelope。当前 G 不引用 C；F 只能包含严格祖先的 evidence，不能含本 G，因此无环。
+
+**不能只改 PortableAuthority::hash()**：通用 `AuthenticatedMetadataObject` 必须继续对实际 core 的全部 canonical bytes 做 G 认证，不能让它认证含可变 witness 的 envelope 后伪称等于 G。`node_objects()` 输出确切 core 对象；evidence 用独立类型/解析通道处理。
+
+## 4. 独立 witness 的实际持久化与恢复落点
+
+不把「core/witness 分离」留成抽象口号：
+
+1. `objects/membership-generation/<G>.json` 仍是**内容寻址 core**。Add 保留原 node；Abort 存上述 AbortCore。此物不可覆盖。
+2. 现每盘 `metadata/membership-generations/<G>/authority.json` 和 `metadata/pool-membership/generation.json` 存**完整 portable envelope**。envelope 可含不同合法 C，但解析后 head core 都必须等于 G。
+3. 新 `install_authority_envelope`：路径不存在时 no-clobber 安装；已存在时解析完整验证其 head G/lineage/closure。
+   - 同G且证据有效：保留已在盘上的原字节，重新文件+目录同步；不能因 incoming C 不同返回 ObjectCollision，也不为同步 witness 无谓覆盖。
+   - 不同G：只允许 existing head 是 incoming 的精确 predecessor 的现有 marker 前进规则；冲突/损坏不覆盖、不降级。
+   - create 结果不确定：重开本路径判断上述语义；不盲重试 replace。
+4. `PortableAuthority::load(hash,load_object)` 必须改成显式双能力：`load_core(G)`（内容寻址）和 `resolve_evidence(G)`（有界证据读取与验证）。它不能随意枚举或跟随任意路径。
+5. **FrozenArchive 中的 detached 证据**使用与 objects 分开的确定命名文件 `authority-evidence/<G>.json`。该叶按预期 core G 验证 portable witness，不冒充「文件内容散列为G」。
+   - 需要哪些叶由精确 ancestor core 链派生；每个 Abort ancestor 必须有完整有效证据；无关叶拒绝，缺失/损坏明确失败。
+   - `ArchiveStore::admit` 的目录准入显式允许这个新证据子目录；`ControlSource` 增加 `predecessor_evidence(G)`；LiveSource 从 held current portable 取，ArchivedSource 从 held archive 取；`FrozenEpoch::read` 调用双能力 load。
+   - build/copy/verify_generation_archive_observed/install_generation_objects 都遍历同一依赖链，独立复制 evidence 及其内容寻址闭包，并仅读目标重验。不能只复制 core 而漏证据。
+   - 证据文件故意不是 F 中的一个可变证书散列：同G的有效 witness 可替换选择，不改 core 身份，也不改已有原 journal/Candidate/F 字节。它是由 core G 和多数证据规则约束的**可独立验证证明**。复制/本地安装保留先前有效字节，不主动修改被冻结源归档。
+   - 原来的 FrozenArchive ROOT schema 和原始已哈希对象不用重写；只有含 Abort 祖先的新归档才有此证明依赖。当前 Genesis/Add-only archive 不需要无用 evidence 文件。这是语义分支，不是旧版迁移。
+6. `effective_config()` 与 `source_intent()` 分离。lineage、candidate、restore、local proof、workspace root aliases、data_dependency 全部按 outcome 选择有效集合；源 intent.target 保留作被否决计划历史，**不作为可访问路径或成员授权**。
+7. 同G的两个有效 witness 在 head/predecessor 比较中必须等价；禁止在恢复时按 envelope bytes、C 或 witness成员数排序选「更新代」。后一代只由 core 的 predecessor 链确定。
+
+此方案的必要成本是 portable/load/archive resolver 的明确分离，不能为了少改几处而永久依赖第一批 Q 个投票根。独立证明损坏/丢失可从仍存在的真实同G slots 重组 C2，但只在显式恢复路径写入；只读 discovery 永不修复。
+
+## 5. 同一 decision slot、持久屏障和并发
+
+建议新增 `membership_transition/decision.rs`，由 Joint/Abort 共同调用。统一路径 `metadata/membership-decisions/<I>/decision.json`，路径不得包含 P/G/C/outcome。pending control、certificate 与状态缓存都不是第二投票槽。
+
+1. 持有真实根、既有 writer lock 与同进程排他访问，验证 root/lock inode、pool/disk/slot/binding_generation/physical identity。以持有目录 fd 操作；新盘不得冒充旧成员。
+2. 打开/创建中性目录 binding，只绑定 I+identity，不先选择 Joint/Abort。严格扫描完整 slot；损坏/截断/未知格式/换名不是 Empty，不修成空槽。
+3. 安装并验证 core G、acceptance X_i 与独立完整 F 的所需本地闭包，完成对象文件及目录同步。
+4. 使用 `AtomicFile::stage(...).prepare(bytes)?.create()`：完整临时文件同步 → no-replace rename → 父目录同步。no-replace 是选择线性化点，成功目录同步后才可发 receipt；重新验证持有目录与命名 leaf 身份。
+5. 相同 choice 重试必须再次 file+dir sync；不同 choice 明确冲突。`Unknown/Published` 不是未写入，要重开确切命名位置；临时文件不算票、不提升为证书。
+6. 不调用 PendingJournal::repair_torn_tail 截断已命名 decision；原子安装后损坏是完整性失败。新 Joint/Abort 只能认共享槽证据，不能接纳原旧式 joint journal 的另一个投票通道；不做旧格式升级/迁移。
+7. 单个 Abort(G) 不是可任意撤回草稿。正常 Joint 的准备/写/恢复在任一新票前读并尊重旧成员中已见 Abort，即便未达Q。取消可不断从其它合格空槽补同G，不能改核心 G。已有 Joint 的成员永久拒绝 Abort，但其它成员可组成独立 AbortQ。
+8. 现纯新增需要全部旧 control/持根；同一 Engine 的 &mut API 与所有实际旧根 writer locks 防止联合协调器竞态。新增 abort 认证只需Q可用根时，先取得并核验全部拟用Q根的锁再投票，持锁期间其它 JointQ 不可能绕过交集；崩溃后的共同槽保证结果不会二投。
+
+原语证据：`src/platform/src/fs_safety/unix.rs:489,517,570` 是 prepare/file sync、no-replace create、parent sync 和 NotPublished/Unknown/Published；`src/engine/src/disk.rs:295` 已有同 immutable bytes 重试的文件/目录同步。
+
+模型假设与当前多数协议一致：成功 fsync 的数据不自行回滚，成员非 Byzantine，真实 root 身份持续有效。哈希不是签名；调用者任意拼 receipt 不能当实盘投票，在线聚合只接收受控写入/读回与屏障形成的内部证明。人为清空/回滚根不在 crash-stop 证明内；遇损坏必须失败保留。
+
+## 6. 安全证明与未采纳方案
+
+任意 Joint 旧多数 J 与 Abort 多数 A 均为 O 的子集，`|J∩A|≥2Q-N≥1`，交点成员同 I 唯一 slot 不可能同时投 Joint/Abort。不同 AbortCore 的两组多数同理不可能同时成立。同G的 C1/C2不同不改变 G，不会出现两套可写 generation journal。
+
+少数 Joint 可以原样保留：N=5/Q=3，1、2为Joint，3、4、5为Abort(G)合法。推广1、2时验证全证书、自己旧fence/身份/归档，不覆盖本盘旧Joint。旧 generation仍fenced；新 authority使用旧成员集、新G、唯一首publication。
+
+**反例一：单独 abort 文件**。A/B 已Joint，B/C另写Abort：两个多数合法且共同B双投。禁止。
+
+**反例二：证书全部哈希进G**。N=3、三盘Abort同值，证书{1,2}与{2,3}都有效，完整node产生G1/G2。两套日志可分别写入。按「当前最小Q」选择也会随恢复证据改变。必须core/witness分离。
+
+**未采纳备选：提前固定恰好Q个voter**。它可让完整证书字节唯一，但投票成员1、2已固定后2永久不可用，1、3仍是旧多数也不能重组。这样人为制造永久冻结，不符合目标。只能留为模型中的反例/实验，不能作为本轮最终合同或暂时上线接口。
+
+## 7. 故障和恢复矩阵
+
+| 证据/故障点 | 允许动作 | 禁止或写状态 |
+|---|---|---|
+| 只有 preparation、尚无已承认 I | 保留准备记录，本设计不靠它伪造取消代 | 不删除reservation、不宣称取消完成 |
+| 部分旧fence，newroot永久丢失 | 从原I只用旧根补同fence，建立完整F | 不重开新根；旧归档不足保持阻塞 |
+| F完整、pending控制未齐/新根失效 | 仅旧根与F认证Abort | 不调用enroll/check_joint_controls，不缩Q |
+| 旧Joint少于Q且有Q个可用空槽或同G Abort | 同G补证据，可跨原witness集合 | 不改G、不改已有Joint |
+| 旧Joint已Q或其余合格票不足Q | 拒绝并报告精确固定N/Q/已见票 | 「目标尚未发布」不是取消权限 |
+| staging/file sync失败 | 无receipt，重开命名slot判断 | temp不算票 |
+| rename/dir sync失败、回复丢失 | 同choice重同步；崩溃未保留且未发durable receipt时可重写 | 检查前不换choice |
+| 命名decision损坏/截断 | 明确错误、保留全部字节 | 不截断清空成Empty |
+| 部分Abort后某投票根丢失 | 从其它旧空槽补同G，只要固定Q仍可成立 | 不绑定原证书那批根、不改G |
+| AbortQ成立、certificate未写完 | 从真实slots组成C1或C2，均证明G | 没完成证书文件不代表Abort可撤回 |
+| C完成、marker前崩溃 | 原代保持fenced，显式继续同G | 不能直接清blocked |
+| marker/seal推广部分完成 | 验证任一有效同G envelope，完成旧根推广 | 不因witness变化报代分叉，不访问取消target |
+| 首cancellation Candidate/Accept/Publication失败 | 恢复唯一G/唯一prescribed candidate | 普通写保持阻塞，不伪称取消已Published |
+| publication完成、回复/系统config丢失 | roots/core/evidence/archive重建，重放原op取消结果 | 原op不能重新新增 |
+| 失效newroot以后出现 | 由权威链判断原I已取消，继续pending/不可写 | 不独立激活旧target、不自动清理 |
+| 下一次新增 | 新op/new I，origin predecessor=取消G | 保留旧候选/旧archive/原取消结果 |
+
+取消首结果必须 `operation_id=I.operation_id`、`request_digest=I`、sequence=fence+1、kind=`membership-add-cancelled`，保存永久幂等收据。metadata authority epoch前进；数据路由、正文、原Candidate不改变。topology_generation如何表示取消代应在单一prescribed next_state合同中固定，不能由恢复时在线根数决定。为保持现generation边界失效语义，建议和当前activation一致做一次checked increment，但不把它解释为成员数量改变。
+
+## 8. 最小实施阶段与验收
+
+1. **共享DecisionStore+Joint接线**：类型、唯一命名槽、atomic屏障、严格冲突、真实本盘证明，所有Joint读写/恢复只走同槽。还没有取消能力。
+2. **稳定AbortCore+独立certificate**：只pure-add；完整F、固定oldQ，可追加不同旧成员的同G票；部分Abort veto正常Joint；明确AbortCertified≠已恢复写。
+3. **core/evidence持久化与portable/归档resolver**：当前pure-add旧core字节不改；同G的C差异可恢复；node_objects与证据分离、所有ancestor证据独立闭包。先覆盖缺证据/损坏/等价不同C。
+4. **取消新代+prescribed首publication**：effective_config贯穿lineage/restore/local/frozen验证；取消仅持旧根、保留少数Joint，永久原op结果；全部旧资源就绪后才恢复写。
+5. **GitHub测试**：纯模型→真实临时目录fault-injection→engine集成；genesis→abort、add→abort、abort→add、系统目录丢失/根地址重绑、不同Q witness同G、证人掉线后新Q重组、旧minority Joint、新目标永久不可用、恢复不访问取消target。未授权真实盘/部署，不做物理掉电。
+
+模型 `test/models/membership_handoff_abort_model.py` 仅Python标准库；未来GitHub命令：`python3 -m unittest discover -s test/models -p 'membership_handoff_abort_model.py' -v`。本轮未运行模型、Rust构建或测试，不把静态设计当集成验证。
+
+成本：旧全历史archive成本不变；决策扫描O(N)，witness分页O(Q至N)，单票依赖对象既有同步+staged file sync+parent dir sync，重试保持file+dir屏障。新证据resolver/复制遍历与ancestor数及证明闭包线性；不进入业务数据热路径、不依靠缓存省略真实边界验证。

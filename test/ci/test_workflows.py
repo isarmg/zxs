@@ -28,6 +28,8 @@ class WorkflowContexts(unittest.TestCase):
         self.assertIn("  contents: read\n", membership)
         self.assertIn("persist-credentials: false", membership)
         self.assertIn("path: target/membership-validation/", membership)
+        self.assertIn("python3 test/models/membership_handoff_abort_model.py -v", membership)
+        self.assertIn("tee target/membership-validation/abort-model.log", membership)
         self.assertLess(membership.index("initialize-cargo-home.sh"),
                         membership.index("rustup "))
 

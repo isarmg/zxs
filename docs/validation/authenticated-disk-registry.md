@@ -21,15 +21,29 @@
 
 ## 明确尚未完成
 
-1. occurrence mask 此批仅为发布前摘要引用，尚不验证其内容和作用域；当前不会实际改变文件列表或可写索引。引用不包含未来 registry/authority/Publication，后置完成证据不得回填已哈希根。
+1. occurrence mask 的内部语义验证和投影现已实现，见下节；现有 `RegistryExitEffect` 的普通准备入口仍只核对摘要格式，不自动认证 mask，不会实际改变文件列表或可写索引。原子发布入口必须显式消费相同 source 上取得的 mask 证明。mask 不包含未来 intent/registry/authority/Publication，后置完成证据不得回填已哈希根。
 2. 尚无真正生命周期 authority 与规定 D3 snapshot 的联合认证、D3 活动切换或从磁盘恢复当前 registry head。可搬运对象图和 seal 绑定验证不能替代这些条件。
 3. registry 内 pending exit 能阻止在这份提议图上继续跨代，但它尚未安装进运行池的持久操作预约；不能宣称已阻止所有运行时 Add/Restore 越过未完成生命周期。
-4. WriteProjection、Detached 内容 occurrence 投影、bootstrap 禁探测策略、全部长期读写与维护资源关闭及永久主操作结果仍须接线。计划下线和注销执行入口继续拒绝，HTTP/Web 不开放成功路径。删除不再有目标恢复文件阶段，移除该要求不代表剩余协议已经闭合。
+4. 内部 `WriteProjection` 与 occurrence 证明尚未接入 workspace、merge/rebase、HTTP/SMB 等真实消费者；bootstrap 禁探测策略、全部长期读写与维护资源关闭及永久主操作结果仍须接线。计划下线和注销执行入口继续拒绝，HTTP/Web 不开放成功路径。删除不再有目标恢复文件阶段，移除该要求不代表剩余协议已经闭合。
 5. 最后 voter 的退出仍缺终止权威。当前准备明确报未实现，不能把至少保留一个 voter 固化为最终产品限制。Disable 后重新启用和完成后的下一次 registry 过渡也不在本批；删除不承诺可通过恢复备份还原登记。
+
+## 内部 occurrence 与可写基线
+
+本次新增源码和下列测试尚未编译或执行；只完成固定工具链定向 rustfmt、差异检查及静态复核，不属于生产删除验收。
+
+- `FrozenDetachSource` 只从同一已准入 Engine、完整相等的 registry base 和准确目标 identity 建立。必须有已发布 snapshot；Engine 借用冻结内容表。`RegistrySource` 格式不变，snapshot 已承诺持久 `business_generation`，不另增重复字段。尚未提供已激活后继 registry 的 source 准入或恢复入口。
+- mask 使用现有 metadata-map 分页，绑定前驱 registry、source、目标 identity；分别枚举 BranchHead、DirectoryHead、Commit、DirectoryTree。每个 scope 固定 head、owner、原 entries 摘要；隐藏项以规范路径为键，值为含 entry/file/version 的完整 entry 摘要。同一 scope 允许同 entry/file 身份的不同路径 alias，不能按 entry_id 或 file_id 合并它们的不同 version/occurrence。验证每个对象后，从同一冻结 preview 重算完整预期图；遗漏 scope/隐藏项、追加共享项、改 source/head/identity 后重哈希仍拒绝。
+- `VerifiedOccurrenceMask::project` 只接受准确 Detach successor 的 predecessor/source/target/mask/view 绑定，返回私有字段的 `WriteProjection`。`entries()` 和 `lookup()` 使用同一保留项集合；只修改共享 b 的 entries 副本不会携带隐藏 a。上传身份选择没有旧 HEAD/pending 回退，同名重建取得新 entry/file 身份。draft 检查拒绝隐藏/外来 scope 的旧身份及目标独占版本，但不替代现有 namespace、发布、配额和授权验证。
+- namespace owner 仍登记时保留空目录；owner 被移除时只保留共享内容和必要目录，不能取得写能力。历史 scope 只供投影检查，原 Commit/DirectoryTree 字节不改写。同一 scope 的共享 alias 可继续原身份并修改版本；原隐藏路径在本片 draft 合同中只接受新身份，即使旧身份仍由其它 alias 保留。携带旧身份 rename 到该隐藏路径，以及跨 scope 保留身份的 merge/rebase 导入，仍需后续明确的 relocation/import 准入，不能绕过本片的严格 draft 检查。
+- `WorkspaceProjection` 只能从当前可写 branch projection 取得新 workspace ID，私有绑定 registry root/view、mask、scope、head、principal 和 fencing token。旧 ID、错 scope/head/view 的 proof 拒绝。它不安装 workspace，也不提供持久化、恢复、真实准入或写路由能力。
+
+新增 10 组测试接线在 `engine::disk_registry::published::occurrence::tests`，名称统一以 `membership_registry_occurrence_` 开始，已有 `membership_` 过滤可以选中。涵盖混合目录、共享/独占与多版本多 scope、空目录及 owner 移除、同名新身份、旧 pending 身份、重哈希差量、所有必要页的缺失/损坏、330 个文件 occurrence 的分页、旧 workspace proof、外来 source、未知字段及原 State/历史/物理文件不变。缺失 pending version 的夹具是额外异常向量，不是声称正常 admitted snapshot 已允许这种状态。
+
+source capture 一次建立已知 file/entry/pending identity 集合；准备和验证遍历冻结 scope 的完整 occurrence 图。设 E 为包含历史 scope 在内的总 occurrence 数，H 为隐藏 occurrence 数，S 为 scope 数，分页输出规模为 O(H+S)，身份集合 O(E+版本/pending 数)。既有 preview 在 owner 被移除时，对目录扫描后代，最坏为单 scope 的二次扫描；本片不宣称大历史性能验收。已构造 projection 的 lookup/身份检查使用有序索引，不在每次 draft 检查重新扫描全历史。没有新增任意历史条数限制、目标盘读写、fsync 或恢复备份阶段。
 
 ## 待 GitHub 执行的定向用例
 
-`storage-engine --lib membership_registry_` 共 10 组：
+原 registry/publication 的 `storage-engine --lib membership_registry_` 用例为以下 10 组；本次另增加上节 10 组 occurrence 用例：
 
 - voter/nonvoter Disabled 保留登记和历史拓扑，纯准备不改变原 State、Config 或文件字节。
 - Detached 仅引用前置依赖，未知 Publication/Prepared/Committed 字段拒绝，未完成预约不能跨代。

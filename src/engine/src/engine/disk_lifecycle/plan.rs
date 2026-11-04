@@ -173,6 +173,33 @@ impl<'a> DeregistrationPreview<'a> {
             },
         })
     }
+    /// Complete frozen scope inventory, including historical import sources.
+    pub(in crate::engine) fn namespaces(
+        &self,
+    ) -> impl Iterator<Item = DeregistrationNamespace<'a>> {
+        self.graph
+            .branches
+            .keys()
+            .map(|id| DeregistrationNamespace::BranchHead(id.as_str()))
+            .chain(
+                self.graph
+                    .directory_branches
+                    .keys()
+                    .map(|id| DeregistrationNamespace::DirectoryHead(id.as_str())),
+            )
+            .chain(
+                self.graph
+                    .commits
+                    .keys()
+                    .map(|id| DeregistrationNamespace::Commit(id.as_str())),
+            )
+            .chain(
+                self.graph
+                    .directory_trees
+                    .keys()
+                    .map(|id| DeregistrationNamespace::DirectoryTree(id.as_str())),
+            )
+    }
     pub fn boundary(&self) -> FrozenDeregistrationBoundary<'a> {
         self.boundary
     }
@@ -373,7 +400,8 @@ pub struct NamespaceDeregistrationPreview<'a> {
     entries: &'a [Entry],
 }
 pub struct NamespaceOccurrenceImpact<'a> {
-    /// Identity is (scope, entry_id), never file_id alone.
+    /// An occurrence is bound by scope, normalized path and the complete entry.
+    /// File aliases may share entry_id/file_id while selecting different versions.
     pub scope: DeregistrationNamespace<'a>,
     pub entry_id: &'a str,
     pub path: &'a str,
@@ -475,6 +503,9 @@ impl<'a> DeregistrationPreview<'a> {
     }
 }
 impl<'a> NamespaceDeregistrationPreview<'a> {
+    pub(in crate::engine) fn entries(&self) -> &'a [Entry] {
+        self.entries
+    }
     pub fn scope(&self) -> DeregistrationNamespace<'a> {
         self.scope
     }
