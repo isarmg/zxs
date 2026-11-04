@@ -214,12 +214,25 @@ pub fn write_full(
 /// Reading starts at offset zero. Callers must keep the immutable payload
 /// read-only and prevent concurrent writers through core locks.
 pub fn verify_full(file: &mut File, expectation: Expectation) -> Result<Receipt, Error> {
+    verify_full_observed(file, expectation, &mut || Ok(()))
+}
+
+/// Verify the same held file with cancellation checks before I/O, between bounded
+/// reads, and before returning a receipt. A callback can only stop verification;
+/// identity and complete byte/digest checks still come from the real file.
+pub fn verify_full_observed(
+    file: &mut File,
+    expectation: Expectation,
+    checkpoint: &mut impl FnMut() -> io::Result<()>,
+) -> Result<Receipt, Error> {
+    checkpoint()?;
     let identity = crate::fs_safety::linux::SingleLinkRequirement::check(&*file)?;
     file.seek(SeekFrom::Start(0))?;
     let mut hasher = blake3::Hasher::new();
     let mut bytes = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {
+        checkpoint()?;
         let read = match file.read(&mut buffer) {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             result => result?,
@@ -252,6 +265,7 @@ pub fn verify_full(file: &mut File, expectation: Expectation) -> Result<Receipt,
     {
         return Err(Error::Digest);
     }
+    checkpoint()?;
     Ok(Receipt {
         bytes,
         blake3: digest,

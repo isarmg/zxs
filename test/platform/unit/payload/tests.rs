@@ -394,3 +394,70 @@ fn reader_directory_replacement_keeps_publication_in_the_held_directory() {
     );
     assert_eq!(fs::read_dir(retained).unwrap().count(), 1);
 }
+
+#[test]
+fn observed_verification_keeps_identity_digest_and_bounded_cancellation() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("observed");
+    let bytes = vec![19; 150_000];
+    fs::write(&path, &bytes).unwrap();
+    let expectation = Expectation {
+        bytes: bytes.len() as u64,
+        blake3: Some(blake3::hash(&bytes)),
+    };
+    let mut file = File::open(&path).unwrap();
+    let reference = verify_full(&mut file, expectation).unwrap();
+    let mut checkpoints = 0;
+    let observed = verify_full_observed(&mut file, expectation, &mut || {
+        checkpoints += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(observed, reference);
+    assert_eq!(checkpoints, 6); // initial, three chunks, EOF, final receipt
+
+    for (stop, expected_position) in [(1, 7), (3, 64 * 1024), (6, 150_000)] {
+        file.seek(SeekFrom::Start(7)).unwrap();
+        let mut checkpoints = 0;
+        let result = verify_full_observed(&mut file, expectation, &mut || {
+            checkpoints += 1;
+            if checkpoints == stop {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "cancelled"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(
+            matches!(result, Err(Error::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied)
+        );
+        assert_eq!(file.stream_position().unwrap(), expected_position);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn observed_verification_still_rejects_a_multiple_link_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("original");
+    fs::write(&path, b"bytes").unwrap();
+    fs::hard_link(&path, temp.path().join("alias")).unwrap();
+    let mut file = File::open(&path).unwrap();
+    let mut checkpoints = 0;
+    let result = verify_full_observed(
+        &mut file,
+        Expectation {
+            bytes: 5,
+            blake3: None,
+        },
+        &mut || {
+            checkpoints += 1;
+            Ok(())
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(Error::Filesystem(crate::fs_safety::Error::MultipleLinks(_)))
+    ));
+    assert_eq!(checkpoints, 1);
+    assert_eq!(file.stream_position().unwrap(), 0);
+}
