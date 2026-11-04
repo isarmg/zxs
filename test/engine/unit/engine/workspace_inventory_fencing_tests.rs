@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 
 fn descriptors(path: &Path) -> usize {
     fs::read_dir("/proc/self/fd")

@@ -1,5 +1,6 @@
 use super::*;
 use json_codec::json;
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
