@@ -145,6 +145,7 @@ fn inspect(browser: &Browser, locale: &str) -> Result<()> {
     browser.css(SECTION)?;
     refresh_disks_from_header(browser)?;
     select_action(browser, "Inspect / query", "检查 / 查询")?;
+    accessibility::input_surfaces(browser)?;
     expect_labels(browser, "nav button", &ACTIONS, locale)?;
     expect_labels(browser, ":scope > button", &QUERIES, locale)?;
     expect_labels(
@@ -162,6 +163,7 @@ fn inspect(browser: &Browser, locale: &str) -> Result<()> {
     // These navigation buttons only select local forms. Never submit a mutation
     // or click a query/checkbox, even when the disposable fixture is writable.
     select_action(browser, "Repository", "仓库")?;
+    accessibility::input_surfaces(browser)?;
     expect_labels(
         browser,
         "label > span",
@@ -198,6 +200,7 @@ fn inspect(browser: &Browser, locale: &str) -> Result<()> {
         &[("Enable SMB", "启用 SMB")],
         locale,
     )?;
+    accessibility::input_surface_viewports(browser)?;
     Ok(())
 }
 fn switch(browser: &Browser, target: &str) -> Result<()> {

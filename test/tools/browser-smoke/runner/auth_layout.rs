@@ -77,6 +77,8 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>) -> Result<()> {
                     )?,
                 )?;
             }
+            // Persist the real image and geometry before any new appearance assertion.
+            accessibility::input_surfaces(browser)?;
             if geometry["valid"] != true {
                 return Err(
                     format!("anonymous {width}x{height}, setup open={open}: {geometry}").into(),
@@ -86,9 +88,10 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>) -> Result<()> {
         let username = browser.css(".authentication-card > form [name='username']")?;
         browser.click(&username)?;
         browser.keys(&username, "\u{e004}")?;
-        if browser.script("const e=document.activeElement,s=getComputedStyle(e);return e.name==='password'&&e.matches(':focus-visible')&&parseFloat(s.outlineWidth)>0&&s.outlineStyle!=='none'")? != true {
+        if browser.script("const e=document.activeElement,s=getComputedStyle(e);return e.name==='password'&&e.matches(':focus-visible')&&parseFloat(s.borderBottomWidth)===3&&s.borderBottomStyle==='dashed'&&(parseFloat(s.outlineWidth)===0||s.outlineStyle==='none')")? != true {
             return Err(format!("anonymous {width}x{height} keyboard focus is invisible").into());
         }
+        accessibility::input_surfaces(browser)?;
         // Empty submission is local validation, never an authentication request.
         browser.click(&browser.css(".authentication-card > form > button[type=submit]")?)?;
         browser.css(".authentication-card > form > .zxs-error")?;

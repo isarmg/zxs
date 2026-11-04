@@ -64,7 +64,8 @@ fn check(browser: &Browser) -> Result<()> {
                 "const e=document.querySelector('.zxs-account-form input[name=current_password]');\
                      const s=getComputedStyle(e);\
                      return document.activeElement===e && e.matches(':focus-visible') && \
-                     parseFloat(s.outlineWidth)>0 && s.outlineStyle!=='none'",
+                     parseFloat(s.borderBottomWidth)===3 && s.borderBottomStyle==='dashed' && \
+                     (parseFloat(s.outlineWidth)===0 || s.outlineStyle==='none')",
             )?;
             if focus == true {
                 Ok(())
@@ -72,6 +73,7 @@ fn check(browser: &Browser) -> Result<()> {
                 Err(format!("invisible compact input focus in {theme}").into())
             }
         })?;
+        input_surface_viewports(browser)?;
         browser.click(&browser.button("History", "历史记录")?)?;
         let trigger = browser.css(".zxs-history-toolbar .zxs-select-trigger")?;
         if browser.script("const root=document.querySelector('.zxs-history-toolbar .zxs-select'),name=document.documentElement.lang==='zh-CN'?'硬盘':'Disk';return !root.querySelector('label')&&[...root.querySelectorAll('[role=combobox],[role=listbox]')].every(e=>e.getAttribute('aria-label')===name&&!e.hasAttribute('aria-labelledby'))")? != true {
@@ -121,6 +123,40 @@ fn check(browser: &Browser) -> Result<()> {
         browser.keys(&trigger, "\u{e00c}")?;
     }
     Ok(())
+}
+
+/// Observe real text controls without adding, disabling or restyling product DOM.
+pub(super) fn input_surfaces(browser: &Browser) -> Result<()> {
+    wait_for(
+        "native text fields have only a dashed underline and no stale G4 paint",
+        || {
+            let evidence = browser.script(include_str!("input_surfaces.js"))?;
+            if evidence["valid"] == true {
+                Ok(())
+            } else {
+                Err(format!("native input surfaces: {evidence}").into())
+            }
+        },
+    )
+}
+
+pub(super) fn input_surface_viewports(browser: &Browser) -> Result<()> {
+    with_cleanup(
+        || {
+            for (width, height) in [(320, 568), (980, 760)] {
+                browser.cdp(
+                    "Emulation.setDeviceMetricsOverride",
+                    json!({"width":width,"height":height,"deviceScaleFactor":1,"mobile":false}),
+                )?;
+                input_surfaces(browser)?;
+            }
+            Ok(())
+        },
+        || {
+            browser.cdp("Emulation.clearDeviceMetricsOverride", json!({}))?;
+            Ok(())
+        },
+    )
 }
 
 fn visible_menu(browser: &Browser, fallback: bool, theme: &str, mode: &str) -> Result<()> {

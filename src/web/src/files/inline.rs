@@ -531,7 +531,7 @@ fn editor_input(editor: Editor) -> impl IntoView {
         input.select();
     });
     view! {
-        <input class="zxs-inline-input zxs-input zxs-input--compact zxs-input--underline" node_ref=input type="text"
+        <input class="zxs-inline-input zxs-input zxs-input--compact" node_ref=input type="text"
             aria-label=editor.label.get_value() aria-invalid=move ||(editor.draft.error.get() || editor.draft.name_error.get().is_some()).to_string()
             title=if editor.kind == InputKind::NamespaceName {
                 t("名称及完整路径须符合共享命名规则；Enter 保存，Esc 或点击其他位置取消。", "Names and complete paths must meet the shared naming rules. Enter saves; Escape or clicking elsewhere cancels.")

@@ -192,8 +192,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.next_branch_cursor().is_none()) on:click=move |_|actions::page_history_branches(state,true)>{t("下一页分支","Next branches")}</button>
                 </div>
                 <div class="zxs-file-toolbar zxs-flow">
-                    <label class="zxs-flow"><span class="zxs-row">{t("新增标签","Add tags")}</span>
-                        <input class="zxs-input zxs-input--compact zxs-input--underline" aria-label=t("新增标签","Add tag") maxlength=128 data-max-bytes=storage_contract::MAX_TAG_BYTES.to_string() disabled=disabled prop:value=move ||state.with(|s|s.files.tag_edit.as_ref().map(|draft|draft.input.clone()).unwrap_or_default()) on:input=move |event|edit_input(state,instance,event_target_value(&event)) on:keydown=move |event:web_sys::KeyboardEvent|{if event.key()=="Enter"&&!event.is_composing(){event.prevent_default();add_input(state,instance);}}/>
+                    <label class="zxs-form-field"><span class="zxs-row">{t("新增标签","Add tags")}</span>
+                        <input class="zxs-input zxs-input--compact" aria-label=t("新增标签","Add tag") maxlength=128 data-max-bytes=storage_contract::MAX_TAG_BYTES.to_string() disabled=disabled prop:value=move ||state.with(|s|s.files.tag_edit.as_ref().map(|draft|draft.input.clone()).unwrap_or_default()) on:input=move |event|edit_input(state,instance,event_target_value(&event)) on:keydown=move |event:web_sys::KeyboardEvent|{if event.key()=="Enter"&&!event.is_composing(){event.prevent_default();add_input(state,instance);}}/>
                     </label>
                     <button class="zxs-button" disabled=disabled on:click=move |_|add_input(state,instance)>{t("添加标签","Add tag")}</button>
                 </div>

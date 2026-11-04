@@ -42,7 +42,7 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   .zxs-button { border: 0; background: transparent; color: var(--zxs-text-link); font-weight: 400; }
   .zxs-button:hover { text-decoration: underline; }
   .zxs-button:disabled:hover { text-decoration: none; }
-  .zxs-input { border-color: var(--zxs-block-border); background: transparent; }
+  .zxs-input:not(input,textarea) { border-color: var(--zxs-block-border); background: transparent; }
   .zxs-error,.zxs-empty,.zxs-loading { border: 0; border-radius: 0; background: var(--zxs-bg-panel); --zxs-contour-extent: var(--zxs-contour-notification); }
   .zxs-app-shell :is(.zxs-empty,.zxs-loading) { display: flex; align-items: center; }
   .zxs-header-actions { max-width: 100%; margin-inline-start: auto; flex-shrink: 0; }

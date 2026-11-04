@@ -104,7 +104,7 @@ pub(super) fn control(
                 let input = NodeRef::<html::Input>::new();
                 input.on_load(|input| { if let Err(error) = input.focus() { web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error); } });
                 view! {
-                    <input class="zxs-branch-name zxs-input zxs-input--compact zxs-input--underline" node_ref=input type="text"
+                    <input class="zxs-branch-name zxs-input zxs-input--compact" node_ref=input type="text"
                         aria-label=t("分支名称","Branch name")
                         aria-invalid=move || (error.get() || draft.name_error.get().is_some()).to_string()
                         title=t("最多 128 个 UTF-8 字节。","Up to 128 UTF-8 bytes.") data-max-bytes="128" autocomplete="off"

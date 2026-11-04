@@ -22,9 +22,9 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   .authentication-card details label:has(> input[type="checkbox"]) { display: block; }
   .authentication-card details { border-top: 1px solid var(--zxs-block-border); }
   .authentication-card .zxs-button { border: 1px solid var(--zxs-block-muted); padding: .5rem .8rem; }
-  .authentication-card .zxs-input { min-width: 0; border: 1px solid var(--zxs-block-muted); padding: .5rem .8rem; }
-  .authentication-card :is(.zxs-button, .zxs-input) { background: var(--zxs-bg-page); }
-  .authentication-card :is(.zxs-button, .zxs-input):focus-visible { outline: 3px solid var(--zxs-focus); outline-offset: 3px; }
+  .authentication-card .zxs-input { min-width: 0; padding-block: .5rem; }
+  .authentication-card .zxs-button { background: var(--zxs-bg-page); }
+  .authentication-card .zxs-button:focus-visible { outline: 3px solid var(--zxs-focus); outline-offset: 3px; }
   .zxs-login-controls { display: flex; align-items: center; gap: 8px; }
   .zxs-login-controls > button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 44px; padding: 0 8px; line-height: 1; }
   .zxs-login-controls svg { width: var(--zxs-header-icon-size, 1em); height: var(--zxs-header-icon-size, 1em); }

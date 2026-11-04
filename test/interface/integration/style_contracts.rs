@@ -46,7 +46,8 @@ fn session_restoration_is_visually_empty() {
 fn anonymous_forms_keep_visible_controls_and_content_driven_layout() {
     let css = include_str!("../../../src/web/public/styles/components/auth.css");
     assert!(!css.contains("border-bottom: 1px solid transparent"));
-    assert!(css.contains(".authentication-card .zxs-input { min-width: 0; border: 1px solid"));
+    assert!(css.contains(".authentication-card .zxs-input { min-width: 0; padding-block:"));
+    assert!(!css.contains(".authentication-card :is(.zxs-button, .zxs-input):focus-visible"));
     assert!(css.contains(".authentication-card .zxs-button { border: 1px solid"));
     assert!(css.contains(".authentication-card > form > .zxs-error {"));
     assert!(!css.contains(".authentication-card .zxs-error {"));
@@ -237,7 +238,17 @@ fn shared_form_groups_align_fields_without_individual_input_boxes() {
     assert!(css.contains(".zxs-form-field {"));
     assert!(css.contains("align-items: center; column-gap:"));
     assert!(css.contains("border: 0; border-bottom: 1px dashed"));
-    assert!(css.contains("outline-offset: -2px"));
+    assert!(
+        css.contains(
+            ":root :is(input,textarea).zxs-input:focus-visible { border-bottom-width: 3px;"
+        )
+    );
+    assert!(css.contains(
+        "background: transparent; outline: 0; --zxs-contour-extent: 0px; --zxs-contour-mode: none;"
+    ));
+    assert!(!css.contains("@media (forced-colors: active)"));
+    let geometry = include_str!("../../../src/web/public/styles/components/geometry.css");
+    assert!(!geometry.contains(".zxs-input--underline"));
     assert!(!css.contains(".zxs-form-field + .zxs-form-field"));
     let login = include_str!("../../../src/interface/src/components/login.rs");
     let account = include_str!("../../../src/interface/src/components/account.rs");
@@ -264,6 +275,6 @@ fn smb_selection_and_passwords_share_aligned_form_groups() {
     assert!(binding.contains("name=\"smb_binding_administrator_password\""));
     assert_eq!(smb.matches("<div class=\"zxs-form-grid\">").count(), 2);
     let css = include_str!("../../../src/web/public/styles/components/base.css");
-    assert!(css.contains(".zxs-input:not(.zxs-select-trigger)"));
+    assert!(css.contains(":root :is(input,textarea).zxs-input {"));
     assert!(css.contains("border: 0; border-bottom: 1px dashed"));
 }

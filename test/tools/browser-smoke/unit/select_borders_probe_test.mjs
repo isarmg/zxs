@@ -4,12 +4,15 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 const source=readFileSync(new URL('../runner/select_borders.js',import.meta.url),'utf8');
 // The anonymous setup Select is outside .zxs-app-shell. Its black color must
-// override html .authentication-card .zxs-input without replacing auth geometry.
+// retain its separate black border while native auth text fields use underlines.
 const css=readFileSync(new URL('../../../../src/web/public/styles/components/select.css',import.meta.url),'utf8');
 const authCss=readFileSync(new URL('../../../../src/web/public/styles/components/auth.css',import.meta.url),'utf8');
 const setup=readFileSync(new URL('../../../../src/web/src/setup.rs',import.meta.url),'utf8');
 assert.match(setup,/<Select label=t\("本地预置方案 ID"/);
-assert.match(authCss,/\.authentication-card \.zxs-input\s*\{[^}]*border:/);
+assert.doesNotMatch(authCss,/\.authentication-card \.zxs-input\s*\{[^}]*border:/);
+const baseCss=readFileSync(new URL('../../../../src/web/public/styles/components/base.css',import.meta.url),'utf8');
+assert.match(baseCss,/:root :is\(input,textarea\)\.zxs-input\s*\{[^}]*border-bottom: 1px dashed/,
+    'Underline policy must target native text controls, not the button-based Select');
 assert.match(css,/:root \.zxs-select \.zxs-select-trigger\.zxs-input\s*\{\s*border-color:\s*#000;\s*\}/,
     'Global Select color rule must outrank auth inputs without changing background or dimensions');
 const selectSource=readFileSync(new URL('../../../../src/interface/src/components/select.rs',import.meta.url),'utf8');

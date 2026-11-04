@@ -82,8 +82,12 @@ class RuntimeAcceptanceReceipts(unittest.TestCase):
             module = modules / 'vfs/zxs.so'
             module.write_bytes(b'unit-test module placeholder')
             target = json.loads((ROOT / '.github/samba-debian-target.json').read_text())
-            users = [SimpleNamespace(pw_uid=21001, pw_gid=21001),
-                     SimpleNamespace(pw_uid=21002, pw_gid=21002, pw_name='zxs-smb-test')]
+            users = {
+                name: SimpleNamespace(pw_uid=uid, pw_gid=uid, pw_name=name)
+                for name, uid in (('zxs-engine-test', 21001),
+                                  ('zxs-smb-test', 21002),
+                                  ('zxs-smb-next-test', 21003))
+            }
 
             def command_output(command, **_):
                 if command[0] == 'dpkg-query':
@@ -100,7 +104,7 @@ class RuntimeAcceptanceReceipts(unittest.TestCase):
 
             stack.enter_context(patch.dict(os.environ, {'ZXS_ISOLATED_SAMBA_TEST': '1'}))
             stack.enter_context(patch.object(SAMBA.os, 'geteuid', return_value=0))
-            stack.enter_context(patch.object(SAMBA.pwd, 'getpwnam', side_effect=users))
+            accounts = stack.enter_context(patch.object(SAMBA.pwd, 'getpwnam', side_effect=users.__getitem__))
             stack.enter_context(patch.object(SAMBA.os, 'chown'))
             kill = stack.enter_context(patch.object(SAMBA.os, 'killpg'))
             stack.enter_context(patch.object(SAMBA.subprocess, 'check_output', side_effect=command_output))
@@ -111,6 +115,7 @@ class RuntimeAcceptanceReceipts(unittest.TestCase):
             stack.enter_context(patch.object(SAMBA, 'wait_file', side_effect=fail_after_start))
             with self.assertRaisesRegex(RuntimeError, 'injected fixture startup failure'):
                 SAMBA.run(SimpleNamespace(output=output, module=module, fixture=root / 'fixture'))
+            self.assertCountEqual([call.args[0] for call in accounts.call_args_list], users)
             self.assertFalse(output.exists())
             self.assertEqual((root / 'engine.log').read_text(), 'current fixture failed')
             kill.assert_called_once_with(child.pid, SAMBA.signal.SIGTERM)

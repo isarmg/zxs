@@ -97,14 +97,6 @@
   height: auto;
   padding-block: max(0px, calc((var(--zxs-control-height) - 1lh) / 2 - var(--zxs-control-border-width)));
 }
-.zxs-app-shell .zxs-input--underline {
-  --zxs-contour-extent: 0px;
-  border: 0;
-  border-bottom: var(--zxs-control-border-width) solid var(--zxs-block-border);
-  padding-inline: calc(var(--zxs-control-content-inset) - var(--zxs-row-border, 0px));
-  background: transparent;
-}
-.zxs-app-shell .zxs-input--underline:focus { border-bottom-color: var(--zxs-focus); outline: 0; }
 .zxs-app-shell .zxs-control-group--comfortable .zxs-button {
   --zxs-control-height: var(--zxs-input-row-height);
   /* Keep a 44px target without enlarging the adjacent menu typography. */

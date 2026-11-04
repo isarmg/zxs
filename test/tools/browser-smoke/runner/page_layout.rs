@@ -42,6 +42,7 @@ pub(super) fn files(browser: &Browser) -> Result<()> {
                     accessibility::select_theme(browser, theme)?;
                     for (width, height) in VIEWS {
                         viewport(browser, width, height)?;
+                        accessibility::input_surfaces(browser)?;
                         let geometry=browser.script(r#"
                         const nav=document.querySelector('.zxs-file-pagination'),panel=nav.closest('.zxs-file-list-panel');
                         const table=panel.querySelector('table'),scroll=table.parentElement;
