@@ -1,6 +1,10 @@
 """Source contracts for one temporary batch, not evidence that Actions passed."""
 from pathlib import Path
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +50,79 @@ class ValidationBatchWorkflow(unittest.TestCase):
         for broad in ['check.sh workspace', 'check.sh security', 'check-foundation.sh',
                       'release-publish.sh', 'release-assemble.sh', 'select-ci-suites.py']:
             self.assertNotIn(broad, self.batch)
+
+    def test_reuse_is_bound_to_one_parent_source_tree_and_exact_paths(self):
+        script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
+                                 .split('      - name:', 1)[0])
+        base = '01305735ce153015a08bf14c6920cdce40b8b79b'
+        self.assertIn(f'base={base}', script)
+        self.assertIn('fetch-depth: 2', self.batch)
+        self.assertIn('git diff --name-only --no-renames "$base" HEAD', script)
+        paths = [
+            '.github/workflows/validate-ui-smb-history.yml',
+            'docs/tools/browser-smoke.md',
+            'test/ci/test_validation_batch_workflow.py',
+            'test/ci/test_file_row_decoration.py',
+            'test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs',
+            'test/tools/browser-smoke/runner/main.rs',
+            'test/tools/browser-smoke/runner/file_row_pointer.js',
+            'test/tools/browser-smoke/unit/file_row_pointer_probe_test.mjs',
+        ]
+        # Execute the actual gate with controlled git replies, not the product.
+        # Every unrelated file or mismatched commit/tree must restore coverage.
+        git = r'''git() {
+            if [ "$*" = "$TEST_GIT_FAIL" ]; then return 42; fi
+            case "$*" in
+                "rev-parse HEAD^") printf '%s\n' "$TEST_PARENT" ;;
+                "rev-parse HEAD:src") printf '%s\n' "$TEST_SOURCE" ;;
+                "rev-parse $base:src") printf '%s\n' baseline-source ;;
+                "diff --name-only --no-renames $base HEAD") printf '%s\n' "$TEST_PATHS" ;;
+                *) return 99 ;;
+            esac
+        }
+        '''
+        cases = [
+            (base, 'baseline-source', paths, True, ''),
+            ('another-parent', 'baseline-source', paths, False, ''),
+            (base, 'changed-source', paths, False, ''),
+        ]
+        for extra in ['src/smb/src/client.rs', 'test/smb/unit/client/tests.rs',
+                      'test/interface/integration/style_contracts.rs',
+                      '.github/workflows/smb-sdk.yml', 'Cargo.lock',
+                      'docs/unrelated.md', 'test/tools/browser-smoke/runner/unknown.rs']:
+            cases.append((base, 'baseline-source', paths + [extra], False, ''))
+        for failed in ['rev-parse HEAD^', 'rev-parse HEAD:src', f'rev-parse {base}:src',
+                       f'diff --name-only --no-renames {base} HEAD']:
+            cases.append((base, 'baseline-source', paths, False, failed))
+        for parent, source, changed, expected, failed in cases:
+            with self.subTest(parent=parent, source=source, changed=changed, failed=failed):
+                with tempfile.TemporaryDirectory() as directory:
+                    output = Path(directory) / 'output'
+                    env = dict(os.environ, TEST_PARENT=parent, TEST_SOURCE=source,
+                               TEST_PATHS='\n'.join(changed), TEST_GIT_FAIL=failed,
+                               GITHUB_OUTPUT=str(output))
+                    subprocess.run(['bash', '-euo', 'pipefail', '-c', git + script],
+                                   check=True, env=env, capture_output=True, text=True)
+                    self.assertEqual(output.read_text(), f'test_only_retry={str(expected).lower()}\n')
+
+    def test_retry_preserves_unrun_http_protocol_and_exact_head_browser(self):
+        condition = "if: needs.static.outputs.test_only_retry != 'true'"
+        self.assertEqual(self.batch.count(condition), 4)
+        self.assertIn("- name: Lint the changed history integration target\n"
+                      "        if: needs.static.outputs.test_only_retry == 'true'\n"
+                      "        run: cargo clippy --locked --offline -p storage-engine "
+                      "--test branch_alias_operations -- -D warnings", self.batch)
+        for marker in ['Check affected native targets and no-core server',
+                       'Exercise engine, server, client and wire unit contracts']:
+            self.assertIn(f'- name: {marker}\n        {condition}', self.batch)
+        self.assertIn(f'name: Affected Web state and style contracts\n    {condition}', self.batch)
+        self.assertIn(f'  smb-sdk:\n    {condition}', self.batch)
+        for marker in ['Exercise history integration and real HTTP routes',
+                       'Check changed wire contracts and SMB feature combinations',
+                       'Build production Web distribution',
+                       'Exercise real login, setup, monitor, file rows and history flows']:
+            step = self.batch.split(f'- name: {marker}', 1)[1].split('      - name:', 1)[0]
+            self.assertNotIn(condition, step)
 
     def test_batch_keeps_read_permissions_and_same_run_assets(self):
         self.assertIn('permissions:\n  contents: read\n', self.batch)

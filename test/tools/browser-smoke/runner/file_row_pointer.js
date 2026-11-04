@@ -10,10 +10,14 @@ const hitOnRow = hit === row || row.contains(hit);
 const visible = right > left && r.top >= 0 && r.bottom <= innerHeight
     && point.x >= left && point.x < right && point.y >= r.top && point.y < r.bottom;
 const hoverEnabled = matchMedia('(hover: hover) and (pointer: fine)').matches;
+const device = {hover: matchMedia('(hover: hover)').matches, anyHover: matchMedia('(any-hover: hover)').matches,
+    fine: matchMedia('(pointer: fine)').matches, anyFine: matchMedia('(any-pointer: fine)').matches,
+    coarse: matchMedia('(pointer: coarse)').matches, none: matchMedia('(pointer: none)').matches,
+    maxTouchPoints: navigator.maxTouchPoints};
 const hovered = row.matches(':hover'), surface = row.querySelector('.zxs-file-row-surface'), css = getComputedStyle(surface);
 return {valid: visible && hitOnRow && hoverEnabled && hovered && css.opacity === '1',
     index, kind: row.querySelector('.zxs-file-icon--folder') ? 'folder' : 'file', theme: document.documentElement.dataset.zxsTheme,
-    point, visible, hitOnRow, hoverEnabled, hovered, opacity: css.opacity, contour: surface.dataset.zxsContourState,
+    point, visible, hitOnRow, hoverEnabled, device, hovered, opacity: css.opacity, contour: surface.dataset.zxsContourState,
     hit: hit ? {tag: hit.tagName, className: hit.getAttribute('class'), text: hit.textContent.slice(0, 120)} : null,
     row: {left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height},
     viewport: {width: innerWidth, height: innerHeight, scrollX, scrollY},

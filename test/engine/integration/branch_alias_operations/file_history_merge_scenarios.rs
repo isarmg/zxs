@@ -1,4 +1,5 @@
 use super::*;
+use std::os::unix::fs::DirBuilderExt;
 use storage_contract::{BranchName, ErrorCode, FileHistoryMergeInput, OperationId};
 
 fn fork(p: &mut Pool, file: &str, node: &str, name: &str) -> String {
@@ -168,7 +169,14 @@ fn historical_nodes_on_one_branch_merge_without_changing_original_heads_or_defau
         .code(),
         ErrorCode::IdempotencyKeyReused
     );
-    let package = p._temporary.path().join("history-package");
+    // tempfile's default directory mode depends on umask; exports require a
+    // private parent. Create this test-owned parent without relaxing admission.
+    let exports = p._temporary.path().join("exports");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&exports)
+        .unwrap();
+    let package = exports.join("history-package");
     p.engine
         .export_history_package(&p.repo.history_tree_id, &package)
         .unwrap();

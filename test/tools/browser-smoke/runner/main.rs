@@ -587,7 +587,11 @@ fn run() -> Result<()> {
         } else {
             "--window-size=1280,900"
         };
-        let mut chrome = json!({"args":["--headless=new","--disable-dev-shm-usage",window_size]});
+        // Headless CI has no physical mouse to discover. Declare the desktop
+        // input device used by our real WebDriver actions, not a forced :hover.
+        // Chromium's HoverType::kHoverHoverType=2 and PointerType::kPointerFineType=4.
+        let desktop_pointer = "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4";
+        let mut chrome = json!({"args":["--headless=new","--disable-dev-shm-usage",window_size,desktop_pointer]});
         if let Some(binary) = env::var_os("CHROME_BIN") {
             chrome["binary"] = binary.to_string_lossy().into_owned().into();
         }

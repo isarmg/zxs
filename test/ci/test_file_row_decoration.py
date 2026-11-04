@@ -34,6 +34,14 @@ class FileRowDecoration(unittest.TestCase):
                         visual.index('if let Err(error) = result'))
         self.assertIn('"captureBeyondViewport":false', visual)
         self.assertNotIn('CSS.forcePseudoState', visual)
+        main = (ROOT / 'test/tools/browser-smoke/runner/main.rs').read_text()
+        self.assertIn('--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4', main)
+        self.assertIn('window_size,desktop_pointer]', main)
+        self.assertIn('state["hoverEnabled"] != true', visual)
+        pointer = (ROOT / 'test/tools/browser-smoke/runner/file_row_pointer.js').read_text()
+        self.assertIn("matchMedia('(hover: hover) and (pointer: fine)').matches", pointer)
+        self.assertIn("hovered && css.opacity === '1'", pointer)
+        self.assertIn('maxTouchPoints: navigator.maxTouchPoints', pointer)
 
     def test_inset_lines_and_g4_fill_reuse_the_frame_corner(self):
         css = (ROOT / 'src/web/public/styles/components/file-manager.css').read_text()

@@ -21,12 +21,43 @@ jobs:
     name: Batch source governance and tooling
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      test_only_retry: ${{ steps.scope.outputs.test_only_retry }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2
       - name: Bind validation to the pushed commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Scope the reviewed test-only retry
+        id: scope
+        run: |
+          # Success evidence: https://github.com/isarmg/zxs/actions/runs/41813864437
+          # Only its direct child with this exact test/doc change set may reuse
+          # Web/Samba and native unit results. Other commits keep all six jobs.
+          base=01305735ce153015a08bf14c6920cdce40b8b79b
+          retry=false
+          if parent=$(git rev-parse HEAD^) && [ "$parent" = "$base" ] &&
+             source=$(git rev-parse HEAD:src) && baseline_source=$(git rev-parse "$base:src") &&
+             [ "$source" = "$baseline_source" ] &&
+             changed=$(git diff --name-only --no-renames "$base" HEAD); then
+            retry=true
+            while IFS= read -r path; do
+              case "$path" in
+                .github/workflows/validate-ui-smb-history.yml|\
+                docs/tools/browser-smoke.md|\
+                test/ci/test_validation_batch_workflow.py|\
+                test/ci/test_file_row_decoration.py|\
+                test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs|\
+                test/tools/browser-smoke/runner/main.rs|\
+                test/tools/browser-smoke/runner/file_row_pointer.js|\
+                test/tools/browser-smoke/unit/file_row_pointer_probe_test.mjs) ;;
+                *) retry=false ;;
+              esac
+            done <<< "$changed"
+          fi
+          echo "test_only_retry=$retry" >> "$GITHUB_OUTPUT"
       - name: Check source governance and tooling regressions
         run: bash .github/scripts/check.sh static
 
@@ -49,10 +80,15 @@ jobs:
       - name: Format affected Rust packages
         run: cargo fmt -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p smb-vfs -p browser-smoke -- --check
       - name: Check affected native targets and no-core server
+        if: needs.static.outputs.test_only_retry != 'true'
         run: |
           cargo clippy --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol --all-targets -- -D warnings
           cargo clippy --locked --offline -p storage-server --no-default-features --all-targets -- -D warnings
+      - name: Lint the changed history integration target
+        if: needs.static.outputs.test_only_retry == 'true'
+        run: cargo clippy --locked --offline -p storage-engine --test branch_alias_operations -- -D warnings
       - name: Exercise engine, server, client and wire unit contracts
+        if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract --lib
       - name: Exercise history integration and real HTTP routes
         run: |
@@ -66,6 +102,7 @@ jobs:
 
   web-tests:
     name: Affected Web state and style contracts
+    if: needs.static.outputs.test_only_retry != 'true'
     needs: static
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -192,5 +229,6 @@ jobs:
           retention-days: 7
 
   smb-sdk:
+    if: needs.static.outputs.test_only_retry != 'true'
     needs: static
     uses: ./.github/workflows/smb-sdk.yml

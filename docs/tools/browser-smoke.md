@@ -2,6 +2,8 @@
 
 独立 Rust 工具，直接调用本机 ChromeDriver 的 W3C WebDriver / Chrome DevTools 协议；不引入 Python、Node 或业务 JavaScript，加载真实生产 Web/WASM，不替换页面资源。业务写入使用真实临时服务；下文明确说明的生命周期、分页及宽历史场景会暂缓或构造限定的读取响应，不把合成夹具当作引擎正确性或规模性能证据。少量浏览器端脚本观察错误、已渲染内容和 computed style；独立键盘焦点与绘制回归还临时注入并移除一条装饰故障 CSS，验证真实轮廓控制器的降级行为。
 
+文件行鼠标验收的设备是 headless Chrome 的桌面鼠标，而非触控手机；320px 等尺寸只改变 CSS 视口。启动时用 Blink 的 `primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4` 声明鼠标能力，避免无物理输入设备的 CI 被识别成无指针。数值来自 [Chromium 指针枚举](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/public/mojom/webpreferences/web_preferences.mojom)，同样的 headless 设置也用于 [Playwright 的 Chromium 启动器](https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/server/chromium/chromium.ts)。每次文件行检查仍读取真实 `matchMedia`、实际命中、原生鼠标触发的 `:hover` 和最终 opacity，再执行原有 G4 几何与截图像素断言；不强制伪类、不改产品 CSS 或放宽视觉阈值。诊断分别记录 primary/any 指针与 hover 媒体、触控点数，并在清理前保存失败现场。
+
 ## 依赖与运行
 
 需要 Linux、项目固定 Rust 工具链、匹配的官方 Chrome / ChromeDriver、PATH 中的 `kill`。Chrome 保持默认沙箱，不添加 `--no-sandbox`。GitHub Ubuntu runner 使用已安装的匹配版本；其他环境从官方 Chrome for Testing 下载同版本浏览器与驱动。浏览器或驱动缺失、沙箱禁止启动、页面加载失败均返回非零，不跳过测试。
