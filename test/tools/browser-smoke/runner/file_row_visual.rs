@@ -139,7 +139,7 @@ fn pixels(browser: &Browser, scene: Value) -> Result<()> {
     Ok(())
 }
 
-fn search_focus_pixels(browser: &Browser, before: &Value, mode: &str) -> Result<()> {
+fn search_focus_state(browser: &Browser, before: &Value, mode: &str) -> Result<()> {
     accessibility::input_surfaces(browser)?;
     let scene = wait_for("search focus uses G4 without moving the input", || {
         let scene = browser.command(
@@ -147,11 +147,18 @@ fn search_focus_pixels(browser: &Browser, before: &Value, mode: &str) -> Result<
             "/execute/sync",
             Some(json!({"script":r#"
                 const [before,mode]=arguments,i=document.querySelector('.zxs-file-search input'),f=i.closest('.zxs-file-search');
-                const r=f.getBoundingClientRect(),css=getComputedStyle(f),focused=mode!=='blurred';
+                const r=f.getBoundingClientRect(),css=getComputedStyle(f),focused=mode==='pointer'||mode==='keyboard';
+                const active=document.activeElement,previous=f.previousElementSibling,main=document.getElementById('zxs-main-content');
+                const target=focused?active===i:mode==='keyboard-away'?active===previous&&previous.tagName==='BUTTON'&&!previous.disabled&&previous.matches(':focus-visible'):active===main&&!main.matches(':focus-visible');
+                const requests=performance.getEntriesByType('resource').filter(e=>/\/api\/(file-manager|repositories)\//.test(e.name)).length;
+                const describe=e=>{const c=getComputedStyle(e);return {tag:e.tagName,id:e.id,text:e.tagName==='BUTTON'?e.textContent.trim():null,rect:e.getBoundingClientRect().toJSON(),focusVisible:e.matches(':focus-visible'),outlineWidth:c.outlineWidth,outlineOffset:c.outlineOffset}};
                 const x=Math.floor(r.left)-8,y=Math.floor(r.top)-8,width=Math.ceil(r.right)-x+8,height=Math.ceil(r.bottom)-y+8;
                 const outline=parseFloat(css.outlineWidth)>0&&!['none','hidden'].includes(css.outlineStyle);
                 return {label:'search-focus-'+mode+'-'+document.documentElement.dataset.zxsTheme+'-'+innerWidth+'-'+(i.value===''?'empty':'filled'),kind:'search-focus',focused,
-                    valid:(document.activeElement===i)===focused&&i.matches(':focus-visible')===focused&&!outline
+                    active:describe(active),previous:describe(previous),search:r.toJSON(),requests,
+                    valid:target&&(active===i)===focused&&i.matches(':focus-visible')===focused&&!outline
+                        &&location.href===before.url&&i.value===before.value&&requests===before.requests
+                        &&document.querySelector('.zxs-breadcrumb').textContent===before.breadcrumb
                         &&f.dataset.zxsContourState===(focused?'paint':'clip')&&(!focused||css.maskImage==='none')
                         &&Math.abs(r.width-before.width)<.01&&Math.abs(r.height-before.height)<.01,
                     color:css.getPropertyValue('--zxs-focus').trim(),page:css.getPropertyValue('--zxs-bg-page').trim(),
@@ -171,20 +178,85 @@ fn search_focus_pixels(browser: &Browser, before: &Value, mode: &str) -> Result<
         "/execute/async",
         Some(json!({"script":"const done=arguments[arguments.length-1];requestAnimationFrame(()=>requestAnimationFrame(()=>done(true)))","args":[]})),
     )?;
+    if mode == "keyboard-away" {
+        // The previous button's valid focus outline can overlap this crop. Keep
+        // it as evidence, but inspect ring removal separately after a neutral click.
+        println!("INFO search Shift+Tab focus: {scene}");
+        if let Some(directory) = env::var_os("ZXS_VIEWPORT_PREVIEWS").map(PathBuf::from) {
+            fs::create_dir_all(&directory)?;
+            let label = scene["label"]
+                .as_str()
+                .ok_or("missing search focus label")?;
+            let screenshot = browser.cdp(
+                "Page.captureScreenshot",
+                json!({"format":"png","captureBeyondViewport":false,"clip":scene["clip"]}),
+            )?;
+            fs::write(
+                directory.join(format!("{label}.png")),
+                STANDARD.decode(
+                    screenshot["data"]
+                        .as_str()
+                        .ok_or("missing search focus screenshot")?,
+                )?,
+            )?;
+            fs::write(
+                directory.join(format!("{label}.json")),
+                json_codec::to_vec_pretty(&scene)?,
+            )?;
+        }
+        return Ok(());
+    }
     pixels(browser, scene)
 }
 
-/// Real pointer, Shift+Tab and Tab against the product input. Capture the page
-/// pixels in each state, not just the paint source or computed CSS declaration.
+fn search_neutral_click(browser: &Browser) -> Result<()> {
+    let target = browser.script(r#"
+        const main=document.getElementById('zxs-main-content'),m=main.getBoundingClientRect();
+        const f=document.querySelector('.zxs-file-search').getBoundingClientRect();
+        const x=Math.floor(m.left+parseFloat(getComputedStyle(main).paddingLeft)/2),y=Math.floor(f.top+f.height/2);
+        const hit=document.elementFromPoint(x,y);
+        return {x,y,hit:hit?{tag:hit.tagName,id:hit.id}:null,
+            valid:hit===main&&main.tabIndex===-1&&x>=m.left&&x<m.right&&y>=m.top&&y<m.bottom};
+    "#)?;
+    if target["valid"] != true {
+        return Err(
+            format!("search neutral pointer target is not the main padding: {target}").into(),
+        );
+    }
+    println!("INFO search neutral pointer target: {target}");
+    // No synthetic blur, CSS suppression, or click on a neighbouring control.
+    // The main element has no activation handler; its padding is hit-tested at
+    // the current search height, so all viewport/theme/query cases use it.
+    browser.command(
+        "POST",
+        "/actions",
+        Some(json!({"actions":[{"type":"pointer","id":"file-row-mouse",
+            "parameters":{"pointerType":"mouse"},"actions":[
+                {"type":"pointerMove","duration":0,"origin":"viewport","x":target["x"],"y":target["y"]},
+                {"type":"pointerDown","button":0},{"type":"pointerUp","button":0}]}]})),
+    )?;
+    Ok(())
+}
+
+/// Inspect real pointer focus and neutral blur separately from Shift+Tab/Tab.
+/// An adjacent button's focus ring must not be mistaken for a stale search ring.
 pub(super) fn search_focus(browser: &Browser) -> Result<()> {
-    let before = browser.script("const f=document.querySelector('.zxs-file-search');f.scrollIntoView({block:'center'});const r=f.getBoundingClientRect();return {width:r.width,height:r.height}")?;
+    let before = browser.script(r#"
+        const f=document.querySelector('.zxs-file-search');f.scrollIntoView({block:'center'});
+        const r=f.getBoundingClientRect();return {width:r.width,height:r.height,url:location.href,
+            value:f.querySelector('input').value,breadcrumb:document.querySelector('.zxs-breadcrumb').textContent,
+            requests:performance.getEntriesByType('resource').filter(e=>/\/api\/(file-manager|repositories)\//.test(e.name)).length};
+    "#)?;
     let input = browser.css(".zxs-file-search input")?;
     browser.click(&input)?;
-    search_focus_pixels(browser, &before, "pointer")?;
+    search_focus_state(browser, &before, "pointer")?;
+    search_neutral_click(browser)?;
+    search_focus_state(browser, &before, "blurred")?;
+    browser.click(&input)?;
     browser.keys(&input, "\u{e008}\u{e004}\u{e000}")?;
-    search_focus_pixels(browser, &before, "blurred")?;
+    search_focus_state(browser, &before, "keyboard-away")?;
     browser.keys(&browser.css(":focus")?, "\u{e004}")?;
-    search_focus_pixels(browser, &before, "keyboard")
+    search_focus_state(browser, &before, "keyboard")
 }
 
 fn row_pixels(browser: &Browser, index: usize) -> Result<()> {
