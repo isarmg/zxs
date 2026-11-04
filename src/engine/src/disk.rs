@@ -15,7 +15,7 @@ mod admission;
 pub use admission::DiskFile;
 pub(crate) use admission::{DiskIoBinding, DiskIoLease};
 mod owned;
-pub(crate) use owned::{DiskHandle, DiskResources, DiskRoot};
+pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
 
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     e.into()

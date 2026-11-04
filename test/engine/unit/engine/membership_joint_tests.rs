@@ -516,7 +516,7 @@ fn membership_joint_certificate_rejects_relabelled_duplicate_foreign_and_modifie
         }
         let mut encoder = Encoder::new(MAX_METADATA);
         let bad = Certificate {
-            format: JointFormat::FencedJointDecision,
+            format: JointFormat::Joint,
             proposal_hash: status.proposal_hash.clone(),
             votes: encoder
                 .map_root(votes, ProofMeasure::Plain)
@@ -660,3 +660,6 @@ fn membership_joint_corrupt_binding_dependency_and_completion_are_preserved() {
         assert_eq!(fixture.run(), status);
     }
 }
+
+#[path = "membership_exit_joint_tests.rs"]
+mod exit_preparation;

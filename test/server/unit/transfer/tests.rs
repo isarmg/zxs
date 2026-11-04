@@ -513,7 +513,7 @@ fn fully_verified_preserves_the_last_failure_in_pop_order() {
 fn fully_verified_without_manifest_preserves_the_existing_content() {
     let dropped = Arc::new(AtomicUsize::new(0));
     let mut content = content(dropped.clone());
-    content.fallback_files.push(payload_file(b"unused"));
+    content.fallback_files.push(payload_file(b"unused").into());
     content.file.seek(SeekFrom::Start(4)).unwrap();
     let mut content = content.fully_verified().unwrap();
     assert!(content.checksum_manifest.is_none());

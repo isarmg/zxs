@@ -511,6 +511,68 @@ fn a_file_opened_before_quiescing_but_registered_after_it_is_closed() {
 }
 
 #[test]
+fn directory_next_guard_keeps_the_real_stream_until_its_return_tail() {
+    use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
+
+    fn directory_descriptors(path: &std::path::Path) -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|entry| match std::fs::read_link(entry) {
+                Ok(target) => target == path,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                Err(error) => panic!("cannot inspect test descriptor: {error}"),
+            })
+            .count()
+    }
+
+    let (directory, _config, handle) = disk();
+    let path = directory.path().join("entries");
+    handle.root.private_dir(&path).unwrap();
+    std::fs::write(path.join("payload"), b"value").unwrap();
+    let binding = handle.root.io_binding().unwrap();
+    let lease = binding.admit().unwrap();
+    let root = OpenAt2Root::open(&path, MountPolicy::SameMount).unwrap();
+    let entries = lease.hold(root.entries().unwrap());
+    drop(root);
+    let entered = Barrier::new(2);
+    let finish = Barrier::new(2);
+    let mut entries = std::thread::scope(|threads| {
+        let worker = threads.spawn(|| {
+            {
+                // This is the exact guard used by next_entry, including a real
+                // directory read. Pause its return tail without a business hook
+                // or a claim that the kernel syscall itself is blocked.
+                let mut access = entries.access().unwrap();
+                assert_eq!(
+                    access.value().resource.next().unwrap().unwrap().as_os_str(),
+                    "payload"
+                );
+                entered.wait();
+                finish.wait();
+            }
+            entries
+        });
+        entered.wait();
+        drop(binding.begin_quiesce().unwrap().unwrap());
+        assert_eq!(directory_descriptors(&path), 1);
+        assert_eq!(binding.status().unwrap().ordinary, 1);
+        assert!(!binding.status().unwrap().drained());
+        finish.wait();
+        worker.join().unwrap()
+    });
+    assert_eq!(directory_descriptors(&path), 0);
+    assert!(binding.status().unwrap().drained());
+    assert!(entries.resource.value.lock().unwrap().is_none());
+    let error = entries.next_entry().unwrap().unwrap_err();
+    assert!(matches!(
+        error,
+        platform_io::fs_safety::Error::Io(error)
+            if error.kind() == io::ErrorKind::PermissionDenied
+    ));
+}
+
+#[test]
 fn concurrent_clone_cannot_escape_the_quiescing_resource_snapshot() {
     for _ in 0..64 {
         let (directory, _config, handle) = disk();

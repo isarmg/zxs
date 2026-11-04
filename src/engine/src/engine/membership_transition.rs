@@ -7,14 +7,17 @@ use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod archive;
+mod effect;
+pub use effect::MembershipExitAction;
+use effect::{ExitEffect, validate_transition_target};
 pub(crate) mod pending;
 pub use archive::{
     MembershipArchiveInspection, MembershipControlArchive, MembershipJournalInspection,
     verify_membership_control_archive,
 };
 pub use pending::{
-    MembershipJointDecisionStatus, MembershipJointVote, PendingMemberControlReceipt,
-    PendingMemberDirectory, PendingMembershipStatus,
+    MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
+    PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
 };
 
 const INTENT_KIND: &str = "membership-transition";
@@ -73,9 +76,35 @@ struct TransitionIntent {
     principal: String,
     origin: Origin,
     target: ValidatedConfig,
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
+    effect: Option<ExitEffect>,
     boundary: Option<PublishedBoundary>,
     #[serialization(with = "storage_contract::u64_string")]
     fence_sequence: u64,
+}
+
+impl TransitionIntent {
+    fn participants(&self) -> Vec<DiskConfig> {
+        let mut members = self
+            .target
+            .metadata_members()
+            .map(|disk| (disk.disk_id.clone(), disk.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for disk in self.origin.config().metadata_members() {
+            members
+                .entry(disk.disk_id.clone())
+                .or_insert_with(|| disk.clone());
+        }
+        members.into_values().collect()
+    }
+    fn old_only(&self) -> impl Iterator<Item = &DiskConfig> {
+        self.origin.config().metadata_members().filter(|old| {
+            !self
+                .target
+                .metadata_members()
+                .any(|target| target.disk_id == old.disk_id)
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -138,13 +167,24 @@ impl Engine {
         principal: &str,
         operation_id: OperationId,
     ) -> Result<MembershipFenceStatus> {
+        self.begin_membership_handoff_with_effect(target, None, principal, operation_id)
+    }
+
+    fn begin_membership_handoff_with_effect(
+        &mut self,
+        target: Config,
+        effect: Option<ExitEffect>,
+        principal: &str,
+        operation_id: OperationId,
+    ) -> Result<MembershipFenceStatus> {
         Self::require_actor(principal)?;
         self.require_no_commit_preparation()?;
         let target = ValidatedConfig::try_from(target)?;
-        self.validate_handoff_target(&target)?;
+        validate_transition_target(&self.config, &target, effect.as_ref())?;
         if let Some(fence) = &self.membership_fence {
             if fence.intent.operation_id != operation_id
                 || fence.intent.principal != principal
+                || fence.intent.effect != effect
                 || object_hash("membership-target", &fence.intent.target)?
                     != object_hash("membership-target", &target)?
             {
@@ -180,6 +220,7 @@ impl Engine {
                     },
                 },
                 target,
+                effect,
                 boundary: self.handoff_boundary()?,
                 fence_sequence: self.next_slot,
             };
@@ -205,18 +246,6 @@ impl Engine {
             });
         }
         self.persist_membership_fence()
-    }
-
-    fn validate_handoff_target(&self, target: &ValidatedConfig) -> Result<()> {
-        if target.pool_id != self.config.pool_id
-            || !changes_registered_membership(&self.config, target)
-        {
-            return Err(Error::new(
-                ErrorCode::ConfigConflict,
-                "handoff must retain the pool identity and change voters or add registered devices",
-            ));
-        }
-        Ok(())
     }
 
     fn validate_fence_members(&self, members: &[DiskConfig]) -> Result<()> {
@@ -364,7 +393,7 @@ impl Engine {
             ));
         }
         self.config.verify_saved_metadata_membership(config)?;
-        self.validate_handoff_target(&intent.target)?;
+        validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
         Self::require_actor(&intent.principal)?;
         let boundary_sequence = intent.boundary.as_ref().map_or(0, |base| base.sequence);
         if intent.fence_sequence <= boundary_sequence || intent.fence_sequence == u64::MAX {

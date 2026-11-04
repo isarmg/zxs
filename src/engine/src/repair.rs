@@ -6,12 +6,11 @@ use crate::{
     *,
 };
 use platform_io::payload::{Expectation, verify_full};
-use std::fs::File;
 
 fn required(message: impl Into<String>) -> Error {
     Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
 }
-fn matching(source: Result<File>, version: &FileVersion) -> Result<bool> {
+fn matching(source: Result<impl Into<ReadFile>>, version: &FileVersion) -> Result<bool> {
     let mut file = match source {
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
         | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -22,7 +21,7 @@ fn matching(source: Result<File>, version: &FileVersion) -> Result<bool> {
         Err(error) => {
             return Err(error.context(ErrorCode::RecoveryRequired, "cannot open recovery bytes"));
         }
-        Ok(file) => file,
+        Ok(file) => file.into(),
     };
     if file.metadata()?.len() != version.logical_size {
         return Ok(false);

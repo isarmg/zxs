@@ -18,6 +18,24 @@ enum WorkspaceLocation {
     Primary(DiskRoot),
 }
 
+enum StagedSourceLocation<'a> {
+    System(PathBuf),
+    Managed(&'a DiskConfig, PathBuf),
+}
+impl StagedSourceLocation<'_> {
+    fn path(&self) -> &Path {
+        match self {
+            Self::System(path) | Self::Managed(_, path) => path,
+        }
+    }
+    fn owner(&self) -> Option<&str> {
+        match self {
+            Self::System(_) => None,
+            Self::Managed(disk, _) => Some(&disk.disk_id),
+        }
+    }
+}
+
 impl WorkspaceLocation {
     fn root(&self) -> &DiskRoot {
         match self {
@@ -724,9 +742,12 @@ impl Engine {
             ));
         }
         for file in workspace.files.values() {
+            let projected = self
+                .planning_context()
+                .project_staged_path(&workspace.workspace_id, &file.source_path)?;
             if let Some(primary) = &primary
-                && !file.source_path.starts_with(primary)
-                && !file.source_path.starts_with(&local)
+                && !projected.path().starts_with(primary)
+                && !projected.path().starts_with(&local)
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::UnsafePath,
@@ -1176,7 +1197,20 @@ impl<'a> crate::engine::PlanningContext<'a> {
         workspace: &str,
         file: &StagedFile,
     ) -> Result<Option<ReadSource>> {
-        let path = &file.source_path;
+        match self.project_staged_path(workspace, &file.source_path)? {
+            StagedSourceLocation::System(path) => Ok(Some(ReadSource::external(path))),
+            StagedSourceLocation::Managed(disk, path) => Ok(self
+                .disk_resources
+                .available(disk)
+                .map(|owner| ReadSource::on_disk(owner, path))),
+        }
+    }
+
+    fn project_staged_path(
+        &self,
+        workspace: &str,
+        path: &Path,
+    ) -> Result<StagedSourceLocation<'a>> {
         if path
             .components()
             .any(|part| matches!(part, Component::ParentDir))
@@ -1187,22 +1221,43 @@ impl<'a> crate::engine::PlanningContext<'a> {
             ));
         }
         let local = self.root.join("workspaces").join(workspace);
-        if path.strip_prefix(&local).is_ok() {
-            return Ok(Some(ReadSource::external(path.clone())));
-        }
+        let mut selected = path
+            .strip_prefix(&local)
+            .is_ok()
+            .then(|| StagedSourceLocation::System(path.to_owned()));
         for disk in &self.config.disks {
-            let directory = disk.root.join("staging/workspaces").join(workspace);
-            if path.strip_prefix(directory).is_ok() {
-                return Ok(self
-                    .disk_resources
-                    .available(disk)
-                    .map(|owner| ReadSource::on_disk(owner, path.clone())));
+            let aliases = self
+                .config
+                .generation()
+                .and_then(|generation| generation.historical_workspace_roots(disk));
+            for root in std::iter::once(&disk.root).chain(aliases.into_iter().flatten()) {
+                let directory = root.join("staging/workspaces").join(workspace);
+                if let Ok(relative) = path.strip_prefix(&directory) {
+                    let projected = StagedSourceLocation::Managed(
+                        disk,
+                        disk.root
+                            .join("staging/workspaces")
+                            .join(workspace)
+                            .join(relative),
+                    );
+                    if selected.as_ref().is_some_and(|previous| {
+                        previous.owner() != projected.owner() || previous.path() != projected.path()
+                    }) {
+                        return Err(Error::new(
+                            ErrorCode::UnsafePath,
+                            "workspace historical locator has ambiguous owner or relative address",
+                        ));
+                    }
+                    selected = Some(projected);
+                }
             }
         }
-        Err(Error::new(
-            ErrorCode::UnsafePath,
-            "workspace staging path escapes owned directory",
-        ))
+        selected.ok_or_else(|| {
+            Error::new(
+                ErrorCode::UnsafePath,
+                "workspace staging path escapes owned directory",
+            )
+        })
     }
 
     pub(crate) fn staged_source(

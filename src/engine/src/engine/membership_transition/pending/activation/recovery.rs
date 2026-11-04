@@ -257,6 +257,7 @@ fn admit_discovered(
     })?;
     let generation = Arc::new(Generation {
         hash,
+        workspace_roots: portable.workspace_root_aliases()?,
         portable,
         intent: intent.clone(),
         original,
@@ -457,6 +458,22 @@ impl Engine {
             ));
         }
         let resources = Arc::new(DiskResources::open_activation(&config)?);
+        // A completed predecessor marker is not an activation request for the
+        // next fenced operation. Reject before promoting or repairing any root.
+        for disk in config.metadata_members() {
+            let scan =
+                crate::journal::scan_configured_at(&resources.get(disk)?.root, disk, &config)?;
+            if scan
+                .records
+                .iter()
+                .any(|(record, _)| record.record_type == RecordType::MembershipFence)
+            {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "current generation remains fenced; no successor activation marker",
+                ));
+            }
+        }
         let mut engine = Self::prepare_recovery_resources(root, config, resources)?;
         engine.promote_generation_resources()?;
         let mut prepared = engine.prepare_recovery()?;

@@ -211,8 +211,12 @@ fn held_proof_rejects_mode_changes_without_content_changes() {
     let body = &proof.entries[0].body.file;
     use std::os::unix::fs::PermissionsExt;
     let mode = body.metadata().unwrap().permissions().mode();
-    body.set_permissions(std::fs::Permissions::from_mode(mode ^ 0o100))
-        .unwrap();
+    let path = crate::container_storage::content_path(
+        &proof.entries[0].directory,
+        &candidate.versions[0].version,
+    )
+    .unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode ^ 0o100)).unwrap();
     assert_eq!(
         proof
             .validate(&engine.config, &candidate)
@@ -1165,3 +1169,6 @@ fn incomplete_private_version_admission_cannot_be_truncated_by_zip() {
         .prepare_payloads(&prepared, Vec::new())
         .unwrap();
 }
+
+#[path = "guarded_proof_tests.rs"]
+mod guarded_proof_tests;

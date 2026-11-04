@@ -21,6 +21,8 @@
 3. ready 同步后中断，冷启动仍为原 fenced 池，显式入籍同一根后完成，锁不丢失。
 4. 纯 data-only 与混合各覆盖 marker、seal、Prepare、Accept、Finalize、Publication、配置投影前七个激活断点；同 authority、同操作恢复后实际写入新盘。
 5. 丢失系统、移动 metadata 根后从固定 metadata 多数重建完整登记；data-only 根不能代替投票成员。
+
+   GitHub 首轮暴露了真实恢复缺口：保留 workspace 的绝对 `source_path` 在根合法移位后被新路径前缀检查拒绝。修正从已认证代际链缓存准确 disk/slot/binding 的历史根名，仅将同 workspace 内的相对地址投影到当前已持有资源；不打开历史根、不改原 manifest/hash。原移位恢复覆盖保留，并补原 manifest 字节不变、再次冷开、未知地址、父遍历、错 binding 与跨盘主目录反例。此修正待下一轮 GitHub 执行，未作本地运行。
 6. 复制 pending 根并改写 seal 的 device/inode，不能替换证书已经绑定的物理身份，拒绝且保留该盘字节。
 7. 实际新增第三层 data-only 备份盘：只为后续正文建立第三份副本；原正文不被虚构为已有新增副本，其他盘离线后新副本独立导出。
 

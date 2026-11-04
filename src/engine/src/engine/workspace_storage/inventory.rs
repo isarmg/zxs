@@ -17,7 +17,7 @@ pub struct WorkspaceInventoryRecord {
 /// per-ID index or decoded history. Mirrors are deliberately reported separately.
 pub struct WorkspaceInventory {
     locations: Vec<WorkspaceLocation>,
-    current: Option<(usize, platform_io::fs_safety::linux::DirectoryEntries)>,
+    current: Option<(usize, DiskDirectoryEntries)>,
     next_location: usize,
     _locks: Vec<fs::File>,
 }

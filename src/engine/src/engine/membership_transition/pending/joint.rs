@@ -13,11 +13,18 @@ const CERTIFICATE_KIND: &str = "membership-joint-certificate";
 const BINDING_FILE: &str = "proposal-binding.json";
 const CERTIFICATE_FILE: &str = "certificate.json";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MembershipJointRole {
+    OldOnly,
+    Retained,
+    NewOnly,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MembershipJointVote {
     pub disk_id: String,
     pub slot_id: String,
     pub binding_generation: u64,
+    pub role: MembershipJointRole,
     pub acceptance_hash: String,
     pub frame_hash: String,
 }
@@ -33,6 +40,7 @@ pub struct MembershipJointDecisionStatus {
     pub synchronized_original_votes: usize,
     pub target_members: usize,
     pub target_quorum: usize,
+    pub union_members: usize,
     pub added_data_disks: usize,
     pub ready_data_disks: Vec<String>,
     pub synchronized_target_votes: usize,
@@ -50,10 +58,32 @@ impl MembershipJointDecisionStatus {
     pub fn joint_quorum_accepted(&self) -> bool {
         self.original_quorum_accepted() && self.target_quorum_accepted()
     }
+    /// Counts actual durable certificate locations by their independently bound role.
+    /// Missing old-only copies are a coverage gap, not a changed quorum.
+    pub fn certificate_quorum_counts(&self) -> (usize, usize) {
+        let mut old = 0;
+        let mut target = 0;
+        for vote in self
+            .votes
+            .iter()
+            .filter(|vote| self.certificate_members.contains(&vote.disk_id))
+        {
+            match vote.role {
+                MembershipJointRole::OldOnly => old += 1,
+                MembershipJointRole::Retained => {
+                    old += 1;
+                    target += 1;
+                }
+                MembershipJointRole::NewOnly => target += 1,
+            }
+        }
+        (old, target)
+    }
+    /// Full coverage observation, stronger than the fixed two-sided certificate rule.
     pub fn all_certificates_synchronized(&self) -> bool {
         self.joint_quorum_accepted()
             && self.synchronized_target_votes == self.target_members
-            && self.certificate_members.len() == self.target_members
+            && self.certificate_members.len() == self.union_members
             && self.ready_data_disks.len() == self.added_data_disks
     }
 }
@@ -61,9 +91,11 @@ impl MembershipJointDecisionStatus {
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum JointFormat {
     #[serialization(rename = "fenced-joint-decision")]
-    FencedJointDecision,
+    Joint,
     #[serialization(rename = "fenced-device-decision")]
-    FencedDeviceDecision,
+    Devices,
+    #[serialization(rename = "fenced-exit-control-decision")]
+    ExitControl,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -82,6 +114,8 @@ pub(super) struct Proposal {
     target_members: Reference,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
     data_disks: Option<Reference>,
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
+    old_only_members: Option<Reference>,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -150,6 +184,7 @@ struct Certificate {
 pub(super) struct JointProgress {
     pub(super) status: MembershipJointDecisionStatus,
     original: BTreeSet<(String, String, u64)>,
+    target: BTreeSet<(String, String, u64)>,
 }
 impl JointProgress {
     fn new(
@@ -169,13 +204,26 @@ impl JointProgress {
                     )
                 })
                 .collect(),
+            target: fence
+                .intent
+                .target
+                .metadata_members()
+                .map(|disk| {
+                    (
+                        disk.disk_id.clone(),
+                        disk.slot_id.clone(),
+                        disk.binding_generation,
+                    )
+                })
+                .collect(),
             status: MembershipJointDecisionStatus {
                 transition_hash: pending.transition_hash.clone(),
                 proposal_hash: proposal.object.hash.clone(),
                 original_members: config.metadata_members().len(),
                 original_quorum: config.metadata_quorum(),
                 synchronized_original_votes: 0,
-                target_members: pending.members.len(),
+                target_members: fence.intent.target.metadata_members().len(),
+                union_members: pending.members.len(),
                 target_quorum: fence.intent.target.metadata_quorum(),
                 added_data_disks: pending.data_disks.len(),
                 ready_data_disks: pending.ready_data_disks.clone(),
@@ -188,18 +236,30 @@ impl JointProgress {
     }
     fn observe(&mut self, vote: &JointVote) {
         let identity = &vote.identity;
-        if self.original.contains(&(
+        let member = (
             identity.disk_id.clone(),
             identity.slot_id.clone(),
             identity.binding_generation,
-        )) {
+        );
+        let old = self.original.contains(&member);
+        let target = self.target.contains(&member);
+        if old {
             self.status.synchronized_original_votes += 1;
         }
-        self.status.synchronized_target_votes += 1;
+        if target {
+            self.status.synchronized_target_votes += 1;
+        }
+        let role = match (old, target) {
+            (true, false) => MembershipJointRole::OldOnly,
+            (true, true) => MembershipJointRole::Retained,
+            (false, true) => MembershipJointRole::NewOnly,
+            (false, false) => unreachable!("invariant: admitted union participant"),
+        };
         self.status.votes.push(MembershipJointVote {
             disk_id: identity.disk_id.clone(),
             slot_id: identity.slot_id.clone(),
             binding_generation: identity.binding_generation,
+            role,
             acceptance_hash: vote.acceptance_hash.clone(),
             frame_hash: vote.receipt.frame_hash.clone(),
         });

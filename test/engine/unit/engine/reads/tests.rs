@@ -1208,3 +1208,31 @@ fn an_engine_reopen_cannot_reactivate_a_quiescing_binding_held_by_old_readers() 
         assert!(binding.status().unwrap().drained());
     }
 }
+
+#[test]
+fn generic_managed_copy_source_cannot_escape_its_read_gate() {
+    let (_temp, engine, version) = committed_fixture();
+    let (source, _) = engine.valid_replica(&version).unwrap();
+    let ReadSource::Disk { owner, .. } = &source else {
+        panic!("published replica lost its managed provenance");
+    };
+    let binding = owner.root.io_binding().unwrap();
+    let mut original = source.open().unwrap();
+    let mut duplicate = original.try_clone().unwrap();
+    assert!(binding.status().unwrap().ordinary >= 2);
+    let mut first = [0; 1];
+    original.read_exact(&mut first).unwrap();
+    assert_eq!(first, [b'o']);
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(
+        source.open().err().unwrap().code(),
+        ErrorCode::DiskUnavailable
+    );
+    for file in [&mut original, &mut duplicate] {
+        assert_eq!(
+            file.read(&mut first).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+}

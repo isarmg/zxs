@@ -18,6 +18,7 @@ impl PreparedProposal {
         encoder.object(INTENT_KIND, &fence.intent)?;
         let mut original = json_codec::Map::new();
         let mut targets = json_codec::Map::new();
+        let mut old_only = json_codec::Map::new();
         for (member, checked) in pending.members.iter().zip(checked) {
             if let Some(receipt) = fence.receipts.get(&member.disk.disk_id) {
                 original.insert(
@@ -28,7 +29,17 @@ impl PreparedProposal {
                     })?,
                 );
             }
-            targets.insert(
+            let participants = if fence
+                .intent
+                .target
+                .metadata_members()
+                .any(|disk| disk.disk_id == member.disk.disk_id)
+            {
+                &mut targets
+            } else {
+                &mut old_only
+            };
+            participants.insert(
                 member.disk.disk_id.clone(),
                 json_codec::to_value(TargetDependency {
                     enrollment: member.enrollment.clone(),
@@ -45,10 +56,22 @@ impl PreparedProposal {
                 })?,
             );
         }
-        let format = if pending.data_disks.is_empty() {
-            JointFormat::FencedJointDecision
+        let old_only_members = if old_only.is_empty() {
+            None
         } else {
-            JointFormat::FencedDeviceDecision
+            Some(
+                encoder
+                    .map_root(old_only, ProofMeasure::Plain)?
+                    .reference()
+                    .clone(),
+            )
+        };
+        let format = if fence.intent.effect.is_some() {
+            JointFormat::ExitControl
+        } else if pending.data_disks.is_empty() {
+            JointFormat::Joint
+        } else {
+            JointFormat::Devices
         };
         let data_disks = if pending.data_disks.is_empty() {
             None
@@ -75,6 +98,7 @@ impl PreparedProposal {
             &Proposal {
                 format,
                 data_disks,
+                old_only_members,
                 transition_hash: fence.hash.clone(),
                 original_config_hash: object_hash("membership-original", config)?,
                 target_config_hash: object_hash("membership-target", &fence.intent.target)?,
@@ -351,6 +375,13 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
     let proposal: Proposal = typed(load, PROPOSAL_KIND, expected)?;
     let intent: TransitionIntent = typed(load, INTENT_KIND, &proposal.transition_hash)?;
     let config = intent.origin.config();
+    validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
+    if (proposal.format == JointFormat::ExitControl) != intent.effect.is_some() {
+        return Err(Error::new(
+            ErrorCode::ConfigConflict,
+            "joint effect and certificate purpose differ",
+        ));
+    }
     if proposal.original_config_hash != object_hash("membership-original", config)?
         || proposal.target_config_hash != object_hash("membership-target", &intent.target)?
         || proposal.operation_id != intent.operation_id
@@ -375,11 +406,37 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
             "joint proposal member sets differ",
         ));
     }
+    let old_only = match &proposal.old_only_members {
+        Some(reference) if intent.effect.is_some() => {
+            crate::metadata_map::read_map(reference, |kind, hash| load(kind, hash))?
+        }
+        None => json_codec::Map::new(),
+        Some(_) => {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "pure additions cannot include old-only control participants",
+            ));
+        }
+    };
+    if old_only.len() != intent.old_only().count()
+        || (old_only.is_empty() && proposal.old_only_members.is_some())
+    {
+        return Err(missing_member());
+    }
     let mut dependencies = BTreeMap::new();
     let mut physical = BTreeSet::new();
-    for disk in intent.target.metadata_members() {
+    for disk in &intent.participants() {
+        let selected = if intent
+            .target
+            .metadata_members()
+            .any(|target| target.disk_id == disk.disk_id)
+        {
+            &targets
+        } else {
+            &old_only
+        };
         let dependency: TargetDependency = json_codec::from_value(
-            targets
+            selected
                 .get(&disk.disk_id)
                 .ok_or_else(missing_member)?
                 .clone(),
@@ -442,8 +499,10 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
         })
         .collect::<Vec<_>>();
     let data_values = match (&proposal.format, &proposal.data_disks) {
-        (JointFormat::FencedJointDecision, None) if added_data.is_empty() => json_codec::Map::new(),
-        (JointFormat::FencedDeviceDecision, Some(reference)) if !added_data.is_empty() => {
+        (JointFormat::Joint | JointFormat::ExitControl, None) if added_data.is_empty() => {
+            json_codec::Map::new()
+        }
+        (JointFormat::Devices, Some(reference)) if !added_data.is_empty() => {
             crate::metadata_map::read_map(reference, |kind, hash| load(kind, hash))?
         }
         _ => {
@@ -504,7 +563,7 @@ fn verify_certificate_with(
         ));
     }
     let votes = crate::metadata_map::read_map(&certificate.votes, |kind, hash| load(kind, hash))?;
-    if votes.len() != verified.dependencies.len() {
+    if verified.intent.effect.is_none() && votes.len() != verified.dependencies.len() {
         return Err(Error::new(
             ErrorCode::RecoveryRequired,
             "joint certificate requires every target vote",
@@ -514,10 +573,12 @@ fn verify_certificate_with(
     let mut checked_votes = BTreeMap::new();
     let mut old_votes = 0;
     let mut target_votes = 0;
-    for disk in verified.intent.target.metadata_members() {
-        let vote: JointVote =
-            json_codec::from_value(votes.get(&disk.disk_id).ok_or_else(missing_member)?.clone())?;
-        let dependency = &verified.dependencies[&disk.disk_id];
+    for (disk_id, value) in &votes {
+        let vote: JointVote = json_codec::from_value(value.clone())?;
+        let dependency = verified
+            .dependencies
+            .get(disk_id)
+            .ok_or_else(missing_member)?;
         let acceptance: Acceptance = typed(load, ACCEPTANCE_KIND, &vote.acceptance_hash)?;
         if vote.identity != dependency.enrollment.identity
             || acceptance.proposal_hash != proposal_hash
@@ -546,11 +607,16 @@ fn verify_certificate_with(
         }) {
             old_votes += 1;
         }
-        target_votes += 1;
-        checked_votes.insert(disk.disk_id.clone(), vote);
+        if verified.intent.target.metadata_members().any(|target| {
+            target.disk_id == vote.identity.disk_id
+                && target.slot_id == vote.identity.slot_id
+                && target.binding_generation == vote.identity.binding_generation
+        }) {
+            target_votes += 1;
+        }
+        checked_votes.insert(disk_id.clone(), vote);
     }
-    if old_votes != config.metadata_members().len()
-        || old_votes < config.metadata_quorum()
+    if old_votes < config.metadata_quorum()
         || target_votes < verified.intent.target.metadata_quorum()
     {
         return Err(Error::new(

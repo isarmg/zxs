@@ -34,11 +34,10 @@ impl ReadSource {
         }
     }
 
-    pub(crate) fn open(&self) -> Result<File> {
-        match self {
-            Self::External(path) => open_regular(path),
-            Self::Disk { owner, path } => owner.root.open_regular(path),
-        }
+    /// Every managed copy/sealing source retains its producer's I/O ownership.
+    /// This entry point must not be a raw-file alternative to leased reads.
+    pub(crate) fn open(&self) -> Result<ReadFile> {
+        self.open_leased()
     }
 
     /// Keep the producer's disk ownership through every subsequent read. Local

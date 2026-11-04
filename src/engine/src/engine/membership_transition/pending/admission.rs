@@ -13,6 +13,22 @@ impl Engine {
         })?;
         let origin = fence.intent.origin.config();
         let target = &fence.intent.target;
+        if let Some(effect) = &fence.intent.effect {
+            effect.validate(origin, target)?;
+            if !same_settings(origin, &self.config)
+                || origin.disks.len() != self.config.disks.len()
+                || origin.disks.iter().any(|old| {
+                    !self
+                        .config
+                        .disks
+                        .iter()
+                        .any(|current| same_disk(old, current))
+                })
+            {
+                return Err(unsupported());
+            }
+            return Ok(Vec::new());
+        }
         if !same_settings(origin, target) || !same_settings(origin, &self.config) {
             return Err(unsupported());
         }
@@ -166,7 +182,7 @@ impl Engine {
             );
         }
         let mut members = Vec::new();
-        for disk in fence.intent.target.metadata_members() {
+        for disk in &fence.intent.participants() {
             let resource = match resources.remove(&disk.disk_id) {
                 Some(resource) => resource,
                 None => MemberResource::Retained(Arc::clone(self.disk_resources.get(disk)?)),
@@ -249,6 +265,7 @@ impl Engine {
             transition_hash: fence.hash.clone(),
             archive_root: archive_root.to_owned(),
             members,
+            target_metadata_members: fence.intent.target.metadata_members().len(),
             data_disks,
             ready_data_disks: Vec::new(),
             receipts: BTreeMap::new(),
@@ -388,7 +405,10 @@ fn unsupported() -> Error {
         "pending enrollment supports only unchanged original members plus fresh generation-one devices",
     )
 }
-pub(super) fn same_disk(old: &DiskConfig, new: &DiskConfig) -> bool {
+pub(in crate::engine::membership_transition) fn same_disk(
+    old: &DiskConfig,
+    new: &DiskConfig,
+) -> bool {
     let DiskConfig {
         slot_id,
         disk_id,
@@ -408,7 +428,7 @@ pub(super) fn same_disk(old: &DiskConfig, new: &DiskConfig) -> bool {
         && *binding_generation == new.binding_generation
         && *capacity_bytes == new.capacity_bytes
 }
-pub(super) fn same_settings(old: &Config, new: &Config) -> bool {
+pub(in crate::engine::membership_transition) fn same_settings(old: &Config, new: &Config) -> bool {
     let Config {
         pool_id,
         mode,

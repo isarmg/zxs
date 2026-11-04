@@ -106,6 +106,16 @@ impl Engine {
     /// Complete the pending pure device addition. No payload copies or placement
     /// changes are claimed; original routes and every body remain in place.
     pub fn activate_pending_membership(&mut self) -> Result<OperationResult> {
+        if self
+            .membership_fence
+            .as_ref()
+            .is_some_and(|fence| fence.intent.effect.is_some())
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "exit control preparation awaits authenticated registry, recovery material and persistent I/O closure; activation is not implemented",
+            ));
+        }
         if self.config.generation().is_some() && self.membership_fence.is_none() {
             if self.generation_activation_published() {
                 return self.complete_generation_activation();
@@ -231,6 +241,7 @@ impl Engine {
         let epoch = portable.epoch()?;
         let generation = Arc::new(Generation {
             hash: portable.hash()?,
+            workspace_roots: portable.workspace_root_aliases()?,
             portable,
             intent: intent.clone(),
             original,

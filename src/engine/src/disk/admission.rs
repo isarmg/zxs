@@ -6,6 +6,7 @@
 //! normal builds retain real file ownership and fail-closed accounting.
 use super::DiskSeal;
 use crate::{Error, ErrorCode, Result, ValidatedConfig};
+use platform_io::fs_safety::{EntryName, linux::DirectoryEntries};
 use std::{
     collections::BTreeMap,
     fs::{File, Metadata},
@@ -691,6 +692,20 @@ impl DiskIoResource<File> {
         let file = lease.hold(file);
         file.check_io()?;
         Ok(file)
+    }
+}
+
+impl DiskIoResource<DirectoryEntries> {
+    /// The same resource guard covers buffered names and actual getdents calls.
+    /// Keep the existing platform iterator error shape, including the original
+    /// admission error as the source of a non-retryable PermissionDenied error.
+    pub(super) fn next_entry(
+        &mut self,
+    ) -> Option<std::result::Result<EntryName, platform_io::fs_safety::Error>> {
+        match self.access() {
+            Ok(mut access) => access.value().resource.next(),
+            Err(error) => Some(Err(error.into())),
+        }
     }
 }
 

@@ -10,10 +10,10 @@ use std::{
 };
 
 pub(crate) mod activation;
-mod admission;
+pub(super) mod admission;
 mod data;
 mod joint;
-pub use joint::{MembershipJointDecisionStatus, MembershipJointVote};
+pub use joint::{MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote};
 pub(super) const CONTROL_ARCHIVE_DIRECTORY: &str = "control-archive";
 const ENROLLMENT_KIND: &str = "membership-pending-member";
 const BOOTSTRAP_KIND: &str = "member-control-bootstrap";
@@ -41,6 +41,7 @@ pub struct PendingMembershipStatus {
     pub transition_hash: String,
     pub control_archive_root: String,
     pub target_metadata_members: usize,
+    pub control_participants: usize,
     pub added_data_disks: usize,
     pub ready_data_disks: Vec<String>,
     pub control_receipts: Vec<PendingMemberControlReceipt>,
@@ -48,7 +49,7 @@ pub struct PendingMembershipStatus {
 impl PendingMembershipStatus {
     /// All control-metadata copies are synchronized. This is not full readiness.
     pub fn all_control_metadata_synchronized(&self) -> bool {
-        self.control_receipts.len() == self.target_metadata_members
+        self.control_receipts.len() == self.control_participants
     }
 }
 
@@ -151,6 +152,7 @@ pub(in crate::engine) struct PendingMembership {
     transition_hash: String,
     archive_root: String,
     members: Vec<PendingMember>,
+    target_metadata_members: usize,
     data_disks: Vec<data::PendingDataDisk>,
     ready_data_disks: Vec<String>,
     receipts: BTreeMap<String, Receipt>,
@@ -184,7 +186,8 @@ impl PendingMembership {
         PendingMembershipStatus {
             transition_hash: self.transition_hash.clone(),
             control_archive_root: self.archive_root.clone(),
-            target_metadata_members: self.members.len(),
+            target_metadata_members: self.target_metadata_members,
+            control_participants: self.members.len(),
             added_data_disks: self.data_disks.len(),
             ready_data_disks: self.ready_data_disks.clone(),
             control_receipts: self

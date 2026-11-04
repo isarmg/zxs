@@ -258,14 +258,16 @@ fn membership_pending_unsupported_targets_fail_before_target_writes() {
                 unsupported.disks[0].clone()
             }
             8 => {
+                // New nonvoters are supported, but still require a fresh binding.
                 unsupported.disks[2].metadata_member = false;
+                unsupported.disks[2].binding_generation = 2;
                 unsupported.disks[0].clone()
             }
             _ => unreachable!(),
         };
         f.engine.membership_fence.as_mut().unwrap().intent.target =
             ValidatedConfig::try_from(unsupported).unwrap();
-        assert!(f.enroll().is_err());
+        assert!(f.enroll().is_err(), "case {change}");
         for disk in &f.target.disks[2..] {
             assert!(files(&disk.root).is_empty());
         }

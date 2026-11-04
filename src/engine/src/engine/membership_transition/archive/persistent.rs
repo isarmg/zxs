@@ -831,9 +831,8 @@ fn verify_epoch(
     let epoch = FrozenEpoch::read(&intent, source)?;
     let config = epoch.config;
     Engine::require_actor(&intent.principal)?;
-    if config.pool_id != intent.target.pool_id
-        || !changes_registered_membership(config, &intent.target)
-        || intent.fence_sequence == u64::MAX
+    validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
+    if intent.fence_sequence == u64::MAX
         || intent.fence_sequence <= intent.boundary.as_ref().map_or(0, |base| base.sequence)
     {
         return Err(Error::new(

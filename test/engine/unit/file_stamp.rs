@@ -24,6 +24,7 @@ fn snapshot_preserves_every_metadata_field_and_equality_component() {
     assert_eq!(*modified, (metadata.mtime(), metadata.mtime_nsec()));
     assert_eq!(*changed, (metadata.ctime(), metadata.ctime_nsec()));
     assert_eq!(stamp, FileStamp::of(&file).unwrap());
+    assert_eq!(stamp, FileStamp::from_metadata(&metadata));
     let changes: [fn(&mut FileStamp); 9] = [
         |stamp: &mut FileStamp| stamp.device ^= 1,
         |stamp: &mut FileStamp| stamp.inode ^= 1,

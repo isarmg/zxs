@@ -1266,7 +1266,7 @@ impl crate::engine::PlanningContext<'_> {
                 crate::container_storage::install_version_content_at(root, &directory, content)?;
             drop(reservation);
             if index + 1 < p.placement.route_slot_ids.len() {
-                source = Some(root.open_regular(&path)?);
+                source = Some(ReadFile::from(root.open_leased_regular(&path)?));
             }
         }
         Ok(())

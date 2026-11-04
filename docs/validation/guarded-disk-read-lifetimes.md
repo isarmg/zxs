@@ -65,3 +65,34 @@ record at that disk's root first. Shared content and historical proofs must rema
 intact. Those operations and their API/Web integration are not implemented by
 this batch. No data deletion or physical disk operation is authorized by the
 test hook.
+
+## Prepared payload proof ownership (source pending verification)
+
+Retained payload proofs now keep their body, version/checksum/payload metadata,
+and disk-seal files in the same revocable managed-file owner used by reads.
+Metadata stamps are taken from metadata acquired under that owner; they never
+require exposing the inner File or descriptor. Both cached proofs and the
+uncached full-revalidation path reject a quiesced resource. An idle proof can
+remain allocated without retaining an open target descriptor. Its optional
+process-wide descriptor-budget reservation remains allocated until the proof is
+dropped; that cache budget is not a claim of outstanding disk I/O.
+
+Four new test sources cover idle cached proof closure, uncached retained seals,
+fresh preparation after quiesce, and cancellation after the final replica in
+both modes. The existing mode-change regression still changes the exact fixture
+inode through its test path rather than making the read wrapper writable. The
+metadata-stamp field/equality test also checks the guarded-metadata constructor.
+No local compilation or test execution was performed; these require the next
+GitHub validation batch. This does not migrate raw copy sources, journals,
+private-directory publishers, writer locks or root descriptors, and does not
+complete production offline or deregistration.
+
+The generic internal `ReadSource::open` now returns the same owned `ReadFile`
+as explicit leased reads. Managed workspace sealing, staged-range copy inputs,
+recovery sources and the first publication copy can no longer select a raw-file
+alternative. Publication's subsequent replica-copy source is also opened through
+the producing root's gate. External package/system inputs remain explicitly
+local. A new source/clone test checks cancellation and failed reopen. Destination
+writers and legacy raw repair probes remain separate, unfinished coverage; this
+change does not claim a complete write-side drain. Source inspection and direct
+formatting only, pending GitHub execution with the other affected groups.

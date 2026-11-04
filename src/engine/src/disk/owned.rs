@@ -1,4 +1,5 @@
 //! Held filesystem resources, separate from serializable configuration and writer locks.
+use super::admission::DiskIoResource;
 use super::*;
 use platform_io::fs_safety::linux::DirectoryEntries;
 use std::{
@@ -12,6 +13,53 @@ pub(crate) struct DiskRoot {
     directory: OpenAt2Root,
     io: Option<DiskIoBinding>,
 }
+
+/// A directory cursor never exposes its underlying stream or descriptor. Bound
+/// cursors retain the opening operation and are revocable while the caller is
+/// idle. Unbound bootstrap cursors remain explicitly separate from disk access.
+pub(crate) struct DiskDirectoryEntries {
+    source: Option<DirectorySource>,
+}
+
+enum DirectorySource {
+    Bound(DiskIoResource<DirectoryEntries>),
+    Unbound(DirectoryEntries),
+}
+
+impl DiskDirectoryEntries {
+    fn new(entries: DirectoryEntries, lease: Option<DiskIoLease>) -> Result<Self> {
+        let source = match lease {
+            Some(lease) => {
+                let entries = lease.hold(entries);
+                entries.check_running()?;
+                DirectorySource::Bound(entries)
+            }
+            None => DirectorySource::Unbound(entries),
+        };
+        Ok(Self {
+            source: Some(source),
+        })
+    }
+}
+
+impl Iterator for DiskDirectoryEntries {
+    type Item = std::result::Result<EntryName, platform_io::fs_safety::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = match self.source.as_mut()? {
+            DirectorySource::Bound(entries) => entries.next_entry(),
+            DirectorySource::Unbound(entries) => entries.next(),
+        };
+        // An error is not an empty/successful inventory. Report it exactly once,
+        // then close the stream; EOF also retires ownership while self survives.
+        if !matches!(&next, Some(Ok(_))) {
+            self.source = None;
+        }
+        next
+    }
+}
+
+impl std::iter::FusedIterator for DiskDirectoryEntries {}
 
 impl DiskRoot {
     pub(crate) fn path(&self) -> &Path {
@@ -127,15 +175,19 @@ impl DiskRoot {
         Ok(RootOperation { root: self, lease })
     }
 
+    /// Transfer the opening operation into the actual directory stream. Late
+    /// registration after quiesce closes the stream instead of escaping the gate.
+    pub(crate) fn entries(&self, path: &Path) -> Result<DiskDirectoryEntries> {
+        let operation = self.operation()?;
+        let entries = operation.entries(path)?;
+        DiskDirectoryEntries::new(entries, operation.lease)
+    }
+
     // These legacy resource-returning methods admit their opening and validation
     // only. The returned raw resource is NOT tracked after return. Their callers
     // must migrate before disk-wide drain can be used for a production offline.
     pub(crate) fn directory(&self, path: &Path) -> Result<File> {
         self.operation()?.directory(path)
-    }
-
-    pub(crate) fn entries(&self, path: &Path) -> Result<DirectoryEntries> {
-        self.operation()?.entries(path)
     }
 
     pub(crate) fn open_regular(&self, path: &Path) -> Result<File> {
@@ -741,3 +793,7 @@ mod directory_retry_tests;
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/disk/root_operation_tests.rs"]
 mod root_operation_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/disk/directory_entries_tests.rs"]
+mod directory_entries_tests;

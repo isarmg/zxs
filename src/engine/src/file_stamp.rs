@@ -1,6 +1,9 @@
 //! Metadata snapshot for held-file preparation evidence, not a content proof.
 use crate::Result;
-use std::{fs::File, os::unix::fs::MetadataExt};
+use std::{
+    fs::{File, Metadata},
+    os::unix::fs::MetadataExt,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct FileStamp {
@@ -15,8 +18,12 @@ pub(crate) struct FileStamp {
 
 impl FileStamp {
     pub(crate) fn of(file: &File) -> Result<Self> {
-        let metadata = file.metadata()?;
-        Ok(Self {
+        Ok(Self::from_metadata(&file.metadata()?))
+    }
+
+    /// Snapshot already acquired under the owning resource's I/O guard.
+    pub(crate) fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
             device: metadata.dev(),
             inode: metadata.ino(),
             size: metadata.len(),
@@ -24,7 +31,7 @@ impl FileStamp {
             mode: metadata.mode(),
             modified: (metadata.mtime(), metadata.mtime_nsec()),
             changed: (metadata.ctime(), metadata.ctime_nsec()),
-        })
+        }
     }
 }
 

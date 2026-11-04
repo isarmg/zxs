@@ -1,7 +1,8 @@
-# 已绑定根的同步 I/O 准入边界
+# 已绑定根的同步 I/O 与目录迭代器准入边界
 
-本批接续[受控读取生命周期](guarded-disk-read-lifetimes.md)，只完成已绑定
-`DiskRoot` 的同步调用范围。它不是生产下线入口，也不证明全盘已经停止 I/O。
+本批接续[受控读取生命周期](guarded-disk-read-lifetimes.md)，覆盖已绑定
+`DiskRoot` 的同步调用范围及返回目录迭代器的生命周期。它不是生产下线入口，
+也不证明全盘已经停止 I/O。
 
 ## 本批能力
 
@@ -14,6 +15,18 @@
   普通计数只在这些栈内资源销毁后退出，不在撤销通知时提前退出。
 - `open_leased_regular` 把同一操作的 lease 移入现有可撤销文件 owner，
   打开与交付之间不再获取第二份许可；若期间已撤销，文件不能逃逸注册。
+- `entries` 把同一打开操作的 lease 与真实 `DirectoryEntries` 一起移入可撤销
+  owner；不返回平台原始迭代器、File、FD 或可提取内部资源的引用。每次 `next`
+  先在资源锁内核验准入，缓存中的名称与实际 getdents 使用同一范围。撤销会关闭
+  空闲 stream，不等待调用者再次轮询；已进入的读取则保留真实 FD 和 ordinary
+  计数到返回尾部。成功打开但注册晚于撤销的 stream 立即关闭并返回拒绝。
+- 目录迭代器在 EOF、错误或提前 Drop 时关闭真实 stream，再释放 lease。
+  EOF 后保留 wrapper 不占普通计数；错误仅报告一次，然后迭代器永久结束。
+  撤销保留原平台错误形状：`Io(PermissionDenied)` 的 source 是具体
+  `DiskUnavailable`，不转成可重试 Interrupted，也不把取消伪装成空目录。
+  尚未绑定的 bootstrap/system 枚举仍是独立分支，绑定失败不回退到它。
+  `WorkspaceInventory` 的长期 cursor 改为同一个受控类型，其他枚举调用方
+  继续通过原 Iterator 接口消费；返回的名称不包含后续 metadata 或打开权限。
 - `private_child` 复制原 gate。generation retention 的打开、命名地址验证和
   identity 读取使用同一操作，保留原 gate，不再经过未绑定根构造器。
   子根和持有旧根的 Arc 不能通过这些方法恢复普通准入。
@@ -30,13 +43,17 @@
 不增加 gate 次数。没有文件系统调用持有 gate 锁，没有改变原子写顺序、fsync
 预算或既有原子文件错误来源。本批没有性能测量，不能据此声称吞吐提升。
 
+每个绑定目录 stream 复用打开时的一个 lease，另有一个可撤销资源分配及现有
+O(log 活跃资源数) 注册。每次 next 使用一次资源 mutex、准入检查和尾部 gate
+检查，系统调用期间不持 gate mutex；没有新增文件同步、目录同步或全目录物化。
+未绑定 stream 不增加 gate 或资源 mutex。保留原目录缓冲预算，不改变枚举顺序。
+
 ## 明确未覆盖的返回生命周期
 
 以下接口现在只覆盖打开、验证及其失败清理；成功返回后的原始资源仍需迁移：
 
 - `directory`、`open_regular`、`open_optional_regular` 返回的 `File`。
 - `private_directory` 返回的 `PrivateDirectory`。
-- `entries` 返回的 `DirectoryEntries`；后续 next/getdents 和关闭并未被本批追踪。
 - 根及派生根长期持有的目录 FD。
 - `lock_file` 的返回文件和已持有 writer 锁。writer 锁必须保持到认证 fence 之后，
   不能像普通读者一样撤销；本批不改其释放策略。
@@ -45,6 +62,9 @@
 以及调用方利用原始目录 FD 执行的 rename/link/unlink 仍不构成全生命周期闭包。
 本批没有新增或迁移这些调用方的多步骤事务。普通计数为零仅表示已纳入 gate 的
 责任结束，不代表上述长期资源已经关闭，也不代表现有所有业务路径均已纳入 gate。
+具体而言，`business/workspace.rs` 仍将 PrivateDirectory 转为脱离调用作用域的
+UploadPreparation/OpenAt2Root；`archive/persistent.rs` 的私有目录用于归档发布
+和独立锁。这些能力不能通过给返回值增加可提取的包装层就视为安全，需分别迁移。
 
 ## 未绑定构造的生产调用分类
 
@@ -84,8 +104,17 @@
   时释放原操作且不破坏原根。
 
 建议 GitHub 定向执行 `storage-engine` 的
-`disk::owned::root_operation_tests`、`disk::admission::tests`，并回归原
+`disk::owned::root_operation_tests`、`disk::owned::directory_entries_tests`、
+`disk::admission::tests`，并回归原
 `disk::admission_tests` 及 HTTP/SMB 的读取撤销测试。正常与 fault 特性都需编译。
+
+目录迭代器测试新增于 `test/engine/unit/disk/directory_entries_tests.rs`，由 owned
+私有模块接线，覆盖空闲撤销真实 FD 关闭、缓存名称撤销、EOF、提前 Drop、晚注册、
+打开失败、取消错误来源及单次终止、子根共享 gate、独立未绑定枚举及并发 next。
+`io_admission_tests.rs` 另用 barrier 暂停真实目录读取后的 ResourceAccess 尾部，
+确认关闭前 ordinary 计数不归零，尾部完成后 idle wrapper 不保留 FD。该测试使用
+生产的同一资源 guard，不添加业务 hook，也不声称阻塞了内核 syscall 本身。
+本切片没有新增 getdents syscall 故障注入；平台已有枚举错误语义保持不变。
 
 本批准备阶段只做源码编辑、直接 rustfmt 和 git diff 检查。没有在云电脑运行
 cargo/check/test/clippy，没有真实盘操作、部署或权限变更；测试用例尚未执行。

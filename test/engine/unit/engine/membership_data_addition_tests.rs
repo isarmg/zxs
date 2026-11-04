@@ -341,6 +341,13 @@ fn membership_activation_data_addition_faults_resume_same_authority() {
 fn membership_activation_data_addition_restores_from_voters_not_data_roots() {
     for roles in [&[false][..], &[true, false][..]] {
         let (temp, mut engine, _, _) = initialize();
+        let original_primary = engine.config.disks[0].clone();
+        let workspace_files = files(&original_primary.root.join("staging/workspaces"));
+        let (original_manifest, original_manifest_bytes) = workspace_files
+            .iter()
+            .find(|(path, _)| path.file_name().unwrap() == "workspace.json")
+            .unwrap();
+        let original_workspace: Workspace = decode_strict(original_manifest_bytes).unwrap();
         let (added, archive, operation) =
             begin_additions(&mut engine, temp.path(), roles, "restore-data");
         enroll(&mut engine, temp.path(), "restore-data", &added, &archive).unwrap();
@@ -368,9 +375,13 @@ fn membership_activation_data_addition_restores_from_voters_not_data_roots() {
         );
         let count = config.metadata_members().len();
         let mut roots = Vec::new();
+        let mut moved_primary = None;
         for (i, disk) in config.metadata_members().enumerate() {
             let moved = temp.path().join(format!("moved-{i}"));
             fs::rename(&disk.root, &moved).unwrap();
+            if disk.disk_id == original_primary.disk_id {
+                moved_primary = Some(moved.clone());
+            }
             if count == 2 || i != 0 {
                 roots.push(moved);
             }
@@ -385,10 +396,177 @@ fn membership_activation_data_addition_restores_from_voters_not_data_roots() {
         );
         restored.open_content(&version).unwrap();
         assert_lock_held(&data.root);
+        let moved_primary = moved_primary.unwrap();
+        let relocated_manifest = moved_primary.join(
+            original_manifest
+                .strip_prefix(&original_primary.root)
+                .unwrap(),
+        );
+        assert_eq!(
+            fs::read(&relocated_manifest).unwrap(),
+            *original_manifest_bytes
+        );
         if count == 3 {
             assert!(restored.blocked);
+        } else {
+            let file = original_workspace.files.values().next().unwrap();
+            let projected = restored
+                .planning_context()
+                .staged_source(&original_workspace, file)
+                .unwrap();
+            assert_eq!(
+                projected.path(),
+                moved_primary.join(
+                    file.source_path
+                        .strip_prefix(&original_primary.root)
+                        .unwrap()
+                )
+            );
+            drop(projected);
+            let mut wrong_binding = restored
+                .config
+                .disks
+                .iter()
+                .find(|disk| disk.disk_id == original_primary.disk_id)
+                .unwrap()
+                .clone();
+            wrong_binding.binding_generation += 1;
+            assert!(
+                restored
+                    .config
+                    .generation()
+                    .unwrap()
+                    .historical_workspace_roots(&wrong_binding)
+                    .is_none()
+            );
+            let mut unknown = file.clone();
+            unknown.source_path = temp
+                .path()
+                .join("unknown/staging/workspaces")
+                .join(&original_workspace.workspace_id)
+                .join("data");
+            assert_eq!(
+                restored
+                    .planning_context()
+                    .staged_source(&original_workspace, &unknown)
+                    .err()
+                    .unwrap()
+                    .code(),
+                ErrorCode::UnsafePath
+            );
+            unknown.source_path = file.source_path.join("../outside");
+            assert_eq!(
+                restored
+                    .planning_context()
+                    .staged_source(&original_workspace, &unknown)
+                    .err()
+                    .unwrap()
+                    .code(),
+                ErrorCode::UnsafePath
+            );
+            let foreign_root = restored
+                .config
+                .disks
+                .iter()
+                .find(|disk| disk.disk_id != original_primary.disk_id && disk.metadata_member)
+                .unwrap()
+                .root
+                .clone();
+            drop(restored);
+            // A known historical path never authorizes another binding's workspace.
+            let mut foreign = original_workspace.clone();
+            foreign.files.values_mut().next().unwrap().source_path = foreign_root
+                .join("staging/workspaces")
+                .join(&foreign.workspace_id)
+                .join("data");
+            let bad = canonical_json(&foreign).unwrap();
+            fs::write(&relocated_manifest, &bad).unwrap();
+            assert_eq!(
+                Engine::open(&temp.path().join("restored"))
+                    .err()
+                    .unwrap()
+                    .code(),
+                ErrorCode::UnsafePath
+            );
+            assert_eq!(fs::read(&relocated_manifest).unwrap(), bad);
+            fs::write(&relocated_manifest, original_manifest_bytes).unwrap();
+            let reopened = Engine::open(&temp.path().join("restored")).unwrap();
+            reopened.open_content(&version).unwrap();
+            assert_eq!(
+                fs::read(&relocated_manifest).unwrap(),
+                *original_manifest_bytes
+            );
         }
     }
+}
+
+#[test]
+fn membership_activation_workspace_alias_projection_rejects_ambiguous_owner_and_suffix() {
+    let (temp, mut engine, branch, _) = initialize();
+    let (added, archive, _) = begin_additions(&mut engine, temp.path(), &[false], "aliases");
+    enroll(&mut engine, temp.path(), "aliases", &added, &archive).unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    engine.activate_pending_membership().unwrap();
+    let workspace = engine.create_workspace(&branch, "admin").unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "body.txt", b"alias evidence")
+        .unwrap();
+    let workspace = engine.workspace(&workspace.workspace_id).unwrap();
+    let mut file = workspace.files.values().next().unwrap().clone();
+    let primary = engine.config.disks[0].clone();
+    let nested = primary
+        .root
+        .join("staging/workspaces")
+        .join(&workspace.workspace_id)
+        .join("nested-root");
+    // Unit-test the cached, already-authenticated locator projection. This does
+    // not claim to fabricate or admit an authority chain with changed roots.
+    let mut generation = (**engine.config.generation().unwrap()).clone();
+    generation
+        .workspace_roots
+        .get_mut(&(
+            primary.disk_id.clone(),
+            primary.slot_id.clone(),
+            primary.binding_generation,
+        ))
+        .unwrap()
+        .insert(nested.clone());
+    engine.config = engine
+        .config
+        .clone()
+        .with_generation(Arc::new(generation))
+        .unwrap();
+    file.source_path = nested
+        .join("staging/workspaces")
+        .join(&workspace.workspace_id)
+        .join("body");
+    assert_eq!(
+        engine
+            .planning_context()
+            .staged_source(&workspace, &file)
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::UnsafePath
+    );
+    let actual = workspace.files.values().next().unwrap();
+    let source = engine
+        .planning_context()
+        .staged_source(&workspace, actual)
+        .unwrap();
+    assert!(matches!(source, crate::engine::ReadSource::Disk { .. }));
+    // A newly selected control-state location cannot turn a historical managed
+    // address into an unguarded external source by taking lexical priority.
+    engine.root = primary.root.join("staging");
+    assert_eq!(
+        engine
+            .planning_context()
+            .staged_source(&workspace, actual)
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::UnsafePath
+    );
 }
 
 #[test]

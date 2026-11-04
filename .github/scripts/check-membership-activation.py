@@ -28,9 +28,11 @@ IO_ENGINE_GROUPS = (
     ("root-operations", "disk::owned::", ()),
     ("root-admission", "disk::admission_tests::", ()),
     ("deregistration-impact", "engine::disk_registry::tests::", ()),
+    ("bootstrap-locator", "engine::disk_lifecycle::bootstrap::tests::", ()),
     ("io-authority", "engine::config::io_authority::tests::", ()),
     ("guarded-engine-reads", "engine::reads::tests::", ()),
     ("verified-payloads", "engine::publication::verified_payloads::tests::", ()),
+    ("file-stamps", "file_stamp::tests::", ()),
     ("workspace-range", "business::file::pending_regressions::", ()),
 )
 IO_SERVER_GROUPS = (

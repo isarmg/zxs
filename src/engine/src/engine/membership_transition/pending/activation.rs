@@ -5,9 +5,11 @@ use crate::engine::membership_transition::archive::persistent::{
     ArchiveRoot, install_generation_archive, read_generation_base,
 };
 use joint::store::PortableJoint;
+use std::collections::BTreeSet;
 
 pub(in crate::engine::membership_transition) const AUTHORITY_KIND: &str = "membership-generation";
 const GENERATION_FILE: &str = "metadata/pool-membership/generation.json";
+type WorkspaceRootAliases = BTreeMap<(String, String, u64), BTreeSet<PathBuf>>;
 
 mod authority;
 pub(crate) use authority::PortableAuthority;
@@ -20,9 +22,20 @@ pub(crate) struct Generation {
     original: ValidatedConfig,
     history: BTreeMap<u64, String>,
     epoch: u64,
+    workspace_roots: WorkspaceRootAliases,
     pub(crate) base: Arc<State>,
 }
 impl Generation {
+    pub(crate) fn historical_workspace_roots(
+        &self,
+        disk: &DiskConfig,
+    ) -> Option<&BTreeSet<PathBuf>> {
+        self.workspace_roots.get(&(
+            disk.disk_id.clone(),
+            disk.slot_id.clone(),
+            disk.binding_generation,
+        ))
+    }
     pub(crate) fn membership_epoch(&self) -> u64 {
         self.epoch
     }
@@ -122,6 +135,7 @@ pub(in crate::engine::membership_transition) fn verify_frozen_activation(
 ) -> Result<()> {
     let generation = Generation {
         hash: portable.hash()?,
+        workspace_roots: portable.workspace_root_aliases()?,
         portable: portable.clone(),
         intent: portable.intent()?,
         original: portable.genesis_config()?,

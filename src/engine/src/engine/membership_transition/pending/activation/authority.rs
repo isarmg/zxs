@@ -97,6 +97,12 @@ impl Deref for PortableAuthority {
 impl AuthorityNode {
     fn intent(&self) -> Result<TransitionIntent> {
         let verified = self.joint.verify()?;
+        if verified.intent.effect.is_some() {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "exit control evidence cannot authorize lifecycle activation",
+            ));
+        }
         if object_hash("membership-control-archive", &self.archive)?
             != verified.proposal.control_archive_root
         {
@@ -131,6 +137,26 @@ impl AuthorityNode {
 }
 
 impl PortableAuthority {
+    pub(super) fn workspace_root_aliases(&self) -> Result<WorkspaceRootAliases> {
+        let mut roots: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        // These names are authenticated historical locators, not permissions to
+        // open an old root. Consumers must project onto the current held binding.
+        for (_, intent) in self.lineage()? {
+            for config in [intent.origin.config(), &intent.target] {
+                for disk in &config.disks {
+                    roots
+                        .entry((
+                            disk.disk_id.clone(),
+                            disk.slot_id.clone(),
+                            disk.binding_generation,
+                        ))
+                        .or_default()
+                        .insert(disk.root.clone());
+                }
+            }
+        }
+        Ok(roots)
+    }
     pub(super) fn data_dependency(&self, disk_id: &str) -> Result<Option<data::DataDependency>> {
         // The lineage proves additions are permanent and identities never change.
         self.lineage()?;
