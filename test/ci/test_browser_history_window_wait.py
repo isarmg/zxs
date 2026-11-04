@@ -45,8 +45,34 @@ console.log(JSON.stringify(results));
 
     def test_page_sequence_waits_for_exact_requested_window(self):
         source = (ROOT / 'test/tools/browser-smoke/runner/history_windows.rs').read_text()
-        self.assertEqual(re.findall(r'graph\(browser, (\d)\)', source),
-                         ['0', '1', '2', '1', '2', '1', '2', '1', '1', '1', '0'])
+        parts = re.split(r'^fn ([a-z_]+)\(', source, flags=re.MULTILINE)
+        scenarios = dict(zip(parts[1::2], parts[2::2]))
+        actual = {name: re.findall(r'graph\(browser, (\d+)\)', body)
+                  for name, body in scenarios.items()
+                  if re.search(r'graph\(browser, \d+\)', body)}
+        self.assertEqual(actual, {
+            'exercise': ['0', '1', '2', '1', '2', '1'],
+            'merge_review': ['2', '1'],
+            'graph_merge_review': ['1', '2', '1'],
+            'fields_and_cancellation': ['1', '1', '0'],
+        })
+        self.assertEqual(re.findall(
+            r'^    (merge_review|graph_merge_review|fields_and_cancellation)\(browser\)',
+            scenarios['exercise'], re.MULTILINE),
+            ['merge_review', 'graph_merge_review', 'fields_and_cancellation'])
+        graph_merge = scenarios['graph_merge_review']
+        self.assertEqual(re.findall(
+            r'click\(browser, "(Locate current node|Next history page|Previous history page)"'
+            r'[^\n]+\n\s+graph\(browser, (\d+)\)', graph_merge),
+            [('Locate current node', '1'), ('Next history page', '2'),
+             ('Previous history page', '1')])
+        for contract in (
+            'one source cannot choose or submit a result',
+            'historical inputs keep source bases across graph pages',
+            'chosen result survives leaving its page',
+            'cancelling graph merge removes only its selection controls',
+        ):
+            self.assertIn(contract, graph_merge)
         self.assertIn('for _ in 0..4', source)
         self.assertIn(".zxs-node-checkbox').click()", source)
 
