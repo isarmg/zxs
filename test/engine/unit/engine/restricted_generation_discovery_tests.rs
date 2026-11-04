@@ -40,7 +40,9 @@ impl CountedIo {
                 1,
             );
         }
-        for pair in self.touches.chunks_exact(2) {
+        let (pairs, remainder) = self.touches.as_chunks::<2>();
+        assert!(remainder.is_empty());
+        for pair in pairs {
             let Touch::Stat(path) = &pair[0] else {
                 panic!("stat must come first")
             };

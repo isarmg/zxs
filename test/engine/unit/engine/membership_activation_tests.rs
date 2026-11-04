@@ -629,6 +629,7 @@ fn membership_activation_system_loss_and_rebound_metadata_roots_preserve_state()
     let mut fixture = Fixture::new();
     let result = fixture.engine.activate_pending_membership().unwrap();
     let latest = write_body(&mut fixture.engine, &fixture.branch, b"latest");
+    let data_roots = fixture.engine.recovery_data_roots().unwrap();
     let Fixture {
         temp,
         target,
@@ -648,7 +649,12 @@ fn membership_activation_system_loss_and_rebound_metadata_roots_preserve_state()
         fs::rename(&disk.root, &path).unwrap();
         moved.push(path);
     }
-    let restored = Engine::restore_from_disks(&temp.path().join("restored"), &moved).unwrap();
+    let restored = Engine::restore_from_disks_and_data_roots(
+        &temp.path().join("restored"),
+        &moved,
+        &data_roots,
+    )
+    .unwrap();
     assert_eq!(restored.state.topology_generation, 2);
     assert_eq!(
         restored
@@ -659,6 +665,76 @@ fn membership_activation_system_loss_and_rebound_metadata_roots_preserve_state()
     );
     restored.open_content(&latest).unwrap();
 }
+#[test]
+fn membership_activation_explicit_data_restore_rejects_wrong_role_and_identity() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    let data_roots = fixture.engine.recovery_data_roots().unwrap();
+    let Fixture {
+        temp,
+        target,
+        engine,
+        ..
+    } = fixture;
+    drop(engine);
+    fs::rename(temp.path().join("system"), temp.path().join("lost-system")).unwrap();
+    let voters = target
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member)
+        .map(|disk| disk.root.clone())
+        .collect::<Vec<_>>();
+    let failed = temp.path().join("failed-restore");
+    let mut wrong_role = data_roots[0].clone();
+    wrong_role.identity.disk_id = target
+        .disks
+        .iter()
+        .find(|disk| disk.metadata_member)
+        .unwrap()
+        .disk_id
+        .clone();
+    wrong_role.root = voters[0].clone();
+    let result = Engine::restore_from_disks_and_data_roots(&failed, &voters, &[wrong_role]);
+    assert_eq!(result.err().unwrap().code(), ErrorCode::ConfigConflict);
+    assert!(!failed.exists());
+
+    let data = target
+        .disks
+        .iter()
+        .find(|disk| !disk.metadata_member)
+        .unwrap();
+    let copied = temp.path().join("copied-data-root");
+    private_dir(&copied).unwrap();
+    fs::copy(data.root.join("disk.json"), copied.join("disk.json")).unwrap();
+    let mut input = data_roots[0].clone();
+    input.root = copied.clone();
+    let result = Engine::restore_from_disks_and_data_roots(&failed, &voters, &[input.clone()]);
+    assert_eq!(
+        result.err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert!(!failed.exists());
+
+    let held = DiskRoot::open(&copied).unwrap();
+    let physical = FileIdentity::from_fd(held.directory(held.path()).unwrap()).unwrap();
+    let mut rewritten: DiskSeal = read_json(&copied.join("disk.json")).unwrap();
+    rewritten.device = physical.device;
+    rewritten.inode = physical.inode;
+    write_json(&copied.join("disk.json"), &rewritten, true).unwrap();
+    let result = Engine::restore_from_disks_and_data_roots(&failed, &voters, &[input]);
+    assert_eq!(
+        result.err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert!(!failed.exists());
+
+    // The old entry point still admits only metadata, despite online Config
+    // data paths. Missing SYSTEM never grants permission to discover them.
+    let restored = Engine::restore_from_disks(&temp.path().join("metadata-only"), &voters).unwrap();
+    assert!(restored.config.excludes_io_disk(&data.disk_id));
+    assert!(restored.disk_resources.available(data).is_none());
+}
+
 #[test]
 fn membership_activation_rejects_unarchived_old_candidate_and_repeat_handoff() {
     let mut fixture = Fixture::new();
@@ -714,6 +790,7 @@ fn membership_activation_target_majority_survives_loss_of_original_quorum() {
     let mut fixture = Fixture::new();
     let result = fixture.engine.activate_pending_membership().unwrap();
     let latest = write_body(&mut fixture.engine, &fixture.branch, b"new majority");
+    let data_roots = fixture.engine.recovery_data_roots().unwrap();
     let Fixture {
         temp,
         target,
@@ -728,7 +805,12 @@ fn membership_activation_target_majority_survives_loss_of_original_quorum() {
     )
     .unwrap();
     let inputs = vec![target.disks[2].root.clone(), target.disks[3].root.clone()];
-    let mut restored = Engine::restore_from_disks(&temp.path().join("restored"), &inputs).unwrap();
+    let mut restored = Engine::restore_from_disks_and_data_roots(
+        &temp.path().join("restored"),
+        &inputs,
+        &data_roots,
+    )
+    .unwrap();
     assert_eq!(restored.config.metadata_members().len(), 3);
     assert_eq!(restored.config.metadata_quorum(), 2);
     assert!(restored.blocked);
@@ -1467,6 +1549,7 @@ fn membership_activation_successor_system_loss_uses_rebound_target_majority() {
         &fixture.branch,
         b"restored third epoch",
     );
+    let data_roots = fixture.engine.recovery_data_roots().unwrap();
     let Fixture { temp, engine, .. } = fixture;
     drop(engine);
     fs::rename(temp.path().join("system"), temp.path().join("lost-system")).unwrap();
@@ -1483,7 +1566,12 @@ fn membership_activation_successor_system_loss_uses_rebound_target_majority() {
             roots.push(moved);
         }
     }
-    let mut restored = Engine::restore_from_disks(&temp.path().join("restored"), &roots).unwrap();
+    let mut restored = Engine::restore_from_disks_and_data_roots(
+        &temp.path().join("restored"),
+        &roots,
+        &data_roots,
+    )
+    .unwrap();
     assert_eq!(restored.config.metadata_members().len(), 4);
     assert_eq!(restored.config.metadata_quorum(), 3);
     assert_eq!(restored.config.membership_epoch(), 3);

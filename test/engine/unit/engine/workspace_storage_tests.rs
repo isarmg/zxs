@@ -312,10 +312,14 @@ fn workspace_recovery_does_not_adopt_a_mirror_on_an_unadmitted_replacement() {
     let disk = engine.config.disks[0].clone();
     drop(engine);
     fs::rename(&disk.root, disk.root.with_extension("missing")).unwrap();
-    private_dir(&disk.root).unwrap();
-    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    // Recover while the address is absent. A different directory already at
+    // this address would fail the locator's physical-identity check instead.
+    let system = temp.path().join("system");
+    let mut engine = Engine::open(&system).unwrap();
     assert!(engine.disk_resources.available(&disk).is_none());
     assert!(engine.blocked);
+    assert!(!disk.root.exists());
+    private_dir(&disk.root).unwrap();
     let replacement = disk
         .root
         .join("staging/workspaces")
@@ -324,6 +328,22 @@ fn workspace_recovery_does_not_adopt_a_mirror_on_an_unadmitted_replacement() {
     let mut unrelated = workspace.clone();
     unrelated.principal = "unadmitted".into();
     write_json(&replacement, &unrelated, false).unwrap();
+    let preserved = [
+        replacement.clone(),
+        system
+            .join("workspaces")
+            .join(&workspace.workspace_id)
+            .join("workspace.json"),
+        disk.root
+            .with_extension("missing")
+            .join("staging/workspaces")
+            .join(&workspace.workspace_id)
+            .join("workspace.json"),
+    ]
+    .map(|path| {
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    });
 
     engine.load_workspaces().unwrap();
     assert_eq!(
@@ -343,6 +363,24 @@ fn workspace_recovery_does_not_adopt_a_mirror_on_an_unadmitted_replacement() {
         engine.blocked,
         "missing members do not shrink the write barrier"
     );
+    for (path, bytes) in &preserved {
+        assert_eq!(fs::read(path).unwrap(), *bytes);
+    }
+    drop(engine);
+    for recovery in [false, true] {
+        let opened = if recovery {
+            Engine::open_for_recovery(&system)
+        } else {
+            Engine::open(&system)
+        };
+        assert_eq!(
+            opened.err().unwrap().code(),
+            ErrorCode::DiskIdentityMismatch
+        );
+        for (path, bytes) in &preserved {
+            assert_eq!(fs::read(path).unwrap(), *bytes);
+        }
+    }
 }
 
 #[test]

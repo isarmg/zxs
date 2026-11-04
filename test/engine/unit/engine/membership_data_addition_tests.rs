@@ -376,6 +376,7 @@ fn membership_activation_data_addition_restores_from_voters_not_data_roots() {
             b"restore data registration",
         );
         let config = engine.config.clone();
+        let data_roots = engine.recovery_data_roots().unwrap();
         drop(engine);
         fs::rename(temp.path().join("system"), temp.path().join("lost-system")).unwrap();
         assert!(
@@ -388,6 +389,20 @@ fn membership_activation_data_addition_restores_from_voters_not_data_roots() {
             )
             .is_err()
         );
+        // Explicit data admission is not a vote, and a failed quorum must not
+        // even probe the separately supplied data list.
+        let mut unprobed = data_roots[0].clone();
+        unprobed.root = temp.path().join("must-not-be-probed");
+        let insufficient = Engine::restore_from_disks_and_data_roots(
+            &temp.path().join("explicit-not-a-quorum"),
+            &[config.metadata_members().next().unwrap().root.clone()],
+            &[unprobed],
+        );
+        assert_eq!(
+            insufficient.err().unwrap().code(),
+            ErrorCode::MetadataQuorumUnavailable
+        );
+        assert!(!temp.path().join("explicit-not-a-quorum").exists());
         let count = config.metadata_members().len();
         let mut roots = Vec::new();
         let mut moved_primary = None;
@@ -401,7 +416,12 @@ fn membership_activation_data_addition_restores_from_voters_not_data_roots() {
                 roots.push(moved);
             }
         }
-        let restored = Engine::restore_from_disks(&temp.path().join("restored"), &roots).unwrap();
+        let restored = Engine::restore_from_disks_and_data_roots(
+            &temp.path().join("restored"),
+            &roots,
+            &data_roots,
+        )
+        .unwrap();
         assert_eq!(restored.config.metadata_members().len(), count);
         assert_eq!(restored.config.metadata_quorum(), 2);
         assert_eq!(restored.config.membership_epoch(), 2);
@@ -583,6 +603,83 @@ fn membership_activation_workspace_alias_projection_rejects_ambiguous_owner_and_
             .code(),
         ErrorCode::UnsafePath
     );
+}
+
+#[test]
+fn membership_activation_explicit_data_restore_requires_readiness_and_certified_identity() {
+    let (temp, mut engine, _, _) = initialize();
+    let (added, archive, _) = begin_additions(&mut engine, temp.path(), &[false], "explicit-data");
+    enroll(&mut engine, temp.path(), "explicit-data", &added, &archive).unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    engine.activate_pending_membership().unwrap();
+    let voters = engine
+        .config
+        .metadata_members()
+        .map(|disk| disk.root.clone())
+        .collect::<Vec<_>>();
+    let transition = object_hash(INTENT_KIND, &engine.config.generation().unwrap().intent).unwrap();
+    let inputs = engine.recovery_data_roots().unwrap();
+    drop(engine);
+    fs::rename(temp.path().join("system"), temp.path().join("lost-system")).unwrap();
+    let data = &added[0];
+    let ready_files = files(&data.root);
+    let (ready_path, ready_bytes) = ready_files
+        .iter()
+        .find(|(path, _)| path.file_name().unwrap() == "data-ready.json")
+        .unwrap();
+    fs::remove_file(ready_path).unwrap();
+    let failed = temp.path().join("failed-restore");
+    assert!(Engine::restore_from_disks_and_data_roots(&failed, &voters, &inputs,).is_err());
+    assert!(!failed.exists());
+    fs::write(ready_path, ready_bytes).unwrap();
+
+    // A complete portable certificate is not a local vote. Loss of one actual
+    // decision leaves this fixed two-member group below quorum and must fail
+    // before even opening the separately supplied data path.
+    let decision = voters[0]
+        .join("metadata/membership-decisions")
+        .join(transition)
+        .join("decision.json");
+    let decision_bytes = fs::read(&decision).unwrap();
+    fs::remove_file(&decision).unwrap();
+    let mut unprobed = inputs[0].clone();
+    unprobed.root = temp.path().join("unavailable-data-input");
+    let error = Engine::restore_from_disks_and_data_roots(&failed, &voters, &[unprobed])
+        .err()
+        .unwrap();
+    assert_eq!(error.code(), ErrorCode::MetadataQuorumUnavailable);
+    assert!(!failed.exists());
+    fs::write(&decision, decision_bytes).unwrap();
+
+    // Even a self-rewritten current seal cannot replace the physical identity
+    // authenticated by the metadata quorum's data dependency.
+    let copied = temp.path().join("copied-data");
+    private_dir(&copied).unwrap();
+    for (path, bytes) in files(&data.root) {
+        let destination = copied.join(path.strip_prefix(&data.root).unwrap());
+        private_dir(destination.parent().unwrap()).unwrap();
+        fs::write(destination, bytes).unwrap();
+    }
+    let held = DiskRoot::open(&copied).unwrap();
+    let physical = FileIdentity::from_fd(held.directory(held.path()).unwrap()).unwrap();
+    let mut seal: DiskSeal = read_json(&copied.join("disk.json")).unwrap();
+    seal.device = physical.device;
+    seal.inode = physical.inode;
+    write_json(&copied.join("disk.json"), &seal, true).unwrap();
+    let before = files(&copied);
+    let mut input = inputs[0].clone();
+    input.root = copied.clone();
+    // Even a caller-supplied replacement identity cannot override the added
+    // disk's independently certified data dependency.
+    input.device = physical.device;
+    input.inode = physical.inode;
+    let result = Engine::restore_from_disks_and_data_roots(&failed, &voters, &[input]);
+    assert_eq!(
+        result.err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert!(!failed.exists());
+    assert_eq!(files(&copied), before);
 }
 
 #[test]

@@ -130,6 +130,14 @@ impl ValidatedConfig {
         ) || self.admitted.genesis_io_authority == other.admitted.genesis_io_authority
     }
 
+    /// The fixed saved Genesis authority permits only tighter local retained
+    /// limits. This is a recovery projection check, not I/O-context equality.
+    pub(crate) fn permits_genesis_recovery_projection(&self, projected: &Self) -> bool {
+        self.admitted
+            .genesis_io_authority
+            .permits_recovery_projection(&projected.admitted.genesis_io_authority)
+    }
+
     pub(crate) fn verify_candidate_membership(
         &self,
         candidate: &crate::journal::Candidate,

@@ -129,16 +129,25 @@ impl Fixture {
         let hidden = tree.get("dir/hidden.txt").unwrap().clone();
         let live = tree.get("dir/live.txt").unwrap().clone();
         assert_eq!(live.file_id, old_live.file_id);
-        let hidden_branch = engine
-            .file_context(&repo.repository_id, "dir/hidden.txt")
-            .unwrap()
-            .branch_id
-            .clone();
-        let live_branch = engine
-            .file_context(&repo.repository_id, "dir/live.txt")
-            .unwrap()
-            .branch_id
-            .clone();
+        // Ordinary repositories initially use their full main branch as a
+        // file context. Label edits require real independent public branches.
+        let [hidden_branch, live_branch] = [&hidden, &live].map(|entry| {
+            let result = engine
+                .create_file_branch(
+                    &entry.file_id,
+                    &entry.version_id,
+                    &label("metadata branch"),
+                    "admin",
+                    op(),
+                )
+                .unwrap();
+            let branch = result.branch_id.unwrap();
+            assert_eq!(
+                engine.state.branches[&branch].file_id.as_deref(),
+                Some(entry.file_id.as_str())
+            );
+            branch
+        });
         Self {
             temp,
             engine,

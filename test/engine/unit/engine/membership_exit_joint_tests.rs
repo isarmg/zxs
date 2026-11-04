@@ -309,7 +309,7 @@ fn membership_joint_exit_certificate_counts_fixed_quorums_without_requiring_old_
                 .collect::<json_codec::Map<_, _>>();
             let old_votes = selected.count_ones() as usize;
             let target_votes = (selected & !1).count_ones() as usize;
-            let expected = old_votes >= old / 2 + 1 && target_votes >= (old - 1) / 2 + 1;
+            let expected = old_votes > old / 2 && target_votes > (old - 1) / 2;
             let hash = subset_certificate(&store, &status, subset);
             let portable = store.portable(&hash, &status.proposal_hash);
             assert_eq!(

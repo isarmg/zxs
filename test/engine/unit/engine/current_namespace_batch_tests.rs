@@ -2,7 +2,7 @@
 //! the final lifecycle case runs the actual D3/archive/retirement/reopen path.
 //! No fixture here certifies physical power-loss or HTTP authorization behavior.
 use super::*;
-use std::{fs, path::Path};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
 fn current(fixture: &Fixture, path: &str) -> Entry {
     fixture
@@ -603,7 +603,16 @@ fn membership_registry_current_batch_preserves_preparation_exclusion_and_actual_
     let disk = fixture.engine.disk("D04").unwrap();
     let directory = crate::disk::version_dir(disk, &version.history_tree_id, &version.version_id);
     let content = crate::container_storage::content_path(&directory, version).unwrap();
+    // Published payloads are immutable. This fixture deliberately corrupts
+    // only its temporary payload; ordinary writers must retain that protection.
+    let permissions = fs::metadata(&content).unwrap().permissions();
+    fs::set_permissions(
+        &content,
+        fs::Permissions::from_mode(permissions.mode() | 0o200),
+    )
+    .unwrap();
     fs::write(&content, b"corrupt retained payload").unwrap();
+    fs::set_permissions(&content, permissions).unwrap();
     assert_eq!(
         apply(&mut fixture, &batch, op()).unwrap_err().code(),
         ErrorCode::ContentUnavailable
@@ -667,6 +676,31 @@ fn membership_registry_current_batch_recovery_rejects_hidden_or_duplicate_occurr
         );
         assert_eq!(fixture.engine.snapshot, before_snapshot);
     }
+    // A globally fresh copy ID cannot authorize an unselected helper snapshot.
+    // Its occurrence must exactly match the owner admitted in this publication.
+    let mut forged = published.clone();
+    let helper = forged.file_contexts
+        [&crate::business::context_key_from_key(&fixture.repo.repository_id, "dir/copied")]
+        .branch_id
+        .clone();
+    let head = forged.branches[&helper].head_commit_id.clone();
+    let commit = forged.commits.get_mut(&head).unwrap();
+    commit
+        .entries
+        .iter_mut()
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
+        .unwrap()
+        .relocate(name_policy::PortablePath::parse("dir/forged").unwrap());
+    commit
+        .entries
+        .sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
+    assert!(
+        fixture
+            .engine
+            .install_recovered_namespace_state(forged, snapshot.clone())
+            .is_err()
+    );
+    assert_eq!(fixture.engine.snapshot, before_snapshot);
     fixture
         .engine
         .install_recovered_namespace_state(published, snapshot)

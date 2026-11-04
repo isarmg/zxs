@@ -373,10 +373,10 @@ fn bootstrap_locator_noncanonical_addresses_are_not_stat_candidates() {
 fn bootstrap_locator_each_write_boundary_blocks_fence_until_successful_retry() {
     use store::WriteFault;
     for fault in [
-        WriteFault::BeforeRecordBarrier,
-        WriteFault::AfterRecordBarrier,
-        WriteFault::BeforeHeadBarrier,
-        WriteFault::AfterHeadBarrier,
+        WriteFault::BeforeRecord,
+        WriteFault::AfterRecord,
+        WriteFault::BeforeHead,
+        WriteFault::AfterHead,
     ] {
         let mut fixture = Fixture::new();
         let target = fixture.binding(0);
@@ -390,11 +390,11 @@ fn bootstrap_locator_each_write_boundary_blocks_fence_until_successful_retry() {
         );
         let after = fixture.store.reload(&fixture.config.pool_id);
         match fault {
-            WriteFault::BeforeRecordBarrier => assert_eq!(after.unwrap().generation(), 1),
-            WriteFault::AfterRecordBarrier | WriteFault::BeforeHeadBarrier => {
+            WriteFault::BeforeRecord => assert_eq!(after.unwrap().generation(), 1),
+            WriteFault::AfterRecord | WriteFault::BeforeHead => {
                 assert!(after.is_err())
             }
-            WriteFault::AfterHeadBarrier => assert_eq!(after.unwrap().generation(), 2),
+            WriteFault::AfterHead => assert_eq!(after.unwrap().generation(), 2),
         }
         // Same request can finish an exact orphan or repeat real fsync barriers.
         // Injection models interruption at boundaries, not an executed fsync failure.
@@ -414,7 +414,7 @@ fn bootstrap_locator_each_write_boundary_blocks_fence_until_successful_retry() {
 #[test]
 fn bootstrap_locator_orphan_collision_is_preserved_and_not_replaced() {
     let mut fixture = Fixture::new();
-    fixture.store.inject(store::WriteFault::AfterRecordBarrier);
+    fixture.store.inject(store::WriteFault::AfterRecord);
     let target = fixture.binding(0);
     assert!(
         fixture

@@ -777,17 +777,29 @@ fn configured_metadata_majority_does_not_shrink_when_disks_disappear() {
         for disk in disks.iter().rev().take(lost) {
             std::fs::remove_dir_all(disk).unwrap();
         }
-        match Engine::open(&root) {
-            Ok(engine) => {
-                assert!(expected_available);
-                assert!(engine.blocked);
+        for recovery in [false, true] {
+            let opened = if recovery {
+                Engine::open_for_recovery(&root)
+            } else {
+                Engine::open(&root)
+            };
+            match opened {
+                Ok(engine) => {
+                    assert!(expected_available);
+                    assert!(engine.blocked);
+                    assert_eq!(engine.config.metadata_members().len(), count);
+                    assert_eq!(engine.config.metadata_quorum(), count / 2 + 1);
+                }
+                Err(error) => {
+                    assert!(!expected_available);
+                    assert_eq!(
+                        error.code(),
+                        storage_contract::ErrorCode::MetadataQuorumUnavailable
+                    );
+                }
             }
-            Err(error) => {
-                assert!(!expected_available);
-                assert_eq!(
-                    error.code(),
-                    storage_contract::ErrorCode::MetadataQuorumUnavailable
-                );
+            for disk in disks.iter().rev().take(lost) {
+                assert!(!disk.exists(), "recovery must not recreate a missing root");
             }
         }
         if !expected_available && count > 1 {
@@ -1031,8 +1043,25 @@ fn nonmetadata_payload_disk_offline_proofs_require_saved_membership() {
 }
 
 #[test]
-fn empty_unmounted_root_is_unavailable_without_writes() {
-    for lost in [1, 2] {
+fn empty_replacement_metadata_roots_fail_closed_without_writes() {
+    fn files(root: &std::path::Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = BTreeMap::new();
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    pending.push(path);
+                } else {
+                    files.insert(path.clone(), std::fs::read(path).unwrap());
+                }
+            }
+        }
+        files
+    }
+
+    for replaced in [1, 2] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
         let config =
@@ -1048,30 +1077,41 @@ fn empty_unmounted_root_is_unavailable_without_writes() {
             )
             .unwrap();
         drop(engine);
-        for disk in config.disks.iter().rev().take(lost) {
-            std::fs::remove_dir_all(&disk.root).unwrap();
+        for disk in config.disks.iter().rev().take(replaced) {
+            // Retain the original inode so this cannot accidentally reuse it.
+            // An empty mount point is still a different observed directory.
+            std::fs::rename(&disk.root, disk.root.with_extension("unmounted")).unwrap();
             private_dir(&disk.root).unwrap();
         }
+        let before = files(temp.path());
         for recovery in [false, true] {
             let opened = if recovery {
                 Engine::open_for_recovery(&root)
             } else {
                 Engine::open(&root)
             };
-            if lost == 1 {
-                let engine = opened.unwrap();
-                assert!(engine.blocked);
-                assert!(engine.state.repositories.contains_key(&repo.repository_id));
-            } else {
-                assert_eq!(
-                    opened.err().unwrap().code(),
-                    storage_contract::ErrorCode::MetadataQuorumUnavailable
-                );
-            }
-            for disk in config.disks.iter().rev().take(lost) {
+            let error = opened.err().unwrap();
+            assert_eq!(
+                error.code(),
+                storage_contract::ErrorCode::DiskIdentityMismatch
+            );
+            assert!(error.message().contains("locator's held observation"));
+            assert_eq!(files(temp.path()), before);
+            for disk in config.disks.iter().rev().take(replaced) {
                 assert_eq!(std::fs::read_dir(&disk.root).unwrap().count(), 0);
             }
         }
+        // Returning the original directories preserves their physical binding;
+        // no replacement seal, new pool, or reduced voter set is needed.
+        for disk in config.disks.iter().rev().take(replaced) {
+            std::fs::remove_dir(&disk.root).unwrap();
+            std::fs::rename(disk.root.with_extension("unmounted"), &disk.root).unwrap();
+        }
+        let engine = Engine::open(&root).unwrap();
+        assert!(!engine.blocked);
+        assert_eq!(engine.config.metadata_members().len(), 3);
+        assert_eq!(engine.config.metadata_quorum(), 2);
+        assert!(engine.state.repositories.contains_key(&repo.repository_id));
     }
 }
 

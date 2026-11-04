@@ -30,11 +30,12 @@ pub(crate) struct BootstrapStore {
 }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Injection points bracket the complete record/head durability barriers.
 pub(in crate::engine) enum WriteFault {
-    BeforeRecordBarrier,
-    AfterRecordBarrier,
-    BeforeHeadBarrier,
-    AfterHeadBarrier,
+    BeforeRecord,
+    AfterRecord,
+    BeforeHead,
+    AfterHead,
 }
 #[cfg(test)]
 std::thread_local! {
@@ -216,12 +217,12 @@ impl BootstrapStore {
             }
         }
         #[cfg(test)]
-        self.fail(WriteFault::BeforeRecordBarrier)?;
+        self.fail(WriteFault::BeforeRecord)?;
         self.install_record(&record_name(next.generation)?, &bytes)?;
         #[cfg(test)]
-        self.fail(WriteFault::AfterRecordBarrier)?;
+        self.fail(WriteFault::AfterRecord)?;
         #[cfg(test)]
-        self.fail(WriteFault::BeforeHeadBarrier)?;
+        self.fail(WriteFault::BeforeHead)?;
         let head_name = name(HEAD_FILE)?;
         let head_bytes = next.bytes()?;
         if current.as_ref() == Some(&next) {
@@ -232,7 +233,7 @@ impl BootstrapStore {
             self.atomic(&head_name, &head_bytes, current.is_some())?;
         }
         #[cfg(test)]
-        self.fail(WriteFault::AfterHeadBarrier)?;
+        self.fail(WriteFault::AfterHead)?;
         Ok(LoadedLocator { head: next, record })
     }
     fn check_control_separation(&self, record: &Record) -> Result<()> {

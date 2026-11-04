@@ -76,10 +76,10 @@ fn digest() -> IntentDigest {
 #[test]
 fn prepared_extension_replays_every_real_record_and_head_barrier() {
     for phase in [
-        WriteFault::BeforeRecordBarrier,
-        WriteFault::AfterRecordBarrier,
-        WriteFault::BeforeHeadBarrier,
-        WriteFault::AfterHeadBarrier,
+        WriteFault::BeforeRecord,
+        WriteFault::AfterRecord,
+        WriteFault::BeforeHead,
+        WriteFault::AfterHead,
     ] {
         let mut fixture = Fixture::new();
         let plan = fixture.plan();
@@ -91,10 +91,7 @@ fn prepared_extension_replays_every_real_record_and_head_barrier() {
             fixture.store.resume_root_extension(&plan, roots).is_err(),
             "{phase:?}"
         );
-        if matches!(
-            phase,
-            WriteFault::AfterRecordBarrier | WriteFault::BeforeHeadBarrier
-        ) {
+        if matches!(phase, WriteFault::AfterRecord | WriteFault::BeforeHead) {
             assert!(
                 fixture.store.reload(&fixture.config.pool_id).is_err(),
                 "ordinary reload cannot elect an orphan record"

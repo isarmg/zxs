@@ -17,8 +17,9 @@ fn configuration() -> Config {
 
 #[test]
 fn every_persisted_control_field_participates_in_genesis_context_equality() {
+    type ConfigChange = (&'static str, fn(&mut Config));
     let original = ValidatedConfig::try_from(configuration()).unwrap();
-    let changes: &[(&str, fn(&mut Config))] = &[
+    let changes: &[ConfigChange] = &[
         ("pool", |config| {
             config.pool_id = crate::new_id("pool").unwrap()
         }),
@@ -87,6 +88,12 @@ fn every_persisted_control_field_participates_in_genesis_context_equality() {
             !original.same_genesis_io_authority(&changed),
             "ignored persisted field: {description}",
         );
+        if original.effective_workspace_limits() == changed.effective_workspace_limits() {
+            assert!(
+                !original.permits_genesis_recovery_projection(&changed),
+                "recovery accepted changed control field: {description}",
+            );
+        }
     }
 }
 
@@ -135,4 +142,29 @@ fn the_cached_projection_does_not_change_persisted_configuration_bytes() {
     let expected = crate::canonical_json(&config).unwrap();
     let admitted = ValidatedConfig::try_from(config).unwrap();
     assert_eq!(crate::canonical_json(&admitted).unwrap(), expected);
+}
+
+#[test]
+fn genesis_recovery_only_allows_each_retained_limit_to_tighten() {
+    let original = ValidatedConfig::try_from(configuration()).unwrap();
+    let changes: &[fn(&mut Config)] = &[
+        |config| config.max_retained_workspaces -= 1,
+        |config| config.max_retained_workspaces_per_principal -= 1,
+        |config| config.max_retained_workspace_metadata_bytes -= 1,
+        |config| config.max_retained_workspace_metadata_bytes_per_principal -= 1,
+    ];
+    for change in changes {
+        let mut local = (*original).clone();
+        change(&mut local);
+        let local = ValidatedConfig::try_from(local).unwrap();
+        assert!(original.permits_genesis_recovery_projection(&local));
+        assert!(!local.permits_genesis_recovery_projection(&original));
+        assert!(!original.same_genesis_io_authority(&local));
+    }
+    let mut mixed = (*original).clone();
+    mixed.max_retained_workspaces -= 1;
+    mixed.max_retained_workspace_metadata_bytes += 1;
+    assert!(
+        !original.permits_genesis_recovery_projection(&ValidatedConfig::try_from(mixed).unwrap())
+    );
 }

@@ -218,20 +218,21 @@ fn retained_exit_rejects_real_unpublished_finalize_and_partial_publication() {
         let mut fixture = RetainedFixture::online();
         let boundary = fixture.engine.state.sequence;
         fixture.engine.inject_fault_once(point);
-        assert_eq!(
-            fixture
-                .engine
-                .create_repository(
-                    &RepositoryName::parse("unfinished-decision").unwrap(),
-                    "P01",
-                    1,
-                    "admin",
-                    OperationId::generate().unwrap(),
-                )
-                .unwrap_err()
-                .code(),
-            ErrorCode::InjectedFailure
-        );
+        let error = fixture
+            .engine
+            .create_repository(
+                &RepositoryName::parse("unfinished-decision").unwrap(),
+                "P01",
+                1,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Context { code: ErrorCode::InDoubt, retryable: true, source, .. }
+                if source.code() == ErrorCode::InjectedFailure
+        ));
         assert!(fixture.original.disks[1..].iter().all(|disk| {
             scan(disk).unwrap().records.iter().any(|(record, _)| {
                 record.sequence > boundary && record.record_type == RecordType::Finalize
@@ -372,14 +373,18 @@ fn retained_exit_unopened_target_waits_for_old_io_domain_across_restart() {
     );
     assert!(binding.closed_proof().is_err());
     drop(fixture.engine);
+    // Ordinary open cannot adopt the still-predecessor seals. Explicit resume
+    // is the entry that may promote them, but must first close every old domain.
+    assert!(Engine::open(&fixture.temp.path().join("system")).is_err());
     assert!(
-        matches!(Engine::open(&fixture.temp.path().join("system")), Err(error) if error.code() == ErrorCode::DiskUnavailable)
+        matches!(Engine::resume_membership_activation(&fixture.temp.path().join("system")), Err(error) if error.code() == ErrorCode::DiskUnavailable)
     );
     drop(binding.begin_quiesce().unwrap());
     drop(tail);
     binding.closed_proof().unwrap();
+    assert!(Engine::open(&fixture.temp.path().join("system")).is_err());
     assert!(
-        matches!(Engine::open(&fixture.temp.path().join("system")), Err(error) if error.code() == ErrorCode::DiskUnavailable)
+        matches!(Engine::resume_membership_activation(&fixture.temp.path().join("system")), Err(error) if error.code() == ErrorCode::DiskUnavailable)
     );
     drop(other.begin_quiesce().unwrap());
     drop(other_tail);

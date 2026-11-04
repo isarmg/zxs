@@ -107,11 +107,6 @@ impl CurrentNamespaces {
             .find(|repository| repository.history_tree_id == branch.history_tree_id)
             .ok_or_else(stale)?;
         let owner = self.writable_scope(previous, &repository.main_branch_id)?;
-        // A root helper created by the same write can bind its newly published
-        // owner instead. The existing synchronization proof handles that case.
-        if commit.kind == "file_branch_root" && branch.fork_commit_id != owner.head {
-            return Ok(None);
-        }
         let file = branch
             .file_id
             .as_deref()

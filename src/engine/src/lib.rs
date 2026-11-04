@@ -15,6 +15,7 @@ mod container_storage;
 mod degraded_recovery;
 mod disk;
 mod engine;
+pub use engine::RecoveryDataRoot;
 pub use engine::{
     TerminalMetadataResume, TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
     TerminalMetadataResumeStatus,
@@ -88,6 +89,9 @@ pub use wire::{commit_request_digest, manifest_hash as workspace_manifest_hash};
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/r29_local_publication.rs"]
 mod r29_local_publication;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/repair/io_tail_support.rs"]
+mod repair_io_tail_support;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/tests.rs"]
 mod tests;

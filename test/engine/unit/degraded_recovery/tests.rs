@@ -1,11 +1,5 @@
 use super::*;
-use crate::r29_local_publication;
-#[path = "../repair/io_tail_support.rs"]
-#[expect(
-    dead_code,
-    reason = "repair tests share the read and sync gate support"
-)]
-mod io_tail_support;
+use crate::{r29_local_publication, repair_io_tail_support as io_tail_support};
 
 #[test]
 fn loss_classification_rejects_io_and_authority_failures() {

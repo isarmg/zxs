@@ -307,10 +307,10 @@ fn terminal_resume_reenters_before_and_after_the_durable_selector() {
 #[test]
 fn terminal_resume_exact_bootstrap_barriers_reenter_without_opening_stopped_roots() {
     for phase in [
-        WriteFault::BeforeRecordBarrier,
-        WriteFault::AfterRecordBarrier,
-        WriteFault::BeforeHeadBarrier,
-        WriteFault::AfterHeadBarrier,
+        WriteFault::BeforeRecord,
+        WriteFault::AfterRecord,
+        WriteFault::BeforeHead,
+        WriteFault::AfterHead,
     ] {
         let mut fixture = Fixture::new(MembershipExitAction::Deregister, 0);
         let target = fixture.target(1);

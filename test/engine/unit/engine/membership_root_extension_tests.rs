@@ -200,10 +200,10 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 #[test]
 fn add_extension_real_record_and_head_barriers_resume_without_rewriting_old_candidates() {
     for phase in [
-        WriteFault::BeforeRecordBarrier,
-        WriteFault::AfterRecordBarrier,
-        WriteFault::BeforeHeadBarrier,
-        WriteFault::AfterHeadBarrier,
+        WriteFault::BeforeRecord,
+        WriteFault::AfterRecord,
+        WriteFault::BeforeHead,
+        WriteFault::AfterHead,
     ] {
         let mut fixture = Fixture::new(1, false);
         fixture.crash(phase);
@@ -211,10 +211,7 @@ fn add_extension_real_record_and_head_barriers_resume_without_rewriting_old_cand
         let strict = store.reload(&fixture.target.pool_id);
         assert_eq!(
             strict.is_err(),
-            matches!(
-                phase,
-                WriteFault::AfterRecordBarrier | WriteFault::BeforeHeadBarrier
-            )
+            matches!(phase, WriteFault::AfterRecord | WriteFault::BeforeHead)
         );
         drop(store);
         let Fixture {
@@ -262,10 +259,10 @@ fn add_extension_real_record_and_head_barriers_resume_without_rewriting_old_cand
 #[test]
 fn add_extension_same_operation_retries_the_real_pending_source_after_each_barrier() {
     for phase in [
-        WriteFault::BeforeRecordBarrier,
-        WriteFault::AfterRecordBarrier,
-        WriteFault::BeforeHeadBarrier,
-        WriteFault::AfterHeadBarrier,
+        WriteFault::BeforeRecord,
+        WriteFault::AfterRecord,
+        WriteFault::BeforeHead,
+        WriteFault::AfterHead,
     ] {
         let mut fixture = Fixture::new(1, false);
         fixture.crash(phase);
@@ -286,7 +283,7 @@ fn add_extension_same_operation_retries_the_real_pending_source_after_each_barri
 #[test]
 fn add_extension_unknown_staging_stays_closed_before_any_storage_probe() {
     let mut fixture = Fixture::new(1, false);
-    fixture.crash(WriteFault::AfterRecordBarrier);
+    fixture.crash(WriteFault::AfterRecord);
     let locator = fixture
         .system()
         .join(crate::engine::disk_lifecycle::bootstrap::runtime::DIRECTORY);
@@ -305,7 +302,7 @@ fn add_extension_unknown_staging_stays_closed_before_any_storage_probe() {
 fn add_extension_wrong_system_authority_or_operation_is_not_rebound() {
     for field in ["authority_hash", "operation_id"] {
         let mut fixture = Fixture::new(1, false);
-        fixture.crash(WriteFault::AfterRecordBarrier);
+        fixture.crash(WriteFault::AfterRecord);
         let head_path = fixture
             .system()
             .join("membership-root-extensions/head.json");
@@ -330,7 +327,7 @@ fn add_extension_wrong_system_authority_or_operation_is_not_rebound() {
 #[test]
 fn add_extension_physical_replacement_fails_before_its_seal_is_read() {
     let mut fixture = Fixture::new(1, false);
-    fixture.crash(WriteFault::AfterRecordBarrier);
+    fixture.crash(WriteFault::AfterRecord);
     let added = fixture.target.disks.last().unwrap();
     fs::rename(
         &added.root,
@@ -352,7 +349,7 @@ fn add_extension_physical_replacement_fails_before_its_seal_is_read() {
 #[test]
 fn add_extension_pre_marker_admission_requires_actual_fixed_new_quorum_and_complete_archives() {
     let mut fixture = Fixture::new(4, false);
-    fixture.crash(WriteFault::AfterRecordBarrier);
+    fixture.crash(WriteFault::AfterRecord);
     let (authority, _) = fixture.plan();
     let intent = authority.intent().unwrap();
     let transition = object_hash(INTENT_KIND, &intent).unwrap();
@@ -393,7 +390,7 @@ fn add_extension_recovery_preserves_authenticated_old_stop_with_zero_stat_or_ope
     let mut fixture = Fixture::new(1, true);
     let stopped = fixture.stopped.clone().unwrap();
     let before = files(&stopped);
-    fixture.crash(WriteFault::AfterRecordBarrier);
+    fixture.crash(WriteFault::AfterRecord);
     let mut io = CountedIo::default();
     let config = fixture.verify(&mut io).unwrap();
     assert!(!io.touches.contains(&stopped));
@@ -410,7 +407,7 @@ fn add_extension_recovery_preserves_authenticated_old_stop_with_zero_stat_or_ope
 fn add_extension_without_bound_plan_or_lost_system_requires_explicit_retained_root_recovery() {
     for lose_system in [false, true] {
         let mut fixture = Fixture::new(1, false);
-        fixture.crash(WriteFault::AfterRecordBarrier);
+        fixture.crash(WriteFault::AfterRecord);
         let system = fixture.system();
         let storage = fixture
             .target

@@ -64,6 +64,12 @@ impl Engine {
                 "branch moved to another history",
             ));
         }
+        if commit.history_tree_id != branch.history_tree_id {
+            return Err(Error::new(
+                ErrorCode::CommitNotFound,
+                "current snapshot is outside this branch's history",
+            ));
+        }
         self.current_branch_entries(branch_id, commit)
     }
 

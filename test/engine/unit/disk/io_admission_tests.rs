@@ -190,8 +190,9 @@ fn opening_an_unverified_configuration_cannot_replace_existing_control_authority
 
 #[test]
 fn unchanged_voters_do_not_authorize_changed_data_only_control_contexts() {
+    type ConfigChange = (&'static str, fn(&mut Config));
     let (_directory, original, old) = genesis_with_data_disks();
-    let changes: &[(&str, fn(&mut Config))] = &[
+    let changes: &[ConfigChange] = &[
         ("data-only addition", |config| {
             let mut disk = config.disks[1].clone();
             disk.disk_id = crate::new_id("disk").unwrap();
@@ -705,7 +706,7 @@ fn a_quiescing_wrapper_never_calls_the_underlying_reader_again() {
         .admit()
         .unwrap()
         .hold(CountReads(Arc::clone(&calls)));
-    reader.read(&mut [0; 1]).unwrap();
+    assert_eq!(reader.read(&mut [0; 1]).unwrap(), 0);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let transition = binding.begin_quiesce().unwrap().unwrap();
     drop(transition);

@@ -135,7 +135,10 @@ fn declared_mount_must_be_the_actual_mount_and_selection_is_strict_wire() {
 #[test]
 fn mount_parser_preserves_bind_root_and_escaped_paths() {
     let records = parse_mounts("20 1 8:1 / /mnt/disk rw,relatime - ext4 /dev/sda1 rw\n21 1 8:1 /private/sub /mnt/alias\\040disk rw - ext4 /dev/sda1 rw\n").unwrap();
-    assert_eq!(records[1].root, Path::new("/private/sub"));
+    assert_eq!(
+        records[1].root.directory().unwrap(),
+        Path::new("/private/sub")
+    );
     assert_eq!(records[1].path, Path::new("/mnt/alias disk"));
     for input in [
         "",
@@ -145,12 +148,108 @@ fn mount_parser_preserves_bind_root_and_escaped_paths() {
     ] {
         assert!(parse_mounts(input).is_err(), "{input:?}");
     }
-    for fs in ["proc", "sysfs", "tmpfs", "devtmpfs", "cgroup2"] {
+    for fs in ["proc", "sysfs", "tmpfs", "devtmpfs", "cgroup2", "nsfs"] {
         assert!(reject_non_storage_filesystem(fs).is_err());
     }
     for fs in ["ext4", "xfs", "btrfs", "fuseblk"] {
         assert!(reject_non_storage_filesystem(fs).is_ok());
     }
+}
+
+#[test]
+fn namespace_mount_roots_remain_in_inventory_without_becoming_storage_paths() {
+    let text = "20 1 8:1 / / rw - ext4 /dev/sda1 rw\n21 20 0:4 net:[4026531840] /run/docker/netns/default rw - nsfs nsfs rw\n22 20 8:1 /private/sub /mnt/alias rw - ext4 /dev/sda1 rw\n";
+    let mounts = parse_mounts(text).unwrap();
+    assert_eq!(mounts.len(), 3);
+    assert_eq!(
+        mounts[1].root,
+        MountRoot::Namespace("net:[4026531840]".into())
+    );
+    assert_eq!(mounts[1].id, 21);
+    assert_eq!((mounts[1].major, mounts[1].minor), (0, 4));
+    let ordinary = mapped_location(Path::new("/srv/storage"), &mounts).unwrap();
+    assert_eq!(ordinary.device, (8, 1));
+    assert_eq!(ordinary.path, Path::new("/srv/storage"));
+    assert_eq!(
+        mount_relative_location(&mounts[2], Path::new("/mnt/alias/child")).unwrap(),
+        Path::new("/private/sub/child")
+    );
+    let namespace = Path::new("/run/docker/netns/default");
+    assert!(matches!(
+        mapped_location(namespace, &mounts),
+        Err(Error::UnsupportedFilesystem(filesystem)) if filesystem == "nsfs"
+    ));
+    assert!(matches!(
+        mount_relative_location(&mounts[1], namespace),
+        Err(Error::UnsupportedFilesystem(filesystem)) if filesystem == "nsfs"
+    ));
+    assert!(matches!(
+        StoppedRoots::new(&[namespace.to_owned()], &mounts),
+        Err(Error::UnsupportedFilesystem(filesystem)) if filesystem == "nsfs"
+    ));
+    assert_ne!(
+        mounts,
+        parse_mounts(&text.replace("net:[4026531840]", "net:[4026531841]")).unwrap(),
+        "namespace identity changes must remain visible to inventory revalidation"
+    );
+}
+
+#[test]
+fn namespace_mount_parsing_keeps_format_identity_and_count_limits() {
+    use std::fmt::Write as _;
+
+    for root in [
+        "/",
+        ":[1]",
+        "Net:[1]",
+        "net/:[1]",
+        "net:[]",
+        "net:[0]",
+        "net:[-1]",
+        "net:[+1]",
+        "net:[1]/child",
+        "net:[18446744073709551616]",
+        "../net:[1]",
+        "net\\123:[1]",
+    ] {
+        let text = format!("21 20 0:4 {root} /run/docker/netns/default rw - nsfs nsfs rw\n");
+        assert!(
+            matches!(parse_mounts(&text), Err(Error::InvalidMounts)),
+            "{root}"
+        );
+    }
+    assert_eq!(
+        MountRoot::parse("user:[4026531837]", "nsfs").unwrap(),
+        MountRoot::Namespace("user:[4026531837]".into())
+    );
+    assert!(matches!(
+        MountRoot::parse(&format!("{}:[1]", "n".repeat(4096)), "nsfs"),
+        Err(Error::InvalidMounts)
+    ));
+    for text in [
+        "21 20 8:1 net:[1] /mnt rw - ext4 /dev/sda1 rw\n",
+        "21 20 0:4 net:[1] relative rw - nsfs nsfs rw\n",
+        "21 20 0:4 net:[1] /run/../netns/default rw - nsfs nsfs rw\n",
+        "21 20 0:4 net:[1] /run/netns/default rw - nsfs nsfs\n",
+        "21 20 8:1 / / rw - ext4 /dev/sda1 rw\n21 20 0:4 net:[1] /run/netns/default rw - nsfs nsfs rw\n",
+    ] {
+        assert!(
+            matches!(parse_mounts(text), Err(Error::InvalidMounts)),
+            "{text}"
+        );
+    }
+    let mut text = String::new();
+    for id in 1..=MAX_MOUNTS {
+        writeln!(text, "{id} 0 0:4 net:[1] /run/netns/{id} rw - nsfs nsfs rw").unwrap();
+    }
+    assert_eq!(parse_mounts(&text).unwrap().len(), MAX_MOUNTS);
+    writeln!(
+        text,
+        "{} 0 8:1 / /mnt rw - ext4 /dev/sda1 rw",
+        MAX_MOUNTS + 1
+    )
+    .unwrap();
+    assert!(matches!(parse_mounts(&text), Err(Error::InvalidMounts)));
 }
 
 #[test]
@@ -168,8 +267,8 @@ fn browser_inventory_is_bounded_and_does_not_read_files() {
 #[test]
 fn bind_mount_aliases_map_to_the_same_filesystem_subtree() {
     let mounts = parse_mounts("20 1 8:1 / /mnt/disk rw - ext4 /dev/sda1 rw\n21 1 8:1 /chosen /mnt/alias rw - ext4 /dev/sda1 rw\n").unwrap();
-    let direct = mount_relative_location(&mounts[0], Path::new("/mnt/disk/chosen/sub"));
-    let alias = mount_relative_location(&mounts[1], Path::new("/mnt/alias/sub"));
+    let direct = mount_relative_location(&mounts[0], Path::new("/mnt/disk/chosen/sub")).unwrap();
+    let alias = mount_relative_location(&mounts[1], Path::new("/mnt/alias/sub")).unwrap();
     assert_eq!(direct, alias);
     assert!(overlaps(&direct, Path::new("/chosen")));
     assert!(overlaps(&alias, Path::new("/chosen/sub/future-system")));

@@ -348,6 +348,30 @@ pub(super) fn prepare_resume(
     }))
 }
 
+/// A pending plan may restrict startup but never select an authority. A marker
+/// written first on a data-only root must not let metadata-only discovery return
+/// the old fenced generation as though no activation had begun.
+pub(super) fn require_selected_activation(root: &Path, config: &ValidatedConfig) -> Result<()> {
+    let Some((saved, _)) = PlanStore::open(root)? else {
+        return Ok(());
+    };
+    if saved.completed()? {
+        return Ok(());
+    }
+    let selected = config
+        .generation()
+        .map(|generation| generation.portable.contains(&saved.head.authority_hash))
+        .transpose()?
+        .unwrap_or(false);
+    if !selected {
+        return Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "unfinished Add activation requires explicit membership resume",
+        ));
+    }
+    Ok(())
+}
+
 /// Persist completion only after this exact Add's activation result and SYSTEM
 /// projection are durable. Historical plans are retained and never repurposed.
 pub(super) fn complete(engine: &Engine) -> Result<()> {

@@ -72,8 +72,8 @@ pub(in crate::engine::membership_transition) fn install_marker(
             };
         let seal_bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
         let value: json_codec::Value = decode_strict(&seal_bytes)?;
-        let current_seal = if let Some(core) = generation.portable.terminal_resume_core()
-            && value.get("format").and_then(json_codec::Value::as_str) == Some("membership-pending")
+        let current_seal = if value.get("format").and_then(json_codec::Value::as_str)
+            == Some("membership-pending")
         {
             let seal: PendingDiskSeal = json_codec::from_value(value)?;
             let identity = FileIdentity::from_fd(root.directory(root.path())?)?;
@@ -83,13 +83,22 @@ pub(in crate::engine::membership_transition) fn install_marker(
                 || seal.target_config_hash
                     != object_hash("membership-target", &generation.intent.target)?
                 || seal.control_archive_root != generation.portable.archive_hash()?
+                || generation
+                    .intent
+                    .origin
+                    .config()
+                    .disks
+                    .iter()
+                    .any(|old| old.disk_id == disk.disk_id)
             {
                 return Err(Error::new(
                     ErrorCode::DiskIdentityMismatch,
-                    "terminal pending seal differs from the exact activated group",
+                    "pending seal differs from the exact activated group",
                 ));
             }
-            core.verify_member(root, disk)?;
+            if let Some(core) = generation.portable.terminal_resume_core() {
+                core.verify_member(root, disk)?;
+            }
             false
         } else {
             let seal = decode_seal(&seal_bytes)?;

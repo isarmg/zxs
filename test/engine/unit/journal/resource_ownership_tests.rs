@@ -218,7 +218,8 @@ fn busy_append_read_sync_and_repair_keep_original_fence_until_real_cleanup() {
                             // The scanner checks cancellation before its next
                             // bounded read, while still owning both real FDs.
                             observe(0)?;
-                            files.file().read(&mut [0])?;
+                            let bytes = files.file().read(&mut [0])?;
+                            observe(bytes)?;
                         }
                         Tail::Sync => files.sync_open(
                             #[cfg(feature = "fault-injection")]

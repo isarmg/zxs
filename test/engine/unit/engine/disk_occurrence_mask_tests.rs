@@ -182,7 +182,8 @@ impl Fixture {
             .versions
             .insert(version.version_id.clone(), version);
     }
-    fn commit(&mut self, n: usize, history: usize, entries: Vec<Entry>) {
+    fn commit(&mut self, n: usize, history: usize, mut entries: Vec<Entry>) {
+        entries.sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
         self.state.commits.insert(
             id("commit", n),
             Commit {
@@ -202,7 +203,8 @@ impl Fixture {
             },
         );
     }
-    fn directory_branch(&mut self, n: usize, repository: usize, entries: Vec<Entry>) {
+    fn directory_branch(&mut self, n: usize, repository: usize, mut entries: Vec<Entry>) {
+        entries.sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
         let branch = DirectoryBranch {
             directory_branch_id: id("dbr", n),
             repository_id: id("repo", repository),

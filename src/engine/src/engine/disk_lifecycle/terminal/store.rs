@@ -227,11 +227,21 @@ impl TerminalStore {
             .write_json(&self.operation.path().join(COMPLETE), &self.head, false)
     }
     pub(super) fn verify_publication(&self, authority: &TerminalAuthority) -> Result<()> {
-        let complete: Head = decode_strict(
-            &self
-                .operation
-                .read_bytes(&self.operation.path().join(COMPLETE), MAX_METADATA)?,
-        )?;
+        let bytes = self
+            .operation
+            .read_bytes(&self.operation.path().join(COMPLETE), MAX_METADATA)
+            .map_err(|source| {
+                source.context(
+                    ErrorCode::RecoveryRequired,
+                    "terminal authority has no readable completion record",
+                )
+            })?;
+        let complete: Head = decode_strict(&bytes).map_err(|source| {
+            Error::from(source).context(
+                ErrorCode::RecoveryRequired,
+                "terminal authority completion is malformed",
+            )
+        })?;
         if complete != self.head || authority.hash()? != complete.authority_hash {
             return Err(Error::new(
                 ErrorCode::LogFork,
@@ -270,6 +280,17 @@ pub(in crate::engine) fn require_active_startup(root: &Path) -> Result<()> {
 }
 
 pub(super) fn requires_management(root: &Path) -> Result<bool> {
+    // An unreadable selector cannot authorize active Config startup. Preserve
+    // the actual parse, I/O or authentication failure for recovery diagnostics.
+    read_management_selection(root).map_err(|source| {
+        source.context(
+            ErrorCode::RecoveryRequired,
+            "protected terminal selection cannot authorize active startup",
+        )
+    })
+}
+
+fn read_management_selection(root: &Path) -> Result<bool> {
     let system = DiskRoot::open(root)?;
     let directory = system.path().join(DIRECTORY);
     if system.optional_metadata(&directory)?.is_none() {

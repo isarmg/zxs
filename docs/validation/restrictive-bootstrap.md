@@ -45,6 +45,19 @@ Engine 的 reader/gate 尚未关闭时明确拒绝。重启排除证明不是 li
 身份和分母不变。丢失系统 ledger 后的停止证明来自认证 Exit 和持久的地址排除，
 不会为了补写目标 observation 而打开目标，也不在目标上生成恢复文件或备份。
 
+需要恢复非投票数据根时，使用独立的
+`restore_from_disks_and_data_roots`（及 workspace-limits 变体），同时传入保留元数据根
+与显式 `RecoveryDataRoot`。活动 Engine 的 `recovery_data_roots()` 只从已经持有的
+非投票资源导出准确登记和 device/inode；调用方须在 SYSTEM 丢失前可信保存这些绑定。
+不能从恢复目标自己的 `disk.json` 重新推导“预期”身份。尤其 Genesis 数据盘没有
+独立的后续 Add 身份证书，单凭复制后可重写的 seal 无法证明未发生设备身份替换。
+
+新入口先完成真实 metadata 固定多数选择，再访问显式数据根。数据根永不计票，且须
+匹配已认证当前登记、可信的原物理身份、当前 seal 与本地配置/代际锚；新增数据盘还须
+通过 portable data dependency 和本地 readiness 验证。stop、detach、错误角色或
+身份替换均拒绝，取得实际 Engine handles 后再次复验，随后才记录到新系统 locator。
+没有显式传入的数据路径仍禁止探测；该入口不提供身份重绑定或隐式恢复权限。
+
 ledger 保留不可变历史和完整 hash chain。root 扩展、已有 identity 不变的无 stop
 移动和新增 stop 均使用原有 file/rename/directory 屏障；不删除旧记录。对象仍有
 128 KiB 边界，根数组分页及最后投票成员的独立终止权威尚未实现，不能形成零 quorum

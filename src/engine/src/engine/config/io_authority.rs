@@ -3,7 +3,7 @@
 //! Voter membership alone cannot authorize control over all registered disks.
 //! Preserve every persisted Config field except relocatable root addresses;
 //! physical binding is checked independently by the held disk's I/O gate.
-use crate::{Config, DiskConfig, Mode};
+use crate::{Config, DiskConfig, Mode, RetainedWorkspaceLimits};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,6 +18,12 @@ struct RegisteredDisk {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct GenesisIoAuthority {
+    control: GenesisControlContext,
+    retained: RetainedWorkspaceLimits,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GenesisControlContext {
     pool_id: String,
     mode: Mode,
     disks: BTreeMap<String, RegisteredDisk>,
@@ -25,10 +31,6 @@ pub(super) struct GenesisIoAuthority {
     max_file_bytes: u64,
     max_workspace_bytes: u64,
     max_workspaces: usize,
-    max_retained_workspaces: usize,
-    max_retained_workspaces_per_principal: usize,
-    max_retained_workspace_metadata_bytes: u64,
-    max_retained_workspace_metadata_bytes_per_principal: u64,
     max_entries: usize,
     metadata_reserve_bytes: u64,
     workspace_ttl_seconds: u64,
@@ -81,22 +83,42 @@ impl GenesisIoAuthority {
             })
             .collect();
         Self {
-            pool_id: pool_id.clone(),
-            mode: mode.clone(),
-            disks,
-            checksum_chunk_bytes: *checksum_chunk_bytes,
-            max_file_bytes: *max_file_bytes,
-            max_workspace_bytes: *max_workspace_bytes,
-            max_workspaces: *max_workspaces,
-            max_retained_workspaces: *max_retained_workspaces,
-            max_retained_workspaces_per_principal: *max_retained_workspaces_per_principal,
-            max_retained_workspace_metadata_bytes: *max_retained_workspace_metadata_bytes,
-            max_retained_workspace_metadata_bytes_per_principal:
-                *max_retained_workspace_metadata_bytes_per_principal,
-            max_entries: *max_entries,
-            metadata_reserve_bytes: *metadata_reserve_bytes,
-            workspace_ttl_seconds: *workspace_ttl_seconds,
+            control: GenesisControlContext {
+                pool_id: pool_id.clone(),
+                mode: mode.clone(),
+                disks,
+                checksum_chunk_bytes: *checksum_chunk_bytes,
+                max_file_bytes: *max_file_bytes,
+                max_workspace_bytes: *max_workspace_bytes,
+                max_workspaces: *max_workspaces,
+                max_entries: *max_entries,
+                metadata_reserve_bytes: *metadata_reserve_bytes,
+                workspace_ttl_seconds: *workspace_ttl_seconds,
+            },
+            retained: RetainedWorkspaceLimits {
+                max_retained_workspaces: *max_retained_workspaces,
+                max_retained_workspaces_per_principal: *max_retained_workspaces_per_principal,
+                max_retained_workspace_metadata_bytes: *max_retained_workspace_metadata_bytes,
+                max_retained_workspace_metadata_bytes_per_principal:
+                    *max_retained_workspace_metadata_bytes_per_principal,
+            },
         }
+    }
+
+    /// Recovery may impose a stricter local retained-evidence budget, never
+    /// change registration or use the projection to raise the saved baseline.
+    /// Full I/O-context equality above still includes all four persisted limits.
+    pub(super) fn permits_recovery_projection(&self, projected: &Self) -> bool {
+        let saved = &self.retained;
+        let local = &projected.retained;
+        self.control == projected.control
+            && local.max_retained_workspaces <= saved.max_retained_workspaces
+            && local.max_retained_workspaces_per_principal
+                <= saved.max_retained_workspaces_per_principal
+            && local.max_retained_workspace_metadata_bytes
+                <= saved.max_retained_workspace_metadata_bytes
+            && local.max_retained_workspace_metadata_bytes_per_principal
+                <= saved.max_retained_workspace_metadata_bytes_per_principal
     }
 }
 

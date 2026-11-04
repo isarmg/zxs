@@ -12,6 +12,7 @@ pub(crate) use batch::CurrentBatchScope;
 mod directory_branches;
 mod directory_metadata;
 mod file_branches;
+mod file_synchronization;
 mod history_merges;
 mod new_scope;
 mod relocation;
@@ -518,7 +519,12 @@ impl CurrentNamespaces {
             }
             let source = match history_sources.get(id) {
                 Some(owner) => Some(*owner),
-                None => self.new_file_branch_source(previous, next, branch, commit)?,
+                None => match self
+                    .new_synchronized_file_branch_source(previous, next, branch, commit, &view)?
+                {
+                    Some(owner) => Some(owner),
+                    None => self.new_file_branch_source(previous, next, branch, commit)?,
+                },
             };
             let selection_source =
                 self.directory_selection_source(previous, next, branch, commit)?;

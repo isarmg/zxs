@@ -21,6 +21,15 @@ HTTP 管理面必须自行保留当前管理员认证、请求预算和后台任
 `can_browse` 只表示本次可导航，不表示可初始化。权限失败或链接明确标记。
 mountinfo 读取上限为 4 MiB / 4096 条，解析失败不猜测。
 
+清单区分普通文件系统目录根与 `nsfs` 命名空间文件根。Linux 的
+[`nsfs_show_path`](https://github.com/torvalds/linux/blob/master/fs/nsfs.c)
+会输出 `net:[inode]` 等非路径标识；Docker 的 host-network 默认 namespace
+绑定可使这类记录出现在宿主清单中。它们保留挂载 ID、设备号、挂载点和完整
+namespace 标识，仍计入相同条数上限并参与清单变化比较，不让无关 namespace
+记录阻断正常目录发现。namespace 文件不能成为存储候选或文件系统路径别名；
+涉及其挂载点的路径映射明确拒绝。普通目录根仍严格验证绝对规范路径，
+格式错误、未知转义、重复挂载 ID 与超限清单仍失败，不跳过错误记录。
+
 ## 检查与激活边界
 
 `inspect(&InspectRequest, excluded_roots)` 要求 `mount_path` 为实际挂载点，

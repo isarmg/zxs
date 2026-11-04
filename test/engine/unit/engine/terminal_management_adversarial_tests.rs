@@ -304,6 +304,15 @@ fn read_json(path: &Path) -> Value {
 fn write_json(path: &Path, value: &Value) {
     fs::write(path, crate::canonical_json(value).unwrap()).unwrap();
 }
+fn recovery_cause(error: &Error) -> &(dyn std::error::Error + 'static) {
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert!(!error.is_retryable());
+    let mut cause = std::error::Error::source(error).expect("recovery error preserves its source");
+    while let Some(source) = cause.source() {
+        cause = source;
+    }
+    cause
+}
 fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut result = BTreeMap::new();
     for entry in fs::read_dir(root).unwrap() {
@@ -809,19 +818,19 @@ fn terminal_missing_or_corrupt_selectors_never_probe_any_old_storage_root() {
             _ => {}
         }
         let watch = watch_roots(&saved.config);
-        assert_eq!(
-            Engine::open(&saved.system()).err().unwrap().code(),
-            ErrorCode::RecoveryRequired,
-            "{damage}"
-        );
-        assert_eq!(
-            Engine::open_for_recovery(&saved.system())
-                .err()
-                .unwrap()
-                .code(),
-            ErrorCode::RecoveryRequired,
-            "{damage}"
-        );
+        for error in [
+            Engine::open(&saved.system()).err().unwrap(),
+            Engine::open_for_recovery(&saved.system()).err().unwrap(),
+        ] {
+            assert_eq!(error.code(), ErrorCode::RecoveryRequired, "{damage}");
+            if damage == "corrupt-terminal-head" {
+                assert!(recovery_cause(&error).is::<json_codec::Error>());
+            }
+        }
+        if damage == "corrupt-terminal-head" {
+            let error = TerminalManagement::requires_management(&saved.system()).unwrap_err();
+            assert!(recovery_cause(&error).is::<json_codec::Error>());
+        }
         assert!(
             TerminalManagement::open(&saved.system()).is_err(),
             "{damage}"
@@ -857,7 +866,13 @@ fn terminal_resume_source_cannot_create_a_missing_completion_or_ignore_resume_co
         );
         let before = files(saved.temp.path());
         let watch = watch_roots(&saved.config);
-        assert!(TerminalManagement::open_for_resume(&saved.system()).is_err());
+        let error = TerminalManagement::open_for_resume(&saved.system())
+            .err()
+            .unwrap();
+        let source = recovery_cause(&error)
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
         assert_eq!(
             TerminalManagement::open(&saved.system())
                 .err()
@@ -865,10 +880,18 @@ fn terminal_resume_source_cannot_create_a_missing_completion_or_ignore_resume_co
                 .code(),
             ErrorCode::RecoveryRequired
         );
-        assert_eq!(
-            Engine::open(&saved.system()).err().unwrap().code(),
-            ErrorCode::RecoveryRequired
-        );
+        for error in [
+            Engine::open(&saved.system()).err().unwrap(),
+            Engine::open_for_recovery(&saved.system()).err().unwrap(),
+        ] {
+            assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+            if record == "resume-complete.json" {
+                let source = recovery_cause(&error)
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap();
+                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            }
+        }
         assert_no_root_open(&watch);
         assert_eq!(files(saved.temp.path()), before);
         assert!(!saved.directory().join("complete.json").exists());
@@ -882,6 +905,26 @@ fn terminal_resume_source_cannot_create_a_missing_completion_or_ignore_resume_co
             0
         );
     }
+}
+
+#[test]
+fn terminal_malformed_completion_remains_a_recovery_error_with_its_parse_source() {
+    let saved = Live::new(1, 0).stop(false);
+    fs::write(saved.directory().join("complete.json"), b"{}").unwrap();
+    let before = files(saved.temp.path());
+    let watch = watch_roots(&saved.config);
+    for error in [
+        TerminalManagement::open_for_resume(&saved.system())
+            .err()
+            .unwrap(),
+        TerminalManagement::verified_completed_source(&saved.system())
+            .err()
+            .unwrap(),
+    ] {
+        assert!(recovery_cause(&error).is::<json_codec::Error>());
+    }
+    assert_no_root_open(&watch);
+    assert_eq!(files(saved.temp.path()), before);
 }
 
 #[test]
@@ -904,8 +947,12 @@ fn terminal_conflicting_completion_is_not_overwritten_by_matching_preparation() 
             TerminalManagement::open(&saved.system()).is_err(),
             "{field}"
         );
-        assert!(
-            TerminalManagement::open_for_resume(&saved.system()).is_err(),
+        assert_eq!(
+            TerminalManagement::open_for_resume(&saved.system())
+                .err()
+                .unwrap()
+                .code(),
+            ErrorCode::LogFork,
             "{field}"
         );
         assert_eq!(

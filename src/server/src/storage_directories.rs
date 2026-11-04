@@ -96,9 +96,51 @@ struct Mount {
     id: u64,
     major: u32,
     minor: u32,
-    root: PathBuf,
+    root: MountRoot,
     path: PathBuf,
     filesystem: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MountRoot {
+    Directory(PathBuf),
+    Namespace(String),
+}
+
+impl MountRoot {
+    fn parse(value: &str, filesystem: &str) -> Result<Self> {
+        let value = unescape(value)?;
+        if filesystem != "nsfs" {
+            return Ok(Self::Directory(
+                absolute(&value).map_err(|_| Error::InvalidMounts)?,
+            ));
+        }
+        // Linux nsfs show_path emits a namespace file name, such as
+        // net:[4026531840], rather than a filesystem-relative directory.
+        let (kind, inode) = value
+            .split_once(":[")
+            .and_then(|(kind, inode)| inode.strip_suffix(']').map(|inode| (kind, inode)))
+            .ok_or(Error::InvalidMounts)?;
+        if value.len() > 4096
+            || kind.is_empty()
+            || !kind
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            || inode.is_empty()
+            || !inode.bytes().all(|byte| byte.is_ascii_digit())
+            || inode.parse::<std::num::NonZeroU64>().is_err()
+        {
+            return Err(Error::InvalidMounts);
+        }
+        Ok(Self::Namespace(value))
+    }
+
+    fn directory(&self) -> Result<&Path> {
+        match self {
+            Self::Directory(path) => Ok(path),
+            Self::Namespace(_) => Err(Error::UnsupportedFilesystem("nsfs".into())),
+        }
+    }
 }
 
 fn absolute(value: &str) -> Result<PathBuf> {
@@ -164,7 +206,7 @@ fn parse_mounts(text: &str) -> Result<Vec<Mount>> {
             id: fields[0].parse().map_err(|_| Error::InvalidMounts)?,
             major: major.parse().map_err(|_| Error::InvalidMounts)?,
             minor: minor.parse().map_err(|_| Error::InvalidMounts)?,
-            root: absolute(&unescape(fields[3])?).map_err(|_| Error::InvalidMounts)?,
+            root: MountRoot::parse(fields[3], fields[split + 1])?,
             path: absolute(&unescape(fields[4])?).map_err(|_| Error::InvalidMounts)?,
             filesystem: fields[split + 1].into(),
         };
@@ -238,6 +280,12 @@ fn observe_opened(path: &Path, opened: OpenAt2Root, inventory: &[Mount]) -> Resu
         .find(|mount| mount.id == id)
         .ok_or(Error::Changed)?
         .clone();
+    let filesystem_root = mount
+        .root
+        .directory()?
+        .to_str()
+        .expect("invariant: validated UTF-8 mount root")
+        .to_owned();
     if mount.major != major || mount.minor != minor {
         return Err(Error::Changed);
     }
@@ -265,11 +313,7 @@ fn observe_opened(path: &Path, opened: OpenAt2Root, inventory: &[Mount]) -> Resu
         device_minor: minor,
         root_inode: mount_directory.inode,
         filesystem: mount.filesystem.clone(),
-        filesystem_root: mount
-            .root
-            .to_str()
-            .expect("validated UTF-8 mount path")
-            .into(),
+        filesystem_root,
     };
     Ok(Observed {
         path: path.to_owned(),
@@ -295,13 +339,13 @@ fn verify_current(observed: &Observed) -> Result<()> {
 fn overlaps(left: &Path, right: &Path) -> bool {
     left.starts_with(right) || right.starts_with(left)
 }
-fn mount_relative_location(mount: &Mount, path: &Path) -> PathBuf {
-    mount.root.join(
+fn mount_relative_location(mount: &Mount, path: &Path) -> Result<PathBuf> {
+    Ok(mount.root.directory()?.join(
         path.strip_prefix(&mount.path)
             .expect("observed mount contains path"),
-    )
+    ))
 }
-fn filesystem_path(observed: &Observed) -> PathBuf {
+fn filesystem_path(observed: &Observed) -> Result<PathBuf> {
     mount_relative_location(&observed.mount, &observed.path)
 }
 fn exclusion_location(path: &Path, inventory: &[Mount]) -> Result<(Observed, PathBuf)> {
@@ -310,7 +354,7 @@ fn exclusion_location(path: &Path, inventory: &[Mount]) -> Result<(Observed, Pat
     loop {
         match observe(existing, inventory) {
             Ok(observed) => {
-                let location = filesystem_path(&observed).join(
+                let location = filesystem_path(&observed)?.join(
                     path.strip_prefix(existing)
                         .expect("ancestor contains excluded path"),
                 );
@@ -334,7 +378,7 @@ fn reject_overlaps(observed: &Observed, excluded: &[PathBuf], inventory: &[Mount
         // directory. This also rejects aliases of not-yet-created exclusions.
         let (other, location) = exclusion_location(path, inventory)?;
         if (observed.mount.major, observed.mount.minor) == (other.mount.major, other.mount.minor)
-            && overlaps(&filesystem_path(observed), &location)
+            && overlaps(&filesystem_path(observed)?, &location)
         {
             return Err(Error::Overlap(path.clone()));
         }
@@ -367,6 +411,7 @@ fn reject_non_storage_filesystem(filesystem: &str) -> Result<()> {
             | "bpf"
             | "autofs"
             | "rpc_pipefs"
+            | "nsfs"
     ) {
         return Err(Error::UnsupportedFilesystem(filesystem.into()));
     }
@@ -399,7 +444,7 @@ fn mapped_location(path: &Path, inventory: &[Mount]) -> Result<FilesystemLocatio
     }
     Ok(FilesystemLocation {
         device: (mount.major, mount.minor),
-        path: mount_relative_location(mount, path),
+        path: mount_relative_location(mount, path)?,
     })
 }
 struct StoppedRoot<'a> {

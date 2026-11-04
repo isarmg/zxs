@@ -1,9 +1,8 @@
 use super::*;
+use crate::repair_io_tail_support::{
+    Point, SyscallGate, competitor, descriptors, excluded, tail_error,
+};
 use std::{os::unix::fs::MetadataExt, path::Path, sync::Arc};
-
-#[path = "io_tail_support.rs"]
-mod support;
-use support::{Point, SyscallGate, competitor, descriptors, excluded, tail_error};
 
 fn fixture() -> (tempfile::TempDir, Engine, Candidate) {
     let (temp, system, config, _, operation) = pending();

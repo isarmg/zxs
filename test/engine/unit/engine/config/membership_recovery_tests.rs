@@ -256,3 +256,81 @@ fn membership_anchor_isolation_does_not_complete_unpublished_candidate() {
         }
     }
 }
+
+#[test]
+fn stricter_genesis_budget_keeps_the_saved_anchors_and_local_limits() {
+    let (temporary, config, engine) = fixture(2);
+    drop(engine);
+    let system = temporary.path().join("system");
+    let anchors = config
+        .disks
+        .iter()
+        .map(|disk| disk.root.join("metadata/pool-membership/config.json"))
+        .map(|path| {
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    let mut local = config.clone();
+    local.max_retained_workspaces -= 1;
+    local.max_retained_workspaces_per_principal -= 1;
+    local.max_retained_workspace_metadata_bytes -= 1;
+    local.max_retained_workspace_metadata_bytes_per_principal -= 1;
+    write_json(&system.join("config.json"), &local, true).unwrap();
+    let projected = fs::read(system.join("config.json")).unwrap();
+    let local = ValidatedConfig::try_from(local).unwrap();
+    let engine = Engine::open(&system).unwrap();
+    assert_eq!(
+        engine.config.effective_workspace_limits(),
+        local.effective_workspace_limits(),
+    );
+    assert_eq!(engine.config.metadata_members().len(), 2);
+    assert_eq!(engine.config.metadata_quorum(), 2);
+    assert_eq!(fs::read(system.join("config.json")).unwrap(), projected);
+    for (path, bytes) in anchors {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn stricter_local_budget_cannot_merge_different_saved_genesis_anchors() {
+    let (temporary, config, engine) = fixture(2);
+    drop(engine);
+    let system = temporary.path().join("system");
+    let mut changed = config.clone();
+    changed.max_retained_workspaces -= 1;
+    write_json(&system.join("config.json"), &changed, true).unwrap();
+    write_json(
+        &config.disks[0]
+            .root
+            .join("metadata/pool-membership/config.json"),
+        &changed,
+        true,
+    )
+    .unwrap();
+    let before = disk_bytes(temporary.path());
+    let error = Engine::open(&system).err().unwrap();
+    assert_eq!(error.code(), ErrorCode::MetadataQuorumUnavailable);
+    let Error::Context { source, .. } = &error else {
+        panic!("fixed quorum failure lost the rejected anchor");
+    };
+    assert_eq!(source.code(), ErrorCode::ConfigConflict);
+    assert_eq!(disk_bytes(temporary.path()), before);
+}
+
+#[test]
+fn system_projection_cannot_raise_the_saved_genesis_budget() {
+    let (temporary, mut config, engine) = fixture(1);
+    drop(engine);
+    let system = temporary.path().join("system");
+    config.max_retained_workspaces += 1;
+    write_json(&system.join("config.json"), &config, true).unwrap();
+    let before = disk_bytes(temporary.path());
+    let error = Engine::open(&system).err().unwrap();
+    assert_eq!(error.code(), ErrorCode::MetadataQuorumUnavailable);
+    let Error::Context { source, .. } = &error else {
+        panic!("fixed quorum failure lost the rejected projection");
+    };
+    assert_eq!(source.code(), ErrorCode::ConfigConflict);
+    assert_eq!(disk_bytes(temporary.path()), before);
+}

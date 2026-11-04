@@ -62,6 +62,7 @@ fn discover_startup_with_io(
     let terminal = super::super::terminal_resume::completed_selector(root)?;
     let store = open_store(root)?;
     let config = discover_startup_in_store_with_io(&store, projected, io)?;
+    super::super::root_extension::require_selected_activation(root, &config)?;
     if let Some(terminal) = terminal {
         terminal.verify_selected(&config)?;
     }
@@ -333,12 +334,6 @@ fn discover_root_authority(
             continue;
         };
         let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
-        if !portable.matches_metadata_projection(projected)? {
-            return Err(Error::new(
-                ErrorCode::ConfigConflict,
-                "prepared exit authority differs from projected lineage",
-            ));
-        }
         portable.verify_bootstrap_stop(
             &crate::DiskRegistrationIdentity {
                 pool_id: stop.pool_id.into(),
@@ -351,6 +346,18 @@ fn discover_root_authority(
         )?;
         select_authority(&mut selected, Arc::new(portable))?;
     }
+    // A retained first-stop hint can name an older Exit after later handoffs.
+    // Authenticate every such envelope and its ancestry before checking the
+    // selected successor against the current projection; an older prepared
+    // envelope is not required to describe its descendants' voter set.
+    if let Some(portable) = &selected
+        && !portable.matches_metadata_projection(projected)?
+    {
+        return Err(Error::new(
+            ErrorCode::ConfigConflict,
+            "prepared exit authority differs from projected lineage",
+        ));
+    }
     Ok(selected.map(Arc::unwrap_or_clone))
 }
 
@@ -358,13 +365,19 @@ fn verify_held_generation(
     portable: PortableAuthority,
     held: Vec<HeldCandidate>,
 ) -> Result<RestrictedGenerationEvidence> {
-    verify_held_generation_from(portable, held, GenerationEvidenceSource::Markers)
+    let source = if portable.is_abort() {
+        GenerationEvidenceSource::CertifiedAbort
+    } else {
+        GenerationEvidenceSource::Markers
+    };
+    verify_held_generation_from(portable, held, source)
 }
 
 #[derive(Clone, Copy)]
 enum GenerationEvidenceSource {
     Markers,
     PreparedRootExtension,
+    CertifiedAbort,
 }
 
 fn verify_held_generation_from(
@@ -403,6 +416,10 @@ fn verify_held_generation_from(
                 || member.binding_generation != held.disk.binding_generation
                 || (matches!(source, GenerationEvidenceSource::Markers)
                     && held.authority_hash.as_deref() != Some(hash.as_str()))
+                || (matches!(source, GenerationEvidenceSource::CertifiedAbort)
+                    && held.authority_hash.as_deref().is_some_and(|marker| {
+                        marker != hash && Some(marker) != intent.origin.predecessor()
+                    }))
             {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
@@ -414,11 +431,19 @@ fn verify_held_generation_from(
             disk.root = held.disk.root.clone();
             let saved_path = disk.root.join("metadata/pool-membership/config.json");
             let saved = match source {
-                GenerationEvidenceSource::Markers => {
+                GenerationEvidenceSource::Markers | GenerationEvidenceSource::CertifiedAbort => {
                     Some(held.root.open_read_regular(&saved_path)?)
                 }
                 GenerationEvidenceSource::PreparedRootExtension => {
-                    held.root.open_optional_read_regular(&saved_path)?
+                    if held
+                        .root
+                        .optional_metadata(&disk.root.join("metadata/pool-membership"))?
+                        .is_some()
+                    {
+                        held.root.open_optional_read_regular(&saved_path)?
+                    } else {
+                        None
+                    }
                 }
             };
             if let Some(saved) = saved {
@@ -451,7 +476,9 @@ fn verify_held_generation_from(
                     } else {
                         portable.verify_abort_member(&held.root, &disk)?;
                     }
-                    require_abort_journal(&held.root, &disk, &hash)?;
+                    if !matches!(source, GenerationEvidenceSource::CertifiedAbort) {
+                        require_abort_journal(&held.root, &disk, &hash)?;
+                    }
                 }
                 Some(verified) => {
                     let dependency = verified.dependencies.get(&disk.disk_id).ok_or_else(|| {
@@ -508,10 +535,16 @@ fn verify_held_generation_from(
                 .root
                 .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
             predecessor_seal_matches(config, &disk, &held.root, &seal, &expected)?;
-            if portable.exit_registry().is_some() {
+            if portable.exit_registry().is_some()
+                || matches!(source, GenerationEvidenceSource::CertifiedAbort)
+            {
                 // A prepared envelope may precede active marker promotion.
                 // Every registry-bearing successor, including Add and Abort,
                 // must retain its own journal after marker/seal promotion.
+                // Abort votes come from each root's original decision slot and
+                // full archive, not its derived marker. Only an exact unmoved
+                // predecessor may still lack the new journal; current markers
+                // and seals can never recreate a lost one.
                 activation_namespace_present(&held.root, &disk, config)?;
             }
             Ok(())
@@ -645,7 +678,7 @@ fn verify_held_genesis(
                 &held.disk.root.join("metadata/pool-membership/config.json"),
                 &mut |_| Ok(()),
             )?;
-            if !saved.same_genesis_io_authority(projected)
+            if !saved.permits_genesis_recovery_projection(projected)
                 || selected
                     .as_ref()
                     .is_some_and(|previous| !previous.same_genesis_io_authority(&saved))
@@ -682,22 +715,20 @@ fn verify_held_genesis(
         }
     }
     let Some(config) = selected else {
-        return Err(match rejected_members.pop() {
-            Some((_, error)) => error.context(
-                ErrorCode::RecoveryRequired,
-                "retained roots have no verified genesis authority",
-            ),
-            None => Error::new(
-                ErrorCode::RecoveryRequired,
-                "retained roots have no verified genesis authority",
-            ),
-        });
+        // A concrete identity or resource failure is not a missing authority.
+        // Preserve its exact error/source shape at the disk-read boundary.
+        if let Some(index) = rejected_members.iter().position(|(_, error)| {
+            matches!(
+                error.code(),
+                ErrorCode::DiskIdentityMismatch | ErrorCode::ResourceLimit
+            )
+        }) {
+            return Err(rejected_members.remove(index).1);
+        }
+        return Err(genesis_quorum_failure(rejected_members));
     };
     if verified_members.len() < config.metadata_quorum() {
-        return Err(Error::new(
-            ErrorCode::MetadataQuorumUnavailable,
-            "retained roots cannot satisfy the original fixed genesis quorum",
-        ));
+        return Err(genesis_quorum_failure(rejected_members));
     }
     let metadata_members = config.metadata_members().len();
     Ok(RestrictedGenerationEvidence {
@@ -705,10 +736,24 @@ fn verify_held_genesis(
         authority_hash: object_hash("pool-config", &config)?,
         metadata_members,
         metadata_quorum: config.metadata_quorum(),
-        config,
+        // Registration and N/Q were independently authenticated above. Keep
+        // the stricter local budget (and separate explicit runtime override),
+        // rather than silently replacing it with the saved higher limits.
+        config: projected.clone(),
         verified_members,
         rejected_members,
     })
+}
+
+fn genesis_quorum_failure(mut rejected_members: Vec<(String, Error)>) -> Error {
+    let message = "retained roots cannot satisfy the original fixed genesis quorum";
+    match rejected_members.pop() {
+        Some((disk, source)) => source.context(
+            ErrorCode::MetadataQuorumUnavailable,
+            format!("{message}; rejected genesis member {disk}"),
+        ),
+        None => Error::new(ErrorCode::MetadataQuorumUnavailable, message),
+    }
 }
 
 #[cfg(test)]

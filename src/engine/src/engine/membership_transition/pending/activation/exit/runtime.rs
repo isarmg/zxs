@@ -427,6 +427,13 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_disk_exit_marker_{}", disk.disk_id))?;
         }
+        // Explicit cold resume starts with an empty Engine. Re-establish the
+        // authenticated frozen boundary before replaying this generation's
+        // journal, just as ordinary Add promotion does. The archive is not a
+        // replacement for any current journal; those were checked above.
+        self.state = Arc::clone(&generation.base);
+        self.snapshot = generation.snapshot();
+        self.next_slot = generation.first_sequence()?;
         Ok(())
     }
 

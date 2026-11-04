@@ -698,3 +698,72 @@ fn membership_registry_current_rename_admission_rejects_copy_and_hidden_version_
         ErrorCode::WorkspaceChanged
     );
 }
+
+#[test]
+fn membership_registry_new_rename_helper_recovery_requires_exact_path_lineage() {
+    let mut fixture = Fixture::new(false);
+    fixture.project(false);
+    let previous = Arc::clone(&fixture.engine.state);
+    let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
+    rename(&mut fixture, "dir/b", "dir/a");
+    let context = fixture
+        .engine
+        .file_context(&fixture.repo.repository_id, "dir/a")
+        .unwrap();
+    assert!(!previous.branches.contains_key(&context.branch_id));
+    let published: State =
+        json_codec::from_slice(&canonical_json(fixture.engine.state()).unwrap()).unwrap();
+    view.advance(&previous, &published).unwrap();
+    let node_id = context.node_id.unwrap();
+    for forgery in ["hidden source", "wrong parent", "unselected snapshot"] {
+        let mut forged = published.clone();
+        match forgery {
+            "hidden source" => {
+                forged
+                    .file_path_nodes
+                    .get_mut(&node_id)
+                    .unwrap()
+                    .previous_path = "dir/a".into();
+            }
+            "wrong parent" => {
+                forged
+                    .file_path_nodes
+                    .get_mut(&node_id)
+                    .unwrap()
+                    .parent_node_ids = vec![fixture.removed.version_id.clone()];
+            }
+            "unselected snapshot" => {
+                let head = forged.branches[&context.branch_id].head_commit_id.clone();
+                let commit = forged.commits.get_mut(&head).unwrap();
+                commit
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.kind == NamespaceEntryKind::File)
+                    .unwrap()
+                    .relocate(name_policy::PortablePath::parse("dir/forged").unwrap());
+                commit
+                    .entries
+                    .sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
+            }
+            _ => unreachable!(),
+        }
+        assert!(view.advance(&previous, &forged).is_err(), "{forgery}");
+    }
+    // A valid replay retains the exact visible identity, without changing any
+    // immutable input record or reviving the target-exclusive occurrence.
+    let recovered = view.advance(&previous, &published).unwrap();
+    let branch = &published.branches[&context.branch_id];
+    let entries = recovered
+        .branch_entries(&context.branch_id, &branch.head_commit_id)
+        .unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.path() == "dir/a" && entry.entry_id == fixture.retained.entry_id)
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.entry_id != fixture.removed.entry_id)
+    );
+}

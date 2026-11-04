@@ -102,6 +102,18 @@ pub(crate) struct EvidenceMembers {
     pub(crate) first_error: Option<Error>,
 }
 
+/// Explicit nonvoting recovery input with a trusted pre-loss physical binding.
+/// Retain this independently of SYSTEM before loss. Never reconstruct its expected
+/// identity from a root being recovered: its seal alone cannot authenticate a
+/// Genesis data disk's original device/inode. Only `root` may change on relocation.
+#[derive(Clone, Debug)]
+pub struct RecoveryDataRoot {
+    pub root: PathBuf,
+    pub identity: DiskRegistrationIdentity,
+    pub device: u64,
+    pub inode: u64,
+}
+
 /// The seal boundary that kept a recovery invocation from admitting evidence.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RecoverySealContext {
@@ -729,6 +741,69 @@ impl Engine {
         disks: &[PathBuf],
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
+        Self::restore_from_disks_and_data_roots_with_workspace_limits(
+            root,
+            disks,
+            &[],
+            workspace_limits,
+        )
+    }
+
+    /// Capture trusted physical bindings from already admitted data handles.
+    /// Keep these records outside SYSTEM for explicit system-loss recovery.
+    pub fn recovery_data_roots(&self) -> Result<Vec<RecoveryDataRoot>> {
+        self.config
+            .io_disks()
+            .filter(|disk| !disk.metadata_member)
+            .filter_map(|disk| {
+                self.disk_resources.available(disk).map(|handle| {
+                    let physical = handle.root.directory_identity(handle.root.path())?;
+                    let seal = &handle.seal;
+                    if physical.device != seal.device || physical.inode != seal.inode {
+                        return Err(Error::new(
+                            ErrorCode::DiskIdentityMismatch,
+                            "held data root differs from its admitted physical identity",
+                        ));
+                    }
+                    Ok(RecoveryDataRoot {
+                        root: disk.root.clone(),
+                        identity: DiskRegistrationIdentity {
+                            pool_id: seal.pool_id.clone(),
+                            disk_id: seal.disk_id.clone(),
+                            slot_id: seal.slot_id.clone(),
+                            binding_generation: seal.binding_generation,
+                        },
+                        device: seal.device,
+                        inode: seal.inode,
+                    })
+                })
+            })
+            .collect()
+    }
+
+    /// Recover metadata authority first, then admit only explicitly named existing
+    /// nonvoting data roots. Data roots never contribute to the metadata quorum.
+    /// No configured but unlisted path is probed, initialized or readmitted.
+    pub fn restore_from_disks_and_data_roots(
+        root: &Path,
+        metadata_roots: &[PathBuf],
+        data_roots: &[RecoveryDataRoot],
+    ) -> Result<Self> {
+        Self::restore_from_disks_and_data_roots_with_workspace_limits(
+            root,
+            metadata_roots,
+            data_roots,
+            None,
+        )
+    }
+
+    pub fn restore_from_disks_and_data_roots_with_workspace_limits(
+        root: &Path,
+        metadata_roots: &[PathBuf],
+        data_roots: &[RecoveryDataRoot],
+        workspace_limits: Option<RetainedWorkspaceLimits>,
+    ) -> Result<Self> {
+        let disks = metadata_roots;
         if root.join("config.json").try_exists()? {
             return Err(Error::new(
                 storage_contract::ErrorCode::AlreadyInitialized,
@@ -834,8 +909,66 @@ impl Engine {
             .map(|generation| generation.portable.forbidden_disk_ids())
             .transpose()?
             .unwrap_or_default();
+        // Metadata selection above authenticates the fixed quorum and current
+        // lineage before the first syscall against any explicitly named data root.
+        let mut data_paths = BTreeMap::new();
+        let mut data_seals = BTreeMap::new();
+        for expected in data_roots {
+            let registered = config
+                .disks
+                .iter()
+                .find(|disk| disk.disk_id == expected.identity.disk_id && !disk.metadata_member)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::ConfigConflict,
+                        "explicit recovery identity is not a current nonvoting member",
+                    )
+                })?;
+            if expected.identity.pool_id != config.pool_id
+                || expected.identity.slot_id != registered.slot_id
+                || expected.identity.binding_generation != registered.binding_generation
+                || forbidden.contains(&registered.disk_id)
+                || config.excludes_io_disk(&registered.disk_id)
+            {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "explicit recovery cannot change registration or readmit an excluded disk",
+                ));
+            }
+            let held = DiskRoot::open(&expected.root)?;
+            let stored =
+                decode_seal(&held.read_bytes(&held.path().join("disk.json"), MAX_METADATA)?)?;
+            let mut disk = registered.clone();
+            disk.root = held.path().to_path_buf();
+            let live = identity_at(&config, &disk, &held.directory(held.path())?)?;
+            validate_stored_seal(&stored, &live)?;
+            if live.disk_id != expected.identity.disk_id
+                || live.device != expected.device
+                || live.inode != expected.inode
+            {
+                return Err(Error::new(
+                    ErrorCode::DiskIdentityMismatch,
+                    "explicit data root differs from trusted pre-loss physical binding",
+                ));
+            }
+            config.verify_explicit_recovery_data_root(&held, &disk, &live)?;
+            data_seals.insert(disk.disk_id.clone(), live);
+            if data_paths.insert(disk.disk_id, disk.root).is_some() {
+                return Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "duplicate data disk in recovery input",
+                ));
+            }
+        }
+        let roots = config
+            .disks
+            .iter()
+            .map(|disk| data_paths.get(&disk.disk_id).unwrap_or(&disk.root).clone())
+            .collect();
+        let config = config.with_disk_roots(roots)?;
         let allowed = seals
             .keys()
+            .chain(data_paths.keys())
             .filter(|id| !forbidden.contains(*id))
             .cloned()
             .collect();
@@ -845,16 +978,31 @@ impl Engine {
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
         let (mut engine, warnings) = Self::prepare_retained_workspace_recovery(root, config)?;
+        // Resource acquisition must retain the exact identity checked above;
+        // disappearance or replacement cannot become a silently unavailable disk.
+        for disk in engine
+            .config
+            .io_disks()
+            .filter(|disk| !disk.metadata_member)
+        {
+            let expected = &data_seals[&disk.disk_id];
+            let handle = engine.disk_resources.get(disk)?;
+            validate_stored_seal(expected, &handle.seal)?;
+            engine
+                .config
+                .verify_explicit_recovery_data_root(&handle.root, disk, &handle.seal)?;
+        }
+        let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
+        engine.preflight_workspace_receipts(&mut prepared)?;
+        // A quota failure must not publish a locator or system configuration,
+        // or replay journal repair. Preflight retains the same admitted roots
+        // and writer locks; all exit exclusions still precede writable replay.
         disk_lifecycle::bootstrap::runtime::initialize(
             &engine.root,
             &engine.config,
             &engine.disk_resources,
         )?;
         engine.admit_disk_exit_io_exclusion()?;
-        let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
-        engine.preflight_workspace_receipts(&mut prepared)?;
-        // A quota failure must not publish a system configuration or replay any
-        // journal repair. Preflight above retains the locks across publication.
         if engine.config.generation().is_none() {
             write_json(&engine.root.join("config.json"), &engine.config, false)?;
         }

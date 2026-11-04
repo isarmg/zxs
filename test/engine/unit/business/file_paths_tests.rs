@@ -520,7 +520,13 @@ fn file_merge_requires_readable_chosen_body_but_receipt_replay_does_not() {
                 .merge_file_branches(request(storage_contract::OperationId::generate().unwrap()))
                 .unwrap_err()
                 .code(),
-            storage_contract::ErrorCode::ContentUnavailable
+            if publish_first {
+                // The successful merge consumed these branch heads. A new
+                // operation must reject stale inputs before reading a body.
+                storage_contract::ErrorCode::FileBranchConflict
+            } else {
+                storage_contract::ErrorCode::ContentUnavailable
+            }
         );
         if let Some(receipt) = receipt {
             assert_eq!(

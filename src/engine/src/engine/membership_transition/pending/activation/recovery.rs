@@ -407,12 +407,46 @@ pub(crate) fn restore_anchor(
         })?;
     // Only this explicitly supplied retained root is an I/O authority here.
     // The saved configuration's other addresses are never recovery probes.
-    let (state, history) = portable.read_archive_base(
-        root.private_child(&member_directory(disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY))?,
-    )?;
+    // A portable graph and copied archive alone are not this root's vote. Admit
+    // its actual physical enrollment and local decision before the caller can
+    // count the anchor toward the fixed quorum or inspect any explicit data root.
+    let hash = portable.hash()?;
+    let parent = root.private_child(&member_directory(disk, &transition))?;
+    if let Some(core) = portable.terminal_resume_core() {
+        core.verify_member(&root, disk)?;
+        require_abort_journal(&root, disk, &hash)?;
+    } else if portable.is_abort() {
+        portable.verify_abort_member(&root, disk)?;
+        require_abort_journal(&root, disk, &hash)?;
+    } else {
+        let joint = portable.add_joint()?;
+        let verified = joint.verify()?;
+        let identity = &verified.dependencies[&disk.disk_id].enrollment.identity;
+        let physical = FileIdentity::from_fd(root.directory(root.path())?)?;
+        if identity != &admission::member_identity(&target, disk, physical) {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "restore root differs from its authenticated enrollment",
+            ));
+        }
+        let store = joint::store::JointStore::open(
+            &root,
+            &parent,
+            identity,
+            &transition,
+            &joint.proposal_hash,
+            false,
+        )?;
+        store.verify_certificate_read_only(&joint.certificate_hash, &joint.proposal_hash, disk)?;
+    }
+    if portable.exit_registry().is_some() {
+        require_abort_journal(&root, disk, &hash)?;
+    }
+    let (state, history) = portable
+        .read_archive_base(parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?)?;
     portable.verify_registry_source(&state)?;
     let generation = Arc::new(Generation {
-        hash: portable.hash()?,
+        hash,
         workspace_roots: portable.workspace_root_aliases()?,
         original: portable.genesis_config()?,
         epoch: portable.epoch()?,
@@ -425,6 +459,25 @@ pub(crate) fn restore_anchor(
     portable.restrict_io(target.with_generation(generation)?)
 }
 impl ValidatedConfig {
+    /// Called only for an explicitly supplied data root after the retained
+    /// metadata quorum has selected this configuration and its current seal has
+    /// been matched to the held directory. This grants no locator or vote.
+    pub(crate) fn verify_explicit_recovery_data_root(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        seal: &DiskSeal,
+    ) -> Result<()> {
+        self.verify_root_membership(root, disk)?;
+        if let Some(generation) = self.generation()
+            && let Some(dependency) = generation.portable.data_dependency(&disk.disk_id)?
+        {
+            dependency.verify_active_seal(seal)?;
+            dependency.verify_local(root)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn verify_root_membership(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
         let saved: ValidatedConfig = root.read_json_observed(
             &disk.root.join("metadata/pool-membership/config.json"),
