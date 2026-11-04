@@ -7,6 +7,7 @@ const PRINCIPAL: &str = "smoke-admin";
 const FILE: &str = "browser-smoke.txt";
 const FILE_BRANCH: &str = "browser-smoke-alternate";
 const PAYLOADS: [&str; 2] = ["first real version\n", "second real version: 测试\n"];
+pub(super) const NAMING_REPOSITORY: &str = "browser-naming";
 
 /// Use the same explicit authority publication as production setup. A pool
 /// credential snapshot alone is deliberately insufficient for daemon startup.
@@ -156,6 +157,7 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         PRINCIPAL,
         storage_engine::OperationId::generate().unwrap(),
     )?;
+    seed_naming_scope(&mut engine)?;
     // Reopen from disk before serving: an in-memory-only fixture is insufficient.
     drop(engine);
     let engine = Engine::open(&pool)?;
@@ -172,6 +174,30 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
     if bytes != PAYLOADS[1].as_bytes() {
         return Err("fixture current bytes did not survive reopen".into());
     }
+    Ok(())
+}
+
+// Naming exercises explicit registration from an empty directory-branch scope.
+// Keep it separate from the already registered graph/parent-edge fixture.
+fn seed_naming_scope(engine: &mut Engine) -> Result<()> {
+    let repository = engine.create_repository(
+        &storage_engine::RepositoryName::parse(NAMING_REPOSITORY)?,
+        "P01",
+        3,
+        PRINCIPAL,
+        storage_engine::OperationId::generate().unwrap(),
+    )?;
+    let workspace = engine.create_workspace(&repository.main_branch_id, PRINCIPAL)?;
+    engine.stage_bytes(&workspace.workspace_id, FILE, PAYLOADS[0].as_bytes())?;
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: storage_engine::OperationId::generate().unwrap(),
+        principal: PRINCIPAL.into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "Browser naming registration fixture".into(),
+        request_digest: None,
+    })?;
     Ok(())
 }
 

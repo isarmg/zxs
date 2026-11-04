@@ -45,6 +45,25 @@ async fn directory_history_http_is_read_only_root_bound_and_authenticated() {
         .unwrap()["entry_id"]
         .as_str()
         .unwrap();
+    // A disk-root upload defaults to one primary copy. Publish actual backup
+    // placement before exercising B01, rather than inventing a backup folder.
+    let backup_route = format!("/api/repositories/{repo}/backup-configuration");
+    let protection = success(&app, &token, "GET", &backup_route, None).await;
+    assert_eq!(protection["target_copies"], 1);
+    success(
+        &app,
+        &token,
+        "PUT",
+        &backup_route,
+        Some(json!({
+            "path":"", "target_copies":3,
+            "backup_prefixes":{"B01":"P01","C01":"P01"},
+            "expected_scope_id":protection["scope"]["id"],
+            "expected_generation":protection["generation"],
+            "operation_id":new_id("op").unwrap()
+        })),
+    )
+    .await;
     let request = DirectoryHistoryRequest::parse(
         repo,
         directory,
@@ -114,7 +133,25 @@ async fn directory_history_http_is_read_only_root_bound_and_authenticated() {
             StatusCode::BAD_REQUEST
         );
     }
-    // Backup browsing supplies the same stable logical identity, without conferring writes.
+    // A read-only branch preview retains the original folder's history scope.
+    let preview = success(
+        &app,
+        &token,
+        "GET",
+        &format!(
+            "/api/file-manager/disks/P01/entries?path=docs&directory_branch_id={}&expected_tree_id={}",
+            pending[0].directory_branch_id, pending[0].head_tree_id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(preview["preview"], true);
+    assert_eq!(preview["writable"], false);
+    assert_eq!(preview["context"]["repository_id"], repo);
+    assert_eq!(preview["entries"][0]["read_only"], true);
+    assert_eq!(typed_page(&app, &token, &branch_request).await, branches);
+    // Backup folders aggregate retained file paths; they are not original
+    // directory identities and must never become fabricated history scopes.
     let backup = success(
         &app,
         &token,
@@ -129,8 +166,24 @@ async fn directory_history_http_is_read_only_root_bound_and_authenticated() {
         .iter()
         .find(|e| e["name"] == "docs")
         .unwrap();
-    assert_eq!(entry["entry_id"], directory);
+    let aggregate = entry["entry_id"].as_str().unwrap();
+    assert_ne!(aggregate, directory);
+    assert!(entry["repository_id"].is_null());
     assert_eq!(entry["read_only"], true);
+    assert_eq!(entry["backup"], true);
+    assert_eq!(backup["writable"], false);
+    assert!(backup["context"].is_null());
+    assert_eq!(backup["directory_branches_supported"], false);
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "GET",
+        &format!("/api/repositories/{repo}/directories/{aggregate}/history"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(rejected["error"]["code"], "INVALID_ID");
     assert_eq!(typed_page(&app, &token, &branch_request).await, branches);
     assert_eq!(
         send(

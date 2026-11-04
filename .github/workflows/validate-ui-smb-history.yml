@@ -27,23 +27,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 3
+          fetch-depth: 4
       - name: Bind validation to the pushed commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Scope the reviewed test-only retry
         id: scope
         run: |
           # Success evidence: https://github.com/isarmg/zxs/actions/runs/41813864437
-          # This one retry after the static-only child may reuse the successful
-          # baseline only with the exact cumulative test/doc changes below.
+          # Reuse Web/Samba/native units from the baseline, plus unchanged Engine
+          # integration from run 41817885256, only for this exact retry chain.
           base=01305735ce153015a08bf14c6920cdce40b8b79b
-          expected_parent=8019ec672d666fb3812af1231be2e766114b1ef3
+          expected_parent=7ccbd2a3479dbdef396a0b83efcf2612980a364e
           retry=false
           if parent=$(git rev-parse HEAD^) && [ "$parent" = "$expected_parent" ] &&
-             ancestor=$(git rev-parse "$expected_parent^") && [ "$ancestor" = "$base" ] &&
+             ancestor=$(git rev-parse "$expected_parent~2") && [ "$ancestor" = "$base" ] &&
              source=$(git rev-parse HEAD:src) && baseline_source=$(git rev-parse "$base:src") &&
              [ "$source" = "$baseline_source" ] &&
-             changed=$(git diff --name-only --no-renames "$base" HEAD); then
+             changed=$(git diff --name-only --no-renames "$base" HEAD) &&
+             git diff --quiet "$expected_parent" HEAD -- test/engine; then
             retry=true
             while IFS= read -r path; do
               case "$path" in
@@ -54,7 +55,11 @@ jobs:
                 test/engine/integration/branch_alias_operations/file_history_merge_scenarios.rs|\
                 test/tools/browser-smoke/runner/main.rs|\
                 test/tools/browser-smoke/runner/file_row_pointer.js|\
-                test/tools/browser-smoke/unit/file_row_pointer_probe_test.mjs) ;;
+                test/tools/browser-smoke/unit/file_row_pointer_probe_test.mjs|\
+                test/server/integration/http_engine/directory_history.rs|\
+                test/tools/browser-smoke/runner/fixture.rs|\
+                test/tools/browser-smoke/runner/naming.rs|\
+                test/tools/browser-smoke/unit/fixture_tests.rs) ;;
                 *) retry=false ;;
               esac
             done <<< "$changed"
@@ -86,16 +91,17 @@ jobs:
         run: |
           cargo clippy --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol --all-targets -- -D warnings
           cargo clippy --locked --offline -p storage-server --no-default-features --all-targets -- -D warnings
-      - name: Lint the changed history integration target
+      - name: Lint the changed HTTP integration target
         if: needs.static.outputs.test_only_retry == 'true'
-        run: cargo clippy --locked --offline -p storage-engine --test branch_alias_operations -- -D warnings
+        run: cargo clippy --locked --offline -p storage-server --test http_engine -- -D warnings
       - name: Exercise engine, server, client and wire unit contracts
         if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract --lib
-      - name: Exercise history integration and real HTTP routes
-        run: |
-          cargo test --locked --offline -p storage-engine --test branch_alias_operations
-          cargo test --locked --offline -p storage-server --test http_engine
+      - name: Exercise history integration
+        if: needs.static.outputs.test_only_retry != 'true'
+        run: cargo test --locked --offline -p storage-engine --test branch_alias_operations
+      - name: Exercise real HTTP routes
+        run: cargo test --locked --offline -p storage-server --test http_engine
       - name: Check changed wire contracts and SMB feature combinations
         run: |
           bash .github/scripts/check.sh contracts

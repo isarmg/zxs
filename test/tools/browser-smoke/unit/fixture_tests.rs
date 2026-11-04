@@ -25,7 +25,12 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
     let temporary = pool();
     seed_files(&temporary).unwrap();
     let engine = Engine::open(&temporary.path().join("pool")).unwrap();
-    let repository = engine.state().repositories.values().next().unwrap();
+    let repository = engine
+        .state()
+        .repositories
+        .values()
+        .find(|repository| repository.name == "browser-fixtures")
+        .unwrap();
     assert_eq!(repository.name, "browser-fixtures");
     let entries = engine.list_tree(&repository.main_branch_id).unwrap();
     assert_eq!(entries.len(), 1);
@@ -127,6 +132,30 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
         assert!(nodes.iter().any(|node| node.node_id == *head));
         assert_eq!(head.as_str(), entries[0].version_id);
     }
+    let naming = engine
+        .state()
+        .repositories
+        .values()
+        .find(|repository| repository.name == NAMING_REPOSITORY)
+        .unwrap();
+    assert_ne!(naming.repository_id, repository.repository_id);
+    let naming_entries = engine.list_tree(&naming.main_branch_id).unwrap();
+    assert_eq!(naming_entries.len(), 1);
+    assert_eq!(naming_entries[0].path, FILE);
+    assert_ne!(naming_entries[0].file_id, entries[0].file_id);
+    let mut content = engine.open_content(&naming_entries[0].version_id).unwrap();
+    let mut bytes = Vec::new();
+    content.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, PAYLOADS[0].as_bytes());
+    assert!(
+        engine
+            .state()
+            .directory_branches
+            .values()
+            .all(|branch| branch.repository_id != naming.repository_id),
+        "naming registration needs an unregistered scope, independent of SVG history"
+    );
+    drop(content);
     drop(engine);
     let error = seed_files(&temporary).unwrap_err();
     assert!(error.to_string().contains("fresh disposable pool"));

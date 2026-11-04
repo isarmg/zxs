@@ -16,7 +16,25 @@ fn no_write(browser: &Browser, expected: usize) -> Result<()> {
     Ok(())
 }
 
+fn open_scope(browser: &Browser, name: &str) -> Result<()> {
+    browser.click(&browser.button("Files", "文件")?)?;
+    browser.click(&browser.button("All disks", "所有硬盘")?)?;
+    browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
+    browser.click(&browser.element(
+        "xpath",
+        &format!("//button[contains(@class,'zxs-file-name')][normalize-space(.)='{name}']"),
+    )?)?;
+    browser.element(
+        "xpath",
+        "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
+    )?;
+    Ok(())
+}
+
 pub(super) fn run(browser: &Browser) -> Result<()> {
+    // This persisted scope has content but no directory composition records.
+    // The separate history fixture must keep its real initialized parent edges.
+    open_scope(browser, super::fixture::NAMING_REPOSITORY)?;
     browser.script(r#"
         const original = window.fetch;
         window.__zxsNaming = {writes:[], restore:()=>window.fetch=original};
@@ -225,6 +243,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             })
         },
     )?;
+    open_scope(browser, "browser-fixtures")?;
     println!(
         "PASS production WASM preserves invalid input; NFC/Hangul cancel sends no POST and explicit confirmation submits exact candidate (synthetic 409 replies)"
     );
