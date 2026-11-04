@@ -192,6 +192,19 @@ impl DiskRoot {
         DiskDirectoryEntries::new(entries, operation.lease)
     }
 
+    /// Return identity evidence only, with the opened directory closed before
+    /// its operation retires. No raw descriptor escapes the admission lifetime.
+    pub(crate) fn directory_identity(
+        &self,
+        path: &Path,
+    ) -> Result<platform_io::fs_safety::linux::FileIdentity> {
+        let operation = self.operation()?;
+        let directory = operation.directory(path)?;
+        Ok(platform_io::fs_safety::linux::FileIdentity::from_fd(
+            &directory,
+        )?)
+    }
+
     // These legacy resource-returning methods admit their opening and validation
     // only. The returned raw resource is NOT tracked after return. Their callers
     // must migrate before disk-wide drain can be used for a production offline.

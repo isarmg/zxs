@@ -98,7 +98,7 @@ impl BootstrapStore {
         self.load_chain(&head)
     }
     /// Re-establish the exact current stop record and head barriers using only
-    /// held system state. D4/D5 can call this without touching any stopped root.
+    /// held system state. Completion can call this without touching a stopped root.
     pub(crate) fn sync_current(&mut self, expected: &LoadedLocator) -> Result<()> {
         let current = self.reload(&expected.head.pool_id)?;
         if current.head != expected.head {

@@ -412,6 +412,7 @@ fn typed<T: for<'de> Deserialize<'de>>(
 fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<VerifiedProposal> {
     let proposal: Proposal = typed(load, PROPOSAL_KIND, expected)?;
     let intent: TransitionIntent = typed(load, INTENT_KIND, &proposal.transition_hash)?;
+    reservation::verify_intent_roots(&intent)?;
     let config = intent.origin.config();
     validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
     if (proposal.format == JointFormat::ExitControl) != intent.effect.is_some() {
@@ -775,7 +776,8 @@ fn verify_target(
             }
         }
         (EnrollmentOrigin::Added { pending_seal_hash }, MemberSeal::Added { seal }) => {
-            if object_hash(PENDING_SEAL_KIND, seal)? != *pending_seal_hash
+            if intent.added_roots.get(&disk.disk_id) != Some(identity)
+                || object_hash(PENDING_SEAL_KIND, seal)? != *pending_seal_hash
                 || seal.identity != *identity
                 || seal.transition_hash != proposal.transition_hash
                 || seal.target_config_hash != proposal.target_config_hash

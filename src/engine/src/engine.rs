@@ -433,7 +433,20 @@ impl Engine {
         config: ValidatedConfig,
         disk_resources: Arc<DiskResources>,
     ) -> Result<Self> {
+        // Hold the same directory-before-writer lock order as online preparation
+        // through all initialization writes and index construction. A losing
+        // preparation must not install a reservation into this initializer's root.
+        let _directory_locks =
+            membership_transition::pending::reservation::lock_initialization_directories(
+                &disk_resources,
+            )?;
         let locks = acquire_locks(&root, &disk_resources)?;
+        // Recheck after locking: an earlier empty-root observation can be stale.
+        for disk in disk_resources.handles() {
+            membership_transition::pending::reservation::reject_reserved_initialization(
+                &disk.root,
+            )?;
+        }
         for d in &config.disks {
             let disk = disk_resources.get(d)?;
             disk.root

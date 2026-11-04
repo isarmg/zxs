@@ -3,91 +3,19 @@ use super::*;
 use crate::{
     disk::*,
     engine::{MutationPlan, Prepared, ReadSource},
-    file_stamp::FileStamp,
 };
 use json_codec::json;
-use platform_io::fs_safety::{
-    EntryName, RelativePath,
-    linux::{MountPolicy, OpenAt2Root},
-};
-use std::os::unix::ffi::OsStrExt;
+use platform_io::fs_safety::EntryName;
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
     path::Path,
 };
 
-fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, ContentHash)> {
-    let mut digest = blake3::Hasher::new();
-    let mut size = 0u64;
-    let mut buffer = [0u8; 65536];
-    loop {
-        let n = std::os::unix::fs::FileExt::read_at(&input, &mut buffer, size)?;
-        if n == 0 {
-            break;
-        }
-        size = size.checked_add(n as u64).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                "upload length overflow",
-            )
-        })?;
-        if size > maximum {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                "upload grew beyond file budget",
-            ));
-        }
-        digest.update(&buffer[..n]);
-    }
-    Ok((size, ContentHash::from_digest(digest.finalize())))
-}
-
 fn preparation_fs_error(error: platform_io::fs_safety::Error) -> Error {
     let message = error.to_string();
     Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
 }
-fn retained_upload_usage(directory: &OpenAt2Root) -> Result<(u64, usize)> {
-    let mut retained = 0u64;
-    let mut generations = 0usize;
-    let entries =
-        rustix::fs::Dir::read_from(directory.directory()).map_err(std::io::Error::from)?;
-    for entry in entries {
-        let entry = entry.map_err(std::io::Error::from)?;
-        let path = Path::new(std::ffi::OsStr::from_bytes(entry.file_name().to_bytes()));
-        if path
-            .extension()
-            .is_some_and(|ext| ext == "full" || ext == "prepared")
-            // A crash during full_copy_held can leave its unpublished copy
-            // temporary behind. It still consumes this workspace's capacity.
-            || entry.file_name().to_bytes().starts_with(b".zxs-full-")
-        {
-            generations = generations.checked_add(1).ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::ResourceLimit,
-                    "retained generation count overflow",
-                )
-            })?;
-            let relative = RelativePath::new(path).map_err(preparation_fs_error)?;
-            retained = retained
-                .checked_add(
-                    directory
-                        .open_file(&relative, false)
-                        .map_err(preparation_fs_error)?
-                        .metadata()?
-                        .len(),
-                )
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::ResourceLimit,
-                        "retained workspace byte count overflow",
-                    )
-                })?;
-        }
-    }
-    Ok((retained, generations))
-}
-
 struct UploadPreparationClaim {
     workspace: String,
     claims: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
@@ -105,12 +33,11 @@ pub struct UploadPreparation {
     workspace: Workspace,
     item: String,
     path: name_policy::PortablePath,
-    source: std::fs::File,
+    io: UploadIo,
     expected_content: Option<(u64, ContentHash)>,
     generation: u64,
     base_version_id: Option<String>,
     directory: std::path::PathBuf,
-    directory_handle: OpenAt2Root,
     disk_resources: std::sync::Arc<DiskResources>,
     target: std::path::PathBuf,
     previous: Option<StagedFile>,
@@ -120,59 +47,25 @@ pub struct UploadPreparation {
     max_workspace_bytes: u64,
     chunk_bytes: u32,
     claim: UploadPreparationClaim,
+    // Cross-disk writer fencing stays separate from the target upload lease.
+    // Revoking this upload must not release another disk's fencing ownership.
     _locks: Vec<std::fs::File>,
 }
 
 pub struct PreparedUpload {
     plan: UploadPreparation,
     size: u64,
-    // None exists only while the scratch cleanup guard owns an unfinished copy.
-    hash: Option<ContentHash>,
-    scratch: Option<std::path::PathBuf>,
-    verified: Option<VerifiedUploadFile>,
+    hash: ContentHash,
 }
 
-struct VerifiedUploadFile {
-    file: std::fs::File,
-    stamp: FileStamp,
-}
-impl Drop for PreparedUpload {
-    fn drop(&mut self) {
-        if let Some(path) = &self.scratch
-            && let Some(name) = path.file_name()
-        {
-            match rustix::fs::unlinkat(
-                self.plan.directory_handle.directory(),
-                name,
-                rustix::fs::AtFlags::empty(),
-            ) {
-                Ok(()) | Err(rustix::io::Errno::NOENT) => (),
-                Err(error) => tracing::error!(%error, "upload scratch cleanup failed"),
-            }
-        }
-    }
-}
 impl UploadPreparation {
-    fn retained_file(&self) -> Result<std::fs::File> {
-        let relative =
-            RelativePath::new(Path::new(self.target.file_name().expect("target filename")))
-                .map_err(preparation_fs_error)?;
-        self.directory_handle
-            .open_file(&relative, false)
-            .map_err(preparation_fs_error)
-    }
-
-    fn verify_retained(&self, size: u64, hash: &ContentHash) -> Result<VerifiedUploadFile> {
-        let file = self.retained_file()?;
-        let stamp = FileStamp::of(&file)?;
-        let actual = upload_fingerprint_file(file.try_clone()?, self.max_file_bytes)?;
-        if actual.0 != size || actual.1 != *hash || FileStamp::of(&file)? != stamp {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ChecksumMismatch,
-                "retained upload generation no longer matches its receipt",
-            ));
-        }
-        Ok(VerifiedUploadFile { file, stamp })
+    fn target_name(&self) -> Result<EntryName> {
+        EntryName::new(
+            self.target
+                .file_name()
+                .expect("invariant: upload target has a filename"),
+        )
+        .map_err(preparation_fs_error)
     }
 
     fn verify_content(&self, size: u64, hash: &ContentHash) -> Result<()> {
@@ -199,8 +92,7 @@ impl UploadPreparation {
             .as_ref()
             .filter(|old| old.dirty_generation == self.generation)
         {
-            let (size, hash) =
-                upload_fingerprint_file(self.source.try_clone()?, self.max_file_bytes)?;
+            let (size, hash) = self.io.fingerprint_source(self.max_file_bytes)?;
             self.verify_content(size, &hash)?;
             if size != old.size || hash != old.content_hash {
                 return Err(Error::new(
@@ -214,20 +106,24 @@ impl UploadPreparation {
                     "retained upload path differs from its generation",
                 ));
             }
-            let retained = self.verify_retained(size, &hash)?;
+            self.io
+                .verify_retained(&self.target_name()?, size, &hash, self.max_file_bytes)?;
             return Ok(PreparedUpload {
                 plan: self,
                 size,
-                hash: Some(hash),
-                scratch: None,
-                verified: Some(retained),
+                hash,
             });
         }
         if self.existing {
-            let incoming = upload_fingerprint_file(self.source.try_clone()?, self.max_file_bytes)?;
+            let incoming = self.io.fingerprint_source(self.max_file_bytes)?;
             self.verify_content(incoming.0, &incoming.1)?;
-            let retained = self
-                .verify_retained(incoming.0, &incoming.1)
+            self.io
+                .verify_retained(
+                    &self.target_name()?,
+                    incoming.0,
+                    &incoming.1,
+                    self.max_file_bytes,
+                )
                 .map_err(|error| {
                     if error.code() == storage_contract::ErrorCode::ChecksumMismatch {
                         error.context(
@@ -241,38 +137,18 @@ impl UploadPreparation {
             return Ok(PreparedUpload {
                 plan: self,
                 size: incoming.0,
-                hash: Some(incoming.1),
-                scratch: None,
-                verified: Some(retained),
+                hash: incoming.1,
             });
         }
-        let scratch = self
-            .directory
-            .join(format!(".zxs-upload-{}.prepared", new_id("req")?));
-        let mut prepared = PreparedUpload {
-            plan: self,
-            size: 0,
-            hash: None,
-            scratch: Some(scratch.clone()),
-            verified: None,
-        };
-        let scratch_name = EntryName::new(scratch.file_name().expect("scratch filename"))
+        let scratch_name = EntryName::new(format!(".zxs-upload-{}.prepared", new_id("req")?))
             .map_err(preparation_fs_error)?;
-        let (size, hash, _, file) = full_copy_held(
-            prepared.plan.source.try_clone()?,
-            &prepared.plan.directory_handle,
-            &scratch_name,
-            prepared.plan.chunk_bytes,
-            prepared.plan.maximum,
-        )?;
-        prepared.plan.verify_content(size, &hash)?;
-        prepared.size = size;
-        prepared.hash = Some(hash);
-        prepared.verified = Some(VerifiedUploadFile {
-            stamp: FileStamp::of(&file)?,
-            file,
-        });
-        Ok(prepared)
+        let (size, hash) = self.io.copy(scratch_name, self.chunk_bytes, self.maximum)?;
+        self.verify_content(size, &hash)?;
+        Ok(PreparedUpload {
+            plan: self,
+            size,
+            hash,
+        })
     }
 }
 
@@ -806,14 +682,16 @@ impl Engine {
             claims: self.upload_preparations.clone(),
         };
         let disk_root = self.planning_context().workspace_data_root(&w)?;
-        let directory_handle = OpenAt2Root::from_private_directory(
-            disk_root.private_directory(&directory)?,
-            MountPolicy::SameMount,
+        let io = UploadIo::new(disk_root, &directory, source)?;
+        let (retained, generations) = io.retained_usage()?;
+        let target = directory.join(format!("{item}-{generation}.full"));
+        let target_name = EntryName::new(
+            target
+                .file_name()
+                .expect("invariant: upload target has a filename"),
         )
         .map_err(preparation_fs_error)?;
-        let (retained, generations) = retained_upload_usage(&directory_handle)?;
-        let target = directory.join(format!("{item}-{generation}.full"));
-        let existing = disk_root.open_optional_regular(&target)?.is_some();
+        let existing = io.target_exists(&target_name)?;
         if generations > self.config.max_entries
             || (!existing && generations >= self.config.max_entries)
             || retained > self.config.max_workspace_bytes
@@ -828,12 +706,11 @@ impl Engine {
             workspace: w,
             item: item.into(),
             path: path.clone(),
-            source,
+            io,
             expected_content,
             generation,
             base_version_id: base_entry.map(|entry| entry.version_id),
             directory,
-            directory_handle,
             disk_resources: std::sync::Arc::clone(&self.disk_resources),
             target,
             previous,
@@ -852,7 +729,7 @@ impl Engine {
 
     /// Revalidate the frozen workspace and authorization before making copied
     /// bytes visible through its manifest. Stale work never replaces new state.
-    pub fn finish_upload(&mut self, mut prepared: PreparedUpload) -> Result<StagedFile> {
+    pub fn finish_upload(&mut self, prepared: PreparedUpload) -> Result<StagedFile> {
         let plan = &prepared.plan;
         let (mut w, base_entry) = self.validate_upload_target(
             &plan.workspace.workspace_id,
@@ -881,74 +758,30 @@ impl Engine {
         let current_directory = self
             .planning_context()
             .workspace_data_root(&w)?
-            .directory(&plan.directory)?;
-        if platform_io::fs_safety::linux::FileIdentity::from_fd(&current_directory)?
-            != plan.directory_handle.identity()
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::UnsafePath,
-                "workspace data directory identity changed during preparation",
-            ));
-        }
-        if let Some(verified) = &prepared.verified {
-            let current = if let Some(scratch) = &prepared.scratch {
-                let relative =
-                    RelativePath::new(Path::new(scratch.file_name().expect("scratch filename")))
-                        .map_err(preparation_fs_error)?;
-                plan.directory_handle
-                    .open_file(&relative, false)
-                    .map_err(preparation_fs_error)?
-            } else {
-                plan.retained_file()?
-            };
-            // The single-pass copy retains the inode it wrote. Validate both
-            // that handle and its pathname before publishing its receipt;
-            // readonly permissions alone do not prove unchanged contents.
-            if FileStamp::of(&verified.file)? != verified.stamp
-                || FileStamp::of(&current)? != verified.stamp
-            {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::ChecksumMismatch,
-                    "upload generation changed during preparation",
-                ));
-            }
-        }
-        if let Some(old) = plan
+            .directory_identity(&plan.directory)?;
+        let replay = plan
             .previous
             .as_ref()
-            .filter(|old| old.dirty_generation == plan.generation)
-        {
+            .filter(|old| old.dirty_generation == plan.generation);
+        let finish = if replay.is_some() {
+            UploadFinish::Replay
+        } else {
+            UploadFinish::Publish {
+                max_workspace_bytes: self.config.max_workspace_bytes,
+                max_entries: self.config.max_entries,
+            }
+        };
+        plan.io
+            .finish(&plan.target_name()?, current_directory, finish)?;
+        if let Some(old) = replay {
             return Ok(old.clone());
         }
-        let (retained, generations) = retained_upload_usage(&plan.directory_handle)?;
-        if retained > self.config.max_workspace_bytes || generations > self.config.max_entries {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                "retained generations exceed the workspace byte or count budget",
-            ));
-        }
-        if let Some(scratch) = &prepared.scratch {
-            // Unique immutable scratch is already included in the quota above.
-            // Rename, never copy or hash, while holding the serialized writer.
-            rustix::fs::renameat_with(
-                plan.directory_handle.directory(),
-                scratch.file_name().expect("scratch filename"),
-                plan.directory_handle.directory(),
-                plan.target.file_name().expect("target filename"),
-                rustix::fs::RenameFlags::NOREPLACE,
-            )
-            .map_err(std::io::Error::from)?;
-            prepared.scratch = None;
-        }
-        plan.directory_handle.directory().sync_all()?;
         let staged = StagedFile {
             item_id: plan.item.clone(),
             path: plan.path.clone(),
             source_path: plan.target.clone(),
             size: prepared.size,
-            content_hash: prepared
-                .hash
-                .expect("invariant: completed upload has a body digest"),
+            content_hash: prepared.hash,
             dirty_generation: plan.generation,
             base_version_id: plan.base_version_id.clone(),
         };
@@ -1634,3 +1467,7 @@ impl crate::engine::PlanningContext<'_> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/upload_admission_tests.rs"]
+mod upload_admission_tests;

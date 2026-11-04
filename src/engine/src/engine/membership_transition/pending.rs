@@ -13,6 +13,7 @@ pub(crate) mod activation;
 pub(super) mod admission;
 mod data;
 mod joint;
+pub(in crate::engine) mod reservation;
 pub use joint::{MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote};
 pub(super) const CONTROL_ARCHIVE_DIRECTORY: &str = "control-archive";
 const ENROLLMENT_KIND: &str = "membership-pending-member";
@@ -55,7 +56,7 @@ impl PendingMembershipStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct MemberIdentity {
+pub(super) struct MemberIdentity {
     pool_id: String,
     disk_id: String,
     slot_id: String,
@@ -123,11 +124,13 @@ struct ControlBootstrap {
 }
 
 struct PendingDisk {
-    root: DiskRoot,
+    root: Arc<DiskRoot>,
     seal: PendingDiskSeal,
+    reservation_name: String,
+    _reservation_lock: Arc<File>,
     // Same .writer.lock as ordinary Engine initialization. Never reacquire an
     // old member lock, nor add this resource to normal Engine::disk_resources.
-    _lock: File,
+    _lock: Arc<File>,
 }
 enum MemberResource {
     Retained(Arc<DiskHandle>),
@@ -280,6 +283,8 @@ impl Engine {
         #[cfg(feature = "fault-injection")]
         let mut sealed = 0;
         for (disk, resource) in pending.added_resources() {
+            #[cfg(feature = "fault-injection")]
+            self.failpoint(&format!("before_membership_pending_seal_{}", sealed + 1))?;
             resource
                 .root
                 .write_json(&disk.root.join("disk.json"), &resource.seal, false)?;

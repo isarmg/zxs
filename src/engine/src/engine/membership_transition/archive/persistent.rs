@@ -898,6 +898,7 @@ fn verify_epoch(
         intent,
         hash: root.transition_hash.clone(),
         receipts,
+        prepared_roots: BTreeMap::new(),
     };
     let inspected = inspect_control(&config, &fence, source)?;
     if inspected.journals != journals || inspected.published_candidates != source.seals.len() {
@@ -1013,6 +1014,7 @@ impl PendingControlArchive {
                     intent,
                     hash: epoch.transition_hash.clone(),
                     receipts,
+                    prepared_roots: BTreeMap::new(),
                 };
                 inspect_control(&original, &archived_fence, &mut source)?;
             }
@@ -1242,6 +1244,7 @@ pub(in crate::engine::membership_transition) fn install_generation_archive(
         intent: intent.clone(),
         hash: transition,
         receipts,
+        prepared_roots: BTreeMap::new(),
     };
     let archive = PendingControlArchive {
         store,

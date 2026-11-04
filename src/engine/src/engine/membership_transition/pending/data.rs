@@ -42,6 +42,7 @@ impl DataDependency {
             || identity.slot_id != disk.slot_id
             || identity.binding_generation != disk.binding_generation
             || identity.simulation != (intent.target.mode == Mode::Development)
+            || intent.added_roots.get(&disk.disk_id) != Some(identity)
             || self.seal.transition_hash != object_hash(INTENT_KIND, intent)?
             || self.seal.target_config_hash != object_hash("membership-target", &intent.target)?
             || self.seal.control_archive_root != archive
@@ -123,7 +124,12 @@ pub(super) struct PendingDataDisk {
 impl PendingDataDisk {
     pub(super) fn validate(&self) -> Result<()> {
         admission::verify_named_root(&self.resource.root)?;
-        admission::inspect_new_root(&self.resource.root, &self.resource.seal, true)?;
+        reservation::verify_writer(&self.resource.root, &self.resource._lock)?;
+        admission::inspect_new_root(
+            &self.resource.root,
+            &self.resource.seal,
+            &self.resource.reservation_name,
+        )?;
         Ok(())
     }
     pub(super) fn synchronize(&self) -> Result<()> {

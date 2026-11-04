@@ -34,6 +34,11 @@ IO_ENGINE_GROUPS = (
     ("verified-payloads", "engine::publication::verified_payloads::tests::", ()),
     ("file-stamps", "file_stamp::tests::", ()),
     ("workspace-range", "business::file::pending_regressions::", ()),
+    ("upload-resources", "disk::admission::upload::tests::", ()),
+    ("upload-workspaces", "business::workspace::upload_admission_tests::", ()),
+    ("upload-regressions", "upload_",
+     ("--skip", "upload_admission_tests", "--skip", "disk::admission::upload::tests::")),
+    ("disk-export", "disk::export_tests::", ()),
 )
 IO_PLATFORM_GROUPS = (
     ("platform-payload", "payload::tests::", ()),

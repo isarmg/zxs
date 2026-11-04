@@ -13,7 +13,7 @@ use std::{
 
 mod admission;
 pub use admission::DiskFile;
-pub(crate) use admission::{DiskIoBinding, DiskIoLease};
+pub(crate) use admission::{DiskIoBinding, DiskIoLease, UploadFinish, UploadIo};
 mod owned;
 pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
 
@@ -510,6 +510,7 @@ fn full_copy_to_path(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn full_copy_held(
     source: File,
     directory: &OpenAt2Root,
@@ -528,6 +529,37 @@ pub(crate) fn full_copy_held(
     .map_err(CopyFailure::into_error)
 }
 
+/// The observer receives identity evidence, never a raw file capability. Upload
+/// cleanup can therefore own the published scratch even if its final fsync fails.
+enum FullCopyProgress {
+    Check,
+    Created {
+        name: EntryName,
+        identity: platform_io::fs_safety::linux::FileIdentity,
+    },
+    Published,
+}
+
+fn full_copy_held_observed(
+    source: &File,
+    directory: &OpenAt2Root,
+    destination_name: &EntryName,
+    chunk_bytes: u32,
+    max_bytes: u64,
+    observe: &mut impl FnMut(FullCopyProgress) -> Result<()>,
+) -> Result<(u64, ContentHash, ChecksumManifest, File)> {
+    full_copy_checked_observed(
+        source,
+        directory.directory(),
+        destination_name,
+        chunk_bytes,
+        max_bytes,
+        None,
+        observe,
+    )
+    .map_err(CopyFailure::into_error)
+}
+
 fn full_copy_checked(
     source: impl std::os::unix::fs::FileExt,
     directory: &File,
@@ -536,11 +568,32 @@ fn full_copy_checked(
     max_bytes: u64,
     expected: Option<&FileVersion>,
 ) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
-    let temporary = format!(".zxs-full-{}", new_id("req")?);
+    full_copy_checked_observed(
+        &source,
+        directory,
+        destination_name,
+        chunk_bytes,
+        max_bytes,
+        expected,
+        &mut |_| Ok(()),
+    )
+}
+
+fn full_copy_checked_observed(
+    source: &impl std::os::unix::fs::FileExt,
+    directory: &File,
+    destination_name: &EntryName,
+    chunk_bytes: u32,
+    max_bytes: u64,
+    expected: Option<&FileVersion>,
+    observe: &mut impl FnMut(FullCopyProgress) -> Result<()>,
+) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
+    observe(FullCopyProgress::Check)?;
+    let temporary = EntryName::new(format!(".zxs-full-{}", new_id("req")?)).map_err(fs_error)?;
     let mut target = File::from(
         rustix::fs::openat(
             directory,
-            temporary.as_str(),
+            temporary.as_os_str(),
             rustix::fs::OFlags::CREATE
                 | rustix::fs::OFlags::EXCL
                 | rustix::fs::OFlags::WRONLY
@@ -550,7 +603,14 @@ fn full_copy_checked(
         )
         .map_err(std::io::Error::from)?,
     );
+    let mut identity = None;
     let result = (|| {
+        let created = platform_io::fs_safety::linux::FileIdentity::from_fd(&target)?;
+        identity = Some(created);
+        observe(FullCopyProgress::Created {
+            name: temporary.clone(),
+            identity: created,
+        })?;
         let mut full = blake3::Hasher::new();
         let mut chunks = Vec::new();
         let mut size = 0u64;
@@ -558,8 +618,9 @@ fn full_copy_checked(
         loop {
             let mut used = 0;
             while used < buf.len() {
+                observe(FullCopyProgress::Check)?;
                 let n = std::os::unix::fs::FileExt::read_at(
-                    &source,
+                    source,
                     &mut buf[used..],
                     size + used as u64,
                 )
@@ -584,6 +645,7 @@ fn full_copy_checked(
                     "file exceeds configured maximum",
                 )));
             }
+            observe(FullCopyProgress::Check)?;
             target.write_all(&buf[..used])?;
             full.update(&buf[..used]);
             chunks.push(*blake3::hash(&buf[..used]).as_bytes());
@@ -606,35 +668,69 @@ fn full_copy_checked(
                 "copied content differs from the published manifest",
             )));
         }
+        observe(FullCopyProgress::Check)?;
         target.set_permissions(fs::Permissions::from_mode(0o400))?;
         // Persist the complete bytes and final mode together before publishing
         // the name. The rename still needs its own parent-directory barrier.
+        observe(FullCopyProgress::Check)?;
         target.sync_all()?;
+        observe(FullCopyProgress::Check)?;
         rustix::fs::renameat_with(
             directory,
-            temporary.as_str(),
+            temporary.as_os_str(),
             directory,
             destination_name.as_os_str(),
             rustix::fs::RenameFlags::NOREPLACE,
         )
         .map_err(std::io::Error::from)?;
+        observe(FullCopyProgress::Published)?;
         directory.sync_all()?;
+        observe(FullCopyProgress::Check)?;
         Ok((size, hash, checksums))
     })();
     match result {
         Ok((size, hash, checksums)) => Ok((size, hash, checksums, target)),
         Err(operation) => {
-            match rustix::fs::unlinkat(directory, temporary.as_str(), rustix::fs::AtFlags::empty())
-            {
-                Ok(()) | Err(rustix::io::Errno::NOENT) => Err(operation),
+            // If fstat itself failed, no pathname has a proven cleanup identity.
+            // Preserve that temporary and return the concrete original failure.
+            let Some(identity) = identity else {
+                return Err(operation);
+            };
+            match remove_owned_file(directory, &temporary, identity) {
+                Ok(()) => Err(operation),
                 Err(cleanup) => Err(CopyFailure::Destination(Error::Cleanup {
                     operation: Box::new(operation.into_error()),
-                    cleanup: cleanup.into(),
+                    cleanup,
                 })),
             }
         }
     }
 }
+/// A private scratch name can be replaced between preparation and cleanup.
+/// Never delete a different inode merely because it now has our former name.
+fn remove_owned_file(
+    directory: &File,
+    name: &EntryName,
+    identity: platform_io::fs_safety::linux::FileIdentity,
+) -> std::io::Result<()> {
+    let stat = match rustix::fs::statat(
+        directory,
+        name.as_os_str(),
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(stat) => stat,
+        Err(rustix::io::Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if stat.st_dev != identity.device || stat.st_ino != identity.inode {
+        return Ok(());
+    }
+    match rustix::fs::unlinkat(directory, name.as_os_str(), rustix::fs::AtFlags::empty()) {
+        Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(crate) fn verify_payload(directory: &Path, version: &FileVersion) -> Result<()> {
     verify_payload_held(directory, version).map(|_| ())
 }

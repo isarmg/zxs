@@ -719,7 +719,7 @@ fn membership_activation_later_fence_prevents_reopening_for_writes() {
 }
 
 #[test]
-fn membership_activation_unenrolled_empty_target_does_not_block_old_fence_reopen() {
+fn membership_activation_reserved_target_does_not_block_old_fence_reopen() {
     let temp = tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()
@@ -742,7 +742,8 @@ fn membership_activation_unenrolled_empty_target_does_not_block_old_fence_reopen
     let reopened = Engine::open(&temp.path().join("system")).unwrap();
     assert_eq!(reopened.membership_fence_status(), Some(status));
     assert!(reopened.blocked);
-    assert!(fs::read_dir(&new.root).unwrap().next().is_none());
+    assert!(new.root.join(".writer.lock").is_file());
+    assert!(!new.root.join("disk.json").exists());
 }
 
 #[test]
@@ -1318,7 +1319,8 @@ fn membership_activation_successor_fence_reopens_read_only_before_enrollment() {
         reopened.membership_fence_status().unwrap().operation_id,
         operation
     );
-    assert!(fs::read_dir(&added.root).unwrap().next().is_none());
+    assert!(added.root.join(".writer.lock").is_file());
+    assert!(!added.root.join("disk.json").exists());
     let status = reopened
         .begin_membership_handoff(target, "admin", operation)
         .unwrap();

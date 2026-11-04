@@ -11,6 +11,7 @@ impl Engine {
                 "pending members require original fence",
             )
         })?;
+        reservation::verify_intent_roots(&fence.intent)?;
         let origin = fence.intent.origin.config();
         let target = &fence.intent.target;
         if let Some(effect) = &fence.intent.effect {
@@ -85,7 +86,8 @@ impl Engine {
         let identity = source.identity()?;
         identities.insert((identity.device, identity.inode));
         let mut roots = Vec::new();
-        // Every target is inspected before even creating new lock files.
+        // Check every supplied FD against the pre-fence identity before
+        // consuming held preparation or reacquiring its existing writer lock.
         for disk in added {
             let directory = supplied.remove(&disk.disk_id).ok_or_else(|| {
                 Error::new(
@@ -101,41 +103,63 @@ impl Engine {
                     "pending root aliases an admitted directory",
                 ));
             }
+            let identity = member_identity(&fence.intent.target, &disk, identity);
+            if fence.intent.added_roots.get(&disk.disk_id) != Some(&identity) {
+                return Err(Error::new(
+                    ErrorCode::DiskIdentityMismatch,
+                    "pending root differs from the pre-fence held identity",
+                ));
+            }
+            let reservation_name = reservation::name(
+                &fence.intent.origin,
+                &fence.intent.target,
+                &fence.intent.principal,
+                fence.intent.operation_id,
+                &identity,
+            )?;
             let seal = PendingDiskSeal {
                 format: PendingFormat::MembershipPending,
-                identity: member_identity(&fence.intent.target, &disk, identity),
+                identity,
                 transition_hash: fence.hash.clone(),
                 target_config_hash: target_hash.clone(),
                 control_archive_root: archive_root.to_owned(),
             };
-            let bound = inspect_new_root(&root, &seal, false)?;
-            roots.push((disk, root, seal, bound));
+            inspect_new_root(&root, &seal, &reservation_name)?;
+            roots.push((disk, root, seal, reservation_name));
         }
         let mut resources = BTreeMap::new();
-        for (disk, root, seal, bound) in roots {
-            let lock = root.lock_file()?;
-            platform_io::fs_safety::linux::SingleLinkRequirement::check(&lock).map_err(fs_error)?;
-            rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-                .map_err(|error| {
-                    Error::from(std::io::Error::from(error)).context(
-                        ErrorCode::WriterAlreadyActive,
-                        "another writer owns pending member",
+        for (disk, root, seal, reservation_name) in roots {
+            let (root, lock, directory_lock) = match fence.prepared_roots.get(&disk.disk_id) {
+                Some(prepared) => {
+                    // The caller's FD only confirms its selection. All writes keep
+                    // the resource and locks actually admitted before the fence.
+                    reservation::verify_writer(&prepared.root, &prepared.writer)?;
+                    (
+                        Arc::clone(&prepared.root),
+                        Arc::clone(&prepared.writer),
+                        Arc::clone(&prepared.directory_lock),
                     )
-                })?;
+                }
+                None => {
+                    let directory_lock = root.directory(root.path())?;
+                    reservation::lock(&directory_lock)?;
+                    // A fence is never issued before this name is synchronized.
+                    let lock = root.open_regular(&root.path().join(".writer.lock"))?;
+                    reservation::lock(&lock)?;
+                    reservation::verify_writer(&root, &lock)?;
+                    (Arc::new(root), Arc::new(lock), Arc::new(directory_lock))
+                }
+            };
             verify_named_root(&root)?;
-            let now_bound = inspect_new_root(&root, &seal, true)?;
-            if bound != now_bound {
-                return Err(Error::new(
-                    ErrorCode::DiskIdentityMismatch,
-                    "pending root binding changed during admission",
-                ));
-            }
+            inspect_new_root(&root, &seal, &reservation_name)?;
             resources.insert(
                 disk.disk_id,
                 MemberResource::Added(Box::new(PendingDisk {
                     root,
                     seal,
+                    reservation_name,
                     _lock: lock,
+                    _reservation_lock: directory_lock,
                 })),
             );
         }
@@ -247,7 +271,8 @@ impl Engine {
                 validate_stored_seal(&seal, &handle.seal)
             }
             MemberResource::Added(handle) => {
-                inspect_new_root(&handle.root, &handle.seal, true).map(|_| ())
+                reservation::verify_writer(&handle.root, &handle._lock)?;
+                inspect_new_root(&handle.root, &handle.seal, &handle.reservation_name).map(|_| ())
             }
         }
     }
@@ -256,28 +281,16 @@ impl Engine {
 pub(super) fn inspect_new_root(
     root: &DiskRoot,
     expected: &PendingDiskSeal,
-    own_lock: bool,
+    reservation_name: &str,
 ) -> Result<bool> {
+    reservation::verify_marker(root, reservation_name)?;
     let names = root
         .entries(root.path())?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(fs_error)?;
     let stored = root.open_optional_regular(&root.path().join("disk.json"))?;
-    match stored {
-        None => {
-            // Only a lock created by this still-live admission can be unbound.
-            // A restart cannot adopt a lock or atomic scratch left before seal.
-            if names
-                .iter()
-                .any(|name| !own_lock || name.as_os_str() != ".writer.lock")
-            {
-                return Err(Error::new(
-                    ErrorCode::DiskAlreadyEnrolled,
-                    "unbound pending root is nonempty; preserve and inspect existing material",
-                ));
-            }
-            Ok(false)
-        }
+    let bound = match stored {
+        None => false,
         Some(file) => {
             let actual: PendingDiskSeal = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
             if &actual != expected {
@@ -286,23 +299,52 @@ pub(super) fn inspect_new_root(
                     "pending disk seal differs from held member or transition",
                 ));
             }
-            for name in names {
-                if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
-                    root.open_regular(&root.path().join(name.as_path()))?;
-                } else if !matches!(
-                    name.as_os_str().to_str(),
-                    Some("disk.json" | ".writer.lock" | "metadata")
-                ) {
+            true
+        }
+    };
+    let expected_bytes = encode_metadata(expected, MAX_METADATA)?;
+    for name in names {
+        if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
+            let bytes = root.read_bytes(&root.path().join(name.as_path()), MAX_METADATA)?;
+            // Only an exact prefix of this operation's immutable pending seal
+            // explains a crash before rename. Preserve, never promote/delete it.
+            if !expected_bytes.starts_with(&bytes) {
+                return Err(Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "pending seal staging differs from its exact reservation",
+                ));
+            }
+        } else {
+            match name.as_os_str().to_str() {
+                Some(value) if value == reservation_name => (),
+                Some(".writer.lock") => {
+                    if root
+                        .open_regular(&root.path().join(".writer.lock"))?
+                        .metadata()?
+                        .len()
+                        != 0
+                    {
+                        return Err(Error::new(
+                            ErrorCode::DiskIdentityMismatch,
+                            "pending lock contains unrelated bytes",
+                        ));
+                    }
+                }
+                Some("disk.json") if bound => (),
+                Some("metadata") if bound => (),
+                _ => {
                     return Err(Error::new(
                         ErrorCode::UnsafePath,
                         "pending root contains active or unrelated material",
                     ));
                 }
             }
-            validate_metadata_namespace(root, &expected.transition_hash)?;
-            Ok(true)
         }
     }
+    if bound {
+        validate_metadata_namespace(root, &expected.transition_hash)?;
+    }
+    Ok(bound)
 }
 fn validate_metadata_namespace(root: &DiskRoot, transition: &str) -> Result<()> {
     let metadata = root.path().join("metadata");

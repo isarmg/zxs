@@ -4,6 +4,9 @@
 //! coordinator must cover every consumer before it can advertise a disk as disabled.
 //! Control transitions are currently compiled only for tests/fault injection;
 //! normal builds retain real file ownership and fail-closed accounting.
+mod upload;
+pub(crate) use upload::{UploadFinish, UploadIo};
+
 use super::DiskSeal;
 use crate::{Error, ErrorCode, Result, ValidatedConfig};
 use platform_io::fs_safety::{EntryName, linux::DirectoryEntries};
@@ -651,18 +654,24 @@ impl<T: Send + 'static> DiskIoResource<T> {
             .map_err(|source| io::Error::new(io::ErrorKind::PermissionDenied, source))
     }
 
-    fn access(&self) -> io::Result<ResourceAccess<'_, T>> {
-        let value = self
-            .resource
-            .value
-            .lock()
-            .map_err(|_| io::Error::other("disk I/O resource lock poisoned"))?;
+    fn access_checked(&self) -> Result<ResourceAccess<'_, T>> {
+        let value = self.resource.value.lock().map_err(|_| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "disk I/O resource lock poisoned",
+            )
+        })?;
         let access = ResourceAccess {
             value: Some(value),
             owner: &self.resource,
         };
-        self.check_io()?;
+        self.check_running()?;
         Ok(access)
+    }
+
+    fn access(&self) -> io::Result<ResourceAccess<'_, T>> {
+        self.access_checked()
+            .map_err(|source| io::Error::new(io::ErrorKind::PermissionDenied, source))
     }
 }
 

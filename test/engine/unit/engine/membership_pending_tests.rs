@@ -219,6 +219,10 @@ fn membership_pending_reopens_only_through_original_fence_and_explicit_resume() 
 fn membership_pending_unsupported_targets_fail_before_target_writes() {
     let mut f = Fixture::new();
     let target = f.target.clone();
+    let before = f.target.disks[2..]
+        .iter()
+        .map(|disk| files(&disk.root))
+        .collect::<Vec<_>>();
     for change in 0..9 {
         let mut unsupported = target.clone();
         match change {
@@ -268,8 +272,8 @@ fn membership_pending_unsupported_targets_fail_before_target_writes() {
         f.engine.membership_fence.as_mut().unwrap().intent.target =
             ValidatedConfig::try_from(unsupported).unwrap();
         assert!(f.enroll().is_err(), "case {change}");
-        for disk in &f.target.disks[2..] {
-            assert!(files(&disk.root).is_empty());
+        for (disk, before) in f.target.disks[2..].iter().zip(&before) {
+            assert_eq!(&files(&disk.root), before);
         }
         assert_blocked(&mut f.engine);
     }
@@ -294,6 +298,7 @@ fn membership_pending_rejects_missing_changed_duplicate_and_locked_roots() {
                 directories[1].directory = directories[0].directory.try_clone().unwrap();
             }
             3 => {
+                f.reopen();
                 _lock = DiskRoot::open(&f.target.disks[2].root)
                     .unwrap()
                     .lock_file()
@@ -315,14 +320,18 @@ fn membership_pending_rejects_missing_changed_duplicate_and_locked_roots() {
 #[test]
 fn membership_pending_rejects_untrusted_archive_before_any_seal() {
     let mut f = Fixture::new();
+    let before = f.target.disks[2..]
+        .iter()
+        .map(|disk| files(&disk.root))
+        .collect::<Vec<_>>();
     let wrong = "a".repeat(64);
     assert!(
         f.engine
             .enroll_pending_members(&f.source, &wrong, f.directories())
             .is_err()
     );
-    for disk in &f.target.disks[2..] {
-        assert!(files(&disk.root).is_empty());
+    for (disk, before) in f.target.disks[2..].iter().zip(&before) {
+        assert_eq!(&files(&disk.root), before);
     }
 }
 
@@ -488,7 +497,7 @@ fn membership_pending_rejects_active_namespace_on_added_disk() {
 }
 
 #[test]
-fn membership_pending_seal_failure_boundaries_distinguish_bound_and_unbound_roots() {
+fn membership_pending_seal_failure_boundaries_resume_bound_and_unbound_roots() {
     for completed in [1, 2] {
         for reopen in [false, true] {
             let mut f = Fixture::new();
@@ -509,24 +518,8 @@ fn membership_pending_seal_failure_boundaries_distinguish_bound_and_unbound_root
                     .is_empty()
             );
             if reopen {
-                let before = f.target.disks[2..]
-                    .iter()
-                    .flat_map(|disk| files(&disk.root))
-                    .collect::<BTreeMap<_, _>>();
                 f.reopen();
-                let result = f.enroll();
-                if completed == 1 {
-                    assert!(result.is_err());
-                    assert_eq!(
-                        f.target.disks[2..]
-                            .iter()
-                            .flat_map(|disk| files(&disk.root))
-                            .collect::<BTreeMap<_, _>>(),
-                        before
-                    );
-                } else {
-                    assert!(result.unwrap().all_control_metadata_synchronized());
-                }
+                assert!(f.enroll().unwrap().all_control_metadata_synchronized());
             } else {
                 assert!(
                     f.engine
@@ -763,4 +756,51 @@ fn membership_pending_real_directory_conflict_keeps_progress_incomplete() {
             .unwrap()
             .all_control_metadata_synchronized()
     );
+}
+
+#[test]
+fn membership_pending_reserved_lock_and_exact_seal_staging_resume_after_restart() {
+    for part in ["no-stage", "empty", "partial", "complete", "foreign"] {
+        let mut f = Fixture::new();
+        f.engine
+            .inject_fault_once("before_membership_pending_seal_1");
+        assert!(f.enroll().is_err());
+        let (_, resource) = f
+            .engine
+            .pending_membership
+            .as_ref()
+            .unwrap()
+            .added_resources()
+            .next()
+            .unwrap();
+        let expected = encode_metadata(&resource.seal, MAX_METADATA).unwrap();
+        let path = resource
+            .root
+            .path()
+            .join(".state-atomic-0123456789abcdef0123456789abcdef.tmp");
+        let bytes = match part {
+            "empty" => &expected[..0],
+            "partial" => &expected[..expected.len() / 2],
+            "complete" => expected.as_slice(),
+            "foreign" => b"foreign".as_slice(),
+            "no-stage" => &expected[..0],
+            _ => unreachable!(),
+        };
+        if part != "no-stage" {
+            fs::write(&path, bytes).unwrap();
+        }
+        assert!(!f.target.disks[2].root.join("disk.json").exists());
+        let before = files(&f.target.disks[2].root);
+        f.reopen();
+        let result = f.enroll();
+        if part == "foreign" {
+            assert!(result.is_err());
+            assert_eq!(files(&f.target.disks[2].root), before);
+        } else {
+            assert!(result.unwrap().all_control_metadata_synchronized());
+        }
+        if part != "no-stage" {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+    }
 }

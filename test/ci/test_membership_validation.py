@@ -36,6 +36,10 @@ class MembershipValidation(unittest.TestCase):
         self.assertIn("smb-stream-read", labels)
         self.assertIn("activation", labels)
         self.assertIn("platform-payload", labels)
+        self.assertIn("upload-resources", labels)
+        self.assertIn("upload-workspaces", labels)
+        self.assertIn("upload-regressions", labels)
+        self.assertIn("disk-export", labels)
 
     def test_empty_test_inventory_is_a_failure(self):
         inventory = subprocess.CompletedProcess([], 0, "0 tests, 0 benchmarks\n", "")

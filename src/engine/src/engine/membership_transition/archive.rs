@@ -465,6 +465,7 @@ fn inspect_control(
     fence: &AdmittedFence,
     source: &mut impl ControlSource,
 ) -> Result<MembershipArchiveInspection> {
+    pending::reservation::verify_intent_roots(&fence.intent)?;
     let epoch = FrozenEpoch::read(&fence.intent, source)?;
     let mut members = config.metadata_members().cloned().collect::<Vec<_>>();
     members.sort_by(|left, right| left.disk_id.cmp(&right.disk_id));

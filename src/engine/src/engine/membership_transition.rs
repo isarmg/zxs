@@ -76,6 +76,7 @@ struct TransitionIntent {
     principal: String,
     origin: Origin,
     target: ValidatedConfig,
+    added_roots: BTreeMap<String, pending::MemberIdentity>,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
     effect: Option<ExitEffect>,
     boundary: Option<PublishedBoundary>,
@@ -112,6 +113,7 @@ pub(super) struct AdmittedFence {
     intent: TransitionIntent,
     hash: String,
     receipts: BTreeMap<String, Receipt>,
+    prepared_roots: BTreeMap<String, pending::reservation::ReservedRoot>,
 }
 
 /// Observed, synchronized old-member fence receipts. Neither a quorum nor all
@@ -159,7 +161,8 @@ impl Engine {
     /// Experimental first barrier, not an add/remove operation. It permanently
     /// pauses that generation's business decisions. Pure-add activation is explicit;
     /// cancellation and removal are not supported.
-    /// It writes only the existing members. Target paths are not opened or created.
+    /// Every added directory is reserved and writer-locked before the old fence.
+    /// Partial preparation is resumable only by the same operation and exact roots.
     /// A failed append may have persisted: inspect/reopen and retry the same intent.
     pub fn begin_membership_handoff(
         &mut self,
@@ -208,33 +211,42 @@ impl Engine {
                     "membership fence sequence exhausted",
                 )
             })?;
-            let intent = TransitionIntent {
-                operation_id,
-                principal: principal.to_owned(),
-                origin: match self.config.generation_hash() {
-                    Some(hash) => Origin::Successor {
-                        config: self.config.clone(),
-                        predecessor_authority_hash: hash.to_owned(),
-                    },
-                    None => Origin::Genesis {
-                        config: self.config.clone(),
-                    },
+            let origin = match self.config.generation_hash() {
+                Some(hash) => Origin::Successor {
+                    config: self.config.clone(),
+                    predecessor_authority_hash: hash.to_owned(),
                 },
-                target,
-                effect,
-                boundary: self.handoff_boundary()?,
-                fence_sequence: self.next_slot,
+                None => Origin::Genesis {
+                    config: self.config.clone(),
+                },
             };
-            let prepared = PreparedMetadataObject::new(INTENT_KIND, &intent, MAX_METADATA)?;
+            let boundary = self.handoff_boundary()?;
             let members = self.members();
-            // No fence is issued until every original held member still belongs
-            // to this pool, and every journal can append at a clean boundary.
             self.validate_fence_members(&members)?;
             if self.journals.values().any(JournalWriter::needs_recovery) {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
                     "a new membership fence requires clean original journals",
                 ));
+            }
+            let prepared_roots =
+                self.prepare_added_roots(&origin, &target, principal, operation_id)?;
+            let intent = TransitionIntent {
+                operation_id,
+                principal: principal.to_owned(),
+                origin,
+                added_roots: prepared_roots
+                    .iter()
+                    .map(|(id, root)| (id.clone(), root.identity.clone()))
+                    .collect(),
+                target,
+                effect,
+                boundary,
+                fence_sequence: self.next_slot,
+            };
+            let prepared = PreparedMetadataObject::new(INTENT_KIND, &intent, MAX_METADATA)?;
+            for root in prepared_roots.values() {
+                root.verify_unsealed()?;
             }
             self.blocked = true;
             self.metadata_integrity.invalidate();
@@ -244,6 +256,7 @@ impl Engine {
                 intent,
                 hash: prepared.hash,
                 receipts: BTreeMap::new(),
+                prepared_roots,
             });
         }
         self.persist_membership_fence()
@@ -395,6 +408,7 @@ impl Engine {
         }
         self.config.verify_saved_metadata_membership(config)?;
         validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
+        pending::reservation::verify_intent_roots(&intent)?;
         Self::require_actor(&intent.principal)?;
         let boundary_sequence = intent.boundary.as_ref().map_or(0, |base| base.sequence);
         if intent.fence_sequence <= boundary_sequence || intent.fence_sequence == u64::MAX {
@@ -461,6 +475,7 @@ impl Engine {
             intent,
             hash: hash.clone(),
             receipts,
+            prepared_roots: BTreeMap::new(),
         });
         Ok(())
     }

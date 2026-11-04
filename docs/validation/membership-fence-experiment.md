@@ -94,3 +94,27 @@
 本阶段仍未激活新集合，不提供已有池完整在线添加/管理/删除。HTTP/Web、正文/本盘证明/workspace 排空、后继代际、只凭目标启动和完整操作结果均未执行或实现。最终执行命令、数量与环境另记验证归档，不把历史通过数当作本轮重跑。
 
 2026-11-04 最终源码验证：`membership_` 95 项通过、1 个既有导出夹具默认忽略，其中本阶段新增 joint 专项 15 项；`journal::` 91 项通过；`recovery` 119 项通过。过滤集合存在交叉，不相加作唯一测试数。production library check、全目标严格 Clippy、包级 rustfmt、架构、2845 个本地文档链接与 whitespace 检查通过。两个早期测试编译夹具错误及一次缺显式文档锚已修复；以上为修复后结果。仍未跑全 engine/全仓、HTTP/Web/SMB、真实设备、部署、物理掉电或全逐屏障故障矩阵。
+
+## 在线新增准备的断点恢复增量（源码，待 CI）
+
+本增量替代上文“第一个 seal 后重启时拒绝未绑定锁”的实验限制。它只收敛纯新增的准备恢复，不提供取消、永久故障后的 certified abort 或完整在线增删承诺。新增目录仍是已有、私有的 ZXS 数据目录；同一文件系统的多个目录可用，不把物理设备独立性当作准入条件。
+
+持久顺序与权限边界：
+
+1. 保持旧池 writer，打开并持有全部新增目录 FD。校验配置、名称与 FD 身份、权限、目录内容、直接物理别名和已有准备约束；目录 flock 只串行化支持这一协议的准备者。任何一个明显不合格的新目录在源池写入前拒绝，旧 State 和业务写能力不变。
+2. 在原元数据成员的 `metadata/membership-preparations/<operation>.json` 保存同一不可变源准备记录，全部同步后才修改新根。记录绑定稳定源配置/前代权威、actor/operation、完整 target 和新增根的实际 device/inode；不包含会随业务发布变化的 boundary/snapshot。部分副本可约束同 operation 续作，但不是多数票、成员身份、归档或发布权威。冲突副本、同根不同 operation、原根被替换均拒绝，绝不重新生成已保存身份。
+3. 在每个 held 新根用原子 mkdir 创建 `.membership-reservation-<摘要>` 空目录。名称绑定源/目标/actor/operation 和该根身份，因此目录创建后即有完整意图标识，不依赖一段可能半写的 marker JSON。同步 marker 目录和根后，才创建并持有 `.writer.lock`；同步锁文件和根，并在普通 writer 锁下重新校验身份、锁 inode、空锁字节及受控内容。普通初始化也在同一 writer 锁下拒绝 reservation，不能仅凭先前空目录观察接管该根。
+4. 全部根和锁保留到旧 fence 的 admission。当前实验 `TransitionIntent` 必填新增物理身份集合，冻结真正 fence 时的最新已发布 boundary；原固定 N/Q 不变。该必填字段改变本轮实验 intent 的哈希与格式，不兼容此前实验 generation；不添加默认值或迁移，也不重写旧 Candidate/原 genesis 数据。enrollment 使用同一批 held 根/锁，不丢 FD 后按路径重新选择。重启时由已认证 fence 中的身份恢复，归档、联合依赖与数据 readiness 均精确连回该 intent；没有哈希环，也不改旧 Candidate 字节。
+5. pending seal 之前已存在准确 reservation，因此只有同一 operation、同一物理根、空 writer 锁和该 seal 的准确原子临时前缀可以续作。空、部分、完整 staging 都保留原字节，再写新的完整不可变 seal；外来文件、错误 staging、错误 seal、被替换锁、错误身份均拒绝保留。没有“任何无 seal 非空目录都接管”的分支，也没有删除未知文件的恢复逻辑。
+
+源准备失败或目标准备失败时尚无旧 fence，旧业务仍可继续；稍后同 operation 按稳定准备绑定冻结新的发布前缀。已经存在 reservation 的根只支持原 operation 续作。若目标随后永久不可用，本片没有解除 reservation 或恢复旧代写权的 certified abort；旧 fence 一旦成立仍保持停写。源准备记录是独立新增材料，不改变原 Candidate、seal 或历史日志字节，不是用户删除目录时生成的恢复文件/备份。
+
+测试源码新增 [membership_reservation_tests.rs](../../test/engine/unit/engine/membership_reservation_tests.rs)，覆盖 18 个源记录完成、mkdir、marker 目录同步、根同步、锁创建、flock、锁文件同步、锁根同步断点；每次重开同 operation，期间旧业务可发布，再完成 enrollment/joint/activation。另有非法新目录旧池字节不变、同 operation 身份替换、冲突 operation/actor/target、外来材料保留、初始化并发互斥、held FD/锁对象确实复用。pending 专项新增无 seal 锁恢复、准确空/部分/完整 seal staging 恢复及外来 staging 拒绝；原第一个/第二个 seal 断点均改为可重启续作。原 data-only、mixed、重复代际测试保留，新增身份绑定进入其原有验证链。
+
+验证状态：本次只执行固定 Rust 1.99.0 rustfmt 和 `git diff --check`，未执行 cargo、编译、测试、Clippy 或其他重型验证（执行环境剩余空间不足 1 GB，按任务限制交远程 CI）。上述用例是已加入源码的预期，不是已通过的运行证据；阶段 failpoint 与人工构造 staging 不等于真实物理掉电/全部底层原子写屏障验证。
+
+同步与成本：每轮读取原成员保存的准备记录用于冲突核对，成本随保留记录数增长；对每个旧元数据成员新增一份不可变准备写，对每个新增根新增 marker mkdir、marker/根同步和 writer 文件/根同步。保留全部新增 FD 和锁直到 enrollment/activation，空间为新增根数的线性量。既有 archive/joint/activation 成本不变，未宣称缩短停写时间或完整生产就绪。
+
+源准备记录当前保留并参与同根冲突检查。本片不包含退出后重新登记或 inode 重用的生命周期，不能把这一实验性保留策略宣称为永久产品规则；未来支持这些路径须明确结束原 reservation，不能靠忽略记录或删除未知文件实现。
+
+反向初始化竞态补充：普通初始化也在任何 writer 文件创建或身份写入前持有全部数据根的目录 flock，再按相同顺序取得普通 writer 锁，目录锁持续到 seal/config/journal/index 初始化结束。这样初始化已获准时，准备者在源准备记录和目标 mkdir 之前即失败；准备者先持目录锁时，初始化不能在目标新增 writer 文件。新增反向锁集测试及更新正向并发测试源码，均未本地运行；不只依赖锁后一次 reservation 扫描证明双向互斥。
