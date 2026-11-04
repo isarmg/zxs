@@ -114,7 +114,7 @@ pub(super) fn read_record(
             .ok_or_else(corrupt)?;
         let disk = original.disks.remove(index);
         if disk.slot_id != addition.slot_id
-            || disk.root != PathBuf::from(&addition.selection.root_path)
+            || disk.root.as_path() != Path::new(&addition.selection.root_path)
             || disk.level != addition.level
             || disk.upstream_slot_id != addition.upstream_slot_id
             || disk.metadata_member != addition.metadata_member

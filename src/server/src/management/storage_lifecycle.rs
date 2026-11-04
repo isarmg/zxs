@@ -81,7 +81,7 @@ fn read_record(
         || preview.request.slot_id != preview.target.slot_id
         || disk.slot_id != preview.target.slot_id
         || disk.binding_generation != preview.target.binding_generation
-        || disk.root != PathBuf::from(&preview.target.root_path)
+        || disk.root.as_path() != Path::new(&preview.target.root_path)
         || preview.original_metadata_members
             != record
                 .original

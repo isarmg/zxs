@@ -626,3 +626,60 @@ fn native_error_categories_keep_permissions_timeout_and_invalid_data_distinct() 
         Reason::InvalidOutput
     );
 }
+
+#[test]
+fn offline_smart_replay_preserves_every_fixed_width_row() {
+    let data: [u8; 512] = std::array::from_fn(|index| (index % 256) as u8);
+    let mut text = String::new();
+    replay_data(&mut text, "IDENTIFY DEVICE", &data);
+    let rows: Vec<_> = text
+        .lines()
+        .filter(|line| line.as_bytes().first().is_some_and(u8::is_ascii_digit))
+        .collect();
+    assert_eq!(rows.len(), 32);
+    for (index, row) in rows.iter().enumerate() {
+        let start = index * 16;
+        let (range, bytes) = row.split_once(": ").unwrap();
+        assert_eq!(range, format!("{start:03}-{:03}", start + 15));
+        let expected: Vec<_> = (start..start + 16)
+            .map(|offset| format!("{:02x}", data[offset]))
+            .collect();
+        assert_eq!(bytes, expected.join(" "));
+    }
+    assert!(text.ends_with("===== [IDENTIFY DEVICE] DATA END =====\n"));
+}
+
+#[test]
+fn boxed_directory_observation_keeps_the_original_health_classification() {
+    for (source, expected) in [
+        (
+            storage_engine::Error::Filesystem(platform_io::fs_safety::Error::Io(io::Error::from(
+                io::ErrorKind::PermissionDenied,
+            ))),
+            Reason::PermissionDenied,
+        ),
+        (
+            storage_engine::Error::new(storage_contract::ErrorCode::DiskUnavailable, "offline"),
+            Reason::DeviceChanged,
+        ),
+        (
+            storage_engine::Error::new(
+                storage_contract::ErrorCode::DiskIdentityMismatch,
+                "changed",
+            ),
+            Reason::DeviceChanged,
+        ),
+        (
+            storage_engine::Error::new(storage_contract::ErrorCode::ObjectCorrupt, "invalid"),
+            Reason::QueryFailed,
+        ),
+    ] {
+        assert_eq!(
+            observation_reason(ObservationError::Directory {
+                path: PathBuf::from("/registered/directory"),
+                source: Box::new(source),
+            }),
+            expected,
+        );
+    }
+}

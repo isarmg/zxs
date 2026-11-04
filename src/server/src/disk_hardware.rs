@@ -61,7 +61,7 @@ enum ObservationError {
     Directory {
         path: PathBuf,
         #[source]
-        source: storage_engine::Error,
+        source: Box<storage_engine::Error>,
     },
 }
 
@@ -128,7 +128,7 @@ fn read_root_mount(
         .mount()
         .map_err(|source| ObservationError::Directory {
             path: root.to_owned(),
-            source,
+            source: Box::new(source),
         })?;
     Ok(RootMount {
         id: mount.mount_id,

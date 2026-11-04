@@ -394,3 +394,33 @@ fn held_root_mount_observation_does_not_reopen_a_replaced_directory_name() {
     assert_eq!(held.metadata().unwrap().ino(), original_inode);
     assert!(fs::metadata(&registered).is_err());
 }
+
+#[test]
+fn directory_observation_error_preserves_the_concrete_engine_source_chain() {
+    use std::error::Error as _;
+    let source = storage_engine::Error::new(
+        storage_contract::ErrorCode::DiskUnavailable,
+        "original directory observation failure",
+    )
+    .context(
+        storage_contract::ErrorCode::DiskUnavailable,
+        "held directory mount observation failed",
+    );
+    let source_message = source.to_string();
+    let cause_message = source.source().unwrap().to_string();
+    let error = ObservationError::Directory {
+        path: PathBuf::from("/registered/directory"),
+        source: Box::new(source),
+    };
+    assert_eq!(
+        error.to_string(),
+        "observe registered directory /registered/directory"
+    );
+    let retained = error.source().unwrap();
+    assert_eq!(retained.to_string(), source_message);
+    assert_eq!(retained.source().unwrap().to_string(), cause_message);
+    let ObservationError::Directory { source, .. } = error else {
+        panic!("expected the directory observation variant");
+    };
+    assert_eq!(source.code(), storage_contract::ErrorCode::DiskUnavailable);
+}

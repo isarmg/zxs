@@ -322,7 +322,7 @@ fn replay_data(text: &mut String, name: &'static str, data: &[u8; 512]) {
     .expect("invariant: String formatting cannot fail");
     writeln!(text, "===== [{name}] DATA START (BASE-16) =====")
         .expect("invariant: String formatting cannot fail");
-    for (index, row) in data.chunks_exact(16).enumerate() {
+    for (index, row) in data.as_chunks::<16>().0.iter().enumerate() {
         write!(text, "{:03}-{:03}:", index * 16, index * 16 + 15)
             .expect("invariant: String formatting cannot fail");
         for byte in row {
@@ -681,7 +681,7 @@ fn observation_reason(error: ObservationError) -> Reason {
             Reason::PermissionDenied
         }
         ObservationError::MountMissing(_) => Reason::DeviceChanged,
-        ObservationError::Directory { source, .. } => directory_reason(source),
+        ObservationError::Directory { source, .. } => directory_reason(*source),
         ObservationError::Io { .. } | ObservationError::Invalid { .. } => Reason::MappingUnknown,
     }
 }
