@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn administration_browser_expectations_cover_both_languages_without_mixed_labels() {
-    assert_eq!(ACTIONS.len(), 10);
-    assert_eq!(QUERIES.len(), 14);
+    assert_eq!(ACTIONS.len(), 9);
+    assert_eq!(QUERIES.len(), 13);
     for pairs in [&ACTIONS[..], &QUERIES[..]] {
         let en = labels(pairs, "en");
         let zh = labels(pairs, "zh-CN");
@@ -14,5 +14,16 @@ fn administration_browser_expectations_cover_both_languages_without_mixed_labels
             assert!(!en[..index].contains(&en[index]));
             assert!(!zh[..index].contains(&zh[index]));
         }
+    }
+}
+
+#[test]
+fn administration_controls_do_not_offer_a_second_smb_binding() {
+    for pairs in [&ACTIONS[..], &QUERIES[..]] {
+        assert!(
+            pairs
+                .iter()
+                .all(|(en, zh)| !en.contains("SMB") && !zh.contains("SMB"))
+        );
     }
 }

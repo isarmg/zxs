@@ -35,7 +35,6 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
             "I reviewed this plan and its consequences, including permanent deletion where applicable, and confirm this exact digest.",
         ),
         (Message::RepositoryAction, "仓库", "Repository"),
-        (Message::SmbAction, "SMB 绑定", "SMB binding"),
         (Message::PolicyAction, "路径副本规则", "Path copy rule"),
         (Message::RuleAction, "主盘规则", "Placement rule"),
         (Message::BranchAction, "历史分支", "History branch"),
@@ -56,12 +55,6 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
             "Copies including primary; 1 has no redundancy",
         ),
         (Message::RepositoryId, "仓库 ID", "Repository ID"),
-        (Message::BranchId, "分支 ID", "Branch ID"),
-        (
-            Message::HistoryGeneration,
-            "预期历史代数",
-            "Expected history generation",
-        ),
         (Message::PathRuleId, "路径规则 ID", "Path rule ID"),
         (Message::PathPrefix, "路径前缀", "Path prefix"),
         (
@@ -97,7 +90,6 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
             "操作 / 计划 / 策略 / 拓扑 ID",
             "Operation / plan / policy / topology ID",
         ),
-        (Message::EnableSmb, "启用 SMB", "Enable SMB"),
         (
             Message::Submit,
             "保存配置 / 创建预览",
@@ -110,7 +102,6 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
         (Message::Disks, "磁盘", "Disks"),
         (Message::IntegrityCheck, "完整性检查", "Integrity check"),
         (Message::Repository, "仓库详情", "Repository"),
-        (Message::SmbBinding, "SMB 绑定", "SMB binding"),
         (Message::Operation, "操作", "Operation"),
         (Message::Plan, "计划", "Plan"),
         (Message::BranchTree, "分支树", "Branch tree"),
@@ -205,7 +196,6 @@ fn actual_action_and_query_buttons_use_distinct_localized_keys() {
         ACTIONS.map(|(kind, _)| kind),
         [
             Kind::Repository,
-            Kind::Smb,
             Kind::Policy,
             Kind::Rule,
             Kind::Branch,
@@ -230,5 +220,21 @@ fn actual_action_and_query_buttons_use_distinct_localized_keys() {
             assert!(en.is_ascii(), "mixed English: {key:?}");
             assert_ne!(zh, en);
         }
+    }
+}
+
+#[test]
+fn shared_default_view_has_no_separate_web_binding_controls() {
+    let sources = [
+        include_str!("../../../../src/web/src/admin/mod.rs"),
+        include_str!("../../../../src/web/src/admin/request.rs"),
+        include_str!("../../../../src/web/src/admin/messages.rs"),
+    ];
+    for source in sources {
+        assert!(!source.contains("smb-binding"));
+        assert!(!source.contains("Kind::Smb"));
+    }
+    for (_, key) in ACTIONS {
+        assert!(!key.translations().1.contains("SMB binding"));
     }
 }

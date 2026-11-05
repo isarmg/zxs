@@ -70,7 +70,7 @@ fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
             assert!(c.validate(value).is_err());
         }
     }
-    for kind in [Kind::Smb, Kind::Policy, Kind::Rule] {
+    for kind in [Kind::Policy, Kind::Rule] {
         let c = contract(
             kind,
             &[

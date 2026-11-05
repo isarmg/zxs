@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
     Repository,
-    Smb,
     Policy,
     Rule,
     Branch,
@@ -42,7 +41,6 @@ pub(super) enum QueryId {
     Disks,
     IntegrityCheck,
     Repository,
-    SmbBinding,
     Operation,
     Plan,
     BranchTree,
@@ -54,7 +52,7 @@ pub(super) enum QueryId {
     Topology,
 }
 
-pub(super) const QUERIES: [(QueryId, QueryKind); 14] = [
+pub(super) const QUERIES: [(QueryId, QueryKind); 13] = [
     (
         QueryId::Repositories,
         QueryKind::Inspect {
@@ -85,14 +83,6 @@ pub(super) const QUERIES: [(QueryId, QueryKind); 14] = [
             prefix: "/api/repositories",
             key: Some("repository"),
             suffix: "",
-        },
-    ),
-    (
-        QueryId::SmbBinding,
-        QueryKind::Inspect {
-            prefix: "/api/repositories",
-            key: Some("repository"),
-            suffix: "/smb-binding",
         },
     ),
     (QueryId::Operation, QueryKind::Operation),
@@ -260,16 +250,6 @@ pub(super) fn build(
                 },
             }
         }
-        Kind::Smb => Request {
-            method: "PUT",
-            path: path("/api/repositories", "repository", "smb-binding")?,
-            body: Some(
-                json!({"branch_id":required("branch")?,"enabled":value("enabled")=="true","expected_history_generation":generation()?,"operation_id":operation}),
-            ),
-            contract: Contract::MutationReceipt {
-                operation: operation.into(),
-            },
-        },
         Kind::Policy => Request {
             method: "PUT",
             path: path("/api/policies", "id", "")?,

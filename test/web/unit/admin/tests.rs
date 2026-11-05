@@ -553,7 +553,6 @@ fn every_mutation_failure_keeps_its_captured_operation_not_the_current_form() {
     .collect();
     let mut requests = [
         Kind::Repository,
-        Kind::Smb,
         Kind::Policy,
         Kind::Rule,
         Kind::Branch,

@@ -306,9 +306,6 @@ fn select(state: RwSignal<State>, kind: Kind) {
 fn field(state: RwSignal<State>, key: &'static str, label: Message<'static>) -> impl IntoView {
     view! {<label class="zxs-form-field"><span>{label.text()}</span><input class="zxs-input" type="text" autocomplete="off" disabled=move ||state.with(|s|s.admin_console.reload_blocked()) prop:value=move ||state.with(|s|s.admin_console.fields.get(key).cloned().unwrap_or_default()) on:input=move |ev|state.update(|s|s.admin_console.edit_field(key,event_target_value(&ev)))/></label>}
 }
-fn toggle(state: RwSignal<State>, key: &'static str, label: Message<'static>) -> impl IntoView {
-    view! {<label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|s.admin_console.reload_blocked()) prop:checked=move ||state.with(|s|s.admin_console.fields.get(key).is_some_and(|v|v=="true")) on:change=move |ev|state.update(|s|s.admin_console.edit_field(key,event_target_checked(&ev).to_string()))/>{label.text()}</label>}
-}
 fn query(state: RwSignal<State>, kind: QueryKind) {
     if !allowed(state, false) {
         return;
@@ -333,7 +330,6 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Policy)><p>{Message::PathRuleHelp.text()}</p></Show>
     <div class="zxs-form-grid">{move ||{let kind=state.with(|s|s.admin_console.kind); let fields:Vec<(&'static str,Message<'static>)>=match kind{
         Kind::Repository=>vec![("name",Message::Name),("slot",Message::PrimarySlot),("copies",Message::Copies)],
-        Kind::Smb=>vec![("repository",Message::RepositoryId),("branch",Message::BranchId),("generation",Message::HistoryGeneration)],
         Kind::Policy=>vec![("id",Message::PathRuleId),("repository",Message::RepositoryId),("prefix",Message::PathPrefix),("copies",Message::Copies),("generation",Message::Generation)],
         Kind::Rule=>vec![("id",Message::RuleId),("repository",Message::RepositoryId),("prefix",Message::PathPrefix),("slot",Message::PrimarySlot),("generation",Message::Generation)],
         Kind::Branch=>vec![("repository",Message::RepositoryId),("commit",Message::SourceCommit),("name",Message::Name)],
@@ -342,7 +338,6 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         Kind::Split=>vec![("history",Message::HistoryId),("commit",Message::CutCommit)],
         Kind::Save=>vec![("history",Message::HistoryId),("commit",Message::SourceCommit),("name",Message::Name),("workspace",Message::Workspace),("slot",Message::OptionalSlot),("copies",Message::OptionalCopies)],
         Kind::Inspect=>vec![("repository",Message::RepositoryId),("id",Message::InspectionId)]};fields.into_iter().map(move |(key,label)|field(state,key,label)).collect_view()}}</div>
-    <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Smb)>{toggle(state,"enabled",Message::EnableSmb)}</Show>
     <Show when=move ||state.with(|s|s.admin_console.kind!=Kind::Inspect)><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|submit(state)>{Message::Submit.text()}</button></Show>
     <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Inspect)>{request::QUERIES.into_iter().map(move |(id,kind)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy) on:click=move |_|query(state,kind)>{messages::query_label(id).text()}</button>}).collect_view()}</Show>
     <pre>{move ||state.with(|s|s.admin_console.result.clone())}</pre>

@@ -4,9 +4,8 @@ use super::*;
 pub(super) const SECTION: &str =
     "section[aria-label='Daily administration'], section[aria-label='日常管理']";
 
-const ACTIONS: [(&str, &str); 10] = [
+const ACTIONS: [(&str, &str); 9] = [
     ("Repository", "仓库"),
-    ("SMB binding", "SMB 绑定"),
     ("Path copy rule", "路径副本规则"),
     ("Placement rule", "主盘规则"),
     ("History branch", "历史分支"),
@@ -16,12 +15,11 @@ const ACTIONS: [(&str, &str); 10] = [
     ("Historical save preview", "历史保存预览"),
     ("Inspect / query", "检查 / 查询"),
 ];
-const QUERIES: [(&str, &str); 14] = [
+const QUERIES: [(&str, &str); 13] = [
     ("Repositories", "仓库列表"),
     ("Disks", "磁盘"),
     ("Integrity check", "完整性检查"),
     ("Repository", "仓库详情"),
-    ("SMB binding", "SMB 绑定"),
     ("Operation", "操作"),
     ("Plan", "计划"),
     ("Branch tree", "分支树"),
@@ -183,23 +181,12 @@ fn inspect(browser: &Browser, locale: &str) -> Result<()> {
         &[("Save configuration / Create preview", "保存配置 / 创建预览")],
         locale,
     )?;
-    select_action(browser, "SMB binding", "SMB 绑定")?;
-    expect_labels(
-        browser,
-        "label > span",
-        &[
-            ("Repository ID", "仓库 ID"),
-            ("Branch ID", "分支 ID"),
-            ("Expected history generation", "预期历史代数"),
-        ],
-        locale,
-    )?;
-    expect_labels(
-        browser,
-        "label.zxs-row",
-        &[("Enable SMB", "启用 SMB")],
-        locale,
-    )?;
+    if browser.script(&format!(
+        "return [...document.querySelector({}).querySelectorAll('button,label')].some(e=>['SMB binding','SMB 绑定','Enable SMB','启用 SMB'].includes(e.textContent.trim()))",
+        json!(SECTION),
+    ))? != false {
+        return Err("obsolete independent SMB binding controls remain in administration".into());
+    }
     accessibility::input_surface_viewports(browser)?;
     Ok(())
 }

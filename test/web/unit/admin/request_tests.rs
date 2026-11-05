@@ -48,13 +48,14 @@ fn invalid_numeric_fields_retain_their_parser_source() {
     );
     let fields = [
         ("repository".into(), "repo".into()),
-        ("branch".into(), "b".into()),
+        ("id".into(), "rule".into()),
+        ("slot".into(), "P01".into()),
         ("generation".into(), "18446744073709551616".into()),
     ]
     .into_iter()
     .collect();
     assert!(
-        build(Kind::Smb, &fields, "operation", "admin")
+        build(Kind::Rule, &fields, "operation", "admin")
             .unwrap_err()
             .source()
             .is_some()
@@ -101,15 +102,6 @@ fn each_form_constructs_the_exact_request_and_response_context_together() {
                 name: "Name".into(),
                 primary_slot_id: "P01".into(),
                 target_copies: 2,
-            },
-        ),
-        (
-            Kind::Smb,
-            "PUT",
-            "/api/repositories/repo%2F%21/smb-binding",
-            json!({"branch_id":"branch","enabled":true,"expected_history_generation":"7","operation_id":operation}),
-            Contract::MutationReceipt {
-                operation: operation.into(),
             },
         ),
         (
@@ -199,12 +191,8 @@ fn each_form_constructs_the_exact_request_and_response_context_together() {
             request.contract.mutation_operation(),
             match kind {
                 Kind::Purge | Kind::Split | Kind::Save => None,
-                Kind::Repository
-                | Kind::Smb
-                | Kind::Policy
-                | Kind::Rule
-                | Kind::Branch
-                | Kind::Link => Some(operation),
+                Kind::Repository | Kind::Policy | Kind::Rule | Kind::Branch | Kind::Link =>
+                    Some(operation),
                 Kind::Inspect => unreachable!(),
             }
         );
@@ -308,11 +296,6 @@ fn fixed_inspections_and_identity_queries_keep_get_encoding_and_contracts() {
         (
             QueryId::Repository,
             "/api/repositories/repo%2F!",
-            Contract::Inspect,
-        ),
-        (
-            QueryId::SmbBinding,
-            "/api/repositories/repo%2F!/smb-binding",
             Contract::Inspect,
         ),
         (
