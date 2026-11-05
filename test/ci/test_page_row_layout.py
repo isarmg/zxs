@@ -15,13 +15,20 @@ class PageRows(unittest.TestCase):
             self.assertNotIn('<p>', source)
             self.assertNotIn('<p role=', source)
 
-    def test_pagination_owns_one_line_even_with_no_body_rows(self):
+    def test_pagination_joins_borderless_rows_even_with_no_body_rows(self):
         css = (ROOT / 'src/web/public/styles/components/file-manager.css').read_text()
-        self.assertIn('.zxs-file-pagination { position: relative; border-block-start: var(--zxs-control-border-width) solid transparent; }', css)
-        self.assertIn('.zxs-file-pagination::before { content: ""; }', css)
-        self.assertIn('.zxs-file-table > tbody > tr:not(:last-child) > td > .zxs-file-row-decoration::after,', css)
-        self.assertIn('.zxs-file-table:has(> tbody > tr) > thead > tr > th > .zxs-file-row-decoration::after,', css)
-        self.assertNotIn('border-block-start: 0', css)
+        self.assertNotIn('.zxs-file-pagination::before', css)
+        self.assertNotIn('.zxs-file-row-decoration::after', css)
+        self.assertNotIn('border-block-start:', css)
+        view = (ROOT / 'src/web/src/files/view.rs').read_text()
+        self.assertIn('<nav class="zxs-file-pagination zxs-flow"', view)
+        probe = (ROOT / 'test/tools/browser-smoke/runner/file_row_layout.js').read_text()
+        self.assertIn("const pagination = nav ? noLine(nav, '::before')", probe)
+        self.assertIn('close(nav.getBoundingClientRect().top, scroll.getBoundingClientRect().bottom)', probe)
+        self.assertIn('pagination.valid && joined && documentFits', probe)
+        page = (ROOT / 'test/tools/browser-smoke/runner/page_layout.rs').read_text()
+        self.assertIn('for empty in [false, true]', page)
+        self.assertIn('file_row_geometry(browser)?;', page)
 
     def test_disk_id_label_changes_without_changing_the_identity_value(self):
         source = (ROOT / 'src/web/src/admin/disks.rs').read_text()

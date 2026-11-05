@@ -43,9 +43,13 @@ class FileRowDecoration(unittest.TestCase):
         self.assertIn("hovered && css.opacity === '1'", pointer)
         self.assertIn('maxTouchPoints: navigator.maxTouchPoints', pointer)
 
-    def test_inset_lines_and_g4_fill_reuse_the_frame_corner(self):
+    def test_borderless_g4_fill_reuses_the_frame_corner(self):
         css = (ROOT / 'src/web/public/styles/components/file-manager.css').read_text()
-        self.assertIn('inset-inline: var(--zxs-contour-panel);', css)
+        self.assertNotIn('.zxs-file-row-decoration::after', css)
+        scroll = css.split('.zxs-file-list-panel .zxs-table-scroll {', 1)[1].split('}', 1)[0]
+        cells = css.split('.zxs-file-table :is(th,td) {', 1)[1].split('}', 1)[0]
+        self.assertIn('border: 0;', scroll)
+        self.assertIn('border: 0;', cells)
         surface = css.split('.zxs-file-row-surface {', 1)[1].split('}', 1)[0]
         for declaration in ['position: absolute;', 'inset-block: 0;',
                             'left: var(--zxs-file-scroll-left);', 'width: 100cqw;',
@@ -53,8 +57,6 @@ class FileRowDecoration(unittest.TestCase):
                             '--zxs-contour-extent: var(--zxs-contour-panel);']:
             self.assertIn(declaration, surface)
         self.assertIn('container-type: inline-size;', css)
-        self.assertIn('left: calc(var(--zxs-file-scroll-left) + var(--zxs-contour-panel));', css)
-        self.assertIn('width: calc(100cqw - var(--zxs-contour-panel) * 2);', css)
         decoration = css.split('.zxs-file-row-decoration {', 1)[1].split('}', 1)[0]
         for declaration in ['position: absolute;', 'inset: 0;', 'overflow: clip;',
                             'z-index: -1;', 'pointer-events: none;']:
@@ -111,7 +113,10 @@ class FileRowDecoration(unittest.TestCase):
         probe = (ROOT / 'test/tools/browser-smoke/runner/file_row_layout.js').read_text()
         self.assertIn('const zoom = scroll.currentCSSZoom;', probe)
         self.assertIn('Math.abs(a - b) <= .5', probe)
-        self.assertIn('close(left, extent * zoom)', probe)
+        self.assertIn('close(fill.left, viewport.left) && close(fill.width, viewport.width)', probe)
+        self.assertIn('close(fill.top, box.top) && close(fill.height, box.height)', probe)
+        self.assertIn("const separator = noLine(wrapper, '::after');", probe)
+        self.assertIn('valid: separator.valid && bounds && paint && interaction && cellBorders', probe)
         self.assertIn('Math.abs(offset-s.scrollLeft)<.01', page)
         self.assertIn('before_page = page_layout::file_row_shrink_start(browser)?;', pagination)
         self.assertIn('file_row_shrink_finish(browser, before_page, "pagination")?;', pagination)
