@@ -450,10 +450,7 @@ impl Record {
         match &self.previous {
             None if self.generation == 1
                 && self.stops.is_empty()
-                && self.readmissions.is_empty() =>
-            {
-                ()
-            }
+                && self.readmissions.is_empty() => {}
             Some(head)
                 if head.pool_id == self.pool_id
                     && head.generation.checked_add(1) == Some(self.generation) => {}

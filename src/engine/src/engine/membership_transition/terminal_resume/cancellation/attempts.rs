@@ -183,13 +183,13 @@ impl ResumeAttempts {
         system: &DiskRoot,
         proposal: &ResumeProposal,
     ) -> Result<()> {
-        if let Some(current) = &self.current {
-            if current.hash()? != proposal.hash()? {
-                return Err(Error::new(
-                    ErrorCode::IdempotencyKeyReused,
-                    "terminal authority reserves another exact resume attempt",
-                ));
-            }
+        if let Some(current) = &self.current
+            && current.hash()? != proposal.hash()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "terminal authority reserves another exact resume attempt",
+            ));
         }
         verify_history(&proposal.terminal, &self.cancelled, Some(proposal))?;
         system.private_dir(&self.path)?;

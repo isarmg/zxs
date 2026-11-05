@@ -287,16 +287,15 @@ pub(in crate::engine::membership_transition) fn verify_history(
         }
         previous = Some(cancellation.hash()?);
     }
-    if let Some(selected) = selected {
-        if selected.terminal.hash()? != authority_hash
+    if let Some(selected) = selected
+        && (selected.terminal.hash()? != authority_hash
             || selected.previous_cancellation_hash != previous
-            || !operations.insert(selected.intent.operation_id)
-        {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "terminal resume request omits or reuses its cancelled predecessor",
-            ));
-        }
+            || !operations.insert(selected.intent.operation_id))
+    {
+        return Err(Error::new(
+            ErrorCode::LogFork,
+            "terminal resume request omits or reuses its cancelled predecessor",
+        ));
     }
     Ok(())
 }
