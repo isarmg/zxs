@@ -16,6 +16,7 @@ use std::{
 #[derive(Clone)]
 pub(crate) enum ReadSource {
     External(PathBuf),
+    VerifiedReplica(Arc<super::reads::VerifiedReplicaSource>),
     Disk {
         owner: Arc<DiskHandle>,
         path: PathBuf,
@@ -45,6 +46,11 @@ impl ReadSource {
     pub(crate) fn open_leased(&self) -> Result<ReadFile> {
         match self {
             Self::External(path) => open_regular(path).map(ReadFile::from),
+            Self::VerifiedReplica(source) => source
+                .owner()
+                .root
+                .open_leased_regular(source.path())
+                .map(ReadFile::from),
             Self::Disk { owner, path } => owner.root.open_leased_regular(path).map(ReadFile::from),
         }
     }
@@ -52,6 +58,7 @@ impl ReadSource {
     pub(crate) fn path(&self) -> &Path {
         match self {
             Self::External(path) | Self::Disk { path, .. } => path,
+            Self::VerifiedReplica(source) => source.path(),
         }
     }
 
@@ -59,6 +66,8 @@ impl ReadSource {
         let path = self.path().join(child);
         match self {
             Self::External(_) => Self::External(path),
+            // Joining a child is not the original fully verified body path.
+            Self::VerifiedReplica(source) => Self::on_disk(source.owner(), path),
             Self::Disk { owner, .. } => Self::on_disk(owner, path),
         }
     }

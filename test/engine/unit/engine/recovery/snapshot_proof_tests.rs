@@ -36,7 +36,17 @@ fn retained_snapshot_mismatch_rejects_before_repair_or_visible_state_change() {
         let (sequence, candidates) = prepared.records.first_key_value().unwrap();
         let (hash, receipts) = candidates.first_key_value().unwrap();
         let mut first = engine
-            .read_workspace_receipt_candidate(&prepared.online, *sequence, hash, receipts, &None)
+            .read_workspace_receipt_candidate(
+                &prepared.online,
+                *sequence,
+                hash,
+                receipts,
+                workspace_receipts::ReceiptPrefix {
+                    snapshot: &engine.snapshot,
+                    state: &engine.state,
+                    namespaces: engine.current_namespaces.as_deref(),
+                },
+            )
             .unwrap();
         let (_, last_candidates) = prepared.records.last_key_value().unwrap();
         let (last_hash, _) = last_candidates.first_key_value().unwrap();

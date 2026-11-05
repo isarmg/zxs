@@ -29,13 +29,19 @@
  * specificity; G4 consumes this author color for its foreground paint. */
 .zxs-select .zxs-select-panel {
   position: fixed; inset: auto; margin: 0; padding: 0; box-sizing: border-box;
-  min-width: 0; max-width: calc(100vw - 16px); overflow: auto; overscroll-behavior: contain;
+  min-width: 0; max-width: calc(100vw - 16px); overflow: visible;
   color: var(--zxs-text-primary, #18181b); background: var(--zxs-bg-panel, #fff);
   border: var(--zxs-control-border-width) solid #000; font: inherit; font-size: var(--zxs-compact-font-size);
   --zxs-row-border: var(--zxs-control-border-width);
   --zxs-contour-extent: var(--zxs-contour-panel, 18px);
   --zxs-contour-mode: clip;
   --zxs-contour-foreground: 1;
+}
+/* The card and its border stay stationary while only the options scroll. */
+.zxs-select-panel:popover-open { display: flex; flex-direction: column; }
+.zxs-select-options {
+  position: relative; min-height: 0; overflow: auto;
+  overscroll-behavior: contain;
 }
 /* Hide only unfinished paint, not a completed square fallback. Unsupported
  * decoration must never make an otherwise usable menu invisible. */

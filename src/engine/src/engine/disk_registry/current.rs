@@ -7,6 +7,7 @@
 //! a registry admission: workspaces without a live baseline remain fenced.
 use super::{DiskRegistryCommitment, Engine};
 mod admission;
+mod backup_configuration;
 mod batch;
 pub(crate) use batch::CurrentBatchScope;
 mod branch_archives;
@@ -14,7 +15,9 @@ mod directory_branches;
 mod directory_metadata;
 mod file_branches;
 mod file_synchronization;
+mod file_tags;
 mod history_merges;
+mod merge_links;
 mod new_scope;
 mod path_notes;
 mod plan_cancellation;
@@ -175,6 +178,12 @@ impl CurrentNamespaces {
                     .iter()
                     .any(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
         })
+    }
+
+    pub(in crate::engine) fn copy_identity_is_fresh(&self, entry: &Entry) -> bool {
+        !self.known_entries.contains(&entry.entry_id)
+            && (entry.kind != NamespaceEntryKind::File
+                || !self.known_files.contains(&entry.file_id))
     }
 
     pub(crate) fn directory_entries<'a>(&'a self, branch: &str, head: &str) -> Result<&'a [Entry]> {
@@ -484,6 +493,9 @@ impl CurrentNamespaces {
         self.verify_smb_bindings(previous, next)?;
         self.verify_plan_cancellations(previous, next)?;
         self.verify_branch_archives(previous, next)?;
+        self.verify_backup_configurations(previous, next)?;
+        self.verify_merge_links(previous, next)?;
+        self.verify_file_tag_publications(previous, next)?;
         let mut view = self.clone();
         let branch_changes = next.branches.changes_since(&previous.branches);
         let directory_changes = next

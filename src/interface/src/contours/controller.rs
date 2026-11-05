@@ -1254,7 +1254,13 @@ impl State {
                 writes.append(&node, child)?;
             }
             child.set_attribute("viewBox", &format!("0 0 {} {}", fmt(width), fmt(height)))?;
-            child.style().set_css_text(&format!("all:initial!important;display:block!important;position:fixed!important;left:0!important;top:0!important;width:{}px!important;height:{}px!important;max-width:none!important;max-height:none!important;pointer-events:none!important;visibility:inherit!important;z-index:2147483647!important;overflow:visible!important;", fmt(width), fmt(height)));
+            let local = node
+                .get_attribute("data-zxs-contour-foreground-anchor")
+                .as_deref()
+                == Some("local");
+            child
+                .style()
+                .set_css_text(&paint::foreground_style(width, height, &css, local));
             let path_node = child
                 .first_element_child()
                 .ok_or_else(|| JsValue::from_str("Foreground path is missing"))?;
@@ -1537,16 +1543,14 @@ fn reposition_foregrounds(records: &[Record], mut warn: impl FnMut(&JsValue)) {
     }
 }
 fn foreground_offset(record: &Record) -> Result<Option<ForegroundOffset>, JsValue> {
-    let Some(foreground) = record.foreground.as_ref().filter(|foreground| {
-        foreground.is_connected()
-            && foreground
-                .style()
-                .get_property_value("display")
-                .unwrap_or_default()
-                != "none"
-    }) else {
+    let Some(foreground) = record.foreground.as_ref() else {
         return Ok(None);
     };
+    let style = foreground.style();
+    let fixed = style.get_property_value("position")? == "fixed";
+    if !foreground.is_connected() || !fixed || style.get_property_value("display")? == "none" {
+        return Ok(None);
+    }
     let Some(matrix) = foreground.get_screen_ctm() else {
         return Ok(None);
     };
@@ -1569,7 +1573,6 @@ fn foreground_offset(record: &Record) -> Result<Option<ForegroundOffset>, JsValu
     let rect = record.node.get_bounding_client_rect();
     let x = rect.left() - (a * width).min(0.0) - (c * height).min(0.0) - e;
     let y = rect.top() - (b * width).min(0.0) - (d * height).min(0.0) - f;
-    let style = foreground.style();
     let current = (
         number(&style.get_property_value("left")?),
         number(&style.get_property_value("top")?),

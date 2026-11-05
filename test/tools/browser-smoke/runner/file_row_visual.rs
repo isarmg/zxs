@@ -262,7 +262,7 @@ pub(super) fn search_focus(browser: &Browser) -> Result<()> {
 fn row_pixels(browser: &Browser, index: usize) -> Result<()> {
     page_layout::file_row_geometry(browser)?;
     let scene = browser.script(&format!(
-        "const row=document.querySelectorAll('.zxs-file-table tbody tr')[{index}],s=row.closest('.zxs-table-scroll'),b=s.getBoundingClientRect(),r=row.getBoundingClientRect(),css=getComputedStyle(row),kind=row.querySelector('.zxs-file-icon--folder')?'folder':'file';return {{label:'row-'+kind+'-{index}-'+document.documentElement.dataset.zxsTheme+'-'+s.scrollLeft+'-'+row.getAttribute('aria-selected'),kind:'row',panel:css.getPropertyValue('--zxs-bg-panel'),fill:css.getPropertyValue('--zxs-bg-page'),clip:{{x:b.left+scrollX,y:r.top+scrollY,width:s.clientWidth,height:r.height,scale:1}}}}"
+        "const row=document.querySelectorAll('.zxs-file-table tbody tr')[{index}],s=row.closest('.zxs-table-scroll'),b=s.getBoundingClientRect(),r=row.getBoundingClientRect(),css=getComputedStyle(row),kind=row.querySelector('.zxs-file-icon--folder')?'folder':'file';return {{label:'row-'+kind+'-{index}-'+document.documentElement.dataset.zxsTheme+'-'+s.scrollLeft+'-'+row.getAttribute('aria-selected'),kind:'row',panel:css.getPropertyValue('--zxs-bg-panel'),fill:css.getPropertyValue('--zxs-row-hover-bg'),clip:{{x:b.left+scrollX,y:r.top+scrollY,width:s.clientWidth,height:r.height,scale:1}}}}"
     ))?;
     pixels(browser, scene)
 }

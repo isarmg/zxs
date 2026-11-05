@@ -882,6 +882,11 @@ impl crate::engine::PlanningContext<'_> {
             .current_namespaces
             .map(|view| view.advance(self.state, &next).map(std::sync::Arc::new))
             .transpose()?;
+        if let Some(view) = self.current_namespaces {
+            // The State proof above cannot constrain Prepared. Bind every copy
+            // before the first existing-body probe or any payload preparation.
+            view.verify_backup_prepared(self.state, &next, &result, &prepared)?;
+        }
         let metadata_epoch = self.metadata_integrity.capture();
         let members = self.members();
         let mut required = BTreeMap::<String, u64>::new();

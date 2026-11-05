@@ -91,7 +91,7 @@ async fn web_daily_forms_execute_real_management_operations() {
     let id = repo.value["repository_id"].as_str().unwrap();
     let branch = repo.value["main_branch_id"].as_str().unwrap();
     let history = repo.value["history_tree_id"].as_str().unwrap();
-    // Retired account/grant actions are not representable by the production Kind.
+    // Retired account/grant/SMB binding forms are not representable by Kind.
     assert!(matches!(
         request::build(Kind::Inspect, &fields(&[]), &new_id("op").unwrap(), "admin"),
         Err(InputError::Inspect)
@@ -137,40 +137,6 @@ async fn web_daily_forms_execute_real_management_operations() {
             StatusCode::CONFLICT
         );
     }
-    let binding = success(
-        &app,
-        &admin,
-        "GET",
-        &format!("/api/repositories/{id}/smb-binding"),
-        None,
-    )
-    .await;
-    apply(
-        &app,
-        &admin,
-        Kind::Smb,
-        &fields(&[
-            ("repository", id),
-            ("branch", branch),
-            ("enabled", "false"),
-            (
-                "generation",
-                binding["history_generation"].as_str().unwrap(),
-            ),
-        ]),
-    )
-    .await;
-    assert_eq!(
-        success(
-            &app,
-            &admin,
-            "GET",
-            &format!("/api/repositories/{id}/smb-binding"),
-            None
-        )
-        .await["enabled"],
-        false
-    );
     let current = success(
         &app,
         &admin,

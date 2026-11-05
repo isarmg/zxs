@@ -39,6 +39,29 @@ fn numeric_prefixes_and_css_formatting() {
 }
 
 #[test]
+fn local_foreground_tracks_the_card_border_box_without_scroll_correction() {
+    let mut style = css(1.0, "solid");
+    style
+        .values
+        .insert("border-left-width".into(), "2.5px".into());
+    let local = foreground_style(120.5, 180.0, &style, true);
+    for expected in [
+        "position:absolute!important;",
+        "left:-2.5px!important;",
+        "top:-1px!important;",
+        "width:120.5px!important;",
+        "height:180px!important;",
+        "pointer-events:none!important;",
+    ] {
+        assert!(local.contains(expected), "{expected}: {local}");
+    }
+    assert!(!local.contains("position:fixed"));
+    let fixed = foreground_style(120.5, 180.0, &style, false);
+    assert!(fixed.contains("position:fixed!important;left:0px!important;top:0px!important;"));
+    assert!(!fixed.contains("position:absolute"));
+}
+
+#[test]
 fn only_owned_property_families_are_removed_from_transitions() {
     for property in [
         "background",

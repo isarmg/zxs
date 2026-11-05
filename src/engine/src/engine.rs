@@ -1392,6 +1392,30 @@ impl Engine {
                 |_, next, prepared| change(self, next, prepared),
             );
         }
+        if kind == "backup.configure" {
+            return context.plan_backup_configuration_mutation(
+                principal,
+                operation_id,
+                digest,
+                |_, next, prepared| change(self, next, prepared),
+            );
+        }
+        if kind == "merge-link.create" {
+            return context.plan_merge_link_mutation(
+                principal,
+                operation_id,
+                digest,
+                |_, next, prepared| change(self, next, prepared),
+            );
+        }
+        if kind == "file.tags.update" {
+            return context.plan_file_tags_mutation(
+                principal,
+                operation_id,
+                digest,
+                |_, next, prepared| change(self, next, prepared),
+            );
+        }
         context.plan_new_mutation(
             kind,
             principal,

@@ -448,12 +448,14 @@ fn projection_error(error: impl std::error::Error + Send + Sync + 'static) -> Er
         .context(ErrorCode::PublicationInvalid, "exit namespace proof")
 }
 
-/// Constructed only after the exact prescribed D3, actual retained journals,
-/// durable bootstrap restriction and physical I/O closure have all been verified.
+/// Live admission requires exact D3, actual retained journals, durable Stop
+/// restrictions and physical I/O closure. Archived and preflight admission are
+/// validation-only and can never install a live Engine namespace.
 /// It is not serializable and no caller can manufacture its fields.
 enum PublicationAdmission {
     Live,
     Archived,
+    Preflight,
 }
 
 pub(in crate::engine) struct AdmittedDiskExitPublication {

@@ -72,12 +72,20 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_retained_limit(None)
+    }
+
+    fn with_retained_limit(limit: Option<usize>) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
             Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
         config.disks[3].level = 1;
         config.disks[3].upstream_slot_id = None;
         config.disks[3].metadata_member = false;
+        if let Some(limit) = limit {
+            config.max_retained_workspaces = limit;
+            config.max_retained_workspaces_per_principal = limit;
+        }
         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
         let repository = engine
             .create_repository(
@@ -1511,6 +1519,11 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
             "prior-owner",
             "location",
             "payload",
+            "payload-kind",
+            "payload-marker",
+            "payload-noop",
+            "payload-orphan-auth",
+            "payload-orphan-workspace",
         ] {
             let mut fixture = Fixture::new();
             fixture.exit(0, MembershipExitAction::Deregister);
@@ -1552,6 +1565,37 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
             assert!(prepared.is_empty());
             match attack {
                 "valid" | "payload" => (),
+                "payload-kind"
+                | "payload-marker"
+                | "payload-noop"
+                | "payload-orphan-auth"
+                | "payload-orphan-workspace" => {
+                    result.kind = if attack == "payload-orphan-workspace" {
+                        "workspace.commit"
+                    } else {
+                        "auth.unrelated"
+                    }
+                    .into();
+                    next.events.last_mut().unwrap().kind = result.kind.clone();
+                    if attack == "payload-marker" {
+                        // Removing the Cancelled marker must not hide the real
+                        // unauthorized Plan write from the pure State proof.
+                        next.plans.get_mut(&plan.plan_id).unwrap().state = PlanState::Ready;
+                        result.result["state"] = json!("ready");
+                    }
+                    if attack == "payload-noop" || attack.starts_with("payload-orphan") {
+                        // Erase the entire business mutation and every marker.
+                        // State-only advance legitimately preserves this view;
+                        // only an exact payload delta can reject the old vector.
+                        next.plans.remove(&plan.plan_id);
+                        result.result = json!({
+                            "timestamp": result.result["timestamp"],
+                            "membership_epoch": result.result["membership_epoch"],
+                            "version_protection": [],
+                        });
+                    }
+                    next.operations.insert(operation, result.clone());
+                }
                 "actor" => {
                     next.operation_principals.insert(operation, "other".into());
                 }
@@ -1577,7 +1621,32 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
             // Keep the original State, request and exact receipt valid, but
             // independently smuggle an existing live data-only payload into the
             // Candidate that drives repair. No planner may produce this pair.
-            let versions = if attack == "payload" {
+            let versions = if attack.starts_with("payload-orphan") {
+                let original = next.versions[&fixture.current.version_id].clone();
+                let mut version = original.clone();
+                version.version_id = new_id("ver").unwrap();
+                version.version_sequence = next.sequence;
+                let mut placement = next.placements[&fixture.current.version_id].clone();
+                placement.version_id = version.version_id.clone();
+                next.versions
+                    .insert(version.version_id.clone(), version.clone());
+                next.placements
+                    .insert(version.version_id.clone(), placement.clone());
+                next.content_states.insert(
+                    version.version_id.clone(),
+                    storage_contract::ContentState::Available,
+                );
+                let disk = fixture.engine.disk(&placement.route_slot_ids[0]).unwrap();
+                let old =
+                    crate::disk::version_dir(disk, &original.history_tree_id, &original.version_id);
+                let orphan =
+                    crate::disk::version_dir(disk, &version.history_tree_id, &version.version_id);
+                fs::create_dir_all(&orphan).unwrap();
+                for name in ["commit-proof.json", "publication-proof.json"] {
+                    fs::copy(old.join(name), orphan.join(name)).unwrap();
+                }
+                vec![crate::journal::VersionEvidence { version, placement }]
+            } else if attack.starts_with("payload") {
                 vec![crate::journal::VersionEvidence {
                     version: next.versions[&fixture.current.version_id].clone(),
                     placement: next.placements[&fixture.current.version_id].clone(),
@@ -1585,6 +1654,15 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
             } else {
                 Vec::new()
             };
+            if attack == "payload-noop" || attack.starts_with("payload-orphan") {
+                fixture
+                    .engine
+                    .current_namespaces
+                    .as_ref()
+                    .unwrap()
+                    .advance(&fixture.engine.state, &next)
+                    .unwrap();
+            }
             let candidate = install_cancellation_decision(
                 &mut fixture.engine,
                 &next,
@@ -1608,6 +1686,33 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
                 )
             });
             let members = fixture.engine.members();
+            if !published && attack == "payload-noop" {
+                let before = members
+                    .iter()
+                    .map(|disk| files(&disk.root))
+                    .collect::<Vec<_>>();
+                let before_system = files(&fixture.temp.path().join("system"));
+                let watch = watch_candidate_payload(payload_path.as_ref().unwrap());
+                let error = fixture
+                    .engine
+                    .prepare_degraded_recovery(
+                        operation,
+                        "admin",
+                        "a forged receipt cannot authorize payload observation",
+                    )
+                    .unwrap_err();
+                assert_eq!(error.code(), ErrorCode::PublicationInvalid);
+                assert!(
+                    error
+                        .to_string()
+                        .contains("exact fresh version and placement delta")
+                );
+                assert_no_candidate_payload_io(watch);
+                for (disk, bytes) in members.iter().zip(before) {
+                    assert_eq!(files(&disk.root), bytes);
+                }
+                assert_eq!(files(&fixture.temp.path().join("system")), before_system);
+            }
             let missing = object_path(&members[0], "snapshot", &candidate.snapshot_hash);
             let snapshot_bytes = fs::read(&missing).unwrap();
             let system = fixture.temp.path().join("system");
@@ -1660,6 +1765,20 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
                             .contains("metadata-only current-registry candidate"),
                         "{error}"
                     );
+                } else if attack.starts_with("payload-orphan") {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("matching native content publication scope"),
+                        "{error}"
+                    );
+                } else if attack == "payload-noop" {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("exact fresh version and placement delta"),
+                        "{error}"
+                    );
                 } else {
                     assert!(
                         error.to_string().contains("plan cancellation differs"),
@@ -1708,5 +1827,483 @@ fn assert_no_candidate_payload_io(watch: rustix::fd::OwnedFd) {
         rustix::io::read(&watch, &mut bytes),
         Err(rustix::io::Errno::WOULDBLOCK),
         "a metadata-only candidate must not open or read its smuggled local proof or payload"
+    );
+}
+
+#[test]
+fn current_payload_local_only_publication_preserves_cold_workspace_quota_before_replay() {
+    use crate::engine::membership_transition::pending::activation::log_path;
+    use crate::journal::{Candidate, JournalFrameReader, RecordType, load_object_at, object_path};
+
+    let mut fixture = Fixture::with_retained_limit(Some(1));
+    fixture.exit(0, MembershipExitAction::Deregister);
+    let (parked, stopped_bytes) = fixture.replace_stopped_root(0);
+    let system = fixture.temp.path().join("system");
+    drop(fixture.engine);
+    fixture.engine = Engine::open_with_workspace_limits(
+        &system,
+        Some(RetainedWorkspaceLimits {
+            max_retained_workspaces: 2,
+            max_retained_workspaces_per_principal: 2,
+            max_retained_workspace_metadata_bytes: fixture
+                .config
+                .max_retained_workspace_metadata_bytes,
+            max_retained_workspace_metadata_bytes_per_principal: fixture
+                .config
+                .max_retained_workspace_metadata_bytes_per_principal,
+        }),
+    )
+    .unwrap();
+    let waiting = fixture
+        .engine
+        .create_workspace(&fixture.repository.main_branch_id, "admin")
+        .unwrap();
+    fixture
+        .engine
+        .stage_bytes(&waiting.workspace_id, "waiting", b"still open")
+        .unwrap();
+    let workspace = fixture
+        .engine
+        .create_workspace(&fixture.repository.main_branch_id, "admin")
+        .unwrap();
+    fixture
+        .engine
+        .stage_bytes(
+            &workspace.workspace_id,
+            "fresh",
+            b"new current registry body",
+        )
+        .unwrap();
+    let request = request(&workspace);
+    let result = fixture.engine.commit_workspace(request.clone()).unwrap();
+    assert_eq!(
+        fixture
+            .engine
+            .workspace_capacity("admin")
+            .principal
+            .records
+            .used,
+        1
+    );
+    let members = fixture.engine.members();
+    let mut tails = Vec::new();
+    for disk in &members {
+        let path = log_path(&fixture.engine.config, disk);
+        let bytes = fs::read(&path).unwrap();
+        let mut reader = JournalFrameReader::new(bytes.as_slice());
+        loop {
+            let before = reader.valid_bytes;
+            let (record, _) = reader
+                .next_record()
+                .unwrap()
+                .expect("actual latest publication");
+            if record.record_type == RecordType::Publication && record.sequence == result.sequence {
+                assert!(
+                    reader.next_record().unwrap().is_none(),
+                    "truncate only the last frame"
+                );
+                let candidate: Candidate = load_object_at(
+                    &fixture.engine.disk_resources.get(disk).unwrap().root,
+                    disk,
+                    "candidate",
+                    &record.candidate_hash,
+                )
+                .unwrap();
+                assert_eq!(candidate.operation_id, result.operation_id);
+                assert_eq!(candidate.versions.len(), 1);
+                let evidence = &candidate.versions[0];
+                let target = fixture
+                    .engine
+                    .disk(&evidence.placement.route_slot_ids[0])
+                    .unwrap();
+                assert!(!target.metadata_member);
+                let directory = crate::disk::version_dir(
+                    target,
+                    &evidence.version.history_tree_id,
+                    &evidence.version.version_id,
+                );
+                assert!(directory.join("publication-proof.json").is_file());
+                tails.push((
+                    path,
+                    bytes[..usize::try_from(before).unwrap()].to_vec(),
+                    object_path(disk, "publication", &record.object_hash),
+                ));
+                break;
+            }
+        }
+    }
+    drop(fixture.engine);
+    // Keep the genuine local publication and immutable complete seal. The last
+    // slot has no metadata Publication frames/objects. The persisted limit is
+    // one resident workspace: only discovery before quota admission can prove
+    // the completed workspace cold while retaining the earlier open workspace.
+    // Apply-time discovery alone would charge both records and reject too early.
+    for (journal, prefix, publication) in tails {
+        fs::write(journal, prefix).unwrap();
+        fs::remove_file(publication).unwrap();
+    }
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.operation(result.operation_id).unwrap(), result);
+    assert_eq!(
+        engine.workspace(&waiting.workspace_id).unwrap().state,
+        WorkspaceState::Open
+    );
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+    assert_eq!(
+        engine.workspace_capacity("admin").principal.records.limit,
+        1
+    );
+    assert_eq!(engine.commit_workspace(request).unwrap(), result);
+    assert_eq!(files(&parked), stopped_bytes);
+    assert_eq!(
+        fs::read(&fixture.config.disks[0].root).unwrap(),
+        b"stopped root is not a directory"
+    );
+}
+
+#[test]
+fn current_payload_scope_binds_real_content_actor_and_operation_before_local_proofs() {
+    use crate::engine::MutationPlan;
+    use crate::journal::{VersionEvidence, object_path};
+
+    for published in [false, true] {
+        for retag in [false, true] {
+            let mut fixture = Fixture::new();
+            fixture.exit(0, MembershipExitAction::Deregister);
+            let (parked, stopped_bytes) = fixture.replace_stopped_root(0);
+            let workspace = fixture
+                .engine
+                .create_workspace(&fixture.repository.main_branch_id, "admin")
+                .unwrap();
+            fixture
+                .engine
+                .stage_bytes(&workspace.workspace_id, "fresh", b"real staged body")
+                .unwrap();
+            let request = request(&workspace);
+            let plan = fixture
+                .engine
+                .plan_workspace_commit_inner(request, None)
+                .unwrap();
+            let MutationPlan::Prepared {
+                mut next,
+                prepared,
+                mut result,
+            } = plan.mutation
+            else {
+                panic!("new content must have a real payload plan")
+            };
+            assert_eq!(prepared.len(), 1);
+            if retag {
+                result.kind = "auth.unrelated".into();
+                next.operations.insert(result.operation_id, result.clone());
+                next.events.last_mut().unwrap().kind = result.kind.clone();
+            } else {
+                next.operation_principals
+                    .insert(result.operation_id, "another-actor".into());
+            }
+            fixture
+                .engine
+                .current_namespaces
+                .as_ref()
+                .unwrap()
+                .advance(&fixture.engine.state, &next)
+                .unwrap();
+            let versions = prepared
+                .iter()
+                .map(|copy| VersionEvidence {
+                    version: copy.version.clone(),
+                    placement: copy.placement.clone(),
+                })
+                .collect::<Vec<_>>();
+            let target = fixture
+                .engine
+                .disk(&versions[0].placement.route_slot_ids[0])
+                .unwrap();
+            assert!(!target.metadata_member);
+            let directory = crate::disk::version_dir(
+                target,
+                &versions[0].version.history_tree_id,
+                &versions[0].version.version_id,
+            );
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("commit-proof.json"), b"{}").unwrap();
+            let candidate = install_cancellation_decision(
+                &mut fixture.engine,
+                &next,
+                &result,
+                published,
+                versions,
+            );
+            let members = fixture.engine.members();
+            let missing = object_path(&members[0], "snapshot", &candidate.snapshot_hash);
+            let system = fixture.temp.path().join("system");
+            drop(prepared);
+            drop(fixture.engine);
+            fs::remove_file(&missing).unwrap();
+            let metadata = members
+                .iter()
+                .map(|disk| files(&disk.root))
+                .collect::<Vec<_>>();
+            let data = files(&fixture.config.disks[3].root);
+            let watch = watch_candidate_payload(&directory);
+            let error = Engine::open(&system)
+                .err()
+                .expect("content scope must match its original actor and native operation");
+            assert_eq!(
+                error.code(),
+                ErrorCode::PublicationInvalid,
+                "{published} {retag}: {error}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("matching native content publication scope"),
+                "{error}"
+            );
+            assert_no_candidate_payload_io(watch);
+            assert!(!missing.exists());
+            for (disk, bytes) in members.iter().zip(metadata) {
+                assert_eq!(files(&disk.root), bytes);
+            }
+            assert_eq!(files(&fixture.config.disks[3].root), data);
+            assert_eq!(files(&parked), stopped_bytes);
+        }
+    }
+}
+
+fn current_copy_request(
+    fixture: &Fixture,
+    source_path: &str,
+    target_path: &str,
+) -> DirectoryNamespaceBatch {
+    let branch = &fixture.engine.state.directory_selections[&fixture.repository.repository_id];
+    DirectoryNamespaceBatch {
+        kind: DirectoryBatchKind::Copy,
+        items: vec![DirectoryNamespaceItem {
+            source: DirectoryNamespaceSource {
+                directory_branch_id: branch.clone(),
+                expected_tree_id: fixture.engine.state.directory_branches[branch]
+                    .head_tree_id
+                    .clone(),
+                path: source_path.into(),
+                entry_id: entry(
+                    &fixture.engine,
+                    &fixture.repository.main_branch_id,
+                    source_path,
+                )
+                .entry_id,
+            },
+            target: Some(DirectoryNamespaceTarget {
+                directory_branch_id: branch.clone(),
+                expected_tree_id: fixture.engine.state.directory_branches[branch]
+                    .head_tree_id
+                    .clone(),
+                path: target_path.into(),
+            }),
+        }],
+    }
+}
+
+fn published_candidate(engine: &Engine, sequence: u64) -> crate::journal::Candidate {
+    use crate::engine::membership_transition::pending::activation::log_path;
+    use crate::journal::{JournalFrameReader, RecordType, load_object_at};
+
+    let member = &engine.members()[0];
+    let bytes = fs::read(log_path(&engine.config, member)).unwrap();
+    let mut reader = JournalFrameReader::new(bytes.as_slice());
+    loop {
+        let (record, _) = reader
+            .next_record()
+            .unwrap()
+            .expect("published sequence exists");
+        if record.sequence == sequence && record.record_type == RecordType::Publication {
+            return load_object_at(
+                &engine.disk_resources.get(member).unwrap().root,
+                member,
+                "candidate",
+                &record.candidate_hash,
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn current_copy_preflight_rebuilds_empty_targets_and_fresh_identities_before_body_io() {
+    let mut fixture = Fixture::new();
+    fixture
+        .engine
+        .initialize_directory_scope(&fixture.repository.repository_id, None, "admin", op())
+        .unwrap();
+    fixture.exit(0, MembershipExitAction::Deregister);
+    let (parked, stopped_bytes) = fixture.replace_stopped_root(0);
+    let previous = Arc::clone(&fixture.engine.state);
+    let previous_snapshot = fixture.engine.snapshot.clone();
+    let previous_view = fixture.engine.current_namespaces.clone();
+    let request = current_copy_request(&fixture, "live", "copied");
+    let result = fixture
+        .engine
+        .directory_namespace_batch(&fixture.repository.repository_id, &request, "admin", op())
+        .unwrap();
+    let candidate = published_candidate(&fixture.engine, result.sequence);
+    assert_eq!(candidate.versions.len(), 1);
+    let copied = entry(
+        &fixture.engine,
+        &fixture.repository.main_branch_id,
+        "copied",
+    );
+    let published = Arc::clone(&fixture.engine.state);
+    let published_snapshot = fixture.engine.snapshot.clone();
+    let published_view = fixture.engine.current_namespaces.clone();
+    let target = fixture
+        .engine
+        .disk(&candidate.versions[0].placement.route_slot_ids[0])
+        .unwrap();
+    let directory = crate::disk::version_dir(
+        target,
+        &candidate.versions[0].version.history_tree_id,
+        &candidate.versions[0].version.version_id,
+    );
+    fixture.engine.state = Arc::clone(&previous);
+    fixture.engine.snapshot = previous_snapshot;
+    fixture.engine.current_namespaces = previous_view;
+    assert!(
+        fixture
+            .engine
+            .current_namespaces
+            .as_ref()
+            .unwrap()
+            .copy_identity_is_fresh(&copied)
+    );
+    assert!(
+        !fixture
+            .engine
+            .current_namespaces
+            .as_ref()
+            .unwrap()
+            .copy_identity_is_fresh(&fixture.current)
+    );
+    // A canonical round trip forces every tracked map through its cold path.
+    let cold: State = json_codec::from_slice(&canonical_json(published.as_ref()).unwrap()).unwrap();
+    fixture
+        .engine
+        .verify_current_recovery_candidate(&candidate, &cold)
+        .unwrap();
+    for destination in ["live", "missing/copied"] {
+        let mut forged = cold.clone();
+        let mut request = request.clone();
+        request.items[0].target.as_mut().unwrap().path = destination.into();
+        let receipt = forged.operations.get_mut(&result.operation_id).unwrap();
+        receipt.result["transfers"][0]["target"]["path"] = json!(destination);
+        receipt.request_digest = Engine::native_request_digest(
+            "directory.namespace.batch",
+            "admin",
+            &json!({"repository_id": fixture.repository.repository_id, "request": request}),
+        )
+        .unwrap();
+        let mut forged_candidate = candidate.clone();
+        forged_candidate.request_digest = receipt.request_digest.clone();
+        let before_members = fixture
+            .engine
+            .members()
+            .iter()
+            .map(|disk| (disk.root.clone(), files(&disk.root)))
+            .collect::<Vec<_>>();
+        let before_data = files(&fixture.config.disks[3].root);
+        let watch = watch_candidate_payload(&directory);
+        let error = fixture
+            .engine
+            .verify_current_recovery_candidate(&forged_candidate, &forged)
+            .expect_err("copy destinations must be empty and have an admitted parent");
+        assert_eq!(error.code(), ErrorCode::PublicationInvalid);
+        assert!(
+            error
+                .to_string()
+                .contains("exact empty destination and fresh identity projection"),
+            "{error}"
+        );
+        assert_no_candidate_payload_io(watch);
+        for (root, bytes) in before_members {
+            assert_eq!(files(&root), bytes);
+        }
+        assert_eq!(files(&fixture.config.disks[3].root), before_data);
+    }
+    fixture.engine.state = published;
+    fixture.engine.snapshot = published_snapshot;
+    fixture.engine.current_namespaces = published_view;
+    let system = fixture.temp.path().join("system");
+    drop(fixture.engine);
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(
+        engine
+            .directory_namespace_batch(
+                &fixture.repository.repository_id,
+                &request,
+                "admin",
+                result.operation_id,
+            )
+            .unwrap(),
+        result
+    );
+    assert_eq!(
+        entry(&engine, &fixture.repository.main_branch_id, "copied"),
+        copied
+    );
+    assert_eq!(files(&parked), stopped_bytes);
+}
+
+#[test]
+fn current_copy_preflight_accepts_a_parent_copied_earlier_in_the_same_batch() {
+    let mut fixture = Fixture::new();
+    save(
+        &mut fixture.engine,
+        &fixture.repository.main_branch_id,
+        "source/nested",
+        b"nested body",
+    );
+    fixture
+        .engine
+        .initialize_directory_scope(&fixture.repository.repository_id, None, "admin", op())
+        .unwrap();
+    fixture.exit(0, MembershipExitAction::Deregister);
+    let mut request = current_copy_request(&fixture, "source", "parent-copy");
+    request
+        .items
+        .extend(current_copy_request(&fixture, "live", "parent-copy/second").items);
+    let result = fixture
+        .engine
+        .directory_namespace_batch(&fixture.repository.repository_id, &request, "admin", op())
+        .unwrap();
+    let system = fixture.temp.path().join("system");
+    drop(fixture.engine);
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(
+        engine
+            .directory_namespace_batch(
+                &fixture.repository.repository_id,
+                &request,
+                "admin",
+                result.operation_id,
+            )
+            .unwrap(),
+        result
+    );
+    assert_ne!(
+        entry(
+            &engine,
+            &fixture.repository.main_branch_id,
+            "parent-copy/nested"
+        )
+        .file_id,
+        entry(&engine, &fixture.repository.main_branch_id, "source/nested").file_id
+    );
+    assert_ne!(
+        entry(
+            &engine,
+            &fixture.repository.main_branch_id,
+            "parent-copy/second"
+        )
+        .file_id,
+        fixture.current.file_id
     );
 }

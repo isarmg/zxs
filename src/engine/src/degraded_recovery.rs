@@ -592,7 +592,6 @@ impl Engine {
         }
         let candidate = candidate.ok_or_else(|| required("candidate missing"))?;
         let hash = object_hash("candidate", &candidate)?;
-        exclude_publication(self, &candidate, &hash)?;
         let state = crate::publication_evidence::verified_snapshot_at(
             &self.disk_resources,
             &self.members(),
@@ -604,6 +603,9 @@ impl Engine {
             &candidate,
             Some(&state),
         )?;
+        self.verify_current_recovery_candidate(&candidate, state.state())?;
+        crate::engine::CurrentNamespaces::reject_degraded_backup(&candidate, state.state())?;
+        exclude_publication(self, &candidate, &hash)?;
         Ok((candidate, state, witnesses, accepts))
     }
     pub fn prepare_degraded_recovery(

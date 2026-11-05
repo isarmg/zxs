@@ -96,6 +96,7 @@ pub fn Select(
     let root = NodeRef::<web_interface::html::Div>::new();
     let trigger = NodeRef::<web_interface::html::Button>::new();
     let panel = NodeRef::<web_interface::html::Div>::new();
+    let scroller = NodeRef::<web_interface::html::Div>::new();
     let open = RwSignal::new(false);
     let active = RwSignal::new(None::<usize>);
     let prefix = StoredValue::new((String::new(), 0.0f64));
@@ -165,7 +166,7 @@ pub fn Select(
         let Some(index) = active.get() else {
             return;
         };
-        let Some(panel) = panel.get() else {
+        let Some(scroller) = scroller.get() else {
             return;
         };
         let Some(option) = web_sys::window()
@@ -179,10 +180,10 @@ pub fn Select(
         };
         let top = option.offset_top();
         let bottom = top + option.offset_height();
-        if top < panel.scroll_top() {
-            panel.set_scroll_top(top);
-        } else if bottom > panel.scroll_top() + panel.client_height() {
-            panel.set_scroll_top(bottom - panel.client_height());
+        if top < scroller.scroll_top() {
+            scroller.set_scroll_top(top);
+        } else if bottom > scroller.scroll_top() + scroller.client_height() {
+            scroller.set_scroll_top(bottom - scroller.client_height());
         }
     });
     if let Some(window) = web_sys::window() {
@@ -287,7 +288,8 @@ pub fn Select(
                 }}</span>
                 <svg class="zxs-select-arrow" aria-hidden="true" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
             </button>
-            <div class="zxs-select-panel zxs-frame" node_ref=panel id=list_id.get_value() role="listbox" popover="manual" aria-labelledby=show_label.then(||label_id.get_value()) aria-label=(!show_label).then(||label.get_value())>
+            <div class="zxs-select-panel zxs-frame" node_ref=panel id=list_id.get_value() role="listbox" popover="manual" data-zxs-contour-foreground-anchor="local" aria-labelledby=show_label.then(||label_id.get_value()) aria-label=(!show_label).then(||label.get_value())>
+                <div class="zxs-select-options" node_ref=scroller>
                 {move || {
                     let entries = options.get();
                     if entries.is_empty() { return view! { <div class="zxs-select-empty zxs-row" role="status">{t("没有可用选项", "No options available")}</div> }.into_any(); }
@@ -304,6 +306,7 @@ pub fn Select(
                         }
                     }).collect_view().into_any()
                 }}
+                </div>
             </div>
         </div>
     }

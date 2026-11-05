@@ -340,6 +340,131 @@ impl<'a> PlanningContext<'a> {
         Ok(plan)
     }
 
+    /// Backup configuration carries actual payloads. Its exact source-bound
+    /// policy/placement transition and prepared version set are one admission,
+    /// not a general permission for a named operation or an arbitrary copy.
+    pub(super) fn plan_backup_configuration_mutation<F>(
+        &self,
+        principal: &str,
+        operation_id: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
+        if self.current_namespaces.is_none()
+            && self
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(super::disk_registry::current::pending_publication());
+        }
+        let plan =
+            self.prepare_new_mutation("backup.configure", principal, operation_id, digest, change)?;
+        let MutationPlan::Prepared {
+            next,
+            prepared,
+            result,
+        } = &plan
+        else {
+            unreachable!("invariant: new mutation preparation does not replay old receipts");
+        };
+        if let Some(view) = self.current_namespaces {
+            view.verify_new_backup_configuration(self.state, next, result)?;
+            view.verify_backup_prepared(self.state, next, result, prepared)?;
+        }
+        Ok(plan)
+    }
+
+    /// A relation has a closed metadata write set, not a general kind permit.
+    pub(super) fn plan_merge_link_mutation<F>(
+        &self,
+        principal: &str,
+        operation_id: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
+        if self.current_namespaces.is_none()
+            && self
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(super::disk_registry::current::pending_publication());
+        }
+        let plan = self.prepare_new_mutation(
+            "merge-link.create",
+            principal,
+            operation_id,
+            digest,
+            change,
+        )?;
+        let MutationPlan::Prepared {
+            next,
+            prepared,
+            result,
+        } = &plan
+        else {
+            unreachable!("invariant: new mutation preparation does not replay old receipts");
+        };
+        if !prepared.is_empty() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "merge link cannot prepare payload writes",
+            ));
+        }
+        if let Some(view) = self.current_namespaces {
+            view.verify_new_merge_link(self.state, next, result)?;
+        }
+        Ok(plan)
+    }
+
+    /// Tags can only leave planning after the exact metadata/occurrence proof.
+    pub(super) fn plan_file_tags_mutation<F>(
+        &self,
+        principal: &str,
+        operation_id: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
+        if self.current_namespaces.is_none()
+            && self
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(super::disk_registry::current::pending_publication());
+        }
+        let plan =
+            self.prepare_new_mutation("file.tags.update", principal, operation_id, digest, change)?;
+        let MutationPlan::Prepared {
+            next,
+            prepared,
+            result,
+        } = &plan
+        else {
+            unreachable!("invariant: new mutation preparation does not replay old receipts");
+        };
+        if !prepared.is_empty() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "file tags cannot prepare payload writes",
+            ));
+        }
+        if let Some(view) = self.current_namespaces {
+            view.verify_new_file_tags(self.state, next, result)?;
+        }
+        Ok(plan)
+    }
+
     fn prepare_new_mutation<F>(
         &self,
         kind: &str,

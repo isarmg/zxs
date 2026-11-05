@@ -402,6 +402,14 @@ impl CurrentDirectoryProjection {
         &self.path
     }
 
+    /// Exact frozen nodes from this admitted head's retained occurrence graph.
+    /// A metadata publication must not substitute a descendant's newer HEAD.
+    pub(super) fn file_tag_trees(&self) -> impl Iterator<Item = (&str, &DirectoryTree)> {
+        self.nodes
+            .iter()
+            .map(|(directory, node)| (directory.as_str(), &node.projected))
+    }
+
     fn matching_selected_tree(
         &self,
         state: &State,

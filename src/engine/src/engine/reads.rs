@@ -5,11 +5,44 @@ use crate::{disk::*, *};
 use std::path::Path;
 use std::{io::Read, path::PathBuf, sync::Arc};
 
+/// A resolved replica path and immutable version, created only by the complete
+/// existing read-proof path below. Callers may retain it but cannot substitute
+/// another file path or manufacture this capability from a disk seal.
+pub(crate) struct VerifiedReplicaSource {
+    owner: Arc<DiskHandle>,
+    path: PathBuf,
+    version: FileVersion,
+}
+impl VerifiedReplicaSource {
+    pub(super) fn owner(&self) -> &Arc<DiskHandle> {
+        &self.owner
+    }
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+    pub(super) fn version(&self) -> &FileVersion {
+        &self.version
+    }
+}
+
 impl Engine {
     pub(crate) fn used_bytes(&self, slot: &str) -> u64 {
         self.planning_context().used_bytes(slot)
     }
     pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(ReadSource, FileVersion)> {
+        let source = self.validated_replica_source(version_id)?;
+        Ok((
+            ReadSource::on_disk(&source.owner, source.path),
+            source.version,
+        ))
+    }
+
+    pub(crate) fn valid_backup_replica(&self, version_id: &str) -> Result<ReadSource> {
+        self.validated_replica_source(version_id)
+            .map(|source| ReadSource::VerifiedReplica(Arc::new(source)))
+    }
+
+    fn validated_replica_source(&self, version_id: &str) -> Result<VerifiedReplicaSource> {
         self.with_replica(version_id, |disk, directory, version, lease| {
             verify_read_payload(disk, directory, version, lease)?;
             let content = crate::container_storage::content_path_at(
@@ -18,7 +51,11 @@ impl Engine {
                 version,
                 &mut |_| lease.check_running(),
             )?;
-            Ok((ReadSource::on_disk(disk, content), version.clone()))
+            Ok(VerifiedReplicaSource {
+                owner: Arc::clone(disk),
+                path: content,
+                version: version.clone(),
+            })
         })
     }
     fn verified_replica(&self, version_id: &str) -> Result<(DiskFile, FileVersion, PathBuf)> {

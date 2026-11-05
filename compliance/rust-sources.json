@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
     "compliance/external-tests/foundation.json": "7553f119ba2b1a530ea7c8126701f0410a88945425a76ceb7e7643f6cbb1fecf",
-    "compliance/external-tests/integrated.json": "139a38c6a328d0acee251d1b0ca81fb1b97cb7be239009845cd124db021c03ce",
+    "compliance/external-tests/integrated.json": "2fee433381197373e12df6a25bf4986c2a4d5ca2475a7f7627721ce6f3d2bcf8",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79149,7 +79149,7 @@
       ]
     },
     "src/interface": {
-      "bytes": 94152,
+      "bytes": 95005,
       "directory": "src/interface",
       "file_count": 18,
       "files": [
@@ -79210,7 +79210,7 @@
         },
         {
           "path": "test/interface/unit/contours/paint/tests.rs",
-          "sha256": "2bfa6f109cb40cd871c53b04550ce6562ee8d41741f9b19a8b9ec766744e8067",
+          "sha256": "1eab4b70fc1d8a0e5b4d96e04e97ca4bccad6da58b3af716858e668a7438ff4f",
           "source": "src/interface/src/contours/paint.rs",
           "source_sha256_before": "03e9f77873942b9902a76460378cb4f3135ff56d7a3c23a269efb3fe55d23a7a"
         },
@@ -79820,16 +79820,16 @@
         "src/components/login.rs": "1646308eb176cf99517e1f2017238d7afdbc4514bb326c1a1b1075257fa7ae02",
         "src/components/mod.rs": "10cd01e58a8ae9a376fb13a9144de6034bd9194f79db61da0b2b8ca6e46d08ad",
         "src/components/notification.rs": "121a99dcc2522db1a0e6600ccfc74edc2a935d547f0d069ebcfc7a1c987f9ba0",
-        "src/components/select.rs": "850f7a9b2956d047a9d1dc254118454f6e3e89bd1efc4bc6ee2ad75dbf029ef4",
+        "src/components/select.rs": "9237432b11e08eaa9663a77ce27df99b035e27f9919b4c0d92278cd700b2a600",
         "src/components/shell.rs": "b1db8f57032fadaa071bd8e7e6dbd283d33ec3f895cab1ad188fd054ec6e8d7f",
         "src/components/state.rs": "5a9a5324005dd4d9072b0eb5965e373ae99814f75e386925307fcfe943f342ab",
-        "src/contours/controller.rs": "65c884bbb06fb0fb19f725c0a5420619d33d279f6d43789c9960fa58fee4a2e9",
+        "src/contours/controller.rs": "35635965b0cd050d34e646b5e739c79f63fb3236108d686b351a89cd8a1adae6",
         "src/contours/frame.rs": "9d789a4509f518f1d7060fe91f774c0fcf2a09c28dde6ea0aa82a84691a93241",
         "src/contours/geometry.rs": "88025d1e2cfc38aff75a80b5622d1e3568dac1bfd383d4e26a15bbd4c6d199d0",
         "src/contours/membership.rs": "a9fe0a42485cb6edc84631066c06c685b46abc500394bcea930743d776e0f03c",
         "src/contours/mod.rs": "e058237bf59b14e603dd866e54cb7aa6a464f78e0f1769c5494a5937c9990d73",
         "src/contours/mutations.rs": "567026ccbf3bd62880808bcfa97a5baab1302d83f1e991497a300c8021e07950",
-        "src/contours/paint.rs": "948db7cbeb31dfbd4dc55ca1829e6116c018de07518b60ed00bb403b1fbf7b44",
+        "src/contours/paint.rs": "360d60029cdc970cfb01bcd629fd6f8e7085f4069e811cdc939b4da083a9495f",
         "src/contours/profile.rs": "ff5f8c063bd6e04bf3fd9442c8b9dae5f407799d77c93133010e38b2e3c5225a",
         "src/for_loop.rs": "5f51f418e79900f4ef45ffeb6dcced7cacb8855ec2beabfd7344ba58a17c65a1",
         "src/for_snapshot.rs": "406af645436f3832601d12a7af3eefee7408e0654e39ea198c7d2e39c8049c05",

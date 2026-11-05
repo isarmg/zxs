@@ -821,18 +821,17 @@ fn membership_registry_current_missing_admission_never_falls_back_in_metadata_sn
 }
 
 #[test]
-fn membership_registry_current_unadapted_imports_never_invoke_the_mutation_planner() {
+fn membership_registry_current_generic_imports_never_invoke_the_mutation_planner() {
     let mut fixture = Fixture::new(false);
     fixture.project(false);
     let before = canonical_json(fixture.engine.state()).unwrap();
     for kind in ["branch.create", "merge-link.create"] {
         let invoked = std::cell::Cell::new(false);
-        let result = fixture.engine.plan_mutation_digest(
+        let result = fixture.engine.planning_context().plan_new_mutation(
             kind,
             "admin",
             op(),
-            json_codec::json!({}),
-            None,
+            Engine::native_request_digest(kind, "admin", &json_codec::json!({})).unwrap(),
             |_, _, _| {
                 invoked.set(true);
                 Ok(json_codec::json!({}))

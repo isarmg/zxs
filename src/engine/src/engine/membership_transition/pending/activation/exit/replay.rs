@@ -53,7 +53,12 @@ impl NamespaceReplay {
                 ));
             }
         } else if let Some(view) = &self.view {
-            self.view = Some(view.advance(&self.state, publication.state())?);
+            let advanced = view.advance(&self.state, publication.state())?;
+            // Re-protection reuses historical bodies. Even a fully verified
+            // control archive must bind its independent payload vector to that
+            // exact native backup plan; it grants no historical disk I/O.
+            view.verify_backup_candidate_payloads(&self.state, publication.state(), candidate)?;
+            self.view = Some(advanced);
         }
         self.state = Arc::clone(publication.state());
         self.snapshot = Some(candidate.snapshot_hash.clone());
@@ -123,6 +128,62 @@ impl AdmittedDiskExitPublication {
 }
 
 impl Engine {
+    /// Build only a read-only prefix validator. Unlike live admission this does
+    /// not install a namespace, acquire a Stop gate or publish SYSTEM state.
+    /// The prescribed empty-payload activation and full fixed-member barrier
+    /// must precede any later candidate's local payload proof lookup.
+    pub(in crate::engine) fn preflight_registry_activation(
+        &self,
+        candidate: &Candidate,
+        original: &crate::history_package::AdmittedState,
+        publication: &Publication,
+        seal: &PublicationSeal,
+    ) -> Result<CurrentNamespaces> {
+        let generation = self.config.generation().ok_or_else(|| {
+            Error::new(
+                ErrorCode::PublicationInvalid,
+                "registry preflight has no generation",
+            )
+        })?;
+        generation.verify_activation_candidate(candidate)?;
+        verify_publication_seal(candidate, publication, seal)?;
+        if publication.result != generation.result()? || publication.recovery.is_some() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "registry preflight differs from its prescribed activation result",
+            ));
+        }
+        let previous = self.replay_registry_source(generation)?;
+        let prepared = generation
+            .portable
+            .prepare_namespace_activation(&generation.base, previous.as_ref())?;
+        let boundary = generation
+            .intent
+            .boundary
+            .as_ref()
+            .expect("invariant: registry source");
+        let proof = AdmittedDiskExitPublication {
+            admission: PublicationAdmission::Preflight,
+            registry: generation
+                .portable
+                .exit_registry()
+                .expect("invariant: registry activation")
+                .clone(),
+            occurrence_mask_hash: generation.portable.activation_mask_hash()?,
+            source_snapshot: boundary.snapshot_hash.clone(),
+            source_sequence: boundary.sequence,
+            source_business_generation: generation.base.business_generation,
+            published_snapshot: candidate.snapshot_hash.clone(),
+            published_sequence: candidate.sequence,
+        };
+        prepared.admit(
+            &generation.base,
+            original.state(),
+            &candidate.snapshot_hash,
+            &proof,
+        )
+    }
+
     pub(super) fn replay_registry_source(
         &self,
         generation: &Generation,

@@ -365,8 +365,17 @@ impl Engine {
                 };
                 let id = link.merge_link_id.clone();
                 let history = link.history_tree_id.clone();
+                let source = engine
+                    .namespace_read_view()
+                    .admitted()?
+                    .map(|view| view.merge_link_source(state, &link))
+                    .transpose()?;
                 state.merge_links.insert(id.clone(), link);
-                Ok(json!({"merge_link_id":id,"history_tree_id":history}))
+                let mut result = json!({"merge_link_id":id,"history_tree_id":history});
+                if let Some(source) = source {
+                    result["namespace_merge_link"] = source;
+                }
+                Ok(result)
             },
         )?;
         // A later split can remap the link or replace it with audit boundaries.

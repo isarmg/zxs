@@ -20,6 +20,28 @@ impl CssSnapshot {
     }
 }
 
+/// A positioned, non-scrolling card can anchor its foreground in its own
+/// padding box. Account for the border so the SVG still covers the border box;
+/// generic foregrounds keep the existing fixed-position correction path.
+pub(super) fn foreground_style(width: f64, height: f64, css: &CssSnapshot, local: bool) -> String {
+    let (position, left, top) = if local {
+        (
+            "absolute",
+            -number(css.get("border-left-width")),
+            -number(css.get("border-top-width")),
+        )
+    } else {
+        ("fixed", 0.0, 0.0)
+    };
+    format!(
+        "all:initial!important;display:block!important;position:{position}!important;left:{}px!important;top:{}px!important;width:{}px!important;height:{}px!important;max-width:none!important;max-height:none!important;pointer-events:none!important;visibility:inherit!important;z-index:2147483647!important;overflow:visible!important;",
+        fmt(left),
+        fmt(top),
+        fmt(width),
+        fmt(height)
+    )
+}
+
 #[cfg(target_arch = "wasm32")]
 pub(super) fn snapshot(
     css: &web_sys::CssStyleDeclaration,

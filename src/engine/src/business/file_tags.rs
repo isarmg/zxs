@@ -51,6 +51,14 @@ impl Engine {
         self.mutate("file.tags.update", principal, operation,
             body,
             |engine,state,_| {
+                if let Some(view) = engine.admitted_current_namespaces()? {
+                    return view.update_current_file_tags(
+                        engine.state(),
+                        state,
+                        &request,
+                        engine.config.max_entries,
+                    );
+                }
                 super::file_requests::validate_location(engine, file, location)?;
                 // Complete preflight before any branch, context or tree advances.
                 let mut seen = BTreeSet::new();

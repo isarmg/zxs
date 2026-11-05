@@ -8,6 +8,7 @@ use crate::publication_evidence::{
 use crate::{disk::*, journal::*, *};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod payload_admission;
 mod workspace_receipts;
 
 /// Read-only journal admission, retained with its held descriptors until apply.
@@ -366,7 +367,11 @@ impl Engine {
                     sequence,
                     &hash,
                     &rs,
-                    &self.snapshot,
+                    workspace_receipts::ReceiptPrefix {
+                        snapshot: &self.snapshot,
+                        state: &self.state,
+                        namespaces: self.current_namespaces.as_deref(),
+                    },
                 )?,
             };
             let candidate = prepared.candidate;
@@ -471,9 +476,8 @@ impl Engine {
             // Prove the authenticated transition before repairing any of this
             // candidate's replicas, payloads, names or publication receipts.
             // advance is pure: install the new view only after completion below.
-            if let Some(view) = &self.current_namespaces {
-                workspace_receipts::verify_current_candidate_receipt(&candidate, next)?;
-                view.advance(&self.state, next)?;
+            if self.current_namespaces.is_some() {
+                self.verify_current_recovery_candidate(&candidate, next)?;
             }
             if publication.is_none() && mode == RecoveryMode::PreservePending {
                 self.blocked = true;

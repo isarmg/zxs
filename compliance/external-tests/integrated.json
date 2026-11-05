@@ -60,7 +60,7 @@
         },
         {
           "path": "test/interface/unit/contours/paint/tests.rs",
-          "sha256": "2bfa6f109cb40cd871c53b04550ce6562ee8d41741f9b19a8b9ec766744e8067",
+          "sha256": "1eab4b70fc1d8a0e5b4d96e04e97ca4bccad6da58b3af716858e668a7438ff4f",
           "source": "src/interface/src/contours/paint.rs",
           "source_sha256_before": "03e9f77873942b9902a76460378cb4f3135ff56d7a3c23a269efb3fe55d23a7a"
         },
