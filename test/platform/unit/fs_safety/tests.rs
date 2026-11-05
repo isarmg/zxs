@@ -250,7 +250,12 @@ fn directory_identity_rejects_linked_and_missing_ancestors_without_repair() {
             if matches!(error.raw_os_error(), Some(libc::ENOTDIR | libc::ELOOP))
     ));
     assert!(!absent.exists());
-    assert!(fs::symlink_metadata(&parent).unwrap().file_type().is_symlink());
+    assert!(
+        fs::symlink_metadata(&parent)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
     fs::remove_file(&parent).unwrap();
     PrivateDirectory::create_all(&path).unwrap();
     assert!(matches!(
