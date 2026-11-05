@@ -1543,6 +1543,11 @@ async fn existing_pool_addition_routes_keep_session_origin_and_csrf_boundaries()
         ("POST", "/api/admin/disks/exit"),
         ("POST", "/api/admin/disks/exit/resume"),
         ("GET", "/api/admin/disks/exit"),
+        ("GET", "/api/admin/disks/registrations"),
+        ("POST", "/api/admin/disks/readmission/preview"),
+        ("POST", "/api/admin/disks/readmission"),
+        ("POST", "/api/admin/disks/readmission/resume"),
+        ("GET", "/api/admin/disks/readmission"),
     ] {
         let response = app
             .clone()

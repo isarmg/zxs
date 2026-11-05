@@ -266,7 +266,12 @@ fn terminal_management_allows_fresh_resume_but_never_initial_activation() {
     assert!(!state.admin_console.storage.can_activate());
     assert!(!state.admin_console.storage.can_complete());
     assert!(state.admin_console.storage.editable());
-    assert!(!lifecycle::can_preview(&state));
+    assert!(!lifecycle::can_preview(
+        &state,
+        "P01",
+        "disk_retained",
+        storage_contract::storage_lifecycle::ExitAction::Deregister,
+    ));
     let mut mismatched = value;
     mismatched["terminal"]["registrations"] = json!("empty_registry");
     assert!(storage_snapshot(mismatched).is_err());

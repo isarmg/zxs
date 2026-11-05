@@ -6963,6 +6963,590 @@
       ],
       "additionalProperties": false,
       "description": "以 GET 返回的稳定范围身份、可空精确规则 ID 和十进制 u64 代数更新当前路径规则。expected_rule_id 必须显式提供；身份字符串非空，精确匹配在提交时校验。复用 operation_id 可查询或重试同一请求；不同输入不得复用。"
+    },
+    "StorageReadmissionRequest": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "expected_disk_id": {
+          "$ref": "#/$defs/DiskId"
+        }
+      },
+      "required": [
+        "operation_id",
+        "slot_id",
+        "expected_disk_id"
+      ],
+      "additionalProperties": false
+    },
+    "StorageReadmissionTarget": {
+      "type": "object",
+      "properties": {
+        "pool_id": {
+          "$ref": "#/$defs/PoolId"
+        },
+        "disk_id": {
+          "$ref": "#/$defs/DiskId"
+        },
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "binding_generation": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/UInt64"
+            },
+            {
+              "not": {
+                "const": "0"
+              }
+            }
+          ]
+        },
+        "root_path": {
+          "$ref": "#/$defs/StorageHostPath"
+        }
+      },
+      "required": [
+        "pool_id",
+        "disk_id",
+        "slot_id",
+        "binding_generation",
+        "root_path"
+      ],
+      "additionalProperties": false
+    },
+    "StorageReadmissionAuthority": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "active_membership"
+            },
+            "membership_authority_hash": {
+              "$ref": "#/$defs/Hash"
+            }
+          },
+          "required": [
+            "kind",
+            "membership_authority_hash"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "terminal_management"
+            },
+            "terminal_authority_hash": {
+              "$ref": "#/$defs/Hash"
+            },
+            "terminal_operation_id": {
+              "$ref": "#/$defs/OperationId"
+            }
+          },
+          "required": [
+            "kind",
+            "terminal_authority_hash",
+            "terminal_operation_id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "准确来源的 CAS 上下文，不是认证令牌；服务端从真实 authority 重新验证。终态入口仅在已认证可恢复角色明确提供时可用。"
+    },
+    "StorageReadmissionPreview": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/StorageReadmissionRequest"
+        },
+        "target": {
+          "$ref": "#/$defs/StorageReadmissionTarget"
+        },
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata_member": {
+          "type": "boolean"
+        },
+        "configuration_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "preview_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "authority": {
+          "$ref": "#/$defs/StorageReadmissionAuthority"
+        },
+        "registry_root_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "registry_generation": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/UInt64"
+            },
+            {
+              "not": {
+                "const": "0"
+              }
+            }
+          ]
+        },
+        "source_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "topology_generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "snapshot_hash": {
+          "$ref": "#/$defs/Hash"
+        }
+      },
+      "required": [
+        "request",
+        "target",
+        "principal",
+        "metadata_member",
+        "configuration_digest",
+        "preview_digest",
+        "authority",
+        "registry_root_hash",
+        "registry_generation",
+        "source_sequence",
+        "topology_generation",
+        "snapshot_hash"
+      ],
+      "additionalProperties": false
+    },
+    "StorageReadmissionCommit": {
+      "type": "object",
+      "properties": {
+        "preview": {
+          "$ref": "#/$defs/StorageReadmissionPreview"
+        }
+      },
+      "required": [
+        "preview"
+      ],
+      "additionalProperties": false
+    },
+    "StorageReadmissionResume": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "additionalProperties": false
+    },
+    "StorageReadmissionFailure": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*(?![\\s\\S])"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "StorageReadmissionPublication": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "kind": {
+          "const": "disk-readmit"
+        },
+        "commit_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "history_tree_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commit_state": {
+          "const": "PUBLISHED"
+        },
+        "protection_at_publish": {
+          "const": "NOT_APPLICABLE"
+        },
+        "current_health": {
+          "enum": [
+            "HEALTHY",
+            "DEGRADED",
+            "UNAVAILABLE",
+            "UNKNOWN",
+            "RECOVERING"
+          ]
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "disk_id": {
+              "$ref": "#/$defs/DiskId"
+            },
+            "slot_id": {
+              "$ref": "#/$defs/SlotId"
+            },
+            "binding_generation": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/UInt64"
+                },
+                {
+                  "not": {
+                    "const": "0"
+                  }
+                }
+              ]
+            },
+            "registration": {
+              "const": "enabled"
+            },
+            "io_admission_epoch": {
+              "$ref": "#/$defs/Hash"
+            }
+          },
+          "required": [
+            "disk_id",
+            "slot_id",
+            "binding_generation",
+            "registration",
+            "io_admission_epoch"
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "kind",
+        "commit_id",
+        "history_tree_id",
+        "branch_id",
+        "commit_state",
+        "protection_at_publish",
+        "current_health",
+        "request_digest",
+        "sequence",
+        "result"
+      ],
+      "additionalProperties": false,
+      "description": "保留核心原 OperationResult 的 Published 回执，不把管理缓存 phase 当成功；运行时另验证 actor、精确归档、目标身份及 io_admission_epoch=request_digest。result 保留核心附加证明字段。"
+    },
+    "StorageReadmissionStatus": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "recovery_required",
+            "completed"
+          ]
+        },
+        "phase": {
+          "enum": [
+            "prepared",
+            "fencing",
+            "archiving",
+            "activating",
+            "completed"
+          ]
+        },
+        "preview": {
+          "$ref": "#/$defs/StorageReadmissionPreview"
+        },
+        "failure": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageReadmissionFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageReadmissionPublication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "state",
+        "phase",
+        "preview",
+        "failure",
+        "result"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "phase": {
+                "const": "completed"
+              },
+              "failure": {
+                "type": "null"
+              },
+              "result": {
+                "$ref": "#/$defs/StorageReadmissionPublication"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "phase": {
+                "enum": [
+                  "prepared",
+                  "fencing",
+                  "archiving",
+                  "activating"
+                ]
+              },
+              "result": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StorageReadmissionStatusResponse": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageReadmissionStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "additionalProperties": false
+    },
+    "StorageRegistrationEntry": {
+      "type": "object",
+      "properties": {
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "disk_id": {
+          "$ref": "#/$defs/DiskId"
+        },
+        "binding_generation": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/UInt64"
+            },
+            {
+              "not": {
+                "const": "0"
+              }
+            }
+          ]
+        },
+        "mode": {
+          "enum": [
+            "enabled",
+            "disabled"
+          ]
+        },
+        "metadata_member": {
+          "type": "boolean"
+        },
+        "readmission": {
+          "oneOf": [
+            {
+              "enum": [
+                "metadata_member",
+                "data_only"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "slot_id",
+        "disk_id",
+        "binding_generation",
+        "mode",
+        "metadata_member",
+        "readmission"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "disabled"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "metadata_member": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "readmission": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StorageRegistrationSnapshot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "authority": {
+              "const": "active_membership"
+            },
+            "registrations": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/StorageRegistrationEntry"
+              }
+            }
+          },
+          "required": [
+            "authority",
+            "registrations"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "authority": {
+              "const": "terminal_management"
+            },
+            "registrations": {
+              "type": "array",
+              "items": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/StorageRegistrationEntry"
+                  },
+                  {
+                    "properties": {
+                      "metadata_member": {
+                        "const": false
+                      },
+                      "readmission": {
+                        "enum": [
+                          "metadata_member",
+                          null
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "authority",
+            "registrations"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "authority": {
+              "const": "unadmitted"
+            }
+          },
+          "required": [
+            "authority"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "当前已认证登记与观察健康分离；Detached 不在列表。Unadmitted 不是空池；readmission=null 不允许恢复按钮。"
     }
   }
 }

@@ -313,6 +313,9 @@ impl ReadmissionCore {
     pub(in crate::engine::membership_transition) fn registry(&self) -> &DiskRegistryCommitment {
         &self.proposal.registry
     }
+    pub(in crate::engine::membership_transition) fn source_topology_generation(&self) -> u64 {
+        self.proposal.topology_generation
+    }
     pub(in crate::engine::membership_transition) fn registry_parent(
         &self,
     ) -> &DiskRegistryCommitment {

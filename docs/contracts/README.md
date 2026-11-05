@@ -14,6 +14,8 @@
 | [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照35映射与历史根30映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
 | [contract-check](../tools/contract-check.md) | Rust 实现的 schema/OpenAPI 有效性、两者定义一致性、固定向量、配置投影、文档本地链接和 JSON/TOML 语法校验 | 模型检查、平台测试、网络端点行为和性能 |
 
+新增 `StorageReadmission*` 与 `StorageRegistration*` 定义覆盖登记查询、纯元数据预览、明确提交、原操作查询及继续入口。UINT64 仍为十进制字符串，nullable 状态字段必须显式出现；未知字段、客户端替换路径/actor、Detached 登记模式与无回执 completed 均拒绝。固定向量是合成字段样例，不能证明来源权威、实际固定 quorum、真实目录身份或新的 I/O epoch；这些仍由服务器和核心执行。终态 authority 的 wire 形状不代表任意终态目录可恢复，须由已认证的可恢复角色与对应核心入口共同准入。
+
 认证契约仅描述现有四个端点：`POST /api/auth/login` 返回 `token/csrf_token/principal/expires_at`，`GET /api/auth/me` 返回 `principal/csrf_token`，`POST /api/auth/logout` 返回 `logged_out`，`POST /api/auth/password` 以 `current_password/new_password` 换取 `changed/reauthentication_required`。响应不带角色、禁用或仓库准入字段；请求和响应 schema 均拒绝额外字段。Cookie 与 Bearer 两条认证路径共享当前唯一管理员，Cookie 变更请求仍需 Origin/CSRF。Schema 不替代密码验证、撤销持久性或真实 HTTP 安全测试。
 
 仓库与备份契约不保存 `grants`、`account_scope_repository_id` 或 `can_manage`。对象归属、只读别名、主分支绑定、工作区所有者、幂等主体和既有额度仍保留；移除用户 ACL 不代表解除业务限制。

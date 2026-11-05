@@ -6,9 +6,17 @@ use crate::engine::disk_lifecycle::bootstrap::{
     store::PreparedReadmission,
 };
 use crate::engine::membership_transition::archive::persistent::PendingControlArchive;
-use crate::engine::membership_transition::readmission::{AdmittedReadmission, request};
+use crate::engine::membership_transition::readmission::{AdmittedReadmission, request, status};
 
 const PLAN: &str = "readmission-activation.json";
+
+enum ReadmissionExpectation<'a> {
+    Actor {
+        operation_id: OperationId,
+        principal: &'a str,
+    },
+    Source(&'a DiskReadmissionStatus),
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -65,6 +73,27 @@ impl Engine {
     /// every malformed or unreadable plan remains an error, never a fallback.
     pub fn readmission_recovery_pending(root: &Path) -> Result<bool> {
         Ok(read_plan(root)?.is_some())
+    }
+
+    /// Project the exact saved readmission source using SYSTEM metadata only.
+    /// Callers must still resume this same transition to authenticate its live witnesses.
+    ///
+    /// # Errors
+    /// Rejects malformed or unreadable plans without probing storage directories.
+    pub fn readmission_recovery_status(root: &Path) -> Result<Option<DiskReadmissionStatus>> {
+        read_plan(root)?
+            .map(|plan| {
+                let core = plan
+                    .authority
+                    .readmission_core()
+                    .expect("invariant: read plan checked");
+                status(
+                    &plan.authority.intent()?,
+                    DiskReadmissionPhase::Activating,
+                    core.source_topology_generation(),
+                )
+            })
+            .transpose()
     }
 
     pub(in crate::engine) fn retire_published_readmission_plan(&self) -> Result<()> {
@@ -336,12 +365,32 @@ impl Engine {
         limits: Option<crate::RetainedWorkspaceLimits>,
     ) -> Result<Self> {
         Self::require_actor(principal)?;
-        Self::resume_readmission_plan(root, Some((operation_id, principal)), limits)
+        Self::resume_readmission_plan(
+            root,
+            Some(ReadmissionExpectation::Actor {
+                operation_id,
+                principal,
+            }),
+            limits,
+        )
+    }
+
+    /// Resume only the exact source returned by `readmission_recovery_status`.
+    ///
+    /// # Errors
+    /// Rejects a changed source, operation or actor before opening any storage root.
+    pub fn resume_disk_readmission_transition(
+        root: &Path,
+        source: &DiskReadmissionStatus,
+        limits: Option<crate::RetainedWorkspaceLimits>,
+    ) -> Result<Self> {
+        Self::require_actor(&source.principal)?;
+        Self::resume_readmission_plan(root, Some(ReadmissionExpectation::Source(source)), limits)
     }
 
     fn resume_readmission_plan(
         root: &Path,
-        expected: Option<(OperationId, &str)>,
+        expected: Option<ReadmissionExpectation<'_>>,
         limits: Option<crate::RetainedWorkspaceLimits>,
     ) -> Result<Self> {
         let (root, projected) = Self::recovery_projection(root, limits)?;
@@ -353,17 +402,29 @@ impl Engine {
         })?;
         let portable = &plan.authority;
         let intent = portable.intent()?;
-        if expected.is_some_and(|(operation, principal)| {
-            intent.operation_id != operation || intent.principal != principal
-        }) {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "readmission plan belongs to another operation or actor",
-            ));
-        }
         let core = portable
             .readmission_core()
             .expect("invariant: read plan checked");
+        let matches = match expected {
+            None => true,
+            Some(ReadmissionExpectation::Actor {
+                operation_id,
+                principal,
+            }) => intent.operation_id == operation_id && intent.principal == principal,
+            Some(ReadmissionExpectation::Source(source)) => {
+                status(
+                    &intent,
+                    DiskReadmissionPhase::Activating,
+                    core.source_topology_generation(),
+                )? == *source
+            }
+        };
+        if !matches {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "readmission plan belongs to another operation, actor or source",
+            ));
+        }
         let request = request(&intent)?;
         if !portable.matches_metadata_projection(&projected)? {
             return Err(Error::new(

@@ -22,6 +22,7 @@ pub(in crate::engine::membership_transition) use probe::persist_probe_admission;
 pub(in crate::engine) use probe::{
     ReadmissionProbeAdmission, RecoveredReadmission, persist_recovered_admissions,
 };
+pub(in crate::engine::membership_transition) use runtime::status;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiskReadmissionPhase {
@@ -33,10 +34,21 @@ pub enum DiskReadmissionPhase {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiskReadmissionStatus {
     pub operation_id: OperationId,
+    /// Original actor from the authenticated core intent, not a management cache.
+    pub principal: String,
     pub transition_hash: String,
     pub target: DiskRegistrationIdentity,
     pub phase: DiskReadmissionPhase,
     pub metadata_member: bool,
+    /// BLAKE3 of the serialized original Config from the admitted transition.
+    pub source_configuration_digest: String,
+    pub source_root_path: std::path::PathBuf,
+    pub source_membership_authority_hash: String,
+    pub source_registry_root_hash: String,
+    pub source_registry_generation: u64,
+    pub source_sequence: u64,
+    pub source_topology_generation: u64,
+    pub source_snapshot_hash: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

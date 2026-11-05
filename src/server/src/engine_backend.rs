@@ -25,6 +25,7 @@ mod operations;
 mod read_projection;
 mod storage_addition;
 pub(crate) mod storage_lifecycle;
+pub(crate) mod storage_readmission;
 mod wire;
 use wire::{current_entry_source, field};
 pub(crate) use wire::{error, error_response};

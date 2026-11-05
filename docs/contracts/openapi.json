@@ -8380,6 +8380,190 @@
           }
         }
       }
+    },
+    "/api/admin/disks/registrations": {
+      "get": {
+        "operationId": "getStorageRegistrations",
+        "description": "只读当前已认证登记，不探测 Disabled 或 Detached 目录，不接受查询参数。观察离线不能授权重新启用。",
+        "responses": {
+          "200": {
+            "description": "成功；仅 Published 精确核心回执表示变更完成。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageRegistrationSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知结果保留原 operation_id，查询并明确继续，不换编号重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/disks/readmission/preview": {
+      "post": {
+        "operationId": "previewStorageReadmission",
+        "description": "当前管理员预览准确 Disabled 登记及历史原角色。仅读取已准入元数据，不打开目标，不允许指定替换路径或 actor。",
+        "responses": {
+          "200": {
+            "description": "成功；仅 Published 精确核心回执表示变更完成。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageReadmissionPreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知结果保留原 operation_id，查询并明确继续，不换编号重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageReadmissionRequest"
+              }
+            }
+          },
+          "x-maxBytes": 16384,
+          "description": "严格 JSON，请求最多 16384 字节，十秒读取期限。当前管理员会话、同源及 Cookie CSRF 验证仍适用。"
+        }
+      }
+    },
+    "/api/admin/disks/readmission": {
+      "post": {
+        "operationId": "commitStorageReadmission",
+        "description": "明确提交完整预览，重新验证会话、registry/source/authority 代际与目标身份后才打开原目录。Detached 永久拒绝；客户端断开不释放协调器。",
+        "responses": {
+          "200": {
+            "description": "成功；仅 Published 精确核心回执表示变更完成。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageReadmissionStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知结果保留原 operation_id，查询并明确继续，不换编号重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageReadmissionCommit"
+              }
+            }
+          },
+          "x-maxBytes": 65536,
+          "description": "严格 JSON，请求最多 65536 字节，十秒读取期限。当前管理员会话、同源及 Cookie CSRF 验证仍适用。"
+        }
+      },
+      "get": {
+        "operationId": "getStorageReadmission",
+        "description": "查询原操作或最新操作，不启动恢复或打开停用目标。完成必须由已准入核心的永久回执确认。",
+        "responses": {
+          "200": {
+            "description": "成功；仅 Published 精确核心回执表示变更完成。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageReadmissionStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知结果保留原 operation_id，查询并明确继续，不换编号重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OperationId"
+            }
+          }
+        ]
+      }
+    },
+    "/api/admin/disks/readmission/resume": {
+      "post": {
+        "operationId": "resumeStorageReadmission",
+        "description": "仅明确继续原 operation_id、actor 和已持久化目标；不替换目录、不重选角色。恢复仍要求实际固定 quorum 和完整核心证明。",
+        "responses": {
+          "200": {
+            "description": "成功；仅 Published 精确核心回执表示变更完成。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageReadmissionStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；未知结果保留原 operation_id，查询并明确继续，不换编号重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageReadmissionResume"
+              }
+            }
+          },
+          "x-maxBytes": 16384,
+          "description": "严格 JSON，请求最多 16384 字节，十秒读取期限。当前管理员会话、同源及 Cookie CSRF 验证仍适用。"
+        }
+      }
     }
   },
   "components": {
@@ -15357,6 +15541,590 @@
         ],
         "additionalProperties": false,
         "description": "以 GET 返回的稳定范围身份、可空精确规则 ID 和十进制 u64 代数更新当前路径规则。expected_rule_id 必须显式提供；身份字符串非空，精确匹配在提交时校验。复用 operation_id 可查询或重试同一请求；不同输入不得复用。"
+      },
+      "StorageReadmissionRequest": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "expected_disk_id": {
+            "$ref": "#/components/schemas/DiskId"
+          }
+        },
+        "required": [
+          "operation_id",
+          "slot_id",
+          "expected_disk_id"
+        ],
+        "additionalProperties": false
+      },
+      "StorageReadmissionTarget": {
+        "type": "object",
+        "properties": {
+          "pool_id": {
+            "$ref": "#/components/schemas/PoolId"
+          },
+          "disk_id": {
+            "$ref": "#/components/schemas/DiskId"
+          },
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "binding_generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              {
+                "not": {
+                  "const": "0"
+                }
+              }
+            ]
+          },
+          "root_path": {
+            "$ref": "#/components/schemas/StorageHostPath"
+          }
+        },
+        "required": [
+          "pool_id",
+          "disk_id",
+          "slot_id",
+          "binding_generation",
+          "root_path"
+        ],
+        "additionalProperties": false
+      },
+      "StorageReadmissionAuthority": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "active_membership"
+              },
+              "membership_authority_hash": {
+                "$ref": "#/components/schemas/Hash"
+              }
+            },
+            "required": [
+              "kind",
+              "membership_authority_hash"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "terminal_management"
+              },
+              "terminal_authority_hash": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "terminal_operation_id": {
+                "$ref": "#/components/schemas/OperationId"
+              }
+            },
+            "required": [
+              "kind",
+              "terminal_authority_hash",
+              "terminal_operation_id"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "准确来源的 CAS 上下文，不是认证令牌；服务端从真实 authority 重新验证。终态入口仅在已认证可恢复角色明确提供时可用。"
+      },
+      "StorageReadmissionPreview": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/StorageReadmissionRequest"
+          },
+          "target": {
+            "$ref": "#/components/schemas/StorageReadmissionTarget"
+          },
+          "principal": {
+            "type": "string",
+            "minLength": 1
+          },
+          "metadata_member": {
+            "type": "boolean"
+          },
+          "configuration_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "preview_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/StorageReadmissionAuthority"
+          },
+          "registry_root_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "registry_generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              {
+                "not": {
+                  "const": "0"
+                }
+              }
+            ]
+          },
+          "source_sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "topology_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "snapshot_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "request",
+          "target",
+          "principal",
+          "metadata_member",
+          "configuration_digest",
+          "preview_digest",
+          "authority",
+          "registry_root_hash",
+          "registry_generation",
+          "source_sequence",
+          "topology_generation",
+          "snapshot_hash"
+        ],
+        "additionalProperties": false
+      },
+      "StorageReadmissionCommit": {
+        "type": "object",
+        "properties": {
+          "preview": {
+            "$ref": "#/components/schemas/StorageReadmissionPreview"
+          }
+        },
+        "required": [
+          "preview"
+        ],
+        "additionalProperties": false
+      },
+      "StorageReadmissionResume": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "additionalProperties": false
+      },
+      "StorageReadmissionFailure": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*(?![\\s\\S])"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "StorageReadmissionPublication": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "kind": {
+            "const": "disk-readmit"
+          },
+          "commit_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "history_tree_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commit_state": {
+            "const": "PUBLISHED"
+          },
+          "protection_at_publish": {
+            "const": "NOT_APPLICABLE"
+          },
+          "current_health": {
+            "enum": [
+              "HEALTHY",
+              "DEGRADED",
+              "UNAVAILABLE",
+              "UNKNOWN",
+              "RECOVERING"
+            ]
+          },
+          "request_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "disk_id": {
+                "$ref": "#/components/schemas/DiskId"
+              },
+              "slot_id": {
+                "$ref": "#/components/schemas/SlotId"
+              },
+              "binding_generation": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/UInt64"
+                  },
+                  {
+                    "not": {
+                      "const": "0"
+                    }
+                  }
+                ]
+              },
+              "registration": {
+                "const": "enabled"
+              },
+              "io_admission_epoch": {
+                "$ref": "#/components/schemas/Hash"
+              }
+            },
+            "required": [
+              "disk_id",
+              "slot_id",
+              "binding_generation",
+              "registration",
+              "io_admission_epoch"
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "commit_id",
+          "history_tree_id",
+          "branch_id",
+          "commit_state",
+          "protection_at_publish",
+          "current_health",
+          "request_digest",
+          "sequence",
+          "result"
+        ],
+        "additionalProperties": false,
+        "description": "保留核心原 OperationResult 的 Published 回执，不把管理缓存 phase 当成功；运行时另验证 actor、精确归档、目标身份及 io_admission_epoch=request_digest。result 保留核心附加证明字段。"
+      },
+      "StorageReadmissionStatus": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "recovery_required",
+              "completed"
+            ]
+          },
+          "phase": {
+            "enum": [
+              "prepared",
+              "fencing",
+              "archiving",
+              "activating",
+              "completed"
+            ]
+          },
+          "preview": {
+            "$ref": "#/components/schemas/StorageReadmissionPreview"
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageReadmissionFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageReadmissionPublication"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "state",
+          "phase",
+          "preview",
+          "failure",
+          "result"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "phase": {
+                  "const": "completed"
+                },
+                "failure": {
+                  "type": "null"
+                },
+                "result": {
+                  "$ref": "#/components/schemas/StorageReadmissionPublication"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "phase": {
+                  "enum": [
+                    "prepared",
+                    "fencing",
+                    "archiving",
+                    "activating"
+                  ]
+                },
+                "result": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "StorageReadmissionStatusResponse": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageReadmissionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "additionalProperties": false
+      },
+      "StorageRegistrationEntry": {
+        "type": "object",
+        "properties": {
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "disk_id": {
+            "$ref": "#/components/schemas/DiskId"
+          },
+          "binding_generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              {
+                "not": {
+                  "const": "0"
+                }
+              }
+            ]
+          },
+          "mode": {
+            "enum": [
+              "enabled",
+              "disabled"
+            ]
+          },
+          "metadata_member": {
+            "type": "boolean"
+          },
+          "readmission": {
+            "oneOf": [
+              {
+                "enum": [
+                  "metadata_member",
+                  "data_only"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "slot_id",
+          "disk_id",
+          "binding_generation",
+          "mode",
+          "metadata_member",
+          "readmission"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "disabled"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "metadata_member": {
+                  "const": false
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "readmission": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "StorageRegistrationSnapshot": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "authority": {
+                "const": "active_membership"
+              },
+              "registrations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/components/schemas/StorageRegistrationEntry"
+                }
+              }
+            },
+            "required": [
+              "authority",
+              "registrations"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "authority": {
+                "const": "terminal_management"
+              },
+              "registrations": {
+                "type": "array",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StorageRegistrationEntry"
+                    },
+                    {
+                      "properties": {
+                        "metadata_member": {
+                          "const": false
+                        },
+                        "readmission": {
+                          "enum": [
+                            "metadata_member",
+                            null
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "authority",
+              "registrations"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "authority": {
+                "const": "unadmitted"
+              }
+            },
+            "required": [
+              "authority"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "当前已认证登记与观察健康分离；Detached 不在列表。Unadmitted 不是空池；readmission=null 不允许恢复按钮。"
       }
     }
   }

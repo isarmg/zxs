@@ -25,6 +25,19 @@ pub(crate) fn protected_routes() -> Router<AppState> {
         .route("/api/admin/disks/exit/preview", post(exit_preview))
         .route("/api/admin/disks/exit", get(exit_status).post(exit_commit))
         .route("/api/admin/disks/exit/resume", post(exit_resume))
+        .route("/api/admin/disks/registrations", get(registration_status))
+        .route(
+            "/api/admin/disks/readmission/preview",
+            post(readmission_preview),
+        )
+        .route(
+            "/api/admin/disks/readmission",
+            get(readmission_status).post(readmission_commit),
+        )
+        .route(
+            "/api/admin/disks/readmission/resume",
+            post(readmission_resume),
+        )
         .route(
             "/api/admin/storage/discovery-root",
             get(discovery_root).put(set_discovery_root),
@@ -237,7 +250,9 @@ async fn protected_mutation(
     let limit = match action {
         "activate" => MAX_ACTIVATION_BODY_BYTES,
         "disk_add_preview" => crate::JSON_BODY_LIMIT,
-        "set_discovery_root" | "disk_exit_commit" => MAX_DIRECTORY_BODY_BYTES,
+        "set_discovery_root" | "disk_exit_commit" | "disk_readmit_commit" => {
+            MAX_DIRECTORY_BODY_BYTES
+        }
         _ => super::MAX_SETUP_BODY_BYTES,
     };
     let input = body(request, limit).await?;
@@ -451,4 +466,61 @@ async fn exit_status(
     )
     .await
     .map(Json)
+}
+
+async fn readmission_preview(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_readmit_preview").await
+}
+async fn readmission_commit(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_readmit_commit").await
+}
+async fn readmission_resume(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_readmit_resume").await
+}
+async fn readmission_status(
+    State(state): State<AppState>,
+    crate::http_boundary::ApiQuery(query): crate::http_boundary::ApiQuery<AdditionQuery>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    dispatch(
+        state,
+        "disk_readmit_status",
+        json!({"operation_id":query.operation_id}),
+        None,
+        Some(identity),
+    )
+    .await
+    .map(Json)
+}
+async fn registration_status(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    if request.uri().query().is_some() {
+        return Err(ApiError::invalid(
+            "registration metadata accepts no query parameters",
+        ));
+    }
+    dispatch(state, "disk_registrations", json!({}), None, Some(identity))
+        .await
+        .map(Json)
 }

@@ -1,6 +1,10 @@
 //! Explicit exit confirmation. Navigation and failed replies never undo an exit.
 use super::*;
-use storage_contract::{OperationId, storage_lifecycle::*};
+use storage_contract::{
+    OperationId,
+    storage_lifecycle::*,
+    storage_readmission::{RegistrationEntry, RegistrationMode},
+};
 
 #[derive(Clone, Default)]
 pub(super) struct Model {
@@ -10,7 +14,7 @@ pub(super) struct Model {
     submitted: bool,
     rejected: bool,
     sending: bool,
-    reading: bool,
+    reading: Option<u64>,
     generation: u64,
     acknowledged: bool,
     error: Option<api::Error>,
@@ -18,23 +22,75 @@ pub(super) struct Model {
 impl Model {
     pub(super) fn blocks_edit(&self) -> bool {
         self.sending
-            || self.reading
+            || self.reading.is_some()
             || self.submitted
             || self
                 .status
                 .as_ref()
                 .is_some_and(|status| status.state != ExitState::Completed)
     }
+    /// Only the read that owns this slot can release it. A newer mutation may
+    /// supersede its result while the original read is still in flight.
+    fn finish_read(&mut self, generation: u64) -> bool {
+        if self.reading != Some(generation) {
+            return false;
+        }
+        self.reading = None;
+        self.generation == generation
+    }
+    fn leave_preview(&mut self) {
+        if !self.submitted {
+            self.generation += 1;
+            self.preview = None;
+            self.acknowledged = false;
+            self.sending = false;
+            self.reading = None;
+            self.operation = self.status.as_ref().map(|status| status.operation_id);
+        }
+    }
 }
-pub(in crate::admin) fn can_preview(state: &State) -> bool {
+pub(in crate::admin) fn can_preview(
+    state: &State,
+    slot: &str,
+    disk: &str,
+    action: ExitAction,
+) -> bool {
     let storage = &state.admin_console.storage;
     state.session_active()
-        && storage
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.state == StorageState::Active)
+        && super::readmission::active_registration(state, slot, disk)
+            .is_some_and(|entry| action_available(entry, action))
+        && !storage.busy
+        && !storage.readmission.blocks_edit()
         && !storage.addition.blocks_edit()
         && !storage.lifecycle.blocks_edit()
+}
+fn action_available(entry: &RegistrationEntry, action: ExitAction) -> bool {
+    match action {
+        ExitAction::PlannedOffline => entry.mode == RegistrationMode::Enabled,
+        ExitAction::Deregister => true,
+    }
+}
+fn preview_matches_registration(preview: &ExitPreview, entry: &RegistrationEntry) -> bool {
+    action_available(entry, preview.request.action)
+        && preview.target.slot_id == entry.slot_id
+        && preview.target.disk_id == entry.disk_id
+        && preview.target.binding_generation == entry.binding_generation
+        && preview.original_metadata_members - preview.target_metadata_members
+            == usize::from(entry.metadata_member)
+}
+fn can_submit_preview(state: &State) -> bool {
+    let model = &state.admin_console.storage.lifecycle;
+    model.acknowledged
+        && model.preview.as_ref().is_some_and(|preview| {
+            let target = &preview.target;
+            can_preview(
+                state,
+                &target.slot_id,
+                &target.disk_id,
+                preview.request.action,
+            ) && super::readmission::active_registration(state, &target.slot_id, &target.disk_id)
+                .is_some_and(|entry| preview_matches_registration(preview, entry))
+        })
 }
 pub(in crate::admin) fn preview(
     state: RwSignal<State>,
@@ -56,17 +112,31 @@ pub(in crate::admin) fn preview(
     };
     let captured = state
         .try_update(|s| {
-            if !can_preview(s) {
+            if !can_preview(
+                s,
+                &request.slot_id,
+                &request.expected_disk_id,
+                request.action,
+            ) {
                 return None;
             }
+            let registration = super::readmission::active_registration(
+                s,
+                &request.slot_id,
+                &request.expected_disk_id,
+            )
+            .expect("invariant: eligible exit has an exact active registration")
+            .clone();
             let model = &mut s.admin_console.storage.lifecycle;
             model.sending = true;
+            model.preview = None;
+            model.acknowledged = false;
             model.error = None;
             model.generation += 1;
-            Some((s.session_epoch, model.generation))
+            Some((s.session_epoch, model.generation, registration))
         })
         .flatten();
-    let Some((epoch, generation)) = captured else {
+    let Some((epoch, generation, registration)) = captured else {
         return;
     };
     spawn_local(async move {
@@ -78,7 +148,9 @@ pub(in crate::admin) fn preview(
             |value| {
                 let preview: ExitPreview = decode(value)?;
                 validate_preview(&preview)?;
-                if preview.request != expected {
+                if preview.request != expected
+                    || !preview_matches_registration(&preview, &registration)
+                {
                     return Err(invalid(ResponseError::Identity));
                 }
                 Ok(preview)
@@ -94,15 +166,21 @@ pub(in crate::admin) fn preview(
             {
                 return;
             }
+            let same_registration = super::readmission::active_registration(
+                s,
+                &registration.slot_id,
+                &registration.disk_id,
+            ) == Some(&registration);
             let model = &mut s.admin_console.storage.lifecycle;
             model.sending = false;
             match result {
-                Ok(preview) => {
+                Ok(preview) if same_registration => {
                     model.operation = Some(preview.request.operation_id);
                     model.preview = Some(preview);
                     model.status = None;
                     model.acknowledged = false;
                 }
+                Ok(_) => model.error = Some(invalid(ResponseError::Identity)),
                 Err(error) => model.error = Some(error),
             }
         });
@@ -114,8 +192,9 @@ fn submit(state: RwSignal<State>, resume: bool) {
             if !s.session_active() {
                 return None;
             }
-            let model = &mut s.admin_console.storage.lifecycle;
-            if model.sending
+            let model = &s.admin_console.storage.lifecycle;
+            if (!model.submitted && !can_submit_preview(s))
+                || model.sending
                 || model
                     .status
                     .as_ref()
@@ -136,9 +215,6 @@ fn submit(state: RwSignal<State>, resume: bool) {
                     }),
                 )
             } else {
-                if !model.submitted && !model.acknowledged {
-                    return None;
-                }
                 (
                     "/api/admin/disks/exit",
                     json!(ExitCommit {
@@ -146,6 +222,7 @@ fn submit(state: RwSignal<State>, resume: bool) {
                     }),
                 )
             };
+            let model = &mut s.admin_console.storage.lifecycle;
             model.sending = true;
             model.submitted = true;
             model.rejected = false;
@@ -235,17 +312,31 @@ fn validate_status(status: &ExitStatus, expected: Option<OperationId>) -> Result
         || completed != (status.phase == ExitPhase::Completed)
         || completed != status.result.is_some()
         || (completed && status.failure.is_some())
-        || status.result.as_ref().is_some_and(|result| {
-            result.operation_id != status.operation_id
-                || result.kind != status.preview.request.action.result_kind()
-                || result.commit_state != storage_contract::CommitState::Published
-                || !digest(&result.request_digest)
-                || (status.preview.authority == ExitAuthority::TerminalManagement
-                    && result.result.get("authority_kind").and_then(Value::as_str)
-                        != Some("terminal-management"))
-        })
     {
         return Err(invalid(ResponseError::Identity));
+    }
+    if let Some(result) = &status.result {
+        let target = &status.preview.target;
+        let generation = target.binding_generation.to_string();
+        let outcome = |key: &str| result.result.get(key).and_then(Value::as_str);
+        let registration = match status.preview.request.action {
+            ExitAction::PlannedOffline => "disabled",
+            ExitAction::Deregister => "detached",
+        };
+        if result.operation_id != status.operation_id
+            || result.kind != status.preview.request.action.result_kind()
+            || result.commit_state != storage_contract::CommitState::Published
+            || !digest(&result.request_digest)
+            || outcome("disk_id") != Some(target.disk_id.as_str())
+            || outcome("slot_id") != Some(target.slot_id.as_str())
+            || outcome("binding_generation") != Some(generation.as_str())
+            || outcome("registration") != Some(registration)
+            || outcome("target_io") != Some("closed")
+            || (status.preview.authority == ExitAuthority::TerminalManagement
+                && outcome("authority_kind") != Some("terminal-management"))
+        {
+            return Err(invalid(ResponseError::Identity));
+        }
     }
     Ok(())
 }
@@ -278,10 +369,10 @@ pub(super) fn load(state: RwSignal<State>) {
                 return None;
             }
             let model = &mut s.admin_console.storage.lifecycle;
-            if model.reading {
+            if model.reading.is_some() {
                 return None;
             }
-            model.reading = true;
+            model.reading = Some(model.generation);
             Some((
                 s.session_epoch,
                 model.generation,
@@ -320,8 +411,7 @@ pub(super) fn load(state: RwSignal<State>) {
                 return false;
             }
             let model = &mut s.admin_console.storage.lifecycle;
-            model.reading = false;
-            if model.generation != generation {
+            if !model.finish_read(generation) {
                 return false;
             }
             match result {
@@ -358,7 +448,7 @@ pub(super) fn poll(state: RwSignal<State>) {
     if state.with_untracked(|s| {
         s.session_active()
             && s.admin_console.storage.lifecycle.submitted
-            && !s.admin_console.storage.lifecycle.reading
+            && s.admin_console.storage.lifecycle.reading.is_none()
             && (s.admin_console.storage.lifecycle.sending
                 || s.admin_console
                     .storage
@@ -391,6 +481,9 @@ fn phase_text(phase: ExitPhase) -> String {
     }
 }
 pub(in crate::admin) fn view(state: RwSignal<State>) -> impl IntoView {
+    on_cleanup(move || {
+        let _ = state.try_update(|s| s.admin_console.storage.lifecycle.leave_preview());
+    });
     view! {
         {move ||state.with(|s|s.admin_console.storage.lifecycle.preview.clone()).map(|preview|view!{
             <section class="zxs-frame zxs-stack">
@@ -406,8 +499,8 @@ pub(in crate::admin) fn view(state: RwSignal<State>) -> impl IntoView {
                 </Show>
                 <p class="zxs-row">{t("提交会冻结原代并准备真实退出证明；持有 I/O 尚未结束时需要继续同一操作。关闭页面不取消，不能把准备成功当作下线或注销完成。", "Submission fences the original generation and prepares real exit evidence. Outstanding I/O may require resuming this same operation. Closing the page does not cancel it; preparation is not completion.")}</p>
                 <label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|s.admin_console.storage.lifecycle.blocks_edit()) prop:checked=move ||state.with(|s|s.admin_console.storage.lifecycle.acknowledged) on:change=move |event|state.update(|s|{if s.session_active()&&!s.admin_console.storage.lifecycle.blocks_edit(){s.admin_console.storage.lifecycle.acknowledged=event_target_checked(&event);}})/>{t("我已核对目标、动作与影响，确认执行此操作。", "I reviewed the target, action and impact, and confirm this operation.")}</label>
-                <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.lifecycle.blocks_edit()||!s.admin_console.storage.lifecycle.acknowledged) on:click=move |_|submit(state,false)>{t("确认执行", "Confirm operation")}</button>
-                <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.lifecycle.blocks_edit()) on:click=move |_|state.update(|s|{if s.session_active()&&!s.admin_console.storage.lifecycle.blocks_edit(){s.admin_console.storage.lifecycle.preview=None;s.admin_console.storage.lifecycle.operation=None;s.admin_console.storage.lifecycle.acknowledged=false;}})>{t("关闭未提交预览", "Dismiss unsubmitted preview")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|!can_submit_preview(s)) on:click=move |_|submit(state,false)>{t("确认执行", "Confirm operation")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.lifecycle.blocks_edit()) on:click=move |_|state.update(|s|{if s.session_active()&&!s.admin_console.storage.lifecycle.blocks_edit(){s.admin_console.storage.lifecycle.leave_preview();}})>{t("关闭未提交预览", "Dismiss unsubmitted preview")}</button>
             </section>
         })}
         {move ||state.with(|s|s.admin_console.storage.lifecycle.status.clone()).map(|status|view!{
@@ -417,7 +510,7 @@ pub(in crate::admin) fn view(state: RwSignal<State>) -> impl IntoView {
         <Show when=move ||state.with(|s|s.admin_console.storage.lifecycle.submitted&&!s.admin_console.storage.lifecycle.sending)>
             <p class="zxs-row">{t("保留原操作编号；结果未确认时不要换编号提交。", "Keep the original operation ID; do not submit another ID while its result is unconfirmed.")}</p>
             <button class="zxs-button" on:click=move |_|submit(state,true)>{t("继续原退出操作", "Continue original exit")}</button>
-            <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.lifecycle.reading) on:click=move |_|load(state)>{t("核对原操作", "Check original operation")}</button>
+            <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.lifecycle.reading.is_some()) on:click=move |_|load(state)>{t("核对原操作", "Check original operation")}</button>
         </Show>
         {move ||state.with(|s|s.admin_console.storage.lifecycle.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
     }

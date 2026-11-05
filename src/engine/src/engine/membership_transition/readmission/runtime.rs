@@ -65,26 +65,25 @@ impl Engine {
     ) -> Result<DiskReadmissionStatus> {
         Self::require_actor(principal)?;
         self.require_no_commit_preparation()?;
-        if let Some(intent) = self
+        let phase = if self.state.operations.contains_key(&operation_id) {
+            DiskReadmissionPhase::Published
+        } else {
+            DiskReadmissionPhase::Activating
+        };
+        if let Some(status) = self
             .config
             .generation()
-            .map(|generation| generation.portable.readmission_intent(operation_id))
+            .map(|generation| generation.portable.readmission_status(operation_id, phase))
             .transpose()?
             .flatten()
         {
-            let request = request(&intent)?;
-            if request.target.disk_id != disk_id || intent.principal != principal {
+            if status.target.disk_id != disk_id || status.principal != principal {
                 return Err(Error::new(
                     ErrorCode::IdempotencyKeyReused,
                     "readmission operation belongs to another request",
                 ));
             }
-            let phase = if self.state.operations.contains_key(&operation_id) {
-                DiskReadmissionPhase::Published
-            } else {
-                DiskReadmissionPhase::Activating
-            };
-            return status(&intent, phase);
+            return Ok(status);
         }
         self.admit_disk_exit_io_exclusion()?;
         if let Some(fence) = &self.membership_fence {
@@ -362,7 +361,12 @@ impl Engine {
     pub fn disk_readmission_status(&self) -> Result<Option<DiskReadmissionStatus>> {
         if let Some(fence) = &self.membership_fence {
             return if matches!(fence.intent.origin, Origin::Readmission { .. }) {
-                status(&fence.intent, DiskReadmissionPhase::Fenced).map(Some)
+                status(
+                    &fence.intent,
+                    DiskReadmissionPhase::Fenced,
+                    self.state.topology_generation,
+                )
+                .map(Some)
             } else {
                 Ok(None)
             };
@@ -383,20 +387,61 @@ impl Engine {
         } else {
             DiskReadmissionPhase::Activating
         };
-        status(&generation.portable.intent()?, phase).map(Some)
+        status(
+            &generation.portable.intent()?,
+            phase,
+            generation.base.topology_generation,
+        )
+        .map(Some)
     }
 }
 
-pub(super) fn status(
+pub(in crate::engine::membership_transition) fn status(
     intent: &TransitionIntent,
     phase: DiskReadmissionPhase,
+    source_topology_generation: u64,
 ) -> Result<DiskReadmissionStatus> {
+    let request = request(intent)?;
+    let source: &Config = intent.origin.config();
+    let boundary = intent.boundary.as_ref().ok_or_else(|| {
+        Error::new(
+            ErrorCode::RecoveryRequired,
+            "readmission source boundary is missing",
+        )
+    })?;
+    let root = source
+        .disks
+        .iter()
+        .find(|disk| disk.disk_id == request.target.disk_id)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "readmission source target is missing",
+            )
+        })?;
+    let authority = intent.origin.predecessor().ok_or_else(|| {
+        Error::new(
+            ErrorCode::RecoveryRequired,
+            "readmission source authority is missing",
+        )
+    })?;
     Ok(DiskReadmissionStatus {
         operation_id: intent.operation_id,
+        principal: intent.principal.clone(),
         transition_hash: object_hash(INTENT_KIND, intent)?,
-        target: request(intent)?.target.clone(),
+        target: request.target.clone(),
         phase,
-        metadata_member: request(intent)?.role == ReadmissionRole::Metadata,
+        metadata_member: request.role == ReadmissionRole::Metadata,
+        source_configuration_digest: blake3::hash(&json_codec::to_vec(source)?)
+            .to_hex()
+            .to_string(),
+        source_root_path: root.root.clone(),
+        source_membership_authority_hash: authority.to_owned(),
+        source_registry_root_hash: request.predecessor_registry.root_hash().to_owned(),
+        source_registry_generation: request.predecessor_registry.view_generation(),
+        source_sequence: boundary.sequence,
+        source_topology_generation,
+        source_snapshot_hash: boundary.snapshot_hash.clone(),
     })
 }
 

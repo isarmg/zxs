@@ -3651,6 +3651,330 @@
         "expected_discovery_root": "/zxs/data/disks",
         "discovery_root": "/srv/storage"
       }
+    },
+    {
+      "name": "readmission-request",
+      "schema": "StorageReadmissionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "slot_id": "P01",
+        "expected_disk_id": "disk_11111111111111111111111111111111"
+      }
+    },
+    {
+      "name": "readmission-preview",
+      "schema": "StorageReadmissionPreview",
+      "layer": "schema",
+      "value": {
+        "request": {
+          "operation_id": "op_11111111111111111111111111111111",
+          "slot_id": "P01",
+          "expected_disk_id": "disk_11111111111111111111111111111111"
+        },
+        "target": {
+          "pool_id": "pool_11111111111111111111111111111111",
+          "disk_id": "disk_11111111111111111111111111111111",
+          "slot_id": "P01",
+          "binding_generation": "1",
+          "root_path": "/zxs/data/disks/retained"
+        },
+        "principal": "admin",
+        "metadata_member": true,
+        "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "authority": {
+          "kind": "active_membership",
+          "membership_authority_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "registry_generation": "2",
+        "source_sequence": "4",
+        "topology_generation": "2",
+        "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    },
+    {
+      "name": "readmission-terminal-preview-shape",
+      "schema": "StorageReadmissionPreview",
+      "layer": "schema",
+      "value": {
+        "request": {
+          "operation_id": "op_11111111111111111111111111111111",
+          "slot_id": "P01",
+          "expected_disk_id": "disk_11111111111111111111111111111111"
+        },
+        "target": {
+          "pool_id": "pool_11111111111111111111111111111111",
+          "disk_id": "disk_11111111111111111111111111111111",
+          "slot_id": "P01",
+          "binding_generation": "1",
+          "root_path": "/zxs/data/disks/retained"
+        },
+        "principal": "admin",
+        "metadata_member": true,
+        "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "authority": {
+          "kind": "terminal_management",
+          "terminal_authority_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+          "terminal_operation_id": "op_22222222222222222222222222222222"
+        },
+        "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "registry_generation": "2",
+        "source_sequence": "4",
+        "topology_generation": "2",
+        "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    },
+    {
+      "name": "readmission-commit",
+      "schema": "StorageReadmissionCommit",
+      "layer": "schema",
+      "value": {
+        "preview": {
+          "request": {
+            "operation_id": "op_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "expected_disk_id": "disk_11111111111111111111111111111111"
+          },
+          "target": {
+            "pool_id": "pool_11111111111111111111111111111111",
+            "disk_id": "disk_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "binding_generation": "1",
+            "root_path": "/zxs/data/disks/retained"
+          },
+          "principal": "admin",
+          "metadata_member": true,
+          "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "authority": {
+            "kind": "active_membership",
+            "membership_authority_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "registry_generation": "2",
+          "source_sequence": "4",
+          "topology_generation": "2",
+          "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      }
+    },
+    {
+      "name": "readmission-resume",
+      "schema": "StorageReadmissionResume",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111"
+      }
+    },
+    {
+      "name": "readmission-running",
+      "schema": "StorageReadmissionStatus",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "state": "recovery_required",
+        "phase": "activating",
+        "preview": {
+          "request": {
+            "operation_id": "op_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "expected_disk_id": "disk_11111111111111111111111111111111"
+          },
+          "target": {
+            "pool_id": "pool_11111111111111111111111111111111",
+            "disk_id": "disk_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "binding_generation": "1",
+            "root_path": "/zxs/data/disks/retained"
+          },
+          "principal": "admin",
+          "metadata_member": true,
+          "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "authority": {
+            "kind": "active_membership",
+            "membership_authority_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "registry_generation": "2",
+          "source_sequence": "4",
+          "topology_generation": "2",
+          "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "failure": null,
+        "result": null
+      }
+    },
+    {
+      "name": "readmission-completed",
+      "schema": "StorageReadmissionStatus",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "state": "completed",
+        "phase": "completed",
+        "preview": {
+          "request": {
+            "operation_id": "op_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "expected_disk_id": "disk_11111111111111111111111111111111"
+          },
+          "target": {
+            "pool_id": "pool_11111111111111111111111111111111",
+            "disk_id": "disk_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "binding_generation": "1",
+            "root_path": "/zxs/data/disks/retained"
+          },
+          "principal": "admin",
+          "metadata_member": true,
+          "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "authority": {
+            "kind": "active_membership",
+            "membership_authority_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "registry_generation": "2",
+          "source_sequence": "4",
+          "topology_generation": "2",
+          "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "failure": null,
+        "result": {
+          "operation_id": "op_11111111111111111111111111111111",
+          "kind": "disk-readmit",
+          "commit_id": null,
+          "history_tree_id": null,
+          "branch_id": null,
+          "commit_state": "PUBLISHED",
+          "protection_at_publish": "NOT_APPLICABLE",
+          "current_health": "HEALTHY",
+          "request_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "sequence": "5",
+          "result": {
+            "disk_id": "disk_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "binding_generation": "1",
+            "registration": "enabled",
+            "io_admission_epoch": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      }
+    },
+    {
+      "name": "readmission-empty-status",
+      "schema": "StorageReadmissionStatusResponse",
+      "layer": "schema",
+      "value": {
+        "operation": null
+      }
+    },
+    {
+      "name": "readmission-status-response",
+      "schema": "StorageReadmissionStatusResponse",
+      "layer": "schema",
+      "value": {
+        "operation": {
+          "operation_id": "op_11111111111111111111111111111111",
+          "state": "completed",
+          "phase": "completed",
+          "preview": {
+            "request": {
+              "operation_id": "op_11111111111111111111111111111111",
+              "slot_id": "P01",
+              "expected_disk_id": "disk_11111111111111111111111111111111"
+            },
+            "target": {
+              "pool_id": "pool_11111111111111111111111111111111",
+              "disk_id": "disk_11111111111111111111111111111111",
+              "slot_id": "P01",
+              "binding_generation": "1",
+              "root_path": "/zxs/data/disks/retained"
+            },
+            "principal": "admin",
+            "metadata_member": true,
+            "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "authority": {
+              "kind": "active_membership",
+              "membership_authority_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "registry_generation": "2",
+            "source_sequence": "4",
+            "topology_generation": "2",
+            "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          },
+          "failure": null,
+          "result": {
+            "operation_id": "op_11111111111111111111111111111111",
+            "kind": "disk-readmit",
+            "commit_id": null,
+            "history_tree_id": null,
+            "branch_id": null,
+            "commit_state": "PUBLISHED",
+            "protection_at_publish": "NOT_APPLICABLE",
+            "current_health": "HEALTHY",
+            "request_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "sequence": "5",
+            "result": {
+              "disk_id": "disk_11111111111111111111111111111111",
+              "slot_id": "P01",
+              "binding_generation": "1",
+              "registration": "enabled",
+              "io_admission_epoch": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "registration-active",
+      "schema": "StorageRegistrationSnapshot",
+      "layer": "schema",
+      "value": {
+        "authority": "active_membership",
+        "registrations": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_11111111111111111111111111111111",
+            "binding_generation": "1",
+            "mode": "disabled",
+            "metadata_member": false,
+            "readmission": "metadata_member"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registration-unadmitted",
+      "schema": "StorageRegistrationSnapshot",
+      "layer": "schema",
+      "value": {
+        "authority": "unadmitted"
+      }
+    },
+    {
+      "name": "registration-terminal",
+      "schema": "StorageRegistrationSnapshot",
+      "layer": "schema",
+      "value": {
+        "authority": "terminal_management",
+        "registrations": [
+          {
+            "slot_id": "P01",
+            "disk_id": "disk_11111111111111111111111111111111",
+            "binding_generation": "1",
+            "mode": "disabled",
+            "metadata_member": false,
+            "readmission": "metadata_member"
+          }
+        ]
+      }
     }
   ],
   "negative": [
@@ -14747,6 +15071,177 @@
         "state": "empty",
         "csrf_token": "secret"
       }
+    },
+    {
+      "name": "readmission-rejects-client-path",
+      "schema": "StorageReadmissionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "slot_id": "P01",
+        "expected_disk_id": "disk_11111111111111111111111111111111",
+        "root_path": "/replacement"
+      }
+    },
+    {
+      "name": "readmission-rejects-client-actor",
+      "schema": "StorageReadmissionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "slot_id": "P01",
+        "expected_disk_id": "disk_11111111111111111111111111111111",
+        "principal": "another"
+      }
+    },
+    {
+      "name": "readmission-generation-requires-string",
+      "schema": "StorageReadmissionPreview",
+      "layer": "schema",
+      "value": {
+        "request": {
+          "operation_id": "op_11111111111111111111111111111111",
+          "slot_id": "P01",
+          "expected_disk_id": "disk_11111111111111111111111111111111"
+        },
+        "target": {
+          "pool_id": "pool_11111111111111111111111111111111",
+          "disk_id": "disk_11111111111111111111111111111111",
+          "slot_id": "P01",
+          "binding_generation": 1,
+          "root_path": "/zxs/data/disks/retained"
+        },
+        "principal": "admin",
+        "metadata_member": true,
+        "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "authority": {
+          "kind": "active_membership",
+          "membership_authority_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "registry_generation": "2",
+        "source_sequence": "4",
+        "topology_generation": "2",
+        "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    },
+    {
+      "name": "readmission-terminal-requires-original-operation",
+      "schema": "StorageReadmissionAuthority",
+      "layer": "schema",
+      "value": {
+        "kind": "terminal_management",
+        "terminal_authority_hash": "9999999999999999999999999999999999999999999999999999999999999999"
+      }
+    },
+    {
+      "name": "readmission-detached-is-not-registration",
+      "schema": "StorageRegistrationEntry",
+      "layer": "schema",
+      "value": {
+        "slot_id": "P01",
+        "disk_id": "disk_11111111111111111111111111111111",
+        "binding_generation": "1",
+        "mode": "detached",
+        "metadata_member": false,
+        "readmission": "metadata_member"
+      }
+    },
+    {
+      "name": "readmission-role-is-required",
+      "schema": "StorageRegistrationEntry",
+      "layer": "schema",
+      "value": {
+        "slot_id": "P01",
+        "disk_id": "disk_11111111111111111111111111111111",
+        "binding_generation": "1",
+        "mode": "disabled",
+        "metadata_member": false
+      }
+    },
+    {
+      "name": "readmission-failure-null-is-explicit",
+      "schema": "StorageReadmissionStatus",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "state": "recovery_required",
+        "phase": "activating",
+        "preview": {
+          "request": {
+            "operation_id": "op_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "expected_disk_id": "disk_11111111111111111111111111111111"
+          },
+          "target": {
+            "pool_id": "pool_11111111111111111111111111111111",
+            "disk_id": "disk_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "binding_generation": "1",
+            "root_path": "/zxs/data/disks/retained"
+          },
+          "principal": "admin",
+          "metadata_member": true,
+          "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "authority": {
+            "kind": "active_membership",
+            "membership_authority_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "registry_generation": "2",
+          "source_sequence": "4",
+          "topology_generation": "2",
+          "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "readmission-completion-requires-receipt",
+      "schema": "StorageReadmissionStatus",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "state": "completed",
+        "phase": "completed",
+        "preview": {
+          "request": {
+            "operation_id": "op_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "expected_disk_id": "disk_11111111111111111111111111111111"
+          },
+          "target": {
+            "pool_id": "pool_11111111111111111111111111111111",
+            "disk_id": "disk_11111111111111111111111111111111",
+            "slot_id": "P01",
+            "binding_generation": "1",
+            "root_path": "/zxs/data/disks/retained"
+          },
+          "principal": "admin",
+          "metadata_member": true,
+          "configuration_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "preview_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "authority": {
+            "kind": "active_membership",
+            "membership_authority_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          "registry_root_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "registry_generation": "2",
+          "source_sequence": "4",
+          "topology_generation": "2",
+          "snapshot_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "failure": null,
+        "result": null
+      }
+    },
+    {
+      "name": "readmission-status-operation-is-required",
+      "schema": "StorageReadmissionStatusResponse",
+      "layer": "schema",
+      "value": {}
     }
   ],
   "canonical": [

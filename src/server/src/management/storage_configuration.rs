@@ -116,6 +116,7 @@ pub(crate) fn admits_configuration(
     let mut chain = ConfigurationChain::default();
     super::storage_addition::configuration_edges(root, &mut chain)?;
     super::storage_lifecycle::configuration_edges(root, &mut chain)?;
+    super::storage_readmission::configuration_edges(root, &mut chain)?;
     Ok(chain.connects(
         &configuration_digest(current),
         &configuration_digest(initial),

@@ -488,15 +488,27 @@ impl PortableAuthority {
             _ => None,
         }
     }
-    pub(in crate::engine::membership_transition) fn readmission_intent(
+    pub(in crate::engine::membership_transition) fn readmission_status(
         &self,
         operation: OperationId,
-    ) -> Result<Option<TransitionIntent>> {
-        Ok(self.lineage()?.into_iter().find_map(|(_, intent)| {
-            (intent.operation_id == operation
-                && matches!(intent.origin, Origin::Readmission { .. }))
-            .then_some(intent)
-        }))
+        phase: DiskReadmissionPhase,
+    ) -> Result<Option<DiskReadmissionStatus>> {
+        for (hash, intent) in self.lineage()? {
+            if intent.operation_id == operation
+                && matches!(intent.origin, Origin::Readmission { .. })
+            {
+                let AuthorityCore::Readmission(core) = self.node(&hash)? else {
+                    unreachable!("invariant: readmission intent belongs to a readmission core");
+                };
+                return super::super::super::readmission::status(
+                    &intent,
+                    phase,
+                    core.source_topology_generation(),
+                )
+                .map(Some);
+            }
+        }
+        Ok(None)
     }
     pub(in crate::engine) fn readmission_core(
         &self,

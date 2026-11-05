@@ -37,6 +37,16 @@
 - 后继 Add、再次 Exit 和 Disabled→Deregister 已有真实 registry-lineage 与恢复源码；旧操作回执可在后续代际继续查询。Disabled→Deregister 复用原 durable stop，不能重开目标。唯一 old-only voter 或 data-only 退出目标缺席的准备/恢复已有[严格证明源码](../validation/missing-exit-members.md)，前者须原固定 Q 与全部 retained target，后者保留完整原 metadata 格式。最终元数据 voter 退出、没有已发布源边界、必要历史闭包或另一 retained metadata 成员缺失，以及 Detached 重新登记仍明确拒绝；不会伪造完成或创建绕过核心的路径。
 - 活动 metadata 组中，保留的 Disabled 目录可通过[认证重新准入](../architecture/retained-directory-readmission.md)恢复历史原角色。原登记和 binding generation 不变，仅目标建立独立新 I/O epoch；旧 stop、字节、永久收据与已隐藏 occurrence 保留。该核心接口不代替服务端认证，也不允许将 Detached 或终态池借此重新启用。
 
+## 保留 Disabled 登记的管理入口
+
+- `GET /api/admin/disks/registrations` 只投影当前已认证 registry，区分活动成员、终态管理权威与未准入。观察健康不决定登记；Detached 不出现在可恢复登记中。每个 Disabled 项明确返回可恢复的历史角色或 `readmission:null`，不从目录存在推断可用。
+- `POST /api/admin/disks/readmission/preview` 接收严格 `{operation_id, slot_id, expected_disk_id}`。纯元数据预览绑定服务器原路径、pool/disk/slot/binding、原 actor、配置摘要、authority、registry generation/root 和已发布 sequence/snapshot/topology；不打开停用目标。
+- `POST /api/admin/disks/readmission` 接收严格 `{preview}`。在共同生命周期门及引擎锁内重新比较完整预览并刷新当前会话，随后才打开准确原目录。现有核心状态另提供原 actor，重试不能仅凭可修改管理缓存的 actor 接管已经 Fenced/Activating 的操作。真实目录身份、固定成员和新 epoch 仍由核心认证。
+- `GET /api/admin/disks/readmission?operation_id=…` 只读原状态；省略编号读取最新意图。`POST /api/admin/disks/readmission/resume` 仅接受原 `{operation_id}`，显式恢复原目标和 actor。新增、退出与 readmission 的未完成意图互相排斥，首 setup 配置摘要链同时接纳 Readmission 边，但不把该管理链当核心权威。
+- 完成必须来自已准入核心的永久 `disk-readmit` Published 回执，准确匹配原操作、actor、归档 transition、目标登记及新 `io_admission_epoch`。本地 completed 缓存不能独立宣称成功，后继下线仍可查询旧回执，不能借旧回执重新打开目标。
+- Web 使用准确当前登记及原角色显示预览；关闭未提交预览、离页、重新登录和迟到响应不能改换已提交操作。未知结果保留原编号，只查询并允许明确继续。每次 GET 仅释放自身读取槽，旧结果不能清除新请求的 owner。
+- 活动池入口可单独使用。终态池恢复能力由独立 Terminal retained 协调器接入同一严格 authority 判别契约；未提供可恢复角色时界面不开放按钮。Schema、OpenAPI、固定向量和 Rust 编解码检查已同步，仍不代表实际网络、浏览器或掉电验收通过。
+
 ## 验证边界
 
 本轮遵照用户指令，只修改源码和测试源码，仅执行固定 Rust 1.99 rustfmt 与 git diff 空白检查，没有执行测试、构建、模型检查或 CI。新增源码覆盖纯 data-only、连续代际、mixed、原请求重放、不同意图冲突、持久恢复和会话失效，以及目标路径变成不可访问链接后取消、固定 Joint 多数拒绝取消、原结果永久重放、取消发布后控制投影丢失／重启和取消前会话撤销场景；退出新增测试源码还覆盖真实两种退出结果、目标文件逐字节保留、当前登记与当前文件可见性、原回执重放、管理完成投影丢失后重启、预览过期／动作冲突／会话撤销和无回执拒绝完成；不把测试源码的存在视为已通过。

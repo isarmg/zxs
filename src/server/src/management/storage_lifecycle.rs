@@ -192,6 +192,7 @@ impl ManagementBackend {
         if action == "disk_exit_preview" {
             let backend = self.inner.addition_backend()?;
             self.require_no_pending_addition()?;
+            self.require_no_pending_readmission()?;
             self.require_settled_exit()?;
             let request: ExitRequest =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
@@ -224,6 +225,7 @@ impl ManagementBackend {
                     saved
                 } else {
                     self.require_no_pending_addition()?;
+                    self.require_no_pending_readmission()?;
                     self.require_settled_exit()?;
                     let (preview, original) = self
                         .inner
@@ -280,6 +282,7 @@ impl ManagementBackend {
             ));
         }
         self.require_no_pending_addition()?;
+        self.require_no_pending_readmission()?;
         let latest = read::<OperationId>(&directory, &latest_name())?;
         if latest.is_some_and(|latest| latest != record.status.operation_id) {
             self.require_settled_exit()?;

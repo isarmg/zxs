@@ -28,6 +28,7 @@ mod integrity_scrub;
 pub(crate) mod storage_addition;
 pub(crate) mod storage_configuration;
 pub(crate) mod storage_lifecycle;
+pub(crate) mod storage_readmission;
 use integrity_scrub::IntegrityScrubService;
 mod setup_command;
 use setup_command::SetupCommand;
@@ -1692,6 +1693,20 @@ impl Backend for ManagementBackend {
             "disk_exit_preview" | "disk_exit_commit" | "disk_exit_status" | "disk_exit_resume"
         ) {
             return self.storage_exit(
+                action,
+                input,
+                identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+            );
+        }
+        if matches!(
+            action,
+            "disk_readmit_preview"
+                | "disk_readmit_commit"
+                | "disk_readmit_status"
+                | "disk_readmit_resume"
+                | "disk_registrations"
+        ) {
+            return self.storage_readmission(
                 action,
                 input,
                 identity.as_ref().ok_or_else(ApiError::unauthorized)?,

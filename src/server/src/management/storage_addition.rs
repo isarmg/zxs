@@ -356,6 +356,7 @@ impl ManagementBackend {
         let backend = crate::lock(&self.inner.state).backend.engine().cloned();
         if action == "disk_add_preview" {
             self.require_settled_exit()?;
+            self.require_no_pending_readmission()?;
             let request: AdditionRequest =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
             let (preview, _, _) = self.prepare_addition(
@@ -390,6 +391,7 @@ impl ManagementBackend {
                 saved
             } else {
                 self.require_settled_exit()?;
+                self.require_no_pending_readmission()?;
                 self.require_settled_addition(&directory)?;
                 let (preview, target, directories) = self.prepare_addition(
                     backend.as_deref(),

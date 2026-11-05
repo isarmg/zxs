@@ -151,6 +151,53 @@ fn validate_content_view(value: &Value) -> Result {
 
 fn semantics(name: &str, value: &Value) -> Result {
     match name {
+        "StorageReadmissionRequest" => {
+            let _: storage_contract::storage_readmission::ReadmissionRequest =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionTarget" => {
+            let _: storage_contract::storage_readmission::ReadmissionTarget =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionAuthority" => {
+            let _: storage_contract::storage_readmission::ReadmissionAuthority =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionPreview" => {
+            let _: storage_contract::storage_readmission::ReadmissionPreview =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionCommit" => {
+            let _: storage_contract::storage_readmission::ReadmissionCommit =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionResume" => {
+            let _: storage_contract::storage_readmission::ReadmissionResume =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionFailure" => {
+            let _: storage_contract::storage_readmission::ReadmissionFailure =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionStatus" => {
+            let _: storage_contract::storage_readmission::ReadmissionStatus =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionStatusResponse" => {
+            let _: storage_contract::storage_readmission::ReadmissionStatusResponse =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageRegistrationEntry" => {
+            let _: storage_contract::storage_readmission::RegistrationEntry =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageRegistrationSnapshot" => {
+            let _: storage_contract::storage_readmission::RegistrationSnapshot =
+                json_codec::from_value(value.clone())?;
+        }
+        "StorageReadmissionPublication" => {
+            let _: storage_contract::OperationResult = json_codec::from_value(value.clone())?;
+        }
         "StorageDiscoveryRootSettings" => {
             let _: storage_contract::storage_directories::DiscoveryRootSettings =
                 json_codec::from_value(value.clone())?;

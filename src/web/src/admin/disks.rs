@@ -211,6 +211,7 @@ pub(crate) fn can_load(state: &State) -> bool {
 }
 
 pub(crate) fn load(state: RwSignal<State>) {
+    super::storage::readmission::load_registrations(state);
     let captured = state
         .try_update(|s| {
             if !can_load(s) {
@@ -538,12 +539,17 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
                     </section>
                 }
             })}
+            <p class="zxs-row" role="status">{move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).map(|card|super::storage::readmission::registration_label(s,&slot.get_value(),&card.disk_id)))}</p>
             <div class="zxs-flow">
-                <button class="zxs-button" disabled=move ||state.with(|s|!super::storage::lifecycle::can_preview(s)) on:click=move |_|{
+                <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_none_or(|card|!super::storage::readmission::can_preview(s,&slot.get_value(),&card.disk_id))) on:click=move |_|{
+                    let disk=state.with_untracked(|s|s.admin_console.disks.cards.get(&slot.get_value()).map(|card|card.disk_id.clone()));
+                    if let Some(disk)=disk { super::storage::readmission::preview(state,slot.get_value(),disk); }
+                }>{t("预览重新启用", "Preview readmission")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_none_or(|card|!super::storage::lifecycle::can_preview(s,&slot.get_value(),&card.disk_id,storage_contract::storage_lifecycle::ExitAction::PlannedOffline))) on:click=move |_|{
                     let disk=state.with_untracked(|s|s.admin_console.disks.cards.get(&slot.get_value()).map(|card|card.disk_id.clone()));
                     if let Some(disk)=disk { super::storage::lifecycle::preview(state,slot.get_value(),disk,storage_contract::storage_lifecycle::ExitAction::PlannedOffline); }
                 }>{t("预览下线", "Preview offline")}</button>
-                <button class="zxs-button" disabled=move ||state.with(|s|!super::storage::lifecycle::can_preview(s)) on:click=move |_|{
+                <button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.disks.cards.get(&slot.get_value()).is_none_or(|card|!super::storage::lifecycle::can_preview(s,&slot.get_value(),&card.disk_id,storage_contract::storage_lifecycle::ExitAction::Deregister))) on:click=move |_|{
                     let disk=state.with_untracked(|s|s.admin_console.disks.cards.get(&slot.get_value()).map(|card|card.disk_id.clone()));
                     if let Some(disk)=disk { super::storage::lifecycle::preview(state,slot.get_value(),disk,storage_contract::storage_lifecycle::ExitAction::Deregister); }
                 }>{t("预览注销", "Preview deregistration")}</button>
@@ -587,6 +593,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         <Show when=move ||state.with(|s|s.admin_console.disks.loaded&&s.admin_console.disks.cards.is_empty())><EmptyState message=t("没有已登记的存储目录。","No storage directories are registered.")/></Show>
         <For each=move ||state.with(|s|s.admin_console.disks.cards.keys().cloned().collect::<Vec<_>>()) key=|slot|slot.clone() children=move |slot|card(state,slot)/>
         {super::storage::lifecycle::view(state)}
+        {super::storage::readmission::view(state)}
     </section>}
 }
 

@@ -14,6 +14,7 @@ use web_interface::{components::ErrorState, i18n::t, prelude::*, tasks::spawn_lo
 
 mod addition;
 pub(super) mod lifecycle;
+pub(super) mod readmission;
 mod response;
 #[derive(Debug, error_definition::Error)]
 pub enum ResponseError {
@@ -99,17 +100,22 @@ pub(super) struct Model {
     confirmed: bool,
     addition: addition::Model,
     lifecycle: lifecycle::Model,
+    readmission: readmission::Model,
 }
 impl Model {
     pub(super) fn reload_blocked(&self) -> bool {
         self.mutation
             || self.unknown
             || self.discovery_unknown
-            || (self.addition.blocks_edit() || self.lifecycle.blocks_edit())
+            || (self.addition.blocks_edit()
+                || self.lifecycle.blocks_edit()
+                || self.readmission.blocks_edit())
     }
     fn editable(&self) -> bool {
         !self.busy
-            && !(self.addition.blocks_edit() || self.lifecycle.blocks_edit())
+            && !(self.addition.blocks_edit()
+                || self.lifecycle.blocks_edit()
+                || self.readmission.blocks_edit())
             && !self.unknown
             && !self.discovery_unknown
             && self.success.is_none()
@@ -122,7 +128,9 @@ impl Model {
     }
     fn can_set_root(&self) -> bool {
         !self.busy
-            && !(self.addition.blocks_edit() || self.lifecycle.blocks_edit())
+            && !(self.addition.blocks_edit()
+                || self.lifecycle.blocks_edit()
+                || self.readmission.blocks_edit())
             && !self.unknown
             && !self.discovery_unknown
             && self.success.is_none()
@@ -199,6 +207,7 @@ pub(super) fn refreshing(state: &State) -> bool {
 pub(super) fn poll(state: RwSignal<State>) {
     addition::poll(state);
     lifecycle::poll(state);
+    readmission::poll(state);
     let needed = state.with_untracked(|s| {
         let model = &s.admin_console.storage;
         s.session_active()
@@ -253,6 +262,7 @@ pub(super) fn load(state: RwSignal<State>) {
             super::disks::load(state);
             addition::load(state);
             lifecycle::load(state);
+            readmission::load(state);
         }
     });
 }
