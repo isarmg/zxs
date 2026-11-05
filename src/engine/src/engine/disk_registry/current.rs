@@ -9,6 +9,7 @@ use super::{DiskRegistryCommitment, Engine};
 mod admission;
 mod batch;
 pub(crate) use batch::CurrentBatchScope;
+mod branch_archives;
 mod directory_branches;
 mod directory_metadata;
 mod file_branches;
@@ -482,6 +483,7 @@ impl CurrentNamespaces {
         self.verify_path_notes(previous, next)?;
         self.verify_smb_bindings(previous, next)?;
         self.verify_plan_cancellations(previous, next)?;
+        self.verify_branch_archives(previous, next)?;
         let mut view = self.clone();
         let branch_changes = next.branches.changes_since(&previous.branches);
         let directory_changes = next

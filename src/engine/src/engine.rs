@@ -1384,6 +1384,14 @@ impl Engine {
                 |_, next, prepared| change(self, next, prepared),
             );
         }
+        if kind == "branch.archive" {
+            return context.plan_branch_archive_mutation(
+                principal,
+                operation_id,
+                digest,
+                |_, next, prepared| change(self, next, prepared),
+            );
+        }
         context.plan_new_mutation(
             kind,
             principal,

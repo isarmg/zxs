@@ -439,6 +439,10 @@ impl Engine {
                         "branch has an open workspace",
                     ));
                 }
+                let namespace_archive = engine
+                    .admitted_current_namespaces()?
+                    .map(|view| view.branch_archive_source(state, id))
+                    .transpose()?;
                 let b = state.branches.get_mut(id).ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::BranchNotFound,
@@ -452,7 +456,11 @@ impl Engine {
                         "branch generation exhausted",
                     )
                 })?;
-                Ok(json!({"branch_id":id,"history_tree_id":b.history_tree_id}))
+                let mut result = json!({"branch_id":id,"history_tree_id":b.history_tree_id});
+                if let Some(source) = namespace_archive {
+                    result["namespace_archive"] = source;
+                }
+                Ok(result)
             },
         )
     }

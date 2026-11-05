@@ -297,6 +297,49 @@ impl<'a> PlanningContext<'a> {
         Ok(plan)
     }
 
+    /// Archival has a closed metadata-only write set, rather than a generic
+    /// namespace kind permit. Live workspace guards run in the real consumer;
+    /// its permanent native receipt is reverified here and at publication/replay.
+    pub(super) fn plan_branch_archive_mutation<F>(
+        &self,
+        principal: &str,
+        operation_id: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
+        if self.current_namespaces.is_none()
+            && self
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(super::disk_registry::current::pending_publication());
+        }
+        let plan =
+            self.prepare_new_mutation("branch.archive", principal, operation_id, digest, change)?;
+        let MutationPlan::Prepared {
+            next,
+            prepared,
+            result,
+        } = &plan
+        else {
+            unreachable!("invariant: new mutation preparation does not replay old receipts");
+        };
+        if !prepared.is_empty() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "branch archival cannot prepare payload writes",
+            ));
+        }
+        if let Some(view) = self.current_namespaces {
+            view.verify_new_branch_archive(self.state, next, result)?;
+        }
+        Ok(plan)
+    }
+
     fn prepare_new_mutation<F>(
         &self,
         kind: &str,
