@@ -36,6 +36,52 @@ fn registration_modes_are_required_and_unknown_never_defaults_to_enabled() {
 }
 
 #[test]
+fn registration_snapshots_preserve_their_wire_shapes() {
+    for (snapshot, wire) in [
+        (
+            RegistrationSnapshot::Unadmitted,
+            json!({"authority": "unadmitted"}),
+        ),
+        (
+            RegistrationSnapshot::ActiveMembership {
+                registrations: vec![],
+            },
+            json!({"authority": "active_membership", "registrations": []}),
+        ),
+        (
+            RegistrationSnapshot::TerminalManagement {
+                registrations: vec![],
+            },
+            json!({"authority": "terminal_management", "registrations": []}),
+        ),
+    ] {
+        assert_eq!(json_codec::to_value(&snapshot).unwrap(), wire);
+        assert_eq!(
+            json_codec::from_value::<RegistrationSnapshot>(wire.clone()).unwrap(),
+            snapshot
+        );
+        assert_eq!(
+            json_codec::from_str::<RegistrationSnapshot>(&wire.to_string()).unwrap(),
+            snapshot
+        );
+    }
+}
+
+#[test]
+fn unadmitted_registration_rejects_all_payload_fields() {
+    for encoded in [
+        r#"{"authority":"unadmitted","registrations":[]}"#,
+        r#"{"registrations":null,"authority":"unadmitted"}"#,
+        r#"{"authority":"unadmitted","unexpected":true}"#,
+        r#"{"unexpected":{"nested":[]},"authority":"unadmitted"}"#,
+    ] {
+        let wire: json_codec::Value = json_codec::from_str(encoded).unwrap();
+        assert!(json_codec::from_value::<RegistrationSnapshot>(wire).is_err());
+        assert!(json_codec::from_str::<RegistrationSnapshot>(encoded).is_err());
+    }
+}
+
+#[test]
 fn readmission_authorities_are_closed_and_terminal_hash_is_explicit() {
     let terminal = json!({
         "kind": "terminal_management",

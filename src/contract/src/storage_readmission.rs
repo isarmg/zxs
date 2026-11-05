@@ -183,7 +183,21 @@ pub enum RegistrationSnapshot {
         registrations: Vec<RegistrationEntry>,
     },
     /// No admitted registry is currently available. Empty is not an empty pool.
+    #[serialization(deserialize_with = "deserialize_unadmitted_registration")]
     Unadmitted,
+}
+
+// Internally tagged unit variants discard remaining fields, even with the
+// enum's deny_unknown_fields. Parse the payload as a strict empty map instead.
+fn deserialize_unadmitted_registration<'de, D>(deserializer: D) -> Result<(), D::Error>
+where
+    D: data_serialization::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serialization(deny_unknown_fields)]
+    struct Empty {}
+
+    Empty::deserialize(deserializer).map(|Empty {}| ())
 }
 
 #[cfg(test)]

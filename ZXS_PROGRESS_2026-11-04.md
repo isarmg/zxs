@@ -4,6 +4,10 @@
 
 本文记录本轮 ZXS 改进已落地的代码、已有验证证据、已知失败和剩余工作，供后续继续开发时核对。它是有时间边界的快照，不代替功能规范、发布说明或部署验收。提交和运行链接固定到具体版本；分支后续移动不改变本文所记录的历史结果。
 
+## 2026-11-05 未准入响应严格解析
+
+修复内部标签单元变体吞掉未知字段的问题，保留既有 JSON 与 Rust API。原失败的 registration_modes_are_required_and_unknown_never_defaults_to_enabled 定向测试已通过；新增 round-trip/未知字段回归与完整 workspace 待运行。
+
 ## 2026-11-05 当前命名空间分支归档
 
 当前 registry 的 branch.archive 使用专用 metadata-only planner，并在发布与冷恢复中核验主体、精确回执、历史 alias 与封闭写集；保留 main/selection/workspace 等限制。冷恢复证明先于候选修复副作用，新增 accepted/published 正反例源码。引擎库严格 Clippy 和差异检查通过；新增回归及完整 CI 尚未运行。
