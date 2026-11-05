@@ -16,6 +16,7 @@ mod file_synchronization;
 mod history_merges;
 mod new_scope;
 mod path_notes;
+mod plan_cancellation;
 mod relocation;
 mod smb_bindings;
 mod workspace;
@@ -480,6 +481,7 @@ impl CurrentNamespaces {
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
         self.verify_path_notes(previous, next)?;
         self.verify_smb_bindings(previous, next)?;
+        self.verify_plan_cancellations(previous, next)?;
         let mut view = self.clone();
         let branch_changes = next.branches.changes_since(&previous.branches);
         let directory_changes = next

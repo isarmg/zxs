@@ -171,8 +171,13 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
+        Self::require_actor(principal)?;
+        let input = json!({"plan_id": id});
+        let digest = Self::native_request_digest("plan.cancel", principal, &input)?;
         if let Some(op) = self.state.operations.get(&operation) {
             if op.kind == "plan.cancel"
+                && op.operation_id == operation
+                && op.request_digest == digest
                 && op.result["plan_id"].as_str() == Some(id)
                 && self.operation_owner(operation)?.as_deref() == Some(principal)
             {
@@ -196,19 +201,26 @@ impl Engine {
                 "only an unexecuted plan can be cancelled",
             ));
         }
-        self.mutate(
+        let mut cancelled = plan;
+        cancelled.state = PlanState::Cancelled;
+        let cancelled_plan_hash = object_hash("plan-cancellation", &cancelled)?;
+        self.mutate_digest(
             "plan.cancel",
             principal,
             operation,
-            json!({"plan_id":id}),
+            input,
+            Some(digest),
             |_, state, _| {
-                let mut p = plan.clone();
-                p.state = PlanState::Cancelled;
-                state.plans.insert(id.into(), p);
-                Ok(json!({"plan_id":id,"state":"cancelled"}))
+                state.plans.insert(id.into(), cancelled);
+                Ok(json!({
+                    "plan_id": id,
+                    "state": "cancelled",
+                    "cancelled_plan_hash": cancelled_plan_hash
+                }))
             },
         )
     }
+
     pub fn plan(&self, id: &str) -> Result<Plan> {
         validate_id(id, "plan")?;
         let plan = if let Some(plan) = self.state.plans.get(id) {

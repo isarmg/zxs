@@ -1376,6 +1376,14 @@ impl Engine {
                 |_, next, prepared| change(self, next, prepared),
             );
         }
+        if kind == "plan.cancel" {
+            return context.plan_cancellation_mutation(
+                principal,
+                operation_id,
+                digest,
+                |_, next, prepared| change(self, next, prepared),
+            );
+        }
         context.plan_new_mutation(
             kind,
             principal,
