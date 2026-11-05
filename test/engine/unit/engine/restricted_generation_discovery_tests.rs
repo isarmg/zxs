@@ -748,6 +748,7 @@ fn production_unstopped_relocation_is_identity_checked_and_frozen_before_first_s
             *anchor
         );
     }
+    assert_retained_anchor_failures(&mut engine, &config.disks[1], &result);
     drop(engine);
     let mut io = CountedIo::default();
     let (config, _) = discover_startup_with_io(&fixture.system, config, &mut io).unwrap();
@@ -755,4 +756,74 @@ fn production_unstopped_relocation_is_identity_checked_and_frozen_before_first_s
     assert_eq!(config.metadata_members().len(), 2);
     assert_eq!(config.metadata_quorum(), 2);
     io.assert_only(&moved[1..]);
+    let parked = fixture._temp.path().join("stopped-target");
+    fs::rename(&moved[0], &parked).unwrap();
+    fs::write(&moved[0], b"stopped target must not be opened").unwrap();
+    let mut engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(engine.activate_pending_disk_exit().unwrap(), result);
+    for (path, original) in moved[1..].iter().zip(&anchors[1..]) {
+        assert_eq!(
+            fs::read(path.join("metadata/pool-membership/config.json")).unwrap(),
+            *original
+        );
+    }
+    assert_eq!(
+        fs::read(&moved[0]).unwrap(),
+        b"stopped target must not be opened"
+    );
+}
+
+fn assert_retained_anchor_failures(
+    engine: &mut Engine,
+    disk: &DiskConfig,
+    result: &OperationResult,
+) {
+    let path = disk.root.join("metadata/pool-membership/config.json");
+    let original = fs::read(&path).unwrap();
+    let state = canonical_json(engine.state()).unwrap();
+    for attack in 0..4 {
+        let mut forged: Config = decode_strict(&original).unwrap();
+        let (bytes, code) = match attack {
+            0 => {
+                forged.disks[0].capacity_bytes = Some(1 << 40);
+                (
+                    Some(canonical_json(&forged).unwrap()),
+                    ErrorCode::PublicationInvalid,
+                )
+            }
+            1 => {
+                forged.max_retained_workspaces -= 1;
+                (
+                    Some(canonical_json(&forged).unwrap()),
+                    ErrorCode::PublicationInvalid,
+                )
+            }
+            2 => (
+                Some(b"invalid retained anchor".to_vec()),
+                ErrorCode::InvalidJson,
+            ),
+            3 => (None, ErrorCode::IoError),
+            _ => unreachable!(),
+        };
+        let parked = disk.root.join("original-anchor.json");
+        fs::rename(&path, &parked).unwrap();
+        if let Some(bytes) = &bytes {
+            fs::write(&path, bytes).unwrap();
+        }
+        let error = engine.activate_pending_disk_exit().unwrap_err();
+        assert_eq!(error.code(), code, "anchor attack {attack}");
+        assert_eq!(canonical_json(engine.state()).unwrap(), state);
+        if let Some(bytes) = bytes {
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            fs::remove_file(&path).unwrap();
+        } else {
+            assert_eq!(
+                fs::symlink_metadata(&path).unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+        }
+        fs::rename(&parked, &path).unwrap();
+        assert_eq!(engine.activate_pending_disk_exit().unwrap(), *result);
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
 }

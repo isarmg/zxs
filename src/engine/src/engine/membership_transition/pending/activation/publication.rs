@@ -1,6 +1,28 @@
 //! Explicit generation resource promotion and prescribed publication.
 use super::*;
 
+/// Retained roots already have their immutable Genesis anchor. Its original
+/// addresses can differ after authenticated relocation; stricter local retained
+/// limits do not replace the saved baseline. Missing anchors remain errors.
+pub(in crate::engine::membership_transition) fn sync_retained_genesis_anchor(
+    root: &DiskRoot,
+    disk: &DiskConfig,
+    original: &ValidatedConfig,
+) -> Result<()> {
+    let anchor = disk.root.join("metadata/pool-membership/config.json");
+    let bytes = root.read_bytes(&anchor, MAX_METADATA)?;
+    let saved: ValidatedConfig = decode_strict(&bytes)?;
+    if !saved.permits_genesis_recovery_projection(original) {
+        return Err(Error::new(
+            ErrorCode::PublicationInvalid,
+            "retained Genesis anchor differs from admitted control authority",
+        ));
+    }
+    // Preserve exact bytes, immutable collision detection and both file/parent
+    // durability barriers. Anchor addresses never select or authorize an I/O root.
+    root.write_atomic(&anchor, &bytes, false)
+}
+
 /// Envelope evidence is not generation identity. Equivalent valid witnesses
 /// retain the named bytes and repeat both durability barriers.
 fn install_envelope(
@@ -588,17 +610,18 @@ impl Engine {
             .metadata_members()
             .next()
             .expect("invariant: metadata member");
+        let retained = generation
+            .intent
+            .origin
+            .config()
+            .disks
+            .iter()
+            .map(|disk| disk.disk_id.as_str())
+            .collect::<BTreeSet<_>>();
         for disk in self.config.io_disks() {
             let handle = self.disk_resources.get(disk)?;
-            if disk.metadata_member
-                || generation
-                    .intent
-                    .origin
-                    .config()
-                    .disks
-                    .iter()
-                    .any(|old| old.disk_id == disk.disk_id)
-            {
+            let retained_disk = retained.contains(disk.disk_id.as_str());
+            if disk.metadata_member || retained_disk {
                 let source_disk = if disk.metadata_member { disk } else { first };
                 let source = self.disk_resources.get(source_disk)?.root.private_child(
                     &member_directory(source_disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY),
@@ -621,11 +644,17 @@ impl Engine {
                     )
                 })?;
             }
-            handle.root.write_json(
-                &disk.root.join("metadata/pool-membership/config.json"),
-                &generation.original,
-                false,
-            )?;
+            if retained_disk {
+                sync_retained_genesis_anchor(&handle.root, disk, &generation.original)?;
+            } else {
+                // Only an actual addition in the authenticated transition may
+                // create this anchor. Absence on a retained root never does.
+                handle.root.write_json(
+                    &disk.root.join("metadata/pool-membership/config.json"),
+                    &generation.original,
+                    false,
+                )?;
+            }
             install_marker(&handle.root, disk, &generation)?;
             handle
                 .root

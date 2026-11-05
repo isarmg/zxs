@@ -287,11 +287,7 @@ impl Engine {
                 &generation.portable.archive_hash()?,
                 &generation.intent,
             )?;
-            root.write_json(
-                &disk.root.join("metadata/pool-membership/config.json"),
-                &generation.original,
-                false,
-            )?;
+            publication::sync_retained_genesis_anchor(root, &disk, &generation.original)?;
             if disk.metadata_member || disk.disk_id == request(&generation.intent)?.target.disk_id {
                 core.verify_member(root, &disk, &generation.hash, true)?;
             }

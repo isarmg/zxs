@@ -414,19 +414,7 @@ impl Engine {
                 &transition,
                 &generation.intent,
             )?;
-            // The immutable Genesis anchor can retain earlier root addresses.
-            // Authenticate the fixed settings and permitted tighter retained
-            // limits, then resynchronize its original bytes without relocation.
-            let anchor = disk.root.join("metadata/pool-membership/config.json");
-            let bytes = root.read_bytes(&anchor, MAX_METADATA)?;
-            let saved: ValidatedConfig = decode_strict(&bytes)?;
-            if !saved.permits_genesis_recovery_projection(&generation.original) {
-                return Err(Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "retained Exit anchor differs from the original registration authority",
-                ));
-            }
-            root.write_atomic(&anchor, &bytes, false)?;
+            publication::sync_retained_genesis_anchor(root, disk, &generation.original)?;
             publication::install_marker(root, disk, &generation)?;
             let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
             let expected = identity_at(&self.config, disk, &root.directory(root.path())?)?;

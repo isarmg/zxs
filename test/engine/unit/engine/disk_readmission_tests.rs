@@ -13,11 +13,34 @@ struct Fixture {
 }
 impl Fixture {
     fn new(metadata: bool) -> Self {
+        Self::with_relocation(metadata, false)
+    }
+    fn with_relocation(metadata: bool, relocate: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
             Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
         config.disks[0].metadata_member = metadata;
         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
+        if relocate {
+            // Move before creating a workspace: Genesis has no historical
+            // generation aliases for already persisted absolute staging paths.
+            let admitted = engine.config.clone();
+            drop(engine);
+            let roots = config
+                .disks
+                .iter()
+                .enumerate()
+                .map(|(index, disk)| {
+                    let root = temp.path().join(format!("relocated-{index}"));
+                    fs::rename(&disk.root, &root).unwrap();
+                    root
+                })
+                .collect();
+            let relocated = admitted.with_disk_roots(roots).unwrap();
+            write_json(&temp.path().join("system/config.json"), &relocated, true).unwrap();
+            config = (*relocated).clone();
+            engine = Engine::open(&temp.path().join("system")).unwrap();
+        }
         let repository = engine
             .create_repository(
                 &RepositoryName::parse("readmit-source").unwrap(),
@@ -117,6 +140,89 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         }
     }
     result
+}
+
+#[test]
+fn relocated_genesis_anchors_survive_exit_readmission_and_cold_restart() {
+    for metadata in [true, false] {
+        let mut fixture = Fixture::with_relocation(metadata, true);
+        let anchors = fixture
+            .config
+            .disks
+            .iter()
+            .map(|disk| {
+                let bytes =
+                    fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap();
+                let saved: Config = decode_strict(&bytes).unwrap();
+                assert_ne!(saved.disks[0].root, fixture.config.disks[0].root);
+                bytes
+            })
+            .collect::<Vec<_>>();
+        let history = canonical_json(&fixture.engine.state.commits).unwrap();
+        let offline = fixture.disable();
+        let operation = OperationId::generate().unwrap();
+        let archive = fixture.begin(operation);
+        let disk = fixture.config.disks[0].clone();
+        let anchor = disk.root.join("metadata/pool-membership/config.json");
+        let parked = fixture.temp.path().join("retained-anchor.json");
+        fs::rename(&anchor, &parked).unwrap();
+        assert!(
+            fixture
+                .engine
+                .activate_disk_readmission(
+                    &archive.archive_path,
+                    &archive.root_hash,
+                    directory(&disk),
+                )
+                .is_err()
+        );
+        assert!(!fixture.engine.state.operations.contains_key(&operation));
+        assert_eq!(
+            fs::symlink_metadata(&anchor).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(fs::read(&parked).unwrap(), anchors[0]);
+        fs::rename(&parked, &anchor).unwrap();
+        let result = fixture.activate(&archive);
+        assert_eq!(result.operation_id, operation);
+        assert_eq!(result.kind, "disk-readmit");
+        assert_eq!(
+            fixture.engine.state.operations[&offline.operation_id],
+            offline
+        );
+        assert_eq!(
+            canonical_json(&fixture.engine.state.commits).unwrap(),
+            history
+        );
+        for (disk, bytes) in fixture.config.disks.iter().zip(&anchors) {
+            assert_eq!(
+                fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap(),
+                *bytes
+            );
+        }
+        drop(fixture.engine);
+        let mut engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
+        assert_eq!(engine.state.operations[&operation], result);
+        assert_eq!(engine.state.operations[&offline.operation_id], offline);
+        let registration = engine.registered_disk(&disk.disk_id).unwrap();
+        assert_eq!(registration.registration_mode, RegistrationMode::Enabled);
+        assert_eq!(registration.metadata_member, metadata);
+        assert_eq!(registration.binding_generation, disk.binding_generation);
+        let mut body = Vec::new();
+        engine
+            .open_content(&fixture.version)
+            .unwrap()
+            .file
+            .read_to_end(&mut body)
+            .unwrap();
+        assert_eq!(body, b"retained bytes");
+        for (disk, bytes) in fixture.config.disks.iter().zip(&anchors) {
+            assert_eq!(
+                fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap(),
+                *bytes
+            );
+        }
+    }
 }
 
 #[test]

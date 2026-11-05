@@ -129,6 +129,17 @@ impl Fixture {
                 op(),
             )
             .unwrap();
+        engine
+            .initialize_directory_scope(&repository.repository_id, None, "admin", op())
+            .unwrap();
+        engine
+            .initialize_directory_scope(
+                &repository.repository_id,
+                Some(&name_policy::LookupPath::parse("dir").unwrap()),
+                "admin",
+                op(),
+            )
+            .unwrap();
         save(
             &mut engine,
             &repository.main_branch_id,
@@ -136,6 +147,25 @@ impl Fixture {
             b"current main body",
         );
         let current = entry(&engine, &repository.main_branch_id, "dir/live");
+        assert_eq!(
+            entry(&engine, &alias.branch_id, "dir/live").version_id,
+            original.version_id
+        );
+        assert_eq!(
+            entry(&engine, &alias.branch_id, "dir/gone").version_id,
+            hidden.version_id
+        );
+        assert_ne!(current.version_id, original.version_id);
+        assert!(engine.state.branches.values().any(|branch| {
+            branch.history_tree_id == repository.history_tree_id && branch.file_id.is_some()
+        }));
+        assert!(
+            engine
+                .state
+                .directory_branches
+                .values()
+                .any(|branch| { branch.repository_id == repository.repository_id })
+        );
         Self {
             temp,
             engine,

@@ -94,6 +94,101 @@ fn assert_lock_held(root: &Path) {
 }
 
 #[test]
+fn relocated_addition_preserves_retained_anchors_and_creates_only_new_anchors() {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let mut draft =
+        Config::development((0..3).map(|n| temp.path().join(format!("original-{n}")))).unwrap();
+    draft.disks[2].metadata_member = false;
+    let engine = Engine::initialize(&system, draft).unwrap();
+    let original = engine.config.clone();
+    let anchors = original
+        .disks
+        .iter()
+        .map(|disk| fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap())
+        .collect::<Vec<_>>();
+    drop(engine);
+    let roots = original
+        .disks
+        .iter()
+        .enumerate()
+        .map(|(index, disk)| {
+            let root = temp.path().join(format!("relocated-{index}"));
+            fs::rename(&disk.root, &root).unwrap();
+            root
+        })
+        .collect();
+    let relocated = original.with_disk_roots(roots).unwrap();
+    write_json(&system.join("config.json"), &relocated, true).unwrap();
+    let mut engine = Engine::open(&system).unwrap();
+    let repository = engine
+        .create_repository(
+            &RepositoryName::parse("relocated source").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let version = write_body(&mut engine, &repository.main_branch_id, b"original body");
+    let (added, archive, operation) =
+        begin_additions(&mut engine, temp.path(), &[true, false], "relocated-add");
+    enroll(&mut engine, temp.path(), "relocated-add", &added, &archive).unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    for disk in &added {
+        assert_eq!(
+            fs::symlink_metadata(disk.root.join("metadata/pool-membership/config.json"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+    // A data-only retained root is still an existing registration. The absence
+    // of its anchor must not be mistaken for the first admission of a new root.
+    let anchor = relocated.disks[2]
+        .root
+        .join("metadata/pool-membership/config.json");
+    let parked = temp.path().join("retained-anchor.json");
+    fs::rename(&anchor, &parked).unwrap();
+    assert!(engine.activate_pending_membership().is_err());
+    assert!(!engine.state.operations.contains_key(&operation));
+    assert_eq!(
+        fs::symlink_metadata(&anchor).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(fs::read(&parked).unwrap(), anchors[2]);
+    fs::rename(&parked, &anchor).unwrap();
+    let result = engine.activate_pending_membership().unwrap();
+    assert_eq!(result.operation_id, operation);
+    for (disk, bytes) in relocated.disks.iter().zip(&anchors) {
+        assert_eq!(
+            fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap(),
+            *bytes
+        );
+    }
+    for disk in &added {
+        assert_eq!(
+            fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap(),
+            canonical_json(&relocated).unwrap()
+        );
+    }
+    drop(engine);
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.activate_pending_membership().unwrap(), result);
+    assert_eq!(engine.state.operations[&operation], result);
+    let mut content = engine.open_content(&version).unwrap();
+    let mut body = Vec::new();
+    std::io::Read::read_to_end(&mut content.file, &mut body).unwrap();
+    assert_eq!(body, b"original body");
+    for (disk, bytes) in relocated.disks.iter().zip(&anchors) {
+        assert_eq!(
+            fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap(),
+            *bytes
+        );
+    }
+}
+
+#[test]
 fn membership_activation_data_only_then_mixed_keeps_voters_and_standalone_proofs() {
     let (temp, mut engine, _, original) = initialize();
     let original_config = engine.config.clone();

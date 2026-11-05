@@ -4,6 +4,10 @@
 
 本文记录本轮 ZXS 改进已落地的代码、已有验证证据、已知失败和剩余工作，供后续继续开发时核对。它是有时间边界的快照，不代替功能规范、发布说明或部署验收。提交和运行链接固定到具体版本；分支后续移动不改变本文所记录的历史结果。
 
+## 2026-11-05 Genesis 锚后继修复
+
+基于 `13e5a3ac`，Exit、Add 和 Disabled 重新准入统一验证并重同步既有 Genesis 锚的原字节；只有已认证 origin 判定的新根允许首次创建，缺失旧锚不重建。新增迁移后 Add、重新准入、冷启动及负例源码。引擎库 `cargo check --offline --locked -p storage-engine --lib` 和差异检查通过；新增回归、Abort 和 mixed TerminalResume 重试尚未运行。
+
 ## 2026-11-05 组合候选
 
 以 main `d0d747d3` 为基础，整合 Disabled 重新准入、独立 admission epoch、SYSTEM 丢失后的认证 seed、Terminal fresh resume 的 mixed data-only 与取消，以及对应测试源码。保留 main 的终态轮换、恢复错误来源、浏览器和服务修复。三方冲突已解决，Stop 搬移夹具去重。
