@@ -559,6 +559,93 @@ fn original_root_cannot_replace_its_independent_new_decision_with_old_archive_ev
 }
 
 #[test]
+fn retained_resume_requires_its_actual_new_decision_despite_intact_portable_certificates() {
+    let mut fixture = Fixture::new(MembershipExitAction::PlannedOffline, 0);
+    let disk = fixture.original.disks[0].clone();
+    let mut pending = prepare_retained(&mut fixture);
+    pending.synchronize().unwrap();
+    let transition = object_hash(INTENT_KIND, &pending.proposal.intent).unwrap();
+    let decision = disk
+        .root
+        .join("metadata/membership-decisions")
+        .join(&transition)
+        .join("decision.json");
+    let original_decision = fs::read(&decision).unwrap();
+    let mut another_choice: json_codec::Value = decode_strict(&original_decision).unwrap();
+    assert_eq!(another_choice["choice"]["kind"], "TerminalResume");
+    // The same identity and transition still form a structurally valid record.
+    // Its other choice cannot substitute for the independent new resume vote.
+    another_choice["choice"]["kind"] = json_codec::json!("TerminalResumeCancel");
+    let another_choice = crate::canonical_json(&another_choice).unwrap();
+    let member = member_directory(&disk, &transition);
+    let certificate = member.join("resume-certificate.json");
+    let certificate_bytes = fs::read(&certificate).unwrap();
+    let archive = member.join(CONTROL_ARCHIVE_DIRECTORY);
+    let archive_bytes = files(&archive);
+    assert!(!archive_bytes.is_empty());
+    select_generation(&pending);
+    drop(pending);
+    let selected = fixture.source_path().join("resume-generation.json");
+    let selected_bytes = fs::read(&selected).unwrap();
+    let completed = fixture.source_path().join("resume-complete.json");
+    for fault in ["missing", "malformed", "another-choice"] {
+        match fault {
+            "missing" => fs::remove_file(&decision).unwrap(),
+            "malformed" => fs::write(&decision, b"{").unwrap(),
+            "another-choice" => fs::write(&decision, &another_choice).unwrap(),
+            _ => unreachable!(),
+        }
+        let before_system = files(&fixture.system());
+        let before_root = files(&disk.root);
+        let observed = TerminalManagement::metadata_resume_recovery(&fixture.system())
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed.operation_id, fixture.resume);
+        assert_eq!(
+            observed.phase,
+            crate::TerminalMetadataResumePhase::CompleteGeneration
+        );
+        let error = TerminalManagement::complete_metadata_resume(&fixture.system())
+            .err()
+            .expect("portable certificates cannot replace the target's actual new decision");
+        match fault {
+            "missing" => assert_eq!(error.code(), ErrorCode::RecoveryRequired),
+            "malformed" => {
+                assert_eq!(error.code(), ErrorCode::InvalidJson);
+                let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+                let mut json_cause = false;
+                while let Some(cause) = source {
+                    json_cause |= cause.downcast_ref::<json_codec::Error>().is_some();
+                    source = cause.source();
+                }
+                assert!(
+                    json_cause,
+                    "the actual decision parse cause must remain available"
+                );
+            }
+            "another-choice" => assert_eq!(error.code(), ErrorCode::LogFork),
+            _ => unreachable!(),
+        }
+        assert!(!completed.exists());
+        assert!(Engine::open(&fixture.system()).is_err());
+        assert_eq!(fs::read(&selected).unwrap(), selected_bytes);
+        assert_eq!(fs::read(&certificate).unwrap(), certificate_bytes);
+        assert_eq!(files(&archive), archive_bytes);
+        assert_eq!(files(&fixture.system()), before_system, "{fault}");
+        assert_eq!(files(&disk.root), before_root, "{fault}");
+        fs::write(&decision, &original_decision).unwrap();
+    }
+    let engine = TerminalManagement::complete_metadata_resume(&fixture.system()).unwrap();
+    assert_eq!(
+        engine.state.operations[&fixture.resume].kind,
+        "disk-readmit"
+    );
+    assert!(completed.is_file());
+    drop(engine);
+    assert!(Engine::open(&fixture.system()).is_ok());
+}
+
+#[test]
 fn cancelled_fresh_attempt_can_select_retained_metadata_without_rewriting_old_evidence() {
     let mut fixture = Fixture::new(MembershipExitAction::PlannedOffline, 0);
     let fresh = fixture.target(3);
@@ -618,16 +705,33 @@ fn cancelled_fresh_attempt_can_select_retained_metadata_without_rewriting_old_ev
 }
 
 #[test]
-fn system_loss_preserves_terminal_readmission_epoch_and_closes_it_before_next_readmission() {
+fn system_loss_relocates_terminal_readmission_root_and_preserves_epoch_chain() {
     let mut fixture = Fixture::new(MembershipExitAction::PlannedOffline, 0);
-    let disk = fixture.original.disks[0].clone();
+    let mut disk = fixture.original.disks[0].clone();
     let engine = prepare_retained(&mut fixture).activate().unwrap();
     let admitted = engine.state.operations[&fixture.resume].clone();
     drop(engine);
+    // Neither the old SYSTEM path nor the old root address can serve as an
+    // implicit fallback. Only this relocated original physical directory is supplied.
+    let lost_system = fixture.temporary.path().join("lost-system");
+    fs::rename(fixture.system(), &lost_system).unwrap();
+    fs::write(fixture.system(), b"original SYSTEM is unavailable").unwrap();
+    let lost_system_bytes = files(&lost_system);
+    let old_root = disk.root.clone();
+    let moved = fixture.temporary.path().join("relocated-original-metadata");
+    fs::rename(&old_root, &moved).unwrap();
+    fs::write(&old_root, b"old root path must not be probed").unwrap();
+    disk.root = moved;
+    let original_seal = fs::read(disk.root.join("disk.json")).unwrap();
     let restored = fixture.temporary.path().join("recovered-system");
     let mut engine =
         Engine::restore_from_disks(&restored, std::slice::from_ref(&disk.root)).unwrap();
     assert_eq!(engine.state.operations[&fixture.resume], admitted);
+    assert_eq!(engine.config.disks[0].root, disk.root);
+    assert_eq!(
+        fs::read(disk.root.join("disk.json")).unwrap(),
+        original_seal
+    );
     assert_eq!(
         engine.config.io_admission_epoch(&disk.disk_id).unwrap(),
         Some(admitted.request_digest.clone())
@@ -651,6 +755,11 @@ fn system_loss_preserves_terminal_readmission_epoch_and_closes_it_before_next_re
     );
     fs::write(&probe, certificate).unwrap();
     engine = Engine::open(&restored).unwrap();
+    assert_eq!(engine.config.disks[0].root, disk.root);
+    assert_eq!(
+        engine.config.io_admission_epoch(&disk.disk_id).unwrap(),
+        Some(admitted.request_digest.clone())
+    );
     let stop = OperationId::generate().unwrap();
     engine
         .begin_disk_exit(
@@ -676,8 +785,12 @@ fn system_loss_preserves_terminal_readmission_epoch_and_closes_it_before_next_re
         .unwrap()
         .activate()
         .unwrap();
-    let next = &engine.state.operations[&next_operation];
+    let next = engine.state.operations[&next_operation].clone();
     assert_ne!(next.request_digest, admitted.request_digest);
+    assert_eq!(
+        engine.config.io_admission_epoch(&disk.disk_id).unwrap(),
+        Some(next.request_digest.clone())
+    );
     assert_eq!(engine.state.operations[&fixture.resume], admitted);
     assert_eq!(engine.state.operations[&stop], stopped);
     assert_eq!(fs::read(&seed_path).unwrap(), seed);
@@ -714,9 +827,22 @@ fn system_loss_preserves_terminal_readmission_epoch_and_closes_it_before_next_re
     drop(engine);
     let reopened = Engine::open(&restored).unwrap();
     assert_eq!(reopened.state.operations[&stop], stopped);
+    assert_eq!(reopened.state.operations[&fixture.resume], admitted);
+    assert_eq!(reopened.state.operations[&next_operation], next);
+    assert_eq!(reopened.config.disks[0].root, disk.root);
     assert_eq!(
-        reopened.state.operations[&next_operation].kind,
-        "disk-readmit"
+        reopened.config.io_admission_epoch(&disk.disk_id).unwrap(),
+        Some(next.request_digest.clone())
+    );
+    assert_eq!(fs::read(&seed_path).unwrap(), seed);
+    assert_eq!(files(&lost_system), lost_system_bytes);
+    assert_eq!(
+        fs::read(fixture.system()).unwrap(),
+        b"original SYSTEM is unavailable"
+    );
+    assert_eq!(
+        fs::read(&old_root).unwrap(),
+        b"old root path must not be probed"
     );
 }
 
