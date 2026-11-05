@@ -350,10 +350,10 @@ fn terminal_mixed_resume_cold_request_and_data_marker_reenter_same_operation() {
 #[test]
 fn terminal_mixed_resume_bootstrap_barriers_record_data_roles_without_new_votes() {
     for phase in [
-        WriteFault::BeforeRecordBarrier,
-        WriteFault::AfterRecordBarrier,
-        WriteFault::BeforeHeadBarrier,
-        WriteFault::AfterHeadBarrier,
+        WriteFault::BeforeRecord,
+        WriteFault::AfterRecord,
+        WriteFault::BeforeHead,
+        WriteFault::AfterHead,
     ] {
         let mut fixture = Fixture::new(MembershipExitAction::Deregister, 0);
         let target = mixed_target(&fixture, &[true, false, false]);

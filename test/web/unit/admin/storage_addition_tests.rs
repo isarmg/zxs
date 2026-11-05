@@ -204,20 +204,22 @@ fn metadata_resume_mixed_preview_counts_only_explicit_voters() {
     preview.target_metadata_members = 2;
     assert!(validate_preview(&preview).is_err());
     preview.target_metadata_members = 1;
-    let mut model = super::super::Model::default();
-    model.snapshot = Some(super::super::Snapshot {
-        state: StorageState::TerminalManagement,
-        _disk_ids: Vec::new(),
-        completion_available: false,
-        allow_development: false,
-        terminal: None,
-    });
-    model.selections = preview
-        .request
-        .additions
-        .iter()
-        .map(|addition| addition.selection.clone())
-        .collect();
+    let mut model = super::super::Model {
+        snapshot: Some(super::super::Snapshot {
+            state: StorageState::TerminalManagement,
+            _disk_ids: Vec::new(),
+            completion_available: false,
+            allow_development: false,
+            terminal: None,
+        }),
+        selections: preview
+            .request
+            .additions
+            .iter()
+            .map(|addition| addition.selection.clone())
+            .collect(),
+        ..Default::default()
+    };
     selected(&mut model);
     model
         .addition

@@ -1,7 +1,6 @@
 //! Real retained-directory transitions and interrupted durable consumers.
 //! These tests use actual roots, journals, locks and archives, not mock votes.
 use super::*;
-use crate::*;
 use std::{fs, io::Read, path::PathBuf};
 
 struct Fixture {
@@ -201,7 +200,7 @@ fn relocated_genesis_anchors_survive_exit_readmission_and_cold_restart() {
             );
         }
         drop(fixture.engine);
-        let mut engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
+        let engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
         assert_eq!(engine.state.operations[&operation], result);
         assert_eq!(engine.state.operations[&offline.operation_id], offline);
         let registration = engine.registered_disk(&disk.disk_id).unwrap();
