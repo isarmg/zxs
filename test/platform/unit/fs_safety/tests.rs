@@ -200,6 +200,67 @@ fn raw_directory_admission_and_atomic_writes_keep_the_supplied_handle() {
 }
 
 #[test]
+fn directory_identity_rejects_an_ancestor_alias_even_to_the_held_inode() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let path = parent.join("system");
+    let held = PrivateDirectory::create_all(&path).unwrap();
+    let name = EntryName::new("record").unwrap();
+    AtomicFile::create(&held, &name, b"original").unwrap();
+    held.verify_identity().unwrap();
+
+    let moved = temp.path().join("moved");
+    fs::rename(&parent, &moved).unwrap();
+    symlink(&moved, &parent).unwrap();
+    // A whole-path symlink_metadata sees the original leaf inode here. Name
+    // admission must reject the ancestor without following it to that leaf.
+    assert!(matches!(
+        held.verify_identity(),
+        Err(Error::Io(error))
+            if matches!(error.raw_os_error(), Some(libc::ENOTDIR | libc::ELOOP))
+    ));
+    assert_eq!(held.read_bounded(&name, 8).unwrap(), b"original");
+    AtomicFile::replace(&held, &name.as_relative(), b"held").unwrap();
+    assert_eq!(fs::read(moved.join("system/record")).unwrap(), b"held");
+}
+
+#[test]
+fn directory_identity_rejects_linked_and_missing_ancestors_without_repair() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let path = parent.join("system");
+    let held = PrivateDirectory::create_all(&path).unwrap();
+    let moved = temp.path().join("moved");
+    fs::rename(&parent, &moved).unwrap();
+    assert!(matches!(
+        held.verify_identity(),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound
+    ));
+    assert!(!parent.exists());
+
+    let absent = temp.path().join("absent");
+    symlink(&absent, &parent).unwrap();
+    assert!(matches!(
+        held.verify_identity(),
+        Err(Error::Io(error))
+            if matches!(error.raw_os_error(), Some(libc::ENOTDIR | libc::ELOOP))
+    ));
+    assert!(!absent.exists());
+    assert!(fs::symlink_metadata(&parent).unwrap().file_type().is_symlink());
+    fs::remove_file(&parent).unwrap();
+    PrivateDirectory::create_all(&path).unwrap();
+    assert!(matches!(
+        held.verify_identity(),
+        Err(Error::UnsafeFileType(rejected)) if rejected == path
+    ));
+    assert!(moved.join("system").is_dir());
+}
+
+#[test]
 fn raw_directory_admission_rejects_file_type_and_permissions_without_repair() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();

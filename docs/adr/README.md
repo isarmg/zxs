@@ -19,5 +19,6 @@
 | [0011：预置 Samba 账号的持久单一绑定](0011-smb-account-selection.md) | 已采纳，当前源码设计；不提升 Web 权限 | [SMB 组件](../components/smb.md)、API 与 Web 账户设置 |
 | [0012：系统初始化与存储池首次激活分离](0012-management-and-storage-activation.md) | 当前源码设计；已激活池动态增删未实现 | 系统管理、首次存储激活及第 09、10 章 |
 | [0013：成员配置代际、历史证明与在线交接](0013-generation-bound-membership.md) | 首次元数据纯添加已定向验证，后继批次待验；移除/API/Web未实现 | 第 08、09、10 章及已有池变更 |
+| [0014：SYSTEM 持有目录与 SQLite 文件系统边界](0014-system-directory-ownership.md) | 候选设计；SYSTEM 全流程和 SQLite held-directory 接线尚未完成 | 第 08、10、20 章及显式恢复边界 |
 
 决策文档只保留当前背景、选择、代价、替代方案与关联规则，不追加实施进度或构建日志。

@@ -196,12 +196,12 @@ impl PrivateDirectory {
         &self.directory
     }
     /// Confirm that the named directory still refers to this held handle.
+    /// Every component is opened with DIRECTORY | NOFOLLOW; a symlink to the
+    /// same inode is not an admissible name. Subsequent I/O must still use this
+    /// held directory because the namespace can change after this check.
     pub fn verify_identity(&self) -> Result<(), Error> {
-        let named = std::fs::symlink_metadata(&self.path)?;
+        let named = unix::open_directory(&self.path)?.metadata()?;
         let held = self.directory.metadata()?;
-        if !named.is_dir() || named.file_type().is_symlink() {
-            return Err(Error::UnsafeFileType(self.path.clone()));
-        }
         {
             use std::os::unix::fs::MetadataExt;
             if named.dev() != held.dev() || named.ino() != held.ino() {

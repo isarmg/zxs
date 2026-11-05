@@ -50,6 +50,13 @@ crate 入口在编译期拒绝非 Linux、非 x86_64 或非 64 位目标；内�
 仍在该边界检查目录类型。`SameMount` 仍添加
 `NO_XDEV`；相对文件打开仍拒绝符号链接、非普通文件和多链接。
 
+`PrivateDirectory::verify_identity` 的显式命名核验逐分量使用
+`DIRECTORY | NOFOLLOW` 打开，再检查 device/inode 与私有权限；祖先符号链接即使
+指回同一目录也拒绝，原始 ENOTDIR/ELOOP 等错误保留。它不锁住命名空间，核验后的
+读写仍须锚定原 FD。深度 d 为 O(d) 次目录打开、O(1) 额外同时存活句柄，不增加
+同步。此原语修正不表示 SYSTEM 的路径消费者或 SQLite 已完成迁移，剩余边界见
+[SYSTEM 所有权候选设计](../adr/0014-system-directory-ownership.md)。
+
 ## 私有 payload 打开模式
 
 `PrivateDirectory::open_payload` 显式接收 `PayloadOpenMode`：`CreateNew` 使用
