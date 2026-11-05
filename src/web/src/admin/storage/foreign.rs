@@ -1,6 +1,8 @@
 //! Explicit read-only inspection of an observed foreign source. No admission
 //! action exists here; missing content remains visible history.
 use super::*;
+
+mod plan;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{
     storage_directories::{DirectorySource, DiscoveredDiskState},
@@ -14,12 +16,18 @@ pub(super) struct Model {
     cancellation: Option<api::ReadCancellation>,
     preview: Option<ForeignDiskPreview>,
     error: Option<api::Error>,
+    plan: plan::Model,
 }
 impl Model {
+    pub(super) fn blocks_edit(&self) -> bool {
+        self.plan.blocks_edit()
+    }
     pub(super) fn invalidate(&mut self) {
         if let Some(cancellation) = self.cancellation.take() {
             cancellation.abort();
         }
+        self.plan.leave();
+        self.plan.invalidate();
         self.generation += 1;
         self.reading = false;
         self.preview = None;
@@ -161,7 +169,10 @@ fn inspect(state: RwSignal<State>) {
             model.reading = false;
             model.cancellation = None;
             match result {
-                Ok(preview) => model.preview = Some(preview),
+                Ok(preview) => {
+                    model.plan.set_source(&preview);
+                    model.preview = Some(preview);
+                }
                 Err(error) => model.error = Some(error),
             }
         });
@@ -230,6 +241,10 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             {move ||state.with(|state|state.admin_console.storage.foreign.preview.clone()).map(review)}
         </section>
     </Show>}
+}
+
+pub(super) fn planning(state: RwSignal<State>) -> impl IntoView {
+    plan::view(state)
 }
 
 #[cfg(test)]

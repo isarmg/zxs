@@ -297,7 +297,20 @@ impl Engine {
                 self.promote_readmission_resources()?;
                 let mut prepared = self.prepare_recovery()?;
                 self.preflight_workspace_receipts(&mut prepared)?;
-                self.recover_prepared(crate::engine::RecoveryMode::CompletePending, prepared)?;
+                // Rebuild the write gate from admitted journals, not the failed
+                // attempt. A failed replay must keep this live Engine fenced.
+                self.blocked = false;
+                if let Err(error) =
+                    self.recover_prepared(crate::engine::RecoveryMode::CompletePending, prepared)
+                {
+                    self.blocked = true;
+                    return Err(error);
+                }
+                if !self.generation_activation_published() {
+                    // An unpublished generation keeps its activation barrier
+                    // until complete_generation_activation persists it.
+                    self.blocked = true;
+                }
             }
             return self.complete_generation_activation();
         }

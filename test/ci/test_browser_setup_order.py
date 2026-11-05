@@ -38,6 +38,24 @@ class BrowserSetupOrder(unittest.TestCase):
         self.assertIn('let management = root.join("management");', fixture)
         self.assertIn('fs::DirBuilder::new().mode(0o700).create(&root)?;', fixture)
 
+    def test_setup_returns_from_converted_disk_before_checking_admitted_disks(self):
+        source = (ROOT / 'test/tools/browser-smoke/runner/management.rs').read_text()
+        setup = source.split('pub(super) fn setup(', 1)[1].split('\nstruct SetupFixture', 1)[0]
+        following = setup.split('conversion::run(browser, &fixture)?;', 1)[1]
+        following = following.split('sign_out(browser)?;', 1)[0]
+        expected = [
+            'browser.click(&browser.button("Files", "文件")?)?;',
+            'browser.click(&browser.button("All disks", "所有硬盘")?)?;',
+            'browser.css(".zxs-disk-entry[data-slot=\'D01\']:not([disabled])")?;',
+            'browser.css(".zxs-disk-entry[data-slot=\'N01\']:not([disabled])")?;',
+        ]
+        statements = [line.strip() for line in following.splitlines()
+                      if line.strip() and not line.strip().startswith('//')]
+        self.assertEqual(statements, expected)
+        conversion = (ROOT / 'test/tools/browser-smoke/runner/management/conversion.rs').read_text()
+        self.assertIn('browser.click(&browser.css(".zxs-disk-entry[data-slot=\'N01\']:not([disabled])")?)?;', conversion)
+        self.assertIn("normalize-space(.)='ordinary.txt'", conversion)
+
 
 if __name__ == '__main__':
     unittest.main()

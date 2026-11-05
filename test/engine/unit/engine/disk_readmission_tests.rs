@@ -1187,3 +1187,207 @@ fn stale_readmission_plan_cannot_unlock_a_real_later_membership_fence() {
     }
     assert_eq!(readmission_storage_bytes(&roots), before);
 }
+
+#[cfg(feature = "fault-injection")]
+fn live_readmission_cut(point: &str) -> (Fixture, OperationId, MembershipControlArchive) {
+    let mut fixture = Fixture::new(true);
+    fixture.disable();
+    let operation = OperationId::generate().unwrap();
+    let archive = fixture.begin(operation);
+    fixture.engine.inject_fault_once(point);
+    let error = fixture
+        .engine
+        .activate_disk_readmission(
+            &archive.archive_path,
+            &archive.root_hash,
+            directory(&fixture.config.disks[0]),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InDoubt);
+    assert!(error.to_string().contains(point));
+    assert!(fixture.engine.is_read_only());
+    assert!(!fixture.engine.state.operations.contains_key(&operation));
+    (fixture, operation, archive)
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn live_readmission_retry_restores_writes_without_replacing_its_published_receipt() {
+    let (mut fixture, operation, archive) = live_readmission_cut("after_publication_1");
+    let result = fixture.activate(&archive);
+    assert_eq!(result.operation_id, operation);
+    assert_eq!(fixture.engine.state.operations[&operation], result);
+    assert!(
+        !fixture.engine.is_read_only(),
+        "the same live Engine must become writable after exact publication replay"
+    );
+    write(
+        &mut fixture.engine,
+        &fixture.branch,
+        "live-retry.txt",
+        b"live readmission retry completed",
+    );
+    assert_eq!(fixture.activate(&archive), result);
+    assert!(!fixture.engine.is_read_only());
+    drop(fixture.engine);
+    let mut engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
+    assert!(!engine.is_read_only());
+    assert_eq!(engine.state.operations[&operation], result);
+    write(
+        &mut engine,
+        &fixture.branch,
+        "cold-after-live-retry.txt",
+        b"the original receipt survives later writes and cold open",
+    );
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn live_readmission_retry_failure_keeps_the_caller_fenced_until_exact_recovery() {
+    // Starting before any publication makes the retry's ordinary publication
+    // boundary reachable; an existing publication uses a different replay path.
+    let (mut fixture, operation, archive) = live_readmission_cut("after_accept_1");
+    fixture.engine.inject_fault_once("after_publication_2");
+    let error = fixture
+        .engine
+        .activate_disk_readmission(
+            &archive.archive_path,
+            &archive.root_hash,
+            directory(&fixture.config.disks[0]),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InjectedFailure);
+    assert!(error.to_string().contains("after_publication_2"));
+    assert!(
+        fixture.engine.is_read_only(),
+        "a replay error must restore the caller-visible write barrier"
+    );
+    assert!(!fixture.engine.state.operations.contains_key(&operation));
+    let roots = fixture
+        .config
+        .disks
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect::<Vec<_>>();
+    let before = readmission_storage_bytes(&roots);
+    let error = fixture
+        .engine
+        .create_workspace(&fixture.branch, "admin")
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert_eq!(readmission_storage_bytes(&roots), before);
+    let result = fixture.activate(&archive);
+    assert_eq!(result.operation_id, operation);
+    assert_eq!(fixture.engine.state.operations[&operation], result);
+    assert!(!fixture.engine.is_read_only());
+    write(
+        &mut fixture.engine,
+        &fixture.branch,
+        "after-repeated-live-failure.txt",
+        b"only exact successful recovery reopens writes",
+    );
+    assert_eq!(fixture.activate(&archive), result);
+    assert!(!fixture.engine.is_read_only());
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn live_readmission_retry_before_any_candidate_keeps_activation_as_the_write_boundary() {
+    let mut fixture = Fixture::new(true);
+    fixture.disable();
+    let operation = OperationId::generate().unwrap();
+    let archive = fixture.begin(operation);
+    let point = format!(
+        "after_readmission_marker_{}",
+        fixture.config.disks[0].disk_id
+    );
+    fixture.engine.inject_fault_once(&point);
+    let error = fixture
+        .engine
+        .activate_disk_readmission(
+            &archive.archive_path,
+            &archive.root_hash,
+            directory(&fixture.config.disks[0]),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InjectedFailure);
+    assert!(error.to_string().contains(&point));
+    assert!(fixture.engine.is_read_only());
+    assert!(!fixture.engine.state.operations.contains_key(&operation));
+    assert!(
+        fixture
+            .engine
+            .config
+            .generation()
+            .unwrap()
+            .portable
+            .readmission_core()
+            .is_some(),
+        "the live Engine has switched to the exact readmission generation"
+    );
+    for disk in fixture.engine.config.metadata_members() {
+        let root = &fixture.engine.disk_resources.get(disk).unwrap().root;
+        root.directory_identity(root.path()).unwrap();
+        let journal = crate::engine::membership_transition::pending::activation::log_path(
+            &fixture.engine.config,
+            disk,
+        );
+        match fs::symlink_metadata(&journal) {
+            Ok(metadata) => assert!(metadata.file_type().is_file()),
+            // The first marker precedes creation of the active journal and may
+            // also precede creation of another member's generation directory.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!(
+                "cannot inspect active journal {}: {error}",
+                journal.display()
+            ),
+        }
+        let scan = crate::journal::scan_configured_at(root, disk, &fixture.engine.config).unwrap();
+        assert!(
+            scan.records.is_empty() && !scan.torn_tail && scan.valid_bytes == 0,
+            "activation has not created a candidate"
+        );
+    }
+    fixture
+        .engine
+        .inject_fault_once("before_membership_activation_projection");
+    let error = fixture
+        .engine
+        .activate_disk_readmission(
+            &archive.archive_path,
+            &archive.root_hash,
+            directory(&fixture.config.disks[0]),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InjectedFailure);
+    assert!(
+        error
+            .to_string()
+            .contains("before_membership_activation_projection")
+    );
+    // This cut follows the authoritative publication and its live namespace
+    // admission. A SYSTEM projection failure does not undo that write boundary.
+    let result = fixture.engine.state.operations[&operation].clone();
+    assert!(!fixture.engine.is_read_only());
+    assert_eq!(fixture.activate(&archive), result);
+    assert_eq!(result.operation_id, operation);
+    assert_eq!(fixture.engine.state.operations[&operation], result);
+    assert!(!fixture.engine.is_read_only());
+    write(
+        &mut fixture.engine,
+        &fixture.branch,
+        "after-live-marker-retry.txt",
+        b"the prescribed activation opened writes",
+    );
+    assert_eq!(fixture.activate(&archive), result);
+    drop(fixture.engine);
+    let mut engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
+    assert!(!engine.is_read_only());
+    assert_eq!(engine.state.operations[&operation], result);
+    write(
+        &mut engine,
+        &fixture.branch,
+        "cold-after-live-marker-retry.txt",
+        b"the exact receipt and write admission survive restart",
+    );
+}

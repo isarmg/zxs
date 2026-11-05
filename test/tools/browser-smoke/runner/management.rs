@@ -283,7 +283,11 @@ pub(super) fn setup(
         )?;
         conversion::run(browser, &fixture)?;
         browser.click(&browser.button("Files", "文件")?)?;
+        // Conversion inspected N01's contents. Files preserves that location;
+        // return explicitly to the disk list before checking both admitted disks.
+        browser.click(&browser.button("All disks", "所有硬盘")?)?;
         browser.css(".zxs-disk-entry[data-slot='D01']:not([disabled])")?;
+        browser.css(".zxs-disk-entry[data-slot='N01']:not([disabled])")?;
         sign_out(browser)?;
         Ok(())
     })?;

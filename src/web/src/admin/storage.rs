@@ -105,7 +105,8 @@ impl Model {
             || (self.addition.blocks_edit()
                 || self.lifecycle.blocks_edit()
                 || self.readmission.blocks_edit()
-                || self.conversion.blocks_edit())
+                || self.conversion.blocks_edit()
+                || self.foreign.blocks_edit())
     }
     fn editable(&self) -> bool {
         !self.busy
@@ -114,7 +115,8 @@ impl Model {
             && !(self.addition.blocks_edit()
                 || self.lifecycle.blocks_edit()
                 || self.readmission.blocks_edit()
-                || self.conversion.blocks_edit())
+                || self.conversion.blocks_edit()
+                || self.foreign.blocks_edit())
             && !self.unknown
             && self.success.is_none()
             && self.snapshot.as_ref().is_some_and(|snapshot| {
@@ -403,6 +405,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         {wizard::view(state)}
         <Show when=move ||state.with(|s|!s.admin_console.storage.conversion.blocks_edit())>{addition::view(state)}</Show>
         {conversion::view(state)}
+        {foreign::planning(state)}
         <Show when=move ||state.with(|s|s.admin_console.storage.unknown)><p class="zxs-row" role="alert">{t("激活结果未知，禁止重新提交。刷新状态核对；只有服务器验证的原激活可以继续。关闭页面不会取消服务器操作。", "Activation outcome is unknown; resubmission is blocked. Refresh status to check. Only the server-verified original activation can be completed. Closing this page does not cancel the server operation.")}</p></Show>
         <Show when=move ||state.with(|s|s.admin_console.storage.can_complete())><p class="zxs-row">{t("服务器已验证原激活的中断证明。继续只完成原目录与当前账户的绑定，不重建管理员或选择新目录。", "The server verified the interrupted activation. Continuing only completes the original directories' binding to the current account; it does not recreate the administrator or select new directories.")}</p><button type="button" class="zxs-button" data-storage-complete="" on:click=move |_|activate(state, true)>{t("继续原激活", "Complete original activation")}</button></Show>
         <Show when=move ||state.with(|s|s.admin_console.storage.success.is_some())><p class="zxs-row" role="status">{move ||state.with(|s|if s.admin_console.storage.success==Some(Success::RestartRequired){t("存储已激活，服务需要本地重启。不要再次添加。", "Storage was activated; the service needs a local restart. Do not add it again.")}else{t("存储已激活，正在打开。请刷新状态核对。", "Storage was activated and is opening. Refresh status to check.")})}</p></Show>

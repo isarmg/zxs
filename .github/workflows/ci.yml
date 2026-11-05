@@ -43,7 +43,10 @@ jobs:
     # Cold crypto runs include ten packaged/local-generated ring cases, including
     # both release slow-test matrices; the measured run exceeded 30 minutes.
     # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
+    # The full workspace reached only 907 of 1964 engine tests in 30 minutes,
+    # before server tests and real I/O gates. Retain the full workload and allow
+    # its long fault/recovery cases to finish instead of accepting partial runs.
+    timeout-minutes: ${{ matrix.suite == 'workspace' && 120 || matrix.suite == 'foundation-crypto' && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:
