@@ -297,6 +297,9 @@ impl Engine {
     ) -> Result<Plan> {
         Self::require_actor(principal)?;
         self.require_write()?;
+        if let Some(view) = self.admitted_current_namespaces()? {
+            view.require_operation("history.historical_save")?;
+        }
         if self
             .state
             .branches

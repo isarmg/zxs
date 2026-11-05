@@ -206,6 +206,18 @@ fn verification(error: RestrictedDiscoveryFailure) -> Error {
     }
 }
 
+fn io_cause(error: &Error) -> &std::io::Error {
+    let mut cause: &(dyn std::error::Error + 'static) = error;
+    loop {
+        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+            return error;
+        }
+        cause = cause
+            .source()
+            .expect("discovery failure preserves its I/O source");
+    }
+}
+
 #[test]
 fn restricted_discovery_stale_projection_and_fence_hints_never_probe_present_stopped_root() {
     let fixture = Fixture::new();
@@ -414,16 +426,30 @@ fn restricted_discovery_probe_cannot_be_reused_with_another_projection_before_st
 #[test]
 fn restricted_discovery_missing_retained_roots_never_falls_back_to_config() {
     let fixture = Fixture::new();
-    for (index, disk) in fixture.original.disks.iter().enumerate() {
-        fs::rename(
-            &disk.root,
-            fixture.temp.path().join(format!("missing-{index}")),
-        )
-        .unwrap();
-    }
+    let projection = storage_contract::canonical_json(&fixture.original).unwrap();
+    let moved = fixture
+        .original
+        .disks
+        .iter()
+        .enumerate()
+        .map(|(index, disk)| {
+            let path = fixture.temp.path().join(format!("missing-{index}"));
+            fs::rename(&disk.root, &path).unwrap();
+            path
+        })
+        .collect::<Vec<_>>();
+    let before = snapshot(&moved);
     let mut io = CountedIo::default();
     let error = verification(fixture.discover(&mut io).unwrap_err());
-    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert_eq!(error.code(), ErrorCode::MetadataQuorumUnavailable);
+    assert_eq!(io_cause(&error).kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(fixture.original.metadata_members().len(), 3);
+    assert_eq!(fixture.original.metadata_quorum(), 2);
+    assert_eq!(
+        storage_contract::canonical_json(&fixture.original).unwrap(),
+        projection
+    );
+    assert_eq!(snapshot(&moved), before);
     assert_eq!(io.touches.len(), 3);
     assert!(
         io.touches
@@ -532,6 +558,10 @@ fn production_startup_missing_corrupt_or_absent_system_locator_never_stats_stora
             .err()
             .unwrap();
         assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert!(std::error::Error::source(&error).is_some());
+        if failure == 3 {
+            assert_eq!(io_cause(&error).kind(), std::io::ErrorKind::NotFound);
+        }
         assert!(io.touches.is_empty());
         assert_eq!(
             Engine::open(&fixture.system).err().unwrap().code(),
@@ -621,6 +651,12 @@ fn production_startup_wrong_pool_hint_never_selects_another_pool_or_stats_roots(
 #[test]
 fn production_unstopped_relocation_is_identity_checked_and_frozen_before_first_stop() {
     let fixture = StartupFixture::new();
+    let anchors = fixture
+        .config
+        .disks
+        .iter()
+        .map(|disk| fs::read(disk.root.join("metadata/pool-membership/config.json")).unwrap())
+        .collect::<Vec<_>>();
     let moved: Vec<_> = fixture
         .config
         .disks
@@ -674,6 +710,12 @@ fn production_unstopped_relocation_is_identity_checked_and_frozen_before_first_s
     engine.resume_membership_joint_decision().unwrap();
     let result = engine.activate_pending_disk_exit().unwrap();
     assert_eq!(result.operation_id, operation);
+    for (root, anchor) in moved.iter().zip(&anchors) {
+        assert_eq!(
+            fs::read(root.join("metadata/pool-membership/config.json")).unwrap(),
+            *anchor
+        );
+    }
     drop(engine);
     let mut io = CountedIo::default();
     let (config, _) = discover_startup_with_io(&fixture.system, config, &mut io).unwrap();

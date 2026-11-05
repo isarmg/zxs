@@ -261,6 +261,7 @@ fn logical_history_roots_do_not_depend_on_write_reuse_or_integrity_epoch() {
 fn a_durable_local_plan_preserves_the_published_state_and_exact_roots_after_restart() {
     let (temp, mut engine, repository, file) = fixture();
     let history = &repository.history_tree_id;
+    let published = Arc::clone(&engine.state);
     let old_view = engine.metadata_view();
     let retained = engine
         .capture_history_window(
@@ -288,10 +289,11 @@ fn a_durable_local_plan_preserves_the_published_state_and_exact_roots_after_rest
         )
         .unwrap();
     let new_view = engine.metadata_view();
-    assert!(std::ptr::eq(
+    assert!(Arc::ptr_eq(&published, &engine.state));
+    assert_eq!(
         old_view.business_projection(),
         new_view.business_projection()
-    ));
+    );
     assert!(
         !old_view
             .business_projection()

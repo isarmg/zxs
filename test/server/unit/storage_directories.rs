@@ -253,6 +253,145 @@ fn namespace_mount_parsing_keeps_format_identity_and_count_limits() {
 }
 
 #[test]
+fn cgroup_namespace_roots_remain_opaque_without_blocking_storage_discovery() {
+    for filesystem in ["cgroup", "cgroup2"] {
+        for root in [
+            "/",
+            "/system.slice",
+            "/..",
+            "/../..",
+            "/../../sibling/child",
+            "/../group\\040name",
+        ] {
+            let text = format!(
+                "20 1 8:1 / / rw - ext4 /dev/sda1 rw\n21 20 0:24 {root} /sys/fs/cgroup rw - {filesystem} cgroup rw\n22 20 8:1 /private/sub /mnt/alias rw - ext4 /dev/sda1 rw\n"
+            );
+            let mounts = parse_mounts(&text).unwrap();
+            assert_eq!(mounts.len(), 3);
+            assert_eq!(mounts[1].id, 21);
+            assert_eq!((mounts[1].major, mounts[1].minor), (0, 24));
+            assert!(
+                matches!(&mounts[1].root, MountRoot::Cgroup { filesystem: actual, root: actual_root }
+                if *actual == filesystem && *actual_root == unescape(root).unwrap())
+            );
+            let ordinary = mapped_location(Path::new("/srv/storage"), &mounts).unwrap();
+            assert_eq!(ordinary.device, (8, 1));
+            assert_eq!(ordinary.path, Path::new("/srv/storage"));
+            assert_eq!(
+                mount_relative_location(&mounts[2], Path::new("/mnt/alias/child")).unwrap(),
+                Path::new("/private/sub/child")
+            );
+            let control = Path::new("/sys/fs/cgroup");
+            for result in [
+                mounts[1].root.directory().map(|_| ()),
+                mapped_location(control, &mounts).map(|_| ()),
+                mount_relative_location(&mounts[1], control).map(|_| ()),
+                StoppedRoots::new(&[control.to_owned()], &mounts).map(|_| ()),
+            ] {
+                assert!(
+                    matches!(result, Err(Error::UnsupportedFilesystem(actual)) if actual == filesystem)
+                );
+            }
+            assert_ne!(
+                mounts,
+                parse_mounts(&text.replacen(
+                    &format!("0:24 {root} "),
+                    "0:24 /../different-root ",
+                    1,
+                ))
+                .unwrap(),
+                "the complete cgroup root remains part of inventory revalidation"
+            );
+        }
+    }
+}
+
+#[test]
+fn cgroup_inventory_never_admits_an_observed_storage_candidate() {
+    let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let opened = OpenAt2Root::open(temporary.path(), MountPolicy::AllowNestedMounts).unwrap();
+    let (_, id, major, minor) = identity(opened.directory()).unwrap();
+    for filesystem in ["cgroup", "cgroup2"] {
+        let text = format!(
+            "{id} 1 {major}:{minor} /.. {} rw - {filesystem} cgroup rw\n",
+            temporary.path().display()
+        );
+        let inventory = parse_mounts(&text).unwrap();
+        assert!(matches!(
+            observe(temporary.path(), &inventory),
+            Err(Error::UnsupportedFilesystem(actual)) if actual == filesystem
+        ));
+    }
+}
+
+#[test]
+fn cgroup_root_parsing_preserves_strict_format_and_inventory_limits() {
+    use std::fmt::Write as _;
+    for filesystem in ["cgroup", "cgroup2"] {
+        for root in [
+            "relative",
+            "..",
+            "/.",
+            "/../.",
+            "/group/..",
+            "/../group/..",
+            "/..//group",
+            "/../group/",
+            "/../bad\\123",
+            "/../\0",
+        ] {
+            let text = format!("21 20 0:24 {root} /sys/fs/cgroup rw - {filesystem} cgroup rw\n");
+            assert!(
+                matches!(parse_mounts(&text), Err(Error::InvalidMounts)),
+                "{root:?}"
+            );
+        }
+        assert!(matches!(
+            MountRoot::parse(&format!("/../{}", "n".repeat(4096)), filesystem),
+            Err(Error::InvalidMounts)
+        ));
+        for target in [
+            "relative",
+            "/sys/../cgroup",
+            "/sys//cgroup",
+            "/sys/cgroup\\123",
+        ] {
+            let text = format!("21 20 0:24 /.. {target} rw - {filesystem} cgroup rw\n");
+            assert!(
+                matches!(parse_mounts(&text), Err(Error::InvalidMounts)),
+                "{target}"
+            );
+        }
+    }
+    assert!(matches!(
+        parse_mounts("21 20 8:1 /.. /mnt rw - ext4 /dev/sda1 rw\n"),
+        Err(Error::InvalidMounts)
+    ));
+    assert!(matches!(
+        parse_mounts(
+            "21 20 0:24 /.. /sys/fs/cgroup rw - cgroup2 cgroup rw\n21 20 8:1 / /mnt rw - ext4 /dev/sda1 rw\n"
+        ),
+        Err(Error::InvalidMounts)
+    ));
+    let mut text = String::new();
+    for id in 1..=MAX_MOUNTS {
+        writeln!(
+            text,
+            "{id} 0 0:24 /.. /sys/fs/cgroup/{id} rw - cgroup2 cgroup rw"
+        )
+        .unwrap();
+    }
+    assert_eq!(parse_mounts(&text).unwrap().len(), MAX_MOUNTS);
+    writeln!(
+        text,
+        "{} 0 8:1 / /mnt rw - ext4 /dev/sda1 rw",
+        MAX_MOUNTS + 1
+    )
+    .unwrap();
+    assert!(matches!(parse_mounts(&text), Err(Error::InvalidMounts)));
+}
+
+#[test]
 fn browser_inventory_is_bounded_and_does_not_read_files() {
     let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     for n in 0..MAX_ENTRIES + 1 {

@@ -27,6 +27,22 @@ class DirectoryTreeEdgesProbe(unittest.TestCase):
         self.assertIn('the browser fixture must exercise actual SVG parent edges', unit)
         self.assertIn('engine.state().directory_trees[&node.tree_id].parent_tree_id', unit)
 
+    def test_readonly_history_uses_a_selected_real_preview_after_rejecting_unsolicited_preview(self):
+        source = (PROBE / 'runner/directory_history.rs').read_text()
+        self.assertIn('response.ok&&p.unexpectedPreview', source)
+        self.assertIn('p.unexpectedPreview=false;p.rejectedPages++', source)
+        self.assertIn("includes('INVALID_DIRECTORY_PAGE')", source)
+        self.assertIn("querySelectorAll('.zxs-file-table .zxs-file-name').length===0", source)
+        self.assertIn('fixture::DIRECTORY_PREVIEW', source)
+        self.assertIn("url.searchParams.has('directory_branch_id')&&response.ok", source)
+        self.assertIn("url.searchParams.get('expected_tree_id')", source)
+        self.assertEqual(source.count('body.preview=true;body.writable=false;'), 1)
+        fixture = (PROBE / 'runner/fixture.rs').read_text()
+        self.assertIn('seed_directory_history(&mut engine)?;', fixture)
+        unit = (PROBE / 'unit/fixture_tests.rs').read_text()
+        self.assertIn('engine\n        .preview_directory_branch(', unit)
+        self.assertIn('branches[0].head_tree_id, branches[1].head_tree_id', unit)
+
 
 if __name__ == '__main__':
     unittest.main()

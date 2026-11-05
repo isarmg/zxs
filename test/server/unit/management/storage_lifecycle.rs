@@ -584,6 +584,120 @@ fn terminal_commit(f: &Fixture, action: ExitAction) -> ExitStatus {
         .unwrap()
 }
 
+fn prepare_terminal_cold_recovery(f: &Fixture, failure: Option<&str>) -> (OperationId, PathBuf) {
+    let backend = f.backend.inner.addition_backend().unwrap();
+    let operation = OperationId::generate().unwrap();
+    backend.test_with_engine_locked(|engine| {
+        engine
+            .begin_disk_exit(
+                &f.original.disks[0].disk_id,
+                storage_engine::MembershipExitAction::Deregister,
+                "admin",
+                operation,
+            )
+            .unwrap();
+        let mut exit = engine.prepare_terminal_disk_exit().unwrap();
+        if let Some(failure) = failure {
+            engine.inject_fault_once(failure);
+            assert!(exit.complete(engine).is_err());
+        }
+    });
+    drop(backend);
+    let mut state = crate::lock(&f.backend.inner.state);
+    state.backend = BackendState::Unopened;
+    state.admitted = false;
+    state.status = StorageState::RecoveryRequired;
+    (
+        operation,
+        f.data
+            .join("terminal-management")
+            .join(operation.to_string()),
+    )
+}
+
+#[test]
+fn prepared_terminal_cold_recovery_finishes_without_opening_the_stopped_root() {
+    for failure in [
+        None,
+        Some("after_terminal_stop"),
+        Some("after_terminal_io_closed"),
+    ] {
+        let f = fixture_with_metadata_members(1);
+        let (operation, directory) = prepare_terminal_cold_recovery(&f, failure);
+        assert!(!directory.join("complete.json").exists());
+        let root = &f.original.disks[0].root;
+        let moved = root.with_extension("preserved");
+        fs::rename(root, &moved).unwrap();
+        fs::write(root, b"terminal startup cannot open this as a directory").unwrap();
+        let retained = files(&moved);
+        assert!(f.backend.inner.recover_terminal().unwrap(), "{failure:?}");
+        let terminal = crate::lock(&f.backend.inner.state)
+            .backend
+            .terminal()
+            .cloned()
+            .unwrap();
+        assert_eq!(terminal.result().operation_id, operation);
+        assert_eq!(terminal.result().result["target_io"], "closed");
+        assert_eq!(
+            f.backend.management_status().state(),
+            StorageState::TerminalManagement
+        );
+        assert!(directory.join("complete.json").is_file());
+        assert!(f.backend.inner.backend().is_err());
+        assert_eq!(files(&moved), retained);
+        assert_eq!(
+            fs::read(root).unwrap(),
+            b"terminal startup cannot open this as a directory"
+        );
+    }
+}
+
+#[test]
+fn prepared_terminal_cold_recovery_preserves_and_rejects_bad_publication() {
+    let f = fixture_with_metadata_members(1);
+    let (_, directory) = prepare_terminal_cold_recovery(&f, None);
+    let complete = directory.join("complete.json");
+    fs::write(&complete, b"damaged terminal publication").unwrap();
+    assert!(f.backend.inner.recover_terminal().is_err());
+    assert_eq!(fs::read(complete).unwrap(), b"damaged terminal publication");
+    assert!(matches!(
+        crate::lock(&f.backend.inner.state).backend,
+        BackendState::Unopened
+    ));
+    assert!(f.backend.inner.backend().is_err());
+}
+
+#[test]
+fn terminal_cold_recovery_does_not_treat_orphan_or_malformed_resume_as_absent() {
+    for marker in [
+        "resume-generation.json",
+        "resume-bootstrap.json",
+        "resume-complete.json",
+        "resume.json",
+    ] {
+        let f = fixture_with_metadata_members(1);
+        let completed = terminal_commit(&f, ExitAction::Deregister);
+        crate::lock(&f.backend.inner.state).backend = BackendState::Unopened;
+        let directory = f
+            .data
+            .join("terminal-management")
+            .join(completed.operation_id.to_string());
+        let publication = fs::read(directory.join("complete.json")).unwrap();
+        fs::write(directory.join(marker), b"{}").unwrap();
+        assert!(f.backend.inner.recover_terminal().is_err(), "{marker}");
+        assert_eq!(fs::read(directory.join(marker)).unwrap(), b"{}");
+        assert_eq!(
+            fs::read(directory.join("complete.json")).unwrap(),
+            publication
+        );
+        assert!(matches!(
+            crate::lock(&f.backend.inner.state).backend,
+            BackendState::Unopened
+        ));
+        assert!(f.backend.inner.backend().is_err());
+    }
+}
+
 #[test]
 fn final_voter_deregistration_enters_real_management_and_keeps_data_only_registrations() {
     let f = fixture_with_metadata_members(1);

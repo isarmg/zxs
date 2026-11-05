@@ -213,10 +213,10 @@ fn new_binding_receipt<'a>(
             {
                 return Err(invalid());
             }
-        } else if let Some(current) = current.filter(|current| current.kind == KIND) {
-            if old.is_some() || current.operation_id != *id || receipt.replace(current).is_some() {
-                return Err(invalid());
-            }
+        } else if let Some(current) = current.filter(|current| current.kind == KIND)
+            && (old.is_some() || current.operation_id != *id || receipt.replace(current).is_some())
+        {
+            return Err(invalid());
         }
         Ok(())
     };

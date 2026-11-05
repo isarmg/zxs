@@ -155,12 +155,99 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
             .all(|branch| branch.repository_id != naming.repository_id),
         "naming registration needs an unregistered scope, independent of SVG history"
     );
+    assert_real_readonly_directory_history(&engine);
     drop(content);
     drop(engine);
     let error = seed_files(&temporary).unwrap_err();
     assert!(error.to_string().contains("fresh disposable pool"));
     let engine = Engine::open(&temporary.path().join("pool")).unwrap();
     assert_eq!(engine.file_history(&entries[0].file_id).unwrap().len(), 2);
+}
+
+fn assert_real_readonly_directory_history(engine: &Engine) {
+    use storage_engine::directory_history::{DirectoryHistoryCollection, DirectoryHistoryRequest};
+    let repository = engine
+        .state()
+        .repositories
+        .values()
+        .find(|repository| repository.name == DIRECTORY_REPOSITORY)
+        .unwrap();
+    let entries = engine.list_tree(&repository.main_branch_id).unwrap();
+    let child = entries
+        .iter()
+        .find(|entry| entry.path() == DIRECTORY_PATH)
+        .unwrap();
+    let history = |collection| {
+        engine
+            .capture_directory_history(
+                DirectoryHistoryRequest::parse(
+                    &repository.repository_id,
+                    &child.entry_id,
+                    collection,
+                    std::collections::BTreeMap::new(),
+                )
+                .unwrap(),
+                HistoryWindowCancellation::new(),
+            )
+            .unwrap()
+            .page()
+            .unwrap()
+    };
+    let nodes = history(DirectoryHistoryCollection::Nodes).nodes;
+    assert!(
+        nodes.len() >= 3,
+        "the real preview child needs its initialized scope and two persisted writes"
+    );
+    let ids = nodes
+        .iter()
+        .map(|node| node.tree_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        nodes
+            .iter()
+            .filter(|node| node.parent_tree_id.is_some())
+            .count()
+            >= 2,
+        "the selected read-only child must retain actual parent connectors"
+    );
+    for node in &nodes {
+        assert_eq!(
+            node.parent_tree_id,
+            engine.state().directory_trees[&node.tree_id].parent_tree_id
+        );
+        if let Some(parent) = &node.parent_tree_id {
+            assert!(ids.contains(parent.as_str()));
+        }
+    }
+    let branches = history(DirectoryHistoryCollection::Branches).branches;
+    assert_eq!(branches.len(), 2);
+    assert_eq!(branches[0].head_tree_id, branches[1].head_tree_id);
+    assert!(ids.contains(branches[0].head_tree_id.as_str()));
+    let parent = engine
+        .state()
+        .directory_branches
+        .values()
+        .find(|branch| {
+            branch.repository_id == repository.repository_id && branch.name == DIRECTORY_PREVIEW
+        })
+        .unwrap();
+    assert_eq!(parent.directory_id, repository.repository_id);
+    let preview = engine
+        .preview_directory_branch(
+            &repository.repository_id,
+            &parent.directory_branch_id,
+            &parent.head_tree_id,
+        )
+        .unwrap();
+    let index = preview
+        .branch()
+        .entries
+        .iter()
+        .position(|entry| entry.entry_id == child.entry_id)
+        .unwrap();
+    assert_eq!(preview.path(), "");
+    assert_eq!(preview.entry(index).unwrap().path(), DIRECTORY_PATH);
+    assert_eq!(preview.source_path(DIRECTORY_PATH).unwrap(), DIRECTORY_PATH);
 }
 
 #[test]

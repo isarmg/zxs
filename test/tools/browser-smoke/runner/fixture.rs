@@ -8,6 +8,9 @@ const FILE: &str = "browser-smoke.txt";
 const FILE_BRANCH: &str = "browser-smoke-alternate";
 const PAYLOADS: [&str; 2] = ["first real version\n", "second real version: 测试\n"];
 pub(super) const NAMING_REPOSITORY: &str = "browser-naming";
+pub(super) const DIRECTORY_REPOSITORY: &str = "browser-directory-history";
+pub(super) const DIRECTORY_PATH: &str = "nested-history";
+pub(super) const DIRECTORY_PREVIEW: &str = "readonly-history-preview";
 
 /// Use the same explicit authority publication as production setup. A pool
 /// credential snapshot alone is deliberately insufficient for daemon startup.
@@ -158,6 +161,7 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         storage_engine::OperationId::generate().unwrap(),
     )?;
     seed_naming_scope(&mut engine)?;
+    seed_directory_history(&mut engine)?;
     // Reopen from disk before serving: an in-memory-only fixture is insufficient.
     drop(engine);
     let engine = Engine::open(&pool)?;
@@ -199,6 +203,76 @@ fn seed_naming_scope(engine: &mut Engine) -> Result<()> {
         request_digest: None,
     })?;
     Ok(())
+}
+
+// A real parent preview is needed to select a read-only child directory. The
+// disk-root listing itself is never a directory-branch preview.
+fn seed_directory_history(engine: &mut Engine) -> Result<()> {
+    let repository = engine.create_repository(
+        &storage_engine::RepositoryName::parse(DIRECTORY_REPOSITORY)?,
+        "P01",
+        3,
+        PRINCIPAL,
+        storage_engine::OperationId::generate()?,
+    )?;
+    let path = format!("{DIRECTORY_PATH}/{FILE}");
+    let initial = write_directory_history_version(
+        engine,
+        &repository.main_branch_id,
+        &path,
+        "initial directory version\n",
+    )?;
+    let directory = initial
+        .path
+        .parent()
+        .expect("invariant: the history fixture file is nested")
+        .into();
+    engine.initialize_directory_scope(
+        &repository.repository_id,
+        Some(&directory),
+        PRINCIPAL,
+        storage_engine::OperationId::generate()?,
+    )?;
+    for payload in PAYLOADS {
+        write_directory_history_version(engine, &repository.main_branch_id, &path, payload)?;
+    }
+    // Both child labels reference the same real head; registration invents no
+    // extra history node. Capture that child in the parent's real preview.
+    engine.create_directory_branches(
+        &repository.repository_id,
+        Some(&directory),
+        &storage_engine::BranchName::parse("shared-history-head")?,
+        PRINCIPAL,
+        storage_engine::OperationId::generate()?,
+    )?;
+    engine.create_directory_branches(
+        &repository.repository_id,
+        None,
+        &storage_engine::BranchName::parse(DIRECTORY_PREVIEW)?,
+        PRINCIPAL,
+        storage_engine::OperationId::generate()?,
+    )?;
+    Ok(())
+}
+
+fn write_directory_history_version(
+    engine: &mut Engine,
+    branch: &str,
+    path: &str,
+    payload: &str,
+) -> Result<storage_engine::StagedFile> {
+    let workspace = engine.create_workspace(branch, PRINCIPAL)?;
+    let staged = engine.stage_bytes(&workspace.workspace_id, path, payload.as_bytes())?;
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: storage_engine::OperationId::generate()?,
+        principal: PRINCIPAL.into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "Real read-only directory history fixture".into(),
+        request_digest: None,
+    })?;
+    Ok(staged)
 }
 
 #[cfg(test)]

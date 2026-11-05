@@ -474,6 +474,7 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
     let old_pending = engine.state().branches[&pending].head_commit_id.clone();
     let assert_sources = |engine: &Engine, branch: &str, commit_id: &str| {
         let commit = &engine.state().commits[commit_id];
+        let current = engine.state().branches[branch].head_commit_id == commit_id;
         let legacy: BTreeMap<_, _> = commit
             .entries
             .iter()
@@ -484,9 +485,10 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
             .collect();
         let tree = crate::TreeSnapshot::capture(
             engine,
-            crate::tests::tree_request(&json!({
-                "branch_id": branch, "query": {"commit_id": commit_id}
-            })),
+            crate::ReadTree {
+                branch,
+                commit: (!current).then_some(commit_id),
+            },
         )
         .unwrap();
         assert_eq!(tree.pending_file_versions, legacy);
@@ -507,6 +509,28 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
         let sources = assert_sources(&engine, branch, commit_id);
         assert_eq!(sources.get(&original.file_id), Some(&original.version_id));
     }
+    // Explicit commit selection stays historical even when it names the live
+    // HEAD. It must not borrow the current main selection's pending disposition.
+    let main = &repo.main_branch_id;
+    let head = &engine.state().branches[main].head_commit_id;
+    let historical = crate::TreeSnapshot::capture(
+        &engine,
+        crate::ReadTree {
+            branch: main,
+            commit: Some(head),
+        },
+    )
+    .unwrap();
+    assert!(historical.pending_file_versions.is_empty());
+    assert_eq!(
+        json_codec::to_value(&historical).unwrap(),
+        json!({
+            "branch_id": main,
+            "commit_id": head,
+            "entries": engine.state().commits[head].entries,
+            "pending_file_versions": {},
+        })
+    );
     save_projection_file(
         &mut engine,
         &repo.main_branch_id,

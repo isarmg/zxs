@@ -233,14 +233,10 @@ impl PrimaryListing {
                 .map(|branch| {
                     let current = state.directory_selections.get(&branch.directory_id)
                         == Some(&branch.directory_branch_id);
-                    let entries = if directory.preview.is_some() {
-                        branch.entries.as_slice()
-                    } else {
-                        state
-                            .directory_namespaces
-                            .entries(&branch.directory_branch_id)
-                            .map_err(error)?
-                    };
+                    let entries = state
+                        .directory_namespaces
+                        .entries(&branch.directory_branch_id)
+                        .map_err(error)?;
                     Ok(crate::DirectoryBranchChoice::capture_entries(
                         branch, current, entries,
                     ))

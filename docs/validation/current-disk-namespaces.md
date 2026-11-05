@@ -59,6 +59,7 @@ file note 和 file-branch label 只操作实际当前投影中仍存在的 ident
 - 旧 workspace、旧 entry ID、错误 principal/fence 拒绝；永久 receipt 可恢复正常和 cold workspace 基线。
 - Rename 隐藏同名目的地、case-only/嵌套、链式 Rename/DeleteTree、无关 upload、不同版本 alias、独立 file-branch 保存及跨 disk-root 隔离；反序列化 State 通过恢复安装入口重验正负例。
 - 历史分支/工作区导入在修改前拒绝；上传＋Rename 保留新正文和来源，上传最终被 Delete/DeleteTree 消耗则保留精确拒绝边界。
+- 历史保存预览在读取或封存旧工作区之前经过同一当前操作准入，不为尚未支持的导入生成 Ready 计划；原计划、工作区镜像和暂存正文保持，已经成功的永久结果仍可重放。对应新增源码回归尚待统一执行。
 - 当前 Enabled owner 上新 repository 与 disk-root 可新建并保存；Disabled/Detached owner 拒绝，旧成功创建 receipt 仍可重放；非空/历史 root 不能借新建 scope 取得写权。
 - 显式目录初始化按当前 identity 捕获内容与子目录 refs，不用旧路径复活旧选择；directory label 保留全部 snapshot 数据，变更同名/原 tree 的负例拒绝。
 - Disabled 保留列表与登记但拒绝目标写路由；Detached 不再登记；可显式更新到保留 primary 并写入。

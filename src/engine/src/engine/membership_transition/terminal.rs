@@ -80,26 +80,41 @@ impl TerminalAuthority {
         &self,
         frozen: &State,
     ) -> Result<(Arc<State>, OperationResult)> {
+        let result = self.management_result(frozen)?;
+        let mut state = frozen.clone();
+        state.sequence = result.sequence;
+        // management_result checked this same frozen generation for overflow.
+        state.topology_generation += 1;
+        state.operations.insert(result.operation_id, result.clone());
+        state
+            .operation_principals
+            .insert(result.operation_id, self.intent.principal.clone());
+        Ok((Arc::new(state), result))
+    }
+
+    /// Prescribed permanent receipt without cloning the frozen business state.
+    pub(in crate::engine::membership_transition) fn management_result(
+        &self,
+        frozen: &State,
+    ) -> Result<OperationResult> {
         if frozen.operations.contains_key(&self.operation_id()) {
             return Err(Error::new(
                 ErrorCode::IdempotencyKeyReused,
                 "terminal exit operation already belongs to its frozen history",
             ));
         }
-        let mut state = frozen.clone();
         let sequence =
             self.intent.fence_sequence.checked_add(1).ok_or_else(|| {
                 Error::new(ErrorCode::ResourceLimit, "terminal sequence exhausted")
             })?;
-        state.sequence = sequence;
-        state.topology_generation = state.topology_generation.checked_add(1).ok_or_else(|| {
+        let topology_generation = frozen.topology_generation.checked_add(1).ok_or_else(|| {
             Error::new(
                 ErrorCode::ResourceLimit,
                 "terminal topology generation exhausted",
             )
         })?;
         let target = self.target();
-        let result = OperationResult {
+        Ok(OperationResult {
             operation_id: self.operation_id(),
             kind: match self.action() {
                 MembershipExitAction::PlannedOffline => "disk-planned-offline",
@@ -122,14 +137,9 @@ impl TerminalAuthority {
                 "binding_generation": target.binding_generation.to_string(),
                 "registration": match self.action() { MembershipExitAction::PlannedOffline => "disabled", MembershipExitAction::Deregister => "detached" },
                 "target_io": "closed", "active_metadata_members": 0,
-                "topology_generation": state.topology_generation.to_string(),
+                "topology_generation": topology_generation.to_string(),
             }),
-        };
-        state.operations.insert(result.operation_id, result.clone());
-        state
-            .operation_principals
-            .insert(result.operation_id, self.intent.principal.clone());
-        Ok((Arc::new(state), result))
+        })
     }
     pub(in crate::engine) fn archive(&self, system: &Path) -> MembershipControlArchive {
         MembershipControlArchive {

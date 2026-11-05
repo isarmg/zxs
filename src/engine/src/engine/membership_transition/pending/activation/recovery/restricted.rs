@@ -62,7 +62,12 @@ fn discover_startup_with_io(
     projected: ValidatedConfig,
     io: &mut impl RootIo,
 ) -> Result<(ValidatedConfig, BootstrapStore)> {
-    let terminal = super::super::terminal_resume::completed_selector(root)?;
+    let terminal = super::super::terminal_resume::completed_selector(root).map_err(|source| {
+        source.context(
+            ErrorCode::RecoveryRequired,
+            "protected terminal selection failed before storage discovery",
+        )
+    })?;
     let store = open_store(root)?;
     super::super::exit::stop_plan::require_no_pending_stop(root, &store)?;
     let config = discover_startup_in_store_with_io(&store, projected, io)?;
@@ -230,9 +235,13 @@ fn discover_probes_with_io(
     let mut held = Vec::with_capacity(candidates.len());
     let mut selected = None;
     let mut damaged = Vec::new();
+    let mut unavailable = Vec::new();
     for ProbeCandidate { probe, disk } in candidates {
         match io.stat(probe) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                unavailable.push((probe.disk_id().to_owned(), Error::from(error)));
+                continue;
+            }
             Err(error) => return Err(error.into()),
             Ok(_) => (),
         }
@@ -296,14 +305,16 @@ fn discover_probes_with_io(
     }
     match selected {
         Some(portable) => {
-            let mut evidence = verify_held_generation(Arc::unwrap_or_clone(portable), held)
-                .map_err(|error| match damaged.pop() {
-                    Some((disk, source)) => source.context(
-                        error.code(),
-                        format!("{}; damaged marker on {disk}", error.message()),
-                    ),
-                    None => error,
-                })?;
+            let mut evidence =
+                verify_held_generation(Arc::unwrap_or_clone(portable), held, unavailable).map_err(
+                    |error| match damaged.pop() {
+                        Some((disk, source)) => source.context(
+                            error.code(),
+                            format!("{}; damaged marker on {disk}", error.message()),
+                        ),
+                        None => error,
+                    },
+                )?;
             evidence.rejected_members.extend(damaged);
             Ok(evidence)
         }
@@ -314,7 +325,7 @@ fn discover_probes_with_io(
                 format!("damaged generation marker on {disk} cannot authorize genesis fallback"),
             ))
         }
-        None => verify_held_genesis(config, held),
+        None => verify_held_genesis(config, held, unavailable),
     }
 }
 
@@ -368,13 +379,14 @@ fn discover_root_authority(
 fn verify_held_generation(
     portable: PortableAuthority,
     held: Vec<HeldCandidate>,
+    unavailable: Vec<(String, Error)>,
 ) -> Result<RestrictedGenerationEvidence> {
     let source = if portable.is_abort() {
         GenerationEvidenceSource::CertifiedAbort
     } else {
         GenerationEvidenceSource::Markers
     };
-    verify_held_generation_from(portable, held, source)
+    verify_held_generation_from(portable, held, source, unavailable)
 }
 
 #[derive(Clone, Copy)]
@@ -388,6 +400,7 @@ fn verify_held_generation_from(
     portable: PortableAuthority,
     held: Vec<HeldCandidate>,
     source: GenerationEvidenceSource,
+    unavailable: Vec<(String, Error)>,
 ) -> Result<RestrictedGenerationEvidence> {
     let intent = portable.intent()?;
     let hash = portable.hash()?;
@@ -406,7 +419,7 @@ fn verify_held_generation_from(
         metadata_members: effective.metadata_members().len(),
         metadata_quorum: effective.metadata_quorum(),
         verified_members: Vec::new(),
-        rejected_members: Vec::new(),
+        rejected_members: unavailable,
     };
     for held in held {
         let Some(member) = effective
@@ -662,6 +675,7 @@ fn verify_prepared_add_with_io(
         portable.clone(),
         held,
         GenerationEvidenceSource::PreparedRootExtension,
+        Vec::new(),
     )?;
     let config = locator.restrict_config(evidence.config, &effective)?;
     portable
@@ -672,10 +686,10 @@ fn verify_prepared_add_with_io(
 fn verify_held_genesis(
     projected: &ValidatedConfig,
     held: Vec<HeldCandidate>,
+    mut rejected_members: Vec<(String, Error)>,
 ) -> Result<RestrictedGenerationEvidence> {
     let mut selected: Option<ValidatedConfig> = None;
     let mut verified_members = Vec::new();
-    let mut rejected_members = Vec::new();
     for held in held {
         let result = (|| {
             let saved: ValidatedConfig = held.root.read_json_observed(

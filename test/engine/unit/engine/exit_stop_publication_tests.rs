@@ -30,6 +30,23 @@ impl Fixture {
             Config::development((0..count).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
         let system = temp.path().join("system");
         let mut engine = Engine::initialize(&system, config.clone()).unwrap();
+        if relocate {
+            let next = engine.config.clone();
+            drop(engine);
+            let roots = next
+                .disks
+                .iter()
+                .enumerate()
+                .map(|(i, disk)| {
+                    let path = temp.path().join(format!("relocated-{i}"));
+                    fs::rename(&disk.root, &path).unwrap();
+                    path
+                })
+                .collect();
+            let next = next.with_disk_roots(roots).unwrap();
+            write_json(&system.join("config.json"), &next, true).unwrap();
+            engine = Engine::open(&system).unwrap();
+        }
         let old_operation = OperationId::generate().unwrap();
         let repository = engine
             .create_repository(
@@ -61,23 +78,6 @@ impl Fixture {
                 request_digest: None,
             })
             .unwrap();
-        if relocate {
-            let next = engine.config.clone();
-            drop(engine);
-            let roots = next
-                .disks
-                .iter()
-                .enumerate()
-                .map(|(i, disk)| {
-                    let path = temp.path().join(format!("relocated-{i}"));
-                    fs::rename(&disk.root, &path).unwrap();
-                    path
-                })
-                .collect();
-            let next = next.with_disk_roots(roots).unwrap();
-            write_json(&system.join("config.json"), &next, true).unwrap();
-            engine = Engine::open(&system).unwrap();
-        }
         let prior_target = if prior_stop {
             let first = engine.config.disks[0].clone();
             prepare(
@@ -422,4 +422,35 @@ fn exit_stop_saved_plan_cannot_replace_actual_retained_quorum_or_archive() {
         assert_eq!(files(&fixture.target.root), target_before);
         assert_eq!(fs::read(&plan_path).unwrap(), plan);
     }
+}
+
+#[test]
+fn exit_stop_does_not_replace_a_changed_genesis_control_setting() {
+    let mut fixture = Fixture::prepared(false, false);
+    let path = fixture.engine.config.disks[1]
+        .root
+        .join("metadata/pool-membership/config.json");
+    let original = fs::read(&path).unwrap();
+    let mut changed: Config = decode_strict(&original).unwrap();
+    changed.workspace_ttl_seconds += 1;
+    let changed = canonical_json(&changed).unwrap();
+    fs::write(&path, &changed).unwrap();
+    let target = files(&fixture.target.root);
+    assert_eq!(
+        fixture
+            .engine
+            .activate_pending_disk_exit()
+            .unwrap_err()
+            .code(),
+        ErrorCode::PublicationInvalid
+    );
+    assert!(
+        !fixture
+            .engine
+            .state
+            .operations
+            .contains_key(&fixture.operation)
+    );
+    assert_eq!(fs::read(&path).unwrap(), changed);
+    assert_eq!(files(&fixture.target.root), target);
 }

@@ -14,6 +14,8 @@
 
 恢复先读取受保护系统 locator 的 terminal 选择，再打开 TerminalManagement；不先调用普通 Engine 或初次 activation 的盘探测。坏或缺失 terminal 证据进入恢复错误，不当作首次安装。恢复期间的旧 worker 不可覆盖 Draining、ChangingAuthority 或 Terminal 的 dispatcher。
 
+终态准备已经选中但尚未完成 stop／publication 时，服务先通过 SYSTEM-only 观察验证准确 authority／archive，并区分未开始新组接续与真实 resume 请求；没有接续请求才由原 `TerminalManagement::open` 续作同一停止和发布。存在的损坏 terminal publication、无请求的 resume generation／bootstrap／completion，或损坏的 resume 请求均保留并拒绝，不能当作未开始接续。新增源码回归覆盖停止前、停止后和真实 I/O 关闭后的冷恢复及上述坏记录，尚待统一执行；不构成真实掉电验收。
+
 `/api/management/status` 返回 `terminal_management`，不是 Ready、Unconfigured 或可自动重试的普通故障。管理存储状态显示原固定 N/Q、当前保留登记数、空登记或仍有登记的准确状态。data-only 目录仍列出；Disabled 保留登记，Detached 从当前列表消失。磁盘卡片、系统备注、登记 topology、历史事件和永久 operation outcome 可读；正文与普通业务读写不从这个对象开放。磁盘信息只用系统历史投影，不探测停止目录，也不伪报实时容量或健康。
 
 原始磁盘内容、完整控制历史和旧永久回执不删除。不写目标恢复文件或备份；对象仍是登记目录，同文件系统多个目录不构成禁止条件。设备 SMART 的 UI 来源统一为“设备 SMART”，不把未在 wire 中携带的具体查询实现伪报为 smartctl。

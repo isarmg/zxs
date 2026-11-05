@@ -836,35 +836,67 @@ fn closing_a_published_workspace_does_not_reopen_its_old_fence_on_restart() {
 
 #[test]
 fn absent_primary_preserves_read_only_workspace_receipt_recovery() {
-    for empty_mountpoint in [false, true] {
-        let (temp, mut engine, _, request) = saved();
-        let receipt = engine.commit_workspace(request.clone()).unwrap();
-        let primary = engine.config().disks[0].root.clone();
-        let root = engine.root().to_owned();
-        drop(engine);
-        fs::rename(&primary, temp.path().join("offline-primary")).unwrap();
-        if empty_mountpoint {
-            fs::create_dir(&primary).unwrap();
-            fs::set_permissions(
-                &primary,
-                std::os::unix::fs::PermissionsExt::from_mode(0o700),
-            )
-            .unwrap();
-        }
-        let mut engine = Engine::open(&root).unwrap();
-        assert!(engine.is_read_only());
-        let replayed = engine.commit_workspace(request).unwrap();
-        assert_eq!(replayed, receipt);
-        // Replay returns the frozen receipt; explicit observation reports the
-        // now-absent primary without rewriting publication facts.
-        let observed = engine.operation(receipt.operation_id).unwrap();
-        assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
-        let mut expected = receipt;
-        expected.current_health = storage_contract::CurrentHealth::Unavailable;
-        assert_eq!(observed, expected);
-        if empty_mountpoint {
-            assert_eq!(fs::read_dir(primary).unwrap().count(), 0);
-        }
+    let (temp, mut engine, _, request) = saved();
+    let receipt = engine.commit_workspace(request.clone()).unwrap();
+    let primary = engine.config().disks[0].root.clone();
+    let root = engine.root().to_owned();
+    drop(engine);
+    fs::rename(&primary, temp.path().join("offline-primary")).unwrap();
+    let mut engine = Engine::open(&root).unwrap();
+    assert!(engine.is_read_only());
+    let replayed = engine.commit_workspace(request).unwrap();
+    assert_eq!(replayed, receipt);
+    // Replay returns the frozen receipt; explicit observation reports the
+    // now-absent primary without rewriting publication facts.
+    let observed = engine.operation(receipt.operation_id).unwrap();
+    assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
+    let mut expected = receipt;
+    expected.current_health = storage_contract::CurrentHealth::Unavailable;
+    assert_eq!(observed, expected);
+}
+
+#[test]
+fn replacement_empty_primary_cannot_impersonate_the_original_workspace_owner() {
+    let (temp, mut engine, _, request) = saved();
+    let receipt = engine.commit_workspace(request.clone()).unwrap();
+    let primary = engine.config().disks[0].root.clone();
+    let root = engine.root().to_owned();
+    let config = fs::read(root.join("config.json")).unwrap();
+    let mirrors = request_paths(&engine, &request).map(|path| {
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    });
+    drop(engine);
+    let offline = temp.path().join("offline-primary");
+    fs::rename(&primary, &offline).unwrap();
+    fs::create_dir(&primary).unwrap();
+    fs::set_permissions(
+        &primary,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    assert_eq!(
+        Engine::open(&root).err().unwrap().code(),
+        storage_contract::ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(fs::read_dir(&primary).unwrap().count(), 0);
+    assert_eq!(fs::read(root.join("config.json")).unwrap(), config);
+    for (path, bytes) in &mirrors {
+        let actual = match path.strip_prefix(&primary) {
+            Ok(relative) => offline.join(relative),
+            Err(_) => path.clone(),
+        };
+        assert_eq!(fs::read(actual).unwrap(), *bytes);
+    }
+    // Only the original directory identity may return. Recovery then preserves
+    // the exact permanent receipt and the original request mirrors.
+    fs::remove_dir(&primary).unwrap();
+    fs::rename(offline, &primary).unwrap();
+    let mut engine = Engine::open(&root).unwrap();
+    assert!(!engine.is_read_only());
+    assert_eq!(engine.commit_workspace(request).unwrap(), receipt);
+    for (path, bytes) in mirrors {
+        assert_eq!(fs::read(path).unwrap(), bytes);
     }
 }
 

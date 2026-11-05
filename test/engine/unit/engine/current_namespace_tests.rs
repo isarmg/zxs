@@ -484,6 +484,135 @@ fn membership_registry_current_historical_import_fails_before_mutation() {
 }
 
 #[test]
+fn membership_registry_current_historical_save_preview_preserves_plans_and_staged_bytes() {
+    let mut fixture = Fixture::new(false);
+    let plan = fixture
+        .engine
+        .create_historical_save_plan(
+            &fixture.repo.history_tree_id,
+            HistoricalSaveOptions {
+                source_commit_id: fixture.original_head.clone(),
+                name: "historical import".into(),
+                workspace_id: None,
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    assert_eq!(plan.state, PlanState::Ready);
+    let plan_path = fixture
+        .engine
+        .root
+        .join("plans")
+        .join(format!("{}.json", plan.plan_id));
+    let plan_bytes = std::fs::read(&plan_path).unwrap();
+    let workspace = fixture
+        .engine
+        .create_historical_workspace(
+            &fixture.repo.main_branch_id,
+            &fixture.original_head,
+            "admin",
+        )
+        .unwrap();
+    let staged = fixture
+        .engine
+        .stage_bytes(&workspace.workspace_id, "dir/b", b"retained staged body")
+        .unwrap();
+    let workspace = fixture.engine.workspace(&workspace.workspace_id).unwrap();
+    let manifests = [
+        fixture
+            .engine
+            .workspace_data_directory(&workspace)
+            .unwrap()
+            .join("workspace.json"),
+        fixture
+            .engine
+            .root
+            .join("workspaces")
+            .join(&workspace.workspace_id)
+            .join("workspace.json"),
+    ];
+    let manifest_bytes = manifests.map(|path| (path.clone(), std::fs::read(path).unwrap()));
+    let workspace_bytes = canonical_json(&workspace).unwrap();
+    fixture.project(false);
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    for workspace_id in [None, Some(workspace.workspace_id.clone())] {
+        assert_eq!(
+            fixture
+                .engine
+                .create_historical_save_plan(
+                    &fixture.repo.history_tree_id,
+                    HistoricalSaveOptions {
+                        source_commit_id: fixture.original_head.clone(),
+                        name: "unadmitted import".into(),
+                        workspace_id,
+                        primary_slot_id: None,
+                        target_copies: None,
+                    },
+                    "admin",
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::RecoveryRequired
+        );
+    }
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    assert_eq!(std::fs::read(&plan_path).unwrap(), plan_bytes);
+    assert_eq!(
+        std::fs::read_dir(plan_path.parent().unwrap())
+            .unwrap()
+            .count(),
+        1
+    );
+    assert_eq!(
+        canonical_json(&fixture.engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        workspace_bytes
+    );
+    for (path, bytes) in manifest_bytes {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+    assert_eq!(
+        std::fs::read(staged.source_path).unwrap(),
+        b"retained staged body"
+    );
+}
+
+#[test]
+fn membership_registry_current_historical_save_replays_its_original_success() {
+    let mut fixture = Fixture::new(false);
+    let plan = fixture
+        .engine
+        .create_historical_save_plan(
+            &fixture.repo.history_tree_id,
+            HistoricalSaveOptions {
+                source_commit_id: fixture.original_head.clone(),
+                name: "completed historical import".into(),
+                workspace_id: None,
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    let operation = op();
+    let result = fixture
+        .engine
+        .commit_historical_save_plan(&plan.plan_id, "admin", operation)
+        .unwrap();
+    fixture.project(false);
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    assert_eq!(
+        fixture
+            .engine
+            .commit_historical_save_plan(&plan.plan_id, "admin", operation)
+            .unwrap(),
+        result
+    );
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+}
+
+#[test]
 fn membership_registry_current_disable_keeps_namespace_and_history() {
     let mut fixture = Fixture::new(true);
     fixture.project(true);

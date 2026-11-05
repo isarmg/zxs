@@ -105,11 +105,27 @@ struct Mount {
 enum MountRoot {
     Directory(PathBuf),
     Namespace(String),
+    Cgroup {
+        filesystem: &'static str,
+        root: String,
+    },
 }
 
 impl MountRoot {
     fn parse(value: &str, filesystem: &str) -> Result<Self> {
         let value = unescape(value)?;
+        let cgroup = match filesystem {
+            "cgroup" => Some("cgroup"),
+            "cgroup2" => Some("cgroup2"),
+            _ => None,
+        };
+        if let Some(filesystem) = cgroup {
+            cgroup_root(&value)?;
+            return Ok(Self::Cgroup {
+                filesystem,
+                root: value,
+            });
+        }
         if filesystem != "nsfs" {
             return Ok(Self::Directory(
                 absolute(&value).map_err(|_| Error::InvalidMounts)?,
@@ -139,8 +155,30 @@ impl MountRoot {
         match self {
             Self::Directory(path) => Ok(path),
             Self::Namespace(_) => Err(Error::UnsupportedFilesystem("nsfs".into())),
+            Self::Cgroup { filesystem, .. } => {
+                Err(Error::UnsupportedFilesystem((*filesystem).into()))
+            }
         }
     }
+}
+
+fn cgroup_root(value: &str) -> Result<()> {
+    // cgroup_show_path uses kernfs_path_from_node relative to the reader's
+    // cgroup namespace. A root outside it can be /.., /../.. or /../../sibling.
+    // Preserve this kernel identity; it is never a filesystem directory alias.
+    if value.len() > 4096 || value.as_bytes().contains(&0) {
+        return Err(Error::InvalidMounts);
+    }
+    let suffix = value.strip_prefix('/').ok_or(Error::InvalidMounts)?;
+    if suffix.is_empty() {
+        return Ok(());
+    }
+    let mut components = suffix.split('/').peekable();
+    while components.next_if_eq(&"..").is_some() {}
+    if components.any(|part| matches!(part, "" | "." | "..")) {
+        return Err(Error::InvalidMounts);
+    }
+    Ok(())
 }
 
 fn absolute(value: &str) -> Result<PathBuf> {

@@ -30,6 +30,17 @@ namespace 标识，仍计入相同条数上限并参与清单变化比较，不�
 涉及其挂载点的路径映射明确拒绝。普通目录根仍严格验证绝对规范路径，
 格式错误、未知转义、重复挂载 ID 与超限清单仍失败，不跳过错误记录。
 
+`cgroup` / `cgroup2` 的根也作为独立非存储标识保存，包括普通 `/` 根。
+Linux [`cgroup_show_path`](https://github.com/torvalds/linux/blob/master/kernel/cgroup/cgroup.c)
+按读取者的 cgroup namespace 根调用
+[`kernfs_path_from_node`](https://github.com/torvalds/linux/blob/master/fs/kernfs/dir.c)，
+可合法返回 `/..`、`/../..` 或 `/../../sibling/child`。解析器只允许开头连续
+父组件及其后的普通组件，保留完整标识、文件系统、挂载身份、顺序和预算；
+不将它规范化为 `/`，也不跳过该记录。cgroup 根不能参与目录别名映射、
+发现根或存储候选，返回实际 `cgroup` / `cgroup2` 的不支持文件系统错误。
+普通文件系统的父组件、非绝对挂载点、错误转义及超限仍严格拒绝。相关单元
+夹具覆盖清单保留和映射／候选拒绝，不等同于特权 cgroup namespace 挂载验收。
+
 ## 检查与激活边界
 
 `inspect(&InspectRequest, excluded_roots)` 要求 `mount_path` 为实际挂载点，

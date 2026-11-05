@@ -29,7 +29,7 @@
 
 ## 重启与重试
 
-`TerminalManagement::requires_management` 只读取系统 head 的存在性，用于在任何存储探测前选择入口；结果本身不是认证。`TerminalManagement::open` 持有真实系统 writer 锁，验证 head 指向的唯一 authority、完整 archive、精确 registry 和 mask，再重新同步 stop 和完成记录。整个路径不需要原盘、data-only 盘或配置缓存中的路径可访问。
+`TerminalManagement::requires_management` 在任何存储探测前选择入口；已经完成接续时还须认证准确 completed selector，结果本身不授予 writer ownership。服务通过 SYSTEM-only 的 `metadata_resume_requested` 区分合法未完成终态与真实接续请求，再分别进入 `TerminalManagement::open` 或原接续恢复。损坏的既有 publication、孤立 continuation 和坏请求不能解释为没有接续。`TerminalManagement::open` 持有真实系统 writer 锁，验证 head 指向的唯一 authority、完整 archive、精确 registry 和 mask，再重新同步 stop 和完成记录。整个路径不需要原盘、data-only 盘或配置缓存中的路径可访问。
 
 在 head 之前崩溃时尚未写 stop，旧 fence 可以按原恢复路径重建。head 之后即使 stop 或 complete 未完成，也只恢复同一操作。删除/损坏 head 不能扩大探测范围：已经存在的终态 bootstrap ledger 仍独立关闭全部普通发现。缺失、损坏或冲突记录不会触发新 Genesis、清理旧目录或重置池。
 
@@ -43,7 +43,15 @@
 
 普通管理 open 遇到 `resume.json` 或 `resume-complete.json` 会关闭并要求继续原接续操作。接续消费者有专用 `open_for_resume`，只接受已经完成且完整认证的源管理态，并连续持有原系统 writer ownership。该专用入口不是普通写许可。
 
-本核心补丁只为后续接续和服务后端提供真实认证接口，不声称单独完成 HTTP/UI 或 TerminalResume 的所有消费者。接续上线前必须验证 Disabled 的显式再启用、Detached 身份不能复活、当前 occurrence 删除不会从历史 HEAD 重新出现，以及新组发布后的冷启动选择。
+当前接续源码支持全新 metadata 组及对应服务入口；Disabled 的显式再启用和 TerminalResume 取消仍未实现，不得借普通 Add 或删除 stop 开放。Detached 身份不能复活，当前 occurrence 删除不能从历史 HEAD 重新出现，新组发布后的冷启动仍须独立验证。
+
+## 接续后再次进入终态
+
+同一系统 writer 下，后继终态可消费前一轮已完成的 head。完成选择器必须是当前认证 lineage 中最后一次 TerminalResume，并且实际 Engine 保留旧终态及该次接续的两笔准确永久收据和 principal；新终态的 predecessor 必须等于当前 generation。只包含某个旧 Resume 的后继链不能授权回滚选择器。
+
+先持久化并重新认证新 authority 和完整控制 archive，再核对旧 head 未变，最后原子替换 head；旧 authority、归档、completion 和收据全部保留。相同 head 重试仍使用原不可变写屏障。head 前中断保持旧选择与当前 fence，head 后中断只续新终态的 stop、真实关闭及 publication，不重新探测此前已停止目录。
+
+新增回归源码覆盖多轮 TerminalResume/终态、接续后普通 Add/Exit、有效旧选择器回滚、head 前后冷恢复及两笔收据/主体篡改。该路径只增加有界控制归档和 lineage 验证，不复制用户正文；新 authority 与 head 仍各自保留文件及父目录同步。实际执行结果统一记录在根交接文档。
 
 ## 资源与验证边界
 

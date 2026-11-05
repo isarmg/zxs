@@ -219,9 +219,20 @@ fn names(snapshot: &crate::ListingSnapshot) -> Vec<&str> {
         .collect()
 }
 
+fn frozen_source_bytes(engine: &Engine, branch: &str, tree: &str) -> [Vec<u8>; 2] {
+    [
+        storage_contract::canonical_json(&engine.state().directory_branches[branch]).unwrap(),
+        storage_contract::canonical_json(&engine.state().directory_trees[tree]).unwrap(),
+    ]
+}
+
 #[test]
 fn deregistered_current_listing_tree_selection_and_pending_sources_share_projected_indices() {
     let fixture = Fixture::new();
+    let original_frozen = {
+        let engine = fixture.backend.engine.lock().unwrap();
+        frozen_source_bytes(&engine, &fixture.frozen_branch, &fixture.frozen_tree)
+    };
     let before = fixture
         .backend
         .tree_snapshot(
@@ -348,20 +359,117 @@ fn deregistered_current_listing_tree_selection_and_pending_sources_share_project
             &[
                 ("directory_branch_id", &fixture.frozen_branch),
                 ("expected_tree_id", &fixture.frozen_tree),
+                ("limit", "1"),
+                ("selected_path", "Files/dir/b"),
+                ("selected_entry_id", &fixture.retained.entry_id),
             ],
         )
         .unwrap();
-    assert_eq!(names(&preview), ["a", "b"]);
+    assert_eq!(names(&preview), ["b"]);
     assert!(preview.preview);
+    assert_eq!(preview.entries[0].entry_id, fixture.retained.entry_id);
+    assert_eq!(
+        preview.selected_entry.as_ref().unwrap().entry_id,
+        fixture.retained.entry_id
+    );
+    assert_eq!(
+        (preview.total_entries, preview.directory_file_count),
+        (1, 1)
+    );
+    assert!(preview.previous_cursor.is_none() && preview.next_cursor.is_none());
+    assert_eq!(preview.directory_branches.len(), 2);
     assert!(
         preview
             .directory_branches
             .iter()
-            .all(|branch| branch.file_count == 2)
+            .all(|branch| branch.file_count == 1)
     );
+    let hidden_selection = fixture
+        .listing(
+            "D04",
+            "Files/dir",
+            &[
+                ("directory_branch_id", &fixture.frozen_branch),
+                ("expected_tree_id", &fixture.frozen_tree),
+                ("selected_path", "Files/dir/a"),
+                ("selected_entry_id", &fixture.removed.entry_id),
+            ],
+        )
+        .unwrap();
+    assert!(hidden_selection.selected_entry.is_none());
+    {
+        let engine = fixture.backend.engine.lock().unwrap();
+        assert_eq!(
+            frozen_source_bytes(&engine, &fixture.frozen_branch, &fixture.frozen_tree),
+            original_frozen
+        );
+    }
     assert_eq!(
         fixture.listing("P01", "", &[]).err().unwrap().code,
         ErrorCode::DiskNotFound
+    );
+    drop(fixture.backend);
+    let engine = Engine::open(&fixture._root.path().join("system")).unwrap();
+    assert_eq!(
+        frozen_source_bytes(&engine, &fixture.frozen_branch, &fixture.frozen_tree),
+        original_frozen
+    );
+    let reopened = EngineBackend::new(engine);
+    let cold_preview = reopened
+        .listing(
+            &fixture.identity,
+            listing_request(
+                "D04",
+                "Files/dir",
+                &[
+                    ("directory_branch_id", &fixture.frozen_branch),
+                    ("expected_tree_id", &fixture.frozen_tree),
+                    ("limit", "1"),
+                    ("selected_path", "Files/dir/b"),
+                    ("selected_entry_id", &fixture.retained.entry_id),
+                ],
+            ),
+        )
+        .unwrap();
+    assert_eq!(names(&cold_preview), ["b"]);
+    assert_eq!(
+        (
+            cold_preview.total_entries,
+            cold_preview.directory_file_count
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        cold_preview.selected_entry.as_ref().unwrap().entry_id,
+        fixture.retained.entry_id
+    );
+    assert_eq!(
+        cold_preview.directory_branches.len(),
+        preview.directory_branches.len()
+    );
+    for (cold, warm) in cold_preview
+        .directory_branches
+        .iter()
+        .zip(&preview.directory_branches)
+    {
+        assert_eq!(cold.directory_branch_id, warm.directory_branch_id);
+        assert_eq!(cold.head_tree_id, warm.head_tree_id);
+        assert_eq!(cold.file_count, warm.file_count);
+        assert_eq!(cold.current, warm.current);
+    }
+    let cold_history = reopened
+        .tree_snapshot(
+            &fixture.identity,
+            ReadTree {
+                branch: &fixture.repo.main_branch_id,
+                commit: Some(&fixture.head),
+            },
+        )
+        .unwrap();
+    assert_eq!(cold_history.entries, before.entries);
+    assert_eq!(
+        cold_history.pending_file_versions,
+        before.pending_file_versions
     );
 }
 
@@ -381,13 +489,26 @@ fn disabled_registration_keeps_current_listing_while_content_io_is_closed() {
             .registration_mode,
         storage_engine::RegistrationMode::Disabled
     );
+    let target = engine
+        .config()
+        .disks
+        .iter()
+        .find(|disk| disk.disk_id == fixture.target_disk)
+        .unwrap();
+    std::fs::rename(&target.root, target.root.with_extension("preserved")).unwrap();
+    std::fs::write(&target.root, b"stopped directory must not be reopened").unwrap();
+    // Planning retains metadata only. Actual replica admission must fail before
+    // resolving the stopped target's now-invalid filesystem path.
+    let plan = engine.prepare_content(&fixture.removed.version_id).unwrap();
+    let unavailable = plan.open().err().unwrap();
+    assert_eq!(unavailable.code(), ErrorCode::ContentUnavailable);
+    let storage_engine::Error::Context { source, .. } = unavailable else {
+        panic!("replica failure must retain its concrete admission cause")
+    };
+    assert_eq!(source.code(), ErrorCode::DiskUnavailable);
     assert_eq!(
-        engine
-            .prepare_content(&fixture.removed.version_id)
-            .err()
-            .unwrap()
-            .code(),
-        ErrorCode::DiskUnavailable
+        std::fs::read(&target.root).unwrap(),
+        b"stopped directory must not be reopened"
     );
 }
 

@@ -152,9 +152,45 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
             .0,
         StatusCode::OK
     );
+    wait_for_idle(&backend).await;
     let (status, error) = request(&app, "/api/admin/disks", Some(token), Some(json!(null))).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error:?}");
+    assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    // A structurally valid request still cannot inspect or enroll a directory
+    // without the existing pool. These observations carry no storage authority.
+    let identity = json!({"device":"1","inode":"1","ctime_seconds":"0","ctime_nanoseconds":0});
+    let unavailable_candidate = root.path().join("unopened-candidate");
+    let addition = json!({
+        "operation_id":storage_contract::OperationId::generate().unwrap(),
+        "additions":[{
+            "selection":{
+                "selection_id":"0".repeat(64),
+                "discovery_root":"/zxs/data/disks",
+                "discovery_identity":identity,
+                "mount_path":"/",
+                "root_path":unavailable_candidate,
+                "mount_identity":{
+                    "mount_id":"1","device_major":0,"device_minor":0,
+                    "root_inode":"1","filesystem":"ext4","filesystem_root":"/"
+                },
+                "root_identity":identity
+            },
+            "slot_id":"P04","level":1,"upstream_slot_id":null,"metadata_member":true
+        }]
+    });
+    let (status, error) = request(
+        &app,
+        "/api/admin/disks/preview",
+        Some(token),
+        Some(addition),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{error:?}");
     assert_eq!(error["error"]["code"], "STORAGE_UNAVAILABLE");
+    assert!(!unavailable_candidate.exists());
+    for disk in ["d1", "d2", "d3"] {
+        assert!(!root.path().join(disk).exists());
+    }
     assert_eq!(
         request(&app, "/api/admin/disks", None, Some(json!({})))
             .await

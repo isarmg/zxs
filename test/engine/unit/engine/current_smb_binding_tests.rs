@@ -80,7 +80,17 @@ impl Fixture {
         config.disks[3].upstream_slot_id = None;
         config.disks[3].metadata_member = false;
         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
-        let repository = engine.create_disk_root("D04", "admin", op()).unwrap();
+        // Full SMB namespace aliases belong to a repository history. Disk-root
+        // saves establish independent file branches and forbid full branches.
+        let repository = engine
+            .create_repository(
+                &RepositoryName::parse("SMB binding history").unwrap(),
+                "D04",
+                1,
+                "admin",
+                op(),
+            )
+            .unwrap();
         assert!(repository.smb_enabled);
         assert_eq!(repository.smb_binding_generation, 1);
         engine
@@ -883,9 +893,25 @@ fn current_smb_binding_replays_pre_registry_receipt_without_new_permission_or_pu
 #[test]
 fn local_ready_plans_do_not_leak_into_metadata_publications_or_cold_replay() {
     let mut fixture = Fixture::new();
-    fixture.exit(0, MembershipExitAction::Deregister);
-    let (stopped, original_bytes) = fixture.replace_stopped_root(0);
-    let source = fixture.engine.state.branches[&fixture.repository.main_branch_id]
+    // Historical previews require an active, full-branch history. The binding
+    // fixture already has independent file branches, and D3 forbids new imports.
+    let history = fixture
+        .engine
+        .create_repository(
+            &RepositoryName::parse("local plan source").unwrap(),
+            "D04",
+            1,
+            "admin",
+            op(),
+        )
+        .unwrap();
+    save(
+        &mut fixture.engine,
+        &history.main_branch_id,
+        "source",
+        b"local preview source body",
+    );
+    let source = fixture.engine.state.branches[&history.main_branch_id]
         .head_commit_id
         .clone();
     let published = Arc::clone(&fixture.engine.state);
@@ -896,7 +922,7 @@ fn local_ready_plans_do_not_leak_into_metadata_publications_or_cold_replay() {
             fixture
                 .engine
                 .create_historical_save_plan(
-                    &fixture.repository.history_tree_id,
+                    &history.history_tree_id,
                     HistoricalSaveOptions {
                         source_commit_id: source.clone(),
                         name: name.into(),
@@ -917,6 +943,7 @@ fn local_ready_plans_do_not_leak_into_metadata_publications_or_cold_replay() {
     let plan_bytes: Vec<_> = plans
         .iter()
         .map(|plan| {
+            assert_eq!(plan.state, PlanState::Ready);
             assert_eq!(fixture.engine.plan(&plan.plan_id).unwrap(), *plan);
             assert!(!fixture.engine.state.plans.contains_key(&plan.plan_id));
             fs::read(
@@ -929,6 +956,14 @@ fn local_ready_plans_do_not_leak_into_metadata_publications_or_cold_replay() {
             .unwrap()
         })
         .collect();
+    // Neither the lifecycle publication nor the later metadata-only binding
+    // may promote these local files into authoritative State.
+    fixture.exit(0, MembershipExitAction::Deregister);
+    let (stopped, original_bytes) = fixture.replace_stopped_root(0);
+    for plan in &plans {
+        assert!(!fixture.engine.state.plans.contains_key(&plan.plan_id));
+        assert_eq!(fixture.engine.plan(&plan.plan_id).unwrap(), *plan);
+    }
     let operation = op();
     let generation = fixture.generation();
     let result = fixture.bind(false, operation).unwrap();
@@ -936,35 +971,38 @@ fn local_ready_plans_do_not_leak_into_metadata_publications_or_cold_replay() {
         assert!(!fixture.engine.state.plans.contains_key(&plan.plan_id));
         assert_eq!(fixture.engine.plan(&plan.plan_id).unwrap(), *plan);
     }
+    assert_eq!(canonical_json(published.as_ref()).unwrap(), published_bytes);
     let system = fixture.temp.path().join("system");
     drop(fixture.engine);
-    let mut engine = Engine::open(&system).unwrap();
-    assert_eq!(
-        engine
-            .set_smb_binding(
-                &fixture.repository.repository_id,
-                &fixture.alias.branch_id,
-                false,
-                generation,
-                "admin",
-                operation,
-            )
-            .unwrap(),
-        result
-    );
-    for (plan, bytes) in plans.iter().zip(plan_bytes) {
-        assert!(!engine.state.plans.contains_key(&plan.plan_id));
-        assert_eq!(engine.plan(&plan.plan_id).unwrap(), *plan);
+    for _ in 0..2 {
+        let mut engine = Engine::open(&system).unwrap();
         assert_eq!(
-            fs::read(system.join("plans").join(format!("{}.json", plan.plan_id))).unwrap(),
-            bytes
+            engine
+                .set_smb_binding(
+                    &fixture.repository.repository_id,
+                    &fixture.alias.branch_id,
+                    false,
+                    generation,
+                    "admin",
+                    operation,
+                )
+                .unwrap(),
+            result
+        );
+        for (plan, bytes) in plans.iter().zip(&plan_bytes) {
+            assert!(!engine.state.plans.contains_key(&plan.plan_id));
+            assert_eq!(engine.plan(&plan.plan_id).unwrap(), *plan);
+            assert_eq!(
+                &fs::read(system.join("plans").join(format!("{}.json", plan.plan_id))).unwrap(),
+                bytes
+            );
+        }
+        assert_eq!(files(&stopped), original_bytes);
+        assert_eq!(
+            fs::read(&fixture.config.disks[0].root).unwrap(),
+            b"stopped root must not be opened"
         );
     }
-    assert_eq!(files(&stopped), original_bytes);
-    assert_eq!(
-        fs::read(&fixture.config.disks[0].root).unwrap(),
-        b"stopped root must not be opened"
-    );
 }
 
 #[test]

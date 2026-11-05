@@ -10,7 +10,7 @@ use crate::engine::disk_lifecycle::{
     terminal::TerminalManagement,
 };
 use crate::engine::membership_transition::{
-    terminal::VerifiedTerminalAuthority,
+    terminal::{TerminalAuthority, VerifiedTerminalAuthority},
     terminal_resume::{ResumeCore, ResumeProposal},
 };
 
@@ -384,6 +384,10 @@ pub(in crate::engine::membership_transition) fn reopen(root: &Path) -> Result<En
 /// first-publication replay remain mandatory in normal restricted startup.
 pub(in crate::engine) struct CompletedTerminalResume {
     generation_hash: String,
+    operation: OperationResult,
+    principal: String,
+    terminal_operation: OperationResult,
+    terminal_principal: String,
 }
 impl CompletedTerminalResume {
     pub(in crate::engine) fn verify_selected(&self, config: &ValidatedConfig) -> Result<()> {
@@ -393,11 +397,61 @@ impl CompletedTerminalResume {
                 "completed terminal resumption cannot select Genesis",
             )
         })?;
-        if !generation.portable.contains(&self.generation_hash)? {
+        let latest = generation
+            .portable
+            .lineage()?
+            .into_iter()
+            .rev()
+            .find(|(_, intent)| matches!(intent.origin, Origin::TerminalResume { .. }));
+        if latest
+            .as_ref()
+            .is_none_or(|(hash, _)| hash != &self.generation_hash)
+        {
             return Err(Error::new(
                 ErrorCode::LogFork,
-                "startup authority does not contain the protected terminal resumption",
+                "protected terminal selector is not the latest resumption in the active authority",
             ));
+        }
+        Ok(())
+    }
+
+    /// A SYSTEM completion alone cannot consume an old terminal selector. The
+    /// actual admitted Engine must preserve both permanent receipts, and the
+    /// next handoff must start at that exact current generation.
+    pub(in crate::engine) fn verify_handoff(
+        &self,
+        engine: &Engine,
+        authority: &TerminalAuthority,
+    ) -> Result<()> {
+        self.verify_selected(&engine.config)?;
+        let predecessor = authority.predecessor().ok_or_else(|| {
+            Error::new(
+                ErrorCode::LogFork,
+                "later terminal handoff cannot restart Genesis",
+            )
+        })?;
+        if engine.config.generation_hash() != Some(predecessor.hash()?.as_str()) {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "later terminal handoff does not extend the exact active generation",
+            ));
+        }
+        for (operation, principal) in [
+            (&self.terminal_operation, &self.terminal_principal),
+            (&self.operation, &self.principal),
+        ] {
+            if engine.state.operations.get(&operation.operation_id) != Some(operation)
+                || engine
+                    .state
+                    .operation_principals
+                    .get(&operation.operation_id)
+                    != Some(principal)
+            {
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "later terminal handoff lacks its exact published predecessor receipts",
+                ));
+            }
         }
         Ok(())
     }
@@ -473,8 +527,13 @@ pub(in crate::engine) fn completed_selector(
             "terminal completion does not carry its prescribed permanent result",
         ));
     }
+    let terminal_operation = verified.authority.management_result(&verified.state)?;
     Ok(Some(CompletedTerminalResume {
         generation_hash: generation.hash,
+        operation: completed.operation,
+        principal: generation.intent.principal,
+        terminal_operation,
+        terminal_principal: verified.authority.intent().principal.clone(),
     }))
 }
 

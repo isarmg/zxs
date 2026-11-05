@@ -3,6 +3,7 @@
 use super::*;
 #[path = "stop_plan.rs"]
 mod stop_plan;
+use crate::engine::membership_transition::pending::activation::terminal_resume::completed_selector;
 use crate::{
     decode_strict, disk::MAX_METADATA, engine::membership_transition::terminal::AUTHORITY_KIND,
     journal::AuthenticatedMetadataObject,
@@ -58,13 +59,16 @@ impl TerminalStore {
             operation_id: authority.operation_id(),
             authority_hash: authority.hash()?,
         };
-        if let Some(previous) = optional::<Head>(&directory, &directory.path().join(HEAD))?
-            && previous != head
-        {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "another terminal authority must be explicitly consumed before a later handoff",
-            ));
+        let previous = optional::<Head>(&directory, &directory.path().join(HEAD))?
+            .filter(|previous| previous != &head);
+        if previous.is_some() {
+            let completed = completed_selector(&engine.root)?.ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "later terminal handoff requires the completed exact previous resumption",
+                )
+            })?;
+            completed.verify_handoff(engine, authority)?;
         }
         let operation_path = directory.path().join(authority.operation_id().to_string());
         directory.private_dir(&operation_path)?;
@@ -76,8 +80,34 @@ impl TerminalStore {
             head,
         };
         store.require_no_resume()?;
-        store.synchronize_preparation(authority)?;
+        match previous {
+            Some(previous) => store.replace_consumed_head(authority, &previous)?,
+            None => store.synchronize_preparation(authority)?,
+        }
         Ok(store)
+    }
+
+    fn replace_consumed_head(&self, authority: &TerminalAuthority, previous: &Head) -> Result<()> {
+        // The complete new authority/archive is durable and authenticated before
+        // changing discovery. No stop or target I/O closure has happened yet.
+        self.operation
+            .write_json(&self.operation.path().join(AUTHORITY), authority, false)?;
+        self.load_authority()?;
+        let current: Head = decode_strict(
+            &self
+                .directory
+                .read_bytes(&self.directory.path().join(HEAD), MAX_METADATA)?,
+        )?;
+        if current != *previous {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "consumed terminal selector changed before its successor handoff",
+            ));
+        }
+        // Only this verified successor may replace a selector. Ordinary retries
+        // keep using immutable writes and re-establish the same barriers.
+        self.directory
+            .write_json(&self.directory.path().join(HEAD), &self.head, true)
     }
 
     pub(super) fn open(root: &Path) -> Result<(Self, WriterLocks)> {
@@ -324,6 +354,45 @@ fn read_management_selection(root: &Path) -> Result<bool> {
 }
 
 impl TerminalManagement {
+    /// SYSTEM-only routing before acquiring the terminal writer. A valid
+    /// preparation without a resume can still need its exact stop/publication
+    /// completed. Existing publication and continuation records never become
+    /// permission to treat damaged or incomplete evidence as no request.
+    pub fn metadata_resume_requested(root: &Path) -> Result<bool> {
+        let store = TerminalStore::read_system(DiskRoot::open(root)?)?;
+        let verified = store.load_authority()?;
+        let requested = store
+            .operation
+            .open_optional_read_regular(&store.operation.path().join("resume.json"))?
+            .is_some();
+        for name in [
+            "resume-generation.json",
+            "resume-bootstrap.json",
+            "resume-complete.json",
+        ] {
+            if !requested
+                && store
+                    .operation
+                    .open_optional_read_regular(&store.operation.path().join(name))?
+                    .is_some()
+            {
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "terminal resume continuation has no protected request",
+                ));
+            }
+        }
+        if requested
+            || store
+                .operation
+                .open_optional_read_regular(&store.operation.path().join(COMPLETE))?
+                .is_some()
+        {
+            store.verify_publication(&verified.authority)?;
+        }
+        Ok(requested)
+    }
+
     /// Pure SYSTEM observation for startup/status selection. It grants no writer
     /// ownership, does not synchronize a stop and cannot return a management
     /// handle. Mutable consumers must separately acquire their existing locks.

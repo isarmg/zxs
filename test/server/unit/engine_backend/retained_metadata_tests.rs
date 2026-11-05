@@ -40,11 +40,23 @@ fn saved_file(engine: &mut Engine, slot: &str, name: &str) -> (Entry, String) {
         .get("file.txt")
         .unwrap()
         .clone();
+    // An ordinary repository's write context can name its full main branch.
+    // Label edits require an independent public branch bound to this file.
     let branch = engine
-        .file_context(&repo.repository_id, "file.txt")
+        .create_file_branch(
+            &entry.file_id,
+            &entry.version_id,
+            &BranchName::parse("metadata branch").unwrap(),
+            "owner",
+            op(),
+        )
         .unwrap()
         .branch_id
-        .clone();
+        .unwrap();
+    assert_eq!(
+        engine.state().branches[&branch].file_id.as_deref(),
+        Some(entry.file_id.as_str())
+    );
     (entry, branch)
 }
 fn file_note(file: &str, operation_id: OperationId) -> UpdateNote {

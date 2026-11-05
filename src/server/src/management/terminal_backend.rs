@@ -92,9 +92,11 @@ impl Inner {
         {
             return Ok(false);
         }
-        if TerminalManagement::metadata_resume_recovery(&self.data_root)
+        if TerminalManagement::metadata_resume_requested(&self.data_root)
             .map_err(crate::engine_backend::error)?
-            .is_some()
+            && TerminalManagement::metadata_resume_recovery(&self.data_root)
+                .map_err(crate::engine_backend::error)?
+                .is_some()
         {
             let mut state = crate::lock(&self.state);
             state.backend = BackendState::ResumeRecovery;

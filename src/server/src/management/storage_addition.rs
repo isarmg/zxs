@@ -684,12 +684,22 @@ impl ManagementBackend {
                 (config, AdditionAuthority::ActiveMembership, stopped)
             }
             None => {
-                let terminal = self.inner.terminal(identity)?.ok_or_else(|| {
-                    ApiError::conflict(
+                let Some(terminal) = self.inner.terminal(identity)? else {
+                    if matches!(
+                        crate::lock(&self.inner.state).backend,
+                        BackendState::Unopened
+                    ) {
+                        return Err(ApiError::new(
+                            http::StatusCode::SERVICE_UNAVAILABLE,
+                            ErrorCode::StorageUnavailable,
+                            "open the existing pool before selecting storage additions",
+                        ));
+                    }
+                    return Err(ApiError::conflict(
                         ErrorCode::RecoveryRequired,
                         "continue the existing metadata resume before selecting another group",
-                    )
-                })?;
+                    ));
+                };
                 if terminal.operation(request.operation_id).is_some() {
                     return Err(conflict(
                         "metadata resume operation_id already belongs to permanent history",

@@ -5,6 +5,9 @@ use crate::engine::disk_lifecycle::bootstrap::store::{WriteFault, inject_next};
 use crate::{CommitRequest, MembershipExitAction, RepositoryName};
 use std::{fs, os::unix::fs::PermissionsExt};
 
+#[path = "terminal_head_rotation_tests.rs"]
+mod head_rotation;
+
 struct Fixture {
     temporary: tempfile::TempDir,
     original: Config,
@@ -88,7 +91,11 @@ impl Fixture {
         for disk in &mut target.disks {
             disk.metadata_member = false;
         }
-        for disk in additions.disks.into_iter().skip(old) {
+        for mut disk in additions.disks.into_iter().skip(old) {
+            // The resumed writable route is a fresh primary, independent of the
+            // stopped original primary retained in historical topology.
+            disk.level = 1;
+            disk.upstream_slot_id = None;
             fs::create_dir(&disk.root).unwrap();
             fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
             target.disks.push(disk);
