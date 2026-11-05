@@ -1,0 +1,41 @@
+diff --git a/src/engine/src/degraded_recovery.rs b/src/engine/src/degraded_recovery.rs
+index 9bf7433..8e12503 100644
+--- a/src/engine/src/degraded_recovery.rs
++++ b/src/engine/src/degraded_recovery.rs
+@@ -604,6 +604,7 @@ impl Engine {
+             Some(&state),
+         )?;
+         self.verify_current_recovery_candidate(&candidate, state.state())?;
++        crate::engine::CurrentNamespaces::reject_degraded_backup(&candidate, state.state())?;
+         exclude_publication(self, &candidate, &hash)?;
+         Ok((candidate, state, witnesses, accepts))
+     }
+diff --git a/src/engine/src/engine/recovery/workspace_receipts.rs b/src/engine/src/engine/recovery/workspace_receipts.rs
+index 68b4576..59d2051 100644
+--- a/src/engine/src/engine/recovery/workspace_receipts.rs
++++ b/src/engine/src/engine/recovery/workspace_receipts.rs
+@@ -273,6 +273,13 @@ impl Engine {
+             )?),
+             None => crate::degraded_recovery::discover_publication(self, &candidate, hash)?,
+         };
++        if publication
++            .as_ref()
++            .is_some_and(|publication| publication.recovery.is_some())
++            && let Some(snapshot) = &snapshot
++        {
++            CurrentNamespaces::reject_degraded_backup(&candidate, &snapshot.share_state())?;
++        }
+         Ok(PreparedCandidate {
+             candidate,
+             publication,
+@@ -367,7 +374,9 @@ fn verify_current_candidate_transition(
+ ) -> Result<CurrentNamespaces> {
+     let advanced = view.advance(previous, next)?;
+     verify_current_candidate_receipt(candidate, next)?;
+-    super::payload_admission::verify(view, &advanced, previous, next, candidate)?;
++    if !view.verify_backup_candidate_payloads(previous, next, candidate)? {
++        super::payload_admission::verify(view, &advanced, previous, next, candidate)?;
++    }
+     Ok(advanced)
+ }
+ 

@@ -1,0 +1,3313 @@
+diff --git a/docs/validation/current-backup-configuration-20261105.md b/docs/validation/current-backup-configuration-20261105.md
+new file mode 100644
+index 0000000..a7dc06f
+--- /dev/null
++++ b/docs/validation/current-backup-configuration-20261105.md
+@@ -0,0 +1,50 @@
++# 当前 registry 下的备份配置证明
++
++## 可交付范围
++
++`Engine::configure_backups[_scoped]` 通过专用 planner 准入，普通 `require_operation` 继续拒绝 `backup.configure`。本功能重新保护所选稳定 scope 内仍为 Available 的全部历史正文，不生成新的正文版本，不移动历史 HEAD，不恢复已清除或已迁出正文。
++
++正常发布保留原 fixed metadata quorum、全部成员发布屏障、实际正文复制和设备身份验证。正常 ACCEPT 补全、已发布结果冷恢复、永久幂等重试使用相同证明。代码必须与逐项 current-registry 冷前缀验证一起接线，不能仅添加操作名或只在修复之后验证。
++
++本批不支持 current-registry 备份配置的显式降级恢复。该入口在验证原始候选后、搜索本地正文证明或观察损失前明确拒绝。原因是 PublishedDegraded 的认证结果覆盖与原生收据之间需要独立的证明和归档回放边界；不能把降级结果当成原始 TargetMet，也不能放宽原生收据比较。未形成原始完整副本发布时保留候选、日志和正文，等待后续完整恢复或独立实现的降级协议。
++
++后续闭合必须同时修改普通恢复安装与控制归档回放，不能只删除拒绝条件：
++
++1. 先按原始 hash-bound snapshot 验证原生 State 转换及精确 Candidate 副本集合，再证明 RecoveryProof、固定原成员与 publication barrier。结果只允许协议规定的降级字段覆盖，其他 actor、request、scope、路径、历史版本和策略字段必须保持原值。
++2. `install_recovered_namespace_state` 目前会对已覆盖结果再次执行 `advance`；应消费从原始 State 得到的已验证 view，再安装经过独立证明的可见结果，不能把 Visible State 冒充原始收据。
++3. `membership_transition/archive/namespace_replay.rs` 目前在回放前覆盖结果。归档需同时保留原始 State 与认证 outcome：本项先验证原始转换，后继项使用真实可见前态，snapshot 哈希链仍绑定原始根。`NamespaceReplay` 的冻结源结束校验也必须保持一致。
++4. 验收至少覆盖真实 ACCEPT 后永久损失、显式降级、冷开幂等、后继业务写、再 Exit/归档/冷开，以及 outcome 与 source 任一字段伪造在副本 I/O 前拒绝。此项尚未实现或执行验证，不属于本批已交付能力。
++
++## 纯计划和历史范围
++
++- 来源为当前 main namespace 和该稳定目录的当前命名视图。不可变历史 Commit 和 DirectoryTree 继续保留，不能重新导入隐藏 occurrence。
++- 来源绑定 registry commitment、mask、冻结 source snapshot/sequence/business generation、activation sequence、前态代数、main branch/head 和参与目录的 head。
++- 稳定 scope 条件写入、策略 generation、独立子策略、移出文件的 retained policy 和固定历史副本链均保留。未来写入的各主盘链及全部可用历史版本的原主盘链都要求用户显式提供所需备份前缀。
++- 只从已验证 registry 解析 Enabled 登记及其绑定代数。Disabled、Deregistered 或没有 Enabled 源持有者的范围失败关闭，不获得停止根的路径重开权限。
++- GET 先验证 Enabled 主盘，再把不可用下游视为可用链终点，返回原策略代数/份数和可用上限；完整 requested route 不可满足时为空。PUT 不放宽，必须显式降低份数才能避开停止槽。
++- 路径使用已有相对命名规则。保留现有产品语义：逻辑备份路径发生冲突时，备份列表返回 BACKUP_PATH_CONFLICT；不同历史/稳定文件容器仍物理隔离。本批不悄悄改变配置端冲突语义。
++
++计划的精确写集仅为 scoped/retained policies、文件策略绑定、用户备份路径、所选可用历史版本 placement、一个新操作与主体、一个事件及普通发布代数。穷尽 State 解构保持其余字段不变，包括 FileVersion、Commit、DirectoryTree、物理名称/位置、旧永久收据、认证及拓扑。独立修改旧备份事件或主体同样拒绝。
++
++## 实际副本与来源
++
++State 证明不能约束独立的 Prepared 或 Candidate.versions。专用 planner 和 publication 的首次正文探测前都检查实际 Prepared 的数量、顺序、完整 FileVersion 和 Placement；适用性从真实 State 新收据确定，不能用另一个外传 result 绕过。
++
++当前备份正文源由 `valid_backup_replica` 创建。它与原 `valid_replica` 共用现有本地发布证明、完整正文校验及 held I/O owner 路径，但返回私有字段的不透明来源，精确保存版本、原路径和 owner。仅有相同盘 seal、另一路径、外部文件或相同字节都不能伪造该来源。对来源拼接路径会丢弃这个证明，不增加磁盘读取。其后的副本验证、写入前完整校验、独立副本准备、decision 边界 seal、ACCEPT、publication 和本地 proof 链全部保留。
++
++统一冷入口先用真实前态/current view 验证原生 State 转换，随后精确比对 Candidate 的完整版本与 placement 集合，才允许搜索 local publication proof 或修复。只有成功证明的真实备份转换可以重用旧版本；其他已准入正文操作仍受其完整 fresh-version 增量及本次实际可写 namespace 引用约束。去掉 kind、标记或整个业务 delta 都不会获得任意旧正文探测权限。控制归档的 `NamespaceReplay` 同样在原生 State 转换之后验证精确 backup Candidate 集合，不因来源是归档而省略证明，不打开历史磁盘。
++
++## 验证源码与成本
++
++定向回归在 `test/engine/unit/engine/current_backup_configuration_tests.rs`。保留原真实 D3 Offline/Deregister、两份历史正文、冷幂等、隐藏目录视图、子策略与移出文件、scope/generation、所有 State 字段和冷解码攻击测试。新增：
++
++- Prepared 缺失、额外、重排、版本/placement 改写、外部源、同 owner 换路径、跨版本来源及外传 result 改名，均在 publication I/O 前拒绝。
++- ACCEPT-only 与 Published 的真实重哈希 Candidate/snapshot/history/固定成员日志矩阵，覆盖版本缺失、额外、重复、错误 placement、来源证明改写、改名去标记及删除整个业务 delta。
++- 活跃 data-only 版本目录的 OPEN/ACCESS 观察，先用真实 commit-proof 读取正校准。候选快照缺一份副本时，非法候选仍应在修复、名称投影和正文证明读取前拒绝；停止根搬走并在原址放普通文件，原始保留字节不变。
++- Purged/Migrated 历史版本不参与补副本；旧备份事件不能独立改写或重复追加。
++- 明确拒绝 current backup 降级预览，真实正文/证明目录无 OPEN/ACCESS，日志和原候选保持；Disabled 下游的 GET 展示及显式降份数不重开停止根。
++- 正常 backup 之后再次移除真实 metadata voter，归档重放该 backup；两个停止根都搬走且原址放普通文件，冷开后保持两份历史正文与永久幂等结果。
++
++实际只完成固定 Rust 1.99.0 rustfmt、源码差异检查和独立静态审阅。未运行编译、clippy、这些测试或系统调用观察；没有将源码中的断言当成已经通过的证据。内存与磁盘余量不足，不启动重复构建。
++
++纯计划需要遍历 scope、相关目录、策略和版本，符合全部可用历史版本重新保护的原有语义。来源证明不增加文件 I/O，持有每个副本的既有 FileVersion 与 held owner/path。冷前缀验证会增加原始快照解码/证明工作；不宣称零成本、吞吐提升或物理断电验收。
+diff --git a/src/engine/src/engine/disk_registry/current/backup_configuration.rs b/src/engine/src/engine/disk_registry/current/backup_configuration.rs
+new file mode 100644
+index 0000000..4c6ffa4
+--- /dev/null
++++ b/src/engine/src/engine/disk_registry/current/backup_configuration.rs
+@@ -0,0 +1,662 @@
++//! Backup configuration authenticates its actual policy, owner-path and body
++//! placement plan before the unchanged-namespace fast path. It is not an I/O grant.
++use super::*;
++use crate::engine::{Prepared, ReadSource};
++use crate::journal::Candidate;
++use crate::{
++    CommitState, CurrentHealth, Event, FileVersion, HistoricalDiskDefinition, OperationId,
++    OperationResult, Placement, ProtectionAtPublish, ScopedBackupConfigurationRequest,
++};
++use data_serialization::Deserialize;
++use json_codec::{Value, json};
++use storage_contract::{MapChanges, SequenceChanges, TrackedMap, TrackedOperations};
++
++const KIND: &str = "backup.configure";
++
++fn invalid() -> Error {
++    Error::new(
++        ErrorCode::PublicationInvalid,
++        "backup configuration publication differs from its exact current source and native request",
++    )
++}
++
++#[derive(Deserialize)]
++#[serialization(deny_unknown_fields)]
++struct BackupInput {
++    repository_id: String,
++    path: String,
++    expected_scope_id: Option<String>,
++    target_copies: u32,
++    backup_prefixes: BTreeMap<String, String>,
++    #[serialization(with = "storage_contract::u64_string")]
++    expected_generation: u64,
++}
++
++impl CurrentNamespaces {
++    pub(in crate::engine) fn is_backup_configuration(receipt: &OperationResult) -> bool {
++        receipt.kind == KIND
++            || receipt.result.get("namespace_backup").is_some()
++            || receipt.result.get("backup_request").is_some()
++    }
++
++    /// No current-registry backup may create or install an outcome overlay
++    /// until both ordinary and archived namespace replay prove that protocol.
++    pub(in crate::engine) fn reject_degraded_backup(
++        candidate: &Candidate,
++        next: &State,
++    ) -> Result<()> {
++        if candidate.registry().is_some()
++            && next
++                .operations
++                .get(&candidate.operation_id)
++                .is_some_and(Self::is_backup_configuration)
++        {
++            return Err(Error::new(
++                ErrorCode::RecoveryRequired,
++                "current-registry backup does not support degraded recovery; preserve the original candidate and complete its full-copy publication",
++            ));
++        }
++        Ok(())
++    }
++
++    pub(in crate::engine) fn verify_new_backup_configuration(
++        &self,
++        previous: &State,
++        next: &State,
++        result: &OperationResult,
++    ) -> Result<()> {
++        let receipt = new_receipt(previous, next)?.ok_or_else(invalid)?;
++        if receipt != result {
++            return Err(invalid());
++        }
++        self.verify_backup_configuration(previous, next, receipt)
++    }
++
++    /// Called only after the complete State proof. The expected ordered list
++    /// was reconstructed from the native request, including all eligible history.
++    pub(in crate::engine) fn verify_backup_prepared(
++        &self,
++        previous: &State,
++        next: &State,
++        result: &OperationResult,
++        prepared: &[Prepared],
++    ) -> Result<()> {
++        match new_receipt(previous, next)? {
++            Some(receipt) if receipt == result => (),
++            Some(_) => return Err(invalid()),
++            None if Self::is_backup_configuration(result) => return Err(invalid()),
++            None => return Ok(()),
++        }
++        verify_payloads(
++            next,
++            result,
++            prepared.iter().map(|copy| (&copy.version, &copy.placement)),
++        )?;
++        for copy in prepared {
++            // Re-protection has a managed, enabled historical source. An
++            // external path or merely identical bytes is not source admission.
++            let ReadSource::VerifiedReplica(source) = &copy.source else {
++                return Err(invalid());
++            };
++            let owner = source.owner();
++            if source.version() != &copy.version {
++                return Err(invalid());
++            }
++            let disk = self.backup_configuration_disk(&owner.seal.slot_id)?;
++            let source = previous
++                .placements
++                .get(&copy.version.version_id)
++                .ok_or_else(invalid)?;
++            if owner.seal.pool_id != disk.identity.pool_id
++                || owner.seal.disk_id != disk.identity.disk_id
++                || owner.seal.binding_generation != disk.identity.binding_generation
++                || previous.versions.get(&copy.version.version_id) != Some(&copy.version)
++                || !source.route_slot_ids.contains(&disk.identity.slot_id)
++                || source.binding_generations.get(&disk.identity.slot_id)
++                    != Some(&disk.identity.binding_generation)
++            {
++                return Err(invalid());
++            }
++        }
++        Ok(())
++    }
++
++    /// State admission does not bind the separate Candidate payload vector.
++    /// Replay calls this before local proof discovery or any repair work.
++    pub(in crate::engine) fn verify_backup_candidate_payloads(
++        &self,
++        previous: &State,
++        next: &State,
++        candidate: &Candidate,
++    ) -> Result<bool> {
++        let result = next
++            .operations
++            .get(&candidate.operation_id)
++            .ok_or_else(invalid)?;
++        match new_receipt(previous, next)? {
++            Some(receipt) if receipt == result => (),
++            Some(_) => return Err(invalid()),
++            None if Self::is_backup_configuration(result) => return Err(invalid()),
++            None => return Ok(false),
++        }
++        if candidate.registry() != Some(&self.registry)
++            || result.operation_id != candidate.operation_id
++            || result.sequence != candidate.sequence
++            || result.request_digest != candidate.request_digest
++        {
++            return Err(invalid());
++        }
++        verify_payloads(
++            next,
++            result,
++            candidate
++                .versions
++                .iter()
++                .map(|copy| (&copy.version, &copy.placement)),
++        )?;
++        Ok(true)
++    }
++
++    pub(crate) fn backup_configuration_disk(
++        &self,
++        slot: &str,
++    ) -> Result<&HistoricalDiskDefinition> {
++        let (disk, mode, _) = self
++            .registry_state
++            .registered_definitions()
++            .find(|(disk, _, _)| disk.identity.slot_id.eq_ignore_ascii_case(slot))
++            .ok_or_else(|| {
++                Error::new(
++                    ErrorCode::SlotNotFound,
++                    "backup slot is no longer registered",
++                )
++            })?;
++        if mode != super::super::RegistrationMode::Enabled {
++            return Err(Error::new(
++                ErrorCode::PlacementInvalid,
++                "backup route contains a disabled storage slot",
++            ));
++        }
++        Ok(disk)
++    }
++
++    pub(crate) fn backup_configuration_route(
++        &self,
++        primary: &str,
++        copies: u32,
++    ) -> Result<Vec<String>> {
++        let mut disk = self.backup_configuration_disk(primary)?;
++        if disk.level != 1 || copies == 0 {
++            return Err(Error::new(
++                ErrorCode::PlacementInvalid,
++                "placement requires a primary slot and at least one copy",
++            ));
++        }
++        let mut route = vec![disk.identity.slot_id.clone()];
++        while route.len() < copies as usize {
++            let next =
++                self.registry_state
++                    .historical_topology()
++                    .find(|next| {
++                        next.level == disk.level + 1
++                            && next.upstream_slot_id.as_deref().is_some_and(|slot| {
++                                slot.eq_ignore_ascii_case(&disk.identity.slot_id)
++                            })
++                    })
++                    .ok_or_else(|| {
++                        Error::new(
++                            ErrorCode::RouteIncomplete,
++                            "requested copies exceed the configured fixed route",
++                        )
++                    })?;
++            disk = self.backup_configuration_disk(&next.identity.slot_id)?;
++            route.push(disk.identity.slot_id.clone());
++        }
++        Ok(route)
++    }
++
++    pub(crate) fn backup_configuration_placement(
++        &self,
++        version: &str,
++        primary: &str,
++        copies: u32,
++        topology_generation: u64,
++    ) -> Result<Placement> {
++        let route = self.backup_configuration_route(primary, copies)?;
++        Ok(Placement {
++            version_id: version.into(),
++            primary_slot_id: route[0].clone(),
++            target_copies: copies,
++            topology_generation,
++            binding_generations: route
++                .iter()
++                .map(|slot| {
++                    Ok((
++                        slot.clone(),
++                        self.backup_configuration_disk(slot)?
++                            .identity
++                            .binding_generation,
++                    ))
++                })
++                .collect::<Result<_>>()?,
++            route_slot_ids: route,
++        })
++    }
++
++    pub(crate) fn require_backup_configuration_source(
++        &self,
++        state: &State,
++        version: &FileVersion,
++    ) -> Result<()> {
++        let placement = state
++            .placements
++            .get(&version.version_id)
++            .ok_or_else(invalid)?;
++        if self.unavailable_versions.contains(&version.version_id)
++            || !self
++                .registry_state
++                .registered_definitions()
++                .any(|(disk, mode, _)| {
++                    mode == super::super::RegistrationMode::Enabled
++                        && placement.route_slot_ids.contains(&disk.identity.slot_id)
++                        && placement.binding_generations.get(&disk.identity.slot_id)
++                            == Some(&disk.identity.binding_generation)
++                })
++        {
++            return Err(Error::new(
++                ErrorCode::ContentUnavailable,
++                "backup source body has no enabled retained registration",
++            ));
++        }
++        Ok(())
++    }
++
++    pub(crate) fn backup_configuration_source(
++        &self,
++        state: &State,
++        repository: &str,
++        scope: &str,
++    ) -> Result<Value> {
++        let repo = state.repositories.get(repository).ok_or_else(invalid)?;
++        let branch = state
++            .branches
++            .get(&repo.main_branch_id)
++            .ok_or_else(invalid)?;
++        let history = state
++            .histories
++            .get(&repo.history_tree_id)
++            .ok_or_else(invalid)?;
++        if branch.history_tree_id != repo.history_tree_id
++            || branch.file_id.is_some()
++            || history.repository_id != repo.repository_id
++            || history.main_branch_id.as_deref() != Some(repo.main_branch_id.as_str())
++        {
++            return Err(invalid());
++        }
++        self.branch_entries(&branch.branch_id, &branch.head_commit_id)?;
++        let mut directories = BTreeMap::new();
++        for directory in state.directory_branches.values().filter(|directory| {
++            directory.repository_id == repository && directory.directory_id == scope
++        }) {
++            self.directory_entries(&directory.directory_branch_id, &directory.head_tree_id)?;
++            directories.insert(&directory.directory_branch_id, &directory.head_tree_id);
++        }
++        Ok(json!({
++            "registry":self.registry,"mask_hash":self.mask_hash,
++            "source_snapshot":self.source_snapshot,
++            "source_sequence":self.source_sequence.to_string(),
++            "source_business_generation":self.source_business_generation.to_string(),
++            "activation_sequence":self.activation_sequence.to_string(),
++            "previous_sequence":state.sequence.to_string(),
++            "previous_business_generation":state.business_generation.to_string(),
++            "owner_branch_id":branch.branch_id,"owner_head_commit_id":branch.head_commit_id,
++            "directory_heads":directories
++        }))
++    }
++
++    pub(super) fn verify_backup_configurations(
++        &self,
++        previous: &State,
++        next: &State,
++    ) -> Result<()> {
++        match new_receipt(previous, next)? {
++            Some(receipt) => self.verify_backup_configuration(previous, next, receipt),
++            None if scoped_policy_changed(previous, next) => Err(invalid()),
++            None => Ok(()),
++        }
++    }
++
++    fn verify_backup_configuration(
++        &self,
++        previous: &State,
++        next: &State,
++        receipt: &OperationResult,
++    ) -> Result<()> {
++        let input: BackupInput = json_codec::from_value(receipt.result["backup_request"].clone())?;
++        let generated: Vec<String> =
++            json_codec::from_value(receipt.result["generated_policy_ids"].clone())?;
++        let principal = next
++            .operation_principals
++            .get(&receipt.operation_id)
++            .ok_or_else(invalid)?;
++        Engine::require_actor(principal)?;
++        let mut ids = generated.iter();
++        let plan = self.plan_backup_configuration(
++            previous,
++            ScopedBackupConfigurationRequest {
++                repository_id: &input.repository_id,
++                path: &input.path,
++                expected_scope_id: input.expected_scope_id.as_deref(),
++                target_copies: input.target_copies,
++                backup_prefixes: &input.backup_prefixes,
++                expected_generation: input.expected_generation,
++                principal,
++                operation_id: receipt.operation_id,
++            },
++            || ids.next().cloned().ok_or_else(invalid),
++        )?;
++        if ids.next().is_some() {
++            return Err(invalid());
++        }
++        let digest =
++            Engine::native_request_digest(KIND, principal, &plan.result["backup_request"])?;
++        let mut result = plan.result;
++        for key in ["configured_at", "timestamp", "membership_epoch"] {
++            let decimal = receipt.result[key].as_str().ok_or_else(invalid)?;
++            result[key] = json!(storage_contract::parse_u64_decimal(decimal)?.to_string());
++        }
++        let mut protection = Vec::new();
++        for version in &plan.versions {
++            let placement = &plan.placements[&version.version_id];
++            let mut slots = Vec::new();
++            for slot in &placement.route_slot_ids {
++                let disk = self.backup_configuration_disk(slot)?;
++                slots.push(json!({"slot_id":slot,"copy_level":disk.level,
++                    "disk_id":disk.identity.disk_id,
++                    "binding_generation":disk.identity.binding_generation.to_string(),
++                    "state":"COMPLETE_VERIFIED"}));
++            }
++            protection.push(json!({"version_id":version.version_id,
++                "primary_slot_id":placement.primary_slot_id,"target_copies":placement.target_copies,
++                "required_slots":placement.route_slot_ids,
++                "topology_generation":placement.topology_generation.to_string(),"slots":slots}));
++        }
++        result["version_protection"] = json!(protection);
++        let expected = OperationResult {
++            operation_id: receipt.operation_id,
++            kind: KIND.into(),
++            commit_id: None,
++            history_tree_id: Some(
++                previous.repositories[&input.repository_id]
++                    .history_tree_id
++                    .clone(),
++            ),
++            branch_id: None,
++            commit_state: CommitState::Published,
++            protection_at_publish: if plan.versions.is_empty() {
++                ProtectionAtPublish::NotApplicable
++            } else {
++                ProtectionAtPublish::TargetMet
++            },
++            current_health: CurrentHealth::Healthy,
++            request_digest: digest,
++            sequence: next.sequence,
++            result,
++        };
++        if receipt != &expected
++            || next.sequence <= previous.sequence
++            || previous.business_generation.checked_add(1) != Some(next.business_generation)
++            || !exact_updates(
++                &previous.protection_policies,
++                &next.protection_policies,
++                &plan.policies,
++            )
++            || !exact_upserts(
++                &previous.file_backup_policies,
++                &next.file_backup_policies,
++                &plan.bindings,
++            )
++            || !exact_upserts(
++                &previous.file_backup_paths,
++                &next.file_backup_paths,
++                &plan.paths,
++            )
++            || !exact_upserts(&previous.placements, &next.placements, &plan.placements)
++            || !only_added(
++                &previous.operations,
++                &next.operations,
++                receipt.operation_id,
++                receipt,
++            )
++            || !only_added(
++                &previous.operation_principals,
++                &next.operation_principals,
++                receipt.operation_id,
++                principal,
++            )
++            || !one_event(previous, next, receipt)
++            || !unchanged_state(previous, next)
++        {
++            return Err(invalid());
++        }
++        Ok(())
++    }
++}
++
++fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
++    let mut ids = BTreeSet::new();
++    for changes in [
++        next.operations.changes_since(&previous.operations),
++        next.operation_principals
++            .changes_since(&previous.operation_principals),
++    ] {
++        match changes {
++            MapChanges::Keys(keys) => ids.extend(keys.iter().copied()),
++            MapChanges::All => {
++                ids.extend(previous.operations.keys().copied());
++                ids.extend(next.operations.keys().copied());
++            }
++        }
++    }
++    let mut receipt = None;
++    for id in ids {
++        let before = previous.operations.get(&id);
++        let after = next.operations.get(&id);
++        if before.is_some_and(CurrentNamespaces::is_backup_configuration) {
++            if before != after
++                || previous.operation_principals.get(&id) != next.operation_principals.get(&id)
++            {
++                return Err(invalid());
++            }
++        } else if let Some(after) =
++            after.filter(|operation| CurrentNamespaces::is_backup_configuration(operation))
++        {
++            if before.is_some()
++                || after.kind != KIND
++                || after.operation_id != id
++                || receipt.replace(after).is_some()
++            {
++                return Err(invalid());
++            }
++        }
++    }
++    let start = match next.events.changes_since(&previous.events) {
++        SequenceChanges::Append { start } => start,
++        SequenceChanges::All => 0,
++    };
++    for index in start..previous.events.len().max(next.events.len()) {
++        let before = previous.events.get(index);
++        let after = next.events.get(index);
++        if before != after
++            && (before.is_some_and(|event| event.kind == KIND)
++                || after.is_some_and(|event| {
++                    event.kind == KIND
++                        && (before.is_some()
++                            || Some(event.operation_id)
++                                != receipt.map(|receipt| receipt.operation_id))
++                }))
++        {
++            return Err(invalid());
++        }
++    }
++    Ok(receipt)
++}
++
++// This consumes the exact result already proved by verify_backup_configuration,
++// not an independently supplied plan or a list inferred from disk contents.
++fn verify_payloads<'a>(
++    next: &State,
++    result: &OperationResult,
++    copies: impl ExactSizeIterator<Item = (&'a FileVersion, &'a Placement)>,
++) -> Result<()> {
++    if result.kind != KIND || next.operations.get(&result.operation_id) != Some(result) {
++        return Err(invalid());
++    }
++    let expected = result.result["version_protection"]
++        .as_array()
++        .ok_or_else(invalid)?;
++    if copies.len() != expected.len() {
++        return Err(invalid());
++    }
++    for ((version, placement), expected) in copies.zip(expected) {
++        if expected["version_id"].as_str() != Some(version.version_id.as_str())
++            || next.versions.get(&version.version_id) != Some(version)
++            || next.placements.get(&version.version_id) != Some(placement)
++        {
++            return Err(invalid());
++        }
++    }
++    Ok(())
++}
++
++fn scoped_policy_changed(previous: &State, next: &State) -> bool {
++    let changed = |id: &String| {
++        let before = previous.protection_policies.get(id);
++        let after = next.protection_policies.get(id);
++        before != after
++            && (after.is_some_and(|policy| {
++                policy.scope_file_id.is_some()
++                    || policy.scope_directory_id.is_some()
++                    || !policy.inheritable
++            }) || before.is_some_and(|policy| {
++                policy.inheritable
++                    && (policy.scope_file_id.is_some() || policy.scope_directory_id.is_some())
++            }))
++    };
++    match next
++        .protection_policies
++        .changes_since(&previous.protection_policies)
++    {
++        MapChanges::Keys(keys) => keys.iter().any(changed),
++        MapChanges::All => previous
++            .protection_policies
++            .keys()
++            .chain(next.protection_policies.keys())
++            .any(changed),
++    }
++}
++
++fn exact_updates<T: PartialEq>(
++    before: &TrackedMap<T>,
++    after: &TrackedMap<T>,
++    updates: &BTreeMap<String, Option<T>>,
++) -> bool {
++    if updates
++        .iter()
++        .any(|(id, value)| after.get(id) != value.as_ref())
++    {
++        return false;
++    }
++    unchanged_except(before, after, |id| updates.contains_key(id))
++}
++fn exact_upserts<T: PartialEq>(
++    before: &TrackedMap<T>,
++    after: &TrackedMap<T>,
++    updates: &BTreeMap<String, T>,
++) -> bool {
++    if updates
++        .iter()
++        .any(|(id, value)| after.get(id) != Some(value))
++    {
++        return false;
++    }
++    unchanged_except(before, after, |id| updates.contains_key(id))
++}
++fn unchanged_except<T: PartialEq>(
++    before: &TrackedMap<T>,
++    after: &TrackedMap<T>,
++    allowed: impl Fn(&str) -> bool,
++) -> bool {
++    let equal = |id: &String| allowed(id) || after.get(id) == before.get(id);
++    match after.changes_since(before) {
++        MapChanges::Keys(keys) => keys.iter().all(equal),
++        MapChanges::All => before.keys().chain(after.keys()).all(equal),
++    }
++}
++fn only_added<T: PartialEq>(
++    before: &TrackedOperations<T>,
++    after: &TrackedOperations<T>,
++    key: OperationId,
++    expected: &T,
++) -> bool {
++    if before.contains_key(&key)
++        || before.len().checked_add(1) != Some(after.len())
++        || after.get(&key) != Some(expected)
++    {
++        return false;
++    }
++    let equal = |id: &OperationId| *id == key || after.get(id) == before.get(id);
++    match after.changes_since(before) {
++        MapChanges::Keys(keys) => keys.iter().all(equal),
++        MapChanges::All => before.keys().all(equal),
++    }
++}
++fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool {
++    if previous.events.len().checked_add(1) != Some(next.events.len()) {
++        return false;
++    }
++    let expected = Event {
++        sequence: next.sequence,
++        operation_id: receipt.operation_id,
++        kind: KIND.into(),
++        object_id: receipt
++            .history_tree_id
++            .clone()
++            .expect("invariant: verified backup receipt has its history"),
++    };
++    next.events.last() == Some(&expected)
++        && match next.events.changes_since(&previous.events) {
++            SequenceChanges::Append { start } => start == previous.events.len(),
++            SequenceChanges::All => next.events[..previous.events.len()] == previous.events[..],
++        }
++}
++
++// Every State field must be classified. In particular physical file_names and
++// file_locations are immutable inputs here, never cache-repair permissions.
++macro_rules! unchanged_fields {
++    ($($field:ident),* $(,)?) => {
++        fn unchanged_state(previous: &State, next: &State) -> bool {
++            let State {
++                sequence:_,business_generation:_,operations:_,operation_principals:_,events:_,
++                protection_policies:_,file_backup_paths:_,file_backup_policies:_,placements:_,
++                topology_generation,control_auth,$($field,)*
++            } = next;
++            topology_generation == &previous.topology_generation && control_auth == &previous.control_auth
++                $(&& match $field.changes_since(&previous.$field) {
++                    MapChanges::Keys(keys) => keys.iter().all(|id| $field.get(id) == previous.$field.get(id)),
++                    MapChanges::All => $field == &previous.$field,
++                })*
++        }
++    };
++}
++unchanged_fields! {
++    repositories,histories,branches,file_selections,directory_branches,directory_trees,
++    file_write_origins,file_contexts,file_path_nodes,file_metadata_nodes,file_branch_merges,
++    file_branch_aliases,file_node_parents,file_path_notes,directory_tree_selections,file_locations,
++    directory_selections,directory_selection_generations,file_selection_generations,file_notes,
++    version_notes,file_names,commits,versions,merge_links,history_boundaries,content_states,plans,placement_rules,
++}
++
++#[cfg(test)]
++#[path = "../../../../../../test/engine/unit/engine/current_backup_configuration_tests.rs"]
++mod tests;
+diff --git a/src/engine/src/engine/disk_registry/current.rs b/src/engine/src/engine/disk_registry/current.rs
+index 9adf652..c5ccedd 100644
+--- a/src/engine/src/engine/disk_registry/current.rs
++++ b/src/engine/src/engine/disk_registry/current.rs
+@@ -7,6 +7,7 @@
+ //! a registry admission: workspaces without a live baseline remain fenced.
+ use super::{DiskRegistryCommitment, Engine};
+ mod admission;
++mod backup_configuration;
+ mod batch;
+ pub(crate) use batch::CurrentBatchScope;
+ mod branch_archives;
+@@ -484,6 +485,7 @@ impl CurrentNamespaces {
+         self.verify_smb_bindings(previous, next)?;
+         self.verify_plan_cancellations(previous, next)?;
+         self.verify_branch_archives(previous, next)?;
++        self.verify_backup_configurations(previous, next)?;
+         let mut view = self.clone();
+         let branch_changes = next.branches.changes_since(&previous.branches);
+         let directory_changes = next
+diff --git a/src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs b/src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs
+index ccd7324..c1c5d67 100644
+--- a/src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs
++++ b/src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs
+@@ -53,7 +53,12 @@ impl NamespaceReplay {
+                 ));
+             }
+         } else if let Some(view) = &self.view {
+-            self.view = Some(view.advance(&self.state, publication.state())?);
++            let advanced = view.advance(&self.state, publication.state())?;
++            // Re-protection reuses historical bodies. Even a fully verified
++            // control archive must bind its independent payload vector to that
++            // exact native backup plan; it grants no historical disk I/O.
++            view.verify_backup_candidate_payloads(&self.state, publication.state(), candidate)?;
++            self.view = Some(advanced);
+         }
+         self.state = Arc::clone(publication.state());
+         self.snapshot = Some(candidate.snapshot_hash.clone());
+diff --git a/src/engine/src/engine/planning.rs b/src/engine/src/engine/planning.rs
+index 2813cef..6a5951b 100644
+--- a/src/engine/src/engine/planning.rs
++++ b/src/engine/src/engine/planning.rs
+@@ -340,6 +340,44 @@ impl<'a> PlanningContext<'a> {
+         Ok(plan)
+     }
+ 
++    /// Backup configuration carries actual payloads. Its exact source-bound
++    /// policy/placement transition and prepared version set are one admission,
++    /// not a general permission for a named operation or an arbitrary copy.
++    pub(super) fn plan_backup_configuration_mutation<F>(
++        &self,
++        principal: &str,
++        operation_id: OperationId,
++        digest: String,
++        change: F,
++    ) -> Result<MutationPlan>
++    where
++        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
++    {
++        if self.current_namespaces.is_none()
++            && self
++                .config
++                .generation()
++                .is_some_and(|generation| generation.portable.exit_registry().is_some())
++        {
++            return Err(super::disk_registry::current::pending_publication());
++        }
++        let plan =
++            self.prepare_new_mutation("backup.configure", principal, operation_id, digest, change)?;
++        let MutationPlan::Prepared {
++            next,
++            prepared,
++            result,
++        } = &plan
++        else {
++            unreachable!("invariant: new mutation preparation does not replay old receipts");
++        };
++        if let Some(view) = self.current_namespaces {
++            view.verify_new_backup_configuration(self.state, next, result)?;
++            view.verify_backup_prepared(self.state, next, result, prepared)?;
++        }
++        Ok(plan)
++    }
++
+     fn prepare_new_mutation<F>(
+         &self,
+         kind: &str,
+diff --git a/src/engine/src/engine/publication.rs b/src/engine/src/engine/publication.rs
+index 6d49125..71f09c2 100644
+--- a/src/engine/src/engine/publication.rs
++++ b/src/engine/src/engine/publication.rs
+@@ -882,6 +882,11 @@ impl crate::engine::PlanningContext<'_> {
+             .current_namespaces
+             .map(|view| view.advance(self.state, &next).map(std::sync::Arc::new))
+             .transpose()?;
++        if let Some(view) = self.current_namespaces {
++            // The State proof above cannot constrain Prepared. Bind every copy
++            // before the first existing-body probe or any payload preparation.
++            view.verify_backup_prepared(self.state, &next, &result, &prepared)?;
++        }
+         let metadata_epoch = self.metadata_integrity.capture();
+         let members = self.members();
+         let mut required = BTreeMap::<String, u64>::new();
+diff --git a/src/engine/src/engine/reads.rs b/src/engine/src/engine/reads.rs
+index 465f65d..c33a544 100644
+--- a/src/engine/src/engine/reads.rs
++++ b/src/engine/src/engine/reads.rs
+@@ -5,11 +5,45 @@ use crate::{disk::*, *};
+ use std::path::Path;
+ use std::{io::Read, path::PathBuf, sync::Arc};
+ 
++/// A resolved replica path and immutable version, created only by the complete
++/// existing read-proof path below. Callers may retain it but cannot substitute
++/// another file path or manufacture this capability from a disk seal.
++#[derive(Clone)]
++pub(crate) struct VerifiedReplicaSource {
++    owner: Arc<DiskHandle>,
++    path: PathBuf,
++    version: FileVersion,
++}
++impl VerifiedReplicaSource {
++    pub(super) fn owner(&self) -> &Arc<DiskHandle> {
++        &self.owner
++    }
++    pub(super) fn path(&self) -> &Path {
++        &self.path
++    }
++    pub(super) fn version(&self) -> &FileVersion {
++        &self.version
++    }
++}
++
+ impl Engine {
+     pub(crate) fn used_bytes(&self, slot: &str) -> u64 {
+         self.planning_context().used_bytes(slot)
+     }
+     pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(ReadSource, FileVersion)> {
++        let source = self.validated_replica_source(version_id)?;
++        Ok((
++            ReadSource::on_disk(&source.owner, source.path),
++            source.version,
++        ))
++    }
++
++    pub(crate) fn valid_backup_replica(&self, version_id: &str) -> Result<ReadSource> {
++        self.validated_replica_source(version_id)
++            .map(ReadSource::VerifiedReplica)
++    }
++
++    fn validated_replica_source(&self, version_id: &str) -> Result<VerifiedReplicaSource> {
+         self.with_replica(version_id, |disk, directory, version, lease| {
+             verify_read_payload(disk, directory, version, lease)?;
+             let content = crate::container_storage::content_path_at(
+@@ -18,7 +52,11 @@ impl Engine {
+                 version,
+                 &mut |_| lease.check_running(),
+             )?;
+-            Ok((ReadSource::on_disk(disk, content), version.clone()))
++            Ok(VerifiedReplicaSource {
++                owner: Arc::clone(disk),
++                path: content,
++                version: version.clone(),
++            })
+         })
+     }
+     fn verified_replica(&self, version_id: &str) -> Result<(DiskFile, FileVersion, PathBuf)> {
+diff --git a/src/engine/src/engine/source.rs b/src/engine/src/engine/source.rs
+index fe70d9f..c83ca80 100644
+--- a/src/engine/src/engine/source.rs
++++ b/src/engine/src/engine/source.rs
+@@ -16,6 +16,7 @@ use std::{
+ #[derive(Clone)]
+ pub(crate) enum ReadSource {
+     External(PathBuf),
++    VerifiedReplica(super::reads::VerifiedReplicaSource),
+     Disk {
+         owner: Arc<DiskHandle>,
+         path: PathBuf,
+@@ -45,6 +46,11 @@ impl ReadSource {
+     pub(crate) fn open_leased(&self) -> Result<ReadFile> {
+         match self {
+             Self::External(path) => open_regular(path).map(ReadFile::from),
++            Self::VerifiedReplica(source) => source
++                .owner()
++                .root
++                .open_leased_regular(source.path())
++                .map(ReadFile::from),
+             Self::Disk { owner, path } => owner.root.open_leased_regular(path).map(ReadFile::from),
+         }
+     }
+@@ -52,6 +58,7 @@ impl ReadSource {
+     pub(crate) fn path(&self) -> &Path {
+         match self {
+             Self::External(path) | Self::Disk { path, .. } => path,
++            Self::VerifiedReplica(source) => source.path(),
+         }
+     }
+ 
+@@ -59,6 +66,8 @@ impl ReadSource {
+         let path = self.path().join(child);
+         match self {
+             Self::External(_) => Self::External(path),
++            // Joining a child is not the original fully verified body path.
++            Self::VerifiedReplica(source) => Self::on_disk(source.owner(), path),
+             Self::Disk { owner, .. } => Self::on_disk(owner, path),
+         }
+     }
+diff --git a/src/engine/src/engine.rs b/src/engine/src/engine.rs
+index f505a1d..dbd7642 100644
+--- a/src/engine/src/engine.rs
++++ b/src/engine/src/engine.rs
+@@ -1392,6 +1392,14 @@ impl Engine {
+                 |_, next, prepared| change(self, next, prepared),
+             );
+         }
++        if kind == "backup.configure" {
++            return context.plan_backup_configuration_mutation(
++                principal,
++                operation_id,
++                digest,
++                |_, next, prepared| change(self, next, prepared),
++            );
++        }
+         context.plan_new_mutation(
+             kind,
+             principal,
+diff --git a/src/engine/src/protection/backup_paths.rs b/src/engine/src/protection/backup_paths.rs
+index a7d14da..24f39c8 100644
+--- a/src/engine/src/protection/backup_paths.rs
++++ b/src/engine/src/protection/backup_paths.rs
+@@ -2,7 +2,7 @@
+ use super::*;
+ use crate::{
+     business::{find_unordered, now},
+-    engine::Prepared,
++    engine::{CurrentNamespaces, Prepared},
+ };
+ use std::collections::{BTreeMap, BTreeSet};
+ 
+@@ -165,16 +165,28 @@ struct Scope {
+     path: String,
+     files: BTreeMap<String, Entry>,
+ }
+-fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
++fn source_scope(
++    state: &State,
++    current: Option<&CurrentNamespaces>,
++    repository: &str,
++    path: &str,
++) -> Result<Scope> {
+     let requested = if path.is_empty() {
+         None
+     } else {
+         Some(name_policy::PortablePath::parse(path)?)
+     };
+     let commit = namespace(state, repository)?;
++    let entries = match current {
++        Some(current) => current.branch_entries(
++            &state.repositories[repository].main_branch_id,
++            &commit.commit_id,
++        )?,
++        None => &commit.entries,
++    };
+     let (mut scope, target) = if let Some(requested) = &requested {
+-        let entry = crate::business::find_unordered_key(&commit.entries, requested.key())
+-            .ok_or_else(|| {
++        let entry =
++            crate::business::find_unordered_key(entries, requested.key()).ok_or_else(|| {
+                 Error::new(
+                     storage_contract::ErrorCode::EntryNotFound,
+                     "backup scope no longer exists",
+@@ -205,7 +217,7 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
+         )
+     };
+     let scope_key = target.map_or("", name_policy::PortablePath::key);
+-    for entry in commit.entries.iter().filter(|entry| {
++    for entry in entries.iter().filter(|entry| {
+         entry.kind == NamespaceEntryKind::File
+             && if scope.kind == NamespaceEntryKind::File {
+                 entry.file_id == scope.id
+@@ -239,8 +251,13 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
+             } else {
+                 branch.path.split('/').count()
+             };
+-            for entry in branch
+-                .entries
++            let entries = match current {
++                Some(current) => {
++                    current.directory_entries(&branch.directory_branch_id, &branch.head_tree_id)?
++                }
++                None => &branch.entries,
++            };
++            for entry in entries
+                 .iter()
+                 .filter(|entry| entry.kind == NamespaceEntryKind::File)
+             {
+@@ -293,7 +310,7 @@ fn exact_policy<'a>(
+         })
+ }
+ fn inherited_by_scope(
+-    state: &State,
++    entries: &[Entry],
+     scope_root: &str,
+     previous: Option<&ProtectionPolicy>,
+     effective: Option<&ProtectionPolicy>,
+@@ -304,10 +321,11 @@ fn inherited_by_scope(
+     effective.inheritable
+         && (previous.is_some_and(|own| own.policy_id == effective.policy_id)
+             || (effective.scope_file_id.is_none()
+-                && scope_path(state, effective).is_some_and(|root| within(root, scope_root))))
++                && scope_path_in(entries, effective).is_some_and(|root| within(root, scope_root))))
+ }
+ fn retain_inherited_files(
+     state: &State,
++    entries: &[Entry],
+     repository: &str,
+     scope: &mut Scope,
+     previous: Option<&ProtectionPolicy>,
+@@ -317,15 +335,38 @@ fn retain_inherited_files(
+     }
+     scope.files.retain(|file, entry| {
+         inherited_by_scope(
+-            state,
++            entries,
+             &scope.path,
+             previous,
+-            effective_policy(state, repository, Some(file), entry.path()),
++            effective_policy_in(state, entries, repository, Some(file), entry.path()),
+         )
+     });
+ }
+ 
++// Before the first registry publication the admitted immutable main HEAD is
++// also the current namespace. Keep this initial-state consumer explicit.
++fn retain_initial_inherited_files(
++    state: &State,
++    repository: &str,
++    scope: &mut Scope,
++    previous: Option<&ProtectionPolicy>,
++) {
++    if scope.kind != NamespaceEntryKind::Directory {
++        return;
++    }
++    scope.files.retain(|file, entry| {
++        effective_policy(state, repository, Some(file), entry.path()).is_none_or(|effective| {
++            effective.inheritable
++                && (previous.is_some_and(|own| own.policy_id == effective.policy_id)
++                    || effective.scope_file_id.is_none()
++                        && scope_path(state, effective)
++                            .is_some_and(|root| within(root, &scope.path)))
++        })
++    });
++}
++
+ fn backup_primaries(engine: &Engine, repository: &str, scope: &Scope) -> Result<BTreeSet<String>> {
++    let current = engine.namespace_tree(&engine.state.repositories[repository].main_branch_id)?;
+     let mut primaries = BTreeSet::from([engine
+         .file_placement_settings(repository, None, &scope.path)?
+         .0]);
+@@ -337,10 +378,16 @@ fn backup_primaries(engine: &Engine, repository: &str, scope: &Scope) -> Result<
+             rule.repository_id == repository && within(&scope.path, &rule.path_prefix)
+         }) {
+             if inherited_by_scope(
+-                &engine.state,
++                current.entries(),
+                 &scope.path,
+                 previous,
+-                effective_policy(&engine.state, repository, None, &rule.path_prefix),
++                effective_policy_in(
++                    &engine.state,
++                    current.entries(),
++                    repository,
++                    None,
++                    &rule.path_prefix,
++                ),
+             ) {
+                 primaries.insert(rule.primary_slot_id.clone());
+             }
+@@ -479,10 +526,13 @@ impl Engine {
+         repository: &str,
+         path: &str,
+     ) -> Result<storage_contract::BackupConfigurationSnapshot> {
+-        let mut scope = source_scope(&self.state, repository, path)?;
++        let admitted_current = self.admitted_current_namespaces()?;
++        let mut scope = source_scope(&self.state, admitted_current, repository, path)?;
++        let current = self.namespace_tree(&self.state.repositories[repository].main_branch_id)?;
+         let exact = exact_policy(&self.state, repository, &scope);
+-        let effective = effective_policy(
++        let effective = effective_policy_in(
+             &self.state,
++            current.entries(),
+             repository,
+             (scope.kind == NamespaceEntryKind::File).then_some(scope.id.as_str()),
+             &scope.path,
+@@ -490,7 +540,13 @@ impl Engine {
+         let inherited = effective.is_some_and(|policy| {
+             policy.inheritable && exact.is_none_or(|exact| exact.policy_id != policy.policy_id)
+         });
+-        retain_inherited_files(&self.state, repository, &mut scope, exact);
++        retain_inherited_files(
++            &self.state,
++            current.entries(),
++            repository,
++            &mut scope,
++            exact,
++        );
+         let (primary, copies) = self.file_placement_settings(
+             repository,
+             (scope.kind == NamespaceEntryKind::File).then_some(scope.id.as_str()),
+@@ -500,11 +556,18 @@ impl Engine {
+         let primaries = backup_primaries(self, repository, &scope)?;
+         let mut routes = Vec::new();
+         for source in primaries {
++            // Validate the primary itself. Only later route growth may stop at
++            // a Disabled/Detached downstream; PUT still rejects that route.
+             let mut route = self.route(&source, 1)?;
+             while route.len() < self.config.disks.len() {
+                 match self.route(&source, route.len() as u32 + 1) {
+                     Ok(next) => route = next,
+-                    Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => {
++                    Err(error)
++                        if error.code() == storage_contract::ErrorCode::RouteIncomplete
++                            || admitted_current.is_some()
++                                && error.code()
++                                    == storage_contract::ErrorCode::PlacementInvalid =>
++                    {
+                         break;
+                     }
+                     Err(error) => return Err(error),
+@@ -524,7 +587,11 @@ impl Engine {
+             .expect("invariant: routes include the default primary chain");
+         let requested_route = match self.route(&primary, copies) {
+             Ok(route) => route,
+-            Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => {
++            Err(error)
++                if error.code() == storage_contract::ErrorCode::RouteIncomplete
++                    || admitted_current.is_some()
++                        && error.code() == storage_contract::ErrorCode::PlacementInvalid =>
++            {
+                 Vec::new()
+             }
+             Err(error) => return Err(error),
+@@ -610,10 +677,29 @@ impl Engine {
+             "backup.configure", principal, operation,
+             json!({"repository_id":repository,"path":path,"expected_scope_id":expected_scope_id,"target_copies":copies,"backup_prefixes":prefixes,"expected_generation":expected_generation.to_string()}),
+             |engine, state, pending| {
++                if let Some(current) = engine.admitted_current_namespaces()? {
++                    let plan = current.plan_backup_configuration(
++                        engine.state(),
++                        request,
++                        || new_id("policy"),
++                    )?;
++                    for version in &plan.versions {
++                        let source = engine.valid_backup_replica(&version.version_id)?;
++                        pending.push(Prepared {
++                            version: version.clone(),
++                            placement: plan.placements[&version.version_id].clone(),
++                            source,
++                        });
++                    }
++                    plan.apply(state);
++                    let mut result = plan.result;
++                    result["configured_at"] = json!(now()?.to_string());
++                    return Ok(result);
++                }
+                 let repo = state.repositories.get(repository).cloned()
+                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "backup repository missing"))?;
+ 
+-                let mut scope = source_scope(state, repository, path)?;
++                let mut scope = source_scope(state, None, repository, path)?;
+                 if expected_scope_id.is_some_and(|expected| expected != scope.id) {
+                     return Err(Error::new(storage_contract::ErrorCode::ScopeChanged, "backup path now describes a different file or directory"));
+                 }
+@@ -624,7 +710,7 @@ impl Engine {
+                 }
+                 // An ancestor cannot silently replace independent child rules
+                 // or the binding of a file moved from another protected scope.
+-                retain_inherited_files(state, repository, &mut scope, previous.as_ref());
++                retain_initial_inherited_files(state, repository, &mut scope, previous.as_ref());
+                 let mut normalized = BTreeMap::new();
+                 for (slot, prefix) in prefixes {
+                     let disk = engine.disk(slot)?;
+@@ -700,6 +786,286 @@ impl Engine {
+     }
+ }
+ 
++/// The exact current configuration delta, shared by production planning and
++/// publication replay. No State clone or payload capability is held here.
++pub(crate) struct CurrentBackupConfigurationPlan {
++    pub(crate) policies: BTreeMap<String, Option<ProtectionPolicy>>,
++    pub(crate) bindings: BTreeMap<String, String>,
++    pub(crate) paths: BTreeMap<String, BTreeMap<String, String>>,
++    pub(crate) placements: BTreeMap<String, Placement>,
++    pub(crate) versions: Vec<FileVersion>,
++    pub(crate) result: json_codec::Value,
++}
++
++impl CurrentBackupConfigurationPlan {
++    fn apply(&self, state: &mut State) {
++        for (id, policy) in &self.policies {
++            match policy {
++                Some(policy) => {
++                    state.protection_policies.insert(id.clone(), policy.clone());
++                }
++                None => {
++                    state.protection_policies.remove(id);
++                }
++            }
++        }
++        for (file, policy) in &self.bindings {
++            state
++                .file_backup_policies
++                .insert(file.clone(), policy.clone());
++        }
++        for (file, paths) in &self.paths {
++            state.file_backup_paths.insert(file.clone(), paths.clone());
++        }
++        for (version, placement) in &self.placements {
++            state.placements.insert(version.clone(), placement.clone());
++        }
++    }
++}
++
++fn configured_primary<'a>(state: &'a State, repository: &str, path: &str) -> &'a str {
++    state
++        .placement_rules
++        .values()
++        .filter(|rule| rule.repository_id == repository && super::applies(&rule.path_prefix, path))
++        .max_by_key(|rule| {
++            rule.path_prefix
++                .split('/')
++                .filter(|part| !part.is_empty())
++                .count()
++        })
++        .map(|rule| rule.primary_slot_id.as_str())
++        .unwrap_or(&state.repositories[repository].primary_slot_id)
++}
++
++impl CurrentNamespaces {
++    pub(crate) fn plan_backup_configuration(
++        &self,
++        state: &State,
++        request: ScopedBackupConfigurationRequest<'_>,
++        mut fresh_policy: impl FnMut() -> Result<String>,
++    ) -> Result<CurrentBackupConfigurationPlan> {
++        let repository = request.repository_id;
++        let mut scope = source_scope(state, Some(self), repository, request.path)?;
++        let repo = &state.repositories[repository];
++        let head = namespace(state, repository)?;
++        let entries = self.branch_entries(&repo.main_branch_id, &head.commit_id)?;
++        if request
++            .expected_scope_id
++            .is_some_and(|expected| expected != scope.id)
++        {
++            return Err(Error::new(
++                ErrorCode::ScopeChanged,
++                "backup path now describes a different file or directory",
++            ));
++        }
++        let previous = exact_policy(state, repository, &scope);
++        let generation = previous.map_or(0, |policy| policy.generation);
++        if generation != request.expected_generation {
++            return Err(Error::new(
++                ErrorCode::GenerationMismatch,
++                "backup configuration changed; reread before updating",
++            ));
++        }
++        retain_inherited_files(state, entries, repository, &mut scope, previous);
++        let mut prefixes = BTreeMap::new();
++        for (slot, prefix) in request.backup_prefixes {
++            let disk = self.backup_configuration_disk(slot)?;
++            if disk.level <= 1 {
++                return Err(Error::new(
++                    ErrorCode::InvalidBackupPrefix,
++                    "backup prefixes may only target backup slots",
++                ));
++            }
++            if !prefix.is_empty() {
++                name_policy::validate_path(prefix)?;
++            }
++            if prefixes
++                .insert(disk.identity.slot_id.clone(), prefix.clone())
++                .is_some()
++            {
++                return Err(Error::new(
++                    ErrorCode::InvalidBackupPrefix,
++                    "backup slot is listed more than once",
++                ));
++            }
++        }
++        let mut primaries = BTreeSet::from([configured_primary(state, repository, &scope.path)]);
++        if scope.kind == NamespaceEntryKind::Directory {
++            for rule in state.placement_rules.values().filter(|rule| {
++                rule.repository_id == repository && within(&scope.path, &rule.path_prefix)
++            }) {
++                if inherited_by_scope(
++                    entries,
++                    &scope.path,
++                    previous,
++                    effective_policy_in(state, entries, repository, None, &rule.path_prefix),
++                ) {
++                    primaries.insert(&rule.primary_slot_id);
++                }
++            }
++        }
++        for entry in scope.files.values() {
++            primaries.insert(configured_primary(state, repository, entry.path()));
++        }
++        let versions: Vec<_> = state
++            .versions
++            .values()
++            .filter(|version| {
++                scope.files.contains_key(&version.file_id)
++                    && state
++                        .content_states
++                        .get(&version.version_id)
++                        .is_none_or(|content| *content == ContentState::Available)
++            })
++            .cloned()
++            .collect();
++        let mut placements = BTreeMap::new();
++        for version in &versions {
++            self.require_backup_configuration_source(state, version)?;
++            let previous = state.placements.get(&version.version_id).ok_or_else(|| {
++                Error::new(
++                    ErrorCode::PlacementNotFound,
++                    "backup source placement missing",
++                )
++            })?;
++            primaries.insert(&previous.primary_slot_id);
++            placements.insert(
++                version.version_id.clone(),
++                self.backup_configuration_placement(
++                    &version.version_id,
++                    &previous.primary_slot_id,
++                    request.target_copies,
++                    state.topology_generation,
++                )?,
++            );
++        }
++        for primary in primaries {
++            for slot in self
++                .backup_configuration_route(primary, request.target_copies)?
++                .into_iter()
++                .skip(1)
++            {
++                if !prefixes.contains_key(&slot) {
++                    return Err(Error::new(
++                        ErrorCode::BackupPrefixRequired,
++                        format!("backup slot {slot} requires a user-chosen prefix"),
++                    ));
++                }
++            }
++        }
++        let mut generated = Vec::new();
++        let mut fresh = || -> Result<String> {
++            let id = fresh_policy()?;
++            validate_id(&id, "policy")?;
++            if state.protection_policies.contains_key(&id) || generated.contains(&id) {
++                return Err(Error::new(
++                    ErrorCode::PublicationInvalid,
++                    "backup configuration reused an existing policy identity",
++                ));
++            }
++            generated.push(id.clone());
++            Ok(id)
++        };
++        let policy = ProtectionPolicy {
++            policy_id: match previous {
++                Some(policy) => policy.policy_id.clone(),
++                None => fresh()?,
++            },
++            repository_id: repository.into(),
++            path_prefix: scope.path.clone(),
++            target_copies: request.target_copies,
++            inheritable: true,
++            scope_directory_id: (scope.kind == NamespaceEntryKind::Directory)
++                .then_some(scope.id.clone()),
++            scope_file_id: (scope.kind == NamespaceEntryKind::File).then_some(scope.id.clone()),
++            backup_prefixes: prefixes.clone(),
++            generation: generation.checked_add(1).ok_or_else(|| {
++                Error::new(
++                    ErrorCode::ResourceLimit,
++                    "backup policy generation exhausted",
++                )
++            })?,
++        };
++        let mut policies = BTreeMap::new();
++        let mut bindings = BTreeMap::new();
++        if let Some(previous) = previous {
++            let detached: Vec<_> = state
++                .file_backup_policies
++                .iter()
++                .filter(|(file, id)| *id == &previous.policy_id && !scope.files.contains_key(*file))
++                .map(|(file, _)| file.clone())
++                .collect();
++            if !detached.is_empty() {
++                let mut retained = previous.clone();
++                retained.policy_id = fresh()?;
++                retained.inheritable = false;
++                for file in detached {
++                    bindings.insert(file, retained.policy_id.clone());
++                }
++                policies.insert(retained.policy_id.clone(), Some(retained));
++            }
++        }
++        let mut paths = BTreeMap::new();
++        for (file, entry) in &scope.files {
++            let relative = relative_path(
++                &scope.path,
++                entry.path(),
++                scope.kind == NamespaceEntryKind::File,
++            );
++            if !prefixes.is_empty() {
++                let mut changed = state
++                    .file_backup_paths
++                    .get(file)
++                    .cloned()
++                    .unwrap_or_default();
++                for (slot, prefix) in &prefixes {
++                    changed.insert(slot.clone(), backup_path(prefix, &relative)?);
++                }
++                paths.insert(file.clone(), changed);
++            }
++            bindings.insert(file.clone(), policy.policy_id.clone());
++        }
++        policies.insert(policy.policy_id.clone(), Some(policy.clone()));
++        let referenced: BTreeSet<_> = state
++            .file_backup_policies
++            .iter()
++            .filter(|(file, _)| !bindings.contains_key(*file))
++            .map(|(_, id)| id)
++            .chain(bindings.values())
++            .collect();
++        for (id, old) in state.protection_policies.iter() {
++            if old.repository_id == repository && !old.inheritable && !referenced.contains(id) {
++                policies.insert(id.clone(), None);
++            }
++        }
++        let result = json!({
++            "history_tree_id": repo.history_tree_id,
++            "policy": policy,
++            "scope": {"id":scope.id,"kind":scope.kind,"path":scope.path},
++            "file_count":scope.files.len().to_string(),
++            "version_count":versions.len().to_string(),
++            "target_copies":request.target_copies,"backup_prefixes":prefixes,
++            "backup_request": {
++                "repository_id":repository,"path":request.path,
++                "expected_scope_id":request.expected_scope_id,
++                "target_copies":request.target_copies,"backup_prefixes":request.backup_prefixes,
++                "expected_generation":request.expected_generation.to_string()
++            },
++            "generated_policy_ids":generated,
++            "namespace_backup":self.backup_configuration_source(state, repository, &scope.id)?
++        });
++        Ok(CurrentBackupConfigurationPlan {
++            policies,
++            bindings,
++            paths,
++            placements,
++            versions,
++            result,
++        })
++    }
++}
++
+ #[cfg(test)]
+ #[path = "../../../../test/engine/unit/protection/backup_paths/tests.rs"]
+ mod tests;
+diff --git a/test/engine/unit/engine/current_backup_configuration_tests.rs b/test/engine/unit/engine/current_backup_configuration_tests.rs
+new file mode 100644
+index 0000000..961552a
+--- /dev/null
++++ b/test/engine/unit/engine/current_backup_configuration_tests.rs
+@@ -0,0 +1,1814 @@
++//! Source-only regression cases. Real Engine/D3 paths are exercised when run;
++//! temporary directories are not physical-media or power-loss evidence.
++use super::*;
++use crate::*;
++use std::{
++    fs,
++    io::{Read, Seek, SeekFrom},
++    path::{Path, PathBuf},
++};
++
++fn op() -> OperationId {
++    OperationId::generate().unwrap()
++}
++
++fn save(engine: &mut Engine, repository: &Repository, path: &str, bytes: &[u8]) -> Entry {
++    let workspace = engine
++        .create_workspace(&repository.main_branch_id, "admin")
++        .unwrap();
++    engine
++        .stage_bytes(&workspace.workspace_id, path, bytes)
++        .unwrap();
++    engine
++        .commit_workspace(CommitRequest {
++            workspace_id: workspace.workspace_id,
++            operation_id: op(),
++            principal: "admin".into(),
++            expected_head: workspace.base_head,
++            fencing_token: workspace.fencing_token,
++            message: "current backup fixture".into(),
++            request_digest: None,
++        })
++        .unwrap();
++    engine
++        .namespace_tree(&repository.main_branch_id)
++        .unwrap()
++        .get(path)
++        .unwrap()
++        .clone()
++}
++
++fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
++    fn visit(root: &Path, directory: &Path, found: &mut BTreeMap<PathBuf, Vec<u8>>) {
++        for entry in fs::read_dir(directory).unwrap() {
++            let path = entry.unwrap().path();
++            if path.is_dir() {
++                visit(root, &path, found);
++            } else {
++                found.insert(
++                    path.strip_prefix(root).unwrap().to_owned(),
++                    fs::read(path).unwrap(),
++                );
++            }
++        }
++    }
++    let mut found = BTreeMap::new();
++    visit(root, root, &mut found);
++    found
++}
++
++struct Fixture {
++    temp: tempfile::TempDir,
++    engine: Engine,
++    config: Config,
++    repository: Repository,
++    stopped_repository: Repository,
++    first: Entry,
++    latest: Entry,
++}
++impl Fixture {
++    fn new() -> Self {
++        Self::with_disk_count(4)
++    }
++
++    fn with_disk_count(count: usize) -> Self {
++        let temp = tempfile::Builder::new()
++            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
++            .tempdir()
++            .unwrap();
++        let mut config =
++            Config::development((0..count).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
++        for disk in config.disks.iter_mut().skip(3) {
++            disk.level = 1;
++            disk.upstream_slot_id = None;
++            disk.metadata_member = false;
++        }
++        let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
++        let repository = engine
++            .create_repository(
++                &RepositoryName::parse("live backup").unwrap(),
++                "P01",
++                1,
++                "admin",
++                op(),
++            )
++            .unwrap();
++        let stopped_repository = engine
++            .create_repository(
++                &RepositoryName::parse("stopped backup").unwrap(),
++                "D04",
++                1,
++                "admin",
++                op(),
++            )
++            .unwrap();
++        let first = save(
++            &mut engine,
++            &repository,
++            "docs/report",
++            b"first retained body",
++        );
++        let latest = save(
++            &mut engine,
++            &repository,
++            "docs/report",
++            b"latest retained body",
++        );
++        save(
++            &mut engine,
++            &stopped_repository,
++            "private/original",
++            b"never touch stopped data",
++        );
++        Self {
++            temp,
++            engine,
++            config,
++            repository,
++            stopped_repository,
++            first,
++            latest,
++        }
++    }
++
++    fn exit(&mut self, index: usize, action: MembershipExitAction) -> BTreeMap<PathBuf, Vec<u8>> {
++        let disk = &self.config.disks[index];
++        let held = Arc::clone(self.engine.disk_resources.get(disk).unwrap());
++        self.engine
++            .begin_disk_exit(&disk.disk_id, action, "admin", op())
++            .unwrap();
++        let archive = self
++            .engine
++            .build_managed_membership_control_archive()
++            .unwrap();
++        self.engine
++            .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
++            .unwrap();
++        self.engine.resume_membership_joint_decision().unwrap();
++        let before = files(&disk.root);
++        let receipt = self.engine.activate_pending_disk_exit().unwrap();
++        assert_eq!(receipt.result["target_io"], "closed");
++        held.root.io_binding().unwrap().closed_proof().unwrap();
++        assert!(self.engine.disk_resources.available(disk).is_none());
++        assert_eq!(files(&disk.root), before);
++        before
++    }
++
++    fn configure(
++        &mut self,
++        generation: u64,
++        copies: u32,
++        prefixes: &BTreeMap<String, String>,
++        operation: OperationId,
++    ) -> Result<OperationResult> {
++        self.engine.configure_backups(BackupConfigurationRequest {
++            repository_id: &self.repository.repository_id,
++            path: "docs",
++            target_copies: copies,
++            backup_prefixes: prefixes,
++            expected_generation: generation,
++            principal: "admin",
++            operation_id: operation,
++        })
++    }
++}
++
++fn prefixes() -> BTreeMap<String, String> {
++    BTreeMap::from([("b01".into(), "chosen/archive".into())])
++}
++
++#[test]
++fn current_backup_real_d3_reprotects_all_bodies_preserves_stopped_root_and_permanent_retries() {
++    for action in [
++        MembershipExitAction::PlannedOffline,
++        MembershipExitAction::Deregister,
++    ] {
++        let mut fixture = Fixture::new();
++        let old_workspace = fixture
++            .engine
++            .create_workspace(&fixture.repository.main_branch_id, "admin")
++            .unwrap();
++        let original = fixture.exit(3, action);
++        let stopped_root = fixture.config.disks[3].root.clone();
++        let retained = fixture.temp.path().join("retained-stopped-original");
++        fs::rename(&stopped_root, &retained).unwrap();
++        fs::write(&stopped_root, b"ordinary file at stopped root").unwrap();
++        let before = fixture.engine.state.clone();
++        let operation = op();
++        let prefixes = prefixes();
++        let result = fixture.configure(0, 2, &prefixes, operation).unwrap();
++        assert_eq!(result.result["version_count"], "2");
++        assert_eq!(result.result["file_count"], "1");
++        assert_eq!(result.protection_at_publish, ProtectionAtPublish::TargetMet);
++        assert_eq!(fixture.engine.state.commits, before.commits);
++        assert_eq!(fixture.engine.state.versions, before.versions);
++        assert_eq!(fixture.engine.state.file_names, before.file_names);
++        assert_eq!(fixture.engine.state.file_locations, before.file_locations);
++        for (entry, expected) in [
++            (&fixture.first, b"first retained body".as_slice()),
++            (&fixture.latest, b"latest retained body".as_slice()),
++        ] {
++            let placement = &fixture.engine.state.placements[&entry.version_id];
++            assert_eq!(placement.route_slot_ids, ["P01", "B01"]);
++            let version = &fixture.engine.state.versions[&entry.version_id];
++            let directory = crate::disk::version_dir(
++                &fixture.config.disks[1],
++                &version.history_tree_id,
++                &version.version_id,
++            );
++            let mut payload = crate::disk::verify_payload_held(&directory, version).unwrap();
++            payload.seek(SeekFrom::Start(0)).unwrap();
++            let mut bytes = Vec::new();
++            payload.read_to_end(&mut bytes).unwrap();
++            assert_eq!(bytes, expected);
++        }
++        assert_eq!(
++            fixture.engine.state.file_backup_paths[&fixture.first.file_id]["B01"],
++            "chosen/archive/report"
++        );
++        assert_eq!(
++            fixture.configure(0, 2, &prefixes, operation).unwrap(),
++            result
++        );
++        assert_eq!(
++            fixture
++                .configure(0, 1, &prefixes, operation)
++                .unwrap_err()
++                .code(),
++            ErrorCode::IdempotencyKeyReused
++        );
++        assert_eq!(
++            fixture
++                .engine
++                .configure_backups(BackupConfigurationRequest {
++                    repository_id: &fixture.repository.repository_id,
++                    path: "docs",
++                    target_copies: 2,
++                    backup_prefixes: &prefixes,
++                    expected_generation: 0,
++                    principal: "other",
++                    operation_id: operation,
++                })
++                .unwrap_err()
++                .code(),
++            ErrorCode::IdempotencyKeyReused
++        );
++        assert_eq!(
++            fixture
++                .engine
++                .stage_bytes(&old_workspace.workspace_id, "docs/stale", b"held")
++                .unwrap_err()
++                .code(),
++            ErrorCode::WorkspaceChanged
++        );
++        assert_eq!(files(&retained), original);
++        assert_eq!(
++            fs::read(&stopped_root).unwrap(),
++            b"ordinary file at stopped root"
++        );
++        let system = fixture.temp.path().join("system");
++        drop(fixture.engine);
++        let mut engine = Engine::open(&system).unwrap();
++        assert_eq!(
++            engine
++                .configure_backups(BackupConfigurationRequest {
++                    repository_id: &fixture.repository.repository_id,
++                    path: "docs",
++                    target_copies: 2,
++                    backup_prefixes: &prefixes,
++                    expected_generation: 0,
++                    principal: "admin",
++                    operation_id: operation,
++                })
++                .unwrap(),
++            result
++        );
++        assert_eq!(
++            engine
++                .backup_configuration(&fixture.repository.repository_id, "docs")
++                .unwrap()
++                .generation,
++            1
++        );
++        assert_eq!(
++            engine
++                .stage_bytes(&old_workspace.workspace_id, "docs/stale", b"held")
++                .unwrap_err()
++                .code(),
++            ErrorCode::WorkspaceChanged
++        );
++        assert_eq!(files(&retained), original);
++        assert_eq!(
++            fs::read(&stopped_root).unwrap(),
++            b"ordinary file at stopped root"
++        );
++    }
++}
++
++#[test]
++fn stopped_backup_route_or_hidden_scope_is_rejected_before_target_io_and_does_not_reactivate() {
++    for action in [
++        MembershipExitAction::PlannedOffline,
++        MembershipExitAction::Deregister,
++    ] {
++        let mut fixture = Fixture::new();
++        let original = fixture.exit(1, action);
++        let disk = fixture.config.disks[1].clone();
++        let retained = fixture.temp.path().join("held-backup");
++        fs::rename(&disk.root, &retained).unwrap();
++        fs::write(&disk.root, b"not a directory").unwrap();
++        let before = fixture.engine.state.clone();
++        assert!(fixture.configure(0, 2, &prefixes(), op()).is_err());
++        assert_eq!(*fixture.engine.state, *before);
++        assert!(fixture.engine.disk_resources.available(&disk).is_none());
++        assert_eq!(files(&retained), original);
++        assert_eq!(fs::read(&disk.root).unwrap(), b"not a directory");
++    }
++    let mut fixture = Fixture::new();
++    fixture.exit(3, MembershipExitAction::Deregister);
++    let before = fixture.engine.state.clone();
++    assert_eq!(
++        fixture
++            .engine
++            .configure_backups(BackupConfigurationRequest {
++                repository_id: &fixture.stopped_repository.repository_id,
++                path: "private/original",
++                target_copies: 1,
++                backup_prefixes: &BTreeMap::new(),
++                expected_generation: 0,
++                principal: "admin",
++                operation_id: op(),
++            })
++            .unwrap_err()
++            .code(),
++        ErrorCode::EntryNotFound
++    );
++    assert_eq!(*fixture.engine.state, *before);
++}
++
++#[test]
++fn current_backup_preserves_child_policies_and_detaches_moved_file_bindings() {
++    let mut fixture = Fixture::new();
++    let child = save(
++        &mut fixture.engine,
++        &fixture.repository,
++        "docs/child/file",
++        b"independent",
++    );
++    fixture
++        .engine
++        .configure_backups(BackupConfigurationRequest {
++            repository_id: &fixture.repository.repository_id,
++            path: "docs/child",
++            target_copies: 2,
++            backup_prefixes: &BTreeMap::from([("B01".into(), "child".into())]),
++            expected_generation: 0,
++            principal: "admin",
++            operation_id: op(),
++        })
++        .unwrap();
++    fixture.configure(0, 2, &prefixes(), op()).unwrap();
++    let old_parent_policy =
++        fixture.engine.state.file_backup_policies[&fixture.first.file_id].clone();
++    save(
++        &mut fixture.engine,
++        &fixture.repository,
++        "moved/marker",
++        b"destination parent",
++    );
++    fixture
++        .engine
++        .file_namespace(
++            &fixture.repository.repository_id,
++            NamespaceOperation::parse(
++                NamespaceOperationKind::Rename,
++                "docs/report",
++                Some("moved/report"),
++            )
++            .unwrap(),
++            "admin",
++            op(),
++        )
++        .unwrap();
++    fixture.exit(3, MembershipExitAction::Deregister);
++    let child_policy = fixture.engine.state.file_backup_policies[&child.file_id].clone();
++    let before = fixture.engine.state.clone();
++    let result = fixture.configure(1, 1, &BTreeMap::new(), op()).unwrap();
++    assert_eq!(result.result["file_count"], "0");
++    assert_eq!(result.result["version_count"], "0");
++    assert_eq!(
++        result.protection_at_publish,
++        ProtectionAtPublish::NotApplicable
++    );
++    assert_eq!(
++        fixture.engine.state.file_backup_policies[&child.file_id],
++        child_policy
++    );
++    assert_eq!(
++        fixture.engine.state.protection_policies[&child_policy],
++        before.protection_policies[&child_policy]
++    );
++    let retained = &fixture.engine.state.file_backup_policies[&fixture.first.file_id];
++    assert_ne!(retained, &old_parent_policy);
++    assert!(!fixture.engine.state.protection_policies[retained].inheritable);
++    assert_eq!(
++        fixture.engine.state.protection_policies[retained].target_copies,
++        2
++    );
++    assert_eq!(
++        fixture.engine.state.file_backup_paths,
++        before.file_backup_paths
++    );
++    assert_eq!(fixture.engine.state.placements, before.placements);
++}
++
++fn published() -> (Fixture, Arc<CurrentNamespaces>, Arc<State>, OperationResult) {
++    let mut fixture = Fixture::new();
++    fixture.exit(3, MembershipExitAction::Deregister);
++    let current = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
++    let previous = Arc::clone(&fixture.engine.state);
++    let result = fixture.configure(0, 2, &prefixes(), op()).unwrap();
++    (fixture, current, previous, result)
++}
++
++fn rejected(view: &CurrentNamespaces, previous: &State, forged: &State, label: &str) {
++    assert!(view.advance(previous, forged).is_err(), "live {label}");
++    let previous: State = decode_strict(&canonical_json(previous).unwrap()).unwrap();
++    let forged: State = decode_strict(&canonical_json(forged).unwrap()).unwrap();
++    assert!(view.advance(&previous, &forged).is_err(), "cold {label}");
++}
++
++#[test]
++fn exact_backup_request_actor_registry_scope_and_receipt_are_replayed_without_tracking() {
++    let (fixture, view, previous, result) = published();
++    let next = fixture.engine.state.as_ref();
++    view.advance(&previous, next).unwrap();
++    let cold_previous: State = decode_strict(&canonical_json(&*previous).unwrap()).unwrap();
++    let cold_next: State = decode_strict(&canonical_json(next).unwrap()).unwrap();
++    view.advance(&cold_previous, &cold_next).unwrap();
++    for key in [
++        "registry",
++        "mask_hash",
++        "source_snapshot",
++        "source_sequence",
++        "source_business_generation",
++        "activation_sequence",
++        "previous_sequence",
++        "previous_business_generation",
++        "owner_branch_id",
++        "owner_head_commit_id",
++        "directory_heads",
++    ] {
++        let mut forged = next.clone();
++        forged
++            .operations
++            .get_mut(&result.operation_id)
++            .unwrap()
++            .result["namespace_backup"][key] = json!("forged");
++        rejected(&view, &previous, &forged, key);
++    }
++    for key in [
++        "policy",
++        "scope",
++        "file_count",
++        "version_count",
++        "target_copies",
++        "backup_prefixes",
++        "backup_request",
++        "generated_policy_ids",
++        "version_protection",
++    ] {
++        let mut forged = next.clone();
++        forged
++            .operations
++            .get_mut(&result.operation_id)
++            .unwrap()
++            .result[key] = json!("forged");
++        rejected(&view, &previous, &forged, key);
++    }
++    let mut forged = next.clone();
++    forged
++        .operation_principals
++        .insert(result.operation_id, "different actor".into());
++    rejected(&view, &previous, &forged, "actor");
++    let mut forged = next.clone();
++    forged
++        .operations
++        .get_mut(&result.operation_id)
++        .unwrap()
++        .request_digest = "0".repeat(64);
++    rejected(&view, &previous, &forged, "digest");
++    for remove in [false, true] {
++        let mut forged = next.clone();
++        if remove {
++            forged.operations.remove(&result.operation_id);
++        } else {
++            let receipt = forged.operations.get_mut(&result.operation_id).unwrap();
++            receipt.kind = "auth.update".into();
++            receipt.result = json!({});
++        }
++        rejected(
++            &view,
++            &previous,
++            &forged,
++            "missing or disguised native receipt",
++        );
++    }
++    // A later ordinary state may not rewrite either half of a permanent receipt.
++    let mut later = next.clone();
++    later.begin_tracking();
++    later
++        .operation_principals
++        .insert(result.operation_id, "new owner".into());
++    rejected(&view, next, &later, "permanent actor");
++    let mut later = next.clone();
++    later.begin_tracking();
++    later
++        .operations
++        .get_mut(&result.operation_id)
++        .unwrap()
++        .result["file_count"] = json!("9");
++    rejected(&view, next, &later, "permanent result");
++}
++
++#[test]
++fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publication() {
++    let (fixture, view, previous, result) = published();
++    let next = fixture.engine.state.as_ref();
++    let file = &fixture.first.file_id;
++    let version = &fixture.first.version_id;
++    let branch = &fixture.repository.main_branch_id;
++    let history = &fixture.repository.history_tree_id;
++    let directory = DirectoryBranch {
++        directory_branch_id: "unexpected".into(),
++        repository_id: fixture.repository.repository_id.clone(),
++        directory_id: "unexpected".into(),
++        path: "docs".into(),
++        name: "unexpected".into(),
++        parent_branch_id: None,
++        head_tree_id: "unexpected".into(),
++        commit_id: next.branches[branch].head_commit_id.clone(),
++        entries: vec![],
++        file_branches: BTreeMap::new(),
++        file_contexts: BTreeMap::new(),
++        inherited_files: BTreeMap::new(),
++        directory_refs: BTreeMap::new(),
++        materialized: false,
++        sequence: next.sequence,
++    };
++    let tree = DirectoryTree {
++        tree_id: "unexpected".into(),
++        directory_branch_id: "unexpected".into(),
++        parent_tree_id: None,
++        commit_id: directory.commit_id.clone(),
++        path: "docs".into(),
++        entries: vec![],
++        file_branches: BTreeMap::new(),
++        file_contexts: BTreeMap::new(),
++        inherited_files: BTreeMap::new(),
++        directory_refs: BTreeMap::new(),
++        sequence: next.sequence,
++    };
++    macro_rules! reject_fields {
++        ($state:ident; $($field:ident => $change:block),+ $(,)?) => {{
++            // Exhaustive, so a new State field requires an explicit attack case.
++            let State { $($field: _,)+ } = next;
++            $( {
++                let mut $state = next.clone();
++                $change
++                rejected(&view, &previous, &$state, stringify!($field));
++            } )+
++        }};
++    }
++    reject_fields!(state;
++        sequence => {
++            state.sequence += 1;
++        },
++        business_generation => {
++            state.business_generation += 1;
++        },
++        topology_generation => {
++            state.topology_generation += 1;
++        },
++        control_auth => {
++            state.control_auth = Some(json!({"unexpected":"control mutation"}));
++        },
++        repositories => {
++            state
++                .repositories
++                .get_mut(&fixture.repository.repository_id)
++                .unwrap()
++                .name
++                .push_str(" changed");
++        },
++        histories => {
++            state.histories.get_mut(history).unwrap().generation += 1;
++        },
++        branches => {
++            state
++                .branches
++                .get_mut(branch)
++                .unwrap()
++                .name
++                .push_str(" changed");
++        },
++        commits => {
++            state
++                .commits
++                .get_mut(&next.branches[branch].head_commit_id)
++                .unwrap()
++                .message
++                .push_str(" changed");
++        },
++        versions => {
++            state
++                .versions
++                .get_mut(version)
++                .unwrap()
++                .creation_name
++                .push_str(" changed");
++        },
++        directory_branches => {
++            state
++                .directory_branches
++                .insert("unexpected".into(), directory.clone());
++        },
++        directory_trees => {
++            state
++                .directory_trees
++                .insert("unexpected".into(), tree.clone());
++        },
++        file_selections => {
++            state
++                .file_selections
++                .insert("unexpected".into(), branch.clone());
++        },
++        file_write_origins => {
++            state
++                .file_write_origins
++                .insert("unexpected".into(), branch.clone());
++        },
++        file_contexts => {
++            state.file_contexts.insert(
++                "unexpected".into(),
++                FileContext {
++                    node_id: None,
++                    selection_generation: 1,
++                    branch_id: branch.clone(),
++                    inherited_from: None,
++                },
++            );
++        },
++        file_path_nodes => {
++            state.file_path_nodes.insert(
++                "unexpected".into(),
++                FilePathNode {
++                    node_id: "unexpected".into(),
++                    history_tree_id: history.clone(),
++                    file_id: file.clone(),
++                    version_id: version.clone(),
++                    parent_node_ids: vec![],
++                    branch_id: branch.clone(),
++                    path: "docs/report".into(),
++                    previous_path: "report".into(),
++                    operation_id: op(),
++                    author: "admin".into(),
++                    sequence: next.sequence,
++                    created_at: 1,
++                },
++            );
++        },
++        file_metadata_nodes => {
++            state.file_metadata_nodes.insert(
++                "unexpected".into(),
++                FileMetadataNode {
++                    node_id: "unexpected".into(),
++                    history_tree_id: history.clone(),
++                    file_id: file.clone(),
++                    version_id: version.clone(),
++                    parent_node_ids: vec![],
++                    branch_id: branch.clone(),
++                    kind: FileMetadataKind::Tags,
++                    tags: BTreeSet::from(["tag".into()]),
++                    operation_id: op(),
++                    author: "admin".into(),
++                    sequence: next.sequence,
++                    created_at: 1,
++                },
++            );
++        },
++        file_branch_merges => {
++            state.file_branch_merges.insert(
++                "unexpected".into(),
++                FileBranchMerge {
++                    merge_id: "unexpected".into(),
++                    history_tree_id: history.clone(),
++                    file_id: file.clone(),
++                    input_branch_ids: vec![branch.clone()],
++                    input_node_ids: vec![version.clone()],
++                    chosen_node_id: version.clone(),
++                    result_node_id: version.clone(),
++                    surviving_branch_id: branch.clone(),
++                    reused_node: true,
++                    parent_node_ids: vec![],
++                    operation_id: op(),
++                    sequence: next.sequence,
++                },
++            );
++        },
++        file_branch_aliases => {
++            state
++                .file_branch_aliases
++                .insert("unexpected".into(), branch.clone());
++        },
++        file_node_parents => {
++            state
++                .file_node_parents
++                .insert("unexpected".into(), vec![version.clone()]);
++        },
++        file_path_notes => {
++            state
++                .file_path_notes
++                .insert("unexpected".into(), "not a configuration".into());
++        },
++        directory_tree_selections => {
++            state
++                .directory_tree_selections
++                .insert("unexpected".into(), "tree".into());
++        },
++        file_locations => {
++            state
++                .file_locations
++                .insert(file.clone(), "physical/relocation".into());
++        },
++        file_names => {
++            state
++                .file_names
++                .insert(file.clone(), "physical-renaming".into());
++        },
++        file_backup_paths => {
++            state.file_backup_paths.insert(
++                "unexpected".into(),
++                BTreeMap::from([("B01".into(), "foreign".into())]),
++            );
++        },
++        file_backup_policies => {
++            state.file_backup_policies.insert(
++                "unexpected".into(),
++                result.result["policy"]["policy_id"]
++                    .as_str()
++                    .unwrap()
++                    .into(),
++            );
++        },
++        directory_selections => {
++            state
++                .directory_selections
++                .insert("unexpected".into(), "branch".into());
++        },
++        directory_selection_generations => {
++            state
++                .directory_selection_generations
++                .insert("unexpected".into(), 1);
++        },
++        file_selection_generations => {
++            state
++                .file_selection_generations
++                .insert("unexpected".into(), 1);
++        },
++        file_notes => {
++            state
++                .file_notes
++                .insert(file.clone(), "unrequested note".into());
++        },
++        version_notes => {
++            state
++                .version_notes
++                .insert(version.clone(), "unrequested note".into());
++        },
++        placements => {
++            state
++                .placements
++                .get_mut(version)
++                .unwrap()
++                .route_slot_ids
++                .push("D04".into());
++        },
++        merge_links => {
++            state.merge_links.insert(
++                "unexpected".into(),
++                MergeLink {
++                    merge_link_id: "unexpected".into(),
++                    history_tree_id: history.clone(),
++                    source_branch_id: branch.clone(),
++                    source_commit_id: next.branches[branch].head_commit_id.clone(),
++                    target_branch_id: branch.clone(),
++                    target_commit_id: next.branches[branch].head_commit_id.clone(),
++                    author: "admin".into(),
++                    operation_id: op(),
++                },
++            );
++        },
++        history_boundaries => {
++            state.history_boundaries.insert(
++                "unexpected".into(),
++                HistoryBoundary {
++                    boundary_id: "unexpected".into(),
++                    history_tree_id: history.clone(),
++                    local_commit_id: next.branches[branch].head_commit_id.clone(),
++                    local_branch_id: Some(branch.clone()),
++                    relation: "unexpected".into(),
++                    external_history_tree_id: "elsewhere".into(),
++                    external_commit_id: "elsewhere".into(),
++                    source_merge_link_id: None,
++                },
++            );
++        },
++        content_states => {
++            state
++                .content_states
++                .insert(version.clone(), ContentState::Purged);
++        },
++        operations => {
++            let mut extra = result.clone();
++            extra.operation_id = op();
++            extra.kind = "auth.update".into();
++            extra.result = json!({});
++            state.operations.insert(extra.operation_id, extra);
++        },
++        operation_principals => {
++            state.operation_principals.insert(op(), "unrelated".into());
++        },
++        plans => {
++            state.plans.insert(
++                "unexpected".into(),
++                Plan {
++                    plan_id: "unexpected".into(),
++                    kind: "unexpected".into(),
++                    principal: "admin".into(),
++                    expected_sequence: next.sequence,
++                    digest: "0".repeat(64),
++                    input: json!({}),
++                    state: PlanState::Ready,
++                },
++            );
++        },
++        placement_rules => {
++            state.placement_rules.insert(
++                "unexpected".into(),
++                PlacementRule {
++                    rule_id: "unexpected".into(),
++                    repository_id: fixture.repository.repository_id.clone(),
++                    path_prefix: "docs".into(),
++                    primary_slot_id: "D04".into(),
++                    generation: 1,
++                },
++            );
++        },
++        protection_policies => {
++            let policy = state.protection_policies.values().next().unwrap().clone();
++            state
++                .protection_policies
++                .insert("unexpected".into(), policy);
++        },
++        events => {
++            state.events[0].kind.push_str(" changed");
++        },
++    );
++}
++
++#[test]
++fn cold_missing_physical_inputs_cannot_be_rebuilt_by_backup_configuration() {
++    let (fixture, view, previous, _) = published();
++    for names in [true, false] {
++        let mut previous: State = decode_strict(&canonical_json(&*previous).unwrap()).unwrap();
++        if names {
++            previous.file_names.remove(&fixture.first.file_id);
++        } else {
++            previous.file_locations.remove(&fixture.first.file_id);
++        }
++        rejected(
++            &view,
++            &previous,
++            &fixture.engine.state,
++            "physical owner repair",
++        );
++    }
++}
++
++#[test]
++fn wrong_scope_generation_prefix_and_new_operation_leave_the_published_state_unchanged() {
++    let (mut fixture, _, _, _) = published();
++    let before = fixture.engine.state.clone();
++    for (scope, generation, prefixes) in [
++        (Some("different stable identity"), 1, prefixes()),
++        (None, 0, prefixes()),
++        (None, 1, BTreeMap::new()),
++        (
++            None,
++            1,
++            BTreeMap::from([("P01".into(), "primary-is-not-backup".into())]),
++        ),
++    ] {
++        assert!(
++            fixture
++                .engine
++                .configure_backups_scoped(ScopedBackupConfigurationRequest {
++                    repository_id: &fixture.repository.repository_id,
++                    path: "docs",
++                    expected_scope_id: scope,
++                    target_copies: 2,
++                    backup_prefixes: &prefixes,
++                    expected_generation: generation,
++                    principal: "admin",
++                    operation_id: op(),
++                })
++                .is_err()
++        );
++        assert_eq!(*fixture.engine.state, *before);
++    }
++}
++
++#[test]
++fn backup_scope_uses_current_directory_views_without_importing_hidden_historical_files() {
++    let mut fixture = Fixture::new();
++    let rule = new_id("rule").unwrap();
++    fixture
++        .engine
++        .update_placement_rule(PlacementRuleUpdate {
++            rule_id: &rule,
++            repository_id: &fixture.repository.repository_id,
++            path_prefix: "docs/gone",
++            primary_slot_id: "D04",
++            expected_generation: 0,
++            principal: "admin",
++            operation_id: op(),
++        })
++        .unwrap();
++    let hidden = save(
++        &mut fixture.engine,
++        &fixture.repository,
++        "docs/gone",
++        b"exclusive stopped file",
++    );
++    let directory = fixture
++        .engine
++        .create_directory_branches(
++            &fixture.repository.repository_id,
++            Some(&name_policy::LookupPath::parse("docs").unwrap()),
++            &BranchName::parse("retained named view").unwrap(),
++            "admin",
++            op(),
++        )
++        .unwrap()
++        .result["directory_branch_id"]
++        .as_str()
++        .unwrap()
++        .to_owned();
++    fixture
++        .engine
++        .update_placement_rule(PlacementRuleUpdate {
++            rule_id: &rule,
++            repository_id: &fixture.repository.repository_id,
++            path_prefix: "docs/gone",
++            primary_slot_id: "P01",
++            expected_generation: 1,
++            principal: "admin",
++            operation_id: op(),
++        })
++        .unwrap();
++    fixture.exit(3, MembershipExitAction::Deregister);
++    assert!(
++        fixture.engine.state.directory_branches[&directory]
++            .entries
++            .iter()
++            .any(|entry| entry.file_id == hidden.file_id)
++    );
++    assert!(
++        !fixture
++            .engine
++            .current_directory_entries(&directory)
++            .unwrap()
++            .iter()
++            .any(|entry| entry.file_id == hidden.file_id)
++    );
++    let before = fixture.engine.state.clone();
++    let result = fixture.configure(0, 2, &prefixes(), op()).unwrap();
++    assert_eq!(result.result["file_count"], "1");
++    assert_eq!(result.result["version_count"], "2");
++    assert_eq!(
++        fixture.engine.state.placements[&hidden.version_id],
++        before.placements[&hidden.version_id]
++    );
++    assert_eq!(
++        fixture.engine.state.file_backup_paths.get(&hidden.file_id),
++        before.file_backup_paths.get(&hidden.file_id)
++    );
++    assert_eq!(fixture.engine.state.directory_trees, before.directory_trees);
++    assert_eq!(fixture.engine.state.commits, before.commits);
++}
++
++fn planned_backup(fixture: &Fixture, operation: OperationId) -> crate::engine::MutationPlan {
++    let prefixes = prefixes();
++    let repository = &fixture.repository.repository_id;
++    fixture
++        .engine
++        .plan_mutation_digest(
++            KIND,
++            "admin",
++            operation,
++            json!({"repository_id":repository,"path":"docs","expected_scope_id":null,
++            "target_copies":2,"backup_prefixes":prefixes,"expected_generation":"0"}),
++            None,
++            |engine, next, prepared| {
++                let view = engine.admitted_current_namespaces()?.unwrap();
++                let plan = view.plan_backup_configuration(
++                    engine.state(),
++                    ScopedBackupConfigurationRequest {
++                        repository_id: repository,
++                        path: "docs",
++                        expected_scope_id: None,
++                        target_copies: 2,
++                        backup_prefixes: &prefixes,
++                        expected_generation: 0,
++                        principal: "admin",
++                        operation_id: operation,
++                    },
++                    || new_id("policy"),
++                )?;
++                for version in &plan.versions {
++                    prepared.push(Prepared {
++                        version: version.clone(),
++                        placement: plan.placements[&version.version_id].clone(),
++                        source: engine.valid_backup_replica(&version.version_id)?,
++                    });
++                }
++                for (id, policy) in plan.policies {
++                    match policy {
++                        Some(policy) => {
++                            next.protection_policies.insert(id, policy);
++                        }
++                        None => {
++                            next.protection_policies.remove(&id);
++                        }
++                    }
++                }
++                next.file_backup_policies.extend(plan.bindings);
++                next.file_backup_paths.extend(plan.paths);
++                next.placements.extend(plan.placements);
++                let mut result = plan.result;
++                result["configured_at"] = json!(crate::business::now()?.to_string());
++                Ok(result)
++            },
++        )
++        .unwrap()
++}
++
++fn copy_prepared(copies: &[Prepared]) -> Vec<Prepared> {
++    copies
++        .iter()
++        .map(|copy| Prepared {
++            version: copy.version.clone(),
++            placement: copy.placement.clone(),
++            source: copy.source.clone(),
++        })
++        .collect()
++}
++
++#[test]
++fn backup_requires_exact_prepared_bodies_and_opaque_source_before_any_publication_io() {
++    use crate::engine::MutationPlan;
++    let mut fixture = Fixture::new();
++    fixture.exit(3, MembershipExitAction::Deregister);
++    let view = fixture.engine.current_namespaces.as_ref().unwrap();
++    assert_eq!(
++        view.require_operation(KIND).unwrap_err().code(),
++        ErrorCode::RecoveryRequired
++    );
++    let MutationPlan::Prepared {
++        next,
++        prepared,
++        result,
++    } = planned_backup(&fixture, op())
++    else {
++        panic!("fresh backup must prepare its exact native delta");
++    };
++    assert_eq!(prepared.len(), 2);
++    view.verify_new_backup_configuration(fixture.engine.state(), &next, &result)
++        .unwrap();
++    view.verify_backup_prepared(fixture.engine.state(), &next, &result, &prepared)
++        .unwrap();
++    let generic = fixture.engine.planning_context().plan_new_mutation(
++        KIND,
++        "admin",
++        op(),
++        result.request_digest.clone(),
++        |_, _, _| panic!("generic kind permit must not invoke backup preparation"),
++    );
++    assert!(generic.is_err());
++    let watched = crate::disk::version_dir(
++        &fixture.config.disks[0],
++        &fixture.repository.history_tree_id,
++        &fixture.first.version_id,
++    );
++    for attack in 0..9 {
++        let mut copies = copy_prepared(&prepared);
++        let mut supplied = result.clone();
++        match attack {
++            0 => {
++                copies.pop();
++            }
++            1 => {
++                copies.extend(copy_prepared(&prepared[..1]));
++            }
++            2 => copies.swap(0, 1),
++            3 => copies[0].version.logical_size += 1,
++            4 => copies[0].placement.route_slot_ids.reverse(),
++            5 => {
++                copies[0].source =
++                    ReadSource::external(fixture.temp.path().join("forbidden-source"))
++            }
++            6 => {
++                let ReadSource::VerifiedReplica(source) = &copies[0].source else {
++                    panic!("verified source");
++                };
++                copies[0].source = ReadSource::on_disk(
++                    source.owner(),
++                    source
++                        .owner()
++                        .root
++                        .path()
++                        .join("forbidden-same-owner-source"),
++                );
++            }
++            7 => copies[0].source = copies[1].source.clone(),
++            8 => {
++                supplied.kind = "auth.update".into();
++                supplied.result = json!({});
++            }
++            _ => unreachable!(),
++        }
++        let before = fixture
++            .config
++            .disks
++            .iter()
++            .map(|disk| files(&disk.root))
++            .collect::<Vec<_>>();
++        let watch = watch_backup_payload(&watched);
++        let failure = fixture.engine.prepare_publication(
++            next.as_ref().clone(),
++            copies,
++            supplied,
++            MAX_METADATA,
++        );
++        assert_no_backup_payload_io(watch);
++        let error = failure
++            .err()
++            .expect("unproven backup must not leave publication preparation");
++        assert_eq!(
++            error.code(),
++            ErrorCode::PublicationInvalid,
++            "attack {attack}"
++        );
++        for (disk, expected) in fixture.config.disks.iter().zip(before) {
++            assert_eq!(files(&disk.root), expected, "attack {attack}");
++        }
++    }
++    // A successful real publication still has unchanged immutable identities,
++    // independent destination bytes, and the existing decision-bound checks.
++    fixture
++        .engine
++        .persist(*next, prepared, result.clone())
++        .unwrap();
++    assert_eq!(
++        fixture.engine.operation(result.operation_id).unwrap(),
++        result
++    );
++}
++
++#[test]
++fn later_backup_receipt_cannot_have_its_event_changed_or_appended_independently() {
++    let (fixture, view, _, result) = published();
++    let previous = fixture.engine.state.as_ref();
++    for append in [false, true] {
++        let mut next = previous.clone();
++        next.begin_tracking();
++        if append {
++            next.events.push(Event {
++                sequence: next.sequence,
++                operation_id: result.operation_id,
++                kind: KIND.into(),
++                object_id: result.history_tree_id.clone().unwrap(),
++            });
++        } else {
++            next.events
++                .iter_mut()
++                .find(|event| event.operation_id == result.operation_id)
++                .unwrap()
++                .kind = "auth.update".into();
++        }
++        rejected(&view, previous, &next, "independent permanent event");
++    }
++}
++
++fn watch_backup_payload(path: &Path) -> rustix::fd::OwnedFd {
++    use rustix::fs::inotify;
++    let watch =
++        inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK).unwrap();
++    inotify::add_watch(
++        &watch,
++        path,
++        inotify::WatchFlags::OPEN | inotify::WatchFlags::ACCESS,
++    )
++    .unwrap();
++    watch
++}
++fn assert_no_backup_payload_io(watch: rustix::fd::OwnedFd) {
++    let mut events = [0u8; 4096];
++    assert_eq!(
++        rustix::io::read(&watch, &mut events),
++        Err(rustix::io::Errno::WOULDBLOCK),
++        "rejected backup must not inspect its candidate's actual body/proof directory"
++    );
++}
++
++fn install_backup_decision(
++    engine: &mut Engine,
++    next: &State,
++    result: &OperationResult,
++    published: bool,
++    versions: Vec<crate::journal::VersionEvidence>,
++) -> crate::journal::Candidate {
++    use crate::journal::*;
++
++    let members = engine.members();
++    let snapshot = prepare_snapshot(next, MAX_METADATA).unwrap();
++    snapshot
++        .store_new_objects_at(&engine.disk_resources, &members)
++        .unwrap();
++    let catalog = crate::history_package::store_history_manifests_bounded_at(
++        &engine.disk_resources,
++        &members,
++        next,
++        MAX_METADATA,
++    )
++    .unwrap();
++    let generation = engine.config.generation().unwrap();
++    let candidate = Candidate::new_with_registry(
++        CandidateData {
++            pool_id: engine.config.pool_id.clone(),
++            sequence: next.sequence,
++            transaction_id: new_id("tx").unwrap(),
++            operation_id: result.operation_id,
++            request_digest: result.request_digest.clone(),
++            previous_snapshot: engine.snapshot.clone(),
++            snapshot_hash: snapshot.hash.clone(),
++            versions,
++            metadata_disk_ids: members.iter().map(|disk| disk.disk_id.clone()).collect(),
++            history_roots: catalog.reference().clone(),
++        },
++        engine.config.generation_hash().unwrap(),
++        generation.portable.exit_registry().unwrap(),
++    );
++    engine.verify_candidate_membership(&candidate).unwrap();
++    let hash = object_hash("candidate", &candidate).unwrap();
++    for disk in &members {
++        store_object_at(
++            &engine.disk_resources.get(disk).unwrap().root,
++            disk,
++            "candidate",
++            &candidate,
++        )
++        .unwrap();
++        engine
++            .append_journal(
++                disk,
++                RecordType::Prepare,
++                next.sequence,
++                &hash,
++                &candidate.snapshot_hash,
++            )
++            .unwrap();
++    }
++    let accepts = members
++        .iter()
++        .map(|disk| {
++            engine
++                .append_journal(disk, RecordType::Accept, next.sequence, &hash, &hash)
++                .unwrap()
++        })
++        .collect();
++    if published {
++        let finalize = Finalize {
++            candidate_hash: hash.clone(),
++            accepts,
++            recovery_id: None,
++        };
++        let finalize_hash = object_hash("finalize", &finalize).unwrap();
++        for disk in &members {
++            store_object_at(
++                &engine.disk_resources.get(disk).unwrap().root,
++                disk,
++                "finalize",
++                &finalize,
++            )
++            .unwrap();
++        }
++        let finalize_receipts = members
++            .iter()
++            .map(|disk| {
++                engine
++                    .append_journal(
++                        disk,
++                        RecordType::Finalize,
++                        next.sequence,
++                        &hash,
++                        &finalize_hash,
++                    )
++                    .unwrap()
++            })
++            .collect();
++        let publication = Publication {
++            candidate_hash: hash.clone(),
++            finalize: finalize.clone(),
++            finalize_receipts,
++            payload_receipts: candidate
++                .versions
++                .iter()
++                .flat_map(|evidence| {
++                    evidence
++                        .placement
++                        .route_slot_ids
++                        .iter()
++                        .map(|slot| {
++                            let disk = engine.disk(slot).unwrap();
++                            let proof = CommitProof {
++                                candidate_hash: hash.clone(),
++                                finalize: finalize.clone(),
++                                version_hash: object_hash("version", &evidence.version).unwrap(),
++                                disk_id: disk.disk_id.clone(),
++                                slot_id: slot.clone(),
++                                route_slot_ids: evidence.placement.route_slot_ids.clone(),
++                            };
++                            PayloadReceipt {
++                                version_id: evidence.version.version_id.clone(),
++                                disk_id: disk.disk_id.clone(),
++                                slot_id: slot.clone(),
++                                proof_hash: object_hash("commit-proof", &proof).unwrap(),
++                            }
++                        })
++                        .collect::<Vec<_>>()
++                })
++                .collect(),
++            result: result.clone(),
++            recovery: None,
++        };
++        let publication_hash = object_hash("publication", &publication).unwrap();
++        for disk in &members {
++            store_object_at(
++                &engine.disk_resources.get(disk).unwrap().root,
++                disk,
++                "publication",
++                &publication,
++            )
++            .unwrap();
++        }
++        let receipts = members
++            .iter()
++            .map(|disk| {
++                engine
++                    .append_journal(
++                        disk,
++                        RecordType::Publication,
++                        next.sequence,
++                        &hash,
++                        &publication_hash,
++                    )
++                    .unwrap()
++            })
++            .collect();
++        let seal = PublicationSeal {
++            candidate_hash: hash,
++            publication_hash,
++            receipts,
++        };
++        verify_publication_seal(&candidate, &publication, &seal).unwrap();
++        for disk in &members {
++            engine
++                .disk_resources
++                .get(disk)
++                .unwrap()
++                .root
++                .write_json(
++                    &publication_seal_path(disk, &seal.candidate_hash),
++                    &seal,
++                    false,
++                )
++                .unwrap();
++        }
++    }
++    candidate
++}
++
++#[test]
++fn cold_backup_binds_exact_copy_set_before_body_proof_discovery_and_repair() {
++    use crate::engine::MutationPlan;
++    use crate::journal::{VersionEvidence, object_path};
++    for published in [false, true] {
++        for attack in [
++            "valid",
++            "omitted",
++            "extra",
++            "duplicate",
++            "placement",
++            "source",
++            "retagged",
++            "erased-delta",
++        ] {
++            let mut fixture = Fixture::with_disk_count(5);
++            let other_slot = fixture.config.disks[4].slot_id.clone();
++            let other = fixture
++                .engine
++                .create_repository(
++                    &RepositoryName::parse("unrelated retained backup source").unwrap(),
++                    &other_slot,
++                    1,
++                    "admin",
++                    op(),
++                )
++                .unwrap();
++            let unrelated = save(
++                &mut fixture.engine,
++                &other,
++                "outside-scope",
++                b"unrelated actual bytes",
++            );
++            let extra = VersionEvidence {
++                version: fixture.engine.state.versions[&unrelated.version_id].clone(),
++                placement: fixture.engine.state.placements[&unrelated.version_id].clone(),
++            };
++            let stopped_bytes = fixture.exit(3, MembershipExitAction::Deregister);
++            let parked = fixture.temp.path().join("retained-stopped");
++            fs::rename(&fixture.config.disks[3].root, &parked).unwrap();
++            fs::write(
++                &fixture.config.disks[3].root,
++                b"stopped root must not be opened",
++            )
++            .unwrap();
++            let MutationPlan::Prepared {
++                mut next,
++                prepared,
++                mut result,
++            } = planned_backup(&fixture, op())
++            else {
++                panic!("new backup must prepare");
++            };
++            // Complete only the legitimate copy preparation. The fixture then
++            // stores real fixed-member decision frames for each forged envelope.
++            for copy in &prepared {
++                fixture.engine.prepare_payload(copy).unwrap();
++            }
++            let mut versions = prepared
++                .iter()
++                .map(|copy| VersionEvidence {
++                    version: copy.version.clone(),
++                    placement: copy.placement.clone(),
++                })
++                .collect::<Vec<_>>();
++            match attack {
++                "valid" => (),
++                "omitted" => {
++                    versions.pop();
++                }
++                "extra" => versions.push(extra.clone()),
++                "duplicate" => versions.push(versions[0].clone()),
++                "placement" => {
++                    versions[0].placement = Placement {
++                        version_id: versions[0].version.version_id.clone(),
++                        primary_slot_id: other_slot.clone(),
++                        target_copies: 1,
++                        route_slot_ids: vec![other_slot.clone()],
++                        topology_generation: extra.placement.topology_generation,
++                        binding_generations: extra.placement.binding_generations.clone(),
++                    };
++                }
++                "source" => {
++                    result.result["namespace_backup"]["owner_head_commit_id"] = json!("forged");
++                    next.operations.insert(result.operation_id, result.clone());
++                    versions.push(extra.clone());
++                }
++                "retagged" => {
++                    result.kind = "auth.user.create".into();
++                    result.result = json!({});
++                    result.request_digest =
++                        Engine::native_request_digest(&result.kind, "admin", &json!({})).unwrap();
++                    next.operations.insert(result.operation_id, result.clone());
++                    next.events.last_mut().unwrap().kind = result.kind.clone();
++                    versions.push(extra.clone());
++                }
++                "erased-delta" => {
++                    let sequence = next.sequence;
++                    *next = fixture.engine.state.as_ref().clone();
++                    next.begin_tracking();
++                    next.sequence = sequence;
++                    next.business_generation += 1;
++                    result.kind = "auth.user.create".into();
++                    result.result = json!({});
++                    result.request_digest =
++                        Engine::native_request_digest(&result.kind, "admin", &json!({})).unwrap();
++                    next.operations.insert(result.operation_id, result.clone());
++                    next.operation_principals
++                        .insert(result.operation_id, "admin".into());
++                    next.events.push(Event {
++                        sequence,
++                        operation_id: result.operation_id,
++                        kind: result.kind.clone(),
++                        object_id: result.history_tree_id.clone().unwrap(),
++                    });
++                    versions = vec![extra.clone()];
++                }
++                _ => unreachable!(),
++            }
++            let candidate =
++                install_backup_decision(&mut fixture.engine, &next, &result, published, versions);
++            let members = fixture.engine.members();
++            let missing = object_path(&members[0], "snapshot", &candidate.snapshot_hash);
++            let snapshot_bytes = fs::read(&missing).unwrap();
++            let unrelated_proof = crate::disk::version_dir(
++                &fixture.config.disks[4],
++                &extra.version.history_tree_id,
++                &extra.version.version_id,
++            );
++            assert!(!fixture.config.disks[4].metadata_member);
++            // Positive calibration observes exactly the commit-proof child that
++            // local_proof_directory_at would read for this live data-only body.
++            let calibration = watch_backup_payload(&unrelated_proof);
++            fs::read(unrelated_proof.join("commit-proof.json")).unwrap();
++            let mut events = [0u8; 4096];
++            assert!(rustix::io::read(&calibration, &mut events).unwrap() > 0);
++            drop(calibration);
++            let live_roots = fixture
++                .engine
++                .config
++                .io_disks()
++                .map(|disk| disk.root.clone())
++                .collect::<Vec<_>>();
++            let system = fixture.temp.path().join("system");
++            drop(fixture.engine);
++            fs::remove_file(&missing).unwrap();
++            let live_bytes = live_roots
++                .iter()
++                .map(|root| files(root))
++                .collect::<Vec<_>>();
++            let system_bytes = files(&system);
++            let watch = watch_backup_payload(&unrelated_proof);
++            let opened = Engine::open(&system);
++            assert_no_backup_payload_io(watch);
++            if attack == "valid" {
++                let mut engine = opened.unwrap();
++                assert_eq!(fs::read(&missing).unwrap(), snapshot_bytes);
++                assert_eq!(
++                    engine
++                        .configure_backups(BackupConfigurationRequest {
++                            repository_id: &fixture.repository.repository_id,
++                            path: "docs",
++                            target_copies: 2,
++                            backup_prefixes: &prefixes(),
++                            expected_generation: 0,
++                            principal: "admin",
++                            operation_id: result.operation_id,
++                        })
++                        .unwrap(),
++                    result
++                );
++                for entry in [&fixture.first, &fixture.latest] {
++                    let version = &engine.state.versions[&entry.version_id];
++                    let directory = crate::disk::version_dir(
++                        &fixture.config.disks[1],
++                        &version.history_tree_id,
++                        &version.version_id,
++                    );
++                    crate::disk::verify_payload_held(&directory, version).unwrap();
++                }
++            } else {
++                let error = opened
++                    .err()
++                    .expect("forged backup must fail before candidate repair");
++                assert_eq!(
++                    error.code(),
++                    ErrorCode::PublicationInvalid,
++                    "{published} {attack}: {error}"
++                );
++                assert_eq!(
++                    fs::symlink_metadata(&missing).unwrap_err().kind(),
++                    std::io::ErrorKind::NotFound
++                );
++                assert_eq!(files(&system), system_bytes, "{published} {attack}");
++                for (root, expected) in live_roots.iter().zip(live_bytes) {
++                    assert_eq!(files(root), expected, "{published} {attack}");
++                }
++            }
++            assert_eq!(files(&parked), stopped_bytes);
++            assert_eq!(
++                fs::read(&fixture.config.disks[3].root).unwrap(),
++                b"stopped root must not be opened"
++            );
++        }
++    }
++}
++
++#[test]
++fn backup_history_selection_never_resurrects_disposed_versions() {
++    let mut fixture = Fixture::new();
++    fixture.exit(3, MembershipExitAction::Deregister);
++    let view = fixture.engine.current_namespaces.as_ref().unwrap();
++    for disposed in [ContentState::Purged, ContentState::Migrated] {
++        let mut source = fixture.engine.state.as_ref().clone();
++        source
++            .content_states
++            .insert(fixture.first.version_id.clone(), disposed);
++        let prefixes = prefixes();
++        let plan = view
++            .plan_backup_configuration(
++                &source,
++                ScopedBackupConfigurationRequest {
++                    repository_id: &fixture.repository.repository_id,
++                    path: "docs",
++                    expected_scope_id: None,
++                    target_copies: 2,
++                    backup_prefixes: &prefixes,
++                    expected_generation: 0,
++                    principal: "admin",
++                    operation_id: op(),
++                },
++                || new_id("policy"),
++            )
++            .unwrap();
++        assert_eq!(plan.versions.len(), 1);
++        assert_eq!(plan.versions[0].version_id, fixture.latest.version_id);
++        assert!(!plan.placements.contains_key(&fixture.first.version_id));
++        assert_eq!(plan.result["version_count"], "1");
++    }
++}
++
++#[test]
++fn current_backup_degraded_recovery_stays_closed_before_local_body_observation() {
++    use crate::engine::MutationPlan;
++    let mut fixture = Fixture::new();
++    fixture.exit(3, MembershipExitAction::Deregister);
++    let MutationPlan::Prepared {
++        next,
++        prepared,
++        result,
++    } = planned_backup(&fixture, op())
++    else {
++        panic!("new backup must prepare");
++    };
++    let versions = prepared
++        .iter()
++        .map(|copy| crate::journal::VersionEvidence {
++            version: copy.version.clone(),
++            placement: copy.placement.clone(),
++        })
++        .collect();
++    install_backup_decision(&mut fixture.engine, &next, &result, false, versions);
++    let system = fixture.temp.path().join("system");
++    let proof = crate::disk::version_dir(
++        &fixture.config.disks[0],
++        &fixture.repository.history_tree_id,
++        &fixture.first.version_id,
++    );
++    drop(prepared);
++    drop(fixture.engine);
++    let mut engine = Engine::open_for_recovery(&system).unwrap();
++    let before = fixture
++        .config
++        .disks
++        .iter()
++        .map(|disk| files(&disk.root))
++        .collect::<Vec<_>>();
++    let system_bytes = files(&system);
++    let watch = watch_backup_payload(&proof);
++    let error = engine
++        .prepare_degraded_recovery(result.operation_id, "admin", "explicit unavailable replica")
++        .unwrap_err();
++    assert_no_backup_payload_io(watch);
++    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
++    assert!(
++        error
++            .to_string()
++            .contains("current-registry backup does not support degraded recovery"),
++        "{error}"
++    );
++    assert_eq!(files(&system), system_bytes);
++    for (disk, expected) in fixture.config.disks.iter().zip(before) {
++        assert_eq!(files(&disk.root), expected);
++    }
++}
++
++#[test]
++fn current_backup_get_reports_a_stopped_downstream_and_allows_explicit_copy_reduction() {
++    let mut fixture = Fixture::new();
++    fixture.configure(0, 2, &prefixes(), op()).unwrap();
++    let stopped = fixture.exit(1, MembershipExitAction::PlannedOffline);
++    let old_root = fixture.config.disks[1].root.clone();
++    let parked = fixture.temp.path().join("disabled-backup-root");
++    fs::rename(&old_root, &parked).unwrap();
++    fs::write(&old_root, b"never reopen disabled backup").unwrap();
++    let current = fixture
++        .engine
++        .backup_configuration(&fixture.repository.repository_id, "docs")
++        .unwrap();
++    assert_eq!(current.generation, 1);
++    assert_eq!(current.target_copies, 2);
++    assert_eq!(current.max_copies, 1);
++    assert_eq!(current.available_route_slot_ids, ["P01"]);
++    assert!(current.route_slot_ids.is_empty());
++    assert!(fixture.configure(1, 2, &prefixes(), op()).is_err());
++    fixture.configure(1, 1, &BTreeMap::new(), op()).unwrap();
++    for entry in [&fixture.first, &fixture.latest] {
++        assert_eq!(
++            fixture.engine.state.placements[&entry.version_id].route_slot_ids,
++            ["P01"]
++        );
++    }
++    assert!(
++        fixture
++            .engine
++            .disk_resources
++            .available(&fixture.config.disks[1])
++            .is_none()
++    );
++    assert_eq!(files(&parked), stopped);
++    assert_eq!(
++        fs::read(&old_root).unwrap(),
++        b"never reopen disabled backup"
++    );
++}
++
++#[test]
++fn current_backup_survives_successor_metadata_exit_and_frozen_archive_replay() {
++    let mut fixture = Fixture::new();
++    fixture.exit(3, MembershipExitAction::PlannedOffline);
++    let stopped_data = fixture.config.disks[3].root.clone();
++    let parked_data = fixture.temp.path().join("parked-data-before-backup");
++    fs::rename(&stopped_data, &parked_data).unwrap();
++    fs::write(&stopped_data, b"stopped data path is not storage").unwrap();
++    let original_data = files(&parked_data);
++
++    let operation = op();
++    let prefixes = prefixes();
++    let result = fixture.configure(0, 2, &prefixes, operation).unwrap();
++    assert_eq!(result.result["version_count"], "2");
++
++    // C01 is outside this exact two-copy route, but is a real old metadata
++    // voter. Its successor D3 freezes and replays the current backup itself.
++    let original_metadata = fixture.exit(2, MembershipExitAction::Deregister);
++    assert_eq!(fixture.engine.config.metadata_members().count(), 2);
++    let stopped_metadata = fixture.config.disks[2].root.clone();
++    let parked_metadata = fixture.temp.path().join("parked-metadata-after-backup");
++    fs::rename(&stopped_metadata, &parked_metadata).unwrap();
++    fs::write(&stopped_metadata, b"stopped metadata path is not storage").unwrap();
++
++    let system = fixture.temp.path().join("system");
++    drop(fixture.engine);
++    let mut engine = Engine::open(&system).unwrap();
++    assert_eq!(engine.config.metadata_members().count(), 2);
++    assert_eq!(
++        engine
++            .configure_backups(BackupConfigurationRequest {
++                repository_id: &fixture.repository.repository_id,
++                path: "docs",
++                target_copies: 2,
++                backup_prefixes: &prefixes,
++                expected_generation: 0,
++                principal: "admin",
++                operation_id: operation,
++            })
++            .unwrap(),
++        result
++    );
++    for (entry, expected) in [
++        (&fixture.first, b"first retained body".as_slice()),
++        (&fixture.latest, b"latest retained body".as_slice()),
++    ] {
++        let mut content = engine.open_content(&entry.version_id).unwrap();
++        let mut actual = Vec::new();
++        content.file.read_to_end(&mut actual).unwrap();
++        assert_eq!(actual, expected);
++        assert_eq!(
++            engine.state.placements[&entry.version_id].route_slot_ids,
++            ["P01", "B01"]
++        );
++    }
++    assert_eq!(files(&parked_data), original_data);
++    assert_eq!(files(&parked_metadata), original_metadata);
++    assert_eq!(
++        fs::read(&stopped_data).unwrap(),
++        b"stopped data path is not storage"
++    );
++    assert_eq!(
++        fs::read(&stopped_metadata).unwrap(),
++        b"stopped metadata path is not storage"
++    );
++}

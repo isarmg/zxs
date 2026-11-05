@@ -1,0 +1,1243 @@
+diff --git a/src/engine/src/degraded_recovery.rs b/src/engine/src/degraded_recovery.rs
+--- a/src/engine/src/degraded_recovery.rs
++++ b/src/engine/src/degraded_recovery.rs
+@@ -592,7 +592,6 @@
+         }
+         let candidate = candidate.ok_or_else(|| required("candidate missing"))?;
+         let hash = object_hash("candidate", &candidate)?;
+-        exclude_publication(self, &candidate, &hash)?;
+         let state = crate::publication_evidence::verified_snapshot_at(
+             &self.disk_resources,
+             &self.members(),
+@@ -604,6 +603,8 @@
+             &candidate,
+             Some(&state),
+         )?;
++        self.verify_current_recovery_candidate(&candidate, state.state())?;
++        exclude_publication(self, &candidate, &hash)?;
+         Ok((candidate, state, witnesses, accepts))
+     }
+     pub fn prepare_degraded_recovery(
+diff --git a/src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs b/src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs
+--- a/src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs
++++ b/src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs
+@@ -123,6 +123,62 @@
+ }
+ 
+ impl Engine {
++    /// Build only a read-only prefix validator. Unlike live admission this does
++    /// not install a namespace, acquire a Stop gate or publish SYSTEM state.
++    /// The prescribed empty-payload activation and full fixed-member barrier
++    /// must precede any later candidate's local payload proof lookup.
++    pub(in crate::engine) fn preflight_registry_activation(
++        &self,
++        candidate: &Candidate,
++        original: &crate::history_package::AdmittedState,
++        publication: &Publication,
++        seal: &PublicationSeal,
++    ) -> Result<CurrentNamespaces> {
++        let generation = self.config.generation().ok_or_else(|| {
++            Error::new(
++                ErrorCode::PublicationInvalid,
++                "registry preflight has no generation",
++            )
++        })?;
++        generation.verify_activation_candidate(candidate)?;
++        verify_publication_seal(candidate, publication, seal)?;
++        if publication.result != generation.result()? || publication.recovery.is_some() {
++            return Err(Error::new(
++                ErrorCode::PublicationInvalid,
++                "registry preflight differs from its prescribed activation result",
++            ));
++        }
++        let previous = self.replay_registry_source(generation)?;
++        let prepared = generation
++            .portable
++            .prepare_namespace_activation(&generation.base, previous.as_ref())?;
++        let boundary = generation
++            .intent
++            .boundary
++            .as_ref()
++            .expect("invariant: registry source");
++        let proof = AdmittedDiskExitPublication {
++            admission: PublicationAdmission::Preflight,
++            registry: generation
++                .portable
++                .exit_registry()
++                .expect("invariant: registry activation")
++                .clone(),
++            occurrence_mask_hash: generation.portable.activation_mask_hash()?,
++            source_snapshot: boundary.snapshot_hash.clone(),
++            source_sequence: boundary.sequence,
++            source_business_generation: generation.base.business_generation,
++            published_snapshot: candidate.snapshot_hash.clone(),
++            published_sequence: candidate.sequence,
++        };
++        prepared.admit(
++            &generation.base,
++            original.state(),
++            &candidate.snapshot_hash,
++            &proof,
++        )
++    }
++
+     pub(super) fn replay_registry_source(
+         &self,
+         generation: &Generation,
+diff --git a/src/engine/src/engine/membership_transition/pending/activation/exit.rs b/src/engine/src/engine/membership_transition/pending/activation/exit.rs
+--- a/src/engine/src/engine/membership_transition/pending/activation/exit.rs
++++ b/src/engine/src/engine/membership_transition/pending/activation/exit.rs
+@@ -448,12 +448,14 @@
+         .context(ErrorCode::PublicationInvalid, "exit namespace proof")
+ }
+ 
+-/// Constructed only after the exact prescribed D3, actual retained journals,
+-/// durable bootstrap restriction and physical I/O closure have all been verified.
++/// Live admission requires exact D3, actual retained journals, durable Stop
++/// restrictions and physical I/O closure. Archived and preflight admission are
++/// validation-only and can never install a live Engine namespace.
+ /// It is not serializable and no caller can manufacture its fields.
+ enum PublicationAdmission {
+     Live,
+     Archived,
++    Preflight,
+ }
+ 
+ pub(in crate::engine) struct AdmittedDiskExitPublication {
+diff --git a/src/engine/src/engine/recovery/payload_admission.rs b/src/engine/src/engine/recovery/payload_admission.rs
+new file mode 100644
+--- /dev/null
++++ b/src/engine/src/engine/recovery/payload_admission.rs
+@@ -0,0 +1,373 @@
++//! Pure payload authority for current-registry recovery, before any body I/O.
++use super::*;
++use crate::engine::disk_registry::current::CurrentNamespaces;
++
++pub(super) fn verify(
++    view: &CurrentNamespaces,
++    advanced: &CurrentNamespaces,
++    previous: &State,
++    next: &State,
++    candidate: &Candidate,
++) -> Result<()> {
++    verify_fresh_payload_delta(view, previous, next, candidate)?;
++    verify_payload_scopes(view, advanced, previous, next, candidate)
++}
++
++// The admitted current payload producers (uploads and copied versions) create
++// fresh immutable versions through build_version. Bind that complete State
++// delta, not a caller-chosen operation label or a list in its result. Existing
++// versions/placements cannot acquire I/O authority from a no-op receipt. A future
++// producer of historical copies needs its own complete, explicit proof branch.
++fn verify_fresh_payload_delta(
++    view: &CurrentNamespaces,
++    previous: &State,
++    next: &State,
++    candidate: &Candidate,
++) -> Result<()> {
++    let invalid = || {
++        Error::new(
++            ErrorCode::PublicationInvalid,
++            "current-registry candidate payloads differ from the exact fresh version and placement delta",
++        )
++    };
++    if candidate.registry() != Some(view.registry())
++        || previous
++            .versions
++            .len()
++            .checked_add(candidate.versions.len())
++            != Some(next.versions.len())
++        || previous
++            .placements
++            .len()
++            .checked_add(candidate.versions.len())
++            != Some(next.placements.len())
++        || previous
++            .versions
++            .iter()
++            .any(|(id, version)| next.versions.get(id) != Some(version))
++        || previous
++            .placements
++            .iter()
++            .any(|(id, placement)| next.placements.get(id) != Some(placement))
++    {
++        return Err(invalid());
++    }
++    let mut seen = BTreeSet::new();
++    for evidence in &candidate.versions {
++        let id = &evidence.version.version_id;
++        if !seen.insert(id)
++            || previous.versions.contains_key(id)
++            || previous.placements.contains_key(id)
++            || evidence.version.version_sequence != candidate.sequence
++            || evidence.placement.version_id != *id
++            || next.versions.get(id) != Some(&evidence.version)
++            || next.placements.get(id) != Some(&evidence.placement)
++            || next.content_states.get(id) != Some(&storage_contract::ContentState::Available)
++        {
++            return Err(invalid());
++        }
++        for slot in &evidence.placement.route_slot_ids {
++            view.require_write_slot(slot).map_err(|source| {
++                source.context(
++                    ErrorCode::PublicationInvalid,
++                    "current candidate payload route is not admitted for writes",
++                )
++            })?;
++        }
++    }
++    Ok(())
++}
++
++// A fresh object alone is not a content write: a receipt-only operation could
++// invent an otherwise well-formed orphan version. Each payload must belong to
++// the same actor/operation's actual, newly advanced writable namespace. These
++// are the two existing current-generation producers; unknown producers fail
++// closed until they supply a complete dedicated payload admission.
++fn verify_payload_scopes(
++    source: &CurrentNamespaces,
++    advanced: &CurrentNamespaces,
++    previous: &State,
++    next: &State,
++    candidate: &Candidate,
++) -> Result<()> {
++    if candidate.versions.is_empty() {
++        return Ok(());
++    }
++    let invalid = || {
++        Error::new(
++            ErrorCode::PublicationInvalid,
++            "current-registry payload has no matching native content publication scope",
++        )
++    };
++    let result = next
++        .operations
++        .get(&candidate.operation_id)
++        .ok_or_else(invalid)?;
++    let principal = next
++        .operation_principals
++        .get(&candidate.operation_id)
++        .ok_or_else(invalid)?;
++    Engine::require_actor(principal)?;
++    if previous.operations.contains_key(&candidate.operation_id)
++        || previous
++            .operation_principals
++            .contains_key(&candidate.operation_id)
++        || !next.events.last().is_some_and(|event| {
++            event.operation_id == candidate.operation_id
++                && event.sequence == candidate.sequence
++                && event.kind == result.kind
++        })
++    {
++        return Err(invalid());
++    }
++    let workspace = result.kind == "workspace.commit";
++    let copied = result.kind == "directory.namespace.batch"
++        && result.result["action"] == json_codec::json!(DirectoryBatchKind::Copy);
++    if !workspace && !copied {
++        return Err(invalid());
++    }
++    let copy_paths = if copied {
++        Some(verify_copied_payload_request(
++            source, previous, candidate, result, principal,
++        )?)
++    } else {
++        None
++    };
++    let native_commit = |commit: &Commit| {
++        !previous.commits.contains_key(&commit.commit_id)
++            && commit.operation_id == candidate.operation_id
++            && commit.sequence == candidate.sequence
++            && &commit.author == principal
++            && result.history_tree_id.as_ref() == Some(&commit.history_tree_id)
++    };
++    let versions = candidate
++        .versions
++        .iter()
++        .map(|evidence| (evidence.version.version_id.as_str(), &evidence.version))
++        .collect::<BTreeMap<_, _>>();
++    let mut covered = BTreeSet::new();
++    for (id, branch) in next.branches.iter() {
++        if previous
++            .branches
++            .get(id)
++            .is_some_and(|old| old.head_commit_id == branch.head_commit_id)
++        {
++            continue;
++        }
++        let commit = next
++            .commits
++            .get(&branch.head_commit_id)
++            .ok_or_else(invalid)?;
++        if !native_commit(commit) || !advanced.branch_writable(next, id)? {
++            continue;
++        }
++        if workspace
++            && (result.branch_id.as_ref() != Some(id)
++                || result.commit_id.as_ref() != Some(&commit.commit_id)
++                || commit.kind != "content")
++        {
++            continue;
++        }
++        if workspace {
++            let before = previous.branches.get(id).ok_or_else(invalid)?;
++            if commit.parent_commit_ids.as_slice() != std::slice::from_ref(&before.head_commit_id) {
++                return Err(invalid());
++            }
++        }
++        for entry in advanced.branch_entries(id, &branch.head_commit_id)? {
++            if entry.kind == NamespaceEntryKind::File
++                && versions
++                    .get(entry.version_id.as_str())
++                    .is_some_and(|version| {
++                        version.file_id == entry.file_id
++                            && version.history_tree_id == commit.history_tree_id
++                            && version.logical_size == entry.size
++                    })
++            {
++                if copy_paths
++                    .as_ref()
++                    .is_some_and(|paths| !paths[&entry.version_id].contains(entry.lookup_key()))
++                {
++                    return Err(invalid());
++                }
++                covered.insert(entry.version_id.as_str());
++            }
++        }
++    }
++    if copied {
++        for (id, branch) in next.directory_branches.iter() {
++            if previous
++                .directory_branches
++                .get(id)
++                .is_some_and(|old| old.head_tree_id == branch.head_tree_id)
++            {
++                continue;
++            }
++            let commit = next.commits.get(&branch.commit_id).ok_or_else(invalid)?;
++            if !native_commit(commit) || !advanced.directory_writable(next, id)? {
++                continue;
++            }
++            for entry in advanced.directory_entries(id, &branch.head_tree_id)? {
++                if entry.kind == NamespaceEntryKind::File
++                    && versions
++                        .get(entry.version_id.as_str())
++                        .is_some_and(|version| {
++                            version.file_id == entry.file_id
++                                && version.history_tree_id == commit.history_tree_id
++                                && version.logical_size == entry.size
++                        })
++                {
++                    if copy_paths
++                        .as_ref()
++                        .is_some_and(|paths| !paths[&entry.version_id].contains(entry.lookup_key()))
++                    {
++                        return Err(invalid());
++                    }
++                    covered.insert(entry.version_id.as_str());
++                }
++            }
++        }
++    }
++    if covered.len() != candidate.versions.len() {
++        return Err(invalid());
++    }
++    Ok(())
++}
++
++// Copy retains its original source/target request in the permanent transfer
++// result. Recompute that request and resolve sources through the current batch
++// admission, never through a raw historical tree or an arbitrary old body.
++fn verify_copied_payload_request(
++    view: &CurrentNamespaces,
++    previous: &State,
++    candidate: &Candidate,
++    result: &OperationResult,
++    principal: &str,
++) -> Result<BTreeMap<String, BTreeSet<String>>> {
++    let invalid = || {
++        Error::new(
++            ErrorCode::PublicationInvalid,
++            "copied payload differs from its native current namespace request",
++        )
++    };
++    let transfers = result.result["transfers"].as_array().ok_or_else(invalid)?;
++    let items = transfers
++        .iter()
++        .map(|transfer| {
++            json_codec::from_value::<DirectoryNamespaceItem>(json_codec::json!({
++                "source": transfer["source"], "target": transfer["target"],
++            }))
++            .map_err(|source| {
++                Error::from(source).context(
++                    ErrorCode::PublicationInvalid,
++                    "invalid persisted namespace copy request",
++                )
++            })
++        })
++        .collect::<Result<Vec<_>>>()?;
++    let request = DirectoryNamespaceBatch {
++        kind: DirectoryBatchKind::Copy,
++        items,
++    };
++    let history = result.history_tree_id.as_ref().ok_or_else(invalid)?;
++    let repository = &previous
++        .histories
++        .get(history)
++        .ok_or_else(invalid)?
++        .repository_id;
++    if request.items.is_empty()
++        || result.result["count"].as_str() != Some(request.items.len().to_string().as_str())
++        || Engine::native_request_digest(
++            "directory.namespace.batch",
++            principal,
++            &json_codec::json!({"repository_id": repository, "request": request}),
++        )? != candidate.request_digest
++    {
++        return Err(invalid());
++    }
++    let mut sources = BTreeSet::new();
++    for item in &request.items {
++        let target = item.target.as_ref().ok_or_else(invalid)?;
++        for (id, expected) in [
++            (
++                &item.source.directory_branch_id,
++                &item.source.expected_tree_id,
++            ),
++            (&target.directory_branch_id, &target.expected_tree_id),
++        ] {
++            let branch = previous.directory_branches.get(id).ok_or_else(invalid)?;
++            if &branch.repository_id != repository || &branch.head_tree_id != expected {
++                return Err(invalid());
++            }
++            view.batch_scope(previous, id)?;
++        }
++        let source = view.batch_scope(previous, &item.source.directory_branch_id)?;
++        let original = source
++            .branch()
++            .entries
++            .iter()
++            .find(|entry| {
++                entry.entry_id == item.source.entry_id
++                    && entry.lookup_key() == name_policy::path_key(&item.source.path)
++            })
++            .ok_or_else(invalid)?;
++        let prefix = format!("{}/", original.lookup_key());
++        for entry in source.branch().entries.iter().filter(|entry| {
++            entry.kind == NamespaceEntryKind::File
++                && (entry.lookup_key() == original.lookup_key()
++                    || original.kind == NamespaceEntryKind::Directory
++                        && entry.lookup_key().starts_with(&prefix))
++        }) {
++            // Match native batch::relocate by components. Display spelling of
++            // an ancestor may differ while its normalized identity is equal.
++            let depth = original.path().split('/').count();
++            let target_path = name_policy::PortablePath::parse(&target.path)?;
++            let destination = if entry.path().split('/').count() == depth {
++                target_path
++            } else {
++                entry.location().rebase(depth, &target_path)?
++            };
++            sources.insert((
++                entry.file_id.clone(),
++                entry.version_id.clone(),
++                destination.key().to_owned(),
++            ));
++        }
++    }
++    let copies = result.result["copies"].as_array().ok_or_else(invalid)?;
++    if copies.len() != candidate.versions.len() {
++        return Err(invalid());
++    }
++    let mut permitted = BTreeMap::new();
++    for (copy, evidence) in copies.iter().zip(&candidate.versions) {
++        let source_file = copy["source_file_id"].as_str().ok_or_else(invalid)?;
++        let source_version = copy["source_version_id"].as_str().ok_or_else(invalid)?;
++        let path = copy["path"].as_str().ok_or_else(invalid)?;
++        let original = previous.versions.get(source_version).ok_or_else(invalid)?;
++        if !sources.contains(&(
++            source_file.to_owned(),
++            source_version.to_owned(),
++            name_policy::path_key(path),
++        )) || copy["file_id"].as_str() != Some(evidence.version.file_id.as_str())
++            || copy["version_id"].as_str() != Some(evidence.version.version_id.as_str())
++            || previous.content_states.get(source_version)
++                != Some(&storage_contract::ContentState::Available)
++            || original.file_id != source_file
++            || original.content_hash != evidence.version.content_hash
++            || original.logical_size != evidence.version.logical_size
++            || !evidence.version.created_as_full_checkpoint
++            || !evidence.version.source_version_ids.is_empty()
++        {
++            return Err(invalid());
++        }
++        permitted.insert(
++            evidence.version.version_id.clone(),
++            sources
++                .iter()
++                .filter(|(file, version, _)| file == source_file && version == source_version)
++                .map(|(_, _, path)| path.clone())
++                .collect(),
++        );
++    }
++    Ok(permitted)
++}
+diff --git a/src/engine/src/engine/recovery/workspace_receipts.rs b/src/engine/src/engine/recovery/workspace_receipts.rs
+--- a/src/engine/src/engine/recovery/workspace_receipts.rs
++++ b/src/engine/src/engine/recovery/workspace_receipts.rs
+@@ -1,5 +1,6 @@
+ //! Verify published receipts before workspace admission or recovery writes.
+ use super::*;
++use crate::engine::disk_registry::current::CurrentNamespaces;
+ use std::sync::Arc;
+ 
+ pub(super) struct PreparedCandidate {
+@@ -9,6 +10,14 @@
+     // Only this exact candidate.snapshot_hash, consumed once under the same
+     // admitted roots/locks. Never an all-history State cache.
+     pub snapshot: Option<crate::publication_evidence::SharedAdmittedSnapshot>,
++    // A pure next view for this preflight slot, never an Engine installation.
++    next_namespaces: Option<CurrentNamespaces>,
++}
++
++pub(super) struct ReceiptPrefix<'a> {
++    pub snapshot: &'a Option<String>,
++    pub state: &'a State,
++    pub namespaces: Option<&'a CurrentNamespaces>,
+ }
+ 
+ impl Engine {
+@@ -17,6 +26,8 @@
+         prepared: &mut PreparedRecovery,
+     ) -> Result<()> {
+         let mut previous = self.snapshot.clone();
++        let mut previous_state = Arc::clone(&self.state);
++        let mut namespaces = self.current_namespaces.as_deref().cloned();
+         let mut published = None;
+         for (sequence, candidates) in &prepared.records {
+             let mut active = candidates.iter().filter(|(_, receipts)| {
+@@ -41,7 +52,11 @@
+                 *sequence,
+                 hash,
+                 receipts,
+-                &previous,
++                ReceiptPrefix {
++                    snapshot: &previous,
++                    state: &previous_state,
++                    namespaces: namespaces.as_ref(),
++                },
+             )?;
+             let barrier = match &candidate.publication {
+                 Some(publication) => published_barrier(
+@@ -56,12 +71,59 @@
+                     break;
+                 }
+             };
+-            if let Err(source) = barrier {
+-                // This slot may still be repairable by apply. It cannot grant
+-                // cold admission. Keep the concrete failure for diagnostics.
+-                candidate.barrier_failure = Some(source);
+-                prepared.candidates.insert(*sequence, candidate);
+-                break;
++            let seal = match barrier {
++                Ok(seal) => seal,
++                Err(source) => {
++                    // This slot may still be repairable by apply. It cannot grant
++                    // cold admission. Keep the concrete failure for diagnostics.
++                    candidate.barrier_failure = Some(source);
++                    prepared.candidates.insert(*sequence, candidate);
++                    break;
++                }
++            };
++            if candidate.candidate.registry().is_some() {
++                if candidate.next_namespaces.is_none()
++                    && let Err(source) =
++                        self.preflight_registry_barrier(&prepared.online, receipts, &seal)
++                {
++                    // A serialized seal is not an actual D3 journal barrier.
++                    // Leave this slot for normal repair, without inspecting any
++                    // later payload proof or advancing workspace admission.
++                    candidate.barrier_failure = Some(source);
++                    prepared.candidates.insert(*sequence, candidate);
++                    break;
++                }
++                let admitted = candidate
++                    .snapshot
++                    .take()
++                    .expect("invariant: registry preflight authenticated its snapshot")
++                    .into_admitted();
++                let original = admitted.for_candidate(&candidate.candidate)?;
++                namespaces = Some(match candidate.next_namespaces.take() {
++                    Some(view) => view,
++                    None => self.preflight_registry_activation(
++                        &candidate.candidate,
++                        original,
++                        candidate
++                            .publication
++                            .as_ref()
++                            .expect("invariant: published barrier"),
++                        &seal,
++                    )?,
++                });
++                let shared = admitted.into_shared();
++                previous_state = shared.share_state();
++                // The original proof remains unmodified for this candidate.
++                // Only the next slot's predecessor includes an authenticated
++                // recovered outcome, just as the visible replay state does.
++                if let Some(publication) = &candidate.publication
++                    && publication.recovery.is_some()
++                {
++                    Arc::make_mut(&mut previous_state)
++                        .operations
++                        .insert(candidate.candidate.operation_id, publication.result.clone());
++                }
++                candidate.snapshot = Some(shared);
+             }
+             previous = Some(candidate.candidate.snapshot_hash.clone());
+             published = Some(*sequence);
+@@ -70,6 +132,9 @@
+             prepared.candidates.clear();
+             prepared.candidates.insert(*sequence, candidate);
+         }
++        // End the cursor's snapshot loan before reclaiming the latest cached
++        // admitted State below (SharedAdmittedState requires unique ownership).
++        drop(previous_state);
+         self.verify_membership_fence_prefix(published, previous.as_deref())?;
+         // Main's operation and operation_principals maps remain authoritative.
+         // Only the latest fully published State is needed for cold admission;
+@@ -131,38 +196,67 @@
+         sequence: u64,
+         hash: &str,
+         receipts: &[Receipt],
+-        previous: &Option<String>,
++        prefix: ReceiptPrefix<'_>,
+     ) -> Result<PreparedCandidate> {
+         let candidate: Candidate =
+             verified_object_at(&self.disk_resources, online, "candidate", hash)?;
+         self.verify_candidate_membership(&candidate)?;
+         if let Some(generation) = self.config.generation()
+-            && previous == &generation.snapshot()
++            && prefix.snapshot == &generation.snapshot()
+         {
+             generation.verify_activation_candidate(&candidate)?;
+         }
+         if candidate.sequence != sequence
+             || candidate.pool_id != self.config.pool_id
+-            || &candidate.previous_snapshot != previous
++            || &candidate.previous_snapshot != prefix.snapshot
+         {
+             return Err(Error::new(
+                 ErrorCode::LogFork,
+                 "candidate does not extend the verified publication prefix",
+             ));
+         }
+-        // Publication discovery can read local payload proofs even for an
+-        // ACCEPT-only candidate. Authenticate the original snapshot receipt
+-        // before letting a current-registry envelope drive any such I/O.
+-        let snapshot = if candidate.registry().is_some() && !candidate.versions.is_empty() {
++        // Even ACCEPT-only discovery may open a data-only local proof. Prove
++        // this slot against its exact admitted predecessor before that search;
++        // receipt labels alone cannot grant permission to inspect payloads.
++        let mut next_namespaces = None;
++        let snapshot = if candidate.registry().is_some() {
+             let admitted = verified_recovery_snapshot_at(
+                 &self.disk_resources,
+                 online,
+                 &candidate.snapshot_hash,
+             )?;
+-            verify_current_candidate_receipt(
++            let original = admitted.for_candidate(&candidate)?;
++            crate::history_package::bound_history_objects_at(
++                &self.disk_resources,
++                online,
+                 &candidate,
+-                admitted.for_candidate(&candidate)?.state(),
++                Some(original),
+             )?;
++            if let Some(view) = prefix.namespaces {
++                next_namespaces = Some(verify_current_candidate_transition(
++                    view,
++                    prefix.state,
++                    original.state(),
++                    &candidate,
++                )?);
++            } else {
++                // The exact prescribed activation has no payload vector. Only
++                // its verified publication barrier can establish the pure view
++                // used to check following slots. Pending activation grants none.
++                let generation = self.config.generation().ok_or_else(|| {
++                    Error::new(
++                        ErrorCode::PublicationInvalid,
++                        "registry candidate has no generation",
++                    )
++                })?;
++                if prefix.snapshot != &generation.snapshot() {
++                    return Err(Error::new(
++                        ErrorCode::PublicationInvalid,
++                        "registry candidate precedes its verified activation",
++                    ));
++                }
++                generation.verify_activation_candidate(&candidate)?;
++            }
+             Some(admitted.into_shared())
+         } else {
+             None
+@@ -184,7 +278,46 @@
+             publication,
+             barrier_failure: None,
+             snapshot,
++            next_namespaces,
+         })
++    }
++
++    fn preflight_registry_barrier(
++        &self,
++        online: &[DiskConfig],
++        receipts: &[Receipt],
++        seal: &PublicationSeal,
++    ) -> Result<()> {
++        if online.len() < self.config.metadata_quorum() {
++            return Err(Error::new(
++                ErrorCode::MetadataQuorumUnavailable,
++                "registry preflight lacks its unchanged target metadata quorum",
++            ));
++        }
++        if online.iter().any(|disk| {
++            !seal.receipts.iter().any(|sealed| {
++                sealed.disk_id == disk.disk_id
++                    && sealed.slot_id == disk.slot_id
++                    && receipts.iter().any(|actual| actual == sealed)
++            })
++        }) {
++            return Err(Error::new(
++                ErrorCode::RecoveryRequired,
++                "registry preflight lacks an actual retained D3 publication receipt",
++            ));
++        }
++        Ok(())
++    }
++
++    pub(crate) fn verify_current_recovery_candidate(
++        &self,
++        candidate: &Candidate,
++        next: &State,
++    ) -> Result<()> {
++        if let Some(view) = self.admitted_current_namespaces()? {
++            verify_current_candidate_transition(view, &self.state, next, candidate)?;
++        }
++        Ok(())
+     }
+ }
+ 
+@@ -194,7 +327,7 @@
+     receipts: &[Receipt],
+     candidate: &Candidate,
+     publication: &Publication,
+-) -> Result<()> {
++) -> Result<PublicationSeal> {
+     let publication_hash = object_hash("publication", publication)?;
+     let complete = candidate
+         .metadata_disk_ids
+@@ -211,19 +344,31 @@
+         })
+         .collect::<Option<Vec<_>>>();
+     if let Some(receipts) = complete {
+-        verify_publication_seal(
+-            candidate,
+-            publication,
+-            &PublicationSeal {
+-                candidate_hash: publication.candidate_hash.clone(),
+-                publication_hash,
+-                receipts,
+-            },
+-        )
++        let seal = PublicationSeal {
++            candidate_hash: publication.candidate_hash.clone(),
++            publication_hash,
++            receipts,
++        };
++        verify_publication_seal(candidate, publication, &seal)?;
++        Ok(seal)
+     } else {
+         verified_publication_seal_at(&engine.disk_resources, online, candidate, publication)
+-            .map(|_| ())
+-    }
++    }
++}
++
++// All callers share this ordering, including explicit degraded recovery. This
++// builds a pure view; neither it nor the preflight activation authorizes live
++// namespace installation, payload repair or weakening a publication barrier.
++fn verify_current_candidate_transition(
++    view: &CurrentNamespaces,
++    previous: &State,
++    next: &State,
++    candidate: &Candidate,
++) -> Result<CurrentNamespaces> {
++    let advanced = view.advance(previous, next)?;
++    verify_current_candidate_receipt(candidate, next)?;
++    super::payload_admission::verify(view, &advanced, previous, next, candidate)?;
++    Ok(advanced)
+ }
+ 
+ // State-only transition proofs cannot constrain Candidate.versions, which
+diff --git a/src/engine/src/engine/recovery.rs b/src/engine/src/engine/recovery.rs
+--- a/src/engine/src/engine/recovery.rs
++++ b/src/engine/src/engine/recovery.rs
+@@ -8,6 +8,7 @@
+ use crate::{disk::*, journal::*, *};
+ use std::collections::{BTreeMap, BTreeSet};
+ 
++mod payload_admission;
+ mod workspace_receipts;
+ 
+ /// Read-only journal admission, retained with its held descriptors until apply.
+@@ -366,7 +367,11 @@
+                     sequence,
+                     &hash,
+                     &rs,
+-                    &self.snapshot,
++                    workspace_receipts::ReceiptPrefix {
++                        snapshot: &self.snapshot,
++                        state: &self.state,
++                        namespaces: self.current_namespaces.as_deref(),
++                    },
+                 )?,
+             };
+             let candidate = prepared.candidate;
+@@ -471,9 +476,8 @@
+             // Prove the authenticated transition before repairing any of this
+             // candidate's replicas, payloads, names or publication receipts.
+             // advance is pure: install the new view only after completion below.
+-            if let Some(view) = &self.current_namespaces {
+-                workspace_receipts::verify_current_candidate_receipt(&candidate, next)?;
+-                view.advance(&self.state, next)?;
++            if self.current_namespaces.is_some() {
++                self.verify_current_recovery_candidate(&candidate, next)?;
+             }
+             if publication.is_none() && mode == RecoveryMode::PreservePending {
+                 self.blocked = true;
+diff --git a/test/engine/unit/engine/current_plan_cancellation_tests.rs b/test/engine/unit/engine/current_plan_cancellation_tests.rs
+--- a/test/engine/unit/engine/current_plan_cancellation_tests.rs
++++ b/test/engine/unit/engine/current_plan_cancellation_tests.rs
+@@ -72,12 +72,20 @@
+ 
+ impl Fixture {
+     fn new() -> Self {
++        Self::with_retained_limit(None)
++    }
++
++    fn with_retained_limit(limit: Option<usize>) -> Self {
+         let temp = tempfile::tempdir().unwrap();
+         let mut config =
+             Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+         config.disks[3].level = 1;
+         config.disks[3].upstream_slot_id = None;
+         config.disks[3].metadata_member = false;
++        if let Some(limit) = limit {
++            config.max_retained_workspaces = limit;
++            config.max_retained_workspaces_per_principal = limit;
++        }
+         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
+         let repository = engine
+             .create_repository(
+@@ -1511,6 +1519,11 @@
+             "prior-owner",
+             "location",
+             "payload",
++            "payload-kind",
++            "payload-marker",
++            "payload-noop",
++            "payload-orphan-auth",
++            "payload-orphan-workspace",
+         ] {
+             let mut fixture = Fixture::new();
+             fixture.exit(0, MembershipExitAction::Deregister);
+@@ -1552,6 +1565,37 @@
+             assert!(prepared.is_empty());
+             match attack {
+                 "valid" | "payload" => (),
++                "payload-kind"
++                | "payload-marker"
++                | "payload-noop"
++                | "payload-orphan-auth"
++                | "payload-orphan-workspace" => {
++                    result.kind = if attack == "payload-orphan-workspace" {
++                        "workspace.commit"
++                    } else {
++                        "auth.unrelated"
++                    }
++                    .into();
++                    next.events.last_mut().unwrap().kind = result.kind.clone();
++                    if attack == "payload-marker" {
++                        // Removing the Cancelled marker must not hide the real
++                        // unauthorized Plan write from the pure State proof.
++                        next.plans.get_mut(&plan.plan_id).unwrap().state = PlanState::Ready;
++                        result.result["state"] = json!("ready");
++                    }
++                    if attack == "payload-noop" || attack.starts_with("payload-orphan") {
++                        // Erase the entire business mutation and every marker.
++                        // State-only advance legitimately preserves this view;
++                        // only an exact payload delta can reject the old vector.
++                        next.plans.remove(&plan.plan_id);
++                        result.result = json!({
++                            "timestamp": result.result["timestamp"],
++                            "membership_epoch": result.result["membership_epoch"],
++                            "version_protection": [],
++                        });
++                    }
++                    next.operations.insert(operation, result.clone());
++                }
+                 "actor" => {
+                     next.operation_principals.insert(operation, "other".into());
+                 }
+@@ -1577,7 +1621,32 @@
+             // Keep the original State, request and exact receipt valid, but
+             // independently smuggle an existing live data-only payload into the
+             // Candidate that drives repair. No planner may produce this pair.
+-            let versions = if attack == "payload" {
++            let versions = if attack.starts_with("payload-orphan") {
++                let original = next.versions[&fixture.current.version_id].clone();
++                let mut version = original.clone();
++                version.version_id = new_id("ver").unwrap();
++                version.version_sequence = next.sequence;
++                let mut placement = next.placements[&fixture.current.version_id].clone();
++                placement.version_id = version.version_id.clone();
++                next.versions
++                    .insert(version.version_id.clone(), version.clone());
++                next.placements
++                    .insert(version.version_id.clone(), placement.clone());
++                next.content_states.insert(
++                    version.version_id.clone(),
++                    storage_contract::ContentState::Available,
++                );
++                let disk = fixture.engine.disk(&placement.route_slot_ids[0]).unwrap();
++                let old =
++                    crate::disk::version_dir(disk, &original.history_tree_id, &original.version_id);
++                let orphan =
++                    crate::disk::version_dir(disk, &version.history_tree_id, &version.version_id);
++                fs::create_dir_all(&orphan).unwrap();
++                for name in ["commit-proof.json", "publication-proof.json"] {
++                    fs::copy(old.join(name), orphan.join(name)).unwrap();
++                }
++                vec![crate::journal::VersionEvidence { version, placement }]
++            } else if attack.starts_with("payload") {
+                 vec![crate::journal::VersionEvidence {
+                     version: next.versions[&fixture.current.version_id].clone(),
+                     placement: next.placements[&fixture.current.version_id].clone(),
+@@ -1585,6 +1654,15 @@
+             } else {
+                 Vec::new()
+             };
++            if attack == "payload-noop" || attack.starts_with("payload-orphan") {
++                fixture
++                    .engine
++                    .current_namespaces
++                    .as_ref()
++                    .unwrap()
++                    .advance(&fixture.engine.state, &next)
++                    .unwrap();
++            }
+             let candidate = install_cancellation_decision(
+                 &mut fixture.engine,
+                 &next,
+@@ -1608,6 +1686,33 @@
+                 )
+             });
+             let members = fixture.engine.members();
++            if !published && attack == "payload-noop" {
++                let before = members
++                    .iter()
++                    .map(|disk| files(&disk.root))
++                    .collect::<Vec<_>>();
++                let before_system = files(&fixture.temp.path().join("system"));
++                let watch = watch_candidate_payload(payload_path.as_ref().unwrap());
++                let error = fixture
++                    .engine
++                    .prepare_degraded_recovery(
++                        operation,
++                        "admin",
++                        "a forged receipt cannot authorize payload observation",
++                    )
++                    .unwrap_err();
++                assert_eq!(error.code(), ErrorCode::PublicationInvalid);
++                assert!(
++                    error
++                        .to_string()
++                        .contains("exact fresh version and placement delta")
++                );
++                assert_no_candidate_payload_io(watch);
++                for (disk, bytes) in members.iter().zip(before) {
++                    assert_eq!(files(&disk.root), bytes);
++                }
++                assert_eq!(files(&fixture.temp.path().join("system")), before_system);
++            }
+             let missing = object_path(&members[0], "snapshot", &candidate.snapshot_hash);
+             let snapshot_bytes = fs::read(&missing).unwrap();
+             let system = fixture.temp.path().join("system");
+@@ -1660,6 +1765,20 @@
+                             .contains("metadata-only current-registry candidate"),
+                         "{error}"
+                     );
++                } else if attack.starts_with("payload-orphan") {
++                    assert!(
++                        error
++                            .to_string()
++                            .contains("matching native content publication scope"),
++                        "{error}"
++                    );
++                } else if attack == "payload-noop" {
++                    assert!(
++                        error
++                            .to_string()
++                            .contains("exact fresh version and placement delta"),
++                        "{error}"
++                    );
+                 } else {
+                     assert!(
+                         error.to_string().contains("plan cancellation differs"),
+@@ -1710,3 +1829,244 @@
+         "a metadata-only candidate must not open or read its smuggled local proof or payload"
+     );
+ }
++
++#[test]
++fn current_payload_local_only_publication_preserves_cold_workspace_quota_before_replay() {
++    use crate::engine::membership_transition::pending::activation::log_path;
++    use crate::journal::{Candidate, JournalFrameReader, RecordType, load_object_at, object_path};
++
++    let mut fixture = Fixture::with_retained_limit(Some(1));
++    fixture.exit(0, MembershipExitAction::Deregister);
++    let (parked, stopped_bytes) = fixture.replace_stopped_root(0);
++    let system = fixture.temp.path().join("system");
++    drop(fixture.engine);
++    fixture.engine = Engine::open_with_workspace_limits(
++        &system,
++        Some(RetainedWorkspaceLimits {
++            max_retained_workspaces: 2,
++            max_retained_workspaces_per_principal: 2,
++            max_retained_workspace_metadata_bytes: fixture
++                .config
++                .max_retained_workspace_metadata_bytes,
++            max_retained_workspace_metadata_bytes_per_principal: fixture
++                .config
++                .max_retained_workspace_metadata_bytes_per_principal,
++        }),
++    )
++    .unwrap();
++    let waiting = fixture
++        .engine
++        .create_workspace(&fixture.repository.main_branch_id, "admin")
++        .unwrap();
++    fixture
++        .engine
++        .stage_bytes(&waiting.workspace_id, "waiting", b"still open")
++        .unwrap();
++    let workspace = fixture
++        .engine
++        .create_workspace(&fixture.repository.main_branch_id, "admin")
++        .unwrap();
++    fixture
++        .engine
++        .stage_bytes(
++            &workspace.workspace_id,
++            "fresh",
++            b"new current registry body",
++        )
++        .unwrap();
++    let request = request(&workspace);
++    let result = fixture.engine.commit_workspace(request.clone()).unwrap();
++    assert_eq!(
++        fixture
++            .engine
++            .workspace_capacity("admin")
++            .principal
++            .records
++            .used,
++        1
++    );
++    let members = fixture.engine.members();
++    let mut tails = Vec::new();
++    for disk in &members {
++        let path = log_path(&fixture.engine.config, disk);
++        let bytes = fs::read(&path).unwrap();
++        let mut reader = JournalFrameReader::new(bytes.as_slice());
++        loop {
++            let before = reader.valid_bytes;
++            let (record, _) = reader
++                .next_record()
++                .unwrap()
++                .expect("actual latest publication");
++            if record.record_type == RecordType::Publication && record.sequence == result.sequence {
++                assert!(
++                    reader.next_record().unwrap().is_none(),
++                    "truncate only the last frame"
++                );
++                let candidate: Candidate = load_object_at(
++                    &fixture.engine.disk_resources.get(disk).unwrap().root,
++                    disk,
++                    "candidate",
++                    &record.candidate_hash,
++                )
++                .unwrap();
++                assert_eq!(candidate.operation_id, result.operation_id);
++                assert_eq!(candidate.versions.len(), 1);
++                let evidence = &candidate.versions[0];
++                let target = fixture
++                    .engine
++                    .disk(&evidence.placement.route_slot_ids[0])
++                    .unwrap();
++                assert!(!target.metadata_member);
++                let directory = crate::disk::version_dir(
++                    target,
++                    &evidence.version.history_tree_id,
++                    &evidence.version.version_id,
++                );
++                assert!(directory.join("publication-proof.json").is_file());
++                tails.push((
++                    path,
++                    bytes[..usize::try_from(before).unwrap()].to_vec(),
++                    object_path(disk, "publication", &record.object_hash),
++                ));
++                break;
++            }
++        }
++    }
++    drop(fixture.engine);
++    // Keep the genuine local publication and immutable complete seal. The last
++    // slot has no metadata Publication frames/objects. The persisted limit is
++    // one resident workspace: only discovery before quota admission can prove
++    // the completed workspace cold while retaining the earlier open workspace.
++    // Apply-time discovery alone would charge both records and reject too early.
++    for (journal, prefix, publication) in tails {
++        fs::write(journal, prefix).unwrap();
++        fs::remove_file(publication).unwrap();
++    }
++    let mut engine = Engine::open(&system).unwrap();
++    assert_eq!(engine.operation(result.operation_id).unwrap(), result);
++    assert_eq!(
++        engine.workspace(&waiting.workspace_id).unwrap().state,
++        WorkspaceState::Open
++    );
++    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
++    assert_eq!(
++        engine.workspace_capacity("admin").principal.records.limit,
++        1
++    );
++    assert_eq!(engine.commit_workspace(request).unwrap(), result);
++    assert_eq!(files(&parked), stopped_bytes);
++    assert_eq!(
++        fs::read(&fixture.config.disks[0].root).unwrap(),
++        b"stopped root is not a directory"
++    );
++}
++
++#[test]
++fn current_payload_scope_binds_real_content_actor_and_operation_before_local_proofs() {
++    use crate::engine::MutationPlan;
++    use crate::journal::{VersionEvidence, object_path};
++
++    for published in [false, true] {
++        for retag in [false, true] {
++            let mut fixture = Fixture::new();
++            fixture.exit(0, MembershipExitAction::Deregister);
++            let (parked, stopped_bytes) = fixture.replace_stopped_root(0);
++            let workspace = fixture
++                .engine
++                .create_workspace(&fixture.repository.main_branch_id, "admin")
++                .unwrap();
++            fixture
++                .engine
++                .stage_bytes(&workspace.workspace_id, "fresh", b"real staged body")
++                .unwrap();
++            let request = request(&workspace);
++            let plan = fixture
++                .engine
++                .plan_workspace_commit_inner(request, None)
++                .unwrap();
++            let MutationPlan::Prepared {
++                mut next,
++                prepared,
++                mut result,
++            } = plan.mutation
++            else {
++                panic!("new content must have a real payload plan")
++            };
++            assert_eq!(prepared.len(), 1);
++            if retag {
++                result.kind = "auth.unrelated".into();
++                next.operations.insert(result.operation_id, result.clone());
++                next.events.last_mut().unwrap().kind = result.kind.clone();
++            } else {
++                next.operation_principals
++                    .insert(result.operation_id, "another-actor".into());
++            }
++            fixture
++                .engine
++                .current_namespaces
++                .as_ref()
++                .unwrap()
++                .advance(&fixture.engine.state, &next)
++                .unwrap();
++            let versions = prepared
++                .iter()
++                .map(|copy| VersionEvidence {
++                    version: copy.version.clone(),
++                    placement: copy.placement.clone(),
++                })
++                .collect::<Vec<_>>();
++            let target = fixture
++                .engine
++                .disk(&versions[0].placement.route_slot_ids[0])
++                .unwrap();
++            assert!(!target.metadata_member);
++            let directory = crate::disk::version_dir(
++                target,
++                &versions[0].version.history_tree_id,
++                &versions[0].version.version_id,
++            );
++            fs::create_dir_all(&directory).unwrap();
++            fs::write(directory.join("commit-proof.json"), b"{}").unwrap();
++            let candidate = install_cancellation_decision(
++                &mut fixture.engine,
++                &next,
++                &result,
++                published,
++                versions,
++            );
++            let members = fixture.engine.members();
++            let missing = object_path(&members[0], "snapshot", &candidate.snapshot_hash);
++            let system = fixture.temp.path().join("system");
++            drop(prepared);
++            drop(fixture.engine);
++            fs::remove_file(&missing).unwrap();
++            let metadata = members
++                .iter()
++                .map(|disk| files(&disk.root))
++                .collect::<Vec<_>>();
++            let data = files(&fixture.config.disks[3].root);
++            let watch = watch_candidate_payload(&directory);
++            let error = Engine::open(&system)
++                .err()
++                .expect("content scope must match its original actor and native operation");
++            assert_eq!(
++                error.code(),
++                ErrorCode::PublicationInvalid,
++                "{published} {retag}: {error}"
++            );
++            assert!(
++                error
++                    .to_string()
++                    .contains("matching native content publication scope"),
++                "{error}"
++            );
++            assert_no_candidate_payload_io(watch);
++            assert!(!missing.exists());
++            for (disk, bytes) in members.iter().zip(metadata) {
++                assert_eq!(files(&disk.root), bytes);
++            }
++            assert_eq!(files(&fixture.config.disks[3].root), data);
++            assert_eq!(files(&parked), stopped_bytes);
++        }
++    }
++}

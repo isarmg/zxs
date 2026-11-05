@@ -1,0 +1,2113 @@
+diff --git a/docs/components/rescue.md b/docs/components/rescue.md
+index 7dc41d6b..75bc9308 100644
+--- a/docs/components/rescue.md
++++ b/docs/components/rescue.md
+@@ -17,6 +17,41 @@ zxs-rescue --root /srv/zxs/new-system restore-system \
+ 
+ 输出中的 `credential_recovery_snapshot_available` 只表示恢复后的池中存在凭据灾备快照，不表示已创建或替换管理面权威凭据。工具不写旧 `auth.json` 缓存，也不覆盖独立系统目录中的 `management-auth.json`。随后启动守护进程或重试存储发现都不会自动导入该快照，无论是否已有权威标记。有效的本机管理凭据继续作为唯一权威；凭据缺失或损坏时保持认证关闭。需要恢复管理凭据时，保留此次恢复目录作为核验依据，停止相关服务，并在另行准备的干净系统状态目录中走受本机 bootstrap 授权保护、明确接受旧凭据风险的恢复流程。不要删除或覆盖现有管理凭据、权威标记或部分恢复目录来绕过保护；工具不提供凭据重置命令。
+ 
++<a id="pre-loss-data-bindings"></a>
++
++### 非投票数据根的灾前清单
++
++需要在 SYSTEM 丢失后明确接纳现有 data-only 根时，先停止守护进程，在健康池上导出：
++
++```sh
++zxs-rescue --root /srv/zxs/system export-recovery-data \
++  --output /srv/private-rescue/pre-loss-data.json
++```
++
++输出父目录必须已存在、由当前账户拥有且为 0700；清单以 0600、单链接、不可覆盖的新文件发布，
++保留文件及目录同步屏障。目录和文件不得位于 SYSTEM 或任何已登记存储根下。工具不创建父目录、
++不修改权限。清单只保存已准入 held handles 的 pool/disk/slot/binding generation/device/inode，
++不保存可自动探测的路径。收据明确列出实际导出的 data disk ID；缺失或已排除的根不会导出，
++不能把这份清单当作所有配置盘均有灾备或当前磁盘健康的证明。
++
++把原始清单保存在 SYSTEM 外的可信独立位置。文件私有权限和格式检查不能证明其灾前来源；
++不得在灾后从目标盘 `disk.json`、扫描结果或重新统计的 device/inode 制作替代清单。
++没有可信清单时仍只能走原 metadata-only 恢复，不能把可复制的 seal 当作身份依据。
++
++```sh
++zxs-rescue --root /srv/zxs/new-system restore-system \
++  --disks /srv/zxs/old-metadata-1 /srv/zxs/old-metadata-2 \
++  --data-manifest /srv/private-rescue/pre-loss-data.json \
++  --data-root disk_REPLACE_WITH_EXPORTED_ID=/srv/zxs/retained-data
++```
++
++`--data-root` 可重复，每个 ID 必须来自清单，路径必须明确、绝对且不得父级穿越；两项新参数须同时出现。
++CLI 在读取清单前、核心恢复首步，均以纯路径预检拒绝 SYSTEM 与任何所选 metadata/data 根相同或父子重叠；metadata 权威与显式搬家投影完成后、任何 data open 之前，还检查全部认证登记根，避免未列旧数据根冒充 SYSTEM。SYSTEM 每个分量使用 NOFOLLOW 安全打开，拒绝叶子与祖先链接；config 只从持有目录 fd 检查，缺失 SYSTEM 在数据身份通过后才安全创建。不通过 canonicalize 探测候选。
++路径搬家不改变预期身份。读取清单时拒绝链接、非私有文件、重复/未知字段、不支持格式、冲突登记和超限文件。
++先恢复 metadata 固定多数，再对选定数据根执行原核心严格验证；数据根不计票，缺盘、换目录、改写 seal、
++已停止/注销和身份重绑定均不能借清单放行。未选择根不探测，取得 Engine handles 后再次复核，随后才发布 SYSTEM。
++这不是自动挂载、替换盘或 Disabled readmission。
++
+ ## 受限降级恢复
+ 
+ ```sh
+diff --git a/docs/management/setup-recovery.md b/docs/management/setup-recovery.md
+index beb9cb79..ffd8bf72 100644
+--- a/docs/management/setup-recovery.md
++++ b/docs/management/setup-recovery.md
+@@ -21,7 +21,7 @@
+ - `SetupStatus`：状态 `empty`、`management_ready`、`existing`、`recovery_required`、`unavailable`；公开首次状态只返回 `state`；独立 `recovery-status` 在 bootstrap 授权后返回恢复字段与 `csrf_token`。`management_ready` 表示系统管理权威已建立、尚未激活存储，不代表零成员池。
+ - 首次初始化请求只含 `username`、`password`，拒绝 `disk_ids`、`mode`、预设或配置字段；成功响应为 `initialized: true, storage_pending: true`。凭据不进入诊断或浏览器持久存储。
+ - `StorageActivationRequest`：`selections` 为 1—32 项已检查的目录身份，另有 `mode`。只接受当前管理员会话，开发模式必须由可信本地配置启用。第一项为 P01 主存储，后续按顺序形成逐级备份链，所有项都是元数据成员；正常写入全部成员在线，系统恢复要求原成员严格多数。
+-- `RestoreRequest`：1—32 个不同允许 ID；bootstrap 恢复要求 `accept_stale_credentials: true`。选定幸存者必须满足原配置成员法定数，不能按可达盘重算法定数。管理盘丢失后旧密码/授权可能过时，所有恢复会话必须清除。
++- `RestoreRequest`：1—32 个不同允许 metadata ID；可选 `data_recovery` 只含 `manifest_id` 与 1—32 个 `disk_ids`，两者都必须由本地部署预置，不能提交路径、device/inode 或登记身份。bootstrap 恢复要求 `accept_stale_credentials: true`。选定幸存者必须满足原配置成员法定数，不能按可达盘重算法定数。管理盘丢失后旧密码/授权可能过时，所有恢复会话必须清除。
+ - `RecoveryPreviewRequest`：`operation_id`、`reason`。
+ - `RecoveryCommitRequest`：`recovery_id`、`digest`、`accept_permanent_loss`。
+ 
+@@ -29,6 +29,26 @@
+ 
+ <a id="initialization-and-interrupted-setup"></a>
+ 
++### 明确接纳 data-only 灾备根
++
++先使用[离线救援的灾前导出](../components/rescue.md#pre-loss-data-bindings)保留可信绑定。
++本地启动参数 `--recovery-data-manifest ID=/absolute/private/file` 和
++`--recovery-data-root DISK_ID=/absolute/path` 分别配置清单与实际路径，均可重复。
++清单和数据根不会在服务启动或构造选项时被读取；普通 `--setup-disk` 仍只授权原 metadata 恢复成员。
++恢复请求示例：
++
++```json
++{"disk_ids":["old-metadata-1","old-metadata-2"],"data_recovery":{"manifest_id":"saved","disk_ids":["disk_REPLACE_WITH_EXPORTED_ID"]},"accept_stale_credentials":true}
++```
++
++清单必须来自灾前已准入的 held handles，并由本地管理员可信保存在 SYSTEM 和候选根之外；
++本次启动的 `SetupRecovery.identities`、目录扫描和目标自己的 seal 不能补造这个来源。
++缺少 `data_recovery` 时不读取任何配置清单、不探测 data-only 根，保留原 metadata-only 行为。
++清单读取只接受私有、单链接、无符号链接的有界严格格式文件；读取清单不赋予其全部条目 I/O 权限。
++只有请求明确选择的本地根交给 Engine，固定 metadata Q 先于 data-root I/O；原有当前登记、设备、
++seal、代际/准入证据、held 二次验证与预发布配额检查不变。数据根永不计票，也不能用于重新准入或换身份。
++请求仍走原会话/本机 bootstrap 授权、Origin/CSRF、生命周期 owner 与发布前撤权复核，不增加匿名导入入口。
++
+ ## 初始化与中断
+ 
+ 账户初始化以独立的 `setup.lock` 一次性准入，不占用存储恢复门，也不排空已有池。它在系统目录持久保存管理初始化意图，先以 create-new 创建凭据，再发布系统管理权威并安装当前认证，不调用 `Engine::initialize`。已存在配置、凭据、权威或旧池证据不能当作新安装；凭据已创建但权威发布中断时不允许匿名覆盖账户，服务重启仅补建该现有账户的权威。既有权威但凭据缺失仍保持恢复要求。
+diff --git a/src/engine/src/engine.rs b/src/engine/src/engine.rs
+index cb4a1fe4..5455f80a 100644
+--- a/src/engine/src/engine.rs
++++ b/src/engine/src/engine.rs
+@@ -807,13 +807,15 @@ impl Engine {
+         data_roots: &[RecoveryDataRoot],
+         workspace_limits: Option<RetainedWorkspaceLimits>,
+     ) -> Result<Self> {
++        // This must precede the SYSTEM existence check: when SYSTEM is a data
++        // root (or its child), even that first stat would cross the data boundary.
++        let selected_roots: Vec<_> = metadata_roots
++            .iter()
++            .cloned()
++            .chain(data_roots.iter().map(|data| data.root.clone()))
++            .collect();
++        crate::preflight_recovery_paths(root, &selected_roots)?;
+         let disks = metadata_roots;
+-        if root.join("config.json").try_exists()? {
+-            return Err(Error::new(
+-                storage_contract::ErrorCode::AlreadyInitialized,
+-                "restore requires a new system state directory",
+-            ));
+-        }
+         if disks.is_empty() {
+             return Err(Error::new(
+                 storage_contract::ErrorCode::MetadataQuorumUnavailable,
+@@ -913,10 +915,9 @@ impl Engine {
+             .map(|generation| generation.portable.forbidden_disk_ids())
+             .transpose()?
+             .unwrap_or_default();
+-        // Metadata selection above authenticates the fixed quorum and current
+-        // lineage before the first syscall against any explicitly named data root.
++        // Project every explicit data path without inspecting it. The fixed
++        // metadata quorum above owns the registration and exclusion decisions.
+         let mut data_paths = BTreeMap::new();
+-        let mut data_seals = BTreeMap::new();
+         for expected in data_roots {
+             let registered = config
+                 .disks
+@@ -939,12 +940,41 @@ impl Engine {
+                     "explicit recovery cannot change registration or readmit an excluded disk",
+                 ));
+             }
+-            let held = DiskRoot::open(&expected.root)?;
++            if data_paths
++                .insert(registered.disk_id.clone(), absolute_path(&expected.root)?)
++                .is_some()
++            {
++                return Err(Error::new(
++                    ErrorCode::ConfigConflict,
++                    "duplicate data disk in recovery input",
++                ));
++            }
++        }
++        let roots = config
++            .disks
++            .iter()
++            .map(|disk| data_paths.get(&disk.disk_id).unwrap_or(&disk.root).clone())
++            .collect();
++        let config = config.with_disk_roots(roots)?;
++        // Check every authenticated registration, including unlisted roots,
++        // before SYSTEM or any data I/O. Relocation is only a path projection;
++        // it grants no authority until the original physical binding is checked.
++        let registered_roots: Vec<_> = config.disks.iter().map(|disk| disk.root.clone()).collect();
++        crate::preflight_recovery_paths(root, &registered_roots)?;
++        // Reject leaf/ancestor aliases without following them to excluded data.
++        // Missing SYSTEM components remain absent until data admission succeeds.
++        let system = crate::recovery_data::open_recovery_system(root)?;
++        let mut data_seals = BTreeMap::new();
++        for expected in data_roots {
++            let disk = config
++                .disks
++                .iter()
++                .find(|disk| disk.disk_id == expected.identity.disk_id)
++                .expect("invariant: explicit data registration was validated before projection");
++            let held = DiskRoot::open(&disk.root)?;
+             let stored =
+                 decode_seal(&held.read_bytes(&held.path().join("disk.json"), MAX_METADATA)?)?;
+-            let mut disk = registered.clone();
+-            disk.root = held.path().to_path_buf();
+-            let live = identity_at(&config, &disk, &held.directory(held.path())?)?;
++            let live = identity_at(&config, disk, &held.directory(held.path())?)?;
+             validate_stored_seal(&stored, &live)?;
+             if live.disk_id != expected.identity.disk_id
+                 || live.device != expected.device
+@@ -955,21 +985,9 @@ impl Engine {
+                     "explicit data root differs from trusted pre-loss physical binding",
+                 ));
+             }
+-            config.verify_explicit_recovery_data_root(&held, &disk, &live)?;
++            config.verify_explicit_recovery_data_root(&held, disk, &live)?;
+             data_seals.insert(disk.disk_id.clone(), live);
+-            if data_paths.insert(disk.disk_id, disk.root).is_some() {
+-                return Err(Error::new(
+-                    ErrorCode::ConfigConflict,
+-                    "duplicate data disk in recovery input",
+-                ));
+-            }
+         }
+-        let roots = config
+-            .disks
+-            .iter()
+-            .map(|disk| data_paths.get(&disk.disk_id).unwrap_or(&disk.root).clone())
+-            .collect();
+-        let config = config.with_disk_roots(roots)?;
+         let allowed = seals
+             .keys()
+             .chain(data_paths.keys())
+@@ -979,8 +997,12 @@ impl Engine {
+         let config = config
+             .with_workspace_limits(workspace_limits)?
+             .restrict_io_disks(allowed)?;
+-        private_dir(root)?;
+-        let root = existing_private_dir(root)?.path().to_path_buf();
++        // Creation also walks every component with NOFOLLOW, including a
++        // missing ancestor. The held handle owns the config lookup and remains
++        // alive across recovery; neither absence nor an alias authorizes a stat
++        // through SYSTEM's original path.
++        let system = system.create()?;
++        let root = system.path().to_path_buf();
+         let (mut engine, warnings) = Self::prepare_retained_workspace_recovery(root, config)?;
+         // Resource acquisition must retain the exact identity checked above;
+         // disappearance or replacement cannot become a silently unavailable disk.
+@@ -1018,6 +1040,7 @@ impl Engine {
+         engine.retire_published_readmission_plan()?;
+         engine.load_workspaces()?;
+         engine.rebuild_index()?;
++        drop(system);
+         Ok(engine)
+     }
+     pub(crate) fn require_recovery_locks(&self) -> Result<()> {
+diff --git a/src/engine/src/lib.rs b/src/engine/src/lib.rs
+index 8b53bed8..8cbc68ea 100644
+--- a/src/engine/src/lib.rs
++++ b/src/engine/src/lib.rs
+@@ -16,11 +16,13 @@ mod degraded_recovery;
+ mod disk;
+ mod engine;
+ pub use engine::RecoveryDataRoot;
++mod recovery_data;
+ pub use engine::{
+     TerminalMetadataResume, TerminalMetadataResumeCancelOutcome,
+     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
+     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus,
+ };
++pub use recovery_data::{RecoveryDataManifest, preflight_recovery_paths};
+ mod file_stamp;
+ mod historical_save;
+ pub use engine::{
+diff --git a/src/rescue/src/main.rs b/src/rescue/src/main.rs
+index 9bbe5cab..3aa287ae 100644
+--- a/src/rescue/src/main.rs
++++ b/src/rescue/src/main.rs
+@@ -1,6 +1,7 @@
+ //! Deliberately small offline rescue utility. Stop the daemon before using it.
+ mod configuration;
+ mod private_io;
++mod recovery_data;
+ mod scrub;
+ use command_line::{Parser, Subcommand};
+ use json_codec::json;
+@@ -46,6 +47,18 @@ enum Command {
+     RestoreSystem {
+         #[arg(long,num_args=1..,required=true)]
+         disks: Vec<PathBuf>,
++        /// Trusted pre-loss export retained outside SYSTEM and all candidate roots.
++        #[arg(long, requires = "data_roots")]
++        data_manifest: Option<PathBuf>,
++        /// Explicit existing nonvoting root, repeated as DISK_ID=/absolute/path.
++        #[arg(long = "data-root", requires = "data_manifest")]
++        data_roots: Vec<String>,
++    },
++    /// Save held data-root identities before SYSTEM loss; stop the daemon first.
++    ExportRecoveryData {
++        /// New file in an existing private directory outside SYSTEM and all pool roots.
++        #[arg(long)]
++        output: PathBuf,
+     },
+     RecoveryPreview {
+         operation: OperationId,
+@@ -227,10 +240,27 @@ fn run(args: Args) -> Result<()> {
+                 print(restored?)
+             }
+         },
+-        Command::RestoreSystem { disks } => {
+-            let mut engine = Engine::restore_from_disks_with_workspace_limits(
++        Command::ExportRecoveryData { output } => {
++            let mut engine = Engine::open_with_workspace_limits(&root, retained_workspace_limits)?;
++            report_recovery_warnings(&mut engine);
++            let manifest = engine.export_recovery_data_manifest(&output)?;
++            print(json!({
++                "pool_id": manifest.pool_id(),
++                "exported_data_disk_ids": manifest.disk_ids().collect::<Vec<_>>(),
++                "retained_outside_system": true
++            }))
++        }
++        Command::RestoreSystem {
++            disks,
++            data_manifest,
++            data_roots,
++        } => {
++            let data_roots =
++                recovery_data::load(data_manifest.as_deref(), &data_roots, &root, &disks)?;
++            let mut engine = Engine::restore_from_disks_and_data_roots_with_workspace_limits(
+                 &root,
+                 &disks,
++                &data_roots,
+                 retained_workspace_limits,
+             )?;
+             report_recovery_warnings(&mut engine);
+diff --git a/src/server/src/main.rs b/src/server/src/main.rs
+index 2d5d4bfd..fe09ccf0 100644
+--- a/src/server/src/main.rs
++++ b/src/server/src/main.rs
+@@ -58,6 +58,12 @@ struct Args {
+     /// Locally reviewed private configuration preset, repeated as ID=/absolute/file.
+     #[arg(long = "setup-config")]
+     setup_configs: Vec<String>,
++    /// Trusted pre-loss binding export, repeated as ID=/absolute/private/file.
++    #[arg(long = "recovery-data-manifest")]
++    recovery_data_manifests: Vec<String>,
++    /// Existing nonvoting recovery root, repeated as DISK_ID=/absolute/path.
++    #[arg(long = "recovery-data-root")]
++    recovery_data_roots: Vec<String>,
+     /// Test-only: allow development-mode pool setup; production also accepts managed directories.
+     #[arg(long)]
+     allow_development_setup: bool,
+@@ -185,6 +191,8 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
+         management_root,
+         setup_disks,
+         setup_configs,
++        recovery_data_manifests,
++        recovery_data_roots,
+         allow_development_setup,
+         listen,
+         external_origin,
+@@ -258,6 +266,11 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
+             scrub_policy,
+             setup_disks: parse_setup_map(setup_disks, "--setup-disk")?,
+             setup_configs: parse_setup_map(setup_configs, "--setup-config")?,
++            recovery_data_manifests: parse_setup_map(
++                recovery_data_manifests,
++                "--recovery-data-manifest",
++            )?,
++            recovery_data_roots: parse_setup_map(recovery_data_roots, "--recovery-data-root")?,
+             allow_development_setup,
+             retained_workspace_limits,
+         },
+diff --git a/src/server/src/management.rs b/src/server/src/management.rs
+index 84a9b61d..38fd953e 100644
+--- a/src/server/src/management.rs
++++ b/src/server/src/management.rs
+@@ -67,6 +67,8 @@ struct Inner {
+     capabilities: Mutex<crate::Capabilities>,
+     setup_disks: BTreeMap<String, PathBuf>,
+     setup_configs: BTreeMap<String, PathBuf>,
++    recovery_data_manifests: BTreeMap<String, PathBuf>,
++    recovery_data_roots: BTreeMap<String, PathBuf>,
+     allow_development_setup: bool,
+     retained_workspace_limits: Option<storage_engine::RetainedWorkspaceLimits>,
+ }
+@@ -85,6 +87,10 @@ pub struct ManagementOptions {
+     pub scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy,
+     pub setup_disks: BTreeMap<String, PathBuf>,
+     pub setup_configs: BTreeMap<String, PathBuf>,
++    /// Explicit pre-loss exports held outside SYSTEM; never derived from candidate seals.
++    pub recovery_data_manifests: BTreeMap<String, PathBuf>,
++    /// Explicit paths only. Construction and management startup do not probe these roots.
++    pub recovery_data_roots: BTreeMap<String, PathBuf>,
+     pub allow_development_setup: bool,
+     /// Immutable host policy, never loaded from an HTTP request or persisted to the pool.
+     pub retained_workspace_limits: Option<storage_engine::RetainedWorkspaceLimits>,
+@@ -157,6 +163,8 @@ pub fn open_service_with_disks(
+             scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy::default(),
+             setup_disks,
+             setup_configs: BTreeMap::new(),
++            recovery_data_manifests: BTreeMap::new(),
++            recovery_data_roots: BTreeMap::new(),
+             allow_development_setup,
+             retained_workspace_limits: None,
+         },
+@@ -171,6 +179,8 @@ pub fn open_service_with_options(
+         scrub_policy,
+         setup_disks,
+         setup_configs,
++        recovery_data_manifests,
++        recovery_data_roots,
+         allow_development_setup,
+         retained_workspace_limits,
+     } = options;
+@@ -219,6 +229,8 @@ pub fn open_service_with_options(
+             capabilities: Mutex::new(crate::Capabilities::unavailable()),
+             setup_disks,
+             setup_configs,
++            recovery_data_manifests,
++            recovery_data_roots,
+             allow_development_setup,
+             retained_workspace_limits,
+         }),
+@@ -1633,6 +1645,10 @@ impl Backend for ManagementBackend {
+             },
+         )?
+         .with_presets(self.inner.setup_configs.clone())
++        .with_recovery_data(
++            self.inner.recovery_data_manifests.clone(),
++            self.inner.recovery_data_roots.clone(),
++        )?
+         .with_workspace_limits(self.inner.retained_workspace_limits)?;
+         if self.inner.allow_development_setup {
+             setup = setup.allow_development_mode();
+diff --git a/src/server/src/setup_recovery.rs b/src/server/src/setup_recovery.rs
+index 98441c93..9f7b1347 100644
+--- a/src/server/src/setup_recovery.rs
++++ b/src/server/src/setup_recovery.rs
+@@ -16,7 +16,9 @@ use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits, ValidatedCon
+ 
+ mod activation;
+ mod discovery;
++mod recovery_data;
+ pub use activation::{StorageActivationRequest, StorageActivationState, StorageActivationStatus};
++pub use recovery_data::RecoveryDataSelection;
+ mod http;
+ pub(crate) use http::{protected_routes, public_routes};
+ 
+@@ -67,6 +69,8 @@ pub struct SetupRequest {
+ #[serialization(deny_unknown_fields)]
+ pub struct RestoreRequest {
+     pub disk_ids: Vec<String>,
++    /// Select independently retained local bindings; never supplies physical identities.
++    pub data_recovery: Option<RecoveryDataSelection>,
+     /// Required only for bootstrap restore after management state loss.
+     #[serialization(default)]
+     pub accept_stale_credentials: bool,
+@@ -156,6 +160,8 @@ pub struct SetupRecovery {
+     management_root: PathBuf,
+     disks: BTreeMap<String, PathBuf>,
+     identities: BTreeMap<String, (u64, u64)>,
++    recovery_data_manifests: BTreeMap<String, PathBuf>,
++    recovery_data_roots: BTreeMap<String, PathBuf>,
+     allow_development: bool,
+     presets: BTreeMap<String, PathBuf>,
+     retained_workspace_limits: Option<RetainedWorkspaceLimits>,
+@@ -225,6 +231,8 @@ impl SetupRecovery {
+             management_root,
+             disks: canonical,
+             identities,
++            recovery_data_manifests: BTreeMap::new(),
++            recovery_data_roots: BTreeMap::new(),
+             allow_development: false,
+             presets: BTreeMap::new(),
+             retained_workspace_limits: None,
+@@ -961,9 +969,11 @@ impl SetupRecovery {
+             ));
+         }
+         let disks = self.selected(&request.disk_ids)?;
+-        let mut engine = Engine::restore_from_disks_with_workspace_limits(
++        let data_roots = self.selected_recovery_data(request.data_recovery.as_ref())?;
++        let mut engine = Engine::restore_from_disks_and_data_roots_with_workspace_limits(
+             &self.data_root,
+             &disks,
++            &data_roots,
+             self.retained_workspace_limits,
+         )
+         .map_err(engine_error)?;
+diff --git a/test/rescue/startup.rs b/test/rescue/startup.rs
+index 4e33e265..47bf46f3 100644
+--- a/test/rescue/startup.rs
++++ b/test/rescue/startup.rs
+@@ -1,9 +1,62 @@
+ use std::process::Command;
++
++#[test]
++fn explicit_data_recovery_uses_the_cli_export_after_system_loss_and_relocation() {
++    use std::os::unix::fs::PermissionsExt;
++    use storage_engine::{Config, Engine};
++    let temp = tempfile::Builder::new()
++        .permissions(std::fs::Permissions::from_mode(0o700))
++        .tempdir()
++        .unwrap();
++    let old_system = temp.path().join("original-system");
++    let voter = temp.path().join("voter");
++    let data = temp.path().join("data");
++    let mut config = Config::development([voter.clone(), data.clone()]).unwrap();
++    config.disks[1].metadata_member = false;
++    let data_id = config.disks[1].disk_id.clone();
++    drop(Engine::initialize(&old_system, config).unwrap());
++    let manifest = temp.path().join("pre-loss.json");
++    let binary = env!("CARGO_BIN_EXE_zxs-rescue");
++    let exported = Command::new(binary)
++        .arg("--root")
++        .arg(&old_system)
++        .args(["export-recovery-data", "--output"])
++        .arg(&manifest)
++        .output()
++        .unwrap();
++    assert!(exported.status.success(), "{exported:?}");
++    let receipt: json_codec::Value = json_codec::from_slice(&exported.stdout).unwrap();
++    assert_eq!(receipt["exported_data_disk_ids"][0], data_id);
++    let original = std::fs::read(&manifest).unwrap();
++    std::fs::rename(&old_system, temp.path().join("lost-system")).unwrap();
++    let relocated = temp.path().join("relocated-data");
++    std::fs::rename(&data, &relocated).unwrap();
++    let restored_system = temp.path().join("restored-system");
++    let restored = Command::new(binary)
++        .arg("--root")
++        .arg(&restored_system)
++        .args(["restore-system", "--disks"])
++        .arg(&voter)
++        .arg("--data-manifest")
++        .arg(&manifest)
++        .arg("--data-root")
++        .arg(format!("{data_id}={}", relocated.display()))
++        .output()
++        .unwrap();
++    assert!(restored.status.success(), "{restored:?}");
++    let engine = Engine::open(&restored_system).unwrap();
++    let roots = engine.recovery_data_roots().unwrap();
++    assert_eq!(roots.len(), 1);
++    assert_eq!(roots[0].identity.disk_id, data_id);
++    assert_eq!(roots[0].root, relocated);
++    assert_eq!(std::fs::read(&manifest).unwrap(), original);
++}
+ #[test]
+ fn rescue_exposes_only_offline_recovery_and_configuration_operations() {
+     let binary = env!("CARGO_BIN_EXE_zxs-rescue");
+     for name in [
+         "restore-system",
++        "export-recovery-data",
+         "recovery-preview",
+         "recovery-commit",
+         "offline-check",
+diff --git a/test/rescue/unit/main/args_tests.rs b/test/rescue/unit/main/args_tests.rs
+index 721f3b74..c97d4711 100644
+--- a/test/rescue/unit/main/args_tests.rs
++++ b/test/rescue/unit/main/args_tests.rs
+@@ -1,5 +1,42 @@
+ use super::*;
+ 
++#[test]
++fn data_recovery_requires_both_saved_manifest_and_explicit_roots() {
++    let base = ["zxs-rescue", "restore-system", "--disks", "/voter"];
++    for incomplete in [
++        vec!["--data-manifest", "/saved.json"],
++        vec!["--data-root", "disk_x=/data"],
++    ] {
++        assert!(Args::try_parse_from(base.into_iter().chain(incomplete)).is_err());
++    }
++    let args = Args::try_parse_from(base.into_iter().chain([
++        "--data-manifest",
++        "/saved.json",
++        "--data-root",
++        "disk_x=/data",
++    ]))
++    .unwrap();
++    let Command::RestoreSystem {
++        data_manifest,
++        data_roots,
++        ..
++    } = args.command
++    else {
++        panic!("wrong command")
++    };
++    assert_eq!(data_manifest, Some(PathBuf::from("/saved.json")));
++    assert_eq!(data_roots, ["disk_x=/data"]);
++    assert!(
++        Args::try_parse_from([
++            "zxs-rescue",
++            "export-recovery-data",
++            "--output",
++            "/external/saved.json"
++        ])
++        .is_ok()
++    );
++}
++
+ #[test]
+ fn workspace_inventory_is_an_explicit_read_only_command() {
+     let args =
+@@ -13,10 +50,17 @@ fn workspace_inventory_is_an_explicit_read_only_command() {
+ fn restore_system_accepts_one_original_member_but_requires_a_path() {
+     let args =
+         Args::try_parse_from(["zxs-rescue", "restore-system", "--disks", "/disk/only"]).unwrap();
+-    let Command::RestoreSystem { disks } = args.command else {
++    let Command::RestoreSystem {
++        disks,
++        data_manifest,
++        data_roots,
++    } = args.command
++    else {
+         panic!("wrong command")
+     };
+     assert_eq!(disks, [PathBuf::from("/disk/only")]);
++    assert!(data_manifest.is_none());
++    assert!(data_roots.is_empty());
+     assert!(Args::try_parse_from(["zxs-rescue", "restore-system", "--disks"]).is_err());
+ }
+ 
+diff --git a/test/server/unit/main_tests.rs b/test/server/unit/main_tests.rs
+index e6900cbc..24221b3e 100644
+--- a/test/server/unit/main_tests.rs
++++ b/test/server/unit/main_tests.rs
+@@ -1,5 +1,26 @@
+ use super::*;
+ 
++#[test]
++fn recovery_data_options_are_explicit_local_sources_not_setup_discovery() {
++    let args = Args::try_parse_from([
++        "zxs",
++        "--recovery-data-manifest",
++        "saved=/external/pre-loss.json",
++        "--recovery-data-root",
++        "disk_0123456789abcdef0123456789abcdef=/unmounted/data",
++    ])
++    .unwrap();
++    assert_eq!(
++        args.recovery_data_manifests,
++        ["saved=/external/pre-loss.json"]
++    );
++    assert_eq!(
++        args.recovery_data_roots,
++        ["disk_0123456789abcdef0123456789abcdef=/unmounted/data"]
++    );
++    assert!(args.setup_disks.is_empty());
++}
++
+ #[test]
+ fn log_filter_errors_retain_typed_sources_without_displaying_input() {
+     use std::{error::Error, ffi::OsString, os::unix::ffi::OsStringExt};
+diff --git a/test/server/unit/setup_recovery_tests.rs b/test/server/unit/setup_recovery_tests.rs
+index 310bf986..2778097b 100644
+--- a/test/server/unit/setup_recovery_tests.rs
++++ b/test/server/unit/setup_recovery_tests.rs
+@@ -246,6 +246,7 @@ fn restore_requires_two_old_members_and_never_initializes_them() {
+             .restore_system(
+                 &permit(&f.service),
+                 RestoreRequest {
++                    data_recovery: None,
+                     accept_stale_credentials: true,
+                     disk_ids: vec!["one".into()]
+                 },
+@@ -258,6 +259,7 @@ fn restore_requires_two_old_members_and_never_initializes_them() {
+             .restore_system(
+                 &permit(&f.service),
+                 RestoreRequest {
++                    data_recovery: None,
+                     accept_stale_credentials: true,
+                     disk_ids: vec!["one".into(), "two".into()]
+                 },
+@@ -312,6 +314,7 @@ fn local_bootstrap_never_bypasses_existing_management_auth() {
+         .restore_system(
+             &permit(&f.service),
+             RestoreRequest {
++                data_recovery: None,
+                 accept_stale_credentials: true,
+                 disk_ids: vec!["one".into(), "two".into()],
+             },
+@@ -437,6 +440,7 @@ fn unavailable_unrelated_member_does_not_block_survivor_checks_or_restore_select
+     let result = recovery.restore_system(
+         &permit(&recovery),
+         RestoreRequest {
++            data_recovery: None,
+             disk_ids: vec!["one".into(), "two".into()],
+             accept_stale_credentials: true,
+         },
+@@ -943,6 +947,7 @@ fn restore_single_member_uses_original_membership_not_survivor_count() {
+             .restore_system(
+                 &permit(&recovery),
+                 RestoreRequest {
++                    data_recovery: None,
+                     disk_ids: vec!["one".into()],
+                     accept_stale_credentials: true,
+                 },
+@@ -1050,6 +1055,7 @@ fn bootstrap_restore_rechecks_authorization_after_disk_recovery() {
+         let result = recovery.restore_system(
+             &authorization,
+             RestoreRequest {
++                data_recovery: None,
+                 disk_ids: vec!["one".into()],
+                 accept_stale_credentials: true,
+             },
+@@ -1113,6 +1119,7 @@ fn authenticated_restore_does_not_require_bootstrap_authorization() {
+         .restore_authenticated(
+             &admin(),
+             RestoreRequest {
++                data_recovery: None,
+                 disk_ids: vec!["one".into()],
+                 accept_stale_credentials: false,
+             },
+@@ -1341,6 +1348,7 @@ fn system_restore_passes_runtime_workspace_limits_without_rewriting_baseline() {
+         .restore_system(
+             &permit(&f.service),
+             RestoreRequest {
++                data_recovery: None,
+                 disk_ids: vec!["one".into()],
+                 accept_stale_credentials: true,
+             },
+diff --git a/docs/validation/explicit-data-recovery-manifest.md b/docs/validation/explicit-data-recovery-manifest.md
+new file mode 100644
+index 00000000..0a62f91e
+--- /dev/null
++++ b/docs/validation/explicit-data-recovery-manifest.md
+@@ -0,0 +1,38 @@
++# 显式 data-only SYSTEM 恢复的可信清单
++
++## 实际入口
++
++- `Engine::export_recovery_data_manifest` 从健康 Engine 的 `recovery_data_roots()` 导出已持有、已准入的登记和物理绑定。
++- `zxs-rescue export-recovery-data --output FILE` 是灾前真实导出入口；文件不得覆盖，不创建父目录，父目录须由当前账户拥有且为 0700。
++- `zxs-rescue restore-system --disks ... --data-manifest FILE --data-root DISK_ID=/absolute/path` 明确选择已保存身份及现有路径。
++- 服务本地 `--recovery-data-manifest ID=FILE`、`--recovery-data-root DISK_ID=PATH` 只保存配置，不访问数据根。现有 restore-system HTTP 请求的可选 `data_recovery` 只选择本地 manifest ID 和 disk IDs。
++- 两条恢复入口共用 `restore_from_disks_and_data_roots_with_workspace_limits`，不引入第二套 quorum、设备身份或代际验证。
++
++## 信任与访问边界
++
++当前清单格式为 `pre-loss-data-bindings`，最多 1 MiB、4096 条；严格拒绝重复/未知字段、不支持格式、重复登记/槽/物理身份和跨池绑定。格式只含 pool/disk/slot/generation/device/inode，没有自动访问的路径。
++
++可信来源是灾前已准入 held handles 与 SYSTEM 外独立保留的原始导出。私有 0600、单链接、无符号链接、可信目录祖先和有界读取保护本地加载，但不构成灾前来源的密码学证明。管理员必须可信保管；程序绝不从候选 seal、扫描器、启动时重新统计值或任意 HTTP 身份字段制造预期绑定。没有清单时保留 metadata-only 恢复。
++
++路径单独显式选择；`preflight_recovery_paths` 纯词法检查 SYSTEM 与所有显式 metadata/data 根，拒绝相同及任一方向的父子重叠、父级穿越。核心首步检查显式输入，CLI 在读取清单之前检查；完成 metadata 权威选择及显式搬家投影后，核心先纯检查全部认证登记根，尚未打开任何 data root。SYSTEM 每个路径分量使用 `DIRECTORY|NOFOLLOW` 打开，叶子或祖先符号链接（包括悬空链接）都明确拒绝，不能凭词法检查后再裸路径 stat。缺失 SYSTEM 在数据身份验证后才用同样逐分量原语创建，保留全祖先 fsync；已有 SYSTEM 在前后两个 held fd 间比较 dev/inode，config 存在性只通过 held fd 的 no-symlink openat2 判断。这样 metadata-only 请求也不能把未列旧数据根冒充 SYSTEM。AlreadyInitialized 的判定因此晚于恢复输入的只读核验，但早于任何 SYSTEM/控制写入。两层纯路径检查都不通过 canonicalize/stat/open 探测候选；SYSTEM 的安全打开不能跟随链接到候选，也不对其链接目标做 canonicalize。清单文件与 SYSTEM/候选根的重叠另行拒绝。未选择条目不会成为 I/O 授权。核心先选真实固定 metadata 多数，再验证当前非投票登记、原 device/inode、当前 seal、本地锚及 portable 证据。数据根不计票，stop/detach/错误角色/身份重绑定仍拒绝。获得 held handles 后再次验证，随后依次 workspace preflight、bootstrap、exclusion 与 replay。原有身份认证、CSRF/Origin、生命周期 owner 和发布前撤权检查没有更改。
++
++导出只包含当前可用且已准入的非投票根，收据列明实际 disk IDs。它不是全盘覆盖/健康证明，不提供 Disabled readmission、设备替换、自动挂载或凭据重置。
++
++## 回归源码与验收状态
++
++- `test/engine/unit/recovery_data_tests.rs`：导出原身份、重定位恢复与冷开、不覆盖、禁止内部备份、私有/链接/严格格式拒绝、无绑定不回退、改写候选 seal 仍拒绝、缺固定 Q 先于数据根访问。
++- `test/rescue/startup.rs`：真实导出 CLI → SYSTEM 丢失 → 数据路径移动 → 恢复 CLI → 冷开；`test/rescue/unit/recovery_data_tests.rs` 与 `main/args_tests.rs` 覆盖纯选择与参数约束。
++- `test/server/unit/setup_recovery/recovery_data_tests.rs`：服务接线、auth snapshot 保留、未选清单不读取、未知本地源/HTTP 自报身份拒绝、缺 Q 及配置阶段不访问数据根；`test/server/unit/main_tests.rs` 覆盖本地选项。
++- core 与 CLI 另有相同/父/子/`.` 等价路径拒绝回归；CLI 使用不存在清单证明拒绝先于清单读取。core 还覆盖 SYSTEM 叶子/祖先链接、悬空链接、held SYSTEM 名称被替换后 config 查找仍不重开路径、config 本身为链接、延迟创建前已有目录被替换或缺失祖先变成链接，以及多层缺失 SYSTEM 祖先的成功恢复。
++
++真实零 stat/open 验收入口：
++
++```sh
++bash test/engine/unit/recovery-data-probe.sh ENGINE_LIBTEST ZXS_RESCUE /absolute/new-private-evidence
++```
++
++须传同一组合树的 engine libtest 与 rescue 二进制，并已安装 strace、python3。脚本运行精确 ignored 场景，使用 `strace -f -yy` 观察真实内核 stat/open，包括 rustix direct syscall，无需 libc 特性或预加载替换。Engine/CLI、缺 Q/相同/父/子重叠/未列数据根冒充 SYSTEM/未列 A 冒充 SYSTEM 且另选 B/叶子链接/祖先链接、候选存在/缺失组成 32 个场景。拒绝窗口必须零候选 stat/open；随后必须实际观察 `symlink_metadata` 和同一 `DiskRoot::open` 的正校准，缺失标记或任一校准未观察到都失败。链接场景另按 alias 名称匹配，因为 strace 不保证展开中间链接目标：拒绝窗口只允许对该单分量的 `openat` 带 `DIRECTORY|NOFOLLOW` 并返回 ENOTDIR/ELOOP，任何经 alias 的 stat、多分量 open 或成功 open 都失败；正校准必须真实看到跟随 alias 的 stat 和 open。脚本在指定的新私有目录保留原始 syscall/result，不删除证据。它不把“路径未创建”或某个错误码当作零探测的充分证据。
++
++本次仅执行指定 Rust 文件的 rustfmt 和 `git diff --check`，未编译、测试、运行上述 strace 门禁、Clippy、CI、真实部署或物理掉电验证。集成后须分别执行 engine、rescue 与 server 的对应目标，且保留完整组合 CI；源码中的拒绝测试不是已经通过的系统调用隔离或生产恢复演练证明。
++
++清单生成/验证为 O(N log N)，选择为 O(N log N + M log N)，N 为导出条目、M 为显式根数；内存受清单字节数和条目数限制。导出复用 AtomicFile 的文件同步与 no-clobber 发布、目录同步屏障；恢复读取清单不新增磁盘写入或削减核心屏障。
+diff --git a/src/engine/src/recovery_data.rs b/src/engine/src/recovery_data.rs
+new file mode 100644
+index 00000000..d87f7d83
+--- /dev/null
++++ b/src/engine/src/recovery_data.rs
+@@ -0,0 +1,307 @@
++//! Operator-retained, pre-loss physical bindings. No candidate root supplies authority.
++use crate::{DiskRegistrationIdentity, Engine, Error, ErrorCode, RecoveryDataRoot, Result};
++use data_serialization::{Deserialize, Serialize};
++use platform_io::fs_safety::{
++    AtomicFile, EntryName, PrivateDirectory,
++    linux::{MountPolicy, OpenAt2Root, open_private_regular},
++};
++use std::{
++    collections::{BTreeMap, BTreeSet},
++    os::unix::fs::MetadataExt,
++    path::{Path, PathBuf},
++};
++
++const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
++const MAX_BINDINGS: usize = 4096;
++
++/// Pure recovery-path preflight, before even checking SYSTEM/config.json.
++/// This rejects equality and either direction of containment after lexical
++/// normalization, without canonicalizing, opening or stating a storage root.
++/// It grants no I/O authority and does not replace quorum or held-root checks.
++///
++/// # Errors
++/// Rejects parent traversal and overlap between SYSTEM and any explicitly
++/// selected metadata or data root. Relative paths use the current directory.
++pub fn preflight_recovery_paths(system: &Path, storage_roots: &[PathBuf]) -> Result<()> {
++    let system = crate::disk::absolute_path(system)?;
++    for storage in storage_roots {
++        let storage = crate::disk::absolute_path(storage)?;
++        if system.starts_with(&storage) || storage.starts_with(&system) {
++            return Err(Error::new(
++                ErrorCode::ConfigInvalid,
++                "storage and system recovery directories must not overlap",
++            ));
++        }
++    }
++    Ok(())
++}
++
++/// Open every SYSTEM component with DIRECTORY | NOFOLLOW. A missing component
++/// is not created yet; a symlink (including a dangling one or an ancestor) is
++/// an error, never an absent SYSTEM. Do not inspect config through a bare path.
++pub(crate) fn open_recovery_system(root: &Path) -> Result<RecoverySystem> {
++    let path = crate::disk::absolute_path(root)?;
++    let existing = match PrivateDirectory::open_existing(&path) {
++        Ok(directory) => Some(OpenAt2Root::from_private_directory(
++            directory,
++            MountPolicy::SameMount,
++        )?),
++        Err(platform_io::fs_safety::Error::Io(error))
++            if error.kind() == std::io::ErrorKind::NotFound =>
++        {
++            None
++        }
++        Err(error) => return Err(error.into()),
++    };
++    Ok(RecoverySystem { path, existing })
++}
++
++pub(crate) struct RecoverySystem {
++    path: PathBuf,
++    existing: Option<OpenAt2Root>,
++}
++
++impl RecoverySystem {
++    /// Preserve the full existing mkdir/fsync protocol after data admission.
++    /// Reopening each component remains NOFOLLOW; compare only held identities,
++    /// never a path-based stat that could follow a replaced ancestor.
++    pub(crate) fn create(self) -> Result<PrivateDirectory> {
++        let directory = PrivateDirectory::create_all(&self.path)?;
++        let current = OpenAt2Root::from_private_directory(directory, MountPolicy::SameMount)?;
++        if self
++            .existing
++            .as_ref()
++            .is_some_and(|old| old.identity() != current.identity())
++        {
++            return Err(platform_io::fs_safety::Error::IdentityChanged(self.path).into());
++        }
++        let directory = PrivateDirectory::from_directory(current.into_directory(), self.path)?;
++        require_uninitialized_system(&directory)?;
++        Ok(directory)
++    }
++}
++
++/// The held SYSTEM descriptor, not its diagnostic path, owns this lookup.
++pub(crate) fn require_uninitialized_system(directory: &PrivateDirectory) -> Result<()> {
++    match open_private_regular(directory, &EntryName::new("config.json")?) {
++        Ok(_) => Err(Error::new(
++            ErrorCode::AlreadyInitialized,
++            "restore requires a new system state directory",
++        )),
++        Err(platform_io::fs_safety::Error::Io(error))
++            if error.kind() == std::io::ErrorKind::NotFound =>
++        {
++            Ok(())
++        }
++        Err(error) => Err(error.into()),
++    }
++}
++
++#[derive(Deserialize, Serialize)]
++enum ManifestFormat {
++    #[serialization(rename = "pre-loss-data-bindings")]
++    PreLossDataBindings,
++}
++
++#[derive(Deserialize, Serialize)]
++#[serialization(deny_unknown_fields)]
++struct Binding {
++    identity: DiskRegistrationIdentity,
++    #[serialization(with = "storage_contract::u64_string")]
++    device: u64,
++    #[serialization(with = "storage_contract::u64_string")]
++    inode: u64,
++}
++
++#[derive(Deserialize, Serialize)]
++#[serialization(deny_unknown_fields)]
++struct Document {
++    format: ManifestFormat,
++    pool_id: String,
++    bindings: Vec<Binding>,
++}
++
++/// Validated bindings loaded from a separately trusted pre-loss export.
++/// File ownership protects local admission; it cannot prove when somebody wrote
++/// a file. The operator must retain the original export outside SYSTEM and data
++/// roots. A manifest copied or synthesized from a recovery candidate is not trusted.
++/// Paths are deliberately absent: selecting this file never selects a data root.
++pub struct RecoveryDataManifest {
++    document: Document,
++}
++
++impl RecoveryDataManifest {
++    fn validate(document: Document) -> Result<Self> {
++        storage_contract::validate_id(&document.pool_id, "pool")?;
++        if document.bindings.len() > MAX_BINDINGS {
++            return Err(Error::new(
++                ErrorCode::ResourceLimit,
++                "too many recovery data bindings",
++            ));
++        }
++        let mut ids = BTreeSet::new();
++        let mut slots = BTreeSet::new();
++        let mut physical = BTreeSet::new();
++        for binding in &document.bindings {
++            let identity = &binding.identity;
++            storage_contract::validate_id(&identity.disk_id, "disk")?;
++            name_policy::validate_slot(&identity.slot_id)?;
++            if identity.pool_id != document.pool_id
++                || identity.binding_generation == 0
++                || !ids.insert(&identity.disk_id)
++                || !slots.insert(identity.slot_id.to_ascii_lowercase())
++                || !physical.insert((binding.device, binding.inode))
++            {
++                return Err(Error::new(
++                    ErrorCode::ConfigConflict,
++                    "conflicting recovery data bindings",
++                ));
++            }
++        }
++        Ok(Self { document })
++    }
++
++    /// Read an explicitly trusted external file, never a path from an HTTP request.
++    /// `excluded_roots` must include SYSTEM and all locally authorized candidate
++    /// roots. The overlap check is lexical and performs no candidate-root I/O.
++    /// Errors retain strict JSON, ownership, link, size and filesystem causes.
++    pub fn read_trusted(path: &Path, excluded_roots: &[PathBuf]) -> Result<Self> {
++        let (directory, name) = external_file(path, excluded_roots)?;
++        let file = open_private_regular(&directory, &name)?;
++        let identity = file.metadata()?;
++        if identity.uid() != rustix::process::geteuid().as_raw()
++            || identity.mode() & 0o7777 != 0o600
++        {
++            return Err(platform_io::fs_safety::Error::UnsafePermissions(
++                directory.path().join(name.as_path()),
++            )
++            .into());
++        }
++        let bytes = crate::disk::read_file_bytes(file, MAX_MANIFEST_BYTES)?;
++        Self::validate(storage_contract::decode_strict(&bytes)?)
++    }
++
++    pub fn pool_id(&self) -> &str {
++        &self.document.pool_id
++    }
++
++    /// Exported identities only, not a promise that every configured data disk was available.
++    pub fn disk_ids(&self) -> impl Iterator<Item = &str> {
++        self.document
++            .bindings
++            .iter()
++            .map(|binding| binding.identity.disk_id.as_str())
++    }
++
++    /// Bind only explicitly selected paths to previously saved physical identities.
++    /// This is pure: quorum selection and all actual root validation remain in Engine.
++    pub fn data_roots(
++        &self,
++        selected: &BTreeMap<String, PathBuf>,
++    ) -> Result<Vec<RecoveryDataRoot>> {
++        let by_id: BTreeMap<_, _> = self
++            .document
++            .bindings
++            .iter()
++            .map(|binding| (binding.identity.disk_id.as_str(), binding))
++            .collect();
++        let mut unique_paths = BTreeSet::new();
++        selected
++            .iter()
++            .map(|(id, path)| {
++                let binding = by_id.get(id.as_str()).ok_or_else(|| {
++                    Error::new(
++                        ErrorCode::ConfigConflict,
++                        "selected data disk has no trusted pre-loss binding",
++                    )
++                })?;
++                if !path.is_absolute() {
++                    return Err(Error::new(
++                        ErrorCode::UnsafePath,
++                        "explicit data roots must be absolute",
++                    ));
++                }
++                let root = crate::disk::absolute_path(path)?;
++                if !unique_paths.insert(root.clone()) {
++                    return Err(Error::new(
++                        ErrorCode::ConfigConflict,
++                        "duplicate explicit data root",
++                    ));
++                }
++                Ok(RecoveryDataRoot {
++                    root,
++                    identity: binding.identity.clone(),
++                    device: binding.device,
++                    inode: binding.inode,
++                })
++            })
++            .collect()
++    }
++
++    fn encode(&self) -> Result<Vec<u8>> {
++        let bytes = json_codec::to_vec(&self.document)?;
++        if bytes.len() > MAX_MANIFEST_BYTES {
++            return Err(Error::new(
++                ErrorCode::ResourceLimit,
++                "recovery data manifest exceeds byte limit",
++            ));
++        }
++        Ok(bytes)
++    }
++}
++
++impl Engine {
++    /// Save physical bindings from this healthy, already admitted Engine into a
++    /// new external private file. No seal or expected identity is read from a
++    /// user-supplied candidate. Unavailable data members are not exported.
++    /// Stop the daemon before invoking this through the offline rescue tool.
++    /// Errors never overwrite an existing export or create its parent directory.
++    pub fn export_recovery_data_manifest(&self, path: &Path) -> Result<RecoveryDataManifest> {
++        self.require_write()?;
++        let bindings = self
++            .recovery_data_roots()?
++            .into_iter()
++            .map(|root| Binding {
++                identity: root.identity,
++                device: root.device,
++                inode: root.inode,
++            })
++            .collect();
++        let manifest = RecoveryDataManifest::validate(Document {
++            format: ManifestFormat::PreLossDataBindings,
++            pool_id: self.config().pool_id.clone(),
++            bindings,
++        })?;
++        let excluded: Vec<_> = std::iter::once(self.root().to_path_buf())
++            .chain(self.config().disks.iter().map(|disk| disk.root.clone()))
++            .collect();
++        let (directory, name) = external_file(path, &excluded)?;
++        AtomicFile::create(&directory, &name, &manifest.encode()?)?;
++        Ok(manifest)
++    }
++}
++
++fn external_file(path: &Path, excluded_roots: &[PathBuf]) -> Result<(PrivateDirectory, EntryName)> {
++    let path = crate::disk::absolute_path(path)?;
++    for excluded in excluded_roots {
++        let excluded = crate::disk::absolute_path(excluded)?;
++        if path.starts_with(&excluded) || excluded.starts_with(&path) {
++            return Err(Error::new(
++                ErrorCode::UnsafePath,
++                "recovery manifest must be outside SYSTEM and candidate roots",
++            ));
++        }
++    }
++    let parent = path
++        .parent()
++        .ok_or_else(|| Error::new(ErrorCode::UnsafePath, "manifest parent is missing"))?;
++    let name = EntryName::new(
++        path.file_name()
++            .ok_or_else(|| Error::new(ErrorCode::UnsafePath, "manifest file name is missing"))?,
++    )?;
++    Ok((PrivateDirectory::open_trusted(parent)?, name))
++}
++
++#[cfg(test)]
++#[path = "../../../test/engine/unit/recovery_data_tests.rs"]
++mod tests;
+diff --git a/src/rescue/src/recovery_data.rs b/src/rescue/src/recovery_data.rs
+new file mode 100644
+index 00000000..36fc8726
+--- /dev/null
++++ b/src/rescue/src/recovery_data.rs
+@@ -0,0 +1,50 @@
++//! Explicit, independently trusted recovery bindings; candidate paths are never inspected here.
++use crate::Result;
++use std::{
++    collections::BTreeMap,
++    path::{Path, PathBuf},
++};
++use storage_engine::{RecoveryDataManifest, RecoveryDataRoot};
++
++pub(crate) fn load(
++    manifest: Option<&Path>,
++    mappings: &[String],
++    system: &Path,
++    metadata_roots: &[PathBuf],
++) -> Result<Vec<RecoveryDataRoot>> {
++    let Some(manifest) = manifest else {
++        if !mappings.is_empty() {
++            return Err("explicit data roots require a trusted pre-loss manifest".into());
++        }
++        storage_engine::preflight_recovery_paths(system, metadata_roots)?;
++        return Ok(Vec::new());
++    };
++    if mappings.is_empty() {
++        return Err("a recovery manifest requires explicit data-root selections".into());
++    }
++    let mut selected = BTreeMap::new();
++    for mapping in mappings {
++        let (id, path) = mapping
++            .split_once('=')
++            .ok_or("--data-root must be DISK_ID=/absolute/path")?;
++        storage_engine::validate_id(id, "disk")?;
++        let path = PathBuf::from(path);
++        if !path.is_absolute() || selected.insert(id.to_owned(), path).is_some() {
++            return Err("data-root IDs must be unique and paths absolute".into());
++        }
++    }
++    let storage_roots: Vec<_> = metadata_roots
++        .iter()
++        .cloned()
++        .chain(selected.values().cloned())
++        .collect();
++    storage_engine::preflight_recovery_paths(system, &storage_roots)?;
++    let excluded: Vec<_> = std::iter::once(system.to_path_buf())
++        .chain(storage_roots)
++        .collect();
++    Ok(RecoveryDataManifest::read_trusted(manifest, &excluded)?.data_roots(&selected)?)
++}
++
++#[cfg(test)]
++#[path = "../../../test/rescue/unit/recovery_data_tests.rs"]
++mod tests;
+diff --git a/src/server/src/setup_recovery/recovery_data.rs b/src/server/src/setup_recovery/recovery_data.rs
+new file mode 100644
+index 00000000..3fa5e807
+--- /dev/null
++++ b/src/server/src/setup_recovery/recovery_data.rs
+@@ -0,0 +1,105 @@
++//! Recovery-only local bindings. No constructor or selection probes a data root.
++use super::{ApiError, PathBuf, SetupRecovery, engine_error, valid_local_setup_id};
++use data_serialization::Deserialize;
++use std::{
++    collections::BTreeMap,
++    path::{Component, Path},
++};
++use storage_engine::{RecoveryDataManifest, RecoveryDataRoot};
++
++#[derive(Deserialize)]
++#[serialization(deny_unknown_fields)]
++pub struct RecoveryDataSelection {
++    pub manifest_id: String,
++    pub disk_ids: Vec<String>,
++}
++
++impl SetupRecovery {
++    /// Immutable trusted-local paths only. Manifests must be original exports
++    /// retained before SYSTEM loss; current discovery observations cannot replace
++    /// them. This stores paths without opening files or inspecting candidate roots.
++    pub fn with_recovery_data(
++        mut self,
++        manifests: BTreeMap<String, PathBuf>,
++        roots: BTreeMap<String, PathBuf>,
++    ) -> Result<Self, ApiError> {
++        for (id, path) in &manifests {
++            if !valid_local_setup_id(id) {
++                return Err(ApiError::invalid(
++                    "invalid local recovery manifest identifier",
++                ));
++            }
++            absolute(path)?;
++        }
++        for (id, path) in &roots {
++            storage_contract::validate_id(id, "disk").map_err(ApiError::invalid_source)?;
++            absolute(path)?;
++            if [&self.data_root, &self.management_root]
++                .into_iter()
++                .chain(self.disks.values())
++                .any(|other| path.starts_with(other) || other.starts_with(path))
++            {
++                return Err(ApiError::invalid(
++                    "data recovery roots overlap system or metadata roots",
++                ));
++            }
++        }
++        self.recovery_data_manifests = manifests;
++        self.recovery_data_roots = roots;
++        Ok(self)
++    }
++
++    pub(super) fn selected_recovery_data(
++        &self,
++        selection: Option<&RecoveryDataSelection>,
++    ) -> Result<Vec<RecoveryDataRoot>, ApiError> {
++        let Some(selection) = selection else {
++            return Ok(Vec::new());
++        };
++        if selection.disk_ids.is_empty() || selection.disk_ids.len() > 32 {
++            return Err(ApiError::invalid(
++                "select between one and 32 explicitly authorized data roots",
++            ));
++        }
++        let manifest = self
++            .recovery_data_manifests
++            .get(&selection.manifest_id)
++            .ok_or_else(|| ApiError::invalid("recovery manifest is not locally authorized"))?;
++        let mut selected = BTreeMap::new();
++        for id in &selection.disk_ids {
++            let root = self
++                .recovery_data_roots
++                .get(id)
++                .ok_or_else(|| ApiError::invalid("recovery data root is not locally authorized"))?;
++            if selected.insert(id.clone(), root.clone()).is_some() {
++                return Err(ApiError::invalid("duplicate recovery data identifier"));
++            }
++        }
++        let excluded: Vec<_> = [&self.data_root, &self.management_root]
++            .into_iter()
++            .chain(self.disks.values())
++            .chain(self.recovery_data_roots.values())
++            .cloned()
++            .collect();
++        RecoveryDataManifest::read_trusted(manifest, &excluded)
++            .and_then(|manifest| manifest.data_roots(&selected))
++            .map_err(engine_error)
++    }
++}
++
++fn absolute(path: &Path) -> Result<(), ApiError> {
++    if !path.is_absolute()
++        || path
++            .components()
++            .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
++    {
++        return Err(ApiError::invalid(
++            "recovery sources require absolute paths without traversal",
++        ));
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++#[path = "../../../../test/server/unit/setup_recovery/recovery_data_tests.rs"]
++mod tests;
+diff --git a/test/engine/unit/recovery-data-probe.sh b/test/engine/unit/recovery-data-probe.sh
+new file mode 100644
+index 00000000..3655ae12
+--- /dev/null
++++ b/test/engine/unit/recovery-data-probe.sh
+@@ -0,0 +1,94 @@
++#!/usr/bin/env bash
++# Observe actual syscalls, including rustix direct syscalls; no preload or product hook.
++set -euo pipefail
++engine="$(realpath "${1:?pass the storage-engine libtest binary}")"
++rescue="$(realpath "${2:?pass the zxs-rescue binary}")"
++evidence="${3:?pass an unused absolute evidence directory; traces are retained}"
++[[ "$evidence" = /* ]] || { echo "Evidence directory must be absolute" >&2; exit 1; }
++command -v strace >/dev/null || { echo "strace is required for syscall evidence" >&2; exit 1; }
++command -v python3 >/dev/null
++name=recovery_data::tests::recovery_preflight_forbids_candidate_syscalls
++listed="$("$engine" --list --ignored --exact "$name")"
++[[ "$(grep -Fxc "$name: test" <<< "$listed")" = 1 ]] || {
++  echo "The exact current ignored recovery syscall test is missing" >&2
++  exit 1
++}
++mkdir -m 700 "$evidence"
++for entry in engine cli; do
++  for action in missing-quorum overlap-same overlap-parent overlap-child unlisted-system unlisted-with-selection system-symlink-leaf system-symlink-ancestor; do
++    for present in 0 1; do
++      base="$evidence/$entry-$action-$present"
++      mkdir -m 700 "$base"
++      env ZXS_RECOVERY_PROBE_BASE="$base" ZXS_RECOVERY_PROBE_ENTRY="$entry" \
++        ZXS_RECOVERY_PROBE_ACTION="$action" ZXS_RECOVERY_PROBE_PRESENT="$present" \
++        ZXS_RECOVERY_PROBE_RESCUE="$rescue" \
++        strace -f -qq -yy -s 4096 -e trace=%file,fstat,write -o "$base/syscalls" \
++        "$engine" --ignored --exact --nocapture --test-threads=1 --color never "$name" \
++        | tee "$base/result"
++      grep -Fq "ZXS_RECOVERY_PROBE_COMPLETE entry=$entry action=$action" "$base/result"
++      grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out;' "$base/result"
++      python3 - "$base/syscalls" "$action" <<'PY'
++import re
++import sys
++
++needle = "forbidden-data-candidate-9c79f5f8"
++alias = "system-alias-4ce3b0"
++alias_action = sys.argv[2] in {"system-symlink-leaf", "system-symlink-ancestor"}
++markers = {
++    "ZXS_RECOVERY_PROBE_REJECT_BEGIN": (None, "reject"),
++    "ZXS_RECOVERY_PROBE_REJECT_END": ("reject", None),
++    "ZXS_RECOVERY_PROBE_CALIBRATE_BEGIN": (None, "calibrate"),
++    "ZXS_RECOVERY_PROBE_CALIBRATE_END": ("calibrate", None),
++}
++seen = {marker: 0 for marker in markers}
++events = {"reject": [], "calibrate": []}
++alias_events = {"reject": [], "calibrate": []}
++syscall = re.compile(r"\b(open(?:64|at2?)?|(?:new)?f?stat(?:at64|at|64|x)?|lstat(?:64)?)\(")
++phase = None
++with open(sys.argv[1], encoding="utf-8") as source:
++    for line in source:
++        if re.search(r"\bwrite\(", line):
++            for marker, (before, after) in markers.items():
++                if marker in line:
++                    if phase != before:
++                        raise SystemExit(f"Invalid trace phase for {marker}: {line}")
++                    seen[marker] += 1
++                    phase = after
++        found = syscall.search(line)
++        if phase and found and needle in line:
++            events[phase].append((found.group(1), line.rstrip()))
++        if phase and found and alias in line:
++            alias_events[phase].append((found.group(1), line.rstrip()))
++if phase is not None or any(count != 1 for count in seen.values()):
++    raise SystemExit(f"Incomplete or duplicate probe boundaries: {seen}")
++if events["reject"]:
++    raise SystemExit("Forbidden candidate syscall before rejection:\n" + "\n".join(line for _, line in events["reject"]))
++calibrated = {kind for kind, _ in events["calibrate"]}
++if not any(kind.startswith("open") for kind in calibrated) or not any("stat" in kind for kind in calibrated):
++    raise SystemExit(f"Observer did not see both real candidate stat and DiskRoot open: {calibrated}")
++if alias_action:
++    if not alias_events["reject"]:
++        raise SystemExit("The alias rejection was not observed")
++    for kind, line in alias_events["reject"]:
++        # Only an exact single component relative to the already-held parent,
++        # with NOFOLLOW|DIRECTORY and kernel rejection, can inspect the link
++        # without dereferencing it. NOFOLLOW on a multi-component path is not
++        # enough; stat(alias/child) can follow an intermediate link silently.
++        safe = (
++            kind == "openat"
++            and re.search(r'openat\(\d+<[^>]+>, "' + re.escape(alias) + r'", ', line)
++            and "O_NOFOLLOW" in line
++            and "O_DIRECTORY" in line
++            and re.search(r'= -1 (ENOTDIR|ELOOP)\b', line)
++        )
++        if not safe:
++            raise SystemExit("Following or unproved alias access before rejection:\n" + line)
++    alias_calibrated = {kind for kind, _ in alias_events["calibrate"]}
++    if not any(kind.startswith("open") for kind in alias_calibrated) or not any("stat" in kind for kind in alias_calibrated):
++        raise SystemExit(f"Observer missed following alias stat/open calibration: {alias_calibrated}")
++print("PROVEN: zero candidate stat/open during rejection; real stat and DiskRoot open calibration observed")
++PY
++    done
++  done
++done
++printf 'Recovery syscall traces retained at %s\n' "$evidence"
+diff --git a/test/engine/unit/recovery_data_tests.rs b/test/engine/unit/recovery_data_tests.rs
+new file mode 100644
+index 00000000..c10abe90
+--- /dev/null
++++ b/test/engine/unit/recovery_data_tests.rs
+@@ -0,0 +1,483 @@
++use super::*;
++use crate::Config;
++use std::{
++    fs,
++    os::unix::fs::{MetadataExt, PermissionsExt},
++};
++
++fn fixture() -> (tempfile::TempDir, Engine, PathBuf) {
++    let temp = tempfile::Builder::new()
++        .permissions(std::fs::Permissions::from_mode(0o700))
++        .tempdir()
++        .unwrap();
++    let mut config =
++        Config::development([temp.path().join("voter"), temp.path().join("retained/data")])
++            .unwrap();
++    config.disks[1].metadata_member = false;
++    let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
++    let manifest = temp.path().join("pre-loss.json");
++    (temp, engine, manifest)
++}
++
++#[test]
++fn core_recovery_rejects_system_equal_parent_or_child_before_candidate_io() {
++    let (_temp, engine, _) = fixture();
++    let metadata = engine.config().disks[0].root.clone();
++    let data = engine.recovery_data_roots().unwrap();
++    let original = fs::read(data[0].root.join("disk.json")).unwrap();
++    drop(engine);
++    for system in [
++        data[0].root.clone(),
++        data[0].root.parent().unwrap().to_path_buf(),
++        data[0].root.join("nested-system"),
++        data[0].root.join("."),
++    ] {
++        let error = Engine::restore_from_disks_and_data_roots(
++            &system,
++            std::slice::from_ref(&metadata),
++            &data,
++        )
++        .err()
++        .unwrap();
++        assert_eq!(error.code(), ErrorCode::ConfigInvalid);
++        assert!(!system.join("config.json").exists());
++        assert_eq!(fs::read(data[0].root.join("disk.json")).unwrap(), original);
++    }
++    for system in [metadata.clone(), metadata.join("nested-system")] {
++        assert_eq!(
++            Engine::restore_from_disks(&system, std::slice::from_ref(&metadata))
++                .err()
++                .unwrap()
++                .code(),
++            ErrorCode::ConfigInvalid
++        );
++    }
++    for system in [
++        data[0].root.clone(),
++        data[0].root.parent().unwrap().to_path_buf(),
++        data[0].root.join("system-without-data-selection"),
++    ] {
++        assert_eq!(
++            Engine::restore_from_disks(&system, std::slice::from_ref(&metadata))
++                .err()
++                .unwrap()
++                .code(),
++            ErrorCode::ConfigInvalid
++        );
++        assert!(!system.join("config.json").exists());
++    }
++}
++
++#[test]
++fn core_recovery_rejects_system_leaf_and_ancestor_symlinks() {
++    let (temp, engine, _) = fixture();
++    let metadata = engine.config().disks[0].root.clone();
++    let data = engine.config().disks[1].root.clone();
++    let original = fs::read(data.join("disk.json")).unwrap();
++    drop(engine);
++    let alias = temp.path().join("system-alias");
++    std::os::unix::fs::symlink(&data, &alias).unwrap();
++    for system in [alias.clone(), alias.join("missing/nested-system")] {
++        assert_eq!(
++            Engine::restore_from_disks(&system, std::slice::from_ref(&metadata))
++                .err()
++                .unwrap()
++                .code(),
++            ErrorCode::UnsafePath
++        );
++    }
++    assert_eq!(fs::read(data.join("disk.json")).unwrap(), original);
++    assert!(!data.join("missing").exists());
++    fs::rename(&data, temp.path().join("parked-data")).unwrap();
++    // A dangling leaf or ancestor is never treated as a missing SYSTEM.
++    for system in [alias.clone(), alias.join("missing/nested-system")] {
++        assert_eq!(
++            Engine::restore_from_disks(&system, std::slice::from_ref(&metadata))
++                .err()
++                .unwrap()
++                .code(),
++            ErrorCode::UnsafePath
++        );
++    }
++    assert!(
++        fs::symlink_metadata(&alias)
++            .unwrap()
++            .file_type()
++            .is_symlink()
++    );
++    assert!(!data.exists());
++}
++
++#[test]
++fn system_config_lookup_uses_held_directory_and_rejects_linked_config() {
++    let (temp, engine, _) = fixture();
++    let safe = temp.path().join("new-system");
++    let held = PrivateDirectory::create_all(&safe).unwrap();
++    let parked = temp.path().join("parked-system");
++    fs::rename(&safe, &parked).unwrap();
++    std::os::unix::fs::symlink(engine.root(), &safe).unwrap();
++    // The replacement points to an initialized SYSTEM, but cannot redirect this
++    // already held lookup. No path-based check or fallback is permitted here.
++    require_uninitialized_system(&held).unwrap();
++    std::os::unix::fs::symlink(
++        engine.root().join("config.json"),
++        parked.join("config.json"),
++    )
++    .unwrap();
++    assert_eq!(
++        require_uninitialized_system(&held).unwrap_err().code(),
++        ErrorCode::UnsafePath
++    );
++    assert_eq!(
++        require_uninitialized_system(&PrivateDirectory::open_existing(engine.root()).unwrap())
++            .unwrap_err()
++            .code(),
++        ErrorCode::AlreadyInitialized
++    );
++}
++
++#[test]
++fn delayed_system_creation_rejects_replaced_or_newly_linked_components() {
++    let (temp, engine, _) = fixture();
++    let safe = temp.path().join("new-system");
++    PrivateDirectory::create_all(&safe).unwrap();
++    let pending = open_recovery_system(&safe).unwrap();
++    fs::rename(&safe, temp.path().join("parked-system")).unwrap();
++    PrivateDirectory::create_all(&safe).unwrap();
++    assert_eq!(pending.create().unwrap_err().code(), ErrorCode::UnsafePath);
++
++    let pending = open_recovery_system(&safe).unwrap();
++    fs::remove_dir(&safe).unwrap();
++    let data = &engine.config().disks[1].root;
++    std::os::unix::fs::symlink(data, &safe).unwrap();
++    assert_eq!(pending.create().unwrap_err().code(), ErrorCode::UnsafePath);
++
++    let ancestor = temp.path().join("missing-ancestor");
++    let pending = open_recovery_system(&ancestor.join("nested/system")).unwrap();
++    std::os::unix::fs::symlink(data, &ancestor).unwrap();
++    assert_eq!(pending.create().unwrap_err().code(), ErrorCode::UnsafePath);
++    assert!(!data.join("nested").exists());
++}
++
++#[test]
++#[ignore = "requires the external strace recovery-data-probe.sh observer"]
++fn recovery_preflight_forbids_candidate_syscalls() {
++    use std::process::Command;
++    let base = PathBuf::from(std::env::var_os("ZXS_RECOVERY_PROBE_BASE").unwrap());
++    let action = std::env::var("ZXS_RECOVERY_PROBE_ACTION").unwrap();
++    let entry = std::env::var("ZXS_RECOVERY_PROBE_ENTRY").unwrap();
++    let present = std::env::var("ZXS_RECOVERY_PROBE_PRESENT").unwrap() == "1";
++    let candidate = base.join("retained/forbidden-data-candidate-9c79f5f8");
++    let second = base.join("second-forbidden-data-candidate-9c79f5f8");
++    let metadata: Vec<_> = (0..3).map(|n| base.join(format!("voter-{n}"))).collect();
++    let mut config = Config::development(
++        metadata
++            .iter()
++            .cloned()
++            .chain([candidate.clone(), second.clone()]),
++    )
++    .unwrap();
++    config.disks[3].metadata_member = false;
++    config.disks[4].metadata_member = false;
++    let engine = Engine::initialize(&base.join("original-system"), config).unwrap();
++    let manifest_path = base.join("pre-loss.json");
++    let manifest = engine
++        .export_recovery_data_manifest(&manifest_path)
++        .unwrap();
++    let data_id = engine.config().disks[3].disk_id.clone();
++    let roots = manifest
++        .data_roots(&BTreeMap::from([(data_id.clone(), candidate.clone())]))
++        .unwrap();
++    let second_id = engine.config().disks[4].disk_id.clone();
++    let second_roots = manifest
++        .data_roots(&BTreeMap::from([(second_id.clone(), second.clone())]))
++        .unwrap();
++    drop(engine);
++    if !present {
++        fs::rename(&candidate, base.join("parked-data")).unwrap();
++    }
++    let alias = base.join("system-alias-4ce3b0");
++    let alias_action = matches!(
++        action.as_str(),
++        "system-symlink-leaf" | "system-symlink-ancestor"
++    );
++    if alias_action {
++        std::os::unix::fs::symlink(&candidate, &alias).unwrap();
++    }
++    let system = match action.as_str() {
++        "missing-quorum" => base.join("restored-system"),
++        "overlap-same" => candidate.clone(),
++        "overlap-parent" => candidate.parent().unwrap().to_path_buf(),
++        "overlap-child" => candidate.join("nested-system"),
++        "unlisted-system" | "unlisted-with-selection" => candidate.clone(),
++        "system-symlink-leaf" => alias.clone(),
++        "system-symlink-ancestor" => alias.join("missing/nested-system"),
++        other => panic!("unknown probe action {other}"),
++    };
++    let expected = if action == "missing-quorum" {
++        ErrorCode::ConfigConflict
++    } else if alias_action {
++        ErrorCode::UnsafePath
++    } else {
++        ErrorCode::ConfigInvalid
++    };
++    let selected_metadata = if action == "missing-quorum" {
++        &metadata[..1]
++    } else {
++        metadata.as_slice()
++    };
++    let selected_data = match action.as_str() {
++        "unlisted-system" | "system-symlink-leaf" | "system-symlink-ancestor" => &[][..],
++        "unlisted-with-selection" => second_roots.as_slice(),
++        _ => roots.as_slice(),
++    };
++    println!("ZXS_RECOVERY_PROBE_REJECT_BEGIN");
++    let code = match entry.as_str() {
++        "engine" => {
++            Engine::restore_from_disks_and_data_roots(&system, selected_metadata, selected_data)
++                .err()
++                .unwrap()
++                .code()
++        }
++        "cli" => {
++            let mut command = Command::new(std::env::var_os("ZXS_RECOVERY_PROBE_RESCUE").unwrap());
++            command
++                .arg("--root")
++                .arg(&system)
++                .args(["restore-system", "--disks"])
++                .args(selected_metadata);
++            if !selected_data.is_empty() {
++                command.arg("--data-manifest").arg(&manifest_path);
++                for selected in selected_data {
++                    command.arg("--data-root").arg(format!(
++                        "{}={}",
++                        selected.identity.disk_id,
++                        selected.root.display()
++                    ));
++                }
++            }
++            let output = command.output().unwrap();
++            assert_eq!(output.status.code(), Some(1), "{output:?}");
++            assert!(
++                String::from_utf8_lossy(&output.stderr).contains(&expected.to_string()),
++                "{output:?}"
++            );
++            expected
++        }
++        other => panic!("unknown probe entry {other}"),
++    };
++    println!("ZXS_RECOVERY_PROBE_REJECT_END");
++    assert_eq!(code, expected);
++    // The observer must see both the real first stat and the exact DiskRoot
++    // open implementation, including an ENOENT candidate. No libc shim is used.
++    println!("ZXS_RECOVERY_PROBE_CALIBRATE_BEGIN");
++    let observed = fs::symlink_metadata(&candidate);
++    let opened = crate::disk::DiskRoot::open(&candidate);
++    if alias_action {
++        // Trace the alias spelling too: strace cannot be assumed to expand
++        // intermediate symlinks for path-based stat/open calls.
++        assert_eq!(fs::metadata(&alias).is_ok(), present);
++        assert_eq!(fs::File::open(&alias).is_ok(), present);
++    }
++    println!("ZXS_RECOVERY_PROBE_CALIBRATE_END");
++    assert_eq!(observed.is_ok(), present);
++    assert_eq!(opened.is_ok(), present);
++    drop(opened);
++    println!("ZXS_RECOVERY_PROBE_COMPLETE entry={entry} action={action} present={present}");
++}
++
++#[test]
++fn export_retains_held_identity_and_restores_only_explicit_relocated_data() {
++    let (temp, engine, path) = fixture();
++    let original = engine.recovery_data_roots().unwrap();
++    let exported = engine.export_recovery_data_manifest(&path).unwrap();
++    assert_eq!(
++        exported.disk_ids().collect::<Vec<_>>(),
++        [original[0].identity.disk_id.as_str()]
++    );
++    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
++    let bytes = fs::read(&path).unwrap();
++    let document: json_codec::Value = json_codec::from_slice(&bytes).unwrap();
++    assert!(document["bindings"][0].get("root").is_none());
++    assert!(document["bindings"][0].get("path").is_none());
++    let metadata = engine.config().disks[0].root.clone();
++    drop(engine);
++    let relocated = temp.path().join("relocated-data");
++    fs::rename(&original[0].root, &relocated).unwrap();
++    let system = temp
++        .path()
++        .join("missing-system-ancestors/nested/restored-system");
++    let manifest = RecoveryDataManifest::read_trusted(
++        &path,
++        &[system.clone(), metadata.clone(), relocated.clone()],
++    )
++    .unwrap();
++    let selected = BTreeMap::from([(original[0].identity.disk_id.clone(), relocated.clone())]);
++    let roots = manifest.data_roots(&selected).unwrap();
++    assert_eq!(roots[0].device, original[0].device);
++    assert_eq!(roots[0].inode, original[0].inode);
++    let restored = Engine::restore_from_disks_and_data_roots(&system, &[metadata], &roots).unwrap();
++    assert_eq!(restored.recovery_data_roots().unwrap()[0].root, relocated);
++    drop(restored);
++    let reopened = Engine::open(&system).unwrap();
++    assert_eq!(
++        reopened.recovery_data_roots().unwrap()[0].identity,
++        original[0].identity
++    );
++    assert_eq!(fs::read(&path).unwrap(), bytes);
++}
++
++#[test]
++fn export_never_overwrites_or_uses_system_or_storage_as_backup() {
++    let (temp, engine, path) = fixture();
++    engine.export_recovery_data_manifest(&path).unwrap();
++    let original = fs::read(&path).unwrap();
++    assert!(engine.export_recovery_data_manifest(&path).is_err());
++    assert_eq!(fs::read(&path).unwrap(), original);
++    for forbidden in [
++        engine.root().join("backup.json"),
++        engine.config().disks[1].root.join("backup.json"),
++    ] {
++        assert_eq!(
++            engine
++                .export_recovery_data_manifest(&forbidden)
++                .err()
++                .unwrap()
++                .code(),
++            ErrorCode::UnsafePath
++        );
++        assert!(!forbidden.exists());
++    }
++    let missing = temp.path().join("missing-parent/backup.json");
++    assert!(engine.export_recovery_data_manifest(&missing).is_err());
++    assert!(!missing.parent().unwrap().exists());
++}
++
++#[test]
++fn manifest_reader_rejects_public_linked_foreign_and_malformed_evidence() {
++    let (temp, engine, path) = fixture();
++    engine.export_recovery_data_manifest(&path).unwrap();
++    let original = fs::read(&path).unwrap();
++    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
++    assert!(RecoveryDataManifest::read_trusted(&path, &[]).is_err());
++    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
++    let alias = temp.path().join("alias.json");
++    fs::hard_link(&path, &alias).unwrap();
++    assert!(RecoveryDataManifest::read_trusted(&path, &[]).is_err());
++    fs::remove_file(&alias).unwrap();
++    std::os::unix::fs::symlink(&path, &alias).unwrap();
++    assert!(RecoveryDataManifest::read_trusted(&alias, &[]).is_err());
++    for change in ["foreign", "duplicate", "unknown", "format"] {
++        let mut value: json_codec::Value = json_codec::from_slice(&original).unwrap();
++        match change {
++            "foreign" => {
++                value["bindings"][0]["identity"]["pool_id"] = crate::new_id("pool").unwrap().into()
++            }
++            "duplicate" => {
++                let binding = value["bindings"][0].clone();
++                value["bindings"].as_array_mut().unwrap().push(binding);
++            }
++            "unknown" => value["candidate_root"] = "/not-authority".into(),
++            "format" => value["format"] = "invented".into(),
++            _ => unreachable!(),
++        }
++        fs::write(&path, json_codec::to_vec(&value).unwrap()).unwrap();
++        assert!(
++            RecoveryDataManifest::read_trusted(&path, &[]).is_err(),
++            "{change}"
++        );
++    }
++    fs::write(
++        &path,
++        br#"{"format":"pre-loss-data-bindings","format":"pre-loss-data-bindings"}"#,
++    )
++    .unwrap();
++    assert!(RecoveryDataManifest::read_trusted(&path, &[]).is_err());
++}
++
++#[test]
++fn missing_trusted_binding_never_falls_back_to_candidate_seal_or_unlisted_roots() {
++    let (temp, engine, path) = fixture();
++    engine.export_recovery_data_manifest(&path).unwrap();
++    let manifest = RecoveryDataManifest::read_trusted(&path, &[]).unwrap();
++    let unlisted = temp.path().join("never-probed");
++    let unknown = BTreeMap::from([(crate::new_id("disk").unwrap(), unlisted.clone())]);
++    assert_eq!(
++        manifest.data_roots(&unknown).err().unwrap().code(),
++        ErrorCode::ConfigConflict
++    );
++    assert!(!unlisted.exists());
++    let metadata = engine.config().disks[0].root.clone();
++    drop(engine);
++    let restored =
++        Engine::restore_from_disks(&temp.path().join("metadata-only"), &[metadata]).unwrap();
++    assert!(restored.recovery_data_roots().unwrap().is_empty());
++}
++
++#[test]
++fn rewritten_candidate_seal_cannot_replace_the_saved_physical_identity() {
++    let (temp, engine, path) = fixture();
++    let original = engine.recovery_data_roots().unwrap().remove(0);
++    let metadata = engine.config().disks[0].root.clone();
++    engine.export_recovery_data_manifest(&path).unwrap();
++    drop(engine);
++    fs::rename(&original.root, temp.path().join("old-data")).unwrap();
++    fs::create_dir(&original.root).unwrap();
++    fs::set_permissions(&original.root, fs::Permissions::from_mode(0o700)).unwrap();
++    let physical = fs::metadata(&original.root).unwrap();
++    let mut seal: json_codec::Value =
++        json_codec::from_slice(&fs::read(temp.path().join("old-data/disk.json")).unwrap()).unwrap();
++    seal["device"] = physical.dev().to_string().into();
++    seal["inode"] = physical.ino().to_string().into();
++    fs::write(
++        original.root.join("disk.json"),
++        json_codec::to_vec(&seal).unwrap(),
++    )
++    .unwrap();
++    fs::set_permissions(
++        original.root.join("disk.json"),
++        fs::Permissions::from_mode(0o600),
++    )
++    .unwrap();
++    let manifest = RecoveryDataManifest::read_trusted(&path, &[]).unwrap();
++    let roots = manifest
++        .data_roots(&BTreeMap::from([(
++            original.identity.disk_id,
++            original.root,
++        )]))
++        .unwrap();
++    let system = temp.path().join("must-not-publish");
++    let error = Engine::restore_from_disks_and_data_roots(&system, &[metadata], &roots)
++        .err()
++        .unwrap();
++    assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
++    assert!(!system.join("config.json").exists());
++}
++
++#[test]
++fn insufficient_metadata_quorum_precedes_explicit_data_path_access() {
++    let temp = tempfile::Builder::new()
++        .permissions(std::fs::Permissions::from_mode(0o700))
++        .tempdir()
++        .unwrap();
++    let mut config =
++        Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
++    config.disks[3].metadata_member = false;
++    let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
++    let path = temp.path().join("pre-loss.json");
++    let manifest = engine.export_recovery_data_manifest(&path).unwrap();
++    let metadata = engine.config().disks[0].root.clone();
++    let data = engine.config().disks[3].clone();
++    drop(engine);
++    let absent = temp.path().join("never-probed");
++    let roots = manifest
++        .data_roots(&BTreeMap::from([(data.disk_id, absent.clone())]))
++        .unwrap();
++    let system = temp.path().join("failed");
++    let error = Engine::restore_from_disks_and_data_roots(&system, &[metadata], &roots)
++        .err()
++        .unwrap();
++    assert_eq!(error.code(), ErrorCode::ConfigConflict);
++    assert!(!system.exists());
++    assert!(!absent.exists());
++}
+diff --git a/test/rescue/unit/recovery_data_tests.rs b/test/rescue/unit/recovery_data_tests.rs
+new file mode 100644
+index 00000000..7a8a4a96
+--- /dev/null
++++ b/test/rescue/unit/recovery_data_tests.rs
+@@ -0,0 +1,102 @@
++use super::*;
++use std::os::unix::fs::PermissionsExt;
++use storage_engine::{Config, Engine};
++
++#[test]
++fn cli_rejects_system_equal_parent_or_child_before_reading_even_the_manifest() {
++    let base = tempfile::tempdir().unwrap();
++    let candidate = base.path().join("retained/data");
++    let mapping = format!(
++        "{}={}",
++        storage_engine::new_id("disk").unwrap(),
++        candidate.display()
++    );
++    let manifest = base.path().join("absent-manifest.json");
++    let metadata = [base.path().join("absent-voter")];
++    for system in [
++        candidate.clone(),
++        candidate.parent().unwrap().to_path_buf(),
++        candidate.join("system"),
++        candidate.join("."),
++    ] {
++        let error = load(
++            Some(&manifest),
++            std::slice::from_ref(&mapping),
++            &system,
++            &metadata,
++        )
++        .unwrap_err();
++        assert_eq!(
++            error
++                .downcast_ref::<storage_engine::Error>()
++                .unwrap()
++                .code(),
++            storage_engine::ErrorCode::ConfigInvalid
++        );
++    }
++    assert!(!candidate.exists());
++    assert!(!manifest.exists());
++}
++
++#[test]
++fn cli_binding_load_never_derives_identity_from_candidate_paths() {
++    let temp = tempfile::Builder::new()
++        .permissions(std::fs::Permissions::from_mode(0o700))
++        .tempdir()
++        .unwrap();
++    let mut config =
++        Config::development([temp.path().join("voter"), temp.path().join("data")]).unwrap();
++    config.disks[1].metadata_member = false;
++    let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
++    let original = engine.recovery_data_roots().unwrap().remove(0);
++    let manifest = temp.path().join("saved.json");
++    engine.export_recovery_data_manifest(&manifest).unwrap();
++    let absent = temp.path().join("not-yet-mounted");
++    let mapping = format!("{}={}", original.identity.disk_id, absent.display());
++    let roots = load(
++        Some(&manifest),
++        std::slice::from_ref(&mapping),
++        &temp.path().join("restored"),
++        &[],
++    )
++    .unwrap();
++    assert_eq!(roots[0].device, original.device);
++    assert_eq!(roots[0].inode, original.inode);
++    assert_eq!(roots[0].root, absent);
++    assert!(!absent.exists());
++    assert!(
++        load(
++            None,
++            std::slice::from_ref(&mapping),
++            &temp.path().join("restored"),
++            &[]
++        )
++        .is_err()
++    );
++    assert!(
++        load(
++            Some(&manifest),
++            &[mapping.clone(), mapping],
++            &temp.path().join("restored"),
++            &[]
++        )
++        .is_err()
++    );
++    assert!(
++        load(
++            Some(&manifest),
++            &[format!(
++                "{}=/missing",
++                storage_engine::new_id("disk").unwrap()
++            )],
++            &temp.path().join("restored"),
++            &[]
++        )
++        .is_err()
++    );
++    assert!(
++        load(None, &[], &temp.path().join("restored"), &[])
++            .unwrap()
++            .is_empty()
++    );
++}
+diff --git a/test/server/unit/setup_recovery/recovery_data_tests.rs b/test/server/unit/setup_recovery/recovery_data_tests.rs
+new file mode 100644
+index 00000000..9fc6bb64
+--- /dev/null
++++ b/test/server/unit/setup_recovery/recovery_data_tests.rs
+@@ -0,0 +1,204 @@
++use super::*;
++use crate::setup_recovery::RestoreRequest;
++use std::{fs, os::unix::fs::PermissionsExt};
++use storage_engine::{Config, Engine};
++
++struct Fixture {
++    temp: tempfile::TempDir,
++    service: SetupRecovery,
++    data_id: String,
++    data_root: PathBuf,
++    manifest: PathBuf,
++}
++
++fn fixture() -> Fixture {
++    let temp = tempfile::Builder::new()
++        .permissions(std::fs::Permissions::from_mode(0o700))
++        .tempdir()
++        .unwrap();
++    let mut config =
++        Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
++    config.disks[3].metadata_member = false;
++    let mut engine = Engine::initialize(&temp.path().join("original-system"), config).unwrap();
++    engine
++        .persist_auth_state(
++            crate::auth::AuthStore::initialize(
++                &temp.path().join("snapshot-auth"),
++                "admin",
++                "long-test-password",
++            )
++            .unwrap()
++            .snapshot()
++            .unwrap(),
++            "system_auth",
++            storage_contract::OperationId::generate().unwrap(),
++        )
++        .unwrap();
++    let manifest = temp.path().join("pre-loss.json");
++    engine.export_recovery_data_manifest(&manifest).unwrap();
++    let data_id = engine.config().disks[3].disk_id.clone();
++    let old_data = engine.config().disks[3].root.clone();
++    let metadata = engine.config().disks[..3]
++        .iter()
++        .enumerate()
++        .map(|(n, disk)| (format!("voter-{n}"), disk.root.clone()))
++        .collect();
++    drop(engine);
++    let data_root = temp.path().join("relocated-data");
++    fs::rename(old_data, &data_root).unwrap();
++    let system = temp.path().join("restored-system");
++    let management = temp.path().join("new-management");
++    for path in [&system, &management] {
++        fs::create_dir(path).unwrap();
++        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
++    }
++    let service = SetupRecovery::new(system, management, metadata)
++        .unwrap()
++        .with_recovery_data(
++            BTreeMap::from([("saved".to_owned(), manifest.clone())]),
++            BTreeMap::from([(data_id.clone(), data_root.clone())]),
++        )
++        .unwrap();
++    Fixture {
++        temp,
++        service,
++        data_id,
++        data_root,
++        manifest,
++    }
++}
++
++fn request(data_id: &str, metadata: &[&str]) -> RestoreRequest {
++    RestoreRequest {
++        disk_ids: metadata.iter().map(|id| (*id).to_owned()).collect(),
++        data_recovery: Some(RecoveryDataSelection {
++            manifest_id: "saved".into(),
++            disk_ids: vec![data_id.to_owned()],
++        }),
++        accept_stale_credentials: false,
++    }
++}
++
++#[test]
++fn restore_service_uses_saved_binding_and_preserves_relocated_data_on_cold_open() {
++    let f = fixture();
++    let bytes = fs::read(&f.manifest).unwrap();
++    f.service
++        .restore_locked(
++            request(&f.data_id, &["voter-0", "voter-1", "voter-2"]),
++            |engine| {
++                let roots = engine.recovery_data_roots().unwrap();
++                assert_eq!(roots.len(), 1);
++                assert_eq!(roots[0].root, f.data_root);
++                assert!(engine.auth_state().is_some());
++                Ok(())
++            },
++        )
++        .unwrap();
++    let engine = Engine::open(&f.service.data_root).unwrap();
++    assert_eq!(
++        engine.recovery_data_roots().unwrap()[0].identity.disk_id,
++        f.data_id
++    );
++    assert_eq!(fs::read(&f.manifest).unwrap(), bytes);
++}
++
++#[test]
++fn service_metadata_quorum_failure_precedes_data_path_open() {
++    let mut f = fixture();
++    let absent = f.temp.path().join("never-opened-data");
++    f.service
++        .recovery_data_roots
++        .insert(f.data_id.clone(), absent.clone());
++    let error = f
++        .service
++        .restore_locked(request(&f.data_id, &["voter-0"]), |_| {
++            panic!("must not publish")
++        })
++        .unwrap_err();
++    assert_eq!(error.code, storage_contract::ErrorCode::ConfigConflict);
++    assert!(!f.service.data_root.join("config.json").exists());
++    assert!(!absent.exists());
++}
++
++#[test]
++fn omitted_data_selection_does_not_read_manifest_or_probe_data() {
++    let f = fixture();
++    fs::write(&f.manifest, b"malformed unselected file").unwrap();
++    f.service
++        .restore_locked(
++            RestoreRequest {
++                disk_ids: vec!["voter-0".into(), "voter-1".into(), "voter-2".into()],
++                data_recovery: None,
++                accept_stale_credentials: false,
++            },
++            |engine| {
++                assert!(engine.recovery_data_roots().unwrap().is_empty());
++                Ok(())
++            },
++        )
++        .unwrap();
++    assert_eq!(fs::read(&f.manifest).unwrap(), b"malformed unselected file");
++}
++
++#[test]
++fn service_never_accepts_http_physical_identity_or_unknown_local_sources() {
++    for field in ["device", "inode", "root", "identity"] {
++        let mut value = json_codec::json!({
++            "disk_ids": ["voter-0"],
++            "data_recovery": {"manifest_id":"saved", "disk_ids":["disk_test"]}
++        });
++        value["data_recovery"][field] = "self-certified".into();
++        assert!(
++            json_codec::from_value::<RestoreRequest>(value).is_err(),
++            "{field}"
++        );
++    }
++    let f = fixture();
++    for selection in [
++        RecoveryDataSelection {
++            manifest_id: "unknown".into(),
++            disk_ids: vec![f.data_id.clone()],
++        },
++        RecoveryDataSelection {
++            manifest_id: "saved".into(),
++            disk_ids: vec!["unknown".into()],
++        },
++        RecoveryDataSelection {
++            manifest_id: "saved".into(),
++            disk_ids: vec![f.data_id.clone(), f.data_id.clone()],
++        },
++    ] {
++        assert!(f.service.selected_recovery_data(Some(&selection)).is_err());
++    }
++    assert!(!f.service.data_root.join("config.json").exists());
++}
++
++#[test]
++fn manifest_inside_selected_data_root_is_rejected_without_fallback() {
++    let mut f = fixture();
++    f.service
++        .recovery_data_manifests
++        .insert("saved".into(), f.data_root.join("disk.json"));
++    let error = f
++        .service
++        .selected_recovery_data(request(&f.data_id, &["voter-0"]).data_recovery.as_ref())
++        .err()
++        .unwrap();
++    assert_eq!(error.code, storage_contract::ErrorCode::UnsafePath);
++}
++
++#[test]
++fn configuring_data_roots_performs_no_candidate_io() {
++    let f = fixture();
++    let missing = f.temp.path().join("unmounted-data");
++    let service = f
++        .service
++        .with_recovery_data(
++            BTreeMap::from([("missing-file".into(), f.temp.path().join("missing.json"))]),
++            BTreeMap::from([(f.data_id, missing.clone())]),
++        )
++        .unwrap();
++    assert!(!missing.exists());
++    assert!(service.selected_recovery_data(None).unwrap().is_empty());
++}

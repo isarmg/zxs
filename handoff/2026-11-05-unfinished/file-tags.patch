@@ -1,0 +1,3697 @@
+diff --git a/docs/validation/current-file-tags-20261105.md b/docs/validation/current-file-tags-20261105.md
+new file mode 100644
+index 00000000..50a87a95
+--- /dev/null
++++ b/docs/validation/current-file-tags-20261105.md
+@@ -0,0 +1,49 @@
++# 当前注册表下的文件节点标签准入
++
++基线：`9ae138d0`，复用 `fc2af0bf` 的独立标签规划候选。范围是既有 `file.tags.update`，不改变标签产品语义、HTTP 认证、正文访问权限、磁盘退出或恢复协议。
++
++## 证明与写集
++
++- 普通 `require_operation` 白名单不增加标签操作。独立 planner 在闭包前拒绝未准入 registry，规划后拒绝任何 Prepared payload；实际发布和冷 replay 使用同一纯计划重建，不能只靠操作名通过。
++- 输入严格反序列化，保留原生 actor、完整摘要（包括显式空 location）、批量来源、精确 expected node、只读别名、标签名称及 16 项容量检查。分支、仓库、历史、head/fork、节点和正文的真实键/ID/历史域相互绑定；原生分支归属与继承标签规则保留。
++- 当前节点推进必须来自准入分支和 owner 的相同 entry ID、文件 ID、路径及正文尺寸。历史节点仍可生成不读正文的标签子节点，但不能把较新的当前正文或分支头回退；隐藏、Detached 或 Disabled 目标不会由标签重新开放。
++- `namespace_tags` 固定 registry、activation sequence、mask、认证源 snapshot 和 sequence。operation/ordinal 派生的新 ID、元数据时间、原始标签集合与增删集合共同重建唯一计划，不在 replay 读取时钟、随机源或正文。
++- 写集仅包含计划中的 immutable metadata children、确实匹配的分支和目录后继、对应 context/selected tree，以及一个原生 receipt、actor 和 event。穷尽解构 State；正文 versions、placements、物理名称/位置、路由、选择意图代数、备注、计划、auth 与 topology 不得夹带变化。
++- 旧 metadata 子节点、标签 receipt、actor 和 event 保持不可变。移除来源标记或换 kind 不能把新 Tags 子节点隐藏起来；新 Merge 子节点仍需要真实的新合并来源记录和既有合并证明，不因标签准入获得权限。
++- 主线共享 `verify_current_candidate_receipt` 同时拒绝标签候选的非空 Candidate.versions，在 Accept-only publication discovery 或 published barrier 读取 local payload proof 之前生效。原有 snapshot/history 认证及 repair/名称投影前的纯 advance 都保留。
++
++## Named HEAD 与 selected tree
++
++旧候选把 selected composition 放进以 branch ID 索引的源表，再无条件写回 named HEAD，可能在标记旧正文时回退未匹配的较新目录头。本次分开两条证明：
++
++1. Named HEAD 只从 `directory_projection` 的已认证保留图重写。每个 frozen descendant 来自该父图的真实 tree，不借用同名子分支的新 HEAD；未匹配的 named HEAD 不变。
++2. 实际选择从 `batch_scope` 认证其精确 selected graph 与当前 owner occurrence、继承意图。只更新对应 selected tree，允许它继续不同于 named HEAD。
++3. 同一精确投影和已重写子引用共享本次计划的缓存；不按可变 branch ID 混用不同组成。旧 commit/tree 永不改写，新树保留确切 parent tree 与 commit 来源。
++
++磁盘注销只移除 ZXS 登记及目标独占当前 occurrence，不擦除原文件，不创建备份或恢复文件；登记下线保留登记和数据。本次标签操作不改变这些规则。
++
++## 定向回归源码
++
++`test/engine/unit/engine/current_file_tags_tests.rs` 包含 16 个测试函数：
++
++- 真实 D3 注销/下线后的当前标签、不可用历史正文标签、no-op、永久幂等、未选目录、继承意图和只读别名。
++- 精确节点/正文/历史身份、缺失 occurrence、预期头、位置、容量和旧工作区拒绝；tracked 与序列化恢复 State 的 actor、receipt、事件、目录 context 和封闭写集攻击。
++- 真实 freeze root → 更新正文 → D3 → 选择旧 frozen composition → 标签 → 两次冷开。所选旧正文获得标签，较新 named child HEAD 和文件分支 HEAD 保持不变；再次编辑标签也不得回退。
++- 同一批次的历史 no-op 与当前变更、双来源移除标签，以及第二目标冲突时整批不发布。
++- 24 个真实 accepted/published 冷 fixture（两种决定 × 当前/历史来源 × valid/actor/source/context/location/payload）。真实 snapshot/history、Prepare/Accept 和可选 Finalize/Publication/Seal 后移除一个候选 snapshot 副本。合法对照应修复；攻击应在修复/投影前拒绝并保持 SYSTEM 和所有 metadata/data 根字节不变。
++- payload 变体保持完整 State/receipt 证明合法，仅向 Candidate 夹带已有 D04 data-only 版本；inotify 验证其版本目录及直接子文件无 OPEN/ACCESS。此断言不声称启动从未获取合法根目录句柄。
++
++建议父任务用 `cargo test -p storage-engine --lib <filter> -- --test-threads=1` 定向执行以下模块，检查标签与既有选择/合并交互；不要求全 workspace 测试：
++
++- `engine::disk_registry::current::file_tags::tests`
++- `business::file_tags::tests`
++- `engine::disk_registry::current::batch::tests`
++- `engine::disk_registry::current::file_branches::tests`
++
++共享空版本门禁的零 payload I/O 断言限定于原始有效 `file.tags.update` receipt；同时把 receipt.kind 伪装成另一操作的冷变体不在这项断言范围内，不能由本回归推定已闭合。
++
++## 成本与实际验证
++
++Live 使用原 Config::max_entries。Replay 由已准入 occurrence 最大数和目标数推导有限重建上界，不使用 usize::MAX；候选解码继续受原 MAX_METADATA 约束。计划只读取认证 State，遍历含目标文件的 named scope 和相关 selected graph；成本取决于各源图累计展开的 occurrence/ref 数，嵌套目录或多个冻结别名可能重复验证共有后代。临时缓存只合并完全相同投影的新对象，不声称全图线性或常数成本。tracked 写集按变化键检查，冷 State 比较相关完整映射。复用主线 shared helper 对非空 versions registry 候选提前读取原始认证 snapshot 的已有 metadata I/O 成本；合法标签候选的 versions 为空。本次未增加数据根探测、正文复制、锁、fsync 或 quorum。
++
++已执行：固定 1.99.0 rustfmt、git diff --check、补丁正反 apply 静态检查。未执行：编译、定向测试、故障注入、物理介质或吞吐验收。环境可用空间约 140 MiB，遵循主线程要求不启动构建；源码存在不表示回归已通过。
+diff --git a/src/engine/src/business/file_tags.rs b/src/engine/src/business/file_tags.rs
+index 6478aa7f..eb217d54 100644
+--- a/src/engine/src/business/file_tags.rs
++++ b/src/engine/src/business/file_tags.rs
+@@ -51,6 +51,9 @@ impl Engine {
+         self.mutate("file.tags.update", principal, operation,
+             body,
+             |engine,state,_| {
++                if let Some(view) = engine.admitted_current_namespaces()? {
++                    return view.update_current_file_tags(engine.state(), state, &request, engine.config.max_entries);
++                }
+                 super::file_requests::validate_location(engine, file, location)?;
+                 // Complete preflight before any branch, context or tree advances.
+                 let mut seen = BTreeSet::new();
+diff --git a/src/engine/src/engine.rs b/src/engine/src/engine.rs
+index f505a1dd..4efef344 100644
+--- a/src/engine/src/engine.rs
++++ b/src/engine/src/engine.rs
+@@ -1392,6 +1392,14 @@ impl Engine {
+                 |_, next, prepared| change(self, next, prepared),
+             );
+         }
++        if kind == "file.tags.update" {
++            return context.plan_file_tags_mutation(
++                principal,
++                operation_id,
++                digest,
++                |_, next, prepared| change(self, next, prepared),
++            );
++        }
+         context.plan_new_mutation(
+             kind,
+             principal,
+diff --git a/src/engine/src/engine/disk_registry/current.rs b/src/engine/src/engine/disk_registry/current.rs
+index 9adf6526..b807648d 100644
+--- a/src/engine/src/engine/disk_registry/current.rs
++++ b/src/engine/src/engine/disk_registry/current.rs
+@@ -14,6 +14,7 @@ mod directory_branches;
+ mod directory_metadata;
+ mod file_branches;
+ mod file_synchronization;
++mod file_tags;
+ mod history_merges;
+ mod new_scope;
+ mod path_notes;
+@@ -484,6 +485,7 @@ impl CurrentNamespaces {
+         self.verify_smb_bindings(previous, next)?;
+         self.verify_plan_cancellations(previous, next)?;
+         self.verify_branch_archives(previous, next)?;
++        self.verify_file_tag_publications(previous, next)?;
+         let mut view = self.clone();
+         let branch_changes = next.branches.changes_since(&previous.branches);
+         let directory_changes = next
+diff --git a/src/engine/src/engine/disk_registry/current/directory_branches.rs b/src/engine/src/engine/disk_registry/current/directory_branches.rs
+index 1c3a9068..effabd16 100644
+--- a/src/engine/src/engine/disk_registry/current/directory_branches.rs
++++ b/src/engine/src/engine/disk_registry/current/directory_branches.rs
+@@ -402,6 +402,14 @@ impl CurrentDirectoryProjection {
+         &self.path
+     }
+ 
++    /// Exact frozen nodes from this admitted head's retained occurrence graph.
++    /// A metadata publication must not substitute a descendant's newer HEAD.
++    pub(super) fn file_tag_trees(&self) -> impl Iterator<Item = (&str, &DirectoryTree)> {
++        self.nodes
++            .iter()
++            .map(|(directory, node)| (directory.as_str(), &node.projected))
++    }
++
+     fn matching_selected_tree(
+         &self,
+         state: &State,
+diff --git a/src/engine/src/engine/disk_registry/current/file_tags.rs b/src/engine/src/engine/disk_registry/current/file_tags.rs
+new file mode 100644
+index 00000000..e387c8ef
+--- /dev/null
++++ b/src/engine/src/engine/disk_registry/current/file_tags.rs
+@@ -0,0 +1,562 @@
++//! Tags publish immutable children through exact current occurrences. The same
++//! pure plan authenticates every row during live publication and cold replay.
++use super::*;
++use crate::{
++    Branch, BranchKind, CommitState, CurrentHealth, DirectoryBranch, DirectoryTree, FileContext,
++    FileMetadataKind, FileMetadataNode, FileNodeTagsUpdateRequest, FileTagTarget, MAX_FILE_TAGS,
++    OperationId, OperationResult, ProtectionAtPublish, Repository,
++};
++use data_serialization::Deserialize;
++use json_codec::{Value, json};
++mod publication;
++mod replay;
++
++const KIND: &str = "file.tags.update";
++
++fn invalid() -> Error {
++    Error::new(
++        ErrorCode::PublicationInvalid,
++        "file tag publication differs from its authenticated request and current occurrences",
++    )
++}
++fn missing() -> Error {
++    Error::new(
++        ErrorCode::FileNotFound,
++        "tag source occurrence is absent from its current owner",
++    )
++}
++fn increment(value: u64) -> Result<u64> {
++    value.checked_add(1).ok_or_else(|| {
++        Error::new(
++            ErrorCode::ResourceLimit,
++            "file tag publication generation exhausted",
++        )
++    })
++}
++fn at_key<'a>(entries: &'a [Entry], key: &str) -> Option<&'a Entry> {
++    entries
++        .binary_search_by(|entry| entry.lookup_key().cmp(key))
++        .ok()
++        .map(|i| &entries[i])
++}
++fn same_occurrence(left: &Entry, right: &Entry) -> bool {
++    left.entry_id == right.entry_id
++        && left.kind == right.kind
++        && left.file_id == right.file_id
++        && left.path() == right.path()
++}
++
++#[derive(Deserialize)]
++#[serialization(deny_unknown_fields)]
++struct Location {
++    repository_id: String,
++    path: String,
++}
++#[derive(Deserialize)]
++#[serialization(deny_unknown_fields)]
++struct Input {
++    file_id: String,
++    targets: Vec<FileTagTarget>,
++    add: Vec<String>,
++    remove: Vec<String>,
++    location: Option<Location>,
++}
++impl Input {
++    fn body(&self) -> Value {
++        let location = self.location.as_ref().map(|location| {
++            json!({
++                "repository_id": location.repository_id, "path": location.path
++            })
++        });
++        json!({"file_id": self.file_id, "targets": self.targets, "add": self.add,
++            "remove": self.remove, "location": location})
++    }
++}
++
++struct Change {
++    branch: String,
++    source: String,
++    node: String,
++    version: String,
++    tags: BTreeSet<String>,
++    changed: bool,
++    advance: bool,
++    entries: Option<Vec<Entry>>,
++    directories: BTreeSet<String>,
++}
++
++/// IDs are a domain-separated function of the permanent operation and ordinal.
++/// Replay needs no random source, wall clock, body I/O or caller-supplied IDs.
++struct Ids {
++    operation: OperationId,
++    ordinal: u64,
++}
++impl Ids {
++    fn next(&mut self, prefix: &str) -> Result<String> {
++        let digest = crate::object_hash(
++            "current-file-tags-id",
++            &json!({
++                "operation_id": self.operation, "ordinal": self.ordinal.to_string(), "kind": prefix
++            }),
++        )?;
++        self.ordinal = increment(self.ordinal)?;
++        Ok(format!("{prefix}_{}", &digest[..32]))
++    }
++}
++
++type Patch<T> = BTreeMap<String, Option<T>>;
++#[derive(Default)]
++struct Plan {
++    branches: Patch<Branch>,
++    commits: Patch<Commit>,
++    file_metadata_nodes: Patch<FileMetadataNode>,
++    directory_branches: Patch<DirectoryBranch>,
++    directory_trees: Patch<DirectoryTree>,
++    file_contexts: Patch<FileContext>,
++    directory_tree_selections: Patch<String>,
++    result: Value,
++}
++
++struct Planner<'a> {
++    view: &'a CurrentNamespaces,
++    previous: &'a State,
++    input: &'a Input,
++    principal: &'a str,
++    operation: OperationId,
++    sequence: u64,
++    created_at: u64,
++    maximum: usize,
++    ids: Ids,
++    changes: Vec<Change>,
++    plan: Plan,
++}
++
++impl CurrentNamespaces {
++    pub(crate) fn update_current_file_tags(
++        &self,
++        previous: &State,
++        next: &mut State,
++        request: &FileNodeTagsUpdateRequest<'_>,
++        maximum: usize,
++    ) -> Result<Value> {
++        let input = Input {
++            file_id: request.file_id.into(),
++            targets: request.targets.to_vec(),
++            add: request.add.to_vec(),
++            remove: request.remove.to_vec(),
++            location: request.location.map(|location| Location {
++                repository_id: location.repository_id.clone(),
++                path: location.path.clone(),
++            }),
++        };
++        let plan = self.file_tag_plan(
++            previous,
++            &input,
++            request.principal,
++            request.operation_id,
++            next.sequence,
++            crate::business::now()?,
++            maximum,
++        )?;
++        let Plan {
++            branches,
++            commits,
++            file_metadata_nodes,
++            directory_branches,
++            directory_trees,
++            file_contexts,
++            directory_tree_selections,
++            result,
++        } = plan;
++        macro_rules! apply {
++            ($field:ident) => {
++                for (id, value) in $field {
++                    match value {
++                        Some(value) => {
++                            next.$field.insert(id, value);
++                        }
++                        None => {
++                            next.$field.remove(&id);
++                        }
++                    }
++                }
++            };
++        }
++        apply!(branches);
++        apply!(commits);
++        apply!(file_metadata_nodes);
++        apply!(directory_branches);
++        apply!(directory_trees);
++        apply!(file_contexts);
++        apply!(directory_tree_selections);
++        Ok(result)
++    }
++
++    fn file_tag_plan(
++        &self,
++        previous: &State,
++        input: &Input,
++        principal: &str,
++        operation: OperationId,
++        sequence: u64,
++        created_at: u64,
++        maximum: usize,
++    ) -> Result<Plan> {
++        Planner {
++            view: self,
++            previous,
++            input,
++            principal,
++            operation,
++            sequence,
++            created_at,
++            maximum,
++            ids: Ids {
++                operation,
++                ordinal: 0,
++            },
++            changes: Vec::new(),
++            plan: Plan::default(),
++        }
++        .prepare()
++    }
++}
++
++impl Planner<'_> {
++    fn prepare(mut self) -> Result<Plan> {
++        self.preflight()?;
++        self.metadata_children()?;
++        if self.changes.iter().any(|change| change.changed) {
++            let history = &self.previous.branches[&self.changes[0].branch].history_tree_id;
++            let repository = self
++                .previous
++                .repositories
++                .values()
++                .find(|repository| &repository.history_tree_id == history)
++                .ok_or_else(stale)?
++                .clone();
++            self.publish_directories(&repository)?;
++            self.publish_main(&repository)?;
++        }
++        let nodes = self
++            .changes
++            .iter()
++            .map(|change| {
++                let mut result = json!({"branch_id": change.branch, "source_node_id": change.source,
++                "node_id": change.node, "tags": change.tags, "no_change": !change.changed,
++                "advanced": change.changed && change.advance});
++                if change.changed {
++                    result["directory_branch_ids"] = json!(change.directories);
++                }
++                result
++            })
++            .collect::<Vec<_>>();
++        self.plan.result = json!({"file_id": self.input.file_id, "nodes": nodes,
++        "content_versions_created": "0", "source_request": self.input.body(),
++        "metadata_created_at": self.created_at.to_string(),
++        "namespace_tags": {
++            "registry": self.view.registry,
++            "activation_sequence": self.view.activation_sequence.to_string(),
++            "mask_hash": self.view.mask_hash,
++            "source_snapshot": self.view.source_snapshot,
++            "source_sequence": self.view.source_sequence.to_string(),
++        }});
++        if let Some(branch) = self
++            .plan
++            .branches
++            .values()
++            .filter_map(Option::as_ref)
++            .find(|branch| branch.file_id.is_none())
++        {
++            self.plan.result["branch_id"] = json!(branch.branch_id);
++            self.plan.result["history_tree_id"] = json!(branch.history_tree_id);
++            self.plan.result["commit_id"] = json!(branch.head_commit_id);
++        }
++        Ok(self.plan)
++    }
++
++    fn preflight(&mut self) -> Result<()> {
++        let input = self.input;
++        if input.targets.is_empty()
++            || input.targets.len() > self.maximum
++            || input.add.len() > MAX_FILE_TAGS
++            || input.remove.len() > MAX_FILE_TAGS
++        {
++            return Err(Error::new(
++                ErrorCode::InvalidRequest,
++                "a bounded nonempty tag target list is required",
++            ));
++        }
++        for tag in input.add.iter().chain(&input.remove) {
++            crate::validate_tag(tag)?;
++        }
++        let added: BTreeSet<_> = input.add.iter().cloned().collect();
++        let removed: BTreeSet<_> = input.remove.iter().cloned().collect();
++        if !added.is_disjoint(&removed) {
++            return Err(Error::new(
++                ErrorCode::InvalidTag,
++                "a tag cannot be added and removed in one operation",
++            ));
++        }
++        let mut seen = BTreeSet::new();
++        for target in &input.targets {
++            if !seen.insert((&target.branch_id, &target.source_node_id)) {
++                return Err(Error::new(
++                    ErrorCode::InvalidRequest,
++                    "duplicate tag target",
++                ));
++            }
++            let branch = self
++                .previous
++                .branches
++                .get(&target.branch_id)
++                .filter(|branch| {
++                    branch.branch_kind == BranchKind::File
++                        && branch.file_id.as_deref() == Some(input.file_id.as_str())
++                })
++                .ok_or_else(|| {
++                    Error::new(ErrorCode::FileBranchNotFound, "tag target branch missing")
++                })?;
++            let history = self
++                .previous
++                .histories
++                .get(&branch.history_tree_id)
++                .ok_or_else(invalid)?;
++            let repository = self
++                .previous
++                .repositories
++                .get(&history.repository_id)
++                .ok_or_else(invalid)?;
++            let head_commit = self
++                .previous
++                .commits
++                .get(&branch.head_commit_id)
++                .ok_or_else(invalid)?;
++            let fork = self
++                .previous
++                .commits
++                .get(&branch.fork_commit_id)
++                .ok_or_else(invalid)?;
++            let scope = self
++                .view
++                .branches
++                .get(&target.branch_id)
++                .ok_or_else(stale)?;
++            if branch.branch_id != target.branch_id
++                || history.history_tree_id != branch.history_tree_id
++                || repository.repository_id != history.repository_id
++                || repository.history_tree_id != branch.history_tree_id
++                || head_commit.commit_id != branch.head_commit_id
++                || head_commit.history_tree_id != branch.history_tree_id
++                || fork.commit_id != branch.fork_commit_id
++                || fork.history_tree_id != branch.history_tree_id
++                || scope.head != branch.head_commit_id
++                || self.changes.first().is_some_and(|first| {
++                    self.previous.branches[&first.branch].history_tree_id != branch.history_tree_id
++                })
++            {
++                return Err(invalid());
++            }
++            if branch.state != BranchState::Active
++                || self
++                    .previous
++                    .file_branch_aliases
++                    .contains_key(&target.branch_id)
++            {
++                return Err(Error::new(
++                    ErrorCode::BranchNotActive,
++                    "merged aliases are read-only",
++                ));
++            }
++            let head = branch
++                .file_node_id
++                .clone()
++                .or_else(|| {
++                    head_commit
++                        .entries
++                        .iter()
++                        .find(|entry| {
++                            entry.kind == NamespaceEntryKind::File && entry.file_id == input.file_id
++                        })
++                        .map(|entry| entry.version_id.clone())
++                })
++                .ok_or_else(invalid)?;
++            checked_node_version(
++                self.previous,
++                &input.file_id,
++                &head,
++                &branch.history_tree_id,
++            )?;
++            if head != target.expected_node_id {
++                return Err(Error::new(
++                    ErrorCode::FileBranchConflict,
++                    "tag target head changed",
++                ));
++            }
++            let version = checked_node_version(
++                self.previous,
++                &input.file_id,
++                &target.source_node_id,
++                &branch.history_tree_id,
++            )?;
++            if !crate::business::file_nodes::belongs_to_branch(
++                self.previous,
++                &target.branch_id,
++                &head,
++                &target.source_node_id,
++            ) {
++                return Err(Error::new(
++                    ErrorCode::FileNodeNotFound,
++                    "tag target node is outside the selected branch",
++                ));
++            }
++            self.location(repository)?;
++            let source = if head == target.source_node_id {
++                Some(self.current_file_source(branch, repository, &version)?)
++            } else {
++                None
++            };
++            let old = crate::business::file_nodes::node_tags(self.previous, &target.source_node_id);
++            let mut tags = old.clone();
++            tags.retain(|tag| !removed.contains(tag));
++            tags.extend(added.iter().cloned());
++            if tags.len() > MAX_FILE_TAGS {
++                return Err(Error::new(
++                    ErrorCode::TagLimitExceeded,
++                    "a file node supports at most 16 tags",
++                ));
++            }
++            let entries = source.filter(|_| tags != old).map(<[Entry]>::to_vec);
++            self.changes.push(Change {
++                branch: target.branch_id.clone(),
++                source: target.source_node_id.clone(),
++                node: target.source_node_id.clone(),
++                version,
++                changed: tags != old,
++                entries,
++                tags,
++                advance: head == target.source_node_id,
++                directories: BTreeSet::new(),
++            });
++        }
++        Ok(())
++    }
++
++    fn location(&self, repository: &Repository) -> Result<()> {
++        let Some(location) = &self.input.location else {
++            return Ok(());
++        };
++        name_policy::validate_path(&location.path)?;
++        let head = &self.previous.branches[&repository.main_branch_id].head_commit_id;
++        let entries = self.view.branch_entries(&repository.main_branch_id, head)?;
++        if location.repository_id != repository.repository_id
++            || !at_key(entries, &name_policy::path_key(&location.path)).is_some_and(|entry| {
++                entry.kind == NamespaceEntryKind::File && entry.file_id == self.input.file_id
++            })
++        {
++            return Err(missing());
++        }
++        Ok(())
++    }
++
++    fn current_file_source(
++        &self,
++        branch: &Branch,
++        repository: &Repository,
++        version: &str,
++    ) -> Result<&[Entry]> {
++        let source = self.view.writable_scope(self.previous, &branch.branch_id)?;
++        let owner = self
++            .view
++            .writable_scope(self.previous, &repository.main_branch_id)?;
++        let mut files = 0;
++        let mut ancestors = BTreeSet::new();
++        for entry in source
++            .entries
++            .iter()
++            .filter(|entry| entry.kind == NamespaceEntryKind::File)
++        {
++            if entry.file_id != self.input.file_id
++                || entry.version_id != version
++                || entry.size != self.previous.versions[version].logical_size
++                || !at_key(&owner.entries, entry.lookup_key())
++                    .is_some_and(|owner| same_occurrence(owner, entry))
++                || self.input.location.as_ref().is_some_and(|location| {
++                    name_policy::path_key(&location.path) != entry.lookup_key()
++                })
++            {
++                return Err(missing());
++            }
++            files += 1;
++            let mut key = entry.lookup_key();
++            while let Some((parent, _)) = key.rsplit_once('/') {
++                ancestors.insert(parent);
++                key = parent;
++            }
++        }
++        if files == 0
++            || source.entries.len() != files + ancestors.len()
++            || source.entries.iter().any(|entry| {
++                entry.kind == NamespaceEntryKind::Directory
++                    && (!ancestors.contains(entry.lookup_key())
++                        || at_key(&owner.entries, entry.lookup_key()) != Some(entry))
++            })
++        {
++            return Err(missing());
++        }
++        Ok(&source.entries)
++    }
++}
++
++fn checked_node_version(state: &State, file: &str, node: &str, history: &str) -> Result<String> {
++    let (id, owner, source_history, version) = match (
++        state.versions.get(node),
++        state.file_path_nodes.get(node),
++        state.file_metadata_nodes.get(node),
++    ) {
++        (Some(body), None, None) => (
++            &body.version_id,
++            &body.file_id,
++            &body.history_tree_id,
++            &body.version_id,
++        ),
++        (None, Some(path), None) => (
++            &path.node_id,
++            &path.file_id,
++            &path.history_tree_id,
++            &path.version_id,
++        ),
++        (None, None, Some(metadata)) => (
++            &metadata.node_id,
++            &metadata.file_id,
++            &metadata.history_tree_id,
++            &metadata.version_id,
++        ),
++        (None, None, None) => {
++            return Err(Error::new(
++                ErrorCode::FileNodeNotFound,
++                "tag source node is missing",
++            ));
++        }
++        _ => return Err(invalid()),
++    };
++    if owner != file || source_history != history {
++        return Err(Error::new(
++            ErrorCode::FileNodeNotFound,
++            "tag source node escapes its file or history",
++        ));
++    }
++    let body = state.versions.get(version).ok_or_else(invalid)?;
++    if id != node
++        || body.version_id != *version
++        || body.file_id != file
++        || body.history_tree_id != history
++    {
++        return Err(invalid());
++    }
++    Ok(version.clone())
++}
++
++#[cfg(test)]
++#[path = "../../../../../../test/engine/unit/engine/current_file_tags_tests.rs"]
++mod tests;
+diff --git a/src/engine/src/engine/disk_registry/current/file_tags/publication.rs b/src/engine/src/engine/disk_registry/current/file_tags/publication.rs
+new file mode 100644
+index 00000000..bf479454
+--- /dev/null
++++ b/src/engine/src/engine/disk_registry/current/file_tags/publication.rs
+@@ -0,0 +1,479 @@
++//! Exact current metadata publication, without reading immutable raw namespaces.
++use super::*;
++
++impl Planner<'_> {
++    pub(super) fn metadata_children(&mut self) -> Result<()> {
++        for index in 0..self.changes.len() {
++            if !self.changes[index].changed {
++                continue;
++            }
++            let id = self.ids.next("fmeta")?;
++            if self.previous.file_metadata_nodes.contains_key(&id) {
++                return Err(invalid());
++            }
++            self.changes[index].node = id.clone();
++            let change = &self.changes[index];
++            let branch = &self.previous.branches[&change.branch];
++            self.plan.file_metadata_nodes.insert(
++                id.clone(),
++                Some(FileMetadataNode {
++                    node_id: id,
++                    history_tree_id: branch.history_tree_id.clone(),
++                    file_id: self.input.file_id.clone(),
++                    version_id: change.version.clone(),
++                    parent_node_ids: vec![change.source.clone()],
++                    branch_id: change.branch.clone(),
++                    kind: FileMetadataKind::Tags,
++                    tags: change.tags.clone(),
++                    operation_id: self.operation,
++                    author: self.principal.into(),
++                    sequence: self.sequence,
++                    created_at: self.created_at,
++                }),
++            );
++            if change.advance {
++                let mut branch = branch.clone();
++                let entries = self.changes[index].entries.take().expect(
++                    "invariant: changed current tag target has an admitted source projection",
++                );
++                let commit = self.commit(
++                    &branch.history_tree_id,
++                    &branch.head_commit_id,
++                    entries,
++                    branch.pending_file_versions.clone(),
++                    Some(self.changes[index].node.clone()),
++                )?;
++                branch.head_commit_id = commit;
++                branch.file_node_id = Some(self.changes[index].node.clone());
++                branch.generation = increment(branch.generation)?;
++                self.plan
++                    .branches
++                    .insert(branch.branch_id.clone(), Some(branch));
++            }
++        }
++        Ok(())
++    }
++
++    fn commit(
++        &mut self,
++        history: &str,
++        parent: &str,
++        entries: Vec<Entry>,
++        pending: BTreeMap<String, String>,
++        provenance: Option<String>,
++    ) -> Result<String> {
++        let id = self.ids.next("commit")?;
++        if self.previous.commits.contains_key(&id) {
++            return Err(invalid());
++        }
++        let tree = self.ids.next("tree")?;
++        let kind = if provenance.is_some() {
++            "file_metadata"
++        } else {
++            "file_node_publication"
++        };
++        self.plan.commits.insert(
++            id.clone(),
++            Some(Commit {
++                namespace_deletions: None,
++                commit_id: id.clone(),
++                history_tree_id: history.into(),
++                kind: kind.into(),
++                parent_commit_ids: vec![parent.into()],
++                tree_id: tree,
++                sequence: self.sequence,
++                operation_id: self.operation,
++                author: self.principal.into(),
++                message: "Publish current file tags".into(),
++                entries,
++                pending_file_versions: pending,
++                provenance,
++            }),
++        );
++        Ok(id)
++    }
++
++    fn matching(&self, entry: &Entry, context: &FileContext) -> Option<usize> {
++        (entry.kind == NamespaceEntryKind::File && entry.file_id == self.input.file_id)
++            .then(|| {
++                self.changes.iter().position(|change| {
++                    change.changed
++                        && change.branch == context.branch_id
++                        && change.source == context.node_id.as_deref().unwrap_or(&entry.version_id)
++                })
++            })
++            .flatten()
++    }
++
++    fn tag_context(
++        &self,
++        repository: &Repository,
++        entry: &Entry,
++        context: &mut FileContext,
++        index: usize,
++    ) -> Result<()> {
++        let owner = self
++            .view
++            .writable_scope(self.previous, &repository.main_branch_id)?;
++        if !at_key(&owner.entries, entry.lookup_key())
++            .is_some_and(|owner| same_occurrence(owner, entry))
++            || entry.version_id != self.changes[index].version
++        {
++            return Err(missing());
++        }
++        super::super::directory_branches::validate_context(
++            self.previous,
++            &repository.repository_id,
++            entry,
++            context,
++        )?;
++        context.node_id = Some(self.changes[index].node.clone());
++        context.selection_generation = increment(context.selection_generation)?;
++        Ok(())
++    }
++
++    pub(super) fn publish_main(&mut self, repository: &Repository) -> Result<()> {
++        let branch = &self.previous.branches[&repository.main_branch_id];
++        let entries = self
++            .view
++            .branch_entries(&branch.branch_id, &branch.head_commit_id)?;
++        let mut changed = false;
++        for entry in entries.iter().filter(|entry| {
++            entry.kind == NamespaceEntryKind::File && entry.file_id == self.input.file_id
++        }) {
++            let key = crate::business::context_key_from_key(
++                &repository.repository_id,
++                entry.lookup_key(),
++            );
++            let Some(context) = self.previous.file_contexts.get(&key) else {
++                return Err(stale());
++            };
++            if let Some(index) = self.matching(entry, context) {
++                let mut context = context.clone();
++                self.tag_context(repository, entry, &mut context, index)?;
++                self.plan.file_contexts.insert(key, Some(context));
++                changed = true;
++            }
++        }
++        if !changed {
++            return Ok(());
++        }
++        let live: BTreeSet<_> = entries
++            .iter()
++            .filter(|entry| entry.kind == NamespaceEntryKind::File)
++            .map(|entry| entry.file_id.as_str())
++            .collect();
++        let mut pending = branch.pending_file_versions.clone();
++        pending.retain(|file, _| live.contains(file.as_str()));
++        let mut branch = branch.clone();
++        let commit_pending = self.pending(entries, |entry| {
++            self.previous
++                .file_contexts
++                .get(&crate::business::context_key_from_key(
++                    &repository.repository_id,
++                    entry.lookup_key(),
++                ))
++        })?;
++        branch.head_commit_id = self.commit(
++            &repository.history_tree_id,
++            &branch.head_commit_id,
++            entries.to_vec(),
++            commit_pending,
++            None,
++        )?;
++        branch.pending_file_versions = pending;
++        branch.generation = increment(branch.generation)?;
++        self.plan
++            .branches
++            .insert(branch.branch_id.clone(), Some(branch));
++        for path in self.view.removed_paths(&repository.main_branch_id) {
++            let key = crate::business::context_key_from_key(&repository.repository_id, path);
++            if self.previous.file_contexts.contains_key(&key) {
++                self.plan.file_contexts.insert(key, None);
++            }
++        }
++        Ok(())
++    }
++
++    fn pending<'a>(
++        &self,
++        entries: &'a [Entry],
++        context: impl Fn(&'a Entry) -> Option<&'a FileContext>,
++    ) -> Result<BTreeMap<String, String>> {
++        let mut pending = BTreeMap::new();
++        for entry in entries
++            .iter()
++            .filter(|entry| entry.kind == NamespaceEntryKind::File)
++        {
++            let context = context(entry).ok_or_else(stale)?;
++            let branch = self
++                .previous
++                .branches
++                .get(&context.branch_id)
++                .ok_or_else(stale)?;
++            if context.inherited_from.is_some()
++                || branch.pending_file_versions.contains_key(&entry.file_id)
++            {
++                pending.insert(entry.file_id.clone(), entry.version_id.clone());
++            }
++        }
++        Ok(pending)
++    }
++
++    pub(super) fn publish_directories(&mut self, repository: &Repository) -> Result<()> {
++        // A source is keyed by its exact projected immutable contents, never by
++        // a mutable named branch alone. Named heads and selected older trees can
++        // legitimately represent different bodies or inheritance contexts.
++        let mut cache = BTreeMap::new();
++        self.publish_named_directories(repository, &mut cache)?;
++        self.publish_selected_directories(repository, &mut cache)
++    }
++
++    fn matches_tree(&self, tree: &DirectoryTree) -> bool {
++        tree.entries.iter().any(|entry| {
++            tree.file_contexts
++                .get(entry.lookup_key())
++                .is_some_and(|context| self.matching(entry, context).is_some())
++        })
++    }
++
++    fn publish_named_directories(
++        &mut self,
++        repository: &Repository,
++        cache: &mut BTreeMap<String, (String, BTreeSet<usize>)>,
++    ) -> Result<()> {
++        for source in self
++            .previous
++            .directory_branches
++            .values()
++            .filter(|branch| branch.repository_id == repository.repository_id)
++        {
++            if !self
++                .view
++                .directory_entries(&source.directory_branch_id, &source.head_tree_id)?
++                .iter()
++                .any(|entry| {
++                    entry.kind == NamespaceEntryKind::File && entry.file_id == self.input.file_id
++                })
++            {
++                continue;
++            }
++            let projection = self
++                .view
++                .directory_projection(self.previous, &source.directory_branch_id)?;
++            let mut nodes = projection
++                .file_tag_trees()
++                .map(|(directory, tree)| (directory.to_owned(), tree.clone()))
++                .collect::<Vec<_>>();
++            if !nodes.iter().any(|(_, tree)| self.matches_tree(tree)) {
++                continue;
++            }
++            self.view
++                .require_file_merge_directory(self.previous, projection.branch())?;
++            // Every descendant comes from this root's authenticated flattened
++            // graph, including any frozen child composition older than its HEAD.
++            nodes.sort_by_key(|(_, tree)| tree.directory_refs.len());
++            let mut rewritten = BTreeMap::new();
++            for (directory, tree) in nodes {
++                let result = self.rewrite_directory(repository, tree, &rewritten, cache)?;
++                rewritten.insert(directory, result);
++            }
++            let (tree_id, matched) = &rewritten[&source.directory_id];
++            if tree_id == &source.head_tree_id {
++                continue;
++            }
++            let tree = self.plan.directory_trees[tree_id]
++                .as_ref()
++                .expect("invariant: rewritten directory tree is newly planned");
++            let mut branch = source.clone();
++            branch.head_tree_id = tree_id.clone();
++            branch.commit_id = tree.commit_id.clone();
++            branch.path = tree.path.clone();
++            branch.entries = tree.entries.clone();
++            branch.file_contexts = tree.file_contexts.clone();
++            branch.file_branches = tree.file_branches.clone();
++            branch.inherited_files = tree.inherited_files.clone();
++            branch.directory_refs = tree.directory_refs.clone();
++            branch.materialized = true;
++            branch.sequence = self.sequence;
++            for index in matched {
++                self.changes[*index]
++                    .directories
++                    .insert(source.directory_branch_id.clone());
++            }
++            self.plan
++                .directory_branches
++                .insert(branch.directory_branch_id.clone(), Some(branch));
++        }
++        Ok(())
++    }
++
++    fn publish_selected_directories(
++        &mut self,
++        repository: &Repository,
++        cache: &mut BTreeMap<String, (String, BTreeSet<usize>)>,
++    ) -> Result<()> {
++        let main = &self.previous.branches[&repository.main_branch_id];
++        let owner = self
++            .view
++            .branch_entries(&main.branch_id, &main.head_commit_id)?;
++        // Historical-only tags do not acquire a writable owner or make an
++        // unrelated directory selection a new admission requirement.
++        if !owner.iter().any(|entry| {
++            self.previous
++                .file_contexts
++                .get(&crate::business::context_key_from_key(
++                    &repository.repository_id,
++                    entry.lookup_key(),
++                ))
++                .is_some_and(|context| self.matching(entry, context).is_some())
++        }) {
++            return Ok(());
++        }
++        let mut sources = Vec::new();
++        for (directory, branch) in &self.previous.directory_selections {
++            if self.previous.directory_branches[branch].repository_id != repository.repository_id {
++                continue;
++            }
++            let scope = self.view.batch_scope(self.previous, branch)?;
++            let branch = scope.branch();
++            let original = self
++                .previous
++                .directory_trees
++                .get(scope.selected_tree_id())
++                .ok_or_else(stale)?;
++            let tree = DirectoryTree {
++                tree_id: original.tree_id.clone(),
++                directory_branch_id: branch.directory_branch_id.clone(),
++                parent_tree_id: original.parent_tree_id.clone(),
++                commit_id: branch.commit_id.clone(),
++                path: branch.path.clone(),
++                entries: branch.entries.clone(),
++                file_contexts: branch.file_contexts.clone(),
++                file_branches: branch.file_branches.clone(),
++                inherited_files: branch.inherited_files.clone(),
++                directory_refs: branch.directory_refs.clone(),
++                sequence: original.sequence,
++            };
++            sources.push((directory.clone(), tree));
++        }
++        sources.sort_by_key(|(_, tree)| tree.directory_refs.len());
++        let mut affected = sources
++            .iter()
++            .filter(|(_, tree)| self.matches_tree(tree))
++            .map(|(directory, _)| directory.clone())
++            .collect::<BTreeSet<_>>();
++        for (directory, tree) in sources.iter().rev() {
++            if affected.contains(directory)
++                || tree
++                    .directory_refs
++                    .keys()
++                    .any(|child| affected.contains(child))
++            {
++                affected.insert(directory.clone());
++                affected.extend(tree.directory_refs.keys().cloned());
++            }
++        }
++        let mut rewritten = BTreeMap::new();
++        for (directory, tree) in sources {
++            if !affected.contains(&directory) {
++                continue;
++            }
++            let original = tree.tree_id.clone();
++            let result = self.rewrite_directory(repository, tree, &rewritten, cache)?;
++            if result.0 != original {
++                self.plan
++                    .directory_tree_selections
++                    .insert(directory.clone(), Some(result.0.clone()));
++            }
++            rewritten.insert(directory, result);
++        }
++        Ok(())
++    }
++
++    fn rewrite_directory(
++        &mut self,
++        repository: &Repository,
++        mut tree: DirectoryTree,
++        children: &BTreeMap<String, (String, BTreeSet<usize>)>,
++        cache: &mut BTreeMap<String, (String, BTreeSet<usize>)>,
++    ) -> Result<(String, BTreeSet<usize>)> {
++        let mut matched = BTreeSet::new();
++        for (directory, reference) in &mut tree.directory_refs {
++            let (id, impacts) = children.get(directory).ok_or_else(stale)?;
++            reference.tree_id = id.clone();
++            matched.extend(impacts.iter().copied());
++        }
++        let key = crate::object_hash("current-file-tags-directory-source", &tree)?;
++        if let Some(done) = cache.get(&key) {
++            return Ok(done.clone());
++        }
++        for entry in &tree.entries {
++            if let Some(context) = tree.file_contexts.get_mut(entry.lookup_key())
++                && let Some(index) = self.matching(entry, context)
++            {
++                self.tag_context(repository, entry, context, index)?;
++                matched.insert(index);
++            }
++        }
++        let original = self
++            .previous
++            .directory_trees
++            .get(&tree.tree_id)
++            .ok_or_else(stale)?;
++        let id = if tree == *original {
++            tree.tree_id
++        } else {
++            self.freeze_directory(repository, tree)?
++        };
++        let result = (id, matched);
++        cache.insert(key, result.clone());
++        Ok(result)
++    }
++
++    fn freeze_directory(
++        &mut self,
++        repository: &Repository,
++        mut tree: DirectoryTree,
++    ) -> Result<String> {
++        let owner = self
++            .view
++            .writable_scope(self.previous, &repository.main_branch_id)?;
++        let mut full = tree.entries.clone();
++        let key = name_policy::path_key(&tree.path);
++        full.extend(
++            owner
++                .entries
++                .iter()
++                .filter(|entry| {
++                    entry.kind == NamespaceEntryKind::Directory
++                        && (entry.lookup_key() == key
++                            || key
++                                .strip_prefix(entry.lookup_key())
++                                .is_some_and(|suffix| suffix.starts_with('/')))
++                })
++                .cloned(),
++        );
++        crate::business::validate_entries(&mut full, self.maximum)?;
++        let pending = self.pending(&tree.entries, |entry| {
++            tree.file_contexts.get(entry.lookup_key())
++        })?;
++        let commit = self.commit(
++            &repository.history_tree_id,
++            &tree.commit_id,
++            full,
++            pending,
++            None,
++        )?;
++        let id = self.ids.next("dtree")?;
++        if self.previous.directory_trees.contains_key(&id) {
++            return Err(invalid());
++        }
++        tree.parent_tree_id = Some(tree.tree_id);
++        tree.tree_id = id.clone();
++        tree.commit_id = commit;
++        tree.sequence = self.sequence;
++        self.plan.directory_trees.insert(id.clone(), Some(tree));
++        Ok(id)
++    }
++}
+diff --git a/src/engine/src/engine/disk_registry/current/file_tags/replay.rs b/src/engine/src/engine/disk_registry/current/file_tags/replay.rs
+new file mode 100644
+index 00000000..659cca97
+--- /dev/null
++++ b/src/engine/src/engine/disk_registry/current/file_tags/replay.rs
+@@ -0,0 +1,427 @@
++//! Rebuild exactly the authenticated tag request before any publication effects.
++use super::*;
++use storage_contract::{MapChanges, SequenceChanges};
++
++fn is_tag(receipt: &OperationResult) -> bool {
++    receipt.kind == KIND || receipt.result.get("namespace_tags").is_some()
++}
++
++impl CurrentNamespaces {
++    pub(in crate::engine) fn verify_new_file_tags(
++        &self,
++        previous: &State,
++        next: &State,
++        result: &OperationResult,
++    ) -> Result<()> {
++        let receipt = new_tag_receipt(previous, next)?.ok_or_else(invalid)?;
++        if receipt != result {
++            return Err(invalid());
++        }
++        verify_metadata_sources(previous, next, Some(receipt.operation_id))?;
++        self.verify_file_tags(previous, next, receipt)
++    }
++
++    pub(in crate::engine::disk_registry::current) fn verify_file_tag_publications(
++        &self,
++        previous: &State,
++        next: &State,
++    ) -> Result<()> {
++        let receipt = new_tag_receipt(previous, next)?;
++        verify_metadata_sources(previous, next, receipt.map(|receipt| receipt.operation_id))?;
++        match receipt {
++            Some(receipt) => self.verify_file_tags(previous, next, receipt),
++            None => Ok(()),
++        }
++    }
++
++    fn verify_file_tags(
++        &self,
++        previous: &State,
++        next: &State,
++        receipt: &OperationResult,
++    ) -> Result<()> {
++        let principal = next
++            .operation_principals
++            .get(&receipt.operation_id)
++            .ok_or_else(invalid)?;
++        Engine::require_actor(principal).map_err(|error| {
++            error.context(ErrorCode::PublicationInvalid, "file tag actor is invalid")
++        })?;
++        let input: Input = json_codec::from_value(
++            receipt
++                .result
++                .get("source_request")
++                .ok_or_else(invalid)?
++                .clone(),
++        )
++        .map_err(|error| {
++            Error::from(error).context(ErrorCode::PublicationInvalid, "file tag request is invalid")
++        })?;
++        let created_at = decimal_field(&receipt.result, "metadata_created_at")?;
++        // Live planning uses Config::max_entries. Replay only reconstructs rows
++        // from bounded, admitted sources: a directory commit can concatenate its
++        // projected descendants and owner ancestors, never invent more entries.
++        let source_maximum = self
++            .branches
++            .values()
++            .chain(self.directories.values())
++            .map(|scope| scope.entries.len())
++            .max()
++            .unwrap_or(0);
++        let maximum = source_maximum
++            .checked_mul(2)
++            .ok_or_else(invalid)?
++            .max(input.targets.len());
++        let plan = self
++            .file_tag_plan(
++                previous,
++                &input,
++                principal,
++                receipt.operation_id,
++                next.sequence,
++                created_at,
++                maximum,
++            )
++            .map_err(|error| {
++                error.context(
++                    ErrorCode::PublicationInvalid,
++                    "file tag source proof is invalid",
++                )
++            })?;
++        let mut expected_result = plan.result.clone();
++        expected_result["timestamp"] =
++            json!(decimal_field(&receipt.result, "timestamp")?.to_string());
++        expected_result["membership_epoch"] =
++            json!(decimal_field(&receipt.result, "membership_epoch")?.to_string());
++        expected_result["version_protection"] = json!([]);
++        if let Some(id) = plan.result["branch_id"].as_str() {
++            let branch = plan
++                .branches
++                .get(id)
++                .and_then(Option::as_ref)
++                .ok_or_else(invalid)?;
++            expected_result["branch_generation"] = json!(branch.generation.to_string());
++        }
++        let expected = OperationResult {
++            operation_id: receipt.operation_id,
++            kind: KIND.into(),
++            commit_id: plan.result["commit_id"].as_str().map(str::to_owned),
++            history_tree_id: plan.result["history_tree_id"].as_str().map(str::to_owned),
++            branch_id: plan.result["branch_id"].as_str().map(str::to_owned),
++            commit_state: CommitState::Published,
++            protection_at_publish: ProtectionAtPublish::NotApplicable,
++            current_health: CurrentHealth::Healthy,
++            request_digest: Engine::native_request_digest(KIND, principal, &input.body())?,
++            sequence: next.sequence,
++            result: expected_result,
++        };
++        if receipt != &expected {
++            return Err(invalid());
++        }
++        plan.verify(previous, next, receipt, principal)
++    }
++}
++
++// Metadata children are immutable. Relabeling a new tag child as Merge cannot
++// evade the proof without a real, new merge provenance record; that record still
++// has to pass the existing merge/history and occurrence validation paths.
++fn verify_metadata_sources(
++    previous: &State,
++    next: &State,
++    tag_operation: Option<OperationId>,
++) -> Result<()> {
++    let inspect = |id: &String| -> Result<()> {
++        let before = previous.file_metadata_nodes.get(id);
++        let after = next.file_metadata_nodes.get(id);
++        if before == after {
++            return Ok(());
++        }
++        if before.is_some() {
++            return Err(invalid());
++        }
++        let node = after.ok_or_else(invalid)?;
++        let valid = match node.kind {
++            FileMetadataKind::Tags => Some(node.operation_id) == tag_operation,
++            FileMetadataKind::Merge => next.file_branch_merges.values().any(|merge| {
++                !previous.file_branch_merges.contains_key(&merge.merge_id)
++                    && !merge.reused_node
++                    && merge.result_node_id == *id
++                    && merge.operation_id == node.operation_id
++                    && merge.surviving_branch_id == node.branch_id
++                    && merge.history_tree_id == node.history_tree_id
++                    && merge.file_id == node.file_id
++                    && merge.parent_node_ids == node.parent_node_ids
++                    && next
++                        .operations
++                        .get(&node.operation_id)
++                        .is_some_and(|receipt| {
++                            matches!(
++                                receipt.kind.as_str(),
++                                "file.branches.merge" | "file.history.merge"
++                            )
++                        })
++            }),
++        };
++        if node.node_id != *id || !valid {
++            return Err(invalid());
++        }
++        Ok(())
++    };
++    match next
++        .file_metadata_nodes
++        .changes_since(&previous.file_metadata_nodes)
++    {
++        MapChanges::Keys(ids) => ids.iter().try_for_each(inspect),
++        MapChanges::All => {
++            for id in previous
++                .file_metadata_nodes
++                .keys()
++                .chain(next.file_metadata_nodes.keys())
++            {
++                inspect(id)?;
++            }
++            Ok(())
++        }
++    }
++}
++
++fn decimal_field(value: &Value, key: &str) -> Result<u64> {
++    storage_contract::parse_u64_decimal(value[key].as_str().ok_or_else(invalid)?).map_err(|error| {
++        Error::from(error).context(
++            ErrorCode::PublicationInvalid,
++            "file tags envelope has an invalid decimal field",
++        )
++    })
++}
++
++/// Tracking is only an optimization. Persisted States compare the complete
++/// relevant maps, and independent owner/event deltas cannot hide behind HEAD.
++fn new_tag_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
++    let mut receipt = None;
++    let mut inspect = |id: &OperationId| -> Result<()> {
++        let before = previous.operations.get(id);
++        let after = next.operations.get(id);
++        if before.is_some_and(is_tag) {
++            if before != after {
++                return Err(invalid());
++            }
++        } else if let Some(after) = after.filter(|after| is_tag(after))
++            && (before.is_some() || after.operation_id != *id || receipt.replace(after).is_some())
++        {
++            return Err(invalid());
++        }
++        Ok(())
++    };
++    match next.operations.changes_since(&previous.operations) {
++        MapChanges::Keys(ids) => ids.iter().try_for_each(&mut inspect)?,
++        MapChanges::All => {
++            for id in previous.operations.keys() {
++                inspect(id)?;
++            }
++            for id in next
++                .operations
++                .keys()
++                .filter(|id| !previous.operations.contains_key(*id))
++            {
++                inspect(id)?;
++            }
++        }
++    }
++    let preserved_owner = |id: &OperationId| {
++        previous.operations.get(id).is_none_or(|old| {
++            !is_tag(old)
++                || previous.operation_principals.get(id) == next.operation_principals.get(id)
++        })
++    };
++    let owners_unchanged = match next
++        .operation_principals
++        .changes_since(&previous.operation_principals)
++    {
++        MapChanges::Keys(ids) => ids.iter().all(preserved_owner),
++        MapChanges::All => previous.operations.keys().all(preserved_owner),
++    };
++    if !owners_unchanged {
++        return Err(invalid());
++    }
++    let start = match next.events.changes_since(&previous.events) {
++        SequenceChanges::Append { start } => start,
++        SequenceChanges::All => 0,
++    };
++    for index in start..previous.events.len().max(next.events.len()) {
++        let before = previous.events.get(index);
++        let after = next.events.get(index);
++        if before != after
++            && (before.is_some_and(|event| event.kind == KIND)
++                || after.is_some_and(|event| {
++                    event.kind == KIND
++                        && (before.is_some()
++                            || Some(event.operation_id)
++                                != receipt.map(|receipt| receipt.operation_id))
++                }))
++        {
++            return Err(invalid());
++        }
++    }
++    Ok(receipt)
++}
++
++impl Plan {
++    fn verify(
++        &self,
++        previous: &State,
++        next: &State,
++        receipt: &OperationResult,
++        principal: &str,
++    ) -> Result<()> {
++        macro_rules! verify_patch {
++            ($field:ident, $patch:expr) => {{
++                let patch = $patch;
++                let check = |id| -> Result<()> {
++                    let expected = patch
++                        .get(id)
++                        .map(Option::as_ref)
++                        .unwrap_or_else(|| previous.$field.get(id));
++                    if next.$field.get(id) != expected {
++                        return Err(invalid());
++                    }
++                    Ok(())
++                };
++                match &next.$field.changes_since(&previous.$field) {
++                    storage_contract::MapChanges::Keys(ids) => {
++                        for id in ids.iter() {
++                            check(id)?;
++                        }
++                    }
++                    storage_contract::MapChanges::All => {
++                        for id in previous.$field.keys().chain(next.$field.keys()) {
++                            check(id)?;
++                        }
++                    }
++                }
++                for id in patch.keys() {
++                    check(id)?;
++                }
++            }};
++        }
++        macro_rules! unchanged {
++            ($($field:ident),* $(,)?) => { $(
++                let same = match next.$field.changes_since(&previous.$field) {
++                    MapChanges::Keys(ids) => ids.iter().all(|id| previous.$field.get(id) == next.$field.get(id)),
++                    MapChanges::All => next.$field == previous.$field,
++                };
++                if !same { return Err(invalid()); }
++            )* };
++        }
++        // Exhaustive coverage: adding a State field requires a write-set decision.
++        let State {
++            sequence: _,
++            business_generation: _,
++            topology_generation: _,
++            control_auth: _,
++            events: _,
++            repositories: _,
++            histories: _,
++            branches: _,
++            file_selections: _,
++            directory_branches: _,
++            directory_trees: _,
++            file_write_origins: _,
++            file_contexts: _,
++            file_path_nodes: _,
++            file_metadata_nodes: _,
++            file_branch_merges: _,
++            file_branch_aliases: _,
++            file_node_parents: _,
++            file_path_notes: _,
++            directory_tree_selections: _,
++            file_locations: _,
++            file_backup_paths: _,
++            file_backup_policies: _,
++            directory_selections: _,
++            directory_selection_generations: _,
++            file_selection_generations: _,
++            file_notes: _,
++            version_notes: _,
++            file_names: _,
++            commits: _,
++            versions: _,
++            placements: _,
++            merge_links: _,
++            history_boundaries: _,
++            content_states: _,
++            operations: _,
++            plans: _,
++            placement_rules: _,
++            protection_policies: _,
++            operation_principals: _,
++        } = next;
++        unchanged!(
++            repositories,
++            histories,
++            file_selections,
++            file_write_origins,
++            file_path_nodes,
++            file_branch_merges,
++            file_branch_aliases,
++            file_node_parents,
++            file_path_notes,
++            file_locations,
++            file_backup_paths,
++            file_backup_policies,
++            directory_selections,
++            directory_selection_generations,
++            file_selection_generations,
++            file_notes,
++            version_notes,
++            file_names,
++            versions,
++            placements,
++            merge_links,
++            history_boundaries,
++            content_states,
++            plans,
++            placement_rules,
++            protection_policies
++        );
++        verify_patch!(branches, &self.branches);
++        verify_patch!(commits, &self.commits);
++        verify_patch!(file_metadata_nodes, &self.file_metadata_nodes);
++        verify_patch!(directory_branches, &self.directory_branches);
++        verify_patch!(directory_trees, &self.directory_trees);
++        verify_patch!(file_contexts, &self.file_contexts);
++        verify_patch!(directory_tree_selections, &self.directory_tree_selections);
++        let operation = BTreeMap::from([(receipt.operation_id, Some(receipt.clone()))]);
++        let actor = BTreeMap::from([(receipt.operation_id, Some(principal.to_owned()))]);
++        verify_patch!(operations, &operation);
++        verify_patch!(operation_principals, &actor);
++        if next.sequence <= previous.sequence
++            || next.business_generation != increment(previous.business_generation)?
++            || next.topology_generation != previous.topology_generation
++            || next.control_auth != previous.control_auth
++            || previous.events.len().checked_add(1) != Some(next.events.len())
++        {
++            return Err(invalid());
++        }
++        match next.events.changes_since(&previous.events) {
++            SequenceChanges::Append { start } if start == previous.events.len() => {}
++            SequenceChanges::Append { .. } | SequenceChanges::All => {
++                if next.events[..previous.events.len()] != previous.events[..] {
++                    return Err(invalid());
++                }
++            }
++        }
++        let event = &next.events[previous.events.len()];
++        if event.operation_id != receipt.operation_id
++            || event.sequence != next.sequence
++            || event.kind != "file.tags.update"
++            || event.object_id
++                != receipt
++                    .commit_id
++                    .clone()
++                    .unwrap_or_else(|| receipt.operation_id.to_string())
++        {
++            return Err(invalid());
++        }
++        Ok(())
++    }
++}
+diff --git a/src/engine/src/engine/planning.rs b/src/engine/src/engine/planning.rs
+index 2813cef7..d0dae5c0 100644
+--- a/src/engine/src/engine/planning.rs
++++ b/src/engine/src/engine/planning.rs
+@@ -340,6 +340,47 @@ impl<'a> PlanningContext<'a> {
+         Ok(plan)
+     }
+ 
++    /// Tags can only leave planning after the exact metadata/occurrence proof.
++    pub(super) fn plan_file_tags_mutation<F>(
++        &self,
++        principal: &str,
++        operation_id: OperationId,
++        digest: String,
++        change: F,
++    ) -> Result<MutationPlan>
++    where
++        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
++    {
++        if self.current_namespaces.is_none()
++            && self
++                .config
++                .generation()
++                .is_some_and(|generation| generation.portable.exit_registry().is_some())
++        {
++            return Err(super::disk_registry::current::pending_publication());
++        }
++        let plan =
++            self.prepare_new_mutation("file.tags.update", principal, operation_id, digest, change)?;
++        let MutationPlan::Prepared {
++            next,
++            prepared,
++            result,
++        } = &plan
++        else {
++            unreachable!("invariant: new mutation preparation does not replay old receipts");
++        };
++        if !prepared.is_empty() {
++            return Err(Error::new(
++                ErrorCode::PublicationInvalid,
++                "file tags cannot prepare payload writes",
++            ));
++        }
++        if let Some(view) = self.current_namespaces {
++            view.verify_new_file_tags(self.state, next, result)?;
++        }
++        Ok(plan)
++    }
++
+     fn prepare_new_mutation<F>(
+         &self,
+         kind: &str,
+diff --git a/src/engine/src/engine/recovery/workspace_receipts.rs b/src/engine/src/engine/recovery/workspace_receipts.rs
+index 30f88871..d5817fac 100644
+--- a/src/engine/src/engine/recovery/workspace_receipts.rs
++++ b/src/engine/src/engine/recovery/workspace_receipts.rs
+@@ -250,8 +250,10 @@ pub(super) fn verify_current_candidate_receipt(candidate: &Candidate, next: &Sta
+             "current-registry candidate differs from its original operation receipt",
+         ));
+     }
+-    if matches!(result.kind.as_str(), "plan.cancel" | "branch.archive")
+-        && !candidate.versions.is_empty()
++    if matches!(
++        result.kind.as_str(),
++        "plan.cancel" | "branch.archive" | "file.tags.update"
++    ) && !candidate.versions.is_empty()
+     {
+         return Err(Error::new(
+             ErrorCode::PublicationInvalid,
+diff --git a/test/engine/unit/engine/current_file_tags_tests.rs b/test/engine/unit/engine/current_file_tags_tests.rs
+new file mode 100644
+index 00000000..902e6bdf
+--- /dev/null
++++ b/test/engine/unit/engine/current_file_tags_tests.rs
+@@ -0,0 +1,2009 @@
++//! Real temporary-root Engine/D3 publications, plus cold decoded-state proofs.
++//! These are regression sources, not physical-device or HTTP acceptance evidence.
++use super::*;
++use crate::*;
++use std::{
++    fs,
++    io::Read,
++    path::{Path, PathBuf},
++};
++
++fn op() -> OperationId {
++    OperationId::generate().unwrap()
++}
++fn name(value: &str) -> BranchName {
++    BranchName::parse(value).unwrap()
++}
++fn save(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Entry {
++    let workspace = engine.create_workspace(branch, "admin").unwrap();
++    engine
++        .stage_bytes(&workspace.workspace_id, path, bytes)
++        .unwrap();
++    engine
++        .commit_workspace(CommitRequest {
++            workspace_id: workspace.workspace_id,
++            operation_id: op(),
++            principal: "admin".into(),
++            expected_head: workspace.base_head,
++            fencing_token: workspace.fencing_token,
++            message: "current file tags fixture".into(),
++            request_digest: None,
++        })
++        .unwrap();
++    engine
++        .namespace_tree(branch)
++        .unwrap()
++        .get(path)
++        .unwrap()
++        .clone()
++}
++fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
++    let mut result = BTreeMap::new();
++    for child in fs::read_dir(root).unwrap() {
++        let path = child.unwrap().path();
++        if path.is_dir() {
++            result.extend(files(&path));
++        } else {
++            result.insert(path.clone(), fs::read(path).unwrap());
++        }
++    }
++    result
++}
++fn tag_target(engine: &Engine, branch: &str, source: &str) -> FileTagTarget {
++    FileTagTarget {
++        branch_id: branch.into(),
++        source_node_id: source.into(),
++        expected_node_id: engine.file_branch_head(branch).unwrap(),
++    }
++}
++fn edit(
++    engine: &mut Engine,
++    file: &str,
++    targets: &[FileTagTarget],
++    add: &[String],
++    operation: OperationId,
++) -> Result<OperationResult> {
++    engine.update_file_node_tags(FileNodeTagsUpdateRequest {
++        file_id: file,
++        targets,
++        add,
++        remove: &[],
++        location: None,
++        principal: "admin",
++        operation_id: operation,
++    })
++}
++fn node(receipt: &OperationResult) -> String {
++    receipt.result["nodes"][0]["node_id"]
++        .as_str()
++        .unwrap()
++        .into()
++}
++fn cold(state: &State) -> State {
++    json_codec::from_slice(&canonical_json(state).unwrap()).unwrap()
++}
++
++struct Fixture {
++    temp: tempfile::TempDir,
++    engine: Engine,
++    config: Config,
++    repository: Repository,
++    hidden: Entry,
++    first: Entry,
++    current: Entry,
++    branch: String,
++}
++impl Fixture {
++    fn new() -> Self {
++        let temp = tempfile::tempdir().unwrap();
++        let mut config =
++            Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
++        config.disks[3].level = 1;
++        config.disks[3].upstream_slot_id = None;
++        config.disks[3].metadata_member = false;
++        let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
++        let repository = engine.create_disk_root("D04", "admin", op()).unwrap();
++        let hidden_rule = new_id("rule").unwrap();
++        let live_rule = new_id("rule").unwrap();
++        for (rule, path) in [(&hidden_rule, "dir/gone"), (&live_rule, "dir/live")] {
++            engine
++                .update_placement_rule(PlacementRuleUpdate {
++                    rule_id: rule,
++                    repository_id: &repository.repository_id,
++                    path_prefix: path,
++                    primary_slot_id: "P01",
++                    expected_generation: 0,
++                    principal: "admin",
++                    operation_id: op(),
++                })
++                .unwrap();
++        }
++        let hidden = save(
++            &mut engine,
++            &repository.main_branch_id,
++            "dir/gone",
++            b"target only",
++        );
++        let first = save(
++            &mut engine,
++            &repository.main_branch_id,
++            "dir/live",
++            b"historical source",
++        );
++        for (rule, path) in [(&hidden_rule, "dir/gone"), (&live_rule, "dir/live")] {
++            engine
++                .update_placement_rule(PlacementRuleUpdate {
++                    rule_id: rule,
++                    repository_id: &repository.repository_id,
++                    path_prefix: path,
++                    primary_slot_id: "D04",
++                    expected_generation: 1,
++                    principal: "admin",
++                    operation_id: op(),
++                })
++                .unwrap();
++        }
++        let current = save(
++            &mut engine,
++            &repository.main_branch_id,
++            "dir/live",
++            b"retained body",
++        );
++        let branch = engine
++            .file_context(&repository.repository_id, "dir/live")
++            .unwrap()
++            .branch_id;
++        Self {
++            temp,
++            engine,
++            config,
++            repository,
++            hidden,
++            first,
++            current,
++            branch,
++        }
++    }
++    fn exit(&mut self, action: MembershipExitAction) -> BTreeMap<PathBuf, Vec<u8>> {
++        let disk = self.config.disks[0].clone();
++        let held = Arc::clone(self.engine.disk_resources.get(&disk).unwrap());
++        self.engine
++            .begin_disk_exit(&disk.disk_id, action, "admin", op())
++            .unwrap();
++        let archive = self
++            .engine
++            .build_managed_membership_control_archive()
++            .unwrap();
++        self.engine
++            .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
++            .unwrap();
++        self.engine.resume_membership_joint_decision().unwrap();
++        let physical = files(&disk.root);
++        self.engine.activate_pending_disk_exit().unwrap();
++        held.root.io_binding().unwrap().closed_proof().unwrap();
++        assert!(self.engine.disk_resources.available(&disk).is_none());
++        assert_eq!(files(&disk.root), physical);
++        physical
++    }
++    fn hidden_absent(&self) {
++        assert!(
++            self.engine
++                .namespace_tree(&self.repository.main_branch_id)
++                .unwrap()
++                .get("dir/gone")
++                .is_none()
++        );
++        let view = self.engine.current_namespaces.as_ref().unwrap();
++        for scope in view.branches.values().chain(view.directories.values()) {
++            assert!(
++                scope
++                    .entries
++                    .iter()
++                    .all(|entry| entry.file_id != self.hidden.file_id)
++            );
++        }
++    }
++}
++
++#[test]
++fn disk_exit_current_file_tags_references_query_retry_noop_and_cold_open() {
++    for action in [
++        MembershipExitAction::Deregister,
++        MembershipExitAction::PlannedOffline,
++    ] {
++        let mut fixture = Fixture::new();
++        let unselected = fixture
++            .engine
++            .create_directory_branches(
++                &fixture.repository.repository_id,
++                Some(&name_policy::LookupPath::parse("dir").unwrap()),
++                &name("unselected tags"),
++                "admin",
++                op(),
++            )
++            .unwrap()
++            .result["directory_branch_id"]
++            .as_str()
++            .unwrap()
++            .to_owned();
++        let retained = fixture.current.clone();
++        let branch = fixture.branch.clone();
++        let target = tag_target(&fixture.engine, &branch, &retained.version_id);
++        let previous_versions = canonical_json(&fixture.engine.state.versions).unwrap();
++        let old_commits = fixture.engine.state.commits.clone();
++        let old_trees = fixture.engine.state.directory_trees.clone();
++        let physical = fixture.exit(action);
++        let original = fixture.engine.state.clone();
++        let view = fixture.engine.current_namespaces.as_ref().unwrap().clone();
++        let operation = op();
++        let add = vec!["review".into(), "发布".into()];
++        let receipt = edit(
++            &mut fixture.engine,
++            &retained.file_id,
++            &[target.clone()],
++            &add,
++            operation,
++        )
++        .unwrap();
++        let tagged = node(&receipt);
++        assert_eq!(fixture.engine.file_branch_head(&branch).unwrap(), tagged);
++        assert_eq!(
++            fixture
++                .engine
++                .file_node_tags(&retained.file_id, &tagged)
++                .unwrap(),
++            BTreeSet::from(["review".into(), "发布".into()])
++        );
++        assert!(
++            fixture
++                .engine
++                .file_node_tags(&retained.file_id, &retained.version_id)
++                .unwrap()
++                .is_empty()
++        );
++        assert_eq!(
++            fixture.engine.state.file_metadata_nodes[&tagged].parent_node_ids,
++            vec![retained.version_id.clone()]
++        );
++        assert_eq!(
++            fixture
++                .engine
++                .file_context(&fixture.repository.repository_id, "dir/live")
++                .unwrap()
++                .node_id
++                .as_deref(),
++            Some(tagged.as_str())
++        );
++        let impacted = receipt.result["nodes"][0]["directory_branch_ids"]
++            .as_array()
++            .unwrap();
++        assert!(
++            impacted
++                .iter()
++                .any(|id| id.as_str() == Some(unselected.as_str()))
++        );
++        assert!(
++            impacted.len() >= 3,
++            "root, child and unselected current composition are preserved"
++        );
++        for id in impacted {
++            let directory = &fixture.engine.state.directory_branches[id.as_str().unwrap()];
++            for entry in directory
++                .entries
++                .iter()
++                .filter(|entry| entry.file_id == retained.file_id)
++            {
++                assert_eq!(entry.version_id, retained.version_id);
++                assert_eq!(
++                    directory.file_contexts[entry.lookup_key()]
++                        .node_id
++                        .as_deref(),
++                    Some(tagged.as_str())
++                );
++            }
++            for reference in directory.directory_refs.values() {
++                let tree = &fixture.engine.state.directory_trees[&reference.tree_id];
++                if action == MembershipExitAction::Deregister {
++                    assert!(
++                        tree.entries
++                            .iter()
++                            .all(|entry| entry.file_id != fixture.hidden.file_id)
++                    );
++                }
++            }
++        }
++        assert_eq!(
++            canonical_json(&fixture.engine.state.versions).unwrap(),
++            previous_versions
++        );
++        for (id, commit) in old_commits.iter() {
++            assert_eq!(fixture.engine.state.commits.get(id), Some(commit));
++        }
++        for (id, tree) in old_trees.iter() {
++            assert_eq!(fixture.engine.state.directory_trees.get(id), Some(tree));
++        }
++        view.advance(&cold(&original), &cold(fixture.engine.state()))
++            .unwrap();
++        assert_eq!(
++            edit(
++                &mut fixture.engine,
++                &retained.file_id,
++                &[target.clone()],
++                &add,
++                operation
++            )
++            .unwrap(),
++            receipt
++        );
++        let noop_target = tag_target(&fixture.engine, &branch, &tagged);
++        let metadata_count = fixture.engine.state.file_metadata_nodes.len();
++        let noop_operation = op();
++        let noop = edit(
++            &mut fixture.engine,
++            &retained.file_id,
++            &[noop_target.clone()],
++            &add,
++            noop_operation,
++        )
++        .unwrap();
++        assert_eq!(noop.result["nodes"][0]["no_change"], true);
++        assert!(
++            noop.commit_id.is_none() && noop.history_tree_id.is_none() && noop.branch_id.is_none()
++        );
++        assert_eq!(
++            fixture.engine.state.file_metadata_nodes.len(),
++            metadata_count
++        );
++        let mut bytes = Vec::new();
++        fixture
++            .engine
++            .open_content(&retained.version_id)
++            .unwrap()
++            .file
++            .read_to_end(&mut bytes)
++            .unwrap();
++        assert_eq!(bytes, b"retained body");
++        if action == MembershipExitAction::Deregister {
++            fixture.hidden_absent();
++        } else {
++            assert!(
++                fixture
++                    .engine
++                    .namespace_tree(&fixture.repository.main_branch_id)
++                    .unwrap()
++                    .get("dir/gone")
++                    .is_some()
++            );
++        }
++        assert_eq!(files(&fixture.config.disks[0].root), physical);
++        let system = fixture.temp.path().join("system");
++        drop(fixture.engine);
++        let mut engine = Engine::open(&system).unwrap();
++        assert_eq!(
++            edit(&mut engine, &retained.file_id, &[target], &add, operation).unwrap(),
++            receipt
++        );
++        assert_eq!(
++            edit(
++                &mut engine,
++                &retained.file_id,
++                &[noop_target],
++                &add,
++                noop_operation
++            )
++            .unwrap(),
++            noop
++        );
++        assert_eq!(engine.file_branch_head(&branch).unwrap(), tagged);
++        assert_eq!(files(&fixture.config.disks[0].root), physical);
++    }
++}
++
++#[test]
++fn disk_exit_historical_tags_do_not_read_unavailable_body_or_rewind_current() {
++    let mut fixture = Fixture::new();
++    let historical = fixture.first.clone();
++    let physical = fixture.exit(MembershipExitAction::Deregister);
++    let target = tag_target(&fixture.engine, &fixture.branch, &historical.version_id);
++    let previous = fixture.engine.state.clone();
++    let view = fixture.engine.current_namespaces.as_ref().unwrap().clone();
++    let operation = op();
++    let receipt = edit(
++        &mut fixture.engine,
++        &historical.file_id,
++        &[target.clone()],
++        &["historical".into()],
++        operation,
++    )
++    .unwrap();
++    let tagged = node(&receipt);
++    assert_eq!(receipt.result["nodes"][0]["advanced"], false);
++    assert!(
++        receipt.commit_id.is_none()
++            && receipt.history_tree_id.is_none()
++            && receipt.branch_id.is_none()
++    );
++    assert_eq!(fixture.engine.state.branches, previous.branches);
++    assert_eq!(
++        fixture.engine.state.directory_branches,
++        previous.directory_branches
++    );
++    assert_eq!(
++        fixture.engine.state.directory_trees,
++        previous.directory_trees
++    );
++    assert_eq!(fixture.engine.state.commits, previous.commits);
++    assert_eq!(fixture.engine.state.file_contexts, previous.file_contexts);
++    assert_eq!(
++        fixture.engine.state.file_metadata_nodes[&tagged].version_id,
++        historical.version_id
++    );
++    view.advance(&cold(&previous), &cold(fixture.engine.state()))
++        .unwrap();
++    assert_eq!(
++        fixture.engine.file_branch_head(&fixture.branch).unwrap(),
++        fixture.current.version_id
++    );
++    fixture.hidden_absent();
++    assert_eq!(files(&fixture.config.disks[0].root), physical);
++    let system = fixture.temp.path().join("system");
++    drop(fixture.engine);
++    let mut engine = Engine::open(&system).unwrap();
++    assert_eq!(
++        edit(
++            &mut engine,
++            &historical.file_id,
++            &[target],
++            &["historical".into()],
++            operation
++        )
++        .unwrap(),
++        receipt
++    );
++    assert_eq!(
++        engine.file_node_tags(&historical.file_id, &tagged).unwrap(),
++        BTreeSet::from(["historical".into()])
++    );
++}
++
++#[test]
++fn disk_exit_tags_reject_hidden_head_wrong_location_and_old_workspace_atomically() {
++    let mut fixture = Fixture::new();
++    let hidden_branch = fixture
++        .engine
++        .file_context(&fixture.repository.repository_id, "dir/gone")
++        .unwrap()
++        .branch_id;
++    let hidden_target = tag_target(&fixture.engine, &hidden_branch, &fixture.hidden.version_id);
++    let workspace = fixture
++        .engine
++        .create_workspace(&fixture.repository.main_branch_id, "admin")
++        .unwrap();
++    fixture
++        .engine
++        .stage_bytes(&workspace.workspace_id, "dir/old-workspace", b"staged")
++        .unwrap();
++    fixture.exit(MembershipExitAction::Deregister);
++    let before = canonical_json(fixture.engine.state()).unwrap();
++    assert!(
++        edit(
++            &mut fixture.engine,
++            &fixture.hidden.file_id,
++            &[hidden_target],
++            &["hidden".into()],
++            op()
++        )
++        .is_err()
++    );
++    let live_target = tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    );
++    let wrong = FileLocation {
++        repository_id: fixture.repository.repository_id.clone(),
++        path: "dir/gone".into(),
++    };
++    assert_eq!(
++        fixture
++            .engine
++            .update_file_node_tags(FileNodeTagsUpdateRequest {
++                file_id: &fixture.current.file_id,
++                targets: &[live_target.clone()],
++                add: &["wrong".into()],
++                remove: &[],
++                location: Some(&wrong),
++                principal: "admin",
++                operation_id: op(),
++            })
++            .unwrap_err()
++            .code(),
++        ErrorCode::FileNotFound
++    );
++    assert_eq!(
++        edit(
++            &mut fixture.engine,
++            &fixture.current.file_id,
++            &[live_target.clone(), live_target],
++            &["duplicate".into()],
++            op()
++        )
++        .unwrap_err()
++        .code(),
++        ErrorCode::InvalidRequest
++    );
++    assert_eq!(
++        fixture
++            .engine
++            .commit_workspace(CommitRequest {
++                workspace_id: workspace.workspace_id.clone(),
++                operation_id: op(),
++                principal: "admin".into(),
++                expected_head: workspace.base_head,
++                fencing_token: workspace.fencing_token,
++                message: "must not revive old namespace".into(),
++                request_digest: None,
++            })
++            .unwrap_err()
++            .code(),
++        ErrorCode::WorkspaceChanged
++    );
++    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
++    assert!(
++        fixture
++            .engine
++            .workspaces
++            .contains_key(&workspace.workspace_id)
++    );
++    fixture.hidden_absent();
++}
++
++#[test]
++fn disk_exit_pending_tag_child_keeps_inheritance_and_merged_alias_is_read_only() {
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let created = fixture
++        .engine
++        .create_file_branch(
++            &fixture.current.file_id,
++            &fixture.current.version_id,
++            &name("pending tags"),
++            "admin",
++            op(),
++        )
++        .unwrap();
++    let pending = created.branch_id.unwrap();
++    let inherited = fixture.engine.state.branches[&pending]
++        .pending_file_versions
++        .clone();
++    let source = tag_target(&fixture.engine, &pending, &fixture.current.version_id);
++    let receipt = edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &[source],
++        &["pending".into()],
++        op(),
++    )
++    .unwrap();
++    assert_eq!(
++        fixture.engine.state.branches[&pending].pending_file_versions,
++        inherited
++    );
++    assert_eq!(
++        fixture.engine.state.file_metadata_nodes[&node(&receipt)].version_id,
++        fixture.current.version_id
++    );
++    let inputs = vec![
++        FileMergeInput {
++            branch_id: fixture.branch.clone(),
++            expected_node_id: fixture.engine.file_branch_head(&fixture.branch).unwrap(),
++        },
++        FileMergeInput {
++            branch_id: pending.clone(),
++            expected_node_id: fixture.engine.file_branch_head(&pending).unwrap(),
++        },
++    ];
++    fixture
++        .engine
++        .merge_file_branches(FileBranchMergeRequest {
++            file_id: &fixture.current.file_id,
++            inputs: &inputs,
++            chosen_node_id: &fixture.current.version_id,
++            surviving_branch_id: &fixture.branch,
++            location: None,
++            principal: "admin",
++            operation_id: op(),
++        })
++        .unwrap();
++    let before = canonical_json(fixture.engine.state()).unwrap();
++    let source = tag_target(&fixture.engine, &pending, &node(&receipt));
++    assert_eq!(
++        edit(
++            &mut fixture.engine,
++            &fixture.current.file_id,
++            &[source],
++            &["forbidden".into()],
++            op()
++        )
++        .unwrap_err()
++        .code(),
++        ErrorCode::BranchNotActive
++    );
++    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
++}
++
++#[test]
++fn disk_exit_tag_replay_authenticates_metadata_actor_digest_context_and_all_write_sets() {
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let before = fixture.engine.state.clone();
++    let view = fixture.engine.current_namespaces.as_ref().unwrap().clone();
++    let source = tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    );
++    let operation = op();
++    let receipt = edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &[source],
++        &["proof".into()],
++        operation,
++    )
++    .unwrap();
++    let published = cold(fixture.engine.state());
++    let tagged = node(&receipt);
++    view.advance(&cold(&before), &published).unwrap();
++    for case in 0..11 {
++        let mut forged = cold(&published);
++        match case {
++            0 => forged.file_metadata_nodes.get_mut(&tagged).unwrap().author = "other".into(),
++            1 => {
++                forged
++                    .file_metadata_nodes
++                    .get_mut(&tagged)
++                    .unwrap()
++                    .parent_node_ids = vec![fixture.hidden.version_id.clone()]
++            }
++            2 => forged
++                .file_metadata_nodes
++                .get_mut(&tagged)
++                .unwrap()
++                .tags
++                .insert("injected".into())
++                .then_some(())
++                .unwrap(),
++            3 => {
++                forged
++                    .operation_principals
++                    .insert(operation, "other".into());
++            }
++            4 => {
++                forged
++                    .operations
++                    .get_mut(&operation)
++                    .unwrap()
++                    .request_digest = "0".repeat(64)
++            }
++            5 => {
++                forged.version_notes.insert(
++                    fixture.current.version_id.clone(),
++                    "unrequested note".into(),
++                );
++            }
++            6 => {
++                let key = crate::business::context_key_from_key(
++                    &fixture.repository.repository_id,
++                    "dir/live",
++                );
++                forged.file_contexts.get_mut(&key).unwrap().node_id =
++                    Some(fixture.first.version_id.clone());
++            }
++            7 => {
++                forged.file_metadata_nodes.remove(&tagged);
++            }
++            8 => {
++                let id = forged
++                    .directory_branches
++                    .values()
++                    .find(|branch| branch.repository_id == fixture.repository.repository_id)
++                    .unwrap()
++                    .head_tree_id
++                    .clone();
++                forged
++                    .directory_trees
++                    .get_mut(&id)
++                    .unwrap()
++                    .entries
++                    .push(fixture.hidden.clone());
++            }
++            9 => {
++                forged.branches.get_mut(&fixture.branch).unwrap().generation += 1;
++            }
++            10 => {
++                forged.operations.get_mut(&operation).unwrap().result["source_request"]["targets"]
++                    [0]["expected_node_id"] = json!(fixture.first.version_id)
++            }
++            _ => unreachable!(),
++        }
++        assert!(
++            view.advance(&cold(&before), &forged).is_err(),
++            "forged tag case {case}"
++        );
++    }
++}
++
++#[test]
++fn disk_exit_tag_noop_replay_still_rejects_unrequested_rows_and_actor_reuse() {
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let source = tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    );
++    let before = fixture.engine.state.clone();
++    let view = fixture.engine.current_namespaces.as_ref().unwrap().clone();
++    let operation = op();
++    let receipt = edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &[source.clone()],
++        &[],
++        operation,
++    )
++    .unwrap();
++    assert_eq!(receipt.result["nodes"][0]["no_change"], true);
++    let published = cold(fixture.engine.state());
++    view.advance(&cold(&before), &published).unwrap();
++    let mut forged = published.clone();
++    forged
++        .file_notes
++        .insert(fixture.current.file_id.clone(), "not a tag change".into());
++    assert!(view.advance(&cold(&before), &forged).is_err());
++    let mut forged = published;
++    forged.operations.get_mut(&operation).unwrap().result["nodes"][0]["no_change"] = json!(false);
++    assert!(view.advance(&cold(&before), &forged).is_err());
++    assert_eq!(
++        fixture
++            .engine
++            .update_file_node_tags(FileNodeTagsUpdateRequest {
++                file_id: &fixture.current.file_id,
++                targets: &[source],
++                add: &[],
++                remove: &[],
++                location: None,
++                principal: "other",
++                operation_id: operation,
++            })
++            .unwrap_err()
++            .code(),
++        ErrorCode::IdempotencyKeyReused
++    );
++}
++
++#[test]
++fn disk_exit_tag_source_cannot_borrow_another_retained_occurrence_or_stale_head() {
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let source = tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    );
++    let mut view = fixture
++        .engine
++        .current_namespaces
++        .as_ref()
++        .unwrap()
++        .as_ref()
++        .clone();
++    let scopes = Arc::make_mut(&mut view.branches);
++    let scope = Arc::make_mut(scopes.get_mut(&fixture.branch).unwrap());
++    scope.entries = Arc::new(Vec::new());
++    let input = Input {
++        file_id: fixture.current.file_id.clone(),
++        targets: vec![source.clone()],
++        add: vec!["source proof".into()],
++        remove: Vec::new(),
++        location: None,
++    };
++    assert!(
++        view.file_tag_plan(
++            fixture.engine.state(),
++            &input,
++            "admin",
++            op(),
++            fixture.engine.state.sequence + 1,
++            crate::business::now().unwrap(),
++            fixture.engine.config.max_entries
++        )
++        .is_err(),
++        "the owner still retains this exact file, but cannot replace the missing source branch occurrence"
++    );
++    let before = canonical_json(fixture.engine.state()).unwrap();
++    let mut stale = source.clone();
++    stale.expected_node_id = fixture.first.version_id.clone();
++    assert_eq!(
++        edit(
++            &mut fixture.engine,
++            &fixture.current.file_id,
++            &[stale],
++            &["stale".into()],
++            op()
++        )
++        .unwrap_err()
++        .code(),
++        ErrorCode::FileBranchConflict
++    );
++    let too_many = (0..=MAX_FILE_TAGS)
++        .map(|n| format!("tag-{n}"))
++        .collect::<Vec<_>>();
++    assert_eq!(
++        edit(
++            &mut fixture.engine,
++            &fixture.current.file_id,
++            &[source],
++            &too_many,
++            op()
++        )
++        .unwrap_err()
++        .code(),
++        ErrorCode::InvalidRequest
++    );
++    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
++}
++
++#[test]
++fn disk_exit_tag_main_receipt_binds_the_real_historical_source_after_restart() {
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let source = tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    );
++    let operation = op();
++    let receipt = edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &[source.clone()],
++        &["historical source proof".into()],
++        operation,
++    )
++    .unwrap();
++    let commit = receipt.commit_id.clone().unwrap();
++    assert_eq!(
++        receipt.branch_id.as_deref(),
++        Some(fixture.repository.main_branch_id.as_str())
++    );
++    assert_eq!(
++        receipt.history_tree_id.as_deref(),
++        Some(fixture.repository.history_tree_id.as_str())
++    );
++    assert_eq!(
++        fixture.engine.state.branches[&fixture.repository.main_branch_id].head_commit_id,
++        commit
++    );
++    let source_entries = fixture
++        .engine
++        .namespace_tree_at(&fixture.repository.main_branch_id, &commit)
++        .unwrap()
++        .entries()
++        .to_vec();
++    assert_eq!(
++        source_entries,
++        fixture
++            .engine
++            .namespace_tree(&fixture.repository.main_branch_id)
++            .unwrap()
++            .entries()
++    );
++    assert_eq!(
++        fixture
++            .engine
++            .create_branch(
++                &commit,
++                &name("independent history remains out of scope"),
++                "admin",
++                op()
++            )
++            .unwrap_err()
++            .code(),
++        ErrorCode::FileBranchScope,
++        "a valid receipt source does not remove the existing independent-file-history branch rule"
++    );
++    let system = fixture.temp.path().join("system");
++    drop(fixture.engine);
++    let mut engine = Engine::open(&system).unwrap();
++    assert_eq!(
++        edit(
++            &mut engine,
++            &fixture.current.file_id,
++            &[source],
++            &["historical source proof".into()],
++            operation
++        )
++        .unwrap(),
++        receipt
++    );
++    assert_eq!(
++        engine
++            .namespace_tree_at(&fixture.repository.main_branch_id, &commit)
++            .unwrap()
++            .entries(),
++        source_entries
++    );
++}
++
++fn prepared_tags(
++    fixture: &Fixture,
++    source: &str,
++    add: &[String],
++    operation: OperationId,
++) -> crate::engine::MutationPlan {
++    let targets = [tag_target(&fixture.engine, &fixture.branch, source)];
++    let request = FileNodeTagsUpdateRequest {
++        file_id: &fixture.current.file_id,
++        targets: &targets,
++        add,
++        remove: &[],
++        location: None,
++        principal: "admin",
++        operation_id: operation,
++    };
++    let body =
++        json!({"file_id":request.file_id,"targets":targets,"add":add,"remove":[],"location":null});
++    fixture
++        .engine
++        .plan_mutation_digest(KIND, "admin", operation, body, None, |engine, next, _| {
++            engine
++                .current_namespaces
++                .as_ref()
++                .unwrap()
++                .update_current_file_tags(engine.state(), next, &request, engine.config.max_entries)
++        })
++        .unwrap()
++}
++
++#[test]
++fn current_file_tags_closed_planner_rejects_payload_and_unproven_metadata() {
++    use crate::engine::MutationPlan;
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let previous = Arc::clone(&fixture.engine.state);
++    let view = fixture.engine.current_namespaces.clone().unwrap();
++    let operation = op();
++    let add = vec!["planner proof".into()];
++    let targets = [tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    )];
++    let request = FileNodeTagsUpdateRequest {
++        file_id: &fixture.current.file_id,
++        targets: &targets,
++        add: &add,
++        remove: &[],
++        location: None,
++        principal: "admin",
++        operation_id: operation,
++    };
++    let input =
++        json!({"file_id":request.file_id,"targets":targets,"add":add,"remove":[],"location":null});
++    let digest = Engine::native_request_digest(KIND, "admin", &input).unwrap();
++    let mut context = fixture.engine.planning_context();
++    assert_eq!(
++        view.require_operation(KIND).unwrap_err().code(),
++        ErrorCode::RecoveryRequired
++    );
++    let rejected =
++        context.plan_new_mutation(KIND, "admin", operation, digest.clone(), |_, _, _| {
++            panic!("no generic tag permit")
++        });
++    assert!(rejected.is_err());
++    for attack in 0..6 {
++        let digest = if attack == 1 {
++            "e".repeat(64)
++        } else {
++            digest.clone()
++        };
++        let planned =
++            context.plan_file_tags_mutation("admin", operation, digest, |_, next, prepared| {
++                let mut result = view.update_current_file_tags(
++                    &previous,
++                    next,
++                    &request,
++                    fixture.engine.config.max_entries,
++                )?;
++                match attack {
++                    0 | 1 => (),
++                    2 => {
++                        result["namespace_tags"]["registry"] = Value::Null;
++                    }
++                    3 => {
++                        next.file_names
++                            .insert(fixture.current.file_id.clone(), "unrequested".into());
++                    }
++                    4 => {
++                        prepared.push(crate::engine::Prepared {
++                            version: previous.versions[&fixture.current.version_id].clone(),
++                            placement: previous.placements[&fixture.current.version_id].clone(),
++                            source: crate::engine::ReadSource::external(
++                                fixture.temp.path().join("not-a-payload"),
++                            ),
++                        });
++                    }
++                    5 => {
++                        next.file_metadata_nodes.clear();
++                    }
++                    _ => unreachable!(),
++                }
++                Ok(result)
++            });
++        if attack == 0 {
++            let Ok(MutationPlan::Prepared {
++                next,
++                prepared,
++                result,
++            }) = planned
++            else {
++                panic!("exact plan must be admitted")
++            };
++            assert!(prepared.is_empty());
++            view.verify_new_file_tags(&previous, &next, &result)
++                .unwrap();
++            view.advance(&previous, &next).unwrap();
++            let mut result = result.clone();
++            result.request_digest = "f".repeat(64);
++            assert!(
++                view.verify_new_file_tags(&previous, &next, &result)
++                    .is_err()
++            );
++        } else {
++            let Err(error) = planned else {
++                panic!("unproven tag plan {attack} escaped")
++            };
++            assert_eq!(error.code(), ErrorCode::PublicationInvalid, "{attack}");
++        }
++    }
++    context.current_namespaces = None;
++    let pending = context.plan_file_tags_mutation("admin", operation, digest, |_, _, _| {
++        panic!("pending registry must reject before preparing tags")
++    });
++    let Err(error) = pending else {
++        panic!("pending registry admitted tag plan")
++    };
++    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
++    assert!(Arc::ptr_eq(&previous, &fixture.engine.state));
++}
++
++#[test]
++fn current_file_tags_prior_actor_event_and_node_cannot_change_without_new_receipt() {
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let target = tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    );
++    let operation = op();
++    let receipt = edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &[target],
++        &["immutable".into()],
++        operation,
++    )
++    .unwrap();
++    let id = node(&receipt);
++    let previous = Arc::clone(&fixture.engine.state);
++    let view = fixture.engine.current_namespaces.clone().unwrap();
++    for attack in 0..7 {
++        let mut forged = previous.as_ref().clone();
++        forged.begin_tracking();
++        forged.sequence += 1;
++        match attack {
++            0 => {
++                forged
++                    .operation_principals
++                    .insert(operation, "other".into());
++            }
++            1 => {
++                forged.events.last_mut().unwrap().kind = "auth.other".into();
++            }
++            2 => {
++                forged.events.last_mut().unwrap().operation_id = op();
++            }
++            3 => {
++                forged.operations.get_mut(&operation).unwrap().kind = "auth.other".into();
++            }
++            4 => {
++                forged.operations.remove(&operation);
++            }
++            5 => {
++                forged.file_metadata_nodes.remove(&id);
++            }
++            6 => {
++                forged.file_metadata_nodes.get_mut(&id).unwrap().kind = FileMetadataKind::Merge;
++            }
++            _ => unreachable!(),
++        }
++        assert!(
++            view.advance(&previous, &forged).is_err(),
++            "tracked {attack}"
++        );
++        assert!(
++            view.advance(&cold(&previous), &cold(&forged)).is_err(),
++            "cold {attack}"
++        );
++    }
++}
++
++#[test]
++fn current_file_tags_receipt_envelope_and_disguised_child_are_rejected() {
++    use crate::engine::MutationPlan;
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let previous = Arc::clone(&fixture.engine.state);
++    let view = fixture.engine.current_namespaces.clone().unwrap();
++    for source in [&fixture.current.version_id, &fixture.first.version_id] {
++        let operation = op();
++        let MutationPlan::Prepared { next, result, .. } =
++            prepared_tags(&fixture, source, &["bound".into()], operation)
++        else {
++            panic!("expected new tag plan")
++        };
++        for attack in 0..13 {
++            let mut forged = next.as_ref().clone();
++            let record = forged.operations.get_mut(&operation).unwrap();
++            match attack {
++                0 => {
++                    record.current_health = CurrentHealth::Unavailable;
++                }
++                1 => {
++                    record.commit_state = CommitState::InDoubt;
++                }
++                2 => {
++                    record.protection_at_publish = ProtectionAtPublish::TargetMet;
++                }
++                3 => {
++                    record.result["timestamp"] = json!("01");
++                }
++                4 => {
++                    record.result["membership_epoch"] = json!(true);
++                }
++                5 => {
++                    record.result["namespace_tags"]["mask_hash"] = Value::Null;
++                }
++                6 => {
++                    record.result["extra"] = json!(true);
++                }
++                7 => {
++                    record.result["metadata_created_at"] = json!("01");
++                }
++                8 => {
++                    record.result["source_request"]["unexpected"] = json!(true);
++                }
++                9 => {
++                    record.result["source_request"]
++                        .as_object_mut()
++                        .unwrap()
++                        .remove("location");
++                }
++                10 => {
++                    forged.topology_generation += 1;
++                }
++                11 => {
++                    forged.control_auth = Some(json!({"unrequested":true}));
++                }
++                12 => {
++                    record.kind = "auth.unrelated".into();
++                    record.result = json!({});
++                    record.request_digest =
++                        Engine::native_request_digest("auth.unrelated", "admin", &json!({}))
++                            .unwrap();
++                    forged.events.last_mut().unwrap().kind = "auth.unrelated".into();
++                    forged
++                        .file_metadata_nodes
++                        .get_mut(&node(&result))
++                        .unwrap()
++                        .kind = FileMetadataKind::Merge;
++                }
++                _ => unreachable!(),
++            }
++            assert!(
++                view.advance(&previous, &forged).is_err(),
++                "tracked {source} {attack}"
++            );
++            assert!(
++                view.advance(&cold(&previous), &cold(&forged)).is_err(),
++                "cold {source} {attack}"
++            );
++        }
++    }
++}
++
++// Real hash-bound journal decisions bypass live planning only in this fixture.
++// Fixed membership, snapshot/history closure and receipts stay authenticated so
++// cold recovery must reach the operation-specific proof before repairing them.
++fn install_tag_decision(
++    engine: &mut Engine,
++    next: &State,
++    result: &OperationResult,
++    published: bool,
++    versions: Vec<crate::journal::VersionEvidence>,
++) -> crate::journal::Candidate {
++    use crate::journal::*;
++
++    let members = engine.members();
++    let snapshot = prepare_snapshot(next, crate::engine::MAX_METADATA).unwrap();
++    snapshot
++        .store_new_objects_at(&engine.disk_resources, &members)
++        .unwrap();
++    let catalog = crate::history_package::store_history_manifests_bounded_at(
++        &engine.disk_resources,
++        &members,
++        next,
++        crate::engine::MAX_METADATA,
++    )
++    .unwrap();
++    let generation = engine.config.generation().unwrap();
++    let candidate = Candidate::new_with_registry(
++        CandidateData {
++            pool_id: engine.config.pool_id.clone(),
++            sequence: next.sequence,
++            transaction_id: new_id("tx").unwrap(),
++            operation_id: result.operation_id,
++            request_digest: result.request_digest.clone(),
++            previous_snapshot: engine.snapshot.clone(),
++            snapshot_hash: snapshot.hash.clone(),
++            versions,
++            metadata_disk_ids: members.iter().map(|disk| disk.disk_id.clone()).collect(),
++            history_roots: catalog.reference().clone(),
++        },
++        engine.config.generation_hash().unwrap(),
++        generation.portable.exit_registry().unwrap(),
++    );
++    engine.verify_candidate_membership(&candidate).unwrap();
++    let hash = object_hash("candidate", &candidate).unwrap();
++    for disk in &members {
++        store_object_at(
++            &engine.disk_resources.get(disk).unwrap().root,
++            disk,
++            "candidate",
++            &candidate,
++        )
++        .unwrap();
++        engine
++            .append_journal(
++                disk,
++                RecordType::Prepare,
++                next.sequence,
++                &hash,
++                &candidate.snapshot_hash,
++            )
++            .unwrap();
++    }
++    let accepts = members
++        .iter()
++        .map(|disk| {
++            engine
++                .append_journal(disk, RecordType::Accept, next.sequence, &hash, &hash)
++                .unwrap()
++        })
++        .collect();
++    if published {
++        let finalize = Finalize {
++            candidate_hash: hash.clone(),
++            accepts,
++            recovery_id: None,
++        };
++        let finalize_hash = object_hash("finalize", &finalize).unwrap();
++        for disk in &members {
++            store_object_at(
++                &engine.disk_resources.get(disk).unwrap().root,
++                disk,
++                "finalize",
++                &finalize,
++            )
++            .unwrap();
++        }
++        let finalize_receipts = members
++            .iter()
++            .map(|disk| {
++                engine
++                    .append_journal(
++                        disk,
++                        RecordType::Finalize,
++                        next.sequence,
++                        &hash,
++                        &finalize_hash,
++                    )
++                    .unwrap()
++            })
++            .collect();
++        let publication = Publication {
++            candidate_hash: hash.clone(),
++            finalize,
++            finalize_receipts,
++            payload_receipts: Vec::new(),
++            result: result.clone(),
++            recovery: None,
++        };
++        let publication_hash = object_hash("publication", &publication).unwrap();
++        for disk in &members {
++            store_object_at(
++                &engine.disk_resources.get(disk).unwrap().root,
++                disk,
++                "publication",
++                &publication,
++            )
++            .unwrap();
++        }
++        let receipts = members
++            .iter()
++            .map(|disk| {
++                engine
++                    .append_journal(
++                        disk,
++                        RecordType::Publication,
++                        next.sequence,
++                        &hash,
++                        &publication_hash,
++                    )
++                    .unwrap()
++            })
++            .collect();
++        let seal = PublicationSeal {
++            candidate_hash: hash,
++            publication_hash,
++            receipts,
++        };
++        verify_publication_seal(&candidate, &publication, &seal).unwrap();
++        for disk in &members {
++            engine
++                .disk_resources
++                .get(disk)
++                .unwrap()
++                .root
++                .write_json(
++                    &publication_seal_path(disk, &seal.candidate_hash),
++                    &seal,
++                    false,
++                )
++                .unwrap();
++        }
++    }
++    candidate
++}
++
++fn relative_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
++    files(root)
++        .into_iter()
++        .map(|(path, bytes)| (path.strip_prefix(root).unwrap().to_owned(), bytes))
++        .collect()
++}
++
++#[test]
++fn current_file_tags_cold_proof_precedes_replica_repair_and_name_projection() {
++    use crate::engine::MutationPlan;
++    use crate::journal::object_path;
++    for published in [false, true] {
++        for historical in [false, true] {
++            for attack in ["valid", "actor", "source", "context", "location", "payload"] {
++                let mut fixture = Fixture::new();
++                fixture.exit(MembershipExitAction::Deregister);
++                let stopped = relative_files(&fixture.config.disks[0].root);
++                let parked = fixture.temp.path().join("parked-source");
++                fs::rename(&fixture.config.disks[0].root, &parked).unwrap();
++                fs::write(
++                    &fixture.config.disks[0].root,
++                    b"stopped root must not be opened",
++                )
++                .unwrap();
++                let source = if historical {
++                    fixture.first.version_id.clone()
++                } else {
++                    fixture.current.version_id.clone()
++                };
++                let target = tag_target(&fixture.engine, &fixture.branch, &source);
++                let operation = op();
++                let add = vec!["cold source proof".into()];
++                let MutationPlan::Prepared {
++                    mut next,
++                    prepared,
++                    mut result,
++                } = prepared_tags(&fixture, &source, &add, operation)
++                else {
++                    panic!("native tags must prepare")
++                };
++                assert!(prepared.is_empty());
++                let tagged = node(&result);
++                match attack {
++                    "valid" | "payload" => (),
++                    "actor" => {
++                        next.operation_principals.insert(operation, "other".into());
++                    }
++                    "source" => {
++                        result.result["namespace_tags"]["mask_hash"] = Value::Null;
++                        next.operations.insert(operation, result.clone());
++                    }
++                    "context" => {
++                        // Same file and same immutable body, so history structure
++                        // remains valid. Only this transition's exact occurrence
++                        // proof can reject the invented context generation.
++                        let key = crate::business::context_key_from_key(
++                            &fixture.repository.repository_id,
++                            "dir/live",
++                        );
++                        next.file_contexts
++                            .get_mut(&key)
++                            .unwrap()
++                            .selection_generation += 1;
++                    }
++                    "location" => {
++                        let name = next.file_names[&fixture.current.file_id].clone();
++                        next.file_locations.insert(
++                            fixture.current.file_id.clone(),
++                            format!("unrequested/{name}"),
++                        );
++                    }
++                    _ => unreachable!(),
++                }
++                let versions = if attack == "payload" {
++                    fixture
++                        .engine
++                        .current_namespaces
++                        .as_ref()
++                        .unwrap()
++                        .verify_new_file_tags(&fixture.engine.state, &next, &result)
++                        .unwrap();
++                    vec![crate::journal::VersionEvidence {
++                        version: next.versions[&fixture.current.version_id].clone(),
++                        placement: next.placements[&fixture.current.version_id].clone(),
++                    }]
++                } else {
++                    Vec::new()
++                };
++                let candidate =
++                    install_tag_decision(&mut fixture.engine, &next, &result, published, versions);
++                let payload_path = candidate.versions.first().map(|evidence| {
++                    let disk = fixture
++                        .engine
++                        .disk(&evidence.placement.route_slot_ids[0])
++                        .unwrap();
++                    assert!(!disk.metadata_member);
++                    assert_eq!(disk.disk_id, "D04");
++                    crate::disk::version_dir(
++                        disk,
++                        &evidence.version.history_tree_id,
++                        &evidence.version.version_id,
++                    )
++                });
++                let members = fixture.engine.members();
++                let live_roots = fixture
++                    .engine
++                    .config
++                    .io_disks()
++                    .map(|disk| disk.root.clone())
++                    .collect::<Vec<_>>();
++                let missing = object_path(&members[0], "snapshot", &candidate.snapshot_hash);
++                let snapshot_bytes = fs::read(&missing).unwrap();
++                let system = fixture.temp.path().join("system");
++                drop(fixture.engine);
++                fs::remove_file(&missing).unwrap();
++                let before_system = relative_files(&system);
++                let before_roots = live_roots
++                    .iter()
++                    .map(|root| relative_files(root))
++                    .collect::<Vec<_>>();
++                let payload_watch = payload_path
++                    .as_ref()
++                    .map(|path| watch_candidate_payload(path));
++                let opened = Engine::open(&system);
++                if let Some(watch) = payload_watch {
++                    assert_no_candidate_payload_io(watch);
++                }
++                if attack == "valid" {
++                    let mut engine = opened.unwrap();
++                    assert_eq!(fs::read(&missing).unwrap(), snapshot_bytes);
++                    assert_eq!(
++                        edit(
++                            &mut engine,
++                            &fixture.current.file_id,
++                            &[target],
++                            &add,
++                            operation
++                        )
++                        .unwrap(),
++                        result
++                    );
++                    assert_eq!(
++                        engine
++                            .file_node_version(&fixture.current.file_id, &tagged)
++                            .unwrap(),
++                        source
++                    );
++                    assert_eq!(
++                        engine.file_branch_head(&fixture.branch).unwrap(),
++                        if historical {
++                            fixture.current.version_id.clone()
++                        } else {
++                            tagged
++                        }
++                    );
++                    assert!(
++                        engine
++                            .namespace_tree(&fixture.repository.main_branch_id)
++                            .unwrap()
++                            .get("dir/gone")
++                            .is_none()
++                    );
++                } else {
++                    let error = opened
++                        .err()
++                        .expect("invalid tag proof must refuse cold recovery");
++                    assert_eq!(
++                        error.code(),
++                        ErrorCode::PublicationInvalid,
++                        "{published} {historical} {attack}"
++                    );
++                    if attack == "payload" {
++                        assert!(
++                            error
++                                .to_string()
++                                .contains("metadata-only current-registry candidate"),
++                            "{error}"
++                        );
++                    } else {
++                        assert!(error.to_string().contains("file tag"), "{error}");
++                    }
++                    assert_eq!(
++                        fs::symlink_metadata(&missing).unwrap_err().kind(),
++                        std::io::ErrorKind::NotFound
++                    );
++                    assert_eq!(relative_files(&system), before_system, "SYSTEM changed");
++                    for (root, bytes) in live_roots.iter().zip(before_roots) {
++                        assert_eq!(
++                            relative_files(root),
++                            bytes,
++                            "root changed: {published} {historical} {attack}"
++                        );
++                    }
++                }
++                assert_eq!(relative_files(&parked), stopped);
++                assert_eq!(
++                    fs::read(&fixture.config.disks[0].root).unwrap(),
++                    b"stopped root must not be opened"
++                );
++            }
++        }
++    }
++}
++
++#[test]
++fn current_file_tags_pre_registry_receipt_remains_permanent_after_activation() {
++    let mut fixture = Fixture::new();
++    let target = tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    );
++    let operation = op();
++    let add = vec!["before registry".into()];
++    let original = edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &[target.clone()],
++        &add,
++        operation,
++    )
++    .unwrap();
++    assert!(original.result.get("namespace_tags").is_none());
++    fixture.exit(MembershipExitAction::Deregister);
++    let before = Arc::clone(&fixture.engine.state);
++    assert_eq!(
++        edit(
++            &mut fixture.engine,
++            &fixture.current.file_id,
++            &[target.clone()],
++            &add,
++            operation
++        )
++        .unwrap(),
++        original
++    );
++    assert!(Arc::ptr_eq(&before, &fixture.engine.state));
++    let latest = tag_target(&fixture.engine, &fixture.branch, &node(&original));
++    edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &[latest],
++        &["after registry".into()],
++        op(),
++    )
++    .unwrap();
++    let system = fixture.temp.path().join("system");
++    drop(fixture.engine);
++    let mut engine = Engine::open(&system).unwrap();
++    assert_eq!(
++        edit(
++            &mut engine,
++            &fixture.current.file_id,
++            &[target],
++            &add,
++            operation
++        )
++        .unwrap(),
++        original
++    );
++}
++
++#[test]
++fn current_file_tags_source_node_and_body_identities_remain_exact() {
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let previous = Arc::clone(&fixture.engine.state);
++    let view = fixture.engine.current_namespaces.clone().unwrap();
++    let target = tag_target(
++        &fixture.engine,
++        &fixture.branch,
++        &fixture.current.version_id,
++    );
++    let input = Input {
++        file_id: fixture.current.file_id.clone(),
++        targets: vec![target],
++        add: vec!["identity proof".into()],
++        remove: vec![],
++        location: None,
++    };
++    for attack in 0..8 {
++        let mut source = previous.as_ref().clone();
++        match attack {
++            0 => {
++                source
++                    .versions
++                    .get_mut(&fixture.current.version_id)
++                    .unwrap()
++                    .version_id = fixture.first.version_id.clone();
++            }
++            1 => {
++                source
++                    .versions
++                    .get_mut(&fixture.current.version_id)
++                    .unwrap()
++                    .file_id = fixture.hidden.file_id.clone();
++            }
++            2 => {
++                source
++                    .versions
++                    .get_mut(&fixture.current.version_id)
++                    .unwrap()
++                    .history_tree_id = new_id("history").unwrap();
++            }
++            3 => {
++                source.branches.get_mut(&fixture.branch).unwrap().branch_id =
++                    fixture.repository.main_branch_id.clone();
++            }
++            4 => {
++                source
++                    .histories
++                    .get_mut(&fixture.repository.history_tree_id)
++                    .unwrap()
++                    .repository_id = new_id("repo").unwrap();
++            }
++            5 => {
++                source
++                    .commits
++                    .get_mut(&fixture.engine.state.branches[&fixture.branch].head_commit_id)
++                    .unwrap()
++                    .commit_id = new_id("commit").unwrap();
++            }
++            6 => {
++                source
++                    .versions
++                    .get_mut(&fixture.current.version_id)
++                    .unwrap()
++                    .logical_size += 1;
++            }
++            7 => {
++                source.versions.remove(&fixture.current.version_id);
++            }
++            _ => unreachable!(),
++        }
++        assert!(
++            view.file_tag_plan(
++                &source,
++                &input,
++                "admin",
++                op(),
++                source.sequence + 1,
++                0,
++                fixture.engine.config.max_entries
++            )
++            .is_err(),
++            "identity {attack}"
++        );
++    }
++    assert!(Arc::ptr_eq(&previous, &fixture.engine.state));
++}
++
++#[test]
++fn current_file_tags_keep_selected_frozen_composition_apart_from_newer_named_heads() {
++    let mut fixture = Fixture::new();
++    let original = fixture.current.clone();
++    let root = fixture
++        .engine
++        .create_directory_branches(
++            &fixture.repository.repository_id,
++            None,
++            &name("frozen tag source"),
++            "admin",
++            op(),
++        )
++        .unwrap()
++        .result["directory_branch_id"]
++        .as_str()
++        .unwrap()
++        .to_owned();
++    let later = save(
++        &mut fixture.engine,
++        &fixture.repository.main_branch_id,
++        "dir/live",
++        b"newer named body must remain",
++    );
++    assert_ne!(original.version_id, later.version_id);
++    let stopped = fixture.exit(MembershipExitAction::Deregister);
++    let tree = fixture.engine.state.directory_branches[&root]
++        .head_tree_id
++        .clone();
++    let head = fixture.engine.state.branches[&fixture.repository.main_branch_id]
++        .head_commit_id
++        .clone();
++    fixture
++        .engine
++        .set_directory_default(DirectoryDefaultSelection {
++            repository_id: &fixture.repository.repository_id,
++            directory_branch_id: &root,
++            expected_tree_id: &tree,
++            expected_head: &head,
++            principal: "admin",
++            operation_id: op(),
++        })
++        .unwrap();
++    let namespace = fixture
++        .engine
++        .namespace_tree(&fixture.repository.main_branch_id)
++        .unwrap();
++    assert_eq!(namespace.get("dir/live"), Some(&original));
++    let directory = namespace.get("dir").unwrap().entry_id.clone();
++    let child = fixture.engine.state.directory_selections[&directory].clone();
++    let named = fixture.engine.state.directory_branches[&child].clone();
++    assert_ne!(
++        fixture.engine.state.directory_tree_selections[&directory],
++        named.head_tree_id
++    );
++    assert!(named.entries.iter().any(|entry| entry == &later));
++    let previous = Arc::clone(&fixture.engine.state);
++    let view = fixture.engine.current_namespaces.clone().unwrap();
++    let target = tag_target(&fixture.engine, &fixture.branch, &original.version_id);
++    assert_eq!(target.expected_node_id, later.version_id);
++    let operation = op();
++    let add = vec!["selected history".into()];
++    let receipt = edit(
++        &mut fixture.engine,
++        &original.file_id,
++        &[target.clone()],
++        &add,
++        operation,
++    )
++    .unwrap();
++    let tagged = node(&receipt);
++    assert_eq!(receipt.result["nodes"][0]["advanced"], false);
++    assert_eq!(fixture.engine.state.directory_branches[&child], named);
++    assert_eq!(
++        fixture.engine.state.branches[&fixture.branch],
++        previous.branches[&fixture.branch]
++    );
++    assert_eq!(
++        fixture.engine.file_branch_head(&fixture.branch).unwrap(),
++        later.version_id
++    );
++    let selected = &fixture.engine.state.directory_tree_selections[&directory];
++    let selected = &fixture.engine.state.directory_trees[selected];
++    assert!(selected.entries.iter().any(|entry| entry == &original));
++    assert!(!selected.entries.iter().any(|entry| entry == &later));
++    assert_eq!(
++        selected.file_contexts["dir/live"].node_id.as_deref(),
++        Some(tagged.as_str())
++    );
++    assert_eq!(
++        fixture
++            .engine
++            .file_context(&fixture.repository.repository_id, "dir/live")
++            .unwrap()
++            .node_id
++            .as_deref(),
++        Some(tagged.as_str())
++    );
++    for (id, commit) in previous.commits.iter() {
++        assert_eq!(fixture.engine.state.commits.get(id), Some(commit));
++    }
++    for (id, tree) in previous.directory_trees.iter() {
++        assert_eq!(fixture.engine.state.directory_trees.get(id), Some(tree));
++    }
++    assert_eq!(fixture.engine.state.versions, previous.versions);
++    assert_eq!(fixture.engine.state.placements, previous.placements);
++    assert_eq!(fixture.engine.state.file_names, previous.file_names);
++    assert_eq!(fixture.engine.state.file_locations, previous.file_locations);
++    view.advance(&cold(&previous), &cold(fixture.engine.state()))
++        .unwrap();
++    fixture.hidden_absent();
++    assert_eq!(files(&fixture.config.disks[0].root), stopped);
++    let system = fixture.temp.path().join("system");
++    drop(fixture.engine);
++    let mut engine = Engine::open(&system).unwrap();
++    assert_eq!(engine.state.directory_branches[&child], named);
++    assert_eq!(
++        engine
++            .namespace_tree(&fixture.repository.main_branch_id)
++            .unwrap()
++            .get("dir/live"),
++        Some(&original)
++    );
++    assert_eq!(
++        edit(&mut engine, &original.file_id, &[target], &add, operation).unwrap(),
++        receipt
++    );
++    let next_target = tag_target(&engine, &fixture.branch, &tagged);
++    let next = edit(
++        &mut engine,
++        &original.file_id,
++        &[next_target],
++        &["second selected child".into()],
++        op(),
++    )
++    .unwrap();
++    assert_eq!(next.result["nodes"][0]["advanced"], false);
++    assert_eq!(engine.state.directory_branches[&child], named);
++    drop(engine);
++    let engine = Engine::open(&system).unwrap();
++    assert_eq!(engine.state.directory_branches[&child], named);
++    assert_eq!(
++        engine.file_branch_head(&fixture.branch).unwrap(),
++        later.version_id
++    );
++    assert_eq!(files(&fixture.config.disks[0].root), stopped);
++}
++
++fn watch_candidate_payload(path: &Path) -> rustix::fd::OwnedFd {
++    use rustix::fs::inotify;
++    let watch =
++        inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK).unwrap();
++    inotify::add_watch(
++        &watch,
++        path,
++        inotify::WatchFlags::OPEN | inotify::WatchFlags::ACCESS,
++    )
++    .unwrap();
++    watch
++}
++
++fn assert_no_candidate_payload_io(watch: rustix::fd::OwnedFd) {
++    let mut bytes = [0u8; 4096];
++    assert_eq!(
++        rustix::io::read(&watch, &mut bytes),
++        Err(rustix::io::Errno::WOULDBLOCK),
++        "a metadata-only tag candidate must not open or read its smuggled local proof or payload"
++    );
++}
++
++#[test]
++fn current_file_tags_batch_keeps_noop_and_changed_sources_exact() {
++    let mut fixture = Fixture::new();
++    fixture.exit(MembershipExitAction::Deregister);
++    let historical_target = tag_target(&fixture.engine, &fixture.branch, &fixture.first.version_id);
++    let historical = edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &[historical_target],
++        &["review".into()],
++        op(),
++    )
++    .unwrap();
++    let historical_node = node(&historical);
++    let targets = [
++        tag_target(&fixture.engine, &fixture.branch, &historical_node),
++        tag_target(
++            &fixture.engine,
++            &fixture.branch,
++            &fixture.current.version_id,
++        ),
++    ];
++    let previous = Arc::clone(&fixture.engine.state);
++    let operation = op();
++    let receipt = edit(
++        &mut fixture.engine,
++        &fixture.current.file_id,
++        &targets,
++        &["review".into()],
++        operation,
++    )
++    .unwrap();
++    assert_eq!(receipt.result["nodes"][0]["no_change"], true);
++    assert_eq!(receipt.result["nodes"][0]["node_id"], historical_node);
++    assert_eq!(receipt.result["nodes"][0]["advanced"], false);
++    assert_eq!(receipt.result["nodes"][1]["no_change"], false);
++    assert_eq!(receipt.result["nodes"][1]["advanced"], true);
++    let current_node = receipt.result["nodes"][1]["node_id"]
++        .as_str()
++        .unwrap()
++        .to_owned();
++    assert_eq!(
++        fixture.engine.file_branch_head(&fixture.branch).unwrap(),
++        current_node
++    );
++    assert_eq!(
++        fixture.engine.state.file_metadata_nodes.len(),
++        previous.file_metadata_nodes.len() + 1
++    );
++    assert_eq!(
++        fixture.engine.state.file_metadata_nodes[&historical_node],
++        previous.file_metadata_nodes[&historical_node]
++    );
++    assert_eq!(fixture.engine.state.versions, previous.versions);
++    let remove_targets = [
++        tag_target(&fixture.engine, &fixture.branch, &historical_node),
++        tag_target(&fixture.engine, &fixture.branch, &current_node),
++    ];
++    let remove = fixture
++        .engine
++        .update_file_node_tags(FileNodeTagsUpdateRequest {
++            file_id: &fixture.current.file_id,
++            targets: &remove_targets,
++            add: &[],
++            remove: &["review".into()],
++            location: None,
++            principal: "admin",
++            operation_id: op(),
++        })
++        .unwrap();
++    for (index, source) in [historical_node, current_node].iter().enumerate() {
++        let id = remove.result["nodes"][index]["node_id"].as_str().unwrap();
++        let child = &fixture.engine.state.file_metadata_nodes[id];
++        assert_eq!(child.parent_node_ids, vec![source.clone()]);
++        assert!(child.tags.is_empty());
++        assert_eq!(remove.result["nodes"][index]["advanced"], index == 1);
++    }
++    let before = Arc::clone(&fixture.engine.state);
++    let mut invalid = remove_targets.clone();
++    invalid[0].expected_node_id = fixture.engine.file_branch_head(&fixture.branch).unwrap();
++    invalid[1].expected_node_id = "stale".into();
++    assert!(
++        edit(
++            &mut fixture.engine,
++            &fixture.current.file_id,
++            &invalid,
++            &["atomic".into()],
++            op()
++        )
++        .is_err()
++    );
++    assert!(Arc::ptr_eq(&before, &fixture.engine.state));
++    let system = fixture.temp.path().join("system");
++    drop(fixture.engine);
++    let mut engine = Engine::open(&system).unwrap();
++    assert_eq!(
++        edit(
++            &mut engine,
++            &fixture.current.file_id,
++            &targets,
++            &["review".into()],
++            operation
++        )
++        .unwrap(),
++        receipt
++    );
++}
