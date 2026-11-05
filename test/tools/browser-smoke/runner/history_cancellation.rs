@@ -145,18 +145,22 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
 }
 
 // Loading is exposed through aria-busy, without transient loading text.
+// A decoded response aborts its transport during resource cleanup. Record the
+// signal before delivery to distinguish that cleanup from owner cancellation.
 const MONITOR_HISTORY_PENDING: &str = r#"
     const p=window.__zxsMonitorCancellation.pending;
     const charts=Array.from(document.querySelectorAll('.zxs-monitor-page .zxs-metric-chart'));
-    return p.length===21&&p.slice(0,-1).every(r=>r.delivered&&r.signal.aborted)
+    return p.length===21&&p.slice(0,-1).every(r=>r.delivered&&r.signal.aborted&&r.abortedAtDelivery===true)
         &&p.at(-1).ready&&!p.at(-1).delivered&&!p.at(-1).signal.aborted
+        &&p.at(-1).abortedAtDelivery===null
         &&charts.length>0&&charts.every(e=>e.getAttribute('aria-busy')==='true');
 "#;
 const MONITOR_HISTORY_SETTLED: &str = r#"
     const p=window.__zxsMonitorCancellation.pending;
     const charts=Array.from(document.querySelectorAll('.zxs-monitor-page .zxs-metric-chart'));
-    return p.length===21&&p.every(r=>r.delivered)
-        &&p.slice(0,-1).every(r=>r.signal.aborted)&&!p.at(-1).signal.aborted
+    return p.length===21&&p.every(r=>r.delivered&&r.signal.aborted)
+        &&p.slice(0,-1).every(r=>r.abortedAtDelivery===true)
+        &&p.at(-1).abortedAtDelivery===false
         &&charts.length>0&&charts.every(e=>e.getAttribute('aria-busy')==='false');
 "#;
 
@@ -182,7 +186,8 @@ pub(super) fn monitor_range(browser: &Browser) -> Result<()> {
             probe.started = true;
             let release;
             const gate = new Promise(resolve => release = resolve);
-            const pending = {signal: request.signal, release, ready: false, delivered: false};
+            const pending = {signal: request.signal, release, ready: false, delivered: false,
+                abortedAtDelivery: null};
             probe.pending.push(pending);
             if (!probe.seed) {
                 const response = await original.apply(this, args);
@@ -191,6 +196,7 @@ pub(super) fn monitor_range(browser: &Browser) -> Result<()> {
             }
             pending.ready = true;
             await gate;
+            pending.abortedAtDelivery = pending.signal.aborted;
             pending.delivered = true;
             return new Response(JSON.stringify(probe.seed), {
                 status: 200, headers: {'Content-Type': 'application/json'}

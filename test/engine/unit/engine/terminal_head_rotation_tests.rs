@@ -294,6 +294,16 @@ fn terminal_head_rotation_accepts_real_add_and_exit_descendants_of_the_resume() 
             ordinary_exit,
         )
         .unwrap();
+    let archive = engine.build_managed_membership_control_archive().unwrap();
+    engine
+        .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+        .unwrap();
+    assert!(
+        engine
+            .resume_membership_joint_decision()
+            .unwrap()
+            .joint_quorum_accepted()
+    );
     assert_eq!(
         engine.activate_pending_disk_exit().unwrap().operation_id,
         ordinary_exit
