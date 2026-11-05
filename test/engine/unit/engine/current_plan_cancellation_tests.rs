@@ -1356,7 +1356,7 @@ fn install_cancellation_decision(
     use crate::journal::*;
 
     let members = engine.members();
-    let snapshot = prepare_snapshot(next, MAX_METADATA).unwrap();
+    let snapshot = prepare_snapshot(next, crate::engine::MAX_METADATA).unwrap();
     snapshot
         .store_new_objects_at(&engine.disk_resources, &members)
         .unwrap();
@@ -1364,7 +1364,7 @@ fn install_cancellation_decision(
         &engine.disk_resources,
         &members,
         next,
-        MAX_METADATA,
+        crate::engine::MAX_METADATA,
     )
     .unwrap();
     let generation = engine.config.generation().unwrap();
