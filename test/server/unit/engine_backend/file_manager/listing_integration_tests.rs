@@ -1,4 +1,5 @@
 use super::*;
+use crate::tests::directory_git_fixture::checkpoint;
 use storage_engine::{CommitRequest, Config, new_id};
 
 pub(super) fn listing_json(engine: &AdmissionEngine, input: &Value) -> Result<Value, ApiError> {
@@ -112,14 +113,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         assert_eq!(back["entries"], first["entries"]);
         assert_eq!(back["snapshot"], first["snapshot"]);
     }
-    engine
-        .initialize_directory_scope(
-            &repo.repository_id,
-            None,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    checkpoint(&mut engine, &repo, "", "owner");
     let initial =
         listing_json(&engine, &json!({"slot_id":"P01","query":{"path":"Files"}})).unwrap();
     let branch = initial["directory_branches"]

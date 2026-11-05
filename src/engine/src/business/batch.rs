@@ -368,9 +368,14 @@ fn apply(
         let mut refs = vec![(
             &item.source.directory_branch_id,
             &item.source.expected_tree_id,
+            item.source.path.as_str(),
         )];
         if let Some(target) = &item.target {
-            refs.push((&target.directory_branch_id, &target.expected_tree_id));
+            refs.push((
+                &target.directory_branch_id,
+                &target.expected_tree_id,
+                target.path.as_str(),
+            ));
         }
         let requires_target = match request.kind {
             DirectoryBatchKind::Move | DirectoryBatchKind::Copy | DirectoryBatchKind::Rename => {
@@ -384,7 +389,7 @@ fn apply(
                 "only delete omits a destination",
             ));
         }
-        for (id, expected) in refs {
+        for (id, expected, path) in refs {
             let branch = state
                 .directory_branches
                 .get(id)
@@ -395,6 +400,7 @@ fn apply(
                         "batch branch missing from repository",
                     )
                 })?;
+            directory_git::require_owned_path(state, branch, path)?;
             if &branch.head_tree_id != expected {
                 return Err(Error::new(
                     storage_contract::ErrorCode::DirectoryBranchConflict,

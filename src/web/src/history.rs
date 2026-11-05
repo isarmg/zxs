@@ -96,6 +96,14 @@ fn action_label(action: &str) -> String {
     match action {
         "file_branch_pending" | "branch_pending" => t("分支登记", "Registered branch"),
         "upload" | "commit" | "save" | "file_save" | "content" => t("保存文件", "Saved file"),
+        "directory.changes.commit" | "directory_commit" => {
+            t("提交目录更改", "Committed folder changes")
+        }
+        "directory.git.initialize" => t("初始化目录仓库", "Initialized folder repository"),
+        "directory.git.stage-owned" => t("暂存本仓库更改", "Staged this repository's changes"),
+        "directory.git.stage-child" => t("暂存子仓库版本引用", "Staged child repository reference"),
+        "directory.git.checkout" => t("切换目录分支", "Switched folder branch"),
+        "directory.git.branch-create" => t("创建目录分支", "Created folder branch"),
         "directory.branches.create" => t("登记目录分支", "Registered folder branch"),
         "directory_branch" | "directory_branches" => t("创建目录分支", "Created folder branches"),
         "directory.branches.select" => t("切换目录分支", "Switched folder branch"),

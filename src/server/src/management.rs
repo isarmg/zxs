@@ -20,7 +20,11 @@ use std::{
     },
 };
 
+mod discovery;
 mod disk_notes;
+mod foreign_plan;
+mod foreign_preview;
+mod ordinary_conversion;
 mod terminal_backend;
 mod terminal_readmission;
 pub(crate) mod terminal_resume;
@@ -66,8 +70,10 @@ struct Inner {
     disk_observation: Mutex<Option<(std::time::Instant, Vec<crate::DiskSample>)>>,
     disk_notes: Mutex<()>,
     storage_addition: Mutex<()>,
+    ordinary_conversion: Mutex<()>,
     capabilities: Mutex<crate::Capabilities>,
     setup_disks: BTreeMap<String, PathBuf>,
+    discovery_root: crate::storage_directories::DiscoveryRoot,
     setup_configs: BTreeMap<String, PathBuf>,
     allow_development_setup: bool,
     retained_workspace_limits: Option<storage_engine::RetainedWorkspaceLimits>,
@@ -86,6 +92,8 @@ pub struct ManagementOptions {
     /// Immutable host scheduling and bandwidth policy for full integrity jobs.
     pub scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy,
     pub setup_disks: BTreeMap<String, PathBuf>,
+    /// Immutable discovery parent supplied by the systemd unit, never by HTTP.
+    pub discovery_root: crate::storage_directories::DiscoveryRoot,
     pub setup_configs: BTreeMap<String, PathBuf>,
     pub allow_development_setup: bool,
     /// Immutable host policy, never loaded from an HTTP request or persisted to the pool.
@@ -158,6 +166,7 @@ pub fn open_service_with_disks(
         ManagementOptions {
             scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy::default(),
             setup_disks,
+            discovery_root: Default::default(),
             setup_configs: BTreeMap::new(),
             allow_development_setup,
             retained_workspace_limits: None,
@@ -172,6 +181,7 @@ pub fn open_service_with_options(
     let ManagementOptions {
         scrub_policy,
         setup_disks,
+        discovery_root,
         setup_configs,
         allow_development_setup,
         retained_workspace_limits,
@@ -218,8 +228,10 @@ pub fn open_service_with_options(
             disk_observation: Mutex::new(None),
             disk_notes: Mutex::new(()),
             storage_addition: Mutex::new(()),
+            ordinary_conversion: Mutex::new(()),
             capabilities: Mutex::new(crate::Capabilities::unavailable()),
             setup_disks,
+            discovery_root,
             setup_configs,
             allow_development_setup,
             retained_workspace_limits,
@@ -492,6 +504,7 @@ impl Inner {
                 self.management_root.clone(),
                 BTreeMap::new(),
             )?
+            .with_discovery_root(self.discovery_root.clone())
             .with_workspace_limits(self.retained_workspace_limits)?;
             setup.activation_admitted()?;
             if setup.storage_status().state
@@ -1325,6 +1338,68 @@ impl Backend for ManagementBackend {
             .backend()?
             .file_history_source(identity, request, cancellation)
     }
+    fn directory_git_status(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        path: &str,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, ApiError> {
+        self.inner
+            .backend()?
+            .directory_git_status(identity, repository, path, cancellation)
+    }
+    fn initialize_directory_git(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: storage_contract::directory_git::DirectoryGitInitializeBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner
+            .backend()?
+            .initialize_directory_git(identity, repository, request)
+    }
+    fn stage_directory_git_child(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: storage_contract::directory_git::DirectoryGitStageChildBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner
+            .backend()?
+            .stage_directory_git_child(identity, repository, request)
+    }
+    fn stage_directory_git_owned(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner
+            .backend()?
+            .stage_directory_git_owned(identity, repository, request)
+    }
+    fn directory_staging(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        branch: &str,
+    ) -> Result<storage_contract::directory_staging::DirectoryStagingStatus, ApiError> {
+        self.inner
+            .backend()?
+            .directory_staging(identity, repository, branch)
+    }
+    fn commit_directory_changes(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        branch: &str,
+        request: storage_contract::directory_staging::DirectoryCommitBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner
+            .backend()?
+            .commit_directory_changes(identity, repository, branch, request)
+    }
     fn directory_history(
         &self,
         identity: &crate::auth::Identity,
@@ -1372,6 +1447,7 @@ impl Backend for ManagementBackend {
                     .registered_disks()
                     .map(|disk| crate::TopologySlot {
                         slot_id: disk.slot_id.to_owned(),
+                        name: None,
                         disk_id: disk.disk_id.to_owned(),
                         level: disk.level,
                         upstream_slot_id: disk.upstream_slot_id.map(str::to_owned),
@@ -1566,7 +1642,13 @@ impl Backend for ManagementBackend {
         }
         let _directory_lifecycle = if matches!(
             action,
-            "storage_directories" | "inspect_storage_directory" | "set_discovery_root"
+            "storage_directories"
+                | "discovered_disks"
+                | "inspect_storage_directory"
+                | "foreign_disk_preview"
+                | "foreign_plan_preview"
+                | "foreign_plan_save"
+                | "foreign_plan_revalidate"
         ) {
             let gate = self.inner.storage_addition.try_lock().map_err(|_| {
                 ApiError::conflict(
@@ -1610,7 +1692,13 @@ impl Backend for ManagementBackend {
                     | "recovery_commit"
             ) || (matches!(
                 action,
-                "storage_directories" | "inspect_storage_directory" | "set_discovery_root"
+                "storage_directories"
+                    | "discovered_disks"
+                    | "inspect_storage_directory"
+                    | "foreign_disk_preview"
+                    | "foreign_plan_preview"
+                    | "foreign_plan_save"
+                    | "foreign_plan_revalidate"
             ) && crate::lock(&self.inner.state).backend.terminal().is_none()))
         {
             return Err(ApiError::conflict(
@@ -1634,6 +1722,7 @@ impl Backend for ManagementBackend {
                 BTreeMap::new()
             },
         )?
+        .with_discovery_root(self.inner.discovery_root.clone())
         .with_presets(self.inner.setup_configs.clone())
         .with_workspace_limits(self.inner.retained_workspace_limits)?;
         if self.inner.allow_development_setup {
@@ -1682,11 +1771,6 @@ impl Backend for ManagementBackend {
                 action,
                 input,
                 identity.as_ref().ok_or_else(ApiError::unauthorized)?,
-                || {
-                    setup
-                        .discovery_root()
-                        .map(|settings| settings.discovery_root)
-                },
             );
         }
         if matches!(
@@ -1724,57 +1808,51 @@ impl Backend for ManagementBackend {
         }
         if action == "discovery_root" {
             identity.as_ref().ok_or_else(ApiError::unauthorized)?;
-            return Ok(json_codec::to_value(setup.discovery_root()?)
+            return Ok(json_codec::to_value(setup.discovery_root())
                 .expect("invariant: discovery settings serialize"));
         }
-        if action == "set_discovery_root" {
-            let request: storage_contract::storage_directories::SetDiscoveryRootRequest =
-                json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-            if let Some(terminal) = self
-                .inner
-                .terminal(identity.as_ref().ok_or_else(ApiError::unauthorized)?)?
-            {
-                return setup
-                    .set_terminal_discovery_root(
-                        identity.as_ref().ok_or_else(ApiError::unauthorized)?,
-                        request,
-                        &terminal,
-                        |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
-                    )
-                    .map(|value| {
-                        json_codec::to_value(value)
-                            .expect("invariant: discovery settings serialize")
-                    });
-            }
-            let backend = crate::lock(&self.inner.state)
-                .backend
-                .active_engine()
-                .cloned();
-            if let Some(backend) = backend {
-                let (_, stopped) = backend.addition_directory_scope(
-                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
-                )?;
-                return setup
-                    .set_active_discovery_root(
-                        identity.as_ref().ok_or_else(ApiError::unauthorized)?,
-                        request,
-                        &stopped,
-                        |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
-                    )
-                    .map(|value| {
-                        json_codec::to_value(value)
-                            .expect("invariant: discovery settings serialize")
-                    });
-            }
-            return setup
-                .set_discovery_root(
-                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
-                    request,
-                    |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
-                )
-                .map(|value| {
-                    json_codec::to_value(value).expect("invariant: discovery settings serialize")
-                });
+        if matches!(
+            action,
+            "ordinary_conversion_preview"
+                | "ordinary_conversion_commit"
+                | "ordinary_conversion_resume"
+                | "ordinary_conversion_stop"
+                | "ordinary_conversion_status"
+        ) {
+            return self.ordinary_conversion(
+                action,
+                input,
+                identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+            );
+        }
+        if matches!(
+            action,
+            "foreign_plan_preview"
+                | "foreign_plan_save"
+                | "foreign_plan_status"
+                | "foreign_plan_revalidate"
+                | "foreign_plan_execute"
+        ) {
+            return self.foreign_plan_operation(
+                action,
+                input,
+                identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+            );
+        }
+        if action == "foreign_disk_preview" {
+            let request = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            let result = self.foreign_disk_preview(
+                identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                request,
+            )?;
+            return Ok(
+                json_codec::to_value(result).expect("invariant: foreign disk preview serializes")
+            );
+        }
+        if action == "discovered_disks" {
+            let result =
+                self.discovered_disks(identity.as_ref().ok_or_else(ApiError::unauthorized)?)?;
+            return Ok(json_codec::to_value(result).expect("invariant: disk discovery serializes"));
         }
         if action == "storage_directories" {
             identity.as_ref().ok_or_else(ApiError::unauthorized)?;
@@ -1795,12 +1873,11 @@ impl Backend for ManagementBackend {
                     .iter()
                     .map(|disk| disk.root.clone())
                     .collect();
-                return crate::storage_directories::browse_fresh_within(
-                    &setup.discovery_root()?.discovery_root,
+                return crate::storage_directories::discover_supported(
+                    &setup.discovery_root().discovery_root,
                     &request.path,
                     &stopped,
                 )
-                .map_err(ApiError::from)
                 .map(|value| {
                     json_codec::to_value(value).expect("invariant: directory listing serializes")
                 });
@@ -1813,21 +1890,20 @@ impl Backend for ManagementBackend {
                 let (_, stopped) = backend.addition_directory_scope(
                     identity.as_ref().ok_or_else(ApiError::unauthorized)?,
                 )?;
-                return crate::storage_directories::browse_fresh_within(
-                    &setup.discovery_root()?.discovery_root,
+                return crate::storage_directories::discover_supported(
+                    &setup.discovery_root().discovery_root,
                     &request.path,
                     &stopped,
                 )
-                .map_err(ApiError::from)
                 .map(|value| {
                     json_codec::to_value(value).expect("invariant: directory listing serializes")
                 });
             }
-            return crate::storage_directories::browse_within(
-                &setup.discovery_root()?.discovery_root,
+            return crate::storage_directories::discover_supported(
+                &setup.discovery_root().discovery_root,
                 &request.path,
+                &[],
             )
-            .map_err(ApiError::from)
             .map(|value| {
                 json_codec::to_value(value).expect("invariant: directory listing serializes")
             });
@@ -1851,7 +1927,7 @@ impl Backend for ManagementBackend {
                     .map(|disk| disk.root.clone())
                     .collect();
                 return crate::storage_directories::inspect_fresh_within(
-                    &setup.discovery_root()?.discovery_root,
+                    &setup.discovery_root().discovery_root,
                     &request,
                     &excluded,
                     &stopped,
@@ -1877,7 +1953,7 @@ impl Backend for ManagementBackend {
                         .map(|disk| disk.root),
                 );
                 return crate::storage_directories::inspect_fresh_within(
-                    &setup.discovery_root()?.discovery_root,
+                    &setup.discovery_root().discovery_root,
                     &request,
                     &excluded,
                     &stopped,
@@ -1888,7 +1964,7 @@ impl Backend for ManagementBackend {
                 });
             }
             return crate::storage_directories::inspect_within(
-                &setup.discovery_root()?.discovery_root,
+                &setup.discovery_root().discovery_root,
                 &request,
                 &excluded,
             )
@@ -2257,6 +2333,10 @@ impl Backend for ManagementBackend {
 #[cfg(test)]
 #[path = "../../web/src/setup/response.rs"]
 mod web_setup_response;
+
+#[cfg(test)]
+#[path = "../../../test/server/support/foreign_disk_fixture.rs"]
+mod foreign_disk_fixture;
 
 #[cfg(test)]
 #[path = "../../web/src/admin/storage/response.rs"]

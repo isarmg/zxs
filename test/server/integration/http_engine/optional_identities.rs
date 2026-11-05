@@ -1598,7 +1598,8 @@ async fn typed_file_manager_disks_keep_projection_without_creating_roots() {
     assert_eq!(disks.as_object().unwrap().len(), 1);
     assert_eq!(disks["disks"].as_array().unwrap().len(), 1);
     let disk = &disks["disks"][0];
-    assert_eq!(disk.as_object().unwrap().len(), 8);
+    assert_eq!(disk.as_object().unwrap().len(), 9);
+    assert_eq!(disk["name"], "disk");
     assert_eq!(disk["slot_id"], "P01");
     assert_eq!(disk["level"], 1);
     assert_eq!(disk["online"], true);
@@ -1674,8 +1675,8 @@ async fn typed_default_directory_http_preserves_empty_and_initialized_views() {
         &app,
         &token,
         "POST",
-        &format!("/api/repositories/{repository}/directory-scopes"),
-        Some(json!({"path":"","operation_id":storage_contract::OperationId::generate().unwrap()})),
+        &format!("/api/repositories/{repository}/directory-git/initialize"),
+        Some(json!({"path":"","expected_namespace_head":branch["head_commit_id"],"operation_id":storage_contract::OperationId::generate().unwrap()})),
     )
     .await;
     let after = success(&app, &token, "GET", &uri, None).await;
@@ -1931,8 +1932,8 @@ async fn typed_directory_rename_preserves_public_receipt_and_name_error_priority
         &app,
         &token,
         "POST",
-        &format!("/api/repositories/{repo}/directory-scopes"),
-        Some(json!({"path":"","operation_id":storage_contract::OperationId::generate().unwrap()})),
+        &format!("/api/repositories/{repo}/directory-git/initialize"),
+        Some(json!({"path":"","expected_namespace_head":branch["head_commit_id"],"operation_id":storage_contract::OperationId::generate().unwrap()})),
     )
     .await;
     let directory = initialized["result"]["directory_branch_id"]
@@ -2257,9 +2258,21 @@ async fn typed_repository_creation_preserves_long_names_original_binding_and_rou
         let mut changed = body.clone();
         changed["target_copies"] = json!(copies);
         assert_eq!(
-            send(&app, Some(&token), "POST", uri, Some(changed)).await.1["error"]["code"],
-            code
+            send(&app, Some(&token), "POST", uri, Some(changed.clone()))
+                .await
+                .1["error"]["code"],
+            "IDEMPOTENCY_KEY_REUSED"
         );
+        if copies != 2 {
+            changed["operation_id"] = storage_contract::OperationId::generate()
+                .unwrap()
+                .to_string()
+                .into();
+            assert_eq!(
+                send(&app, Some(&token), "POST", uri, Some(changed)).await.1["error"]["code"],
+                code
+            );
+        }
     }
     let mut invalid = body.clone();
     invalid["operation_id"] = "bad".into();

@@ -39,6 +39,7 @@ fn navigation_resets_only_location_owned_state() {
     ] {
         let selected = entry(json!({"entry_id":"selected","path":"old/file.txt"}));
         let disks = vec![Disk {
+            name: "disk-directory".into(),
             slot_id: "P01".into(),
             online: true,
             writable: true,
@@ -590,7 +591,7 @@ fn a_removed_entry_discards_metadata() {
 
 #[test]
 fn disk_list_accepts_current_contract_and_rejects_legacy_or_partial_records() {
-    let disk = json!({"slot_id":"P01", "level":2, "online":true, "writable":false, "available_bytes":"18446744073709551615", "used_bytes":"0", "simulation":true, "observation_failure":null});
+    let disk = json!({"name":"primary-directory","slot_id":"P01", "level":2, "online":true, "writable":false, "available_bytes":"18446744073709551615", "used_bytes":"0", "simulation":true, "observation_failure":null});
     let parsed = parse_disks(json!({"disks":[disk.clone()]})).unwrap();
     assert_eq!(parsed[0].slot_id, "P01");
     assert_eq!(parsed[0].available_bytes, Some(u64::MAX));
@@ -609,8 +610,8 @@ fn disk_list_accepts_current_contract_and_rejects_legacy_or_partial_records() {
 #[test]
 fn disk_list_moves_slot_buffers_from_the_owned_response() {
     let response = json!({"disks":[
-        {"slot_id":"P01", "level":1, "online":true, "writable":true, "available_bytes":"0", "used_bytes":"9", "simulation":true, "observation_failure":null},
-        {"slot_id":"B01", "level":2, "online":false, "writable":false, "available_bytes":null, "used_bytes":"9", "simulation":true, "observation_failure":{"stage":"seal","code":"IO_ERROR"}}
+        {"name":"primary-directory","slot_id":"P01", "level":1, "online":true, "writable":true, "available_bytes":"0", "used_bytes":"9", "simulation":true, "observation_failure":null},
+        {"name":"backup-directory","slot_id":"B01", "level":2, "online":false, "writable":false, "available_bytes":null, "used_bytes":"9", "simulation":true, "observation_failure":{"stage":"seal","code":"IO_ERROR"}}
     ]});
     let buffers = response["disks"]
         .as_array()
@@ -687,7 +688,7 @@ fn targeted_refresh_preserves_details_outside_the_loaded_page() {
 
 #[test]
 fn disk_list_offline_unknown_capacity_and_zero_are_distinct_current_records() {
-    let offline = json!({"slot_id":"P01", "level":1, "online":false, "writable":true, "available_bytes":null, "used_bytes":"9", "simulation":true, "observation_failure":{"stage":"seal","code":"IO_ERROR"}});
+    let offline = json!({"name":"primary-directory","slot_id":"P01", "level":1, "online":false, "writable":true, "available_bytes":null, "used_bytes":"9", "simulation":true, "observation_failure":{"stage":"seal","code":"IO_ERROR"}});
     let parsed = parse_disks(json!({"disks":[offline.clone()]})).unwrap();
     assert!(!parsed[0].online);
     assert!(parsed[0].writable);
@@ -707,6 +708,7 @@ fn disk_list_offline_unknown_capacity_and_zero_are_distinct_current_records() {
         Some(0)
     );
     for field in [
+        "name",
         "slot_id",
         "level",
         "online",
@@ -766,7 +768,9 @@ fn server_offline_disk_vector_preserves_known_zero_and_unavailable_rows() {
 #[test]
 fn directory_preview_follows_only_descendants_and_never_crosses_disks() {
     let preview = DirectoryPreview {
-        branch: branch(json!({"directory_branch_id":"draft","path":"Café"})),
+        source: DirectoryPreviewSource::Branch(branch(
+            json!({"directory_branch_id":"draft","path":"Café"}),
+        )),
         path: "Files/Café".into(),
     };
     let mut model = Model {
@@ -786,4 +790,19 @@ fn directory_preview_follows_only_descendants_and_never_crosses_disks() {
     model.directory_preview = Some(preview);
     model.navigate(Navigation::Disk("P02".into()));
     assert!(model.directory_preview.is_none());
+}
+
+#[test]
+fn disk_basename_is_distinct_from_slot_identity_and_must_be_portable() {
+    let row = json!({"name":"照片", "slot_id":"P01", "level":1, "online":true,
+        "writable":true,"available_bytes":"0","used_bytes":"0","simulation":true,
+        "observation_failure":null});
+    let disks = parse_disks(json!({"disks":[row.clone()]})).unwrap();
+    assert_eq!(disks[0].name, "照片");
+    assert_eq!(disks[0].slot_id, "P01");
+    for name in ["", "a/b", "CON", "cafe\u{301}"] {
+        let mut invalid = row.clone();
+        invalid["name"] = name.into();
+        assert!(parse_disks(json!({"disks":[invalid]})).is_err());
+    }
 }

@@ -14,11 +14,14 @@ pub(crate) use history::{
 
 pub(crate) use browse::{
     change_page, edit_search, go_directory, go_root, load_disks, load_entries, open_disk,
-    preview_directory_branch, return_to_default, return_to_default_file, search, select_entry,
+    preview_directory_branch, preview_directory_snapshot, return_to_default,
+    return_to_default_file, search, select_entry,
 };
 pub(crate) use mutation::{
-    create_branch, directory_branch, namespace, rename_directory_branch, rename_file_branch,
-    select_branch, select_default_branch, set_default_file_branch, update_node_note, update_note,
+    commit_directory, create_branch, directory_branch, initialize_directory_git, namespace,
+    rename_directory_branch, rename_file_branch, select_branch, select_default_branch,
+    set_default_file_branch, stage_directory_child, stage_directory_owned, update_node_note,
+    update_note,
 };
 pub(crate) use operation::{poll, record_operation, record_receipt};
 
@@ -56,6 +59,11 @@ pub(crate) fn default_write_allowed(state: &State) -> bool {
     state.session_active()
         && state.management.storage.writable()
         && (state.files.writable || state.files.directory_preview.is_some())
+        && state
+            .files
+            .directory_preview
+            .as_ref()
+            .is_none_or(|preview| preview.branch().is_some())
         && !state.files.loading
         && !pending(state)
 }

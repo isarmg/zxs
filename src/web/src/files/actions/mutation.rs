@@ -61,7 +61,11 @@ pub(crate) fn directory_branch(
     path: String,
     name: String,
 ) -> Option<String> {
-    if !state.with_untracked(write_allowed) {
+    if !state.with_untracked(|state| {
+        write_allowed(state)
+            && state.files.directory_branches_supported
+            && state.files.directory == path
+    }) {
         return None;
     }
     let operation_id = crate::ui::file_operation_id(state)?;
@@ -101,16 +105,20 @@ pub(crate) fn directory_branch(
 
 pub(crate) fn select_default_branch(state: RwSignal<State>, branch_id: String) {
     let request = state.with_untracked(|s| {
-        if !super::default_write_allowed(s) || !s.files.loaded {
+        if !super::default_write_allowed(s)
+            || !s.files.loaded
+            || !s.files.directory_branches_supported
+        {
             return None;
         }
         let preview = s.files.directory_preview.as_ref()?;
-        if !preview.at_directory(&s.files.directory) || preview.branch.id() != branch_id {
+        let branch = preview.branch()?;
+        if !preview.at_directory(&s.files.directory) || branch.id() != branch_id {
             return None;
         }
         Some((
             s.files.repository_id.clone(),
-            preview.branch.head_tree_id().to_owned(),
+            branch.head_tree_id().to_owned(),
             s.files.namespace_head.clone(),
         ))
     });
@@ -165,13 +173,96 @@ fn publish_default(
     });
 }
 
+pub(crate) fn initialize_directory_git(
+    state: RwSignal<State>,
+    repository: String,
+    path: String,
+    expected_namespace_head: String,
+) -> Option<String> {
+    record_mutation(
+        state,
+        "POST",
+        format!(
+            "/api/repositories/{}/directory-git/initialize",
+            api::segment(&repository)
+        ),
+        json!({"path":path,"expected_namespace_head":expected_namespace_head}),
+    )
+}
+pub(crate) fn stage_directory_child(
+    state: RwSignal<State>,
+    repository: String,
+    directory: String,
+    branch: String,
+    expected_index_generation: u64,
+    child_directory: String,
+    expected_child_head: String,
+) -> Option<String> {
+    record_mutation(
+        state,
+        "POST",
+        format!(
+            "/api/repositories/{}/directory-git/children/stage",
+            api::segment(&repository)
+        ),
+        json!({"directory_id":directory,"directory_branch_id":branch,"expected_index_generation":expected_index_generation.to_string(),
+            "child_directory_id":child_directory,"expected_child_head_tree_id":expected_child_head}),
+    )
+}
+
+pub(crate) fn stage_directory_owned(
+    state: RwSignal<State>,
+    repository: String,
+    directory: String,
+    branch: String,
+    tree: String,
+    expected_index_generation: u64,
+) -> Option<String> {
+    record_mutation(
+        state,
+        "POST",
+        format!(
+            "/api/repositories/{}/directory-git/stage",
+            api::segment(&repository)
+        ),
+        json!({"directory_id":directory,"directory_branch_id":branch,"expected_tree_id":tree,"expected_index_generation":expected_index_generation.to_string()}),
+    )
+}
+
+pub(crate) fn commit_directory(
+    state: RwSignal<State>,
+    repository: String,
+    branch: String,
+    expected_tree: String,
+    expected_index_generation: u64,
+    message: String,
+) -> Option<String> {
+    if message.trim().is_empty() || message.len() > storage_contract::MAX_NOTE_BYTES {
+        return None;
+    }
+    record_mutation(
+        state,
+        "POST",
+        format!(
+            "/api/repositories/{}/directory-branches/{}/commits",
+            api::segment(&repository),
+            api::segment(&branch)
+        ),
+        json!({"expected_tree_id":expected_tree,"expected_index_generation":expected_index_generation.to_string(),"message":message}),
+    )
+}
+
 pub(crate) fn rename_directory_branch(
     state: RwSignal<State>,
     repository: String,
     branch_id: String,
     name: String,
 ) -> Option<String> {
-    if repository.is_empty()
+    if !state.with_untracked(|state| {
+        write_allowed(state)
+            && state.files.directory_branches_supported
+            && state.files.repository_id == repository
+    }) || repository.is_empty()
         || branch_id.is_empty()
         || name.len() > storage_contract::MAX_NOTE_BYTES
     {

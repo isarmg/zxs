@@ -27,7 +27,15 @@ fn fixture() -> Fixture {
     // Exercise the product's actual default, not an external archive workaround.
     let management = data.join("management");
     drop(AuthStore::initialize_management(&management, "admin", "addition-test-password").unwrap());
-    let (backend, mut auth) = open_service(&data, &management).unwrap();
+    let (backend, mut auth) = open_service_with_options(
+        &data,
+        &management,
+        ManagementOptions {
+            discovery_root: discovery.to_str().unwrap().parse().unwrap(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let login = auth.login("admin", "addition-test-password").unwrap();
     let identity = auth.authenticate(&login.token).unwrap();
     let engine = Arc::new(EngineBackend::new(engine));
@@ -48,11 +56,7 @@ fn fixture() -> Fixture {
 fn selection(f: &Fixture, name: &str) -> CandidateSelection {
     let path = f.discovery.join(name);
     fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-    let listing = crate::storage_directories::browse_within(
-        f.discovery.to_str().unwrap(),
-        path.to_str().unwrap(),
-    )
-    .unwrap();
+    let listing = crate::storage_directories::browse(path.to_str().unwrap()).unwrap();
     crate::storage_directories::inspect_within(
         f.discovery.to_str().unwrap(),
         &InspectRequest {
@@ -64,9 +68,7 @@ fn selection(f: &Fixture, name: &str) -> CandidateSelection {
     .unwrap()
 }
 fn command(f: &Fixture, action: &'static str, value: Value) -> Result<Value, ApiError> {
-    f.backend.storage_addition(action, value, &f.identity, || {
-        Ok(f.discovery.to_str().unwrap().into())
-    })
+    f.backend.storage_addition(action, value, &f.identity)
 }
 fn request(selection: CandidateSelection, slot: &str, metadata: bool) -> AdditionRequest {
     AdditionRequest {
@@ -82,6 +84,89 @@ fn request(selection: CandidateSelection, slot: &str, metadata: bool) -> Additio
 }
 fn preview(f: &Fixture, request: AdditionRequest) -> AdditionPreview {
     json_codec::from_value(command(f, "disk_add_preview", json!(request)).unwrap()).unwrap()
+}
+
+#[test]
+fn typed_addition_uses_the_same_durable_receipt_as_wire_and_exact_resume() {
+    let f = fixture();
+    let request = request(selection(&f, "typed-new-root"), "N01", true);
+    let preview = f
+        .backend
+        .preview_storage_addition(&f.identity, request)
+        .unwrap();
+    let commit = AdditionCommit { preview };
+    let result = f
+        .backend
+        .commit_storage_addition(&f.identity, commit.clone())
+        .unwrap();
+    assert_eq!(result.state, AdditionState::Completed);
+    assert_eq!(
+        f.backend
+            .resume_storage_addition(
+                &f.identity,
+                AdditionResume {
+                    operation_id: result.operation_id,
+                    continuation: AdditionContinuation::Add,
+                },
+            )
+            .unwrap(),
+        result
+    );
+    assert_eq!(
+        command(&f, "disk_add_commit", json!(commit)).unwrap(),
+        json!(result)
+    );
+    assert_eq!(
+        f.backend
+            .inner
+            .addition_backend()
+            .unwrap()
+            .addition_configuration(&f.identity)
+            .unwrap()
+            .disks
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn typed_addition_keeps_host_scope_gate_and_current_session_checks() {
+    let f = fixture();
+    let selected = selection(&f, "typed-selected");
+    let request = request(selected, "N01", true);
+    let gate = crate::lock(&f.backend.inner.storage_addition);
+    assert_eq!(
+        f.backend
+            .preview_storage_addition(&f.identity, request.clone())
+            .unwrap_err()
+            .code,
+        ErrorCode::StorageRetryRunning
+    );
+    drop(gate);
+    let mut outside = request.clone();
+    outside.additions[0].selection.root_path = f._root.path().join("outside").display().to_string();
+    assert!(
+        f.backend
+            .preview_storage_addition(&f.identity, outside)
+            .is_err()
+    );
+    assert!(!f._root.path().join("outside").exists());
+    let preview = f
+        .backend
+        .preview_storage_addition(&f.identity, request)
+        .unwrap();
+    crate::lock(&f.auth).logout(&f.token).unwrap();
+    assert!(
+        f.backend
+            .commit_storage_addition(&f.identity, AdditionCommit { preview })
+            .is_err()
+    );
+    assert!(
+        fs::read_dir(f.discovery.join("typed-selected"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[test]

@@ -12,102 +12,78 @@ pub(super) const DIRECTORY_REPOSITORY: &str = "browser-directory-history";
 pub(super) const DIRECTORY_PATH: &str = "nested-history";
 pub(super) const DIRECTORY_PREVIEW: &str = "readonly-history-preview";
 
-/// Use the same explicit authority publication as production setup. A pool
-/// credential snapshot alone is deliberately insufficient for daemon startup.
+/// Build a declared three-tier test pool and publish a real management authority.
+/// First activation now creates independent roots, so it must not be repurposed
+/// or have its durable configuration rewritten to manufacture this graph.
 pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &str) -> Result<()> {
-    use super::{fs, wait_for};
+    use super::{Write, fs, wait_for, with_cleanup};
     use std::{
-        collections::BTreeMap,
-        os::unix::fs::DirBuilderExt,
+        os::unix::fs::{DirBuilderExt, OpenOptionsExt},
         sync::{Arc, Mutex},
     };
     use storage_server::Backend;
 
     let root = temporary.path();
-    let pool = root.join("pool");
-    let management = pool.join("management");
-    fs::DirBuilder::new().mode(0o700).create(&pool)?;
-    fs::DirBuilder::new().mode(0o700).create(&management)?;
-    let discovery = root.join("disks");
-    fs::DirBuilder::new().mode(0o700).create(&discovery)?;
-    let mut disks = BTreeMap::new();
-    for slot in ["P01", "B01", "C01"] {
-        let path = discovery.join(slot);
-        fs::DirBuilder::new().mode(0o700).create(&path)?;
-        disks.insert(slot.to_owned(), path);
+    let authority = root.join("authority-fixture");
+    let authority_management = authority.join("management");
+    for path in [&authority, &authority_management] {
+        fs::DirBuilder::new().mode(0o700).create(path)?;
     }
-    let (backend, auth) = storage_server::management::open_service_with_options(
-        &pool,
-        &management,
-        storage_server::management::ManagementOptions {
-            allow_development_setup: true,
-            ..Default::default()
-        },
-    )?;
+    // Account creation remains the real, protected production transition. The
+    // account-only source belongs to this TempDir and is never a supplied pool.
+    let (backend, auth) =
+        storage_server::management::open_service(&authority, &authority_management)?;
     let auth = Arc::new(Mutex::new(auth));
     backend.start_management(auth.clone());
-    wait_for("fixture initial storage discovery", || {
-        if !backend.management_status().recovering() {
+    with_cleanup(
+        || {
+            wait_for("fixture account storage observation", || {
+                if !backend.management_status().recovering() {
+                    Ok(())
+                } else {
+                    Err("fixture account discovery still running".into())
+                }
+            })?;
+            backend.setup_operation(
+                "initialize",
+                json_codec::json!({"username":PRINCIPAL,"password":password}),
+                None,
+                None,
+            )?;
             Ok(())
-        } else {
-            Err("fixture discovery still running".into())
-        }
-    })?;
-    backend.setup_operation(
-        "initialize",
-        json_codec::json!({"username":PRINCIPAL,"password":password}),
-        None,
-        None,
+        },
+        || Ok(backend.drain_management()?),
     )?;
-    let identity = {
-        let mut auth = auth.lock().unwrap();
-        let login = auth.login(PRINCIPAL, password)?;
-        auth.authenticate(&login.token)?
-    };
-    backend.setup_operation(
-        "set_discovery_root",
-        json_codec::json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
-        None,
-        Some(&identity),
-    )?;
-    let mut selections = Vec::new();
-    // Preserve the declared primary/backup order; BTreeMap's sort is not topology.
-    for slot in ["P01", "B01", "C01"] {
-        let root_path = disks[slot].to_str().ok_or("fixture root is not UTF-8")?;
-        let listing = storage_server::storage_directories::browse_within(
-            discovery.to_str().ok_or("non-UTF8 discovery root")?,
-            root_path,
-        )?;
-        selections.push(storage_server::storage_directories::inspect_within(
-            discovery.to_str().ok_or("non-UTF8 discovery root")?,
-            &storage_engine::storage_directories::InspectRequest {
-                mount_path: listing.mount_path,
-                root_path: root_path.into(),
-            },
-            &[pool.clone(), management.clone()],
-        )?);
-    }
-    backend.setup_operation(
-        "activate",
-        json_codec::json!({"selections":selections,"mode":"development"}),
-        None,
-        Some(&identity),
-    )?;
-    wait_for("fixture explicit management initialization", || {
-        let status = backend.management_status();
-        if status.state() == storage_server::StorageState::Ready && !status.recovering() {
-            Ok(())
-        } else {
-            Err("fixture management not ready".into())
-        }
-    })?;
+    let snapshot = auth.lock().unwrap().snapshot()?;
     drop(backend);
     drop(auth);
-    // Background observation can briefly retain the engine after its public
-    // handle is dropped. Reopening verifies durable state and lock release.
-    drop(wait_for("fixture initialization lock release", || {
-        Ok(Engine::open(&pool)?)
-    })?);
+
+    let pool = root.join("pool");
+    let discovery = root.join("disks");
+    fs::DirBuilder::new().mode(0o700).create(&discovery)?;
+    let paths = ["P01", "B01", "C01"].map(|slot| discovery.join(slot));
+    let mut engine = Engine::initialize(&pool, storage_engine::Config::development(paths)?)?;
+    let management = pool.join("management");
+    fs::DirBuilder::new().mode(0o700).create(&management)?;
+    let mut credentials = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(management.join("management-auth.json"))?;
+    credentials.write_all(&fs::read(
+        authority_management.join("management-auth.json"),
+    )?)?;
+    credentials.sync_all()?;
+    fs::File::open(&management)?.sync_all()?;
+    storage_server::management::claim_authority(&pool)?;
+    engine.persist_auth_state(
+        snapshot,
+        PRINCIPAL,
+        storage_engine::OperationId::generate()?,
+    )?;
+    drop(engine);
+    // All topology and credential replica evidence must survive a real reopen.
+    drop(Engine::open(&pool)?);
     Ok(())
 }
 
@@ -124,15 +100,11 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         PRINCIPAL,
         storage_engine::OperationId::generate().unwrap(),
     )?;
-    // Real directory history must exist before the content writes, so the
-    // browser can verify actual parent connectors rather than a lone snapshot.
+    // Explicit directory commits must exist before and after the content writes,
+    // so the browser verifies user-history edges, never internal save checkpoints.
     // This is an explicit mutation of this private, test-owned pool only.
-    engine.initialize_directory_scope(
-        &repository.repository_id,
-        None,
-        PRINCIPAL,
-        storage_engine::OperationId::generate().unwrap(),
-    )?;
+    initialize_directory_fixture(&mut engine, &repository, "")?;
+    commit_directory_fixture(&mut engine, &repository.repository_id, "")?;
     for payload in PAYLOADS {
         let workspace = engine.create_workspace(&repository.main_branch_id, PRINCIPAL)?;
         engine.stage_bytes(&workspace.workspace_id, FILE, payload.as_bytes())?;
@@ -145,6 +117,7 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
             message: "Browser metadata fixture".into(),
             request_digest: None,
         })?;
+        commit_directory_fixture(&mut engine, &repository.repository_id, "")?;
     }
     let entries = engine.list_tree(&repository.main_branch_id)?;
     let [entry] = entries.as_slice() else {
@@ -162,6 +135,7 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
     )?;
     seed_naming_scope(&mut engine)?;
     seed_directory_history(&mut engine)?;
+    super::directory_git::fixture::seed(&mut engine)?;
     // Reopen from disk before serving: an in-memory-only fixture is insufficient.
     drop(engine);
     let engine = Engine::open(&pool)?;
@@ -227,14 +201,11 @@ fn seed_directory_history(engine: &mut Engine) -> Result<()> {
         .parent()
         .expect("invariant: the history fixture file is nested")
         .into();
-    engine.initialize_directory_scope(
-        &repository.repository_id,
-        Some(&directory),
-        PRINCIPAL,
-        storage_engine::OperationId::generate()?,
-    )?;
+    initialize_directory_fixture(engine, &repository, DIRECTORY_PATH)?;
+    commit_directory_fixture(engine, &repository.repository_id, DIRECTORY_PATH)?;
     for payload in PAYLOADS {
         write_directory_history_version(engine, &repository.main_branch_id, &path, payload)?;
+        commit_directory_fixture(engine, &repository.repository_id, DIRECTORY_PATH)?;
     }
     // Both child labels reference the same real head; registration invents no
     // extra history node. Capture that child in the parent's real preview.
@@ -245,6 +216,26 @@ fn seed_directory_history(engine: &mut Engine) -> Result<()> {
         PRINCIPAL,
         storage_engine::OperationId::generate()?,
     )?;
+    initialize_directory_fixture(engine, &repository, "")?;
+    let parent = engine.directory_git_status(&repository.repository_id, "")?;
+    let child = engine.directory_git_status(&repository.repository_id, DIRECTORY_PATH)?;
+    engine.stage_directory_git_child(
+        &repository.repository_id,
+        &storage_engine::directory_git::DirectoryGitStageChildBody {
+            directory_id: parent.directory_id,
+            directory_branch_id: parent
+                .directory_branch_id
+                .ok_or("parent fixture is not initialized")?,
+            expected_index_generation: parent.index_generation,
+            child_directory_id: child.directory_id,
+            expected_child_head_tree_id: child
+                .head_tree_id
+                .ok_or("child fixture is not committed")?,
+            operation_id: storage_engine::OperationId::generate()?,
+        },
+        PRINCIPAL,
+    )?;
+    commit_directory_fixture(engine, &repository.repository_id, "")?;
     engine.create_directory_branches(
         &repository.repository_id,
         None,
@@ -252,6 +243,55 @@ fn seed_directory_history(engine: &mut Engine) -> Result<()> {
         PRINCIPAL,
         storage_engine::OperationId::generate()?,
     )?;
+    Ok(())
+}
+
+pub(super) fn initialize_directory_fixture(
+    engine: &mut Engine,
+    repository: &storage_engine::Repository,
+    path: &str,
+) -> Result<()> {
+    let head = engine.state().branches[&repository.main_branch_id]
+        .head_commit_id
+        .clone();
+    engine.initialize_directory_git(
+        &repository.repository_id,
+        &storage_engine::directory_git::DirectoryGitInitializeBody {
+            path: path.into(),
+            expected_namespace_head: head,
+            operation_id: storage_engine::OperationId::generate()?,
+        },
+        PRINCIPAL,
+    )?;
+    Ok(())
+}
+
+pub(super) fn commit_directory_fixture(
+    engine: &mut Engine,
+    repository: &str,
+    path: &str,
+) -> Result<()> {
+    let status = engine.directory_git_status(repository, path)?;
+    if !status.initialized || status.needs_restage {
+        return Err(
+            "directory fixture must explicitly initialize and stage its own repository".into(),
+        );
+    }
+    engine.commit_directory_changes(storage_engine::DirectoryCommitRequest {
+        repository_id: repository,
+        directory_branch_id: status
+            .directory_branch_id
+            .as_deref()
+            .ok_or("initialized fixture lacks branch")?,
+        expected_tree_id: status
+            .working_tree_id
+            .as_deref()
+            .ok_or("initialized fixture lacks working tree")?,
+        expected_index_generation: status.index_generation,
+        message: "Reviewed browser directory fixture",
+        principal: PRINCIPAL,
+        operation_id: storage_engine::OperationId::generate()?,
+    })?;
     Ok(())
 }
 

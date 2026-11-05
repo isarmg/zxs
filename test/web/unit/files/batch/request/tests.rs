@@ -700,7 +700,7 @@ fn registration_poll_reloads_its_branch_records_without_reposting() {
     // Project the captured diagnostic into the outcome-only wire contract.
     receipt.as_object_mut().unwrap().remove("current_health");
             receipt["operation_id"] = "scope-original".into();
-            receipt["operation_kind"] = "directory.scope.initialize".into();
+            receipt["operation_kind"] = "directory.git.initialize".into();
             receipt["result"] = json!({"directory_branch_id":"registered","head_tree_id":"registered-tree"});
             assert_eq!(file_actions::record_receipt(state, "scope-original", receipt), crate::files::model::SaveStatus::Published);
             state.with_untracked(|s| {
@@ -780,7 +780,7 @@ fn scope_receipt() -> Value {
     // Project the captured diagnostic into the outcome-only wire contract.
     receipt.as_object_mut().unwrap().remove("current_health");
     receipt["operation_id"] = "scope-original".into();
-    receipt["operation_kind"] = "directory.scope.initialize".into();
+    receipt["operation_kind"] = "directory.git.initialize".into();
     receipt["result"] =
         json!({"directory_branch_id":"registered","head_tree_id":"registered-tree"});
     receipt
@@ -1304,4 +1304,27 @@ fn batch_nfc_review_requires_a_selected_source_even_when_inputs_are_editable() {
     assert_eq!(body["items"].as_array().unwrap().len(), 1);
     assert_eq!(body["items"][0]["source"]["path"], "browser-smoke.txt");
     assert_eq!(body["items"][0]["target"]["path"], "é");
+}
+
+#[test]
+fn batch_repository_initialization_uses_new_git_contract_and_reviewed_namespace() {
+    let operation = "op_00000000000000000000000000000001";
+    let (endpoint, value) = super::super::actions::initialization_request(
+        "repo_00000000000000000000000000000001",
+        "folder",
+        "commit_00000000000000000000000000000001",
+        operation,
+    );
+    assert!(endpoint.ends_with("/directory-git/initialize"));
+    let request: storage_contract::directory_git::DirectoryGitInitializeBody =
+        json_codec::from_value(value).unwrap();
+    assert_eq!(request.path, "folder");
+    assert_eq!(
+        request.expected_namespace_head,
+        "commit_00000000000000000000000000000001"
+    );
+    assert_eq!(request.operation_id.to_string(), operation);
+    let view = include_str!("../../../../../../src/web/src/files/batch/view.rs");
+    assert!(view.contains("Initialize independent source repository"));
+    assert!(!view.contains("Register source folder branch records"));
 }

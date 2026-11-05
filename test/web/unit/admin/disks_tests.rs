@@ -116,16 +116,16 @@ fn disk_response_decode_preserves_source_and_rejects_wrong_or_missing_success_id
 #[test]
 fn disk_list_projection_keeps_only_current_identities_without_collapsing_duplicate_slots() {
     assert_eq!(
-        read_list(json!({"disks":[{"slot_id":"P01","disk_id":"disk-one","online":true}]})).unwrap(),
-        BTreeMap::from([("P01".into(), "disk-one".into())])
+        read_list(json!({"disks":[{"slot_id":"P01","disk_id":"disk-one","level":1,"upstream_slot_id":null,"online":true}]})).unwrap().nodes["P01"].disk_id,
+        "disk-one"
     );
     assert!(
         read_list(
-            json!({"disks":[{"slot_id":"P01","disk_id":"one"},{"slot_id":"P01","disk_id":"two"}]})
+            json!({"disks":[{"slot_id":"P01","disk_id":"one","level":1,"upstream_slot_id":null,"online":true},{"slot_id":"P01","disk_id":"two","level":1,"upstream_slot_id":null,"online":true}]})
         )
         .is_err()
     );
-    assert!(read_list(json!({"disks":[{"slot_id":"P01","disk_id":""}]})).is_err());
+    assert!(read_list(json!({"disks":[{"slot_id":"P01","disk_id":"","level":1,"upstream_slot_id":null,"online":true}]})).is_err());
 }
 
 #[test]
@@ -588,11 +588,11 @@ fn bulk_details_are_planned_once_and_keep_the_refresh_fence_until_the_last_card(
             state,
             7,
             4,
-            Ok(BTreeMap::from([
-                ("P01".into(), "disk-one".into()),
-                ("B01".into(), "disk-two".into()),
-                ("C01".into(), "disk-three".into()),
-            ])),
+            read_list(json!({"disks":[
+                {"slot_id":"P01","disk_id":"disk-one","level":1,"upstream_slot_id":null,"online":true},
+                {"slot_id":"B01","disk_id":"disk-two","level":2,"upstream_slot_id":"P01","online":true},
+                {"slot_id":"C01","disk_id":"disk-three","level":3,"upstream_slot_id":"B01","online":true}
+            ]})),
         )
         .unwrap();
         assert_eq!(slots, ["B01", "C01", "P01"]);
@@ -684,5 +684,102 @@ fn note_save_invalidates_display_but_not_the_in_flight_device_query_slot() {
                 .clone()),
             "new note"
         );
+    });
+}
+
+fn two_disks() -> Result<tree::Topology, api::Error> {
+    read_list(json!({"disks":[
+        {"slot_id":"P01","disk_id":"disk-one","level":1,"upstream_slot_id":null,"online":true},
+        {"slot_id":"B01","disk_id":"disk-two","level":2,"upstream_slot_id":"P01","online":false}
+    ]}))
+}
+
+#[test]
+fn selecting_an_offline_disk_and_refreshing_preserves_each_note_draft() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(ready_state());
+        complete_list(state, 7, 0, two_disks()).unwrap();
+        assert_eq!(
+            state
+                .with_untracked(|s| s.admin_console.disks.selected.clone())
+                .as_deref(),
+            Some("P01")
+        );
+        edit(state, "P01");
+        change_note(state, "P01", "unsaved primary note".into());
+        select(state, "B01");
+        assert_eq!(
+            state
+                .with_untracked(|s| s.admin_console.disks.selected.clone())
+                .as_deref(),
+            Some("B01")
+        );
+        complete_list(state, 7, 0, two_disks()).unwrap();
+        assert_eq!(
+            state
+                .with_untracked(|s| s.admin_console.disks.selected.clone())
+                .as_deref(),
+            Some("B01")
+        );
+        select(state, "missing");
+        assert_eq!(
+            state
+                .with_untracked(|s| s.admin_console.disks.selected.clone())
+                .as_deref(),
+            Some("B01")
+        );
+        select(state, "P01");
+        assert_eq!(
+            state.with_untracked(|s| s.admin_console.disks.cards["P01"]
+                .draft
+                .as_ref()
+                .unwrap()
+                .request
+                .note
+                .clone()),
+            "unsaved primary note"
+        );
+        state.update(|s| s.authenticated = false);
+        select(state, "B01");
+        assert_eq!(
+            state
+                .with_untracked(|s| s.admin_console.disks.selected.clone())
+                .as_deref(),
+            Some("P01")
+        );
+    });
+}
+
+#[test]
+fn replaced_disk_lists_reconcile_selection_but_stale_or_invalid_reads_do_not() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(ready_state());
+        complete_list(state, 7, 0, two_disks()).unwrap();
+        select(state, "B01");
+        let before = state.with_untracked(|s| Arc::clone(&s.admin_console.disks.topology));
+        assert!(complete_list(state, 6, 0, read_list(json!({"disks":[]}))).is_none());
+        assert!(complete_list(state, 7, 99, read_list(json!({"disks":[]}))).is_none());
+        let invalid_list = read_list(json!({"disks":[{"slot_id":"P01","disk_id":"disk-one"}]}));
+        assert!(complete_list(state, 7, 0, invalid_list).is_none());
+        state.with_untracked(|s| {
+            assert_eq!(s.admin_console.disks.topology, before);
+            assert_eq!(s.admin_console.disks.selected.as_deref(), Some("B01"));
+            assert!(s.admin_console.disks.error.is_some());
+        });
+        complete_list(state,7,0,read_list(json!({"disks":[
+            {"slot_id":"P01","disk_id":"disk-one","level":1,"upstream_slot_id":null,"online":true}
+        ]}))).unwrap();
+        assert_eq!(
+            state
+                .with_untracked(|s| s.admin_console.disks.selected.clone())
+                .as_deref(),
+            Some("P01")
+        );
+        complete_list(state, 7, 0, read_list(json!({"disks":[]}))).unwrap();
+        state.with_untracked(|s| {
+            assert!(s.admin_console.disks.selected.is_none());
+            assert!(s.admin_console.disks.cards.is_empty());
+            assert!(s.admin_console.disks.topology.nodes.is_empty());
+        });
     });
 }

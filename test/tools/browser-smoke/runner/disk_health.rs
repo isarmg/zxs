@@ -13,10 +13,11 @@ fn check(browser: &Browser, label: &str, script: &str) -> Result<()> {
 }
 
 fn refresh_card(browser: &Browser, slot: &str) -> Result<()> {
+    disk_tree::select(browser, slot)?;
     browser.click(&browser.element(
         "xpath",
         &format!(
-            "//section[contains(@class,'zxs-disk-management-card')][@data-slot='{slot}']//button[normalize-space(.)='Refresh disk information' or normalize-space(.)='刷新硬盘信息']"
+            "//section[contains(@class,'zxs-disk-management-card')][@data-slot='{slot}']//button[not(@disabled) and (normalize-space(.)='Refresh disk information' or normalize-space(.)='刷新硬盘信息')]"
         ),
     )?)
 }
@@ -55,14 +56,15 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         || {
             browser.click(&browser.button("Files", "文件")?)?;
             browser.click(&browser.button("Administration", "系统管理")?)?;
+            disk_tree::select(browser, "P01")?;
             check(
                 browser,
                 "per-directory SMART, multiple-device and denied reports",
                 r#"
                 const card=slot=>document.querySelector('.zxs-disk-management-card[data-slot="'+slot+'"]');
-                const one=card('P01'),many=card('B01'),denied=card('C01');
+                const one=card('P01');
                 const read=slot=>window.__zxsDiskHealth.reads.some(value=>value.slot===slot);
-                if(!['P01','B01','C01'].every(read)||!one||!many||!denied)return false;
+                if(!['P01','B01','C01'].every(read)||!one)return false;
                 const health=one.querySelector('.zxs-disk-health');
                 const buttons=Array.from(document.querySelectorAll('button')).map(button=>button.textContent.trim());
                 const recovery=document.querySelector('.zxs-management-recovery');
@@ -70,14 +72,29 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                     &&!health.textContent.includes('/dev/nvme9n1p1')&&health.textContent.includes('2023-11-14T22:13:20.123Z')
                     &&health.textContent.includes('0 °C')&&/0 (hours|小时)/.test(health.textContent)
                     &&/SMART reports passed|SMART 报告通过/.test(health.textContent)
-                    &&many.querySelector('.zxs-disk-health')?.dataset.zxsDiskHealth==='unavailable'
-                    &&/multiple devices|多个设备/.test(many.querySelector('.zxs-disk-health').textContent)
-                    &&denied.querySelector('.zxs-disk-health')?.dataset.zxsDiskHealth==='unavailable'
-                    &&/lacks permission|没有读取设备健康信息的权限/.test(denied.querySelector('.zxs-disk-health').textContent)
-                    &&!many.querySelector('.zxs-disk-health').textContent.includes('/dev/nvme9n1')
                     &&recovery&&recovery.getBoundingClientRect().height>0
                     &&buttons.some(value=>['Check management status','检查管理状态'].includes(value))
                     &&!buttons.some(value=>['Management health','管理健康'].includes(value));
+            "#,
+            )?;
+            disk_tree::select(browser, "B01")?;
+            check(
+                browser,
+                "multiple-device report remains on B01",
+                r#"
+                const health=document.querySelector('.zxs-disk-management-card[data-slot="B01"] .zxs-disk-health');
+                return health?.dataset.zxsDiskHealth==='unavailable'&&/multiple devices|多个设备/.test(health.textContent)
+                    &&!health.textContent.includes('/dev/nvme9n1');
+            "#,
+            )?;
+            disk_tree::select(browser, "C01")?;
+            check(
+                browser,
+                "permission-denied report remains on C01",
+                r#"
+                const health=document.querySelector('.zxs-disk-management-card[data-slot="C01"] .zxs-disk-health');
+                return health?.dataset.zxsDiskHealth==='unavailable'
+                    &&/lacks permission|没有读取设备健康信息的权限/.test(health.textContent);
             "#,
             )?;
             browser.script("window.__zxsDiskHealth.mode='shared';return true")?;
@@ -86,10 +103,19 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 browser,
                 "directories on one disk retain the same queried-device identity",
                 r#"
-                const cards=['P01','C01'].map(slot=>document.querySelector('.zxs-disk-management-card[data-slot="'+slot+'"]'));
+                const health=document.querySelector('.zxs-disk-management-card[data-slot="C01"] .zxs-disk-health');
                 return window.__zxsDiskHealth.reads.some(value=>value.slot==='C01'&&value.mode==='shared')
-                    &&cards.every(card=>card.querySelector('.zxs-disk-health')?.dataset.zxsDiskHealth==='smart'
-                        &&card.querySelector('.zxs-disk-health').textContent.includes('/dev/nvme9n1'));
+                    &&health?.dataset.zxsDiskHealth==='smart'&&health.textContent.includes('/dev/nvme9n1');
+            "#,
+            )?;
+            disk_tree::select(browser, "P01")?;
+            check(
+                browser,
+                "primary keeps the same shared-device observation",
+                r#"
+                const health=document.querySelector('.zxs-disk-management-card[data-slot="P01"] .zxs-disk-health');
+                return health?.dataset.zxsDiskHealth==='smart'&&health.textContent.includes('/dev/nvme9n1')
+                    &&/SMART reports passed|SMART 报告通过/.test(health.textContent);
             "#,
             )?;
             browser.script("window.__zxsDiskHealth.mode='failed';return true")?;
@@ -99,9 +125,16 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "a failed SMART report is attached only to its refreshed directory",
                 r#"
                 const one=document.querySelector('.zxs-disk-management-card[data-slot="P01"] .zxs-disk-health');
-                const other=document.querySelector('.zxs-disk-management-card[data-slot="C01"] .zxs-disk-health');
-                return /SMART reports failure|SMART 报告异常/.test(one?.textContent)
-                    &&/SMART reports passed|SMART 报告通过/.test(other?.textContent);
+                return /SMART reports failure|SMART 报告异常/.test(one?.textContent);
+            "#,
+            )?;
+            disk_tree::select(browser, "C01")?;
+            check(
+                browser,
+                "another directory does not inherit the failed report",
+                r#"
+                const health=document.querySelector('.zxs-disk-management-card[data-slot="C01"] .zxs-disk-health');
+                return /SMART reports passed|SMART 报告通过/.test(health?.textContent);
             "#,
             )?;
             browser.script("window.__zxsDiskHealth.mode='invalid';return true")?;

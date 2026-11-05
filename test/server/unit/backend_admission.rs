@@ -13,6 +13,7 @@ struct Gate {
     started: tokio::sync::Semaphore,
     calls: AtomicUsize,
     finished: tokio::sync::Semaphore,
+    cancellations: Mutex<Vec<storage_contract::history_window::HistoryWindowCancellation>>,
 }
 impl Gate {
     fn release(&self) {
@@ -495,6 +496,44 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn directory_git_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository: &str,
+        _path: &str,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, crate::ApiError> {
+        self.gate.cancellations.lock().unwrap().push(cancellation);
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn initialize_directory_git(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitInitializeBody,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn stage_directory_git_child(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitStageChildBody,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn stage_directory_git_owned(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn initialize_directory_scope(
         &self,
         _identity: &crate::auth::Identity,
@@ -813,6 +852,7 @@ fn fixture_for(
         started: tokio::sync::Semaphore::new(0),
         calls: AtomicUsize::new(0),
         finished: tokio::sync::Semaphore::new(0),
+        cancellations: Mutex::new(Vec::new()),
     });
     let mut auth = AuthStore::initialize(root, "admin", "a-long-test-password").unwrap();
     let token = auth.login("admin", "a-long-test-password").unwrap().token;
@@ -969,6 +1009,7 @@ async fn management_status_remains_live_during_authentication_contention() {
         started: tokio::sync::Semaphore::new(0),
         calls: AtomicUsize::new(0),
         finished: tokio::sync::Semaphore::new(0),
+        cancellations: Mutex::new(Vec::new()),
     });
     let backend = Arc::new(BackendProbe {
         blocked: BlockedEndpoint::Backend,
@@ -1107,12 +1148,15 @@ fn workspace_body(method: &str, path: &str) -> Value {
         json!({"source_version_id":"version","name":"Side","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/branches") {
         json!({"source_commit_id":"source","name":"Side","operation_id":"op_00000000000000000000000000000000"})
-    } else if path.starts_with("/api/file-manager/disks/")
-        && (path.ends_with("/directory-branches") || path.ends_with("/directory-select"))
+    } else if path.starts_with("/api/file-manager/disks/") && path.ends_with("/directory-branches")
     {
         json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})
-    } else if path.ends_with("/directory-scopes") {
-        json!({"path":"","operation_id":"op_00000000000000000000000000000000"})
+    } else if path.ends_with("/directory-git/initialize") {
+        json!({"path":"","expected_namespace_head":"commit_00000000000000000000000000000000","operation_id":"op_00000000000000000000000000000000"})
+    } else if path.ends_with("/directory-git/children/stage") {
+        json!({"directory_id":"repo_00000000000000000000000000000000","directory_branch_id":"dbr_00000000000000000000000000000000","child_directory_id":"entry_00000000000000000000000000000000","expected_child_head_tree_id":"dtree_00000000000000000000000000000000","expected_index_generation":"1","operation_id":"op_00000000000000000000000000000000"})
+    } else if path.ends_with("/directory-git/stage") {
+        json!({"directory_id":"repo_00000000000000000000000000000000","directory_branch_id":"dbr_00000000000000000000000000000000","expected_tree_id":"dtree_00000000000000000000000000000000","expected_index_generation":"1","operation_id":"op_00000000000000000000000000000000"})
     } else if path.ends_with("/archive") {
         json!({"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "PATCH"
@@ -1218,8 +1262,22 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/file-manager/files/file/branches"),
     ("PATCH", "/api/file-manager/files/file/branches/branch"),
     ("POST", "/api/file-manager/disks/P01/directory-branches"),
-    ("POST", "/api/file-manager/disks/P01/directory-select"),
-    ("POST", "/api/repositories/repo/directory-scopes"),
+    (
+        "GET",
+        "/api/repositories/repo_00000000000000000000000000000000/directory-git?path=",
+    ),
+    (
+        "POST",
+        "/api/repositories/repo_00000000000000000000000000000000/directory-git/initialize",
+    ),
+    (
+        "POST",
+        "/api/repositories/repo_00000000000000000000000000000000/directory-git/children/stage",
+    ),
+    (
+        "POST",
+        "/api/repositories/repo_00000000000000000000000000000000/directory-git/stage",
+    ),
     ("POST", "/api/branches/branch/archive"),
     ("POST", "/api/repositories/repo/branches"),
     ("POST", "/api/repositories"),
@@ -1275,6 +1333,34 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/history-trees/history/split-plans"),
     ("POST", "/api/admin/disks"),
 ];
+
+#[tokio::test]
+async fn directory_git_http_cancellation_reaches_the_authorized_backend() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let route = "/api/repositories/repo_00000000000000000000000000000000/directory-git?path=";
+    let waiter = tokio::spawn(workspace_request(app, "GET", route));
+    tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    {
+        let signals = gate.cancellations.lock().unwrap();
+        assert_eq!(signals.len(), 1);
+        assert!(!signals[0].is_cancelled());
+    }
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(gate.cancellations.lock().unwrap()[0].is_cancelled());
+    assert_eq!(gate.finished.available_permits(), 0);
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(5), gate.finished.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+}
 
 #[tokio::test]
 async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation() {
@@ -1433,6 +1519,7 @@ async fn assert_cancelled_job_keeps_auth(method: &str, path: &str, blocked: Bloc
         started: tokio::sync::Semaphore::new(0),
         calls: AtomicUsize::new(0),
         finished: tokio::sync::Semaphore::new(0),
+        cancellations: Mutex::new(Vec::new()),
     });
     let _release = Release(gate.clone());
     let backend = Arc::new(BackendProbe {
@@ -1512,6 +1599,7 @@ async fn completed_http_bodies_do_not_retain_auth_owner() {
             started: tokio::sync::Semaphore::new(0),
             calls: AtomicUsize::new(0),
             finished: tokio::sync::Semaphore::new(0),
+            cancellations: Mutex::new(Vec::new()),
         });
         let backend = Arc::new(BackendProbe {
             blocked: BlockedEndpoint::Backend,
@@ -1565,6 +1653,7 @@ async fn completed_content_keeps_read_permit_but_not_auth_owner() {
             started: tokio::sync::Semaphore::new(0),
             calls: AtomicUsize::new(0),
             finished: tokio::sync::Semaphore::new(0),
+            cancellations: Mutex::new(Vec::new()),
         }),
         outcome: 0,
         auth: Mutex::new(None),
@@ -1604,6 +1693,7 @@ async fn backend_job_releases_auth_and_admission_after_success_error_and_panic()
                 started: tokio::sync::Semaphore::new(0),
                 calls: AtomicUsize::new(0),
                 finished: tokio::sync::Semaphore::new(0),
+                cancellations: Mutex::new(Vec::new()),
             }),
             outcome,
             auth: Mutex::new(None),
@@ -1641,6 +1731,7 @@ fn queued_backend_job_keeps_auth_and_admission_after_cancellation() {
             started: tokio::sync::Semaphore::new(0),
             calls: AtomicUsize::new(0),
             finished: tokio::sync::Semaphore::new(0),
+            cancellations: Mutex::new(Vec::new()),
         });
         let _release = Release(gate.clone());
         let backend = Arc::new(BackendProbe {

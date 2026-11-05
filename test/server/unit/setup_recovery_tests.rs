@@ -820,6 +820,45 @@ fn local_setup_identifiers_keep_the_existing_ascii_language() {
 }
 
 #[test]
+fn bootstrap_selection_order_never_infers_backup_edges() {
+    for mode in [Mode::Development, Mode::Production] {
+        let f = fixture();
+        let mut input = request();
+        input.mode = mode.clone();
+        input.disk_ids = vec!["three".into(), "one".into(), "two".into()];
+        let paths = input
+            .disk_ids
+            .iter()
+            .map(|id| f.service.disks[id].clone())
+            .collect::<Vec<_>>();
+        let mut identities = Vec::new();
+        f.service
+            .initialize(&permit(&f.service), input, |engine, _, _| {
+                assert_eq!(engine.config().mode, mode);
+                assert_eq!(engine.config().metadata_quorum(), 2);
+                for (index, disk) in engine.config().disks.iter().enumerate() {
+                    assert_eq!(disk.root, paths[index]);
+                    assert_eq!(disk.slot_id, format!("D{:02}", index + 1));
+                    assert_eq!(disk.level, 1);
+                    assert_eq!(disk.upstream_slot_id, None);
+                    assert!(disk.metadata_member);
+                    identities.push(disk.disk_id.clone());
+                }
+                Ok(())
+            })
+            .unwrap();
+        let reopened = Engine::open(&f.service.data_root).unwrap();
+        assert_eq!(reopened.config().mode, mode);
+        for (index, disk) in reopened.config().disks.iter().enumerate() {
+            assert_eq!(disk.disk_id, identities[index]);
+            assert_eq!(disk.root, paths[index]);
+            assert_eq!(disk.level, 1);
+            assert_eq!(disk.upstream_slot_id, None);
+        }
+    }
+}
+
+#[test]
 fn single_disk_setup_is_empty_and_creates_exactly_one_member() {
     let f = fixture_with_disks(&["one"]);
     assert_eq!(f.service.status().state, InstallationState::Empty);

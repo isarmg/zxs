@@ -80,19 +80,7 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
         b"content",
     );
     for path in ["", "Café"] {
-        engine
-            .initialize_directory_scope(
-                &repo.repository_id,
-                (if path.is_empty() {
-                    None
-                } else {
-                    Some(name_policy::LookupPath::parse(path).unwrap())
-                })
-                .as_ref(),
-                "owner",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        checkpoint(&mut engine, &repo, path, "owner");
         engine
             .create_directory_branches(
                 &repo.repository_id,
@@ -181,18 +169,19 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
     assert!(
         matches!(nested.branches,DirectoryScopeRows::Summary(rows) if rows.len()==2 && rows.iter().all(|row|row.path=="Café"))
     );
-    backend
-        .engine
-        .lock()
-        .unwrap()
-        .create_directory_branches(
-            &repo.repository_id,
-            None,
-            &storage_contract::BranchName::parse("later").unwrap(),
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        checkpoint(&mut engine, &repo, "", "owner");
+        engine
+            .create_directory_branches(
+                &repo.repository_id,
+                None,
+                &storage_contract::BranchName::parse("later").unwrap(),
+                "owner",
+                storage_contract::OperationId::generate().unwrap(),
+            )
+            .unwrap();
+    }
     let full = DirectoryScopesResponse::from(full);
     let summary = DirectoryScopesResponse::from(summary);
     struct Probe<'a>(&'a EngineBackend, &'a DirectoryScopesResponse);
@@ -281,14 +270,12 @@ fn all_current_scopes_exclude_deleted_and_reused_directory_identities_but_keep_r
     let (_root, mut engine, repo, identity) = fixture();
     save_projection_file(&mut engine, &repo.main_branch_id, "dir/file", b"original");
     for path in [None, Some(name_policy::LookupPath::parse("dir").unwrap())] {
-        engine
-            .initialize_directory_scope(
-                &repo.repository_id,
-                path.as_ref(),
-                "owner",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        checkpoint(
+            &mut engine,
+            &repo,
+            path.as_ref().map_or("", name_policy::LookupPath::as_str),
+            "owner",
+        );
         engine
             .create_directory_branches(
                 &repo.repository_id,
@@ -352,14 +339,7 @@ fn all_current_scopes_exclude_deleted_and_reused_directory_identities_but_keep_r
     {
         let mut engine = backend.engine.lock().unwrap();
         save_projection_file(&mut engine, &repo.main_branch_id, "dir/new", b"replacement");
-        engine
-            .initialize_directory_scope(
-                &repo.repository_id,
-                Some(&name_policy::LookupPath::parse("dir").unwrap()),
-                "owner",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        checkpoint(&mut engine, &repo, "dir", "owner");
         engine
             .create_directory_branches(
                 &repo.repository_id,

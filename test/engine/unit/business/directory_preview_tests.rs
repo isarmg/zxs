@@ -1,4 +1,5 @@
 use super::*;
+use crate::directory_git_fixture as directory_fixture;
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
     let temp = tempfile::tempdir().unwrap();
@@ -17,6 +18,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
         .unwrap();
     save(&mut engine, &repo, "Café/file.txt", b"before");
     save(&mut engine, &repo, "outside.txt", b"outside");
+    directory_fixture::checkpoint(&mut engine, &repo, "Café");
     let branch = engine
         .create_directory_branches(
             &repo.repository_id,
@@ -78,6 +80,7 @@ fn browsing_frozen_directory_is_read_only_and_default_publishes_only_explicitly(
         .version_id
         .clone();
     save(&mut engine, &repo, "Café/file.txt", b"later");
+    directory_fixture::checkpoint(&mut engine, &repo, "Café");
     let head = engine.state.branches[&repo.main_branch_id]
         .head_commit_id
         .clone();

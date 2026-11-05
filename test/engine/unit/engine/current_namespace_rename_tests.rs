@@ -301,6 +301,8 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
         "alias/keep",
         b"keep",
     );
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "dir");
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "alias");
     let frozen = fixture
         .engine
         .create_directory_branches(

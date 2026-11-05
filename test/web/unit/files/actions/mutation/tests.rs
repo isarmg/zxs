@@ -163,7 +163,9 @@ fn preview_is_not_general_mutation_authority() {
     state.files.writable = true;
     state.files.loaded = true;
     state.files.directory_preview = Some(DirectoryPreview {
-        branch: crate::files::test_entries::branch(json!({"directory_branch_id":"draft"})),
+        source: crate::files::model::DirectoryPreviewSource::Branch(
+            crate::files::test_entries::branch(json!({"directory_branch_id":"draft"})),
+        ),
         path: String::new(),
     });
     assert!(!super::super::write_allowed(&state));

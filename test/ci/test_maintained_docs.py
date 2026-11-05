@@ -3,12 +3,23 @@ import configparser
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class MaintainedDocs(unittest.TestCase):
+    def test_offline_rescue_has_its_own_root_workspace_path(self):
+        workspace = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']
+        self.assertIn('rescue', workspace['members'])
+        self.assertIn('rescue', workspace['default-members'])
+        self.assertFalse((ROOT / 'src/rescue').exists())
+        manifest = tomllib.loads((ROOT / 'rescue/Cargo.toml').read_text())
+        self.assertEqual(manifest['package']['name'], 'storage-rescue')
+        self.assertNotIn('workspace', manifest)
+        self.assertEqual([binary['name'] for binary in manifest['bin']], ['zxs-rescue'])
+
     def test_samba_export_is_consistent_and_outside_private_service_directories(self):
         samba = configparser.ConfigParser(interpolation=None, delimiters=('=',), strict=False)
         samba.read(ROOT / 'deploy/samba/smb.conf.example')
@@ -102,7 +113,7 @@ class MaintainedDocs(unittest.TestCase):
         self.assertIn('根 `test/`', text)
         self.assertNotIn('admin/', text)
         self.assertIn('rescue/', text)
-        rescue = (ROOT / 'src/rescue/src/main.rs').read_text()
+        rescue = (ROOT / 'rescue/src/main.rs').read_text()
         for variant in ('OfflineCheck', 'OfflineExport'):
             self.assertIn(f'    {variant} {{', rescue)
         self.assertNotIn('本机 zxs → 服务启动 / 初始化', text)

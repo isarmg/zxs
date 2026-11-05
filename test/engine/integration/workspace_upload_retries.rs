@@ -335,6 +335,12 @@ fn detached_upload_keeps_writer_locks_until_cancelled() {
 
 #[test]
 fn first_upload_revalidates_prepared_bytes_before_acknowledging() {
+    use std::os::unix::fs::MetadataExt;
+
+    let identity = |path: &Path| {
+        let metadata = fs::metadata(path).unwrap();
+        (metadata.dev(), metadata.ino())
+    };
     for replace in [false, true] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
@@ -372,12 +378,15 @@ fn first_upload_revalidates_prepared_bytes_before_acknowledging() {
                     .is_some_and(|extension| extension == "prepared")
             })
             .unwrap();
+        let original_identity = identity(&scratch);
+        let held = temporary.path().join("held-preparation");
         if replace {
-            fs::rename(&scratch, temporary.path().join("held-preparation")).unwrap();
+            fs::rename(&scratch, &held).unwrap();
             fs::write(&scratch, b"data").unwrap();
         } else {
             corrupt_retained_bytes(&scratch);
         }
+        let scratch_identity = identity(&scratch);
         assert_eq!(
             engine
                 .finish_upload(prepared)
@@ -393,14 +402,31 @@ fn first_upload_revalidates_prepared_bytes_before_acknowledging() {
                 .is_empty()
         );
         assert!(!directory.join(format!("{item}-1.full")).exists());
-        assert!(
-            !scratch.exists(),
-            "rejected preparation must release scratch quota"
-        );
+        if replace {
+            // Equal bytes at the former name do not transfer cleanup ownership.
+            // The uploader cannot erase the replacement or chase its moved inode.
+            assert_ne!(scratch_identity, original_identity);
+            assert_eq!(identity(&scratch), scratch_identity);
+            assert_eq!(fs::read(&scratch).unwrap(), b"data");
+            assert_eq!(identity(&held), original_identity);
+            assert_eq!(fs::read(&held).unwrap(), b"data");
+        } else {
+            assert_eq!(scratch_identity, original_identity);
+            assert!(
+                !scratch.exists(),
+                "rejected preparation releases only the scratch inode it owns"
+            );
+        }
         let retried = engine
             .stage_upload(&workspace.workspace_id, &item, "a", &source, 1)
             .unwrap();
         assert_eq!(fs::read(retried.source_path).unwrap(), b"data");
+        if replace {
+            assert_eq!(identity(&scratch), scratch_identity);
+            assert_eq!(fs::read(&scratch).unwrap(), b"data");
+            assert_eq!(identity(&held), original_identity);
+            assert_eq!(fs::read(&held).unwrap(), b"data");
+        }
     }
 }
 

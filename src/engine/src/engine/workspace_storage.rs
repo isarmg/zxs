@@ -537,7 +537,7 @@ impl Engine {
         ))
     }
 
-    fn workspace_has_preparation(&self, id: &str) -> bool {
+    pub(crate) fn workspace_has_preparation(&self, id: &str) -> bool {
         self.commit_preparation
             .load(std::sync::atomic::Ordering::Acquire)
             || self

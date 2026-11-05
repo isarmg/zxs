@@ -15,6 +15,7 @@ macro_rules! projection_maps {
         branches => Branches, history, "branches";
         file_selections => FileSelections, selected_file, "file_selections";
         directory_branches => DirectoryBranches, repository, "directory_branches";
+        directory_git_repositories => DirectoryGitRepositories, repository, "directory_git_repositories";
         directory_trees => DirectoryTrees, directory_tree, "directory_trees";
         file_write_origins => FileWriteOrigins, file, "file_write_origins";
         file_contexts => FileContexts, context, "file_contexts";

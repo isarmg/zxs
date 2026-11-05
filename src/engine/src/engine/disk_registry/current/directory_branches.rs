@@ -92,13 +92,29 @@ pub(super) fn validate_context(
     entry: &Entry,
     context: &FileContext,
 ) -> Result<()> {
+    validate_context_for(state, repository, entry, context, ContextUse::Current)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContextUse {
+    Current,
+    RetainedChild,
+}
+
+fn validate_context_for(
+    state: &State,
+    repository: &str,
+    entry: &Entry,
+    context: &FileContext,
+    use_as: ContextUse,
+) -> Result<()> {
     let history = &state
         .repositories
         .get(repository)
         .ok_or_else(stale)?
         .history_tree_id;
     let branch = state.branches.get(&context.branch_id).ok_or_else(stale)?;
-    if branch.state != BranchState::Active
+    if (use_as == ContextUse::Current && branch.state != BranchState::Active)
         || branch.history_tree_id != *history
         || branch.file_id.as_deref() != Some(entry.file_id.as_str())
         || context.inherited_from.as_ref().is_some_and(|id| {
@@ -129,6 +145,7 @@ fn project_branch(
     state: &State,
     source: &DirectoryBranch,
     entries: &[Entry],
+    retained_children: &BTreeSet<&str>,
 ) -> Result<DirectoryBranch> {
     let mut branch = DirectoryBranch {
         directory_branch_id: source.directory_branch_id.clone(),
@@ -155,15 +172,20 @@ fn project_branch(
         }
         match entry.kind {
             NamespaceEntryKind::File => {
+                let use_as = if retained_children.contains(entry.entry_id.as_str()) {
+                    ContextUse::RetainedChild
+                } else {
+                    ContextUse::Current
+                };
                 let context = source
                     .file_contexts
                     .get(entry.lookup_key())
                     .ok_or_else(stale)?;
-                validate_context(state, &source.repository_id, entry, context)?;
+                validate_context_for(state, &source.repository_id, entry, context, use_as)?;
                 let file_branch = source.file_branches.get(&entry.file_id).ok_or_else(stale)?;
                 let record = state.branches.get(file_branch).ok_or_else(stale)?;
                 if record.file_id.as_deref() != Some(entry.file_id.as_str())
-                    || record.state != BranchState::Active
+                    || (use_as == ContextUse::Current && record.state != BranchState::Active)
                     || record.history_tree_id
                         != state.repositories[&source.repository_id].history_tree_id
                 {
@@ -248,6 +270,39 @@ impl CurrentNamespaces {
         state: &State,
         id: &str,
     ) -> Result<CurrentDirectoryProjection> {
+        self.project_directory(state, id, &BTreeSet::new())
+    }
+
+    /// Parent checkout retains each independent child's live state. Historical
+    /// child records still prove exact identity, content and reference closure,
+    /// but do not request reactivation of that child's retired file branches.
+    pub(crate) fn directory_checkout_projection(
+        &self,
+        state: &State,
+        id: &str,
+        retained_directories: &BTreeMap<String, String>,
+    ) -> Result<CurrentDirectoryProjection> {
+        let source = state.directory_branches.get(id).ok_or_else(stale)?;
+        let retained = source
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.kind == NamespaceEntryKind::Directory
+                    && retained_directories.contains_key(&entry.entry_id)
+            })
+            .flat_map(|root| descendants(&source.entries, root.lookup_key()))
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
+            .map(|entry| entry.entry_id.as_str())
+            .collect();
+        self.project_directory(state, id, &retained)
+    }
+
+    fn project_directory(
+        &self,
+        state: &State,
+        id: &str,
+        retained_children: &BTreeSet<&str>,
+    ) -> Result<CurrentDirectoryProjection> {
         let source = state.directory_branches.get(id).ok_or_else(stale)?;
         let repo = state
             .repositories
@@ -257,7 +312,7 @@ impl CurrentNamespaces {
         let owner = self.branch_entries(&repo.main_branch_id, &owner.head_commit_id)?;
         let path = current_path(owner, &repo.repository_id, &source.directory_id)?.to_owned();
         let entries = self.directory_entries(id, &source.head_tree_id)?;
-        let branch = project_branch(state, source, entries)?;
+        let branch = project_branch(state, source, entries, retained_children)?;
         let original = state
             .directory_trees
             .get_shared(&source.head_tree_id)
@@ -360,7 +415,7 @@ impl CurrentNamespaces {
             snapshot.file_branches = tree.file_branches.clone();
             snapshot.inherited_files = tree.inherited_files.clone();
             snapshot.directory_refs = tree.directory_refs.clone();
-            let snapshot = project_branch(state, &snapshot, &kept)?;
+            let snapshot = project_branch(state, &snapshot, &kept, retained_children)?;
             for (child, reference) in &snapshot.directory_refs {
                 if branch.directory_refs.get(child) != Some(reference) {
                     return Err(invalid(
@@ -394,6 +449,27 @@ impl CurrentNamespaces {
 }
 
 impl CurrentDirectoryProjection {
+    /// A commit may authenticate only the complete current occurrence graph.
+    /// Matching its root entries alone is insufficient: old child refs can
+    /// still contain retired occurrences or unrelated path-local contexts.
+    pub(crate) fn require_commit_source(&self, state: &State) -> Result<()> {
+        let source = state
+            .directory_branches
+            .get(&self.branch.directory_branch_id)
+            .ok_or_else(stale)?;
+        if source != &self.branch
+            || self.nodes.iter().any(|(directory, node)| {
+                directory != &self.branch.directory_id && node.projected != *node.source
+            })
+        {
+            return Err(Error::new(
+                ErrorCode::DirectoryBranchConflict,
+                "directory commit requires its complete current projection; refresh the working composition",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn branch(&self) -> &DirectoryBranch {
         &self.branch
     }
@@ -443,47 +519,6 @@ impl CurrentDirectoryProjection {
         Ok(Some(expected))
     }
 
-    pub(crate) fn matches_selection(&self, state: &State) -> Result<bool> {
-        for directory in self.nodes.keys() {
-            if self.matching_selected_tree(state, directory)?.is_none() {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    pub(crate) fn install_selection(&self, state: &mut State) -> Result<()> {
-        let mut nodes: Vec<_> = self.nodes.iter().collect();
-        // Every node's ref set is a strict descendant subset of the root graph.
-        // Historical paths can have different depths after an earlier rename.
-        nodes.sort_by_key(|(_, node)| node.projected.directory_refs.len());
-        for (directory, node) in nodes {
-            let mut tree = node.projected.clone();
-            for (child, reference) in &mut tree.directory_refs {
-                reference.tree_id = state
-                    .directory_tree_selections
-                    .get(child)
-                    .ok_or_else(stale)?
-                    .clone();
-            }
-            if tree != *node.source {
-                tree.tree_id = crate::new_id("dtree")?;
-                tree.parent_tree_id = Some(node.source.tree_id.clone());
-                tree.sequence = state.sequence;
-                state
-                    .directory_trees
-                    .insert(tree.tree_id.clone(), tree.clone());
-            }
-            state
-                .directory_selections
-                .insert(directory.clone(), node.selected_branch.clone());
-            state
-                .directory_tree_selections
-                .insert(directory.clone(), tree.tree_id);
-        }
-        Ok(())
-    }
-
     fn verify_selection(&self, previous: &State, next: &State) -> Result<()> {
         for (directory, node) in &self.nodes {
             if next.directory_trees.get(&node.source.tree_id) != Some(node.source.as_ref()) {
@@ -523,6 +558,28 @@ impl CurrentNamespaces {
         branch: &crate::Branch,
         commit: &Commit,
     ) -> Result<Option<CurrentScope>> {
+        if commit.kind == "directory_git_checkout" {
+            let receipt = next
+                .operations
+                .get(&commit.operation_id)
+                .ok_or_else(stale)?;
+            // This is not a kind allowlist. Replay the complete authenticated
+            // index/child-preserving plan before accepting its exact splice.
+            self.verify_new_directory_commit(previous, next, receipt)?;
+            if receipt.kind != "directory.git.checkout"
+                || receipt.commit_id.as_deref() != Some(commit.commit_id.as_str())
+            {
+                return Err(invalid("Git checkout lacks its closed-plan receipt"));
+            }
+            let mut admitted = self
+                .branches
+                .get(&branch.branch_id)
+                .ok_or_else(stale)?
+                .as_ref()
+                .clone();
+            admitted.entries = Arc::new(commit.entries.clone());
+            return Ok(Some(admitted));
+        }
         if commit.kind != "directory_selection" {
             return Ok(None);
         }

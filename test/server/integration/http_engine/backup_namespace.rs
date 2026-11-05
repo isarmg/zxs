@@ -230,8 +230,14 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
         ),
         (
             "namespace-batch",
-            manager_namespace_request(&app, &admin, "delete", "archive/nested/renamed.txt", None)
-                .await,
+            manager_prepare_namespace_request(
+                &app,
+                &admin,
+                "delete",
+                "archive/nested/renamed.txt",
+                None,
+            )
+            .await,
         ),
     ] {
         assert_eq!(

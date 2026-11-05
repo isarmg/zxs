@@ -11,12 +11,21 @@ fn mixed_request(f: &Fixture) -> AdditionRequest {
         .iter()
         .map(|disk| disk.root.clone())
         .collect::<Vec<_>>();
-    let listing = crate::storage_directories::browse_fresh_within(
-        f.discovery.to_str().unwrap(),
-        root.to_str().unwrap(),
-        &stopped,
-    )
-    .unwrap();
+    // Creating another direct child changes the held parent identity. Bind
+    // every selection after the complete set of candidate roots exists.
+    for addition in &mut request.additions {
+        addition.selection = crate::storage_directories::inspect_fresh_within(
+            f.discovery.to_str().unwrap(),
+            &InspectRequest {
+                mount_path: addition.selection.mount_path.clone(),
+                root_path: addition.selection.root_path.clone(),
+            },
+            &[f.data.clone(), f.backend.inner.management_root.clone()],
+            &stopped,
+        )
+        .unwrap();
+    }
+    let listing = crate::storage_directories::browse(root.to_str().unwrap()).unwrap();
     let selection = crate::storage_directories::inspect_fresh_within(
         f.discovery.to_str().unwrap(),
         &InspectRequest {

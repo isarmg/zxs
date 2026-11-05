@@ -6,6 +6,10 @@ use http_routing::{
 use service_stack::ServiceExt;
 use std::time::Duration;
 
+#[cfg(feature = "core")]
+#[path = "../support/directory_git_fixture.rs"]
+pub(crate) mod directory_git_fixture;
+
 pub(crate) fn assert_contract_input(error: &ApiError, expected: &storage_contract::Error) {
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
     assert_eq!(error.code, expected.code());

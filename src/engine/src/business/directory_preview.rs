@@ -80,6 +80,48 @@ impl Engine {
                     "directory branch missing",
                 )
             })?;
+        if let Some(tree) = self
+            .state
+            .directory_trees
+            .get(expected_tree)
+            .filter(|tree| {
+                storage_contract::directory_staging::directory_tree_is_committed(&self.state, tree)
+            })
+        {
+            let owner = &self.state.directory_branches[&tree.directory_branch_id];
+            if owner.repository_id != repository || owner.directory_id != branch.directory_id {
+                return Err(Error::new(
+                    ErrorCode::DirectoryBranchScope,
+                    "history snapshot belongs to another directory",
+                ));
+            }
+            let mut frozen = branch.clone();
+            frozen.head_tree_id = tree.tree_id.clone();
+            frozen.commit_id = tree.commit_id.clone();
+            frozen.path = tree.path.clone();
+            frozen.entries = tree.entries.clone();
+            frozen.file_contexts = tree.file_contexts.clone();
+            frozen.file_branches = tree.file_branches.clone();
+            frozen.inherited_files = tree.inherited_files.clone();
+            frozen.directory_refs = tree.directory_refs.clone();
+            frozen.sequence = tree.sequence;
+            let path = if branch.directory_id == repository {
+                String::new()
+            } else {
+                self.list_tree_ref(&repo.main_branch_id)?
+                    .iter()
+                    .find(|entry| {
+                        entry.kind == NamespaceEntryKind::Directory
+                            && entry.entry_id == branch.directory_id
+                    })
+                    .map(|entry| entry.path().to_owned())
+                    .unwrap_or_else(|| tree.path.clone())
+            };
+            return Ok(DirectoryBranchPreview {
+                branch: frozen,
+                path,
+            });
+        }
         if branch.head_tree_id != expected_tree {
             return Err(Error::new(
                 ErrorCode::ListingChanged,
@@ -131,56 +173,7 @@ impl Engine {
         &mut self,
         request: DirectoryDefaultSelection<'_>,
     ) -> Result<OperationResult> {
-        self.mutate(
-            "directory.default.set",
-            request.principal,
-            request.operation_id,
-            json_codec::json!({
-                "repository_id": request.repository_id,
-                "directory_branch_id": request.directory_branch_id,
-                "expected_tree_id": request.expected_tree_id,
-                "expected_head": request.expected_head,
-            }),
-            |engine, state, _| {
-                let repo = state
-                    .repositories
-                    .get(request.repository_id)
-                    .ok_or_else(|| {
-                        Error::new(ErrorCode::RepositoryNotFound, "repository missing")
-                    })?;
-                if state.branches[&repo.main_branch_id].head_commit_id != request.expected_head {
-                    return Err(Error::new(
-                        ErrorCode::ListingChanged,
-                        "default namespace changed; refresh before setting the default",
-                    ));
-                }
-                let branch = state
-                    .directory_branches
-                    .get(request.directory_branch_id)
-                    .filter(|branch| branch.repository_id == request.repository_id)
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorCode::DirectoryBranchNotFound,
-                            "directory branch missing",
-                        )
-                    })?;
-                if branch.head_tree_id != request.expected_tree_id {
-                    return Err(Error::new(
-                        ErrorCode::ListingChanged,
-                        "viewed directory branch changed; refresh before setting the default",
-                    ));
-                }
-                super::directory::select_change(
-                    engine,
-                    state,
-                    request.repository_id,
-                    request.directory_branch_id,
-                    request.principal,
-                    request.operation_id,
-                    engine.config.max_entries,
-                )
-            },
-        )
+        self.directory_git_checkout(json_codec::json!({"repository_id":request.repository_id,"directory_branch_id":request.directory_branch_id,"expected_tree_id":request.expected_tree_id,"expected_head":request.expected_head}),request.principal,request.operation_id)
     }
 }
 

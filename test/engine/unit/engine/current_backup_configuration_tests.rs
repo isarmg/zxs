@@ -629,6 +629,15 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
                 .creation_name
                 .push_str(" changed");
         },
+        directory_git_repositories => {
+            state.directory_git_repositories.insert("unexpected".into(), storage_contract::directory_git::DirectoryGitRepository {
+                repository_id: "unexpected".into(),
+                directory_id: "unexpected".into(),
+                initialized_sequence: state.sequence,
+                current_branch_id: "unexpected".into(),
+                branches: BTreeMap::new(),
+            });
+        },
         directory_branches => {
             state
                 .directory_branches
@@ -952,6 +961,7 @@ fn backup_scope_uses_current_directory_views_without_importing_hidden_historical
         "docs/gone",
         b"exclusive stopped file",
     );
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "docs");
     let directory = fixture
         .engine
         .create_directory_branches(

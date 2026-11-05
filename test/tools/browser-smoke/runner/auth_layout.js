@@ -101,7 +101,7 @@ const panelGeometry=panel.width<=sharedRowHeight*9+.5&&(compact||panel.height>=p
     &&panel.y>=header.bottom&&[header,panel].every(r=>r.x>=0&&r.right<=layoutWidth+1);
 const headerControls=[...headerNode.querySelectorAll('button')];
 const headerTargets=headerControls.length===2&&headerControls.every(e=>present(e)&&within(e)
-    &&rect(e).height>=44&&rect(e).width>=44&&inside(rect(e),header));
+    &&Math.abs(rect(e).height-sharedRowHeight)<=.5&&rect(e).width>=sharedRowHeight&&inside(rect(e),header));
 const outerPaint=await outerFill(card);
 const outerFrame=outerPaint.valid&&restoredCorner;
 const semanticChildren=[...card.children].filter(e=>!e.matches('svg[data-zxs-contour-decoration="foreground"]'));
@@ -121,12 +121,12 @@ const noSurface=e=>{
         &&e.querySelectorAll('svg[data-zxs-contour-decoration]').length===0;
 };
 const unlinedInput=e=>{
-    const css=getComputedStyle(e);
-    return ['Top','Right','Left'].every(side=>parseFloat(css[`border${side}Width`])===0)
-        &&parseFloat(css.borderBottomWidth)===(e.matches(':focus-visible')?3:0)
-        &&(e.matches(':focus-visible')?css.borderBottomStyle==='solid'&&!transparent(css.borderBottomColor):css.borderBottomStyle==='none')
+    const css=getComputedStyle(e),focused=e.matches(':focus-visible');
+    const focus=focused?parseFloat(css.outlineWidth)>=2&&css.outlineStyle==='solid'&&!transparent(css.outlineColor)&&parseFloat(css.outlineOffset)===-2:noOutline(css);
+    return sides.every(side=>parseFloat(css[`border${side}Width`])===0)
+        &&css.borderBottomStyle==='none'
         &&css.backgroundImage==='none'&&css.borderImageSource==='none'&&transparent(css.backgroundColor)
-        &&css.boxShadow==='none'&&noOutline(css)&&parseFloat(css.getPropertyValue('--zxs-contour-extent'))===0
+        &&css.boxShadow==='none'&&focus&&parseFloat(css.getPropertyValue('--zxs-contour-extent'))===0
         &&e.querySelectorAll('svg[data-zxs-contour-decoration]').length===0;
 };
 const name=e=>(e.getAttribute('aria-label')||e.textContent).trim();

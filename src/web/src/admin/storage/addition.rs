@@ -231,7 +231,13 @@ fn resume(state: RwSignal<State>) {
 fn submit(state: RwSignal<State>, action: Submit) {
     let captured = state
         .try_update(|s| {
-            if !s.session_active() {
+            if !s.session_active() || s.admin_console.storage.conversion.blocks_edit() {
+                return None;
+            }
+            if matches!(action, Submit::Commit)
+                && !s.admin_console.storage.addition.submitted
+                && !s.admin_console.storage.editable()
+            {
                 return None;
             }
             let model = &mut s.admin_console.storage.addition;
@@ -345,7 +351,7 @@ fn submit(state: RwSignal<State>, action: Submit) {
         load(state);
     });
 }
-fn validate_preview(preview: &AdditionPreview) -> Result<(), api::Error> {
+pub(super) fn validate_preview(preview: &AdditionPreview) -> Result<(), api::Error> {
     let digest = |value: &str| {
         value.len() == 64
             && value
@@ -391,7 +397,7 @@ fn validate_preview(preview: &AdditionPreview) -> Result<(), api::Error> {
     }
     Ok(())
 }
-fn validate_status(
+pub(super) fn validate_status(
     status: &AdditionStatus,
     expected: Option<OperationId>,
 ) -> Result<(), api::Error> {
@@ -476,7 +482,7 @@ fn accept(model: &mut Model, status: AdditionStatus) -> bool {
 fn completed_addition(state: RwSignal<State>) {
     state.update(|s| {
         s.admin_console.storage.selections.clear();
-        s.admin_console.storage.inspected = None;
+        s.admin_console.storage.wizard.clear_choice();
         s.admin_console.storage.addition.preview = None;
         s.admin_console.storage.addition.acknowledged = false;
         s.files.invalidate_disks();
@@ -615,7 +621,8 @@ fn field(
 }
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
-        <Show when=move ||state.with(|s|active(&s.admin_console.storage))>
+        <Show when=move ||state.with(|s|active(&s.admin_console.storage)&&!s.admin_console.storage.selections.is_empty())>
+            <h3 class="zxs-row">{t("3. 核对加入方式", "3. Review admission")}</h3>
             <p class="zxs-row">{move ||state.with(|s|if terminal(&s.admin_console.storage) {
                 t("从已认证的完整历史恢复当前池。选择全新空目录与槽位；恢复活动写服务至少需要一个新的元数据成员，其余新目录可以仅存数据。保留原池身份、历史与现有登记，不初始化新池。同一文件系统中的不同目录允许使用，但不构成独立磁盘故障冗余。", "Restore this pool from its authenticated complete history. Select fresh empty directories and slots. Resuming active writes requires at least one new metadata voter; other new directories may be data only. The existing pool identity, history and registrations are retained. Different directories on one filesystem are allowed, but do not provide independent disk-failure redundancy.")
             } else { t("向当前存储池登记目录。允许同一文件系统中的不同目录，但它们不提供独立磁盘故障冗余。新增目录不会自动搬移已有文件或改变现有放置规则。", "Register directories in the current pool. Different directories on one filesystem are allowed, but do not provide independent disk-failure redundancy. Adding directories does not move existing files or change placement rules.") })}</p>
@@ -640,6 +647,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         <Show when=move ||state.with(|s|s.admin_console.storage.addition.submitted)><p class="zxs-row" role="status">{t("存储操作已提交，正在核对服务器阶段。请保留原操作，不要换用新编号重发。", "The storage operation was submitted. Checking its server progress. Keep the original operation; do not resubmit with a new ID.")}</p></Show>
         {move ||state.with(|s|s.admin_console.storage.addition.status.clone()).map(|status|view!{
             <p class="zxs-row" role="status">{status_text(&status)}</p>
+            <p class="zxs-row">{preview_counts(&status.preview)}</p>
             {status.failure.map(|failure|view!{<p class="zxs-row" role="alert">{format!("{}: {}",failure.code,failure.message)}</p>})}
         })}
         <Show when=move ||state.with(|s|s.admin_console.storage.addition.submitted&&!s.admin_console.storage.addition.sending)>

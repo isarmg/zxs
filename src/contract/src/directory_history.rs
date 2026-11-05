@@ -266,10 +266,13 @@ pub struct DirectoryHistoryIdentity {
 pub struct DirectoryHistoryCurrent {
     pub directory_branch_id: Option<String>,
     pub tree_id: Option<String>,
+    pub committed_tree_id: Option<String>,
+    pub staged: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryHistoryNode {
+    pub message: String,
     pub tree_id: String,
     pub directory_branch_id: String,
     pub parent_tree_id: Option<String>,
@@ -282,6 +285,8 @@ pub struct DirectoryHistoryNode {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryHistoryBranch {
+    pub committed_tree_id: Option<String>,
+    pub staged: bool,
     pub directory_branch_id: String,
     pub name: String,
     pub parent_branch_id: Option<String>,
@@ -338,9 +343,29 @@ impl DirectoryHistoryPage {
             (None, None) => {}
             _ => return Err(invalid("directory history current selection is incomplete")),
         }
+        if let Some(tree) = &self.current.committed_tree_id {
+            crate::validate_id(tree, "dtree")?;
+        }
+        if self.current.tree_id.is_none()
+            && (self.current.staged || self.current.committed_tree_id.is_some())
+        {
+            return Err(invalid("directory staging requires a current selection"));
+        }
+        if !self.current.staged
+            && self.current.tree_id.is_some()
+            && self.current.committed_tree_id.is_none()
+        {
+            return Err(invalid(
+                "clean directory selection lacks its committed head",
+            ));
+        }
         let mut ids = BTreeSet::new();
         let mut previous = None;
         for node in &self.nodes {
+            crate::validate_note(&node.message)?;
+            if node.message.trim().is_empty() {
+                return Err(invalid("directory commit message is empty"));
+            }
             crate::validate_id(&node.tree_id, "dtree")?;
             crate::validate_id(&node.directory_branch_id, "dbr")?;
             crate::validate_id(&node.commit_id, "commit")?;
@@ -372,6 +397,12 @@ impl DirectoryHistoryPage {
         ids.clear();
         previous = None;
         for branch in &self.branches {
+            if let Some(tree) = &branch.committed_tree_id {
+                crate::validate_id(tree, "dtree")?;
+            }
+            if !branch.staged && branch.committed_tree_id.is_none() {
+                return Err(invalid("clean directory branch lacks its committed head"));
+            }
             crate::validate_id(&branch.directory_branch_id, "dbr")?;
             crate::validate_id(&branch.head_tree_id, "dtree")?;
             crate::validate_branch_name(&branch.name)?;

@@ -37,7 +37,7 @@ fn install_response_probe(browser: &Browser) -> Result<()> {
                 const body=await response.clone().json();
                 if(!url.searchParams.get('expected_tree_id')||body.preview!==true||body.writable!==false||body.backup)
                     throw new Error('selected real directory preview must be read-only');
-                p.readonlyPages++;
+                p.readonlyPages++;p.previewTree=url.searchParams.get('expected_tree_id');
             }
             if(method==='GET'&&/\/directories\/[^/]+\/history(?:\/branches)?$/.test(url.pathname)){
                 if(!response.ok)throw new Error('real folder history request failed');
@@ -113,7 +113,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             const branches=Array.from(panel.querySelectorAll('[data-directory-branch-id]'),node=>node.dataset.directoryBranchId).sort();
             return expected.length>=3&&JSON.stringify(expected)===JSON.stringify(actual)&&new Set(actual).size===actual.length
                 &&JSON.stringify(branches)===JSON.stringify(p.branches.branches.map(branch=>branch.directory_branch_id).sort())
-                &&p.branches.branches.length>=2&&new Set(p.branches.branches.map(branch=>branch.head_tree_id)).size===1
+                &&p.branches.branches.length>=2&&new Set(p.branches.branches.map(branch=>branch.committed_tree_id)).size===1
                 &&!Array.from(document.querySelectorAll('button')).some(button=>['Create folder branch','创建目录分支'].includes(button.textContent.trim()))&&p.writes===0;
         "#,
             )?;
@@ -154,13 +154,33 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "branch locator reads its real tree and never writes",
                 r#"
             const p=window.__zxsDirectoryHistory,panel=document.querySelector('.zxs-directory-history');
-            return p.lastAnchor&&panel.getAttribute('aria-busy')==='false'&&p.branches.branches.some(branch=>branch.head_tree_id===p.lastAnchor)&&!!panel.querySelector('[data-directory-tree-id="'+p.lastAnchor+'"]')&&p.writes===0;
+            return p.lastAnchor&&panel.getAttribute('aria-busy')==='false'&&p.branches.branches.some(branch=>branch.committed_tree_id===p.lastAnchor)&&!!panel.querySelector('[data-directory-tree-id="'+p.lastAnchor+'"]')&&p.writes===0;
         "#,
             )?;
             check(
                 browser,
                 "anchored directory SVG still joins the actual parent and child",
                 include_str!("directory_tree_edges.js"),
+            )?;
+            browser.script(r#"
+                const p=window.__zxsDirectoryHistory;
+                const node=p.nodes.nodes.find(node=>node.tree_id!==p.nodes.current.committed_tree_id);
+                if(!node)throw new Error('historical snapshot fixture requires a non-current committed node');
+                p.selectedSnapshot=node.tree_id;
+                const button=document.querySelector('[data-directory-snapshot="'+node.tree_id+'"]');
+                if(!button||button.disabled)throw new Error('explicit historical snapshot is unavailable');
+                button.click();return true;
+            "#)?;
+            check(
+                browser,
+                "explicit historical snapshot loads read-only without checkout authority",
+                r#"
+                const p=window.__zxsDirectoryHistory;
+                return p.previewTree===p.selectedSnapshot&&!!document.querySelector('[data-directory-snapshot-readonly]')
+                    &&document.querySelector('.zxs-file-manager')?.getAttribute('aria-busy')==='false'
+                    &&document.querySelector('[data-zxs-set-directory-default]')?.disabled===true
+                    &&!document.querySelector('[data-commit-directory]')&&p.writes===0;
+            "#,
             )?;
             Ok(())
         },
@@ -179,7 +199,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
     )?)?;
     println!(
-        "PASS unsolicited preview fails closed; real read-only folder preview and history: measured SVG parent connectors, shared heads, branch locator and graph-preserving refresh without writes"
+        "PASS unsolicited preview fails closed; real read-only folder preview and history: measured SVG parent connectors, shared heads, branch locator, graph-preserving refresh and explicit immutable snapshot without checkout or writes"
     );
     Ok(())
 }

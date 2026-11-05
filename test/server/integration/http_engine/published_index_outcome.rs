@@ -26,9 +26,14 @@ async fn metadata_projection_failure_returns_published_http_receipt_and_same_id_
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "original.txt", b"unchanged content").await;
-    let request =
-        manager_namespace_request(&app, &token, "rename", "original.txt", Some("renamed.txt"))
-            .await;
+    let request = manager_prepare_namespace_request(
+        &app,
+        &token,
+        "rename",
+        "original.txt",
+        Some("renamed.txt"),
+    )
+    .await;
     let operation = request["operation_id"].as_str().unwrap();
     let index = root.path().join("system/index.sqlite");
     let before = sequence(&app, &token).await;

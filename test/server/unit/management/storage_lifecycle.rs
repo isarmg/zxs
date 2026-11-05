@@ -57,7 +57,15 @@ fn fixture_with_metadata_members(metadata_members: usize) -> Fixture {
     drop(
         AuthStore::initialize_management(&management, "admin", "lifecycle-test-password").unwrap(),
     );
-    let (backend, mut auth) = open_service(&data, &management).unwrap();
+    let (backend, mut auth) = open_service_with_options(
+        &data,
+        &management,
+        ManagementOptions {
+            discovery_root: temp.path().to_str().unwrap().parse().unwrap(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let login = auth.login("admin", "lifecycle-test-password").unwrap();
     let identity = auth.authenticate(&login.token).unwrap();
     let engine = Arc::new(EngineBackend::new(engine));
@@ -399,8 +407,7 @@ fn successive_http_exits_replay_old_receipts_and_recover_the_setup_configuration
     let discovery = f._temp.path().to_str().unwrap();
     let added = f._temp.path().join("later-added-directory");
     fs::DirBuilder::new().mode(0o700).create(&added).unwrap();
-    let browsed =
-        crate::storage_directories::browse_within(discovery, added.to_str().unwrap()).unwrap();
+    let browsed = crate::storage_directories::browse(added.to_str().unwrap()).unwrap();
     let selected = crate::storage_directories::inspect_within(
         discovery,
         &storage_contract::storage_directories::InspectRequest {
@@ -422,9 +429,7 @@ fn successive_http_exits_replay_old_receipts_and_recover_the_setup_configuration
     };
     let preview: AdditionPreview = json_codec::from_value(
         f.backend
-            .storage_addition("disk_add_preview", json!(addition), &f.identity, || {
-                Ok(discovery.into())
-            })
+            .storage_addition("disk_add_preview", json!(addition), &f.identity)
             .unwrap(),
     )
     .unwrap();
@@ -434,7 +439,6 @@ fn successive_http_exits_replay_old_receipts_and_recover_the_setup_configuration
                 "disk_add_commit",
                 json!(AdditionCommit { preview }),
                 &f.identity,
-                || Ok(discovery.into()),
             )
             .unwrap(),
     )

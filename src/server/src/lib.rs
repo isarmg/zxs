@@ -47,7 +47,9 @@ mod bounded_history_http;
 mod history_window_encode;
 mod history_window_http;
 mod history_window_query;
+mod http_directory_git;
 mod http_directory_history;
+mod http_directory_staging;
 mod http_file_history_source;
 pub use backend_file_history::{
     ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
@@ -112,9 +114,8 @@ pub use backend_listing::{
 };
 mod backend_disk_directory;
 mod http_disk_directory;
-pub use backend_disk_directory::{DiskDirectoryAction, MutateDiskDirectory};
-mod http_directory_scope;
 pub use backend_directory_scope::InitializeDirectoryScope;
+pub use backend_disk_directory::{DiskDirectoryAction, MutateDiskDirectory};
 mod backend_create_branch;
 mod backend_create_repository;
 mod backend_merge_link;
@@ -751,6 +752,56 @@ pub trait Backend: Send + Sync {
         _request: storage_contract::file_history_merge::FileHistorySourceRequest,
         _cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::file_history_merge::FileHistorySource, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn directory_git_status(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _path: &str,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn initialize_directory_git(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitInitializeBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn stage_directory_git_child(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitStageChildBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn stage_directory_git_owned(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn directory_staging(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _branch: &str,
+    ) -> Result<storage_contract::directory_staging::DirectoryStagingStatus, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn commit_directory_changes(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _branch: &str,
+        _request: storage_contract::directory_staging::DirectoryCommitBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
         Err(ApiError::unsupported())
     }
     fn directory_history(
@@ -1424,6 +1475,62 @@ impl Backend for AuthorizedBackend {
         self.backend
             .file_history_source(&self.current(identity)?, request, cancellation)
     }
+    fn directory_git_status(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        path: &str,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, ApiError> {
+        self.backend
+            .directory_git_status(&self.current(identity)?, repository, path, cancellation)
+    }
+    fn initialize_directory_git(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: storage_contract::directory_git::DirectoryGitInitializeBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .initialize_directory_git(&self.current(identity)?, repository, request)
+    }
+    fn stage_directory_git_child(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: storage_contract::directory_git::DirectoryGitStageChildBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .stage_directory_git_child(&self.current(identity)?, repository, request)
+    }
+    fn stage_directory_git_owned(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .stage_directory_git_owned(&self.current(identity)?, repository, request)
+    }
+    fn directory_staging(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        branch: &str,
+    ) -> Result<storage_contract::directory_staging::DirectoryStagingStatus, ApiError> {
+        self.backend
+            .directory_staging(&self.current(identity)?, repository, branch)
+    }
+    fn commit_directory_changes(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        branch: &str,
+        request: storage_contract::directory_staging::DirectoryCommitBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .commit_directory_changes(&self.current(identity)?, repository, branch, request)
+    }
     fn directory_history(
         &self,
         identity: &Identity,
@@ -2039,12 +2146,32 @@ fn router_shared(
             get(http_directory_history::branches),
         )
         .route(
-            "/api/repositories/{repo}/directory-scopes",
-            post(http_directory_scope::initialize),
+            "/api/repositories/{repo}/directory-git",
+            get(http_directory_git::read),
+        )
+        .route(
+            "/api/repositories/{repo}/directory-git/initialize",
+            post(http_directory_git::initialize),
+        )
+        .route(
+            "/api/repositories/{repo}/directory-git/children/stage",
+            post(http_directory_git::stage_child),
+        )
+        .route(
+            "/api/repositories/{repo}/directory-git/stage",
+            post(http_directory_git::stage_owned),
         )
         .route(
             "/api/repositories/{repo}/directory-branches",
             get(http_directory_scopes::read).post(http_directory_selection::read),
+        )
+        .route(
+            "/api/repositories/{repo}/directory-branches/{id}/staging",
+            get(http_directory_staging::read),
+        )
+        .route(
+            "/api/repositories/{repo}/directory-branches/{id}/commits",
+            post(http_directory_staging::commit),
         )
         .route(
             "/api/repositories/{repo}/directory-branches/{id}",

@@ -20,6 +20,8 @@ mod backup_namespace;
 mod branch_preview;
 #[path = "http_engine/daily_management.rs"]
 mod daily_management;
+#[path = "http_engine/directory_git.rs"]
+mod directory_git;
 #[path = "http_engine/directory_history.rs"]
 mod directory_history;
 #[path = "http_engine/disk_registration.rs"]
@@ -1234,6 +1236,15 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
         StatusCode::UNAUTHORIZED
     );
     let disks = success(&app, &token, "GET", "/api/file-manager/disks", None).await;
+    assert_eq!(
+        disks["disks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|disk| disk["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["d1", "d2", "d3"]
+    );
     assert_eq!(disks["disks"][0]["slot_id"], "P01");
     assert_eq!(disks["disks"][0]["writable"], true);
     assert_eq!(disks["disks"][1]["writable"], false);
@@ -1727,6 +1738,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
     manager_upload(&app, &token, "folder/nested/b.txt", b"B").await;
     manager_upload(&app, &token, "folder/c.txt", b"C").await;
     manager_upload(&app, &token, "outside.txt", b"outside").await;
+    manager_checkpoint_git(&app, &token, "folder").await;
     let parent_folder = success(
         &app,
         &token,
@@ -1743,6 +1755,15 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         None,
     )
     .await;
+    let repository = parent_folder["context"]["repository_id"].as_str().unwrap();
+    let main = parent_folder["directory_branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|branch| branch["current"] == true)
+        .unwrap()["directory_branch_id"]
+        .as_str()
+        .unwrap();
     let parent_a = parent_folder["entries"]
         .as_array()
         .unwrap()
@@ -1819,12 +1840,11 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
             .iter()
             .any(|branch| branch["current"] == true && branch["materialized"] == true)
     );
-    success(
+    manager_checkpoint_and_select(
         &app,
         &token,
-        "POST",
-        "/api/file-manager/disks/P01/directory-select",
-        Some(json!({"path":"folder","name":"draft","operation_id":new_id("op").unwrap()})),
+        repository,
+        created["result"]["directory_branch_id"].as_str().unwrap(),
     )
     .await;
     let listing = success(
@@ -2053,16 +2073,8 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         outside
     );
     manager_upload(&app, &token, "folder/new.txt", b"new").await;
-    success(
-        &app,
-        &token,
-        "POST",
-        "/api/file-manager/disks/P01/directory-select",
-        Some(json!({
-            "path":"folder","name":"main","operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
+    manager_checkpoint_git(&app, &token, "folder").await;
+    manager_checkpoint_and_select(&app, &token, repository, main).await;
     let restored = success(
         &app,
         &token,
@@ -2987,13 +2999,70 @@ async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire(
     capture_wire("damaged-published-save-operation.json", &wire);
 }
 
-async fn manager_default_request(
+/// Explicit fixture setup through the same user-facing initialization API.
+/// This is deliberately not part of `success`: raw requests still exercise the
+/// uninitialized-directory refusal and no read silently creates a repository.
+async fn manager_initialize_git(app: &Router, token: &str, path: &str) -> Value {
+    let query = url_encoding::form::Serializer::new(String::new())
+        .append_pair("path", path)
+        .finish();
+    let listing = success(
+        app,
+        token,
+        "GET",
+        &format!("/api/file-manager/disks/P01/entries?{query}"),
+        None,
+    )
+    .await;
+    let repository = listing["context"]["repository_id"].as_str().unwrap();
+    let within = listing["context"]["repository_path"].as_str().unwrap();
+    let query = url_encoding::form::Serializer::new(String::new())
+        .append_pair("path", within)
+        .finish();
+    let route = format!("/api/repositories/{repository}/directory-git");
+    let status = success(app, token, "GET", &format!("{route}?{query}"), None).await;
+    if status["initialized"] == false {
+        success(app, token, "POST", &format!("{route}/initialize"), Some(json!({
+            "path":within,"expected_namespace_head":listing["context"]["base_head"],"operation_id":new_id("op").unwrap()
+        }))).await;
+        success(app, token, "GET", &format!("{route}?{query}"), None).await
+    } else {
+        assert_eq!(status["initialized"], true);
+        status
+    }
+}
+
+/// Review and checkpoint this fixture's own working tree before branching or
+/// checkout. Independent children are not recursively staged or committed.
+async fn manager_checkpoint_git(app: &Router, token: &str, path: &str) {
+    let status = manager_initialize_git(app, token, path).await;
+    if status["staged"] == false && status["needs_restage"] == false {
+        assert!(status["head_tree_id"].is_string());
+        return;
+    }
+    let repository = status["repository_id"].as_str().unwrap();
+    let route = format!("/api/repositories/{repository}/directory-git");
+    success(app, token, "POST", &format!("{route}/stage"), Some(json!({
+        "directory_id":status["directory_id"],"directory_branch_id":status["directory_branch_id"],"expected_tree_id":status["working_tree_id"],"expected_index_generation":status["index_generation"],"operation_id":new_id("op").unwrap()
+    }))).await;
+    let query = url_encoding::form::Serializer::new(String::new())
+        .append_pair("path", status["path"].as_str().unwrap())
+        .finish();
+    let staged = success(app, token, "GET", &format!("{route}?{query}"), None).await;
+    success(app, token, "POST", &format!("/api/repositories/{repository}/directory-branches/{}/commits",staged["directory_branch_id"].as_str().unwrap()),Some(json!({
+        "expected_tree_id":staged["working_tree_id"],"expected_index_generation":staged["index_generation"],"message":"Explicit test fixture checkpoint","operation_id":new_id("op").unwrap()
+    }))).await;
+}
+
+async fn manager_prepare_default_request(
     app: &Router,
     token: &str,
     repository: &str,
     branch: &str,
     operation: &str,
 ) -> Value {
+    let scope = manager_scope(app, token, repository, branch).await;
+    manager_checkpoint_git(app, token, scope["path"].as_str().unwrap()).await;
     let scope = manager_scope(app, token, repository, branch).await;
     let defaults = success(
         app,
@@ -3015,6 +3084,27 @@ async fn manager_default_request(
     json!({"directory_branch_id":branch,"expected_tree_id":scope["head_tree_id"],"expected_head":tree["commit_id"],"operation_id":operation})
 }
 
+/// Explicitly preserve this fixture's current work, then select a stable branch
+/// identity with both directory-tree and namespace-head comparison tokens.
+async fn manager_checkpoint_and_select(
+    app: &Router,
+    token: &str,
+    repository: &str,
+    branch: &str,
+) -> Value {
+    let request =
+        manager_prepare_default_request(app, token, repository, branch, &new_id("op").unwrap())
+            .await;
+    success(
+        app,
+        token,
+        "PUT",
+        &format!("/api/repositories/{repository}/default-branch"),
+        Some(request),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn default_directory_branch_is_shared_authorized_and_persistent() {
     let root = tempfile::tempdir().unwrap();
@@ -3022,6 +3112,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
     let admin = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &admin, "one.txt", b"frozen parent").await;
     manager_upload(&app, &admin, "folder/two.txt", b"second parent").await;
+    manager_checkpoint_git(&app, &admin, "").await;
     let listing = success(
         &app,
         &admin,
@@ -3089,7 +3180,8 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
     );
     let selection_operation = new_id("op").unwrap();
     let selection_request =
-        manager_default_request(&app, &session, &repository, &frozen, &selection_operation).await;
+        manager_prepare_default_request(&app, &session, &repository, &frozen, &selection_operation)
+            .await;
     let selected = success(&app, &session, "PUT", &api, Some(selection_request.clone())).await;
     assert_eq!(selected["result"]["directory_branch_id"], frozen);
     let replay = success(&app, &session, "PUT", &api, Some(selection_request.clone())).await;
@@ -3155,8 +3247,14 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         "PUT",
         &api,
         Some(
-            manager_default_request(&app, &session, &repository, &frozen, &new_id("op").unwrap())
-                .await,
+            manager_prepare_default_request(
+                &app,
+                &session,
+                &repository,
+                &frozen,
+                &new_id("op").unwrap(),
+            )
+            .await,
         ),
     )
     .await;
@@ -3201,6 +3299,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         Some(json!({})),
     )
     .await;
+    manager_checkpoint_git(&app, &session, "folder").await;
     let nested = success(
         &app,
         &session,
@@ -3217,7 +3316,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         "PUT",
         &api,
         Some(
-            manager_default_request(
+            manager_prepare_default_request(
                 &app,
                 &session,
                 &repository,
@@ -3269,8 +3368,14 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         "PUT",
         &api,
         Some(
-            manager_default_request(&app, &session, &repository, &frozen, &new_id("op").unwrap())
-                .await,
+            manager_prepare_default_request(
+                &app,
+                &session,
+                &repository,
+                &frozen,
+                &new_id("op").unwrap(),
+            )
+            .await,
         ),
     )
     .await;
@@ -3293,8 +3398,8 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
     );
     let audit = success(&app, &session, "GET", "/api/file-manager/history", None).await;
     for action in [
-        "directory.branches.create",
-        "directory.default.set",
+        "directory.git.branch-create",
+        "directory.git.checkout",
         "directory.branch.rename",
     ] {
         assert!(
@@ -3389,7 +3494,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
 
 /// Capture the same explicit scope, immutable tree, and entry identity used by
 /// the file manager batch UI. Destructive tests must not resolve a path at write time.
-async fn manager_namespace_request(
+async fn manager_prepare_namespace_request(
     app: &Router,
     token: &str,
     kind: &str,
@@ -3400,6 +3505,7 @@ async fn manager_namespace_request(
         .rsplit_once('/')
         .map(|(parent, _)| parent)
         .unwrap_or("");
+    manager_initialize_git(app, token, parent).await;
     let query = url_encoding::form::Serializer::new(String::new())
         .append_pair("path", parent)
         .finish();
@@ -3465,7 +3571,7 @@ async fn manager_namespace(
     path: &str,
     destination: Option<&str>,
 ) -> Value {
-    let request = manager_namespace_request(app, token, kind, path, destination).await;
+    let request = manager_prepare_namespace_request(app, token, kind, path, destination).await;
     success(
         app,
         token,
@@ -3507,9 +3613,16 @@ async fn destructive_namespace_requires_identity_and_rejects_stale_path_aba() {
             original
         );
     }
-    let stale_rename =
-        manager_namespace_request(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
-    let stale_delete = manager_namespace_request(&app, &token, "delete", "report.txt", None).await;
+    let stale_rename = manager_prepare_namespace_request(
+        &app,
+        &token,
+        "rename",
+        "report.txt",
+        Some("renamed.txt"),
+    )
+    .await;
+    let stale_delete =
+        manager_prepare_namespace_request(&app, &token, "delete", "report.txt", None).await;
     manager_namespace(&app, &token, "delete", "report.txt", None).await;
     manager_upload(&app, &token, "report.txt", b"replacement").await;
     let replacement = success(&app, &token, "GET", entries_route, None).await;
@@ -3535,7 +3648,7 @@ async fn destructive_namespace_requires_identity_and_rejects_stale_path_aba() {
     }
     // Even a current tree does not authorize a stale identity at the same path.
     let mut stale_identity =
-        manager_namespace_request(&app, &token, "delete", "report.txt", None).await;
+        manager_prepare_namespace_request(&app, &token, "delete", "report.txt", None).await;
     stale_identity["items"][0]["source"]["entry_id"] = original["entries"][0]["entry_id"].clone();
     let (_, failure) = send(
         &app,
@@ -3561,7 +3674,13 @@ async fn destructive_namespace_requires_identity_and_rejects_stale_path_aba() {
     );
 }
 
-async fn manager_directory_branch(app: &Router, token: &str, path: &str, name: &str) -> String {
+async fn manager_prepare_directory_branch(
+    app: &Router,
+    token: &str,
+    path: &str,
+    name: &str,
+) -> String {
+    manager_checkpoint_git(app, token, path).await;
     success(
         app,
         token,
@@ -3623,12 +3742,12 @@ async fn branch_namespace_batch_preserves_unselected_views_and_is_idempotent() {
     )
     .await;
     let repo = root_view["context"]["repository_id"].as_str().unwrap();
-    let a_m = manager_directory_branch(&app, &token, "a", "m").await;
-    let a_n = manager_directory_branch(&app, &token, "a", "n").await;
-    let a_r = manager_directory_branch(&app, &token, "a", "r").await;
-    let b_l = manager_directory_branch(&app, &token, "b", "l").await;
-    let b_p = manager_directory_branch(&app, &token, "b", "p").await;
-    let b_q = manager_directory_branch(&app, &token, "b", "q").await;
+    let a_m = manager_prepare_directory_branch(&app, &token, "a", "m").await;
+    let a_n = manager_prepare_directory_branch(&app, &token, "a", "n").await;
+    let a_r = manager_prepare_directory_branch(&app, &token, "a", "r").await;
+    let b_l = manager_prepare_directory_branch(&app, &token, "b", "l").await;
+    let b_p = manager_prepare_directory_branch(&app, &token, "b", "p").await;
+    let b_q = manager_prepare_directory_branch(&app, &token, "b", "q").await;
     let m = manager_scope(&app, &token, repo, &a_m).await;
     let n = manager_scope(&app, &token, repo, &a_n).await;
     let r = manager_scope(&app, &token, repo, &a_r).await;
@@ -3895,23 +4014,16 @@ async fn moved_file_aliases_keep_independent_path_contexts_for_history_and_write
         .unwrap()
         .clone();
     assert_eq!(original["repository_path"], "a/report.txt");
-    let m = manager_directory_branch(&app, &token, "a", "m").await;
-    let n = manager_directory_branch(&app, &token, "a", "n").await;
-    let l = manager_directory_branch(&app, &token, "b", "l").await;
+    let m = manager_prepare_directory_branch(&app, &token, "a", "m").await;
+    let n = manager_prepare_directory_branch(&app, &token, "a", "n").await;
+    let l = manager_prepare_directory_branch(&app, &token, "b", "l").await;
     let m0 = manager_scope(&app, &token, repo, &m).await;
     let l0 = manager_scope(&app, &token, repo, &l).await;
     success(&app,&token,"POST","/api/file-manager/disks/P01/namespace-batch",Some(json!({"kind":"move","operation_id":new_id("op").unwrap(),"items":[{
         "source":manager_batch_source(&m0,"a/report.txt"),"target":manager_batch_target(&l0,"b/report.txt")
     }]}))).await;
-    for (path, name) in [("a", "n"), ("b", "l")] {
-        success(
-            &app,
-            &token,
-            "POST",
-            "/api/file-manager/disks/P01/directory-select",
-            Some(json!({"path":path,"name":name,"operation_id":new_id("op").unwrap()})),
-        )
-        .await;
+    for branch in [&n, &l] {
+        manager_checkpoint_and_select(&app, &token, repo, branch).await;
     }
     let a_before = manager_scope(&app, &token, repo, &n).await;
     let file = original["file_id"].as_str().unwrap();
@@ -4794,7 +4906,7 @@ async fn interrupted_new_upload_generation_reports_its_own_durable_progress() {
 }
 
 #[tokio::test]
-async fn directory_scope_initialization_accepts_root_but_requires_a_string_path() {
+async fn directory_git_initialization_accepts_root_but_requires_a_string_path() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
@@ -4809,8 +4921,16 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
         })),
     )
     .await;
+    let namespace = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/branches/{}", repo["main_branch_id"].as_str().unwrap()),
+        None,
+    )
+    .await;
     let endpoint = format!(
-        "/api/repositories/{}/directory-scopes",
+        "/api/repositories/{}/directory-git/initialize",
         repo["repository_id"].as_str().unwrap()
     );
     for path in [
@@ -4819,7 +4939,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
         Some(json!(12)),
         Some(json!("../outside")),
     ] {
-        let mut body = json!({"operation_id":new_id("op").unwrap()});
+        let mut body = json!({"operation_id":new_id("op").unwrap(),"expected_namespace_head":namespace["head_commit_id"]});
         if let Some(path) = path {
             body["path"] = path;
         }
@@ -4836,12 +4956,12 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
         &token,
         "POST",
         &endpoint,
-        Some(json!({"path":"", "operation_id":operation})),
+        Some(json!({"path":"", "operation_id":operation,"expected_namespace_head":namespace["head_commit_id"]})),
     )
     .await;
     assert_eq!(initialized["state"], "completed");
     assert!(initialized["result"]["directory_branch_id"].is_string());
-    assert_eq!(initialized["operation_kind"], "directory.scope.initialize");
+    assert_eq!(initialized["operation_kind"], "directory.git.initialize");
     assert!(initialized["publication_sequence"].is_string());
     assert!(initialized.get("current_health").is_none());
     let replay = success(
@@ -4849,7 +4969,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
         &token,
         "POST",
         &endpoint,
-        Some(json!({"path":"", "operation_id":operation})),
+        Some(json!({"path":"", "operation_id":operation,"expected_namespace_head":namespace["head_commit_id"]})),
     )
     .await;
     for key in [
@@ -4867,7 +4987,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
         Some(&token),
         "POST",
         &endpoint,
-        Some(json!({"path":"missing", "operation_id":operation})),
+        Some(json!({"path":"missing", "operation_id":operation,"expected_namespace_head":namespace["head_commit_id"]})),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -4877,7 +4997,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
         None,
         "POST",
         &endpoint,
-        Some(json!({"path":17, "operation_id":operation})),
+        Some(json!({"path":17, "operation_id":operation,"expected_namespace_head":namespace["head_commit_id"]})),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -5017,27 +5137,25 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
     let token = login(&app, "admin", "integration-test-password").await;
     let before = manager_disk_files(root.path());
     let operation = storage_contract::OperationId::generate().unwrap();
-    for route in ["directory-branches", "directory-select"] {
-        let endpoint = format!("/api/file-manager/disks/P01/{route}");
-        for body in [
-            json!({"path":"","operation_id":operation}),
-            json!({"path":"","name":"branch","operation_id":"bad"}),
-            json!({"path":"","name":"x".repeat(129),"operation_id":operation}),
-            json!({"path":"","name":null,"operation_id":operation}),
-            json!({"path":123,"name":"branch","operation_id":operation}),
-            json!({"path":"../outside","name":"branch","operation_id":operation}),
-            json!({"name":"branch","operation_id":operation,"extra":true}),
-        ] {
-            let (status, response) = send(&app, Some(&token), "POST", &endpoint, Some(body)).await;
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
-            assert!(
-                success(&app, &token, "GET", "/api/repositories", None).await["repositories"]
-                    .as_array()
-                    .unwrap()
-                    .is_empty()
-            );
-            assert_eq!(manager_disk_files(root.path()), before);
-        }
+    let endpoint = "/api/file-manager/disks/P01/directory-branches";
+    for body in [
+        json!({"path":"","operation_id":operation}),
+        json!({"path":"","name":"branch","operation_id":"bad"}),
+        json!({"path":"","name":"x".repeat(129),"operation_id":operation}),
+        json!({"path":"","name":null,"operation_id":operation}),
+        json!({"path":123,"name":"branch","operation_id":operation}),
+        json!({"path":"../outside","name":"branch","operation_id":operation}),
+        json!({"name":"branch","operation_id":operation,"extra":true}),
+    ] {
+        let (status, response) = send(&app, Some(&token), "POST", endpoint, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+        assert!(
+            success(&app, &token, "GET", "/api/repositories", None).await["repositories"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(manager_disk_files(root.path()), before);
     }
     for name in ["main", "MAIN"] {
         let (status, response) = send(
@@ -5052,6 +5170,10 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
         assert_eq!(response["error"]["code"], "NAME_COLLISION");
         assert_eq!(manager_disk_files(root.path()), before);
     }
+    // Valid branch creation now requires an explicitly created and committed
+    // directory repository; the raw-error phase above still creates nothing.
+    manager_upload(&app, &token, "seed.txt", b"fixture seed").await;
+    manager_checkpoint_git(&app, &token, "").await;
     let created = success(
         &app,
         &token,
@@ -5060,10 +5182,10 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
         Some(json!({"name":"side","operation_id":operation})),
     )
     .await;
-    assert_eq!(created["operation_kind"], "directory.branches.create");
+    assert_eq!(created["operation_kind"], "directory.git.branch-create");
     let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
     let repo = &repositories["repositories"][0]["repository_id"];
-    let digest=storage_contract::object_hash("request",&json!({"kind":"directory.branches.create","principal":"admin","body":{"repository_id":repo,"path":"","name":"side"}})).unwrap();
+    let digest=storage_contract::object_hash("request",&json!({"kind":"directory.git.branch-create","principal":"admin","body":{"repository_id":repo,"path":"","name":"side"}})).unwrap();
     assert_eq!(created["request_digest"], digest);
     assert_eq!(created["result"]["path"], "");
     let replay = success(
@@ -5082,12 +5204,11 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
     ] {
         assert_eq!(created[key], replay[key], "{key}");
     }
-    let selected = success(
+    let selected = manager_checkpoint_and_select(
         &app,
         &token,
-        "POST",
-        "/api/file-manager/disks/P01/directory-select",
-        Some(json!({"name":"SIDE","operation_id":storage_contract::OperationId::generate().unwrap()})),
+        repo.as_str().unwrap(),
+        created["result"]["directory_branch_id"].as_str().unwrap(),
     )
     .await;
     assert_eq!(
@@ -5097,9 +5218,12 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
     let (status, response) = send(
         &app,
         None,
-        "POST",
-        "/api/file-manager/disks/P01/directory-select",
-        Some(json!({"name":null})),
+        "PUT",
+        &format!(
+            "/api/repositories/{}/default-branch",
+            repo.as_str().unwrap()
+        ),
+        Some(json!({"directory_branch_id":null})),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -5740,14 +5864,17 @@ async fn disk_write_session_tracks_inherited_selection_and_merged_aliases() {
         Some(json!({"branch_id":right,"operation_id":new_id("op").unwrap()})),
     )
     .await;
-    let frozen = manager_directory_branch(&app, &token, "", "frozen").await;
+    let frozen = manager_prepare_directory_branch(&app, &token, "", "frozen").await;
 
     success(
         &app,
         &token,
         "PUT",
         &format!("/api/repositories/{repo}/default-branch"),
-        Some(manager_default_request(&app, &token, repo, &frozen, &new_id("op").unwrap()).await),
+        Some(
+            manager_prepare_default_request(&app, &token, repo, &frozen, &new_id("op").unwrap())
+                .await,
+        ),
     )
     .await;
     let route = "/api/file-manager/disks/P01/write-sessions";

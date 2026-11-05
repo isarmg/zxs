@@ -68,6 +68,62 @@ fn selected(
     })
 }
 
+fn initialize_git(engine: &mut Engine, repo: &Repository, path: &str) {
+    let expected = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    engine
+        .initialize_directory_git(
+            &repo.repository_id,
+            &storage_contract::directory_git::DirectoryGitInitializeBody {
+                path: path.into(),
+                expected_namespace_head: expected,
+                operation_id: op(),
+            },
+            "admin",
+        )
+        .unwrap();
+}
+fn review_git(
+    engine: &mut Engine,
+    repo: &Repository,
+    path: &str,
+) -> storage_contract::directory_git::DirectoryGitStatus {
+    let status = engine
+        .directory_git_status(&repo.repository_id, path)
+        .unwrap();
+    engine
+        .stage_directory_git_owned(
+            &repo.repository_id,
+            &storage_contract::directory_git::DirectoryGitStageOwnedBody {
+                directory_id: status.directory_id,
+                directory_branch_id: status.directory_branch_id.unwrap(),
+                expected_tree_id: status.working_tree_id.unwrap(),
+                expected_index_generation: status.index_generation,
+                operation_id: op(),
+            },
+            "admin",
+        )
+        .unwrap();
+    let status = engine
+        .directory_git_status(&repo.repository_id, path)
+        .unwrap();
+    engine
+        .commit_directory_changes(DirectoryCommitRequest {
+            repository_id: &repo.repository_id,
+            directory_branch_id: status.directory_branch_id.as_ref().unwrap(),
+            expected_tree_id: status.working_tree_id.as_ref().unwrap(),
+            expected_index_generation: status.index_generation,
+            message: "Review current registry composition",
+            principal: "admin",
+            operation_id: op(),
+        })
+        .unwrap();
+    engine
+        .directory_git_status(&repo.repository_id, path)
+        .unwrap()
+}
+
 fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut result = BTreeMap::new();
     for item in fs::read_dir(root).unwrap() {
@@ -135,6 +191,10 @@ impl Fixture {
         save(&mut engine, &repo, "dir/b", b"retained original");
         save(&mut engine, &repo, "dir/child/kept", b"retained child");
         save(&mut engine, &repo, "outside", b"retained sibling");
+        for path in ["dir", "only", ""] {
+            initialize_git(&mut engine, &repo, path);
+            review_git(&mut engine, &repo, path);
+        }
         let root_operation = op();
         let root_receipt = create(&mut engine, &repo, None, "frozen root", root_operation).unwrap();
         let root_branch = root_receipt.result["directory_branch_id"]
@@ -195,6 +255,11 @@ impl Fixture {
             self.engine.disk_exit_status().unwrap().unwrap().phase,
             DiskExitPhase::Published
         );
+        // The user reviews the retained working composition explicitly; exiting
+        // a disk does not turn the old hidden working checkpoint into a commit.
+        for path in ["dir", ""] {
+            review_git(&mut self.engine, &self.repo, path);
+        }
     }
 }
 
@@ -274,8 +339,8 @@ fn disk_exit_current_directory_choices_project_entries_contexts_and_refs_and_reo
     )
     .unwrap();
     assert_eq!(
-        fixture.engine.state.directory_branches[&fixture.root_branch],
-        source
+        fixture.engine.state.directory_trees[&source.head_tree_id].entries,
+        source.entries
     );
     assert_projected_graph(
         &fixture.engine,
@@ -384,8 +449,8 @@ fn disk_exit_current_directory_selection_preserves_siblings_and_replays_exact_re
         Some(&outside)
     );
     assert_eq!(
-        fixture.engine.state.directory_branches[&fixture.directory_branch],
-        source
+        fixture.engine.state.directory_trees[&source.head_tree_id].entries,
+        source.entries
     );
     assert_projected_graph(&fixture.engine, &source.directory_id, &fixture.hidden);
     let tree_count = fixture.engine.state.directory_trees.len();
@@ -430,6 +495,8 @@ fn disk_exit_new_same_name_directory_never_inherits_lost_identity_or_old_branch(
         "only/new",
         b"fresh directory identity",
     );
+    initialize_git(&mut fixture.engine, &fixture.repo, "only");
+    review_git(&mut fixture.engine, &fixture.repo, "only");
     let created = create(
         &mut fixture.engine,
         &fixture.repo,
@@ -570,6 +637,321 @@ fn disk_exit_directory_fork_replay_rejects_cross_scope_identity_and_context_impo
 }
 
 #[test]
+fn disk_exit_parent_checkout_preserves_child_after_its_old_file_branch_is_archived() {
+    let mut fixture = Fixture::new();
+    fixture.exit(MembershipExitAction::Deregister);
+    save(
+        &mut fixture.engine,
+        &fixture.repo,
+        "dir-sibling",
+        b"owned between mount and child",
+    );
+    review_git(&mut fixture.engine, &fixture.repo, "");
+    let parent = create(
+        &mut fixture.engine,
+        &fixture.repo,
+        None,
+        "before child archive",
+        op(),
+    )
+    .unwrap()
+    .result["directory_branch_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let entry = fixture
+        .engine
+        .namespace_tree(&fixture.repo.main_branch_id)
+        .unwrap()
+        .get("dir/b")
+        .unwrap()
+        .clone();
+    let previous = fixture
+        .engine
+        .file_context(&fixture.repo.repository_id, "dir/b")
+        .unwrap()
+        .branch_id;
+    let alternate = fixture
+        .engine
+        .create_file_branch(
+            &entry.file_id,
+            &entry.version_id,
+            &BranchName::parse("independent current child").unwrap(),
+            "admin",
+            op(),
+        )
+        .unwrap()
+        .branch_id
+        .unwrap();
+    fixture
+        .engine
+        .select_file_branch_at(
+            &fixture.repo.repository_id,
+            &entry.path,
+            &entry.file_id,
+            &alternate,
+            "admin",
+            op(),
+        )
+        .unwrap();
+    save(
+        &mut fixture.engine,
+        &fixture.repo,
+        "dir/b",
+        b"new child body",
+    );
+    let child = review_git(&mut fixture.engine, &fixture.repo, "dir");
+    fixture
+        .engine
+        .archive_branch(&previous, "admin", op())
+        .unwrap();
+    create(
+        &mut fixture.engine,
+        &fixture.repo,
+        None,
+        "after child archive",
+        op(),
+    )
+    .unwrap();
+    let state = fixture.engine.state.as_ref();
+    let view = fixture.engine.current_namespaces.as_ref().unwrap();
+    let retained = BTreeMap::from([(child.directory_id.clone(), "dir".to_owned())]);
+    assert!(view.directory_projection(state, &parent).is_err());
+    assert!(
+        view.directory_checkout_projection(state, &parent, &BTreeMap::new())
+            .is_err()
+    );
+    view.directory_checkout_projection(state, &parent, &retained)
+        .unwrap();
+    for corruption in ["child_context", "child_tree", "owned_branch"] {
+        let mut forged = state.clone();
+        match corruption {
+            "child_context" => {
+                forged
+                    .directory_branches
+                    .get_mut(&parent)
+                    .unwrap()
+                    .file_contexts
+                    .get_mut("dir/b")
+                    .unwrap()
+                    .branch_id = fixture.repo.main_branch_id.clone();
+            }
+            "child_tree" => {
+                let tree = forged.directory_branches[&parent].directory_refs[&child.directory_id]
+                    .tree_id
+                    .clone();
+                forged.directory_trees.remove(&tree);
+            }
+            "owned_branch" => {
+                let branch = forged.directory_branches[&parent].file_contexts["outside"]
+                    .branch_id
+                    .clone();
+                forged.branches.get_mut(&branch).unwrap().state = BranchState::Archived;
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            view.directory_checkout_projection(&forged, &parent, &retained)
+                .is_err(),
+            "{corruption}"
+        );
+    }
+    selected(&mut fixture.engine, &fixture.repo, &parent, op()).unwrap();
+    assert_eq!(
+        fixture
+            .engine
+            .directory_git_status(&fixture.repo.repository_id, "dir")
+            .unwrap(),
+        child
+    );
+    let namespace = fixture
+        .engine
+        .list_tree(&fixture.repo.main_branch_id)
+        .unwrap();
+    assert_projected_graph(
+        &fixture.engine,
+        &fixture.repo.repository_id,
+        &fixture.hidden,
+    );
+    drop(fixture.engine);
+    let engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
+    assert_eq!(
+        engine.list_tree(&fixture.repo.main_branch_id).unwrap(),
+        namespace
+    );
+    assert_eq!(
+        engine
+            .directory_git_status(&fixture.repo.repository_id, "dir")
+            .unwrap(),
+        child
+    );
+}
+
+#[test]
+fn disk_exit_explicit_directory_commit_preserves_projection_and_cold_replay() {
+    let mut f = Fixture::new();
+    f.exit(MembershipExitAction::Deregister);
+    save(&mut f.engine, &f.repo, "new-owned", b"current");
+    let status = f
+        .engine
+        .directory_git_status(&f.repo.repository_id, "")
+        .unwrap();
+    let namespace = f.engine.list_tree(&f.repo.main_branch_id).unwrap();
+    let versions = f.engine.state.versions.clone();
+    let target = files(&f.target.root);
+    let operation = op();
+    let apply = |engine: &mut Engine| {
+        engine.commit_directory_changes(DirectoryCommitRequest {
+            repository_id: &f.repo.repository_id,
+            directory_branch_id: status.directory_branch_id.as_ref().unwrap(),
+            expected_tree_id: status.working_tree_id.as_ref().unwrap(),
+            expected_index_generation: status.index_generation,
+            message: "Commit admitted current repository",
+            principal: "admin",
+            operation_id: operation,
+        })
+    };
+    let result = apply(&mut f.engine).unwrap();
+    assert_eq!(
+        f.engine.list_tree(&f.repo.main_branch_id).unwrap(),
+        namespace
+    );
+    assert_eq!(f.engine.state.versions, versions);
+    assert_projected_graph(&f.engine, &f.repo.repository_id, &f.hidden);
+    drop(f.engine);
+    let mut engine = Engine::open(&f.temp.path().join("system")).unwrap();
+    assert_eq!(apply(&mut engine).unwrap(), result);
+    assert_eq!(engine.list_tree(&f.repo.main_branch_id).unwrap(), namespace);
+    assert_eq!(files(&f.target.root), target);
+}
+#[test]
+fn disk_exit_directory_commit_replay_proves_closed_write_set_without_tracking() {
+    let mut f = Fixture::new();
+    f.exit(MembershipExitAction::Deregister);
+    save(&mut f.engine, &f.repo, "new-owned", b"current");
+    let status = f
+        .engine
+        .directory_git_status(&f.repo.repository_id, "")
+        .unwrap();
+    let previous = Arc::clone(&f.engine.state);
+    let view = Arc::clone(f.engine.current_namespaces.as_ref().unwrap());
+    let operation = op();
+    let result = f
+        .engine
+        .commit_directory_changes(DirectoryCommitRequest {
+            repository_id: &f.repo.repository_id,
+            directory_branch_id: status.directory_branch_id.as_ref().unwrap(),
+            expected_tree_id: status.working_tree_id.as_ref().unwrap(),
+            expected_index_generation: status.index_generation,
+            message: "Exact current Git commit",
+            principal: "admin",
+            operation_id: operation,
+        })
+        .unwrap();
+    let previous: State =
+        json_codec::from_slice(&canonical_json(previous.as_ref()).unwrap()).unwrap();
+    let next: State = json_codec::from_slice(&canonical_json(f.engine.state()).unwrap()).unwrap();
+    view.advance(&previous, &next).unwrap();
+    let head = result.result["head_tree_id"].as_str().unwrap();
+    for corruption in [
+        "old_tree",
+        "new_tree",
+        "context",
+        "child_ref",
+        "commit",
+        "receipt",
+        "principal",
+        "file_note",
+        "event",
+        "git_head",
+        "git_index",
+    ] {
+        let mut changed = next.clone();
+        match corruption {
+            "old_tree" => changed
+                .directory_trees
+                .get_mut(status.working_tree_id.as_ref().unwrap())
+                .unwrap()
+                .entries
+                .clear(),
+            "new_tree" => changed
+                .directory_trees
+                .get_mut(head)
+                .unwrap()
+                .entries
+                .clear(),
+            "context" => changed
+                .directory_trees
+                .get_mut(head)
+                .unwrap()
+                .file_contexts
+                .clear(),
+            "child_ref" => {
+                changed
+                    .directory_trees
+                    .get_mut(head)
+                    .unwrap()
+                    .directory_refs
+                    .insert(
+                        f.repo.repository_id.clone(),
+                        DirectoryReference {
+                            directory_branch_id: status.directory_branch_id.clone().unwrap(),
+                            tree_id: head.into(),
+                        },
+                    );
+            }
+            "commit" => {
+                changed
+                    .commits
+                    .get_mut(result.commit_id.as_ref().unwrap())
+                    .unwrap()
+                    .author = "other author".into()
+            }
+            "receipt" => {
+                changed.operations.get_mut(&operation).unwrap().result["input"]["message"] =
+                    "other review".into()
+            }
+            "principal" => {
+                changed
+                    .operation_principals
+                    .insert(operation, "other principal".into());
+            }
+            "file_note" => {
+                changed
+                    .file_notes
+                    .insert(f.hidden[0].file_id.clone(), "unrelated".into());
+            }
+            "event" => {
+                changed.events.pop();
+            }
+            "git_head" => {
+                changed
+                    .directory_git_repositories
+                    .get_mut(&f.repo.repository_id)
+                    .unwrap()
+                    .branches
+                    .get_mut(status.directory_branch_id.as_ref().unwrap())
+                    .unwrap()
+                    .head_tree_id = None
+            }
+            "git_index" => {
+                changed
+                    .directory_git_repositories
+                    .get_mut(&f.repo.repository_id)
+                    .unwrap()
+                    .branches
+                    .get_mut(status.directory_branch_id.as_ref().unwrap())
+                    .unwrap()
+                    .index_generation += 1
+            }
+            _ => unreachable!(),
+        }
+        assert!(view.advance(&previous, &changed).is_err(), "{corruption}");
+    }
+    assert!(view.require_operation("directory.changes.commit").is_err());
+}
+
+#[test]
 fn disk_exit_directory_default_rejects_stale_heads_without_publishing_a_receipt() {
     let mut fixture = Fixture::new();
     fixture.exit(MembershipExitAction::Deregister);
@@ -660,4 +1042,53 @@ fn disk_exit_disabled_target_keeps_directory_data_and_choices_without_target_wri
             .any(|disk| disk.slot_id == fixture.target.slot_id)
     );
     assert_eq!(files(&fixture.target.root), target_bytes);
+}
+
+#[test]
+fn detached_git_status_rechecks_current_namespace_publication_even_at_the_same_sequence() {
+    let mut fixture = Fixture::new();
+    fixture.exit(MembershipExitAction::Deregister);
+    let read = fixture
+        .engine
+        .capture_directory_git_status(
+            &fixture.repo.repository_id,
+            "",
+            HistoryWindowCancellation::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        read.status().unwrap(),
+        fixture
+            .engine
+            .directory_git_status(&fixture.repo.repository_id, "")
+            .unwrap()
+    );
+    fixture.engine.recheck_directory_git_status(&read).unwrap();
+    let sequence = fixture.engine.state.sequence;
+    let publication = fixture
+        .engine
+        .current_namespaces
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .clone();
+    fixture.engine.current_namespaces = Some(Arc::new(publication));
+    assert_eq!(fixture.engine.state.sequence, sequence);
+    assert_eq!(
+        fixture
+            .engine
+            .recheck_directory_git_status(&read)
+            .unwrap_err()
+            .code(),
+        ErrorCode::ListingChanged
+    );
+    fixture.engine.current_namespaces = None;
+    assert_eq!(
+        fixture
+            .engine
+            .recheck_directory_git_status(&read)
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
 }

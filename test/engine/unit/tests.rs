@@ -812,6 +812,7 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
         .unwrap()
         .clone();
     let versions = engine.state().versions.len();
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "inside");
     let operation = storage_contract::OperationId::generate().unwrap();
     let created = engine
         .create_directory_branches(
@@ -863,6 +864,7 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
             format!("draft {}", file.path).as_bytes(),
         );
     }
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "inside");
     let selection = storage_contract::OperationId::generate().unwrap();
     let selected = engine
         .select_directory_branches(
@@ -873,8 +875,22 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
             selection,
         )
         .unwrap();
-    assert_eq!(selected.result["count"], "2");
+    assert_eq!(selected.result["selected"], true);
+    assert_eq!(selected.result["path"], "inside");
+    assert_eq!(
+        selected.result["directory_branch_id"],
+        created.result["directory_branch_id"]
+    );
     let tree = engine.list_tree(&repo.main_branch_id).unwrap();
+    assert_eq!(
+        tree.iter()
+            .filter(|entry| {
+                entry.kind == NamespaceEntryKind::File && entry.path.starts_with("inside/")
+            })
+            .count(),
+        2,
+        "checkout restores both ordinary descendants in this independent repository"
+    );
     assert_eq!(
         tree.iter()
             .find(|e| e.file_id == outside.file_id)
@@ -956,6 +972,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
         .unwrap();
     // File and directory branch names are separate namespaces. Registering
     // this composition reuses the already selected shared file branches.
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "folder");
     engine
         .create_directory_branches(
             &repo.repository_id,
@@ -999,6 +1016,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
         "folder/new.txt",
         b"new file has no draft",
     );
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "folder");
     engine
         .select_directory_branches(
             &repo.repository_id,
@@ -2661,6 +2679,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
         .map(|entry| (entry.path().to_owned(), entry))
         .collect::<std::collections::BTreeMap<_, _>>();
     let before = engine.state().versions.len();
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "folder");
     let created = engine
         .create_directory_branches(
             &repo.repository_id,
@@ -2680,6 +2699,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
         "folder/b.txt",
         b"later parent B",
     );
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "folder");
     engine
         .select_directory_branches(
             &repo.repository_id,

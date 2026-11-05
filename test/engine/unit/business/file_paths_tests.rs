@@ -163,6 +163,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
         storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
+    crate::directory_git_fixture::checkpoint(&mut e, &r, "folder");
     let old = entries(&e, &r);
     let folderid = &old["folder"].entry_id;
     let selected = e.state().directory_selections[folderid].clone();

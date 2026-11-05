@@ -227,8 +227,14 @@ fn read_only_views(browser: &Browser, fixture: &Fixture, session: &Session) -> R
     repository(browser)?;
     open_name(browser, "future")?;
     let browse=browser.element("xpath","//div[contains(@class,'zxs-select')][./label[normalize-space(.)='Browse folder branch' or normalize-space(.)='浏览目录分支']]/button[@role='combobox']")?;
+    let panel = browser.command(
+        "GET",
+        &format!("/element/{browse}/attribute/aria-controls"),
+        None,
+    )?;
+    let panel = panel.as_str().ok_or("folder combobox lacks a listbox")?;
     browser.click(&browse)?;
-    browser.click(&browser.element("xpath","//*[@role='option' and @aria-disabled='false'][contains(normalize-space(.),'placement-preview')]")?)?;
+    browser.click(&browser.element("xpath", &select_option_xpath(panel, "placement-preview"))?)?;
     browser.button("Return to default view", "返回默认视图")?;
     check(
         browser,
@@ -432,6 +438,8 @@ fn start(
     command
         .arg("--root")
         .arg(&fixture.pool)
+        .arg("--storage-discovery-root")
+        .arg(fixture.root())
         .args(["--listen", &format!("127.0.0.1:{server_port}")]);
     server_web(&mut command, web, fixture.root());
     server_launcher::launch(&mut command, log)

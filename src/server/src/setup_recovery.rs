@@ -155,6 +155,7 @@ pub struct SetupRecovery {
     data_root: PathBuf,
     management_root: PathBuf,
     disks: BTreeMap<String, PathBuf>,
+    discovery_root: crate::storage_directories::DiscoveryRoot,
     identities: BTreeMap<String, (u64, u64)>,
     allow_development: bool,
     presets: BTreeMap<String, PathBuf>,
@@ -224,6 +225,7 @@ impl SetupRecovery {
             data_root,
             management_root,
             disks: canonical,
+            discovery_root: Default::default(),
             identities,
             allow_development: false,
             presets: BTreeMap::new(),
@@ -486,8 +488,8 @@ impl SetupRecovery {
         if request.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
         }
-        let mut config = Config::development(paths).map_err(ApiError::contract_input)?;
-        config.mode = request.mode;
+        let config =
+            Config::independent_roots(request.mode, paths).map_err(ApiError::contract_input)?;
         let config = ValidatedConfig::try_from(config).map_err(engine_error)?;
         self.initialize_config(
             permit,

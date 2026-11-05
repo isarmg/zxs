@@ -14,6 +14,12 @@ fn current(fixture: &Fixture, path: &str) -> Entry {
         .clone()
 }
 
+fn initialize(fixture: &mut Fixture, path: &str) -> String {
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, path)
+        .directory_branch_id
+        .unwrap()
+}
+
 fn selected(fixture: &Fixture, path: &str) -> String {
     let directory = if path.is_empty() {
         fixture.repo.repository_id.clone()
@@ -146,7 +152,7 @@ fn assert_clean(fixture: &Fixture) {
 #[test]
 fn membership_registry_current_batch_rename_uses_hidden_name_without_reusing_hidden_identity() {
     let mut fixture = Fixture::new(true);
-    let scope = selected(&fixture, "dir");
+    let scope = initialize(&mut fixture, "dir");
     let context = fixture
         .engine
         .file_context(&fixture.repo.repository_id, "dir/b")
@@ -223,7 +229,7 @@ fn membership_registry_current_batch_copy_allocates_new_bodies_and_refreshes_fro
         b"child body",
     );
     let child = current(&fixture, "dir/child/keep");
-    let root = selected(&fixture, "");
+    let root = initialize(&mut fixture, "");
     let old_trees = fixture.engine.state.directory_trees.clone();
     fixture.project(false);
     let request = DirectoryNamespaceBatch {
@@ -252,7 +258,7 @@ fn membership_registry_current_batch_copy_allocates_new_bodies_and_refreshes_fro
     for (id, tree) in old_trees.iter() {
         assert_eq!(fixture.engine.state.directory_trees.get(id), Some(tree));
     }
-    let scope = selected(&fixture, "dir");
+    let scope = initialize(&mut fixture, "dir");
     let copy_to_hidden_name = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Copy,
         items: vec![item(&fixture, &scope, "dir/b", Some((&scope, "dir/a")))],
@@ -289,8 +295,8 @@ fn membership_registry_current_batch_moves_between_selected_scopes_and_renames_n
         "dir/child/keep",
         b"nested",
     );
-    let source = selected(&fixture, "dir");
-    let destination = selected(&fixture, "destination");
+    let source = initialize(&mut fixture, "dir");
+    let destination = initialize(&mut fixture, "destination");
     let original_context = fixture
         .engine
         .file_context(&fixture.repo.repository_id, "dir/b")
@@ -327,25 +333,33 @@ fn membership_registry_current_batch_moves_between_selected_scopes_and_renames_n
             .is_none()
     );
     assert_clean(&fixture);
-    let root = selected(&fixture, "");
     let request = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Rename,
-        items: vec![item(&fixture, &root, "dir", Some((&root, "Moved")))],
+        items: vec![item(
+            &fixture,
+            &source,
+            "dir/child",
+            Some((&source, "dir/Moved")),
+        )],
     };
     apply(&mut fixture, &request, op()).unwrap();
-    let moved_directory = current(&fixture, "Moved");
-    let root = selected(&fixture, "");
+    let moved_directory = current(&fixture, "dir/Moved");
     let case_only = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Rename,
-        items: vec![item(&fixture, &root, "Moved", Some((&root, "MOVED")))],
+        items: vec![item(
+            &fixture,
+            &source,
+            "dir/Moved",
+            Some((&source, "dir/MOVED")),
+        )],
     };
     apply(&mut fixture, &case_only, op()).unwrap();
     assert_eq!(
-        current(&fixture, "MOVED").entry_id,
+        current(&fixture, "dir/MOVED").entry_id,
         moved_directory.entry_id
     );
     assert_eq!(
-        body(&fixture.engine, &current(&fixture, "MOVED/child/keep")),
+        body(&fixture.engine, &current(&fixture, "dir/MOVED/keep")),
         b"nested"
     );
     assert_clean(&fixture);
@@ -357,7 +371,7 @@ fn membership_registry_current_batch_moves_between_selected_scopes_and_renames_n
 #[test]
 fn membership_registry_current_batch_delete_records_only_visible_occurrences() {
     let mut fixture = Fixture::new(true);
-    let root = selected(&fixture, "");
+    let root = initialize(&mut fixture, "");
     let old_commits = fixture.engine.state.commits.clone();
     fixture.project(false);
     let request = DirectoryNamespaceBatch {
@@ -392,7 +406,7 @@ fn membership_registry_current_batch_delete_records_only_visible_occurrences() {
 #[test]
 fn membership_registry_current_batch_hidden_sources_and_stale_targets_fail_atomically() {
     let mut fixture = Fixture::new(true);
-    let scope = selected(&fixture, "dir");
+    let scope = initialize(&mut fixture, "dir");
     let hidden = item(&fixture, &scope, "dir/a", Some((&scope, "dir/hidden-copy")));
     fixture.project(false);
     let mut retained = item(&fixture, &scope, "dir/b", Some((&scope, "dir/new")));
@@ -425,8 +439,8 @@ fn membership_registry_current_batch_hidden_sources_and_stale_targets_fail_atomi
 #[test]
 fn membership_registry_current_batch_rejects_overlapping_active_scopes_before_any_publication() {
     let mut fixture = Fixture::new(true);
-    let root = selected(&fixture, "");
-    let directory = selected(&fixture, "dir");
+    let root = initialize(&mut fixture, "");
+    let directory = initialize(&mut fixture, "dir");
     fixture.project(false);
     let request = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Move,
@@ -440,7 +454,7 @@ fn membership_registry_current_batch_rejects_overlapping_active_scopes_before_an
     let before = canonical_json(fixture.engine.state()).unwrap();
     assert_eq!(
         apply(&mut fixture, &request, op()).unwrap_err().code(),
-        ErrorCode::BatchScopeConflict
+        ErrorCode::DirectoryBranchScope
     );
     assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
 }
@@ -448,7 +462,7 @@ fn membership_registry_current_batch_rejects_overlapping_active_scopes_before_an
 #[test]
 fn membership_registry_current_batch_noop_does_not_materialize_raw_hidden_entries() {
     let mut fixture = Fixture::new(true);
-    let scope = selected(&fixture, "dir");
+    let scope = initialize(&mut fixture, "dir");
     fixture.project(false);
     let branches = fixture.engine.state.branches.clone();
     let directories = fixture.engine.state.directory_branches.clone();
@@ -476,6 +490,7 @@ fn membership_registry_current_batch_noop_does_not_materialize_raw_hidden_entrie
 fn membership_registry_current_batch_inactive_and_historical_scopes_stay_fenced_but_receipts_survive()
  {
     let mut fixture = Fixture::new(true);
+    initialize(&mut fixture, "dir");
     let inactive = fixture
         .engine
         .create_directory_branches(
@@ -543,7 +558,7 @@ fn membership_registry_current_batch_inactive_and_historical_scopes_stay_fenced_
 #[test]
 fn membership_registry_current_batch_requires_the_exact_selected_occurrence_not_global_file_ids() {
     let mut fixture = Fixture::new(true);
-    let scope = selected(&fixture, "dir");
+    let scope = initialize(&mut fixture, "dir");
     fixture.project(false);
     let request = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Rename,
@@ -569,7 +584,7 @@ fn membership_registry_current_batch_requires_the_exact_selected_occurrence_not_
 fn membership_registry_current_batch_preserves_preparation_exclusion_and_actual_payload_verification()
  {
     let mut fixture = Fixture::new(true);
-    let scope = selected(&fixture, "dir");
+    let scope = initialize(&mut fixture, "dir");
     fixture.project(false);
     let batch = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Copy,
@@ -632,7 +647,7 @@ fn membership_registry_current_batch_preserves_preparation_exclusion_and_actual_
 #[test]
 fn membership_registry_current_batch_recovery_rejects_hidden_or_duplicate_occurrence_imports() {
     let mut fixture = Fixture::new(true);
-    let scope = selected(&fixture, "dir");
+    let scope = initialize(&mut fixture, "dir");
     fixture.project(false);
     let before = Arc::clone(&fixture.engine.state);
     let before_snapshot = fixture.engine.snapshot.clone();
@@ -732,7 +747,7 @@ fn disk_exit_current_batch_real_d3_restarts_without_reopening_or_rewriting_the_t
         let mut fixture = Fixture::new(true);
         let disk = fixture.engine.disk("P01").unwrap().clone();
         let held = Arc::clone(fixture.engine.disk_resources.get(&disk).unwrap());
-        let scope = selected(&fixture, "dir");
+        let scope = initialize(&mut fixture, "dir");
         let hidden = item(&fixture, &scope, "dir/a", Some((&scope, "dir/hidden-copy")));
         fixture
             .engine

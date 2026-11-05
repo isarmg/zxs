@@ -95,6 +95,8 @@ fn recorded_directory_page() -> storage_contract::directory_history::DirectoryHi
             limit: 7,
         },
         current: DirectoryHistoryCurrent {
+            committed_tree_id: None,
+            staged: false,
             directory_branch_id: None,
             tree_id: None,
         },

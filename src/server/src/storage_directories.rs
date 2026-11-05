@@ -21,6 +21,43 @@ const MAX_MOUNTS: usize = 4096;
 const MAX_ENTRIES: usize = 200;
 const MAX_SCANNED: usize = 4096;
 
+/// Immutable host configuration supplied by the service manager. Parsing this
+/// path never touches a data directory, so unavailable storage cannot block login.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveryRoot(String);
+
+impl DiscoveryRoot {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for DiscoveryRoot {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let value = if value == "/" {
+            value
+        } else {
+            value.strip_suffix('/').unwrap_or(value)
+        };
+        let path = absolute(value)?;
+        Ok(Self(
+            path.to_str()
+                .expect("invariant: validated UTF-8 path")
+                .into(),
+        ))
+    }
+}
+
+impl Default for DiscoveryRoot {
+    fn default() -> Self {
+        storage_contract::storage_directories::DEFAULT_DISCOVERY_ROOT
+            .parse()
+            .expect("invariant: the default discovery root is an absolute normalized path")
+    }
+}
+
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error("directory inspection I/O failed: {0}")]
@@ -29,12 +66,12 @@ pub enum Error {
     Boundary(#[from] fs_safety::Error),
     #[error("expected an absolute, normalized UTF-8 directory path")]
     InvalidPath,
-    #[error(
-        "directory must be inside the configured discovery root; the root itself is not a storage candidate"
-    )]
+    #[error("storage candidates must be immediate children of the configured discovery root")]
     OutsideDiscoveryRoot,
     #[error("mount inventory is invalid or exceeds its bound")]
     InvalidMounts,
+    #[error("discovery directory inventory exceeds its supported bound")]
+    DiscoveryLimit,
     #[error("mounted directory identity changed; inspect it again")]
     Changed,
     #[error("directory overlaps a protected or already selected root: {0}")]
@@ -74,6 +111,10 @@ impl From<Error> for crate::ApiError {
             {
                 (http::StatusCode::NOT_FOUND, ErrorCode::NotFound)
             }
+            Error::DiscoveryLimit => (
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                ErrorCode::ResourceLimit,
+            ),
             Error::Io(_) | Error::InvalidMounts => (
                 http::StatusCode::SERVICE_UNAVAILABLE,
                 ErrorCode::DiskUnavailable,
@@ -680,12 +721,29 @@ fn inspect_held(
     if observed.mount.path != requested_mount {
         return Err(Error::Changed);
     }
+    validate_empty_directory(&observed, excluded_roots, &inventory)?;
+    verify_current(&scope.observed)?;
+    stopped.unchanged()?;
+    let selected = selection(&observed, &scope);
+    Ok(HeldSelection {
+        selected,
+        directory: observed.storage.into_directory(),
+        _mount: observed.mount_root.into_directory(),
+        _discovery: scope.observed.storage.into_directory(),
+    })
+}
+
+fn validate_empty_directory(
+    observed: &Observed,
+    excluded_roots: &[PathBuf],
+    inventory: &[Mount],
+) -> Result<()> {
     reject_non_storage_filesystem(&observed.mount.filesystem)?;
-    reject_overlaps(&observed, excluded_roots, &inventory)?;
+    reject_overlaps(observed, excluded_roots, inventory)?;
     // Use the same actual descriptor, owner and mode policy as initialization.
     let _private = fs_safety::PrivateDirectory::from_directory(
         observed.storage.directory().try_clone()?,
-        root_path,
+        observed.path.clone(),
     )?;
     unix::accessat(
         observed.storage.directory(),
@@ -696,16 +754,8 @@ fn inspect_held(
     if observed.storage.entries()?.next().transpose()?.is_some() {
         return Err(Error::NotEmpty);
     }
-    verify_current(&observed)?;
-    verify_current(&scope.observed)?;
-    stopped.unchanged()?;
-    let selected = selection(&observed, &scope);
-    Ok(HeldSelection {
-        selected,
-        directory: observed.storage.into_directory(),
-        _mount: observed.mount_root.into_directory(),
-        _discovery: scope.observed.storage.into_directory(),
-    })
+    verify_current(observed)?;
+    Ok(())
 }
 
 /// Inspect a currently empty, private directory without changing it. Permission
@@ -782,6 +832,9 @@ impl DiscoveryScope {
         let relative = path
             .strip_prefix(&self.observed.path)
             .map_err(|_| Error::OutsideDiscoveryRoot)?;
+        if strict && relative.components().count() != 1 {
+            return Err(Error::OutsideDiscoveryRoot);
+        }
         let directory = if relative.as_os_str().is_empty() {
             if strict {
                 return Err(Error::OutsideDiscoveryRoot);
@@ -809,12 +862,305 @@ pub fn validate_discovery_root(root: &str, excluded_roots: &[PathBuf]) -> Result
     verify_current(&scope.observed)
 }
 
-/// Public management navigation must use this scope, never the unrestricted
-/// low-level browse helper. The root itself is only a listing container.
+/// Read-only candidates for automatic enrollment. All known registration paths,
+/// including missing and stopped disks, must be supplied by the caller. They are
+/// excluded before opening children. A selection is only an observation: the
+/// publishing transaction must revalidate it and consume its held directory.
+pub fn discover_empty(
+    discovery_root: &str,
+    excluded_roots: &[PathBuf],
+    stopped_roots: &[PathBuf],
+) -> Result<Vec<CandidateSelection>> {
+    let inventory = mounts()?;
+    let protected_paths = excluded_roots
+        .iter()
+        .chain(stopped_roots)
+        .cloned()
+        .collect::<Vec<_>>();
+    let protected = StoppedRoots::new(&protected_paths, &inventory)?;
+    let path = absolute(discovery_root)?;
+    protected.check(&path, false)?;
+    protected.unchanged()?;
+    let scope = DiscoveryScope::open(discovery_root, &inventory)?;
+    let listing = browse_observed(
+        observe_opened(&path, scope.open_descendant(&path, false)?, &inventory)?,
+        false,
+        Some(&protected),
+    )?;
+    if listing.truncated {
+        return Err(Error::DiscoveryLimit);
+    }
+    let mut selected = Vec::with_capacity(listing.entries.len());
+    for entry in listing.entries {
+        if !entry.can_browse {
+            tracing::debug!(path = %entry.path, problem = ?entry.problem, "storage discovery skipped unavailable directory");
+            continue;
+        }
+        let path = absolute(&entry.path)?;
+        let candidate = (|| {
+            protected.check(&path, true)?;
+            let opened = scope.open_descendant(&path, true)?;
+            let observed = observe_opened(&path, opened, &inventory)?;
+            validate_empty_directory(&observed, excluded_roots, &inventory)?;
+            Ok(selection(&observed, &scope))
+        })();
+        match candidate {
+            Ok(candidate) => selected.push(candidate),
+            Err(Error::Changed) => return Err(Error::Changed),
+            Err(error) => {
+                tracing::debug!(path = %entry.path, error = ?error, "storage discovery skipped ineligible directory")
+            }
+        }
+    }
+    verify_current(&scope.observed)?;
+    protected.unchanged()?;
+    Ok(selected)
+}
+
+/// Enumerate the service-owned parent for the disk wizard without changing any
+/// directory. Known and disabled registrations remain outside new candidates.
+#[cfg(feature = "core")]
+pub(crate) fn discover_disks(
+    discovery_root: &str,
+    excluded_roots: &[PathBuf],
+    stopped_roots: &[PathBuf],
+) -> Result<storage_contract::storage_directories::DiscoveredDisks> {
+    use storage_contract::storage_directories::{
+        DiscoveredDisk, DiscoveredDiskState, DiscoveredDisks,
+    };
+    let inventory = mounts()?;
+    let protected_paths = excluded_roots
+        .iter()
+        .chain(stopped_roots)
+        .cloned()
+        .collect::<Vec<_>>();
+    let protected = StoppedRoots::new(&protected_paths, &inventory)?;
+    let path = absolute(discovery_root)?;
+    protected.check(&path, false)?;
+    protected.unchanged()?;
+    let scope = DiscoveryScope::open(discovery_root, &inventory)?;
+    let listing = browse_observed(
+        observe_opened(&path, scope.open_descendant(&path, false)?, &inventory)?,
+        true,
+        Some(&protected),
+    )?;
+    let mut candidates = Vec::with_capacity(listing.entries.len());
+    for entry in listing.entries {
+        let state = if let Some(problem) = entry.problem {
+            DiscoveredDiskState::Unavailable { problem }
+        } else {
+            let path = absolute(&entry.path)?;
+            let candidate = (|| {
+                protected.check(&path, true)?;
+                let observed =
+                    observe_opened(&path, scope.open_descendant(&path, true)?, &inventory)?;
+                classify_candidate(&observed, &scope, &inventory)
+            })();
+            match candidate {
+                Ok(state) => state,
+                Err(Error::Changed) => return Err(Error::Changed),
+                Err(error) => DiscoveredDiskState::Unsupported {
+                    code: storage_contract::ErrorCode::ConfigInvalid,
+                    message: error.to_string(),
+                    source: None,
+                },
+            }
+        };
+        candidates.push(DiscoveredDisk {
+            name: entry.name,
+            path: entry.path,
+            state,
+        });
+    }
+    verify_current(&scope.observed)?;
+    protected.unchanged()?;
+    Ok(DiscoveredDisks {
+        discovery_root: listing.path,
+        candidates,
+        truncated: listing.truncated,
+        skipped_non_utf8: listing.skipped_non_utf8,
+    })
+}
+
+#[cfg(feature = "core")]
+fn classify_candidate(
+    observed: &Observed,
+    scope: &DiscoveryScope,
+    inventory: &[Mount],
+) -> Result<storage_contract::storage_directories::DiscoveredDiskState> {
+    use storage_contract::storage_directories::{DirectorySource, DiscoveredDiskState};
+    let source = DirectorySource {
+        path: observed
+            .path
+            .to_str()
+            .expect("invariant: candidate path is validated UTF-8")
+            .into(),
+        discovery_identity: scope.observed.root_identity.clone(),
+        identity: observed.root_identity.clone(),
+    };
+    let state = if observed.storage.entries()?.next().transpose()?.is_none() {
+        match validate_empty_directory(observed, &[], inventory) {
+            Ok(()) => DiscoveredDiskState::Empty {
+                selection: selection(observed, scope),
+            },
+            Err(Error::Changed) => return Err(Error::Changed),
+            Err(error) => DiscoveredDiskState::Unsupported {
+                code: storage_contract::ErrorCode::ConfigInvalid,
+                message: error.to_string(),
+                source: Some(source),
+            },
+        }
+    } else {
+        match storage_engine::recognize_disk(
+            observed.storage.directory().try_clone()?,
+            observed.path.clone(),
+        ) {
+            Ok(disk) => DiscoveredDiskState::Zxs {
+                disk_id: disk.identity().disk_id.clone(),
+                slot_id: disk.identity().slot_id.clone(),
+                role: storage_contract::storage_directories::DiscoveredDiskRole {
+                    level: disk.role().level(),
+                    upstream_slot_id: disk.role().upstream_slot_id().map(str::to_owned),
+                    metadata_member: disk.role().metadata_member(),
+                    evidence: match disk.role().evidence() {
+                        storage_engine::DiskRoleEvidence::InitialConfiguration => storage_contract::storage_directories::DiskRoleEvidence::InitialDeclaration,
+                        storage_engine::DiskRoleEvidence::MembershipGeneration { .. } => storage_contract::storage_directories::DiskRoleEvidence::GenerationEvidence,
+                    },
+                },
+                source,
+            },
+            Err(error) => DiscoveredDiskState::Unsupported {
+                code: error.code(),
+                message: error.to_string(),
+                source: Some(source),
+            },
+        }
+    };
+    verify_current(observed)?;
+    Ok(state)
+}
+
+/// Reopen an explicitly reviewed source through the fixed parent. This grants
+/// read access only; the conversion plan separately verifies every source entry.
+#[cfg(feature = "core")]
+pub(crate) fn reopen_source(
+    discovery_root: &str,
+    source: &storage_contract::storage_directories::DirectorySource,
+    excluded_roots: &[PathBuf],
+    stopped_roots: &[PathBuf],
+) -> Result<File> {
+    let inventory = mounts()?;
+    let protected_paths = excluded_roots
+        .iter()
+        .chain(stopped_roots)
+        .cloned()
+        .collect::<Vec<_>>();
+    let protected = StoppedRoots::new(&protected_paths, &inventory)?;
+    let path = absolute(&source.path)?;
+    protected.check(&absolute(discovery_root)?, false)?;
+    protected.check(&path, true)?;
+    protected.unchanged()?;
+    let scope = DiscoveryScope::open(discovery_root, &inventory)?;
+    let observed = observe_opened(&path, scope.open_descendant(&path, true)?, &inventory)?;
+    if observed.root_identity != source.identity
+        || scope.observed.root_identity != source.discovery_identity
+    {
+        return Err(Error::Changed);
+    }
+    verify_current(&observed)?;
+    verify_current(&scope.observed)?;
+    protected.unchanged()?;
+    Ok(observed.storage.into_directory())
+}
+
+/// Read-only diagnostic inventory of empty candidates and recognized ZXS roots.
+/// Recognition never admits membership or permits enrollment: only `discover_empty`
+/// supplies new candidates, with every existing registration explicitly excluded.
+/// Unknown nonempty directories are omitted without writes or recursive searching.
+#[cfg(feature = "core")]
+pub(crate) fn discover_supported(
+    discovery_root: &str,
+    path: &str,
+    stopped_roots: &[PathBuf],
+) -> std::result::Result<DirectoryListing, crate::ApiError> {
+    let inventory = mounts()?;
+    let stopped = StoppedRoots::new(stopped_roots, &inventory)?;
+    let path = absolute(path)?;
+    if path != absolute(discovery_root)? {
+        return Err(Error::OutsideDiscoveryRoot.into());
+    }
+    stopped.check(&path, false)?;
+    stopped.unchanged()?;
+    let scope = DiscoveryScope::open(discovery_root, &inventory)?;
+    let mut listing = browse_observed(
+        observe_opened(&path, scope.open_descendant(&path, false)?, &inventory)?,
+        false,
+        Some(&stopped),
+    )?;
+    let mut entries = Vec::with_capacity(listing.entries.len());
+    for entry in listing.entries {
+        if !entry.can_browse {
+            tracing::warn!(path = %entry.path, problem = ?entry.problem, "storage discovery rejected unavailable directory");
+            continue;
+        }
+        let path = absolute(&entry.path)?;
+        let directory = scope.open_descendant(&path, true)?;
+        let observed = observe_opened(&path, directory, &inventory)?;
+        match classify_directory(&observed, &inventory)? {
+            DiscoveredKind::Empty | DiscoveredKind::Recognized => entries.push(entry),
+            DiscoveredKind::Unsupported => {}
+        }
+    }
+    listing.entries = entries;
+    verify_current(&scope.observed)?;
+    stopped.unchanged()?;
+    Ok(listing)
+}
+
+#[cfg(feature = "core")]
+#[derive(Debug, PartialEq, Eq)]
+enum DiscoveredKind {
+    Empty,
+    Recognized,
+    Unsupported,
+}
+
+#[cfg(feature = "core")]
+fn classify_directory(observed: &Observed, inventory: &[Mount]) -> Result<DiscoveredKind> {
+    let kind = if observed.storage.entries()?.next().transpose()?.is_none() {
+        match validate_empty_directory(observed, &[], inventory) {
+            Ok(()) => DiscoveredKind::Empty,
+            Err(Error::Changed) => return Err(Error::Changed),
+            Err(error) => {
+                tracing::debug!(path = %observed.path.display(), error = ?error, "storage discovery rejected ineligible empty directory");
+                DiscoveredKind::Unsupported
+            }
+        }
+    } else {
+        match storage_engine::recognize_disk(
+            observed.storage.directory().try_clone()?,
+            observed.path.clone(),
+        ) {
+            Ok(_) => DiscoveredKind::Recognized,
+            Err(error) => {
+                tracing::debug!(path = %observed.path.display(), error = ?error, "storage discovery rejected unknown nonempty directory");
+                DiscoveredKind::Unsupported
+            }
+        }
+    };
+    verify_current(observed)?;
+    Ok(kind)
+}
+
+/// Enumerate only the configured root. Its immediate children are candidates;
+/// no request may enumerate a child or recursively discover nested directories.
 pub fn browse_within(discovery_root: &str, path: &str) -> Result<DirectoryListing> {
     let inventory = mounts()?;
     let scope = DiscoveryScope::open(discovery_root, &inventory)?;
     let path = absolute(path)?;
+    if path != scope.observed.path {
+        return Err(Error::OutsideDiscoveryRoot);
+    }
     let opened = scope.open_descendant(&path, false)?;
     let observed = observe_opened(&path, opened, &inventory)?;
     let listing = browse_observed(observed, false, None)?;
@@ -822,7 +1168,7 @@ pub fn browse_within(discovery_root: &str, path: &str) -> Result<DirectoryListin
     Ok(listing)
 }
 
-/// Inspect only strict descendants of the server's current configured root.
+/// Inspect only immediate children of the server's immutable configured root.
 /// The actual filesystem mount may be outside that discovery root.
 pub fn inspect_within(
     discovery_root: &str,
@@ -872,6 +1218,9 @@ pub fn browse_fresh_within(
     stopped.check(&path, false)?;
     stopped.unchanged()?;
     let scope = DiscoveryScope::open(discovery_root, &inventory)?;
+    if path != scope.observed.path {
+        return Err(Error::OutsideDiscoveryRoot);
+    }
     let opened = scope.open_descendant(&path, false)?;
     let observed = observe_opened(&path, opened, &inventory)?;
     let listing = browse_observed(observed, false, Some(&stopped))?;

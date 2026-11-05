@@ -103,12 +103,16 @@ impl DefaultShare {
             return Ok(Location::Root);
         }
         let (slot, within) = path.split_once('/').unwrap_or((path, ""));
+        let key = name_policy::lookup_key(slot);
         let slot = topology
             .slots
             .into_iter()
             .find(|candidate| {
                 candidate.level == 1
-                    && name_policy::lookup_key(&candidate.slot_id) == name_policy::lookup_key(slot)
+                    && candidate
+                        .name
+                        .as_ref()
+                        .is_some_and(|name| name.key() == key)
             })
             .ok_or_else(missing)?;
         if within.is_empty() {
@@ -298,9 +302,13 @@ impl DefaultShare {
                     .is_empty()
                     .then(|| location.repository.repository_id.clone());
                 let prefix = if location.repository.file_manager_root {
-                    slot.slot_id
+                    slot.directory_name()?.as_str().to_owned()
                 } else {
-                    format!("{}/{}", slot.slot_id, location.repository.name)
+                    format!(
+                        "{}/{}",
+                        slot.directory_name()?.as_str(),
+                        location.repository.name
+                    )
                 };
                 let key = self.session_key(location.repository)?;
                 let session = self
@@ -338,7 +346,10 @@ impl DefaultShare {
         binding.require_generation(self.account_generation)?;
         let (entry_id, canonical_path, name) = match self.locate(path)? {
             Location::Root => ("smb-root".into(), String::new(), String::new()),
-            Location::Disk(slot) => (slot.disk_id, slot.slot_id.clone(), slot.slot_id),
+            Location::Disk(slot) => {
+                let name = slot.directory_name()?.as_str().to_owned();
+                (slot.disk_id, name.clone(), name)
+            }
             Location::Path { slot, path: within } => {
                 let location = self.shared.backend.resolve_smb_path(
                     &self.identity,
@@ -353,9 +364,13 @@ impl DefaultShare {
                     .is_empty()
                     .then(|| location.repository.repository_id.clone());
                 let prefix = if location.repository.file_manager_root {
-                    slot.slot_id
+                    slot.directory_name()?.as_str().to_owned()
                 } else {
-                    format!("{}/{}", slot.slot_id, location.repository.name)
+                    format!(
+                        "{}/{}",
+                        slot.directory_name()?.as_str(),
+                        location.repository.name
+                    )
                 };
                 let key = self.session_key(location.repository)?;
                 let mut result = self.sessions[&key].stat_typed(&location.relative_path)?;

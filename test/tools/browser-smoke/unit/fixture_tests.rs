@@ -32,6 +32,14 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
         .find(|repository| repository.name == "browser-fixtures")
         .unwrap();
     assert_eq!(repository.name, "browser-fixtures");
+    let root_git = engine
+        .directory_git_status(&repository.repository_id, "")
+        .unwrap();
+    assert!(root_git.initialized && root_git.head_tree_id.is_some());
+    assert!(
+        !root_git.staged && !root_git.needs_restage,
+        "the notice lifecycle must start from a committed, clean independent repository: {root_git:?}"
+    );
     let entries = engine.list_tree(&repository.main_branch_id).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path, FILE);
@@ -77,7 +85,7 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
         .unwrap();
     assert!(
         directory.nodes.len() >= 3,
-        "root scope plus two writes are real directory snapshots"
+        "the root scope and both writes have explicit user directory commits"
     );
     let ids = directory
         .nodes
@@ -101,7 +109,7 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
     for node in &directory.nodes {
         assert_eq!(
             node.parent_tree_id,
-            engine.state().directory_trees[&node.tree_id].parent_tree_id
+            user_commit_parent(&engine, &node.tree_id)
         );
     }
     let HistoryWindowPage::Branches { branches, page, .. } = engine
@@ -147,14 +155,15 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
     let mut bytes = Vec::new();
     content.file.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, PAYLOADS[0].as_bytes());
+    let naming_git = engine
+        .directory_git_status(&naming.repository_id, "")
+        .unwrap();
     assert!(
-        engine
-            .state()
-            .directory_branches
-            .values()
-            .all(|branch| branch.repository_id != naming.repository_id),
-        "naming registration needs an unregistered scope, independent of SVG history"
+        !naming_git.initialized,
+        "the manual initialization browser flow must start uninitialized"
     );
+    assert!(naming_git.directory_branch_id.is_none());
+    assert!(naming_git.head_tree_id.is_none());
     assert_real_readonly_directory_history(&engine);
     drop(content);
     drop(engine);
@@ -196,7 +205,7 @@ fn assert_real_readonly_directory_history(engine: &Engine) {
     let nodes = history(DirectoryHistoryCollection::Nodes).nodes;
     assert!(
         nodes.len() >= 3,
-        "the real preview child needs its initialized scope and two persisted writes"
+        "the real preview child needs three explicit user directory commits"
     );
     let ids = nodes
         .iter()
@@ -213,7 +222,7 @@ fn assert_real_readonly_directory_history(engine: &Engine) {
     for node in &nodes {
         assert_eq!(
             node.parent_tree_id,
-            engine.state().directory_trees[&node.tree_id].parent_tree_id
+            user_commit_parent(engine, &node.tree_id)
         );
         if let Some(parent) = &node.parent_tree_id {
             assert!(ids.contains(parent.as_str()));
@@ -221,8 +230,26 @@ fn assert_real_readonly_directory_history(engine: &Engine) {
     }
     let branches = history(DirectoryHistoryCollection::Branches).branches;
     assert_eq!(branches.len(), 2);
-    assert_eq!(branches[0].head_tree_id, branches[1].head_tree_id);
-    assert!(ids.contains(branches[0].head_tree_id.as_str()));
+    assert_eq!(branches[0].committed_tree_id, branches[1].committed_tree_id);
+    let committed = branches[0].committed_tree_id.as_ref().unwrap();
+    assert!(ids.contains(committed.as_str()));
+    let historical = nodes
+        .iter()
+        .find(|node| &node.tree_id != committed)
+        .unwrap();
+    let frozen = engine
+        .preview_directory_branch(
+            &repository.repository_id,
+            &historical.directory_branch_id,
+            &historical.tree_id,
+        )
+        .unwrap();
+    assert_eq!(frozen.branch().head_tree_id, historical.tree_id);
+    assert_eq!(frozen.path(), DIRECTORY_PATH);
+    assert_eq!(
+        frozen.branch().entries,
+        engine.state().directory_trees[&historical.tree_id].entries
+    );
     let parent = engine
         .state()
         .directory_branches
@@ -248,6 +275,20 @@ fn assert_real_readonly_directory_history(engine: &Engine) {
     assert_eq!(preview.path(), "");
     assert_eq!(preview.entry(index).unwrap().path(), DIRECTORY_PATH);
     assert_eq!(preview.source_path(DIRECTORY_PATH).unwrap(), DIRECTORY_PATH);
+}
+
+fn user_commit_parent(engine: &Engine, tree_id: &str) -> Option<String> {
+    let state = engine.state();
+    state.directory_trees[tree_id]
+        .parent_tree_id
+        .as_ref()
+        .and_then(|parent| {
+            storage_engine::directory_staging::committed_directory_ancestor(
+                state,
+                &state.directory_trees[parent],
+            )
+        })
+        .map(|parent| parent.tree_id.clone())
 }
 
 #[test]

@@ -8,7 +8,8 @@
       "observation_failure": null,
       "used_bytes": "7",
       "simulation": true,
-      "writable": true
+      "writable": true,
+      "name": "directory-P01"
     },
     {
       "slot_id": "B01",
@@ -21,7 +22,8 @@
       },
       "used_bytes": "7",
       "simulation": true,
-      "writable": false
+      "writable": false,
+      "name": "directory-B01"
     }
   ]
 }

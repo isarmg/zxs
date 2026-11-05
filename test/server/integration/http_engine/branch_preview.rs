@@ -17,10 +17,11 @@ async fn directory_preview_is_a_read_and_only_explicit_default_restores_the_subt
     )
     .await;
     let repository = root_page["context"]["repository_id"].as_str().unwrap();
-    let branch = manager_directory_branch(&app, &token, "folder", "frozen").await;
+    let branch = manager_prepare_directory_branch(&app, &token, "folder", "frozen").await;
     manager_upload(&app, &token, "folder/file.txt", b"later").await;
     let request =
-        manager_default_request(&app, &token, repository, &branch, &new_id("op").unwrap()).await;
+        manager_prepare_default_request(&app, &token, repository, &branch, &new_id("op").unwrap())
+            .await;
     let tree = request["expected_tree_id"].as_str().unwrap();
     let default_route = format!("/api/repositories/{repository}/default-branch");
     let before = success(&app, &token, "GET", &default_route, None).await;
@@ -60,14 +61,18 @@ async fn directory_preview_is_a_read_and_only_explicit_default_restores_the_subt
         live["entries"][0]["version_id"],
         preview["entries"][0]["version_id"]
     );
-    let mut stale = request.clone();
-    stale["expected_head"] = "stale".into();
-    stale["operation_id"] = new_id("op").unwrap().into();
-    let (status, rejected) = send(&app, Some(&token), "PUT", &default_route, Some(stale)).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
-    assert_eq!(rejected["error"]["code"], "LISTING_CHANGED");
+    let unchanged_bytes = manager_disk_files(root.path());
+    for (field, prefix) in [("expected_head", "commit"), ("expected_tree_id", "dtree")] {
+        let mut stale = request.clone();
+        stale[field] = new_id(prefix).unwrap().into();
+        stale["operation_id"] = new_id("op").unwrap().into();
+        let (status, rejected) = send(&app, Some(&token), "PUT", &default_route, Some(stale)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{field}: {rejected}");
+        assert_eq!(rejected["error"]["code"], "LISTING_CHANGED");
+        assert_eq!(manager_disk_files(root.path()), unchanged_bytes);
+    }
     let published = success(&app, &token, "PUT", &default_route, Some(request.clone())).await;
-    assert_eq!(published["operation_kind"], "directory.default.set");
+    assert_eq!(published["operation_kind"], "directory.git.checkout");
     assert_eq!(
         success(&app, &token, "PUT", &default_route, Some(request)).await,
         published

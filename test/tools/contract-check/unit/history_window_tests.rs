@@ -382,10 +382,13 @@ fn directory_history_shared_schemas_match_actual_wire_types_and_u64_limits() {
         limit: 128,
     };
     let current = DirectoryHistoryCurrent {
+        committed_tree_id: Some(tree_id.clone()),
+        staged: false,
         directory_branch_id: Some(branch_id.clone()),
         tree_id: Some(tree_id.clone()),
     };
     let node = DirectoryHistoryNode {
+        message: "Commit directory".into(),
         tree_id: tree_id.clone(),
         directory_branch_id: branch_id.clone(),
         parent_tree_id: Some(storage_contract::new_id("dtree").unwrap()),
@@ -395,6 +398,8 @@ fn directory_history_shared_schemas_match_actual_wire_types_and_u64_limits() {
         sequence: u64::MAX,
     };
     let branch = DirectoryHistoryBranch {
+        committed_tree_id: None,
+        staged: true,
         directory_branch_id: branch_id,
         name: "main".into(),
         parent_branch_id: None,
@@ -452,4 +457,31 @@ fn directory_history_shared_schemas_match_actual_wire_types_and_u64_limits() {
             &json_codec::to_value(&page).unwrap(),
         );
     }
+}
+
+#[test]
+fn directory_staging_schemas_match_public_wire_types() {
+    use storage_contract::directory_staging::{DirectoryCommitBody, DirectoryStagingStatus};
+    let tree = storage_contract::new_id("dtree").unwrap();
+    let status = DirectoryStagingStatus {
+        repository_id: storage_contract::new_id("repo").unwrap(),
+        directory_branch_id: storage_contract::new_id("dbr").unwrap(),
+        head_tree_id: tree.clone(),
+        committed_tree_id: None,
+        staged: true,
+        added: u64::MAX,
+        modified: 0,
+        deleted: 1,
+    };
+    let body = DirectoryCommitBody {
+        expected_tree_id: tree,
+            expected_index_generation: 1,
+        message: "Commit directory".into(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+    };
+    assert_shared_history_shape(
+        "DirectoryStagingStatus",
+        &json_codec::to_value(status).unwrap(),
+    );
+    assert_shared_history_shape("DirectoryCommitBody", &json_codec::to_value(body).unwrap());
 }

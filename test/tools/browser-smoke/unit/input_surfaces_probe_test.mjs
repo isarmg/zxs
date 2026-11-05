@@ -4,11 +4,11 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 
 const source = readFileSync(new URL('../runner/input_surfaces.js', import.meta.url), 'utf8');
-const box = (left = 32, width = 240) => ({left, top: 40, right: left + width, bottom: 84, width, height: 44});
+const box = (left = 32, width = 240) => ({left, top: 40, right: left + width, bottom: 76, width, height: 36});
 const makeControl = (tag = 'INPUT', type = 'text') => {
     const style = {
         opacity: '1', backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none', borderImageSource: 'none', boxShadow: 'none',
-        outlineWidth: '0px', outlineStyle: 'none', outlineColor: 'rgb(0, 0, 0)',
+        outlineWidth: '0px', outlineStyle: 'none', outlineColor: 'rgb(0, 0, 0)', outlineOffset: '0px',
         '--zxs-contour-extent': '0px', '--zxs-contour-foreground': '0', '--zxs-compact-row-height': '36px',
         getPropertyValue(property) { return this[property]; },
     };
@@ -72,13 +72,13 @@ check('modern transparent color', f => { f.input.style.backgroundColor = 'color(
 check('disabled text', f => { f.input.disabled = true; f.input.style.opacity = '0.6'; }, true);
 check('fieldset-disabled text', f => { f.input.inheritedDisabled = true; f.input.style.opacity = '0.6'; }, true);
 check('narrow layout viewport', f => { f.clientWidth = 240; for (const node of f.controls) node.box = box(12, 216); }, true);
-const focus = f => { f.input.focusVisible = true; Object.assign(f.input.style, {borderBottomWidth: '3px', borderBottomStyle: 'solid'}); };
-check('keyboard focus uses a solid bottom', focus, true);
+const focus = f => { f.input.focusVisible = true; Object.assign(f.input.style, {outlineWidth: '2px', outlineStyle: 'solid', outlineOffset: '-2px'}); };
+check('keyboard focus uses a visible inset ring without a text underline', focus, true);
 const directory = f => { f.input.storageDirectory = true; f.input.box = {...box(), bottom: 76, height: 36}; };
 check('directory input matches the ordinary row', directory, true);
-check('directory input stays unlined while editing', f => { directory(f); f.input.focusVisible = true; }, true);
-check('directory input rejects the old focus underline', f => { directory(f); focus(f); }, false, 'bottomWidth');
-check('directory input rejects the old tall row', f => { directory(f); f.input.box = box(); }, false, 'directoryRowHeight');
+check('directory input shares the unlined focus ring', f => { directory(f); focus(f); }, true);
+check('directory input rejects the old focus underline', f => { directory(f); focus(f); f.input.style.borderBottomWidth = '3px'; }, false, 'bottomWidth');
+check('directory input rejects the old tall row', f => { directory(f); f.input.box = {...box(), bottom: 84, height: 44}; }, false, 'sharedRowHeight');
 check('directory exception preserves other input focus', f => { directory(f); f.textarea.focusVisible = true; }, false);
 check('invisible outline color', f => { Object.assign(f.input.style, {outlineWidth: '3px', outlineStyle: 'solid', outlineColor: 'rgba(0, 0, 0, 0)'}); }, true);
 check('hidden controls are outside current scene', f => { f.textarea.visible = false; f.textarea.style.borderLeftWidth = '2px'; }, true);
@@ -109,15 +109,17 @@ for (const side of ['Top', 'Right', 'Left']) {
 for (const property of ['backgroundImage', 'borderImageSource']) {
     check(`stale G4 ${property}`, f => { f.input.style[property] = 'url("blob:stale-g4")'; }, false, 'noImages');
 }
-check('rectangular keyboard outline', f => { f.input.focusVisible = true; Object.assign(f.input.style, {borderBottomWidth: '3px', outlineWidth: '2px', outlineStyle: 'solid'}); }, false, 'noOutline');
+check('legacy focus underline remains rejected beside an outline', f => { focus(f); f.input.style.borderBottomWidth = '3px'; }, false, 'bottomWidth');
 check('idle dashed bottom is rejected', f => { f.input.style.borderBottomStyle = 'dashed'; }, false, 'bottomStyle');
 check('idle solid bottom is rejected', f => { f.input.style.borderBottomStyle = 'solid'; }, false, 'bottomStyle');
 check('keyboard dashed bottom is rejected', f => { focus(f); f.input.style.borderBottomStyle = 'dashed'; }, false, 'bottomStyle');
-check('transparent focus bottom is not visible', f => { focus(f); f.input.style.borderBottomColor = 'rgba(0, 0, 0, 0)'; }, false, 'bottomStyle');
-check('modern transparent focus bottom is not visible', f => { focus(f); f.input.style.borderBottomColor = 'rgb(0 0 0 / 0%)'; }, false, 'bottomStyle');
-check('missing focused bottom', f => { focus(f); f.input.style.borderBottomWidth = '0px'; }, false, 'bottomWidth');
+check('transparent focus ring is not visible', f => { focus(f); f.input.style.outlineColor = 'rgba(0, 0, 0, 0)'; }, false, 'focusIndicator');
+check('modern transparent focus ring is not visible', f => { focus(f); f.input.style.outlineColor = 'rgb(0 0 0 / 0%)'; }, false, 'focusIndicator');
+check('missing focused ring', f => { focus(f); f.input.style.outlineWidth = '0px'; }, false, 'focusIndicator');
 check('unfocused thick bottom', f => { f.input.style.borderBottomWidth = '3px'; }, false, 'bottomWidth');
-check('focus without thicker bottom', f => { f.input.focusVisible = true; }, false, 'bottomWidth');
+check('focus without any indicator', f => { f.input.focusVisible = true; }, false, 'focusIndicator');
+check('focus ring must not be clipped outside its field', f => { focus(f); f.input.style.outlineOffset = '3px'; }, false, 'focusIndicator');
+check('ordinary text input cannot retain the old tall row', f => { f.input.box = {...box(), bottom:84, height:44}; }, false, 'sharedRowHeight');
 check('box shadow creates a second border', f => { f.input.style.boxShadow = 'rgb(0, 0, 0) 0px 0px 0px 2px'; }, false, 'noShadow');
 check('opaque native input fill', f => { f.input.style.backgroundColor = 'rgb(255, 255, 255)'; }, false, 'transparentBackground');
 check('contour extent must be zero', f => { f.input.style['--zxs-contour-extent'] = '18px'; }, false, 'noContour');
@@ -137,14 +139,14 @@ check('detached visible candidate', f => { f.input.isConnected = false; }, false
 check('no current text controls cannot silently pass', f => { f.controls = []; }, false);
 const anonymous=f=>{f.input.anonymous=true;f.input.style.borderBottomWidth='0px';f.input.style.borderBottomStyle='none';};
 check('anonymous idle input is unlined', anonymous, true);
-check('anonymous keyboard focus is solid', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='solid';}, true);
+check('anonymous keyboard focus is the shared ring', f=>{anonymous(f);focus(f);}, true);
 check('anonymous policy does not relax other controls', f=>{anonymous(f);f.textarea.style.borderBottomWidth='1px';}, false);
 check('anonymous idle dashed line is rejected', f=>{anonymous(f);f.input.style.borderBottomWidth='1px';f.input.style.borderBottomStyle='dashed';}, false, 'bottomWidth');
 check('anonymous zero-width dashed style is rejected', f=>{anonymous(f);f.input.style.borderBottomStyle='dashed';}, false, 'bottomStyle');
 check('anonymous solid line at rest is rejected', f=>{anonymous(f);f.input.style.borderBottomWidth='1px';f.input.style.borderBottomStyle='solid';}, false, 'bottomWidth');
-check('anonymous missing keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;}, false, 'bottomWidth');
+check('anonymous missing keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;}, false, 'focusIndicator');
 check('anonymous dashed keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='dashed';}, false, 'bottomStyle');
-check('anonymous transparent keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='solid';f.input.style.borderBottomColor='transparent';}, false, 'bottomStyle');
+check('anonymous transparent keyboard focus is rejected', f=>{anonymous(f);focus(f);f.input.style.outlineColor='transparent';}, false, 'focusIndicator');
 const folderSearch = f => {
     const input = f.input;
     input.type = 'search';
@@ -213,8 +215,8 @@ check('forced colors retain a native input focus outline', f => {
     focus(f); f.forced = true; Object.assign(f.input.style, {outlineWidth: '2px', outlineStyle: 'solid'});
 }, true);
 check('forced colors cannot lose native input focus', f => {
-    focus(f); f.forced = true;
-}, false, 'noOutline');
+    focus(f); f.forced = true; f.input.style.outlineWidth='0px';
+}, false, 'focusIndicator');
 check('forced colors search uses its native outer outline', f => {
     folderSearch(f); f.input.focusVisible = true; f.forced = true;
     Object.assign(f.input.searchFrame.style, {outlineWidth: '2px', outlineStyle: 'solid'});

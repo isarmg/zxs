@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
     "compliance/external-tests/foundation.json": "7553f119ba2b1a530ea7c8126701f0410a88945425a76ceb7e7643f6cbb1fecf",
-    "compliance/external-tests/integrated.json": "c995c55711e72afb7774c7f8e38ea7bbab2031e110cda00023e3a144c91baca4",
+    "compliance/external-tests/integrated.json": "6111959dd2d0aeb75fbd01b1390396088517a6b9125bd2da1b59da5d9d68e485",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79149,7 +79149,7 @@
       ]
     },
     "src/interface": {
-      "bytes": 95230,
+      "bytes": 95314,
       "directory": "src/interface",
       "file_count": 18,
       "files": [
@@ -79173,7 +79173,7 @@
         },
         {
           "path": "test/interface/integration/style_contracts.rs",
-          "sha256": "7b6b70fc3f10f1b0e0fa85a6ab7ad4acbde2ad83032d7c5718b397352b627656",
+          "sha256": "fdd81cf6e5f47199a0662a15c15f8d46ff62aad51e32b2086061d6e67b0ae1ae",
           "source": "src/interface/tests/style_contracts.rs",
           "source_sha256_before": "82c878873c25b7f1a59261e4a577dd68c5cc0dd48eb986cb32b221f33f2826b8"
         },
@@ -79501,7 +79501,8 @@
     "Cargo.lock": "517cd06c04f42581249da4632c89145833dcdc3ad7c109f37659ca4d8b631ef6"
   },
   "manifests_sha256": {
-    "Cargo.toml": "d6e9dbd9e1f4973cad5ce12f1d42191928e70363208e7da7a240b69dd1c91b5f",
+    "Cargo.toml": "a9cf1c527b394650c1bc3d97e7caeb259949bbb90a553f4113423860c0915cbd",
+    "rescue/Cargo.toml": "4adf84f3aedd2073c8ee29874d43ed4164a7f658d18da8b6c752bf837ebaaff6",
     "src/auth/Cargo.toml": "f315d7648a6399f68f04ec5e49d9df3f69d9254b68c6f5e8369e87fb1e8282f9",
     "src/client/Cargo.toml": "e52f0f1e11816d9fb28c4b0bfbe607ff3342b30493a92fbb7a75847a1f96b7b6",
     "src/contract/Cargo.toml": "c78a39f40d067f1267d056f0f51c17ada5b2c365556fac2a8c54f9b488f3649f",
@@ -79732,7 +79733,6 @@
     "src/macros/Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
     "src/naming/Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
     "src/platform/Cargo.toml": "497750ef0b747762e3e1a0b70d3553b017025cf4e10e8e2a38f17fedc7902b33",
-    "src/rescue/Cargo.toml": "b6222d3b89dd68661190ded3cbd2d1eb8fc917a0f119a59308d25dd7fe52d664",
     "src/server/Cargo.toml": "31dc234a15d5d6322b2befdc166d0b7fa314b43eae5eee307fb19dc55b68a867",
     "src/smb-vfs/Cargo.toml": "c31cbf9f660ee8cd4b99a6fbe1dde835444ce189db1e6a68a02cb87d0141fc0b",
     "src/smb/Cargo.toml": "62c7175cf2e4e98ea75380065be3e4e4d1e535bbe313ede6577f216543456ec5",
@@ -102387,7 +102387,7 @@
       "version": "0.2.129"
     }
   },
-  "policy_sha256": "033a1e826257e1174106a46e21863e33177c64ab5a3839ce2d5db3483f38ac88",
+  "policy_sha256": "9e8546a00a51ce2359d5fad00b13caba23c9b88028e1e4e26eb945baf13dd4d5",
   "post_consolidation_benchmark_relocation": "8a08cc5b47c335b9e6aa2b7361ab7259fdc394c8dad16c29efb3e90d330ffbbc",
   "proof_maintenance_receipts": [
     "f6b00af0dad58bb402937c193974d916d525a790decbe043e679954c03bcbd1e",

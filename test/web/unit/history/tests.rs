@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn current_directory_git_operations_have_specific_labels() {
+    for (action, expected) in [
+        ("directory.git.initialize", "Initialized folder repository"),
+        (
+            "directory.git.stage-owned",
+            "Staged this repository's changes",
+        ),
+        (
+            "directory.git.stage-child",
+            "Staged child repository reference",
+        ),
+        ("directory.git.checkout", "Switched folder branch"),
+        ("directory.git.branch-create", "Created folder branch"),
+        ("directory.changes.commit", "Committed folder changes"),
+    ] {
+        assert_eq!(action_label(action), expected, "{action}");
+    }
+}
+
+#[test]
 fn branch_registration_is_distinct_from_legacy_content_creation() {
     assert_eq!(action_label("file_branch_pending"), "Registered branch");
     assert_eq!(action_label("branch_pending"), "Registered branch");

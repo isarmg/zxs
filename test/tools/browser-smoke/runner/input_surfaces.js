@@ -32,7 +32,6 @@ const controls = visible.map((node, index) => {
     const searchFrame = node.closest('.zxs-file-search');
     const search = searchFrame !== null;
     const storageDirectory = node.closest('.zxs-storage-activation') !== null;
-    const underline = focusVisible && !search && !storageDirectory;
     const css = getComputedStyle(node);
     const rect = node.getBoundingClientRect();
     const borders = Object.fromEntries(['Top', 'Right', 'Bottom', 'Left'].map(side => [side.toLowerCase(), {
@@ -40,7 +39,7 @@ const controls = visible.map((node, index) => {
         style: css[`border${side}Style`],
         color: css[`border${side}Color`],
     }]));
-    const outline = {width: parseFloat(css.outlineWidth), style: css.outlineStyle, color: css.outlineColor};
+    const outline = {width: parseFloat(css.outlineWidth), style: css.outlineStyle, color: css.outlineColor, offset: parseFloat(css.outlineOffset)};
     const outlineVisible = outline.width > 0 && !['none', 'hidden'].includes(outline.style) && alpha(outline.color) > 0;
     const contour = {
         extent: css.getPropertyValue('--zxs-contour-extent').trim(),
@@ -72,13 +71,12 @@ const controls = visible.map((node, index) => {
     } : null;
     const checks = {
         connected: node.isConnected,
-        noRectangle: ['top', 'right', 'left'].every(side => borders[side].width === 0),
-        bottomStyle: !underline ? borders.bottom.style === 'none'
-            : borders.bottom.style === 'solid' && alpha(borders.bottom.color) > 0,
-        bottomWidth: borders.bottom.width === (underline ? 3 : 0),
-        directoryRowHeight: !storageDirectory || rect.height === parseFloat(css.getPropertyValue('--zxs-compact-row-height')),
+        noRectangle: ['top', 'right', 'bottom', 'left'].every(side => borders[side].width === 0),
+        bottomStyle: borders.bottom.style === 'none',
+        bottomWidth: borders.bottom.width === 0,
+        sharedRowHeight: node.tagName === 'TEXTAREA' ? rect.height >= parseFloat(css.getPropertyValue('--zxs-compact-row-height')) : rect.height === parseFloat(css.getPropertyValue('--zxs-compact-row-height')),
         searchSurface: !search || Object.values(searchSurface).every(Boolean),
-        noOutline: forced && focusVisible && !search ? outlineVisible && outline.style === 'solid' && outline.width >= 2 : !outlineVisible,
+        focusIndicator: focusVisible && !search ? outlineVisible && outline.style === 'solid' && outline.width >= 2 && outline.offset === -2 : !outlineVisible,
         noImages: css.backgroundImage === 'none' && css.borderImageSource === 'none',
         noShadow: css.boxShadow === 'none',
         transparentBackground: alpha(css.backgroundColor) === 0,

@@ -38,7 +38,7 @@
 ```ini
 [Service]
 ExecStart=
-ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400 --smb-socket /zxs/run/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
+ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400 --smb-socket /zxs/run/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
 ```
 
 示例的 `0` 只适用于确认桥接在 Samba 可信 root 进程身份下连接的部署。该连接时机必须在目标 Samba 验证，不能放宽 socket 权限来适应未认证的进程。`/zxs/run` 及 socket 分别维持 `0700`、`0600`，`zxs-owner` 通过 Samba 独立凭据认证后绑定到唯一 ZXS 管理员；不接受 `Samba=ZXS` 映射、重复账户配置、匿名、guest 或 force-user 会话。Samba 配置须同时限制 `valid users` 并关闭所有 guest 路径，见[共享样例](../../../deploy/samba/smb.conf.example)。共享仓库拆分、恢复后必须显式重新绑定，不能自动接入迁移后的历史域。
@@ -71,9 +71,9 @@ SMB spool 与 socket 目录分离，守护进程固定使用 `--management-root/
 
 ## 受保护的首次 Web 初始化
 
-首次 Web 设置只创建系统盘上的管理员账户，无需密钥或候选磁盘；无账户时任何可访问 Web 的人可首先设好账户，应限制初始网络可达范围。登录后默认仅发现 `/zxs/data/disks` 内目录，可设置其他已有发现根，但仍受此单元的路径/UID权限限制。服务无 root、无挂载能力，不会自动请求授权、挂载或修改权限。
+首次 Web 设置只创建系统盘上的管理员账户，无需密钥或候选磁盘；无账户时任何可访问 Web 的人可首先设好账户，应限制初始网络可达范围。发现父目录只由 `ExecStart` 的 `--storage-discovery-root` 设置，默认 `/zxs/data/disks`，仍受此单元的路径/UID权限限制。只枚举父目录下直接子目录，不递归发现子目录中的其他目录。Web 不修改本机发现路径。服务无 root、无挂载能力，不会自动请求授权、挂载或修改权限。
 
-登录后在系统管理页浏览已挂载文件系统，分别设置挂载目录和实际存储目录，允许选择挂载盘中的私有空子目录。服务以现有 UID 与 systemd 可写范围执行校验，不挂载、格式化、创建数据根或自动修改权限；目录不可写时明确拒绝。首次设置完成不代表存储已经激活。`--allow-development-setup` 只允许开发模拟，不绕过路径、身份与完整性检查。
+系统管理页保留存储状态、固定候选磁盘向导和原有中断操作恢复入口，移除自由输入的发现、挂载、浏览目录控件。服务以现有 UID 与 systemd 可写范围执行校验，不挂载、格式化、创建数据根或自动修改权限；目录不可写时明确拒绝。未知非空目录不得作为新盘写入。已有登记磁盘继续按原有持久化身份与恢复证明启动，首次账户设置完成不代表存储已经激活。`--allow-development-setup` 只允许开发模拟，不绕过路径、身份与完整性检查。
 
 `--setup-disk` 的 ID 映射仅保留既有离线恢复用途，不是新存储选择的前提。旧 Web 预设初始化路由已删除，当前 Web 不应用 `--setup-config` 草稿。草稿生成与安全离线编辑见[救援配置子域](../../components/rescue.md)。
 

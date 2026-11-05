@@ -90,12 +90,6 @@ async fn contract_input_routes_keep_exact_error_envelopes() {
             json!({"operation_id":"bad"}),
             invalid_id(),
         ),
-        (
-            "POST",
-            "/api/repositories/repository/directory-scopes",
-            json!({"path":"","operation_id":"bad"}),
-            invalid_id(),
-        ),
     ] {
         let response = app
             .clone()
@@ -802,6 +796,39 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private directory scope panic detail")
     }
+    fn directory_git_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository: &str,
+        _path: &str,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, crate::ApiError> {
+        panic!("private directory_git_status panic detail")
+    }
+    fn initialize_directory_git(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitInitializeBody,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private initialize_directory_git panic detail")
+    }
+    fn stage_directory_git_child(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitStageChildBody,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private stage_directory_git_child panic detail")
+    }
+    fn stage_directory_git_owned(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private stage_directory_git_owned panic detail")
+    }
     fn initialize_directory_scope(
         &self,
         _identity: &crate::auth::Identity,
@@ -1129,9 +1156,30 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             Some(json!({"operation_id":"op_00000000000000000000000000000000"})),
         ),
         (
+            "GET",
+            "/api/repositories/repo_00000000000000000000000000000000/directory-git?path=",
+            None,
+        ),
+        (
             "POST",
-            "/api/repositories/repo/directory-scopes",
-            Some(json!({"path":"","operation_id":"op_00000000000000000000000000000000"})),
+            "/api/repositories/repo_00000000000000000000000000000000/directory-git/stage",
+            Some(
+                json!({"directory_id":"repo_00000000000000000000000000000000","directory_branch_id":"dbr_00000000000000000000000000000000","expected_tree_id":"dtree_00000000000000000000000000000000","expected_index_generation":"1","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/repositories/repo_00000000000000000000000000000000/directory-git/children/stage",
+            Some(
+                json!({"directory_id":"repo_00000000000000000000000000000000","directory_branch_id":"dbr_00000000000000000000000000000000","child_directory_id":"entry_00000000000000000000000000000000","expected_child_head_tree_id":"dtree_00000000000000000000000000000000","expected_index_generation":"1","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/repositories/repo_00000000000000000000000000000000/directory-git/initialize",
+            Some(
+                json!({"path":"","expected_namespace_head":"commit_00000000000000000000000000000000","operation_id":"op_00000000000000000000000000000000"}),
+            ),
         ),
         (
             "POST",
@@ -1275,11 +1323,6 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         (
             "POST",
             "/api/file-manager/disks/P01/directory-branches",
-            Some(json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})),
-        ),
-        (
-            "POST",
-            "/api/file-manager/disks/P01/directory-select",
             Some(json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})),
         ),
         ("GET", "/api/commits/commit", None),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::tests::directory_git_fixture::checkpoint;
 use crate::{
     DirectorySelectionEntryInput, DirectorySelectionSourceInput, ReadDirectorySelection,
     backend_directory_selection::DirectorySelectionResponse,
@@ -7,14 +8,7 @@ use crate::{
 fn bounded_selection_freezes_only_requested_facts_and_rechecks_current_baselines() {
     let (root, mut engine, repo, _) = fixture();
     save_projection_file(&mut engine, &repo.main_branch_id, "Café.txt", b"content");
-    engine
-        .initialize_directory_scope(
-            &repo.repository_id,
-            None,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    checkpoint(&mut engine, &repo, "", "owner");
     let branch = engine.state().directory_branches
         [&engine.state().directory_selections[&repo.repository_id]]
         .clone();
@@ -137,14 +131,7 @@ fn bounded_selection_freezes_only_requested_facts_and_rechecks_current_baselines
 fn bounded_selection_preserves_multiple_source_order_and_empty_queries() {
     let (_root, mut engine, repo, _) = fixture();
     save_projection_file(&mut engine, &repo.main_branch_id, "Café.txt", b"content");
-    engine
-        .initialize_directory_scope(
-            &repo.repository_id,
-            None,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    checkpoint(&mut engine, &repo, "", "owner");
     engine
         .create_directory_branches(
             &repo.repository_id,

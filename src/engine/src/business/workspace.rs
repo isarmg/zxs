@@ -341,6 +341,17 @@ impl Engine {
         Ok(())
     }
     pub fn create_workspace(&mut self, branch_id: &str, principal: &str) -> Result<Workspace> {
+        self.create_workspace_with_intent(branch_id, principal, |_| Ok(()))
+    }
+    /// Retain the allocated identity before namespace admission or workspace I/O.
+    /// A failed intent write prevents those writes; successful intent alone is
+    /// not evidence that a workspace was created or that any content published.
+    pub(crate) fn create_workspace_with_intent(
+        &mut self,
+        branch_id: &str,
+        principal: &str,
+        persist_intent: impl FnOnce(&Workspace) -> Result<()>,
+    ) -> Result<Workspace> {
         Self::require_actor(principal)?;
         self.require_write()?;
         self.repository_for_branch(branch_id)?;
@@ -412,6 +423,7 @@ impl Engine {
             created_at: now()?,
             state: WorkspaceState::Open,
         };
+        persist_intent(&w)?;
         let baseline = self.admit_namespace_workspace(&w)?;
         self.persist_workspace(&w)?;
         if let Some(baseline) = baseline {

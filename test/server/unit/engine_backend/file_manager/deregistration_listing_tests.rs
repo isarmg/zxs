@@ -1,6 +1,7 @@
 //! Real current-view consumers across the retained-membership D3 publication.
 //! Temporary directory tests only; no physical-device or deployment coverage.
 use super::*;
+use crate::tests::directory_git_fixture::checkpoint;
 use crate::{Backend, DirectorySelection, ReadDirectory, ReadTree};
 use storage_contract::{CommitRequest, Entry, ErrorCode, OperationId};
 use storage_engine::{MembershipExitAction, PlacementRuleUpdate};
@@ -106,9 +107,7 @@ impl Fixture {
             })
             .unwrap();
         let path = name_policy::LookupPath::parse("dir").unwrap();
-        engine
-            .initialize_directory_scope(&repo.repository_id, Some(&path), "owner", op())
-            .unwrap();
+        checkpoint(&mut engine, &repo, "dir", "owner");
         let branch_name = storage_contract::BranchName::parse("frozen").unwrap();
         engine
             .create_directory_branches(
@@ -710,14 +709,7 @@ fn directory_scope_queries_do_not_fall_back_to_removed_or_reused_path_identity()
             "dir/new",
             b"new directory identity",
         );
-        engine
-            .initialize_directory_scope(
-                &fixture.repo.repository_id,
-                Some(&name_policy::LookupPath::parse("dir").unwrap()),
-                "owner",
-                op(),
-            )
-            .unwrap();
+        checkpoint(&mut engine, &fixture.repo, "dir", "owner");
     }
     let current = fixture
         .backend
@@ -880,9 +872,12 @@ fn all_current_scopes_hide_deregistered_directory_identities_and_retain_reposito
             b"target-exclusive directory",
         );
         for path in [None, Some(name_policy::LookupPath::parse("only").unwrap())] {
-            engine
-                .initialize_directory_scope(&repo.repository_id, path.as_ref(), "owner", op())
-                .unwrap();
+            checkpoint(
+                &mut engine,
+                &repo,
+                path.as_ref().map_or("", name_policy::LookupPath::as_str),
+                "owner",
+            );
             engine
                 .create_directory_branches(
                     &repo.repository_id,

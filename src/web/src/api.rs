@@ -73,6 +73,8 @@ pub enum ErrorSource {
     ActivityHistory(#[source] json_codec::Error),
     #[error("invalid file-history branches: {0}")]
     FileHistory(#[source] crate::files::FileHistoryError),
+    #[error("invalid directory repository status: {0}")]
+    DirectoryGit(#[source] json_codec::Error),
     #[error("invalid directory history: {0}")]
     DirectoryHistory(#[source] crate::files::DirectoryHistoryError),
     #[error("invalid directory page: {0}")]

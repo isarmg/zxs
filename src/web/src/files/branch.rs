@@ -5,7 +5,6 @@ use web_interface::{html, i18n::t, prelude::*};
 #[derive(Clone)]
 pub(super) enum Target {
     CurrentDirectory,
-    Directory { path: String },
     CurrentFileVersion,
     HistoryNode(String),
 }
@@ -13,7 +12,7 @@ pub(super) enum Target {
 impl Target {
     fn scope(&self) -> super::inline::EditScope {
         match self {
-            Self::CurrentDirectory | Self::Directory { .. } => super::inline::EditScope::Location,
+            Self::CurrentDirectory => super::inline::EditScope::Location,
             Self::CurrentFileVersion | Self::HistoryNode(_) => super::inline::EditScope::History,
         }
     }
@@ -24,7 +23,6 @@ impl Target {
                 let path = state.with_untracked(|s| s.files.directory.clone());
                 actions::directory_branch(state, path, name)
             }
-            Self::Directory { path } => actions::directory_branch(state, path, name),
             Self::CurrentFileVersion | Self::HistoryNode(_) => {
                 let (version, node) = state.with_untracked(|s| file_source(&s.files, &self))?;
                 actions::create_branch(state, version, node, name)
@@ -54,7 +52,7 @@ fn file_source(model: &super::model::Model, target: &Target) -> Option<(String, 
                 Some(record.id().to_owned()),
             ))
         }
-        Target::CurrentDirectory | Target::Directory { .. } => None,
+        Target::CurrentDirectory => None,
     }
 }
 

@@ -768,6 +768,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "folder", "alice");
     let created = engine
         .create_directory_branches(
             &repo.repository_id,
@@ -959,6 +960,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         .find(|entry| entry.path == "a/f.txt")
         .unwrap();
     let create = |engine: &mut Engine, path: &str, name: &str| {
+        crate::directory_git_fixture::checkpoint_as(engine, &repo, path, "alice");
         engine
             .create_directory_branches(
                 &repo.repository_id,
@@ -1030,6 +1032,8 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         .into_iter()
         .find(|entry| entry.path == "b/f.txt")
         .unwrap();
+    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "a", "alice");
+    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "b", "alice");
     engine
         .select_directory_branches(
             &repo.repository_id,
@@ -1039,6 +1043,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "", "alice");
     let saved_root = engine.state.directory_selections[&repo.repository_id].clone();
     let saved_tree = engine.state.directory_branches[&saved_root]
         .head_tree_id
@@ -2751,6 +2756,7 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "", "alice");
     let directory = engine
         .create_directory_branches(
             &repo.repository_id,

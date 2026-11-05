@@ -985,10 +985,18 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
     file
 }
 
-fn directory_fixture(shared: &Shared) -> (String, String, String) {
+fn checkpoint_directory_fixture(backend: &LostCommitReply, repository: &str, path: &str) {
+    backend.inner.test_with_engine_locked(|engine| {
+        let repository = engine.state().repositories[repository].clone();
+        crate::tests::directory_git_fixture::checkpoint(engine, &repository, path, "alice");
+    });
+}
+
+fn directory_fixture(shared: &Shared, backend: &LostCommitReply) -> (String, String, String) {
     let identity = &identity(shared);
     let repositories = shared.backend.repositories_snapshot(identity).unwrap();
     let repository = repositories[0].repository_id.clone();
+    checkpoint_directory_fixture(backend, &repository, "");
     let created = shared
         .backend
         .mutate_disk_directory(
@@ -1016,7 +1024,8 @@ fn directory_fixture(shared: &Shared) -> (String, String, String) {
     )
 }
 
-fn select_directory(shared: &Shared, repository: &str, directory: &str) {
+fn select_directory(shared: &Shared, backend: &LostCommitReply, repository: &str, directory: &str) {
+    checkpoint_directory_fixture(backend, repository, "");
     let identity = identity(shared);
     let defaults = shared
         .backend
@@ -1058,11 +1067,11 @@ fn select_directory(shared: &Shared, repository: &str, directory: &str) {
 #[test]
 fn directory_default_switch_fences_open_and_already_published_writers() {
     let (_temp, shared, backend, branch) = fixture();
-    let (repository, main, draft) = directory_fixture(&shared);
+    let (repository, main, draft) = directory_fixture(&shared, &backend);
     let mut one = session(shared.clone(), &branch);
     let (opened, file) = open_file(&mut one, true);
     file.write_all_at(b"new", 0).unwrap();
-    select_directory(&shared, &repository, &draft);
+    select_directory(&shared, &backend, &repository, &draft);
     let error = one.dirty(opened.handle).unwrap_err();
     assert_eq!(
         error.code,
@@ -1091,8 +1100,8 @@ fn directory_default_switch_fences_open_and_already_published_writers() {
     one.flush(opened.handle).unwrap();
     // Return through another root selection, then to this exact content.
     // Equal file tuples must still retain the old handle's destination.
-    select_directory(&shared, &repository, &main);
-    select_directory(&shared, &repository, &draft);
+    select_directory(&shared, &backend, &repository, &main);
+    select_directory(&shared, &backend, &repository, &draft);
     file.write_all_at(b"bad", 0).unwrap();
     assert_eq!(
         one.dirty(opened.handle).unwrap_err().code,
@@ -1136,6 +1145,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         .repository_id
         .clone();
     let register = |path: &str, name: &str| {
+        checkpoint_directory_fixture(&backend, &repo, path);
         shared.backend.mutate_disk_directory(identity, crate::tests::disk_directory_request(json!({
         "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op").unwrap()
     }),crate::DiskDirectoryAction::Create)).and_then(|result| crate::operation_wire::operation_wire(result.into())).unwrap()["result"]["directory_branch_id"].as_str().unwrap().to_owned()
@@ -1234,7 +1244,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
 
 #[test]
 fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
-    let (_temp, shared, _backend, branch) = fixture();
+    let (_temp, shared, backend, branch) = fixture();
     let mut original = session(shared.clone(), &branch);
     let (opened, file) = original
         .open("future/new.txt".into(), true, true, false, false, false)
@@ -1251,6 +1261,7 @@ fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
         .unwrap();
     creator.dirty(other.handle).unwrap();
     creator.close(other.handle, false).unwrap();
+    checkpoint_directory_fixture(&backend, &repository(&shared), "future");
     shared
         .backend
         .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
@@ -1293,7 +1304,8 @@ fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
     File::from(file.unwrap()).write_all_at(b"other", 0).unwrap();
     creator.dirty(opened.handle).unwrap();
     creator.close(opened.handle, false).unwrap();
-    let (_repository, _main, _draft) = directory_fixture(&shared);
+    let (repository, _main, _draft) = directory_fixture(&shared, &backend);
+    checkpoint_directory_fixture(&backend, &repository, "nested");
     shared
         .backend
         .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
@@ -1324,8 +1336,8 @@ fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
 #[test]
 fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
     let (_temp, shared, backend, branch) = fixture();
-    let (repository, main, draft) = directory_fixture(&shared);
-    select_directory(&shared, &repository, &draft);
+    let (repository, main, draft) = directory_fixture(&shared, &backend);
+    select_directory(&shared, &backend, &repository, &draft);
     let mut initial = session(shared.clone(), &branch);
     let (opened, file) = open_file(&mut initial, true);
     file.write_all_at(b"new", 0).unwrap();
@@ -1371,7 +1383,7 @@ fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
     let mut bytes = [0; 3];
     bytes.copy_from_slice(&read_rpc(&mut wire, pinned_open.handle, 0, 3));
     assert_eq!(&bytes, b"new");
-    select_directory(&shared, &repository, &main);
+    select_directory(&shared, &backend, &repository, &main);
     let (Response::Ok { result }, visible) = rpc(&mut wire, open()) else {
         panic!("read after switch failed")
     };
@@ -1435,7 +1447,7 @@ fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
         .unwrap();
     content.file.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, b"smb");
-    select_directory(&shared, &repository, &draft);
+    select_directory(&shared, &backend, &repository, &draft);
     let entry = observer
         .find(&name_policy::LookupPath::parse("report.txt").unwrap())
         .unwrap()

@@ -633,14 +633,12 @@ impl ManagementBackend {
         directory: &PrivateDirectory,
         mut record: StoredAddition,
         held: Option<Vec<PendingMemberDirectory>>,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<AdditionStatus, ApiError> {
         self.inner.current_management_identity(identity)?;
         if let Some(result) = self.inner.terminal_resume_result(identity, &record)? {
             finish(&mut record, result);
             save(directory, &record)?;
-            return Ok(
-                json_codec::to_value(record.status).expect("invariant: addition status serializes")
-            );
+            return Ok(record.status);
         }
         if let Some(latest) = read::<OperationId>(directory, &latest_name())?
             && latest != record.status.operation_id
@@ -715,7 +713,7 @@ impl ManagementBackend {
         };
         finish(&mut record, result);
         save(directory, &record)?;
-        Ok(json_codec::to_value(record.status).expect("invariant: addition status serializes"))
+        Ok(record.status)
     }
 }
 

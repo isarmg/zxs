@@ -456,13 +456,14 @@ fn configured_discovery_root_only_lists_real_internal_directories() {
     assert_eq!(listing.entries.len(), 1);
     assert_eq!(listing.entries[0].path, child.to_str().unwrap());
     assert!(listing.entries[0].can_browse);
-    assert_eq!(
-        browse_within(scope, child.to_str().unwrap())
-            .unwrap()
-            .entries
-            .len(),
-        1
-    );
+    assert!(matches!(
+        browse_within(scope, child.to_str().unwrap()),
+        Err(Error::OutsideDiscoveryRoot)
+    ));
+    assert!(matches!(
+        inspect_within(scope, &request(&child.join("selected")), &[]),
+        Err(Error::OutsideDiscoveryRoot)
+    ));
     for outside in [sibling.as_path(), tmp.path()] {
         assert!(matches!(
             browse_within(scope, outside.to_str().unwrap()),
@@ -574,9 +575,7 @@ fn scoped_directory_replacement_does_not_redirect_held_storage() {
 
 #[test]
 fn discovery_contract_default_and_strict_settings_fields_are_shared() {
-    use storage_contract::storage_directories::{
-        DEFAULT_DISCOVERY_ROOT, DiscoveryRootSettings, SetDiscoveryRootRequest,
-    };
+    use storage_contract::storage_directories::{DEFAULT_DISCOVERY_ROOT, DiscoveryRootSettings};
     assert_eq!(DEFAULT_DISCOVERY_ROOT, "/zxs/data/disks");
     let settings = DiscoveryRootSettings {
         discovery_root: DEFAULT_DISCOVERY_ROOT.into(),
@@ -586,14 +585,9 @@ fn discovery_contract_default_and_strict_settings_fields_are_shared() {
             .unwrap(),
         settings
     );
-    let update = json_codec::json!({"expected_discovery_root":DEFAULT_DISCOVERY_ROOT,"discovery_root":"/srv/zxs-directories"});
-    assert!(json_codec::from_value::<SetDiscoveryRootRequest>(update.clone()).is_ok());
-    let mut unknown = update;
-    unknown["create_if_missing"] = true.into();
-    assert!(json_codec::from_value::<SetDiscoveryRootRequest>(unknown).is_err());
     assert!(
-        json_codec::from_value::<SetDiscoveryRootRequest>(
-            json_codec::json!({"discovery_root":"/srv/zxs-directories"})
+        json_codec::from_value::<DiscoveryRootSettings>(
+            json_codec::json!({"discovery_root": DEFAULT_DISCOVERY_ROOT, "writable": true})
         )
         .is_err()
     );
@@ -698,4 +692,227 @@ fn pending_fresh_resume_reopens_held_scope_despite_enrollment_ctime_change() {
     private(&root);
     private(&fresh);
     assert!(reopen_fresh_addition(&selected, &[]).is_err());
+}
+
+#[test]
+fn service_discovery_path_is_typed_without_touching_storage() {
+    for path in ["relative", "/a/../b", "/a/./b", "/a//b", "/a//", ""] {
+        assert!(path.parse::<DiscoveryRoot>().is_err(), "{path}");
+    }
+    assert_eq!(
+        "/srv/disks/".parse::<DiscoveryRoot>().unwrap().as_str(),
+        "/srv/disks"
+    );
+    let missing = "/definitely-unavailable-zxs-discovery"
+        .parse::<DiscoveryRoot>()
+        .unwrap();
+    assert_eq!(missing.as_str(), "/definitely-unavailable-zxs-discovery");
+    assert_eq!(
+        DiscoveryRoot::default().as_str(),
+        storage_contract::storage_directories::DEFAULT_DISCOVERY_ROOT
+    );
+}
+
+#[cfg(feature = "core")]
+#[test]
+fn diagnostic_discovery_distinguishes_empty_recognized_and_unsupported_children() {
+    let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let root = tmp.path().join("disks");
+    private(&root);
+    let empty = root.join("empty");
+    private(&empty);
+    let a = root.join("a");
+    let b = root.join("b");
+    let config = storage_engine::Config::development([a.clone(), b.clone()]).unwrap();
+    let engine =
+        storage_engine::Engine::initialize(&tmp.path().join("system"), config.clone()).unwrap();
+    let plain = root.join("plain");
+    private(&plain);
+    std::fs::write(plain.join("preserve.txt"), b"ordinary bytes").unwrap();
+    // A valid disk below another child must not be found recursively.
+    let nested = plain.join("nested-zxs");
+    let nested_engine = storage_engine::Engine::initialize(
+        &tmp.path().join("nested-system"),
+        storage_engine::Config::development([nested.clone()]).unwrap(),
+    )
+    .unwrap();
+    let foreign = root.join("foreign");
+    let foreign_engine = storage_engine::Engine::initialize(
+        &tmp.path().join("foreign-system"),
+        storage_engine::Config::development([foreign.clone()]).unwrap(),
+    )
+    .unwrap();
+    symlink(&a, root.join("alias")).unwrap();
+    let discovery = root.to_str().unwrap();
+    let inventory = mounts().unwrap();
+    assert_eq!(
+        classify_directory(&observe(&empty, &inventory).unwrap(), &inventory).unwrap(),
+        DiscoveredKind::Empty
+    );
+    assert_eq!(
+        classify_directory(&observe(&a, &inventory).unwrap(), &inventory).unwrap(),
+        DiscoveredKind::Recognized
+    );
+    assert_eq!(
+        classify_directory(&observe(&plain, &inventory).unwrap(), &inventory).unwrap(),
+        DiscoveredKind::Unsupported
+    );
+    let before = std::fs::read(a.join("disk.json")).unwrap();
+    let listed = discover_supported(discovery, discovery, &[b]).unwrap();
+    assert_eq!(
+        listed
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "empty", "foreign"]
+    );
+    assert!(discover_supported(discovery, plain.to_str().unwrap(), &[]).is_err());
+    assert_eq!(std::fs::read(a.join("disk.json")).unwrap(), before);
+    assert_eq!(
+        std::fs::read(plain.join("preserve.txt")).unwrap(),
+        b"ordinary bytes"
+    );
+    assert!(nested.join("disk.json").is_file());
+    drop((engine, nested_engine, foreign_engine));
+}
+
+#[test]
+fn empty_discovery_excludes_registered_and_stopped_paths_before_new_admission() {
+    let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let root = tmp.path().join("disks");
+    private(&root);
+    let fresh = root.join("new-empty");
+    private(&fresh);
+    let known = root.join("known-now-empty");
+    private(&known);
+    let stopped = root.join("stopped-now-empty");
+    private(&stopped);
+    let nonempty = root.join("ordinary");
+    private(&nonempty);
+    std::fs::write(nonempty.join("preserve.txt"), b"keep these bytes").unwrap();
+    private(&nonempty.join("nested-empty"));
+    symlink(&fresh, root.join("alias")).unwrap();
+    let unsafe_root = root.join("unsafe");
+    private(&unsafe_root);
+    std::fs::set_permissions(&unsafe_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let missing_known = root.join("known-missing");
+    let excluded = [known.clone(), missing_known.clone()];
+    let selected = discover_empty(
+        root.to_str().unwrap(),
+        &excluded,
+        std::slice::from_ref(&stopped),
+    )
+    .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].root_path, fresh.to_str().unwrap());
+    assert!(
+        revalidate_fresh_within(
+            root.to_str().unwrap(),
+            &selected[0],
+            &excluded,
+            std::slice::from_ref(&stopped)
+        )
+        .is_ok()
+    );
+    assert_eq!(std::fs::read_dir(&fresh).unwrap().count(), 0);
+    assert!(!missing_known.exists());
+    assert_eq!(
+        std::fs::read(nonempty.join("preserve.txt")).unwrap(),
+        b"keep these bytes"
+    );
+    std::fs::write(fresh.join("late-file"), b"race must reject").unwrap();
+    assert!(matches!(
+        revalidate_fresh_within(root.to_str().unwrap(), &selected[0], &excluded, &[stopped]),
+        Err(Error::NotEmpty)
+    ));
+    assert_eq!(
+        std::fs::read(fresh.join("late-file")).unwrap(),
+        b"race must reject"
+    );
+}
+
+#[test]
+fn empty_discovery_never_creates_a_missing_parent_or_accepts_a_truncated_inventory() {
+    let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let missing = tmp.path().join("missing");
+    assert!(discover_empty(missing.to_str().unwrap(), &[], &[]).is_err());
+    assert!(!missing.exists());
+    for index in 0..=MAX_ENTRIES {
+        private(&tmp.path().join(format!("disk-{index}")));
+    }
+    assert!(matches!(
+        discover_empty(tmp.path().to_str().unwrap(), &[], &[]),
+        Err(Error::DiscoveryLimit)
+    ));
+}
+
+#[cfg(feature = "core")]
+#[test]
+fn wizard_discovery_is_read_only_and_source_reopen_binds_exact_parent_and_child() {
+    use storage_contract::storage_directories::DiscoveredDiskState;
+    let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let root = tmp.path().join("disks");
+    private(&root);
+    let empty = root.join("empty");
+    private(&empty);
+    let ordinary = root.join("ordinary");
+    private(&ordinary);
+    std::fs::write(ordinary.join("keep"), b"not imported").unwrap();
+    private(&ordinary.join("nested"));
+    let excluded = root.join("already-registered");
+    private(&excluded);
+    symlink(&ordinary, root.join("alias")).unwrap();
+    let listing = discover_disks(root.to_str().unwrap(), &[excluded], &[]).unwrap();
+    assert_eq!(
+        listing
+            .candidates
+            .iter()
+            .map(|disk| disk.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alias", "empty", "ordinary"]
+    );
+    assert!(matches!(
+        listing.candidates[0].state,
+        DiscoveredDiskState::Unavailable {
+            problem: DirectoryProblem::SymbolicLink
+        }
+    ));
+    assert!(matches!(
+        listing.candidates[1].state,
+        DiscoveredDiskState::Empty { .. }
+    ));
+    let DiscoveredDiskState::Unsupported {
+        source: Some(source),
+        ..
+    } = &listing.candidates[2].state
+    else {
+        panic!("ordinary directory must remain unadmitted")
+    };
+    let held = reopen_source(root.to_str().unwrap(), source, &[], &[]).unwrap();
+    assert_eq!(identity(&held).unwrap().0, source.identity);
+    assert!(
+        reopen_source(
+            root.to_str().unwrap(),
+            source,
+            std::slice::from_ref(&ordinary),
+            &[]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        std::fs::read(ordinary.join("keep")).unwrap(),
+        b"not imported"
+    );
+    assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0);
+    std::fs::rename(&ordinary, root.join("old-source")).unwrap();
+    private(&ordinary);
+    assert!(matches!(
+        reopen_source(root.to_str().unwrap(), source, &[], &[]),
+        Err(Error::Changed)
+    ));
+    assert_eq!(
+        std::fs::read(root.join("old-source/keep")).unwrap(),
+        b"not imported"
+    );
 }

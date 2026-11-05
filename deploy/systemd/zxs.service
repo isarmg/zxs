@@ -14,7 +14,7 @@ Environment=XDG_CACHE_HOME=/zxs/cache XDG_CONFIG_HOME=/zxs/config XDG_DATA_HOME=
 StandardOutput=append:/zxs/log/zxs.log
 StandardError=append:/zxs/log/zxs.log
 WorkingDirectory=/zxs
-ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400
+ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400
 KillSignal=SIGINT
 # Do not kill admitted durability/recovery work during normal shutdown.
 # A stuck kernel I/O requires an explicit operator force-stop and crash recovery.

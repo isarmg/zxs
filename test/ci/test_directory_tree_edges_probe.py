@@ -20,12 +20,17 @@ class DirectoryTreeEdgesProbe(unittest.TestCase):
 
     def test_fixture_initializes_real_directory_history_before_two_content_writes(self):
         source = (PROBE / 'runner/fixture.rs').read_text()
-        self.assertLess(source.index('engine.initialize_directory_scope('),
+        self.assertLess(source.index('initialize_directory_fixture(&mut engine, &repository, "")?;'),
                         source.index('for payload in PAYLOADS'))
+        self.assertLess(source.index('commit_directory_fixture(&mut engine, &repository.repository_id, "")?;'),
+                        source.index('for payload in PAYLOADS'))
+        self.assertIn('engine.initialize_directory_git(', source)
+        self.assertNotIn('engine.initialize_directory_scope(', source)
         unit = (PROBE / 'unit/fixture_tests.rs').read_text()
-        self.assertIn('root scope plus two writes are real directory snapshots', unit)
+        self.assertIn('the root scope and both writes have explicit user directory commits', unit)
         self.assertIn('the browser fixture must exercise actual SVG parent edges', unit)
-        self.assertIn('engine.state().directory_trees[&node.tree_id].parent_tree_id', unit)
+        self.assertIn('user_commit_parent(&engine, &node.tree_id)', unit)
+        self.assertIn('committed_directory_ancestor(', unit)
 
     def test_readonly_history_uses_a_selected_real_preview_after_rejecting_unsolicited_preview(self):
         source = (PROBE / 'runner/directory_history.rs').read_text()
@@ -41,7 +46,7 @@ class DirectoryTreeEdgesProbe(unittest.TestCase):
         self.assertIn('seed_directory_history(&mut engine)?;', fixture)
         unit = (PROBE / 'unit/fixture_tests.rs').read_text()
         self.assertIn('engine\n        .preview_directory_branch(', unit)
-        self.assertIn('branches[0].head_tree_id, branches[1].head_tree_id', unit)
+        self.assertIn('branches[0].committed_tree_id, branches[1].committed_tree_id', unit)
 
 
 if __name__ == '__main__':

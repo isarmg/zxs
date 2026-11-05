@@ -1,7 +1,12 @@
 //! Directory selection admits the complete composed tree, not just its subtree.
 //! All namespace, publication, and restart checks use disposable storage pools.
 use std::path::PathBuf;
-use storage_engine::{CommitRequest, Config, Engine, NamespaceOperation, Repository};
+use storage_engine::{
+    CommitRequest, Config, DirectoryCommitRequest, Engine, NamespaceOperation, Repository,
+};
+
+#[path = "../support/directory_git_fixture.rs"]
+mod directory_fixture;
 
 struct Pool {
     _temporary: tempfile::TempDir,
@@ -72,6 +77,7 @@ impl Pool {
     }
 
     fn register(&mut self, path: &str, name: &str) -> String {
+        self.checkpoint(path);
         self.engine
             .create_directory_branches(
                 &self.repo.repository_id,
@@ -90,6 +96,10 @@ impl Pool {
             .as_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn checkpoint(&mut self, path: &str) {
+        directory_fixture::checkpoint(&mut self.engine, &self.repo, path);
     }
 
     fn paths(&self) -> Vec<String> {
@@ -121,7 +131,7 @@ impl Pool {
     }
 }
 
-fn sibling_compositions() -> (Pool, String, String) {
+fn left_composition() -> Pool {
     let mut pool = Pool::new();
     pool.namespace(storage_contract::NamespaceOperationKind::Mkdir, "left");
     pool.namespace(storage_contract::NamespaceOperationKind::Mkdir, "right");
@@ -131,8 +141,10 @@ fn sibling_compositions() -> (Pool, String, String) {
         pool.paths(),
         ["left", "left/one.txt", "left/two.txt", "right"]
     );
-    let left = pool.register("left", "full");
-    let left_root = pool.register("", "left-full");
+    pool
+}
+
+fn replace_left_with_right(pool: &mut Pool) {
     pool.namespace(
         storage_contract::NamespaceOperationKind::Delete,
         "left/one.txt",
@@ -147,24 +159,43 @@ fn sibling_compositions() -> (Pool, String, String) {
         pool.paths(),
         ["left", "right", "right/one.txt", "right/two.txt"]
     );
-    let right = pool.register("right", "full");
-    let right_root = pool.register("", "right-full");
+}
 
-    // Both roots were created legally at the four-entry limit. Combining their
-    // two-file sibling subtrees would instead expose six entries in one tree.
+fn sibling_compositions() -> Pool {
+    let mut pool = left_composition();
+    let left = pool.register("left", "full");
+    replace_left_with_right(&mut pool);
+    // Checkout must reach the composed-tree quota check from a clean source.
+    pool.checkpoint("left");
+    let right = pool.register("right", "full");
+
+    // Each sibling was committed legally at the four-entry limit. Combining
+    // their two-file subtrees would instead expose six entries in one tree.
     let branches = &pool.engine.state().directory_branches;
-    assert_eq!(branches[&left_root].entries.len(), 4);
-    assert_eq!(branches[&right_root].entries.len(), 4);
     assert_eq!(
         branches[&left].entries.len() + branches[&right].entries.len() + 2,
         6
     );
+    pool
+}
+
+fn root_compositions() -> (Pool, String, String) {
+    let mut pool = left_composition();
+    // The root owns ordinary descendants. Independently initialized children
+    // would be preserved by root checkout rather than replaced with its tree.
+    let left_root = pool.register("", "left-full");
+    replace_left_with_right(&mut pool);
+    let right_root = pool.register("", "right-full");
+
+    let branches = &pool.engine.state().directory_branches;
+    assert_eq!(branches[&left_root].entries.len(), 4);
+    assert_eq!(branches[&right_root].entries.len(), 4);
     (pool, left_root, right_root)
 }
 
 #[test]
 fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
-    let (mut pool, _, _) = sibling_compositions();
+    let mut pool = sibling_compositions();
     let operation = storage_contract::OperationId::generate().unwrap();
     let before = pool.state_bytes();
     let journals = pool.journals();
@@ -242,7 +273,7 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
 
 #[test]
 fn root_selection_replaces_the_tree_at_the_entry_limit_and_survives_restart() {
-    let (mut pool, left_root, right_root) = sibling_compositions();
+    let (mut pool, left_root, right_root) = root_compositions();
     pool.engine
         .select_default_directory_branch(
             &pool.repo.repository_id,

@@ -84,7 +84,7 @@ def check(root):
     assert "similarity::jaro(v, pv.as_ref())" in suggestions.read_text(), "suggestions bypass moved Jaro implementation"
     assert "mod lexer;" in runtime.read_text(), "missing private lexer module"
     assert "pub mod lexer" not in runtime.read_text(), "lexer exposed as separate public API"
-    for base in ("src", "tools"):
+    for base in ("src", "tools", "rescue"):
         for manifest in (root / base).rglob("Cargo.toml"):
             reject_dependency_aliases(tomllib.loads(manifest.read_text()))
 
@@ -117,7 +117,7 @@ def check(root):
             r'is_ident\("(?:clap|structopt|command_line)"\)', attributes.read_text()
         ), "legacy helper parser branch"
 
-    for relative in ("src/server/src/main.rs", "src/rescue/src/main.rs"):
+    for relative in ("src/server/src/main.rs", "rescue/src/main.rs"):
         source = root / relative
         assert "command_line::" in source.read_text(), f"unmigrated consumer: {source}"
     catalog = json.loads((root / "compliance/rust-sources.json").read_text())

@@ -1,20 +1,16 @@
 //! Public directory labels do not materialize raw historical entries.
 use super::*;
 
-fn directory_branch(fixture: &Fixture) -> String {
-    let directory = fixture
-        .engine
-        .namespace_tree(&fixture.repo.main_branch_id)
+fn directory_branch(fixture: &mut Fixture) -> String {
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "dir")
+        .directory_branch_id
         .unwrap()
-        .get("dir")
-        .unwrap();
-    fixture.engine.state.directory_selections[&directory.entry_id].clone()
 }
 
 #[test]
 fn membership_registry_current_directory_label_reuses_the_exact_owned_projection() {
     let mut fixture = Fixture::new(true);
-    let branch_id = directory_branch(&fixture);
+    let branch_id = directory_branch(&mut fixture);
     let before = fixture.engine.state.directory_branches[&branch_id].clone();
     let old_tree = fixture.engine.state.directory_trees[&before.head_tree_id].clone();
     fixture.project(false);
@@ -83,7 +79,7 @@ fn membership_registry_current_directory_label_reuses_the_exact_owned_projection
 #[test]
 fn membership_registry_current_directory_label_rejects_reused_path_identity() {
     let mut fixture = Fixture::new(true);
-    let branch_id = directory_branch(&fixture);
+    let branch_id = directory_branch(&mut fixture);
     let old_directory = fixture.engine.state.directory_branches[&branch_id]
         .directory_id
         .clone();
@@ -159,7 +155,7 @@ fn membership_registry_current_directory_label_rejects_reused_path_identity() {
 #[test]
 fn membership_registry_current_directory_label_recovery_requires_unchanged_tree_contents() {
     let mut fixture = Fixture::new(true);
-    let branch_id = directory_branch(&fixture);
+    let branch_id = directory_branch(&mut fixture);
     fixture.project(false);
     let before = fixture.engine.state();
     let view = fixture.engine.current_namespaces.as_ref().unwrap();
@@ -200,14 +196,9 @@ fn membership_registry_current_directory_label_retains_disabled_empty_roots() {
             .engine
             .create_disk_root("P01", "admin", op())
             .unwrap();
-        let initialized = fixture
-            .engine
-            .initialize_directory_scope(&root.repository_id, None, "admin", op())
+        let branch = crate::directory_git_fixture::checkpoint(&mut fixture.engine, &root, "")
+            .directory_branch_id
             .unwrap();
-        let branch = initialized.result["directory_branch_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
         fixture.project(disable);
         let result = fixture.engine.rename_directory_branch(
             &root.repository_id,

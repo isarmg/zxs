@@ -319,6 +319,7 @@ fn verify_write_set(
         file_locations,
         file_selections,
         directory_branches,
+        directory_git_repositories,
         directory_trees,
         file_write_origins,
         file_contexts,

@@ -16,6 +16,53 @@ fn at_key<'a>(entries: &'a [Entry], key: &str) -> Option<&'a Entry> {
         .map(|index| &entries[index])
 }
 
+/// A parked parent does not own a historical occurrence below an independently
+/// initialized child. Match path-local branch intent as well as file identity:
+/// an alias owned by this scope still participates in its explicit merge.
+fn owns_merge_input(
+    state: &State,
+    branch: &DirectoryBranch,
+    file: &str,
+    inputs: &BTreeSet<String>,
+) -> Result<bool> {
+    let children = branch
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == NamespaceEntryKind::Directory
+                && state
+                    .directory_git_repositories
+                    .contains_key(&entry.entry_id)
+        })
+        .map(Entry::lookup_key)
+        .collect::<BTreeSet<_>>();
+    for entry in branch
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
+    {
+        let mut path = entry.lookup_key();
+        let mut independent = false;
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            if children.contains(parent) {
+                independent = true;
+                break;
+            }
+            path = parent;
+        }
+        if !independent {
+            let context = branch
+                .file_contexts
+                .get(entry.lookup_key())
+                .ok_or_else(stale)?;
+            if inputs.contains(&context.branch_id) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 impl CurrentNamespaces {
     pub(crate) fn require_file_merge_directory(
         &self,
@@ -195,9 +242,12 @@ impl CurrentNamespaces {
         &self,
         state: &State,
         repository: &str,
+        file: &str,
+        inputs: &BTreeSet<String>,
     ) -> Result<Vec<DirectoryBranch>> {
         let mut projected = BTreeMap::new();
         let mut source_trees = BTreeMap::new();
+        let mut participating = BTreeSet::new();
         for branch in state
             .directory_branches
             .values()
@@ -205,9 +255,8 @@ impl CurrentNamespaces {
         {
             if state.directory_selections.get(&branch.directory_id)
                 == Some(&branch.directory_branch_id)
-                && state.directory_tree_selections.get(&branch.directory_id)
-                    != Some(&branch.head_tree_id)
             {
+                participating.insert(branch.directory_branch_id.clone());
                 let source = self.batch_scope(state, &branch.directory_branch_id)?;
                 source_trees.insert(
                     branch.directory_branch_id.clone(),
@@ -215,6 +264,9 @@ impl CurrentNamespaces {
                 );
                 projected.insert(branch.directory_branch_id.clone(), source.branch().clone());
                 continue;
+            }
+            if owns_merge_input(state, branch, file, inputs)? {
+                participating.insert(branch.directory_branch_id.clone());
             }
             let mut current = branch.clone();
             current.entries = self
@@ -251,7 +303,10 @@ impl CurrentNamespaces {
             );
             projected.insert(branch.directory_branch_id.clone(), current);
         }
-        for branch in projected.values() {
+        for branch in projected
+            .values()
+            .filter(|branch| participating.contains(&branch.directory_branch_id))
+        {
             let directories: BTreeMap<_, _> = branch
                 .entries
                 .iter()
@@ -285,7 +340,10 @@ impl CurrentNamespaces {
                 }
             }
         }
-        let mut projected = projected.into_values().collect::<Vec<_>>();
+        let mut projected = projected
+            .into_values()
+            .filter(|branch| participating.contains(&branch.directory_branch_id))
+            .collect::<Vec<_>>();
         projected.sort_by_key(|branch| {
             std::cmp::Reverse(
                 branch

@@ -8,7 +8,8 @@ ZXS 采用一个 Git 仓库、一个根 Cargo 工作区和一个活动锁文件�
 
 | 位置 | 职责 |
 | --- | --- |
-| `src/{auth,contract,naming,platform,engine,server,client,rescue}` | 认证、业务契约、命名、平台能力、存储引擎、HTTP 服务、客户端与运维命令 |
+| `src/{auth,contract,naming,platform,engine,server,client}` | 认证、业务契约、命名、平台能力、存储引擎、HTTP 服务与客户端 |
+| `rescue` | 独立离线恢复与本机救援工具 `zxs-rescue` |
 | `src/web` | 浏览器 Rust/WASM 产品界面及静态样式、字体资源 |
 | `src/interface` | 主题、语言、生命周期、共享组件及直接合并的 CSR 基础原语 |
 | `src/macros` | 与编译器进程边界一致的界面过程宏 |
@@ -55,7 +56,7 @@ Unicode 规范化实现位于 `src/naming`，与项目的固定映射、命名�
 | `src/engine` | `storage-engine` |
 | `src/server` | `storage-server` |
 | `src/client` | `storage-client` |
-| `src/rescue` | `storage-rescue`，离线救援命令为 `zxs-rescue`；正常守护进程 `zxs` 由 `src/server` 生成 |
+| `rescue` | `storage-rescue`，离线救援命令为 `zxs-rescue`；正常守护进程 `zxs` 由 `src/server` 生成 |
 | `src/web` | `web-app` |
 | `src/interface` | `web-interface` |
 | `src/macros` | `view-macros` |

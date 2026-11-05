@@ -87,6 +87,7 @@ pub(in crate::admin) fn can_preview(state: &State, slot: &str, disk: &str) -> bo
         && eligible
         && !storage.busy
         && !storage.addition.blocks_edit()
+        && !storage.conversion.blocks_edit()
         && !storage.lifecycle.blocks_edit()
         && !storage.readmission.blocks_edit()
 }
@@ -364,7 +365,7 @@ pub(in crate::admin) fn preview(state: RwSignal<State>, slot_id: String, expecte
 fn submit(state: RwSignal<State>, resume: bool) {
     let captured = state
         .try_update(|s| {
-            if !s.session_active() {
+            if !s.session_active() || s.admin_console.storage.conversion.blocks_edit() {
                 return None;
             }
             let model = &s.admin_console.storage.readmission;

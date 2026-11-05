@@ -13,6 +13,7 @@ pub(crate) use batch::CurrentBatchScope;
 mod branch_archives;
 mod directory_branches;
 mod directory_metadata;
+mod directory_staging;
 mod file_branches;
 mod file_synchronization;
 mod file_tags;
@@ -42,6 +43,15 @@ pub(crate) enum NamespaceReadView {
     Published(Arc<CurrentNamespaces>),
 }
 impl NamespaceReadView {
+    /// Both observations must name the same immutable admitted publication.
+    /// Equal state sequence alone does not prove equal membership visibility.
+    pub(crate) fn same_publication(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Initial, Self::Initial) => true,
+            (Self::Published(left), Self::Published(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
     pub(crate) fn admitted(&self) -> Result<Option<&CurrentNamespaces>> {
         match self {
             Self::Initial => Ok(None),
@@ -201,6 +211,7 @@ impl CurrentNamespaces {
         if kind == "repository.create"
             || kind == "workspace.commit"
             || kind == "workspace.namespace.admit"
+            || kind == "directory.import.stop"
             || kind == "file.namespace"
             || kind == "file.metadata"
             || kind == "file.path.metadata"
@@ -496,6 +507,7 @@ impl CurrentNamespaces {
         self.verify_backup_configurations(previous, next)?;
         self.verify_merge_links(previous, next)?;
         self.verify_file_tag_publications(previous, next)?;
+        self.verify_directory_commits(previous, next)?;
         let mut view = self.clone();
         let branch_changes = next.branches.changes_since(&previous.branches);
         let directory_changes = next

@@ -19,6 +19,7 @@ const REQUIRED_FIELDS: &[&str] = &[
     "placement_rules",
     "protection_policies",
     "operation_principals",
+    "directory_git_repositories",
 ];
 const OPTIONAL_FIELDS: &[&str] = &[
     "file_selections",
@@ -60,6 +61,7 @@ macro_rules! every_tracked_field {
         $apply!(placement_rules);
         $apply!(protection_policies);
         $apply!(operation_principals);
+        $apply!(directory_git_repositories);
         $apply!(file_selections);
         $apply!(directory_branches);
         $apply!(directory_trees);
@@ -112,6 +114,15 @@ fn populated_state() -> State {
     value["directory_selection_generations"] =
         json_codec::json!({"directory": "18446744073709551615"});
     value["file_selection_generations"] = json_codec::json!({"file": "9007199254740992"});
+    value["directory_git_repositories"] = json_codec::json!({"directory": {
+        "repository_id": "repository", "directory_id": "directory",
+        "initialized_sequence": "18446744073709551615", "current_branch_id": "directory-branch",
+        "branches": {"directory-branch": {
+            "head_tree_id": null, "index_tree_id": "index-tree", "index_generation": "9007199254740992",
+            "index_boundaries": {"child": "child-branch"},
+            "index_children": {"child": {"directory_branch_id": "child-branch", "tree_id": null}}
+        }}
+    }});
     value["merge_links"] = json_codec::json!({"merge": {
         "merge_link_id": "merge", "history_tree_id": "history", "source_branch_id": "source",
         "source_commit_id": "source-commit", "target_branch_id": "target",
@@ -162,7 +173,7 @@ fn populated_state() -> State {
     state.control_auth =
         Some(json_codec::json!({"\u{10000}": {"roles": ["读者"]}, "\u{e000}": true}));
     let encoded = json_codec::to_value(&state).unwrap();
-    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 35);
+    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 36);
     for field in REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS) {
         assert!(!encoded[*field].as_object().unwrap().is_empty(), "{field}");
     }

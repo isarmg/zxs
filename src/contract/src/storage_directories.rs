@@ -12,13 +12,6 @@ pub struct DiscoveryRootSettings {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-pub struct SetDiscoveryRootRequest {
-    pub expected_discovery_root: String,
-    pub discovery_root: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
 pub struct DirectoryIdentity {
     #[serialization(with = "crate::u64_string")]
     pub device: u64,
@@ -94,6 +87,70 @@ pub struct DirectoryListing {
     pub entries: Vec<DirectoryEntry>,
     /// Bounded non-snapshot inventory. A false value does not promise the
     /// directory will remain unchanged after this read.
+    pub truncated: bool,
+    pub skipped_non_utf8: u32,
+}
+
+/// A read-only source observation, never an empty-directory or write capability.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectorySource {
+    pub path: String,
+    pub discovery_identity: DirectoryIdentity,
+    pub identity: DirectoryIdentity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum DiskRoleEvidence {
+    InitialDeclaration,
+    GenerationEvidence,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DiscoveredDiskRole {
+    pub level: u32,
+    pub upstream_slot_id: Option<String>,
+    pub metadata_member: bool,
+    pub evidence: DiskRoleEvidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DiscoveredDiskState {
+    Empty {
+        selection: CandidateSelection,
+    },
+    /// Current-format recognition is not proof of admission to this system.
+    Zxs {
+        disk_id: String,
+        slot_id: String,
+        role: DiscoveredDiskRole,
+        source: DirectorySource,
+    },
+    Unsupported {
+        code: crate::ErrorCode,
+        message: String,
+        source: Option<DirectorySource>,
+    },
+    Unavailable {
+        problem: DirectoryProblem,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DiscoveredDisk {
+    pub name: String,
+    pub path: String,
+    pub state: DiscoveredDiskState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DiscoveredDisks {
+    pub discovery_root: String,
+    pub candidates: Vec<DiscoveredDisk>,
     pub truncated: bool,
     pub skipped_non_utf8: u32,
 }

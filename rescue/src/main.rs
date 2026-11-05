@@ -315,5 +315,5 @@ fn run(args: Args) -> Result<()> {
 }
 
 #[cfg(test)]
-#[path = "../../../test/rescue/unit/main/args_tests.rs"]
+#[path = "../../test/rescue/unit/main/args_tests.rs"]
 mod args_tests;

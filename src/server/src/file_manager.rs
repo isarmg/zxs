@@ -24,10 +24,6 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_disk_directory::create),
         )
         .route(
-            "/api/file-manager/disks/{slot}/directory-select",
-            post(http_disk_directory::select),
-        )
-        .route(
             "/api/file-manager/files/{file}/history",
             get(history_window_http::nodes),
         )
@@ -121,9 +117,9 @@ async fn disks(
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
     crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
         .run(move |backend| {
-            backend
-                .disk_status(&identity)
-                .map(backend_diagnostics::FileManagerDisksResponse::from)
+            let topology = backend.topology_snapshot(&identity)?;
+            let disks = backend.disk_status(&identity)?;
+            backend_diagnostics::FileManagerDisksResponse::from_snapshot(disks, topology)
         })
         .await
         .map(Json)

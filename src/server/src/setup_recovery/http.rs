@@ -38,9 +38,51 @@ pub(crate) fn protected_routes() -> Router<AppState> {
             "/api/admin/disks/readmission/resume",
             post(readmission_resume),
         )
+        .route("/api/admin/storage/discovery-root", get(discovery_root))
+        .route("/api/admin/storage/discovered-disks", get(discovered_disks))
         .route(
-            "/api/admin/storage/discovery-root",
-            get(discovery_root).put(set_discovery_root),
+            "/api/admin/storage/foreign/preview",
+            post(foreign_disk_preview),
+        )
+        .route(
+            "/api/admin/storage/foreign/plans/preview",
+            post(foreign_plan_preview),
+        )
+        .route(
+            "/api/admin/storage/foreign/plans/save",
+            post(foreign_plan_save),
+        )
+        .route(
+            "/api/admin/storage/foreign/plans/status",
+            get(foreign_plan_status),
+        )
+        .route(
+            "/api/admin/storage/foreign/plans/revalidate",
+            post(foreign_plan_revalidate),
+        )
+        .route(
+            "/api/admin/storage/foreign/plans/execute",
+            post(foreign_plan_execute),
+        )
+        .route(
+            "/api/admin/storage/conversion/preview",
+            post(ordinary_conversion_preview),
+        )
+        .route(
+            "/api/admin/storage/conversion/commit",
+            post(ordinary_conversion_commit),
+        )
+        .route(
+            "/api/admin/storage/conversion/resume",
+            post(ordinary_conversion_resume),
+        )
+        .route(
+            "/api/admin/storage/conversion/stop",
+            post(ordinary_conversion_stop),
+        )
+        .route(
+            "/api/admin/storage/conversion/status",
+            get(ordinary_conversion_status),
         )
         .route("/api/admin/storage/directories", get(storage_directories))
         .route(
@@ -248,11 +290,14 @@ async fn protected_mutation(
     crate::http_auth::recovery_admission(&state, &request)?;
     // The ordinary authorize middleware has checked the session and CSRF.
     let limit = match action {
+        "foreign_plan_preview" | "foreign_plan_save" => 2 * crate::JSON_BODY_LIMIT,
         "activate" => MAX_ACTIVATION_BODY_BYTES,
         "disk_add_preview" => crate::JSON_BODY_LIMIT,
-        "set_discovery_root" | "disk_exit_commit" | "disk_readmit_commit" => {
-            MAX_DIRECTORY_BODY_BYTES
-        }
+        "disk_exit_commit"
+        | "disk_readmit_commit"
+        | "ordinary_conversion_preview"
+        | "foreign_disk_preview"
+        | "ordinary_conversion_commit" => MAX_DIRECTORY_BODY_BYTES,
         _ => super::MAX_SETUP_BODY_BYTES,
     };
     let input = body(request, limit).await?;
@@ -296,12 +341,147 @@ async fn discovery_root(
         .await
         .map(Json)
 }
-async fn set_discovery_root(
+async fn discovered_disks(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
-    protected_mutation(state, request, "set_discovery_root").await
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    if request.uri().query().is_some() {
+        return Err(ApiError::invalid(
+            "disk discovery accepts no query parameters",
+        ));
+    }
+    dispatch(state, "discovered_disks", json!({}), None, Some(identity))
+        .await
+        .map(Json)
 }
+
+async fn foreign_disk_preview(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    if request.uri().query().is_some() {
+        return Err(ApiError::invalid(
+            "foreign disk preview accepts no query parameters",
+        ));
+    }
+    protected_mutation(state, request, "foreign_disk_preview").await
+}
+async fn foreign_plan_mutation(
+    state: AppState,
+    request: Request,
+    action: &'static str,
+) -> Result<Json<Value>, ApiError> {
+    if request.uri().query().is_some() {
+        return Err(ApiError::invalid(
+            "foreign plan mutations accept no query parameters",
+        ));
+    }
+    protected_mutation(state, request, action).await
+}
+async fn foreign_plan_preview(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    foreign_plan_mutation(state, request, "foreign_plan_preview").await
+}
+async fn foreign_plan_save(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    foreign_plan_mutation(state, request, "foreign_plan_save").await
+}
+async fn foreign_plan_revalidate(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    foreign_plan_mutation(state, request, "foreign_plan_revalidate").await
+}
+async fn foreign_plan_execute(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    foreign_plan_mutation(state, request, "foreign_plan_execute").await
+}
+#[derive(data_serialization::Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct ForeignPlanQuery {
+    operation_id: storage_contract::OperationId,
+}
+async fn foreign_plan_status(
+    State(state): State<AppState>,
+    crate::http_boundary::ApiQuery(query): crate::http_boundary::ApiQuery<ForeignPlanQuery>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    dispatch(
+        state,
+        "foreign_plan_status",
+        json!({"operation_id":query.operation_id}),
+        None,
+        Some(identity),
+    )
+    .await
+    .map(Json)
+}
+async fn ordinary_conversion_preview(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "ordinary_conversion_preview").await
+}
+async fn ordinary_conversion_commit(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "ordinary_conversion_commit").await
+}
+async fn ordinary_conversion_resume(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "ordinary_conversion_resume").await
+}
+async fn ordinary_conversion_stop(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "ordinary_conversion_stop").await
+}
+#[derive(data_serialization::Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct ConversionStatusQuery {
+    operation_id: Option<storage_contract::OperationId>,
+}
+async fn ordinary_conversion_status(
+    State(state): State<AppState>,
+    crate::http_boundary::ApiQuery(query): crate::http_boundary::ApiQuery<ConversionStatusQuery>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    dispatch(
+        state,
+        "ordinary_conversion_status",
+        json!({"operation_id":query.operation_id}),
+        None,
+        Some(identity),
+    )
+    .await
+    .map(Json)
+}
+
 #[derive(data_serialization::Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct DirectoryQuery {

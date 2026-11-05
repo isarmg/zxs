@@ -13,9 +13,9 @@
 .authentication-card :is(.zxs-auth-label, .zxs-auth-input-row) { --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 .authentication-card .zxs-auth-label { display: flex; align-items: center; gap: 1ch; }
 .authentication-shell .authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border: 0; border-radius: 0; background: transparent; outline: 0; }
-.authentication-shell .authentication-card input.zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }
-/* The outer card is the only decorative box. Inputs have no resting line;
- * keyboard focus uses a solid underline. The shell
+.authentication-shell .authentication-card input.zxs-input:focus-visible { outline: 2px solid var(--zxs-focus,Highlight); outline-offset: -2px; }
+/* The outer card is the only decorative box. Inputs stay unlined;
+ * keyboard focus uses the shared inset outline without changing geometry. The shell
  * scope outranks the appearance root plus .zxs-error, even when loaded earlier. */
 .authentication-shell .authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) { border: 0; background: transparent; box-shadow: none; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 .authentication-card .zxs-auth-information { display: grid; align-items: center; overflow-wrap: anywhere; }
@@ -26,7 +26,7 @@
 .authentication-shell .authentication-card .zxs-button:focus-visible { outline: 0; border-bottom: 3px solid var(--zxs-focus,Highlight); }
 .authentication-card .zxs-button svg { width: 1em; height: 1em; }
 .zxs-login-controls { display: flex; align-items: center; gap: 8px; }
-.zxs-login-controls > button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 44px; padding: 0 8px; line-height: 1; }
+.zxs-login-controls > button { display: inline-flex; align-items: center; justify-content: center; min-width: var(--zxs-compact-row-height); height: var(--zxs-compact-row-height); padding: 0 8px; line-height: 1; }
 .zxs-login-controls svg { width: var(--zxs-header-icon-size, 1em); height: var(--zxs-header-icon-size, 1em); }
 html[data-zxs-theme="light"] :is(.authentication-card, .zxs-login-controls) { --zxs-text-primary: #000; --zxs-text-link: #000; --zxs-action-primary: #000; --zxs-block-muted: #000; color: var(--zxs-text-primary); }
 .authentication-card .zxs-auth-label::before,

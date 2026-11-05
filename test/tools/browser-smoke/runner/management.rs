@@ -5,6 +5,8 @@ use super::{
     wait_for, with_cleanup,
 };
 
+mod conversion;
+
 fn prepare_offline(source_pool: &Path, offline: &Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     let pool = offline.join("pool");
@@ -263,12 +265,13 @@ pub(super) fn setup(
         browser.css(".zxs-monitor-page [data-metric='cpu']")?;
         browser.css(".zxs-monitor-page [data-metric='memory']")?;
         // Provision only a disposable test-owned child after account creation.
-        // No --setup-disk/preset or mount-root restriction is used by this daemon.
+        // The daemon has an immutable discovery parent, not a Web-editable path.
         let storage = fixture.storage_directory()?;
         with_cleanup(
             || {
                 browser.script(STORAGE_PROBE)?;
                 select_storage(browser, &storage)?;
+                assert_unadmitted_storage(&fixture, &storage)?;
                 browser.click(&browser.css("[data-storage-activate]")?)?;
                 fixture.wait_state("ready")?;
                 storage_active(browser)?;
@@ -278,8 +281,9 @@ pub(super) fn setup(
             },
             || restore_storage_probe(browser),
         )?;
+        conversion::run(browser, &fixture)?;
         browser.click(&browser.button("Files", "文件")?)?;
-        browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?;
+        browser.css(".zxs-disk-entry[data-slot='D01']:not([disabled])")?;
         sign_out(browser)?;
         Ok(())
     })?;
@@ -307,7 +311,7 @@ pub(super) fn setup(
         sign_out(browser)
     })?;
     println!(
-        "PASS no-disk account setup, administrator monitoring, real nested-directory browse/inspection/activation, exact configured root, and missing-directory restart without recreation"
+        "PASS no-disk account setup, fixed-parent candidate discovery, read-only wizard/back/review, explicit independent-primary activation, and missing-directory restart without recreation"
     );
     lost_initialize_response(browser, daemon, web, root, password)?;
     complete_activation(browser, daemon, web, root, password)
@@ -348,6 +352,8 @@ impl SetupFixture {
             .arg(&self.pool)
             .arg("--management-root")
             .arg(&self.management)
+            .arg("--storage-discovery-root")
+            .arg(self.root.join("storage-parent"))
             .args(["--listen", &format!("127.0.0.1:{}", self.port)])
             .arg("--allow-development-setup");
         super::server_web(&mut command, web, &self.root);
@@ -524,7 +530,7 @@ const STORAGE_PROBE: &str = r#"
 if (window.__zxsStorageProbe) throw new Error('Storage probe already installed');
 const original = window.fetch;
 const state = window.__zxsStorageProbe = {
-  listings:[], inspections:[], posts:[], statusReads:[], activation:null,
+  discoveries:[], posts:[], statusReads:[], activation:null,
   loseActivation:false, dropped:false, holdStatus:false, waiters:[],
   submitStimuli:0, stimuliSettled:true, frame:null,
   release:() => { state.holdStatus=false; for (const resolve of state.waiters.splice(0)) resolve(); },
@@ -537,10 +543,8 @@ window.fetch = async function(...args) {
   if (own && method === 'POST' && ['/api/admin/storage/activate','/api/admin/storage/complete-activation'].includes(path)) state.posts.push(path);
   const response=await Reflect.apply(original,this,args);
   if (!own) return response;
-  if (path === '/api/admin/storage/directories' && method === 'GET')
-    state.listings.push({status:response.status, body:await response.clone().json()});
-  if (path === '/api/admin/storage/directories/inspect' && method === 'POST')
-    state.inspections.push({status:response.status, body:await response.clone().json()});
+  if (path === '/api/admin/storage/discovered-disks' && method === 'GET')
+    state.discoveries.push({status:response.status, body:await response.clone().json()});
   if (path === '/api/admin/storage/activate' && method === 'POST' && state.loseActivation && !state.dropped) {
     const body=await response.clone().json();
     state.activation={status:response.status, body};
@@ -561,74 +565,75 @@ fn restore_storage_probe(browser: &Browser) -> Result<()> {
     browser.script("if(window.__zxsStorageProbe)window.__zxsStorageProbe.restore();return true")?;
     Ok(())
 }
+fn assert_no_storage_path_inputs(browser: &Browser) -> Result<()> {
+    if browser.script("return document.querySelector('[data-storage-field], [data-storage-discovery-root], [data-storage-save-discovery-root]') !== null")? == true {
+        return Err("disk wizard exposed a free-form path, discovery-root or mount input".into());
+    }
+    Ok(())
+}
 fn select_storage(browser: &Browser, storage: &Path) -> Result<()> {
-    let parent = storage
-        .parent()
-        .ok_or("fixture storage has no parent")?
-        .to_str()
-        .ok_or("non-UTF8 fixture parent")?;
     let path = storage.to_str().ok_or("non-UTF8 fixture storage")?;
-    browser.click(&browser.button("Administration", "系统管理")?)?;
-    browser.css(".zxs-storage-activation [data-storage-field='browse']:not([disabled])")?;
-    let discovery = browser.css("[data-storage-discovery-root]:not([disabled])")?;
-    browser.command(
-        "POST",
-        &format!("/element/{discovery}/clear"),
-        Some(json!({})),
-    )?;
-    browser.keys(&discovery, parent)?;
-    browser.click(&browser.css("[data-storage-save-discovery-root]:not([disabled])")?)?;
-    let expected_root = json_codec::to_string(parent)?;
-    wait_for("custom discovery root persisted", || {
-        if browser.script(&format!("return document.querySelector('[data-storage-field=browse]')?.value === {expected_root} && !document.querySelector('[data-storage-field=browse]')?.disabled"))? == true {Ok(())}
-        else {Err("custom discovery root not yet loaded".into())}
-    })?;
-    let browse = browser.css("[data-storage-field='browse']")?;
-    browser.command("POST", &format!("/element/{browse}/clear"), Some(json!({})))?;
-    browser.keys(&browse, parent)?;
-    browser.click(&browser.button("Browse", "浏览")?)?;
-    let expected_parent = json_codec::to_string(parent)?;
-    wait_for("real parent directory listing", || {
-        if browser.script(&format!("const r=window.__zxsStorageProbe.listings.at(-1);return r?.status === 200 && r.body.path === {expected_parent} && r.body.entries.some(e=>e.name === 'selected-storage' && e.can_browse)"))? == true { Ok(()) }
-        else { Err("server did not list the real nested storage directory".into()) }
-    })?;
-    browser.click(&browser.button("selected-storage", "selected-storage")?)?;
     let expected = json_codec::to_string(path)?;
-    wait_for("real child directory listing", || {
-        if browser.script(&format!("const r=window.__zxsStorageProbe.listings.at(-1);return r?.status === 200 && r.body.path === {expected} && r.body.entries.length === 0 && r.body.truncated === false"))? == true { Ok(()) }
-        else { Err("child directory listing not yet available".into()) }
+    let parent = json_codec::to_string(
+        storage
+            .parent()
+            .ok_or("fixture storage has no parent")?
+            .to_str()
+            .ok_or("non-UTF8 discovery root")?,
+    )?;
+    browser.click(&browser.button("Administration", "系统管理")?)?;
+    browser.css("[data-storage-discover]:not([disabled])")?;
+    assert_no_storage_path_inputs(browser)?;
+    browser.click(&browser.css("[data-storage-discover]:not([disabled])")?)?;
+    wait_for("real fixed-parent candidate discovery", || {
+        if browser.script(&format!("const r=window.__zxsStorageProbe.discoveries.at(-1);return r?.status===200&&r.body.discovery_root==={parent}&&r.body.candidates.some(c=>c.path==={expected}&&c.state.kind==='empty'&&c.state.selection.root_path==={expected})"))?==true {Ok(())}
+        else {Err("discovery did not return the real empty immediate child".into())}
     })?;
-    browser.click(&browser.button("Use this directory", "使用此目录")?)?;
-    wait_for("mount and selected child remain distinct", || {
-        if browser.script(&format!("const r=window.__zxsStorageProbe.listings.at(-1).body;return document.querySelector('[data-storage-field=mount]').value === r.mount_path && document.querySelector('[data-storage-field=root]').value === {expected} && r.mount_path !== {expected}"))? == true { Ok(()) }
-        else { Err("directory selection lost the actual mount/child distinction".into()) }
-    })?;
-    browser.click(&browser.css("[data-storage-inspect]")?)?;
-    browser.css("[data-storage-add-selection]:not([disabled])")?;
-    let inspected=browser.script("const s=window.__zxsStorageProbe;return {inspection:s.inspections.at(-1), listing:s.listings.at(-1).body}")?;
-    if inspected["inspection"]["status"] != 200
-        || inspected["inspection"]["body"]["root_path"] != path
-        || inspected["inspection"]["body"]["mount_path"] != inspected["listing"]["mount_path"]
-        || !inspected["inspection"]["body"]["selection_id"]
-            .as_str()
-            .is_some_and(|s| s.starts_with("directory_") && s.len() == 74)
+    let candidate = format!("[data-storage-candidate={expected}]:not([disabled])");
+    if browser.script(&format!("const candidates=[...document.querySelectorAll('.zxs-disk-tree-candidate')],node=candidates.find(node=>node.dataset.storageCandidate==={expected});return !!node&&node.dataset.level==='-1'&&node.getAttribute('aria-controls')==='zxs-disk-wizard'&&document.querySelectorAll('.zxs-disk-tree-edge').length===0"))?!=true {
+        return Err("unadmitted candidate is not in its arrow-free tier -1 tree row".into());
+    }
+    browser.click(&browser.css(&candidate)?)?;
+    browser.css(&format!("[data-storage-wizard-choice={expected}]"))?;
+    // Opening and going back are read-only. The candidate must still require a
+    // separate staging action and an explicit admission confirmation afterward.
+    browser.click(&browser.css("[data-storage-wizard-back]:not([disabled])")?)?;
+    if browser.script("return document.querySelector('[data-storage-wizard-choice], [data-storage-selected]') !== null")?==true {
+        return Err("returning from candidate review retained or admitted a staged disk".into());
+    }
+    assert_activation_posts(browser, &[])?;
+    browser.click(&browser.css(&candidate)?)?;
+    browser.click(&browser.css("[data-storage-add-selection]:not([disabled])")?)?;
+    browser.css(&format!("[data-storage-selected={expected}]"))?;
+    if browser.script("const p=document.querySelector('.zxs-storage-activation');return p.textContent.includes('independent tier-1 primary')||p.textContent.includes('独立的第 1 层主盘')")?!=true {
+        return Err("first-admission review invented backup tiers or omitted independent-primary semantics".into());
+    }
+    if browser
+        .script("return document.querySelector('[data-storage-activate]')?.disabled===true")?
+        != true
     {
-        return Err(
-            format!("real directory inspection did not bind selected child: {inspected}").into(),
-        );
+        return Err("staging a candidate enabled admission before explicit confirmation".into());
     }
-    browser.click(&browser.css("[data-storage-add-selection]")?)?;
-    if browser.script("const t=document.querySelector('.zxs-storage-activation').textContent;return t.includes('One directory holds one copy') || t.includes('单目录只有一份副本')")? != true {
-        return Err("single-directory redundancy warning is missing".into());
-    }
+    assert_activation_posts(browser, &[])?;
     browser.click(&browser.css("[data-storage-development]")?)?;
     browser.click(&browser.css("[data-storage-confirm]")?)?;
     browser.css("[data-storage-activate]:not([disabled])")?;
+    assert_no_storage_path_inputs(browser)?;
     Ok(())
 }
+fn assert_unadmitted_storage(fixture: &SetupFixture, storage: &Path) -> Result<()> {
+    if fixture.pool.join("config.json").exists()
+        || fixture.pool.join("storage-activation-intent.json").exists()
+        || fs::read_dir(storage)?.next().is_some()
+    {
+        return Err("discovery or wizard review wrote disk data before admission".into());
+    }
+    Ok(())
+}
+
 fn storage_active(browser: &Browser) -> Result<()> {
     wait_for("actual activation status settles the Web view", || {
-        if browser.script("const p=window.__zxsStorageProbe;const t=document.querySelector('.zxs-storage-activation')?.textContent || '';return p.statusReads.some(r=>r.status === 200 && r.body.state === 'active') && (t.includes('The storage pool is active.') || t.includes('存储池已激活。')) && !document.querySelector('[data-storage-activate]') && !document.querySelector('[data-language-toggle]')?.disabled")? == true { Ok(()) }
+        if browser.script("const p=window.__zxsStorageProbe;const t=document.querySelector('.zxs-storage-activation')?.textContent || '';return p.statusReads.some(r=>r.status === 200 && r.body.state === 'active') && (t.includes('Storage is ready.') || t.includes('存储已就绪。')) && !document.querySelector('[data-storage-activate]') && !document.querySelector('[data-language-toggle]')?.disabled")? == true { Ok(()) }
         else { Err("activation has not settled from real server status".into()) }
     })
 }
@@ -643,6 +648,7 @@ fn assert_single_storage(fixture: &SetupFixture, storage: &Path) -> Result<()> {
     let config: storage_engine::Config =
         json_codec::from_slice(&fs::read(fixture.pool.join("config.json"))?)?;
     if config.disks.len() != 1
+        || config.disks[0].slot_id != "D01"
         || config.disks[0].level != 1
         || config.disks[0].upstream_slot_id.is_some()
         || config.disks[0].root != storage
@@ -817,6 +823,7 @@ fn lost_initialize_response(
         with_cleanup(|| {
             browser.script(STORAGE_PROBE)?;
             select_storage(browser,&storage)?;
+            assert_unadmitted_storage(&fixture,&storage)?;
             browser.script("window.__zxsStorageProbe.loseActivation=true;return true")?;
             browser.click(&browser.css("[data-storage-activate]")?)?;
             wait_for("successful activation response loss stays unknown",|| {
@@ -898,6 +905,7 @@ fn complete_activation(
             browser.script(STORAGE_PROBE)?;
             browser.click(&browser.button("Administration","系统管理")?)?;
             browser.css("[data-storage-complete]")?;
+            assert_no_storage_path_inputs(browser)?;
             if browser.script("return document.querySelector('[data-storage-activate], [data-setup-user]') !== null")? == true {
                 return Err("interrupted activation offered new storage/account initialization".into());
             }
@@ -915,7 +923,7 @@ fn complete_activation(
         sign_out(browser)?;
         sign_in(browser,"completion-admin",password)?;
         browser.click(&browser.button("Files","文件")?)?;
-        browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?;
+        browser.css(".zxs-disk-entry[data-slot='D01']:not([disabled])")?;
         sign_out(browser)?;
         println!("PASS real durable interrupted activation: existing-account login, server-verified original completion, unchanged configuration/authority and usable storage; no debug endpoint");
         Ok(())
@@ -930,11 +938,19 @@ fn prepare_interruption(fixture: &SetupFixture, password: &str) -> Result<std::p
         Backend,
         setup_recovery::{SetupRecovery, StorageActivationRequest},
     };
-    let (backend, auth) = storage_server::management::open_service_with_disks(
+    let (backend, auth) = storage_server::management::open_service_with_options(
         &fixture.pool,
         &fixture.management,
-        std::collections::BTreeMap::new(),
-        true,
+        storage_server::management::ManagementOptions {
+            discovery_root: fixture
+                .root
+                .join("storage-parent")
+                .to_str()
+                .ok_or("non-UTF8 discovery root")?
+                .parse()?,
+            allow_development_setup: true,
+            ..Default::default()
+        },
     )?;
     let auth = Arc::new(Mutex::new(auth));
     backend.start_management(auth.clone());
@@ -972,7 +988,7 @@ fn prepare_interruption(fixture: &SetupFixture, password: &str) -> Result<std::p
         .ok_or("fixture storage needs parent")?
         .to_str()
         .ok_or("non-UTF8 discovery root")?;
-    let listing = storage_server::storage_directories::browse_within(discovery, path)?;
+    let listing = storage_server::storage_directories::browse(path)?;
     let selection = storage_server::storage_directories::inspect_within(
         discovery,
         &json_codec::from_value(json!({"mount_path":listing.mount_path,"root_path":path}))?,
@@ -983,14 +999,8 @@ fn prepare_interruption(fixture: &SetupFixture, password: &str) -> Result<std::p
         fixture.management.clone(),
         std::collections::BTreeMap::new(),
     )?
+    .with_discovery_root(discovery.parse()?)
     .allow_development_mode();
-    service.set_discovery_root(
-        &identity,
-        json_codec::from_value(
-            json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
-        )?,
-        |_| Ok(()),
-    )?;
     let result = service.activate(
         &identity,
         StorageActivationRequest {

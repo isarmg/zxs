@@ -46,7 +46,7 @@ python3 tools/rust-sources/manage.py refresh --retire-plan /tmp/reviewed-rust-re
 python3 tools/rust-sources/manage.py verify --metadata
 ```
 
-当前清单使用 schema 4，以 `packages`、`merges`、`retired`、`superseded` 分别记录活动源码、组件内合并实现、已移除实现和已升级替换的原始身份。退役记录保留最后源码摘要、原始身份及原因，记录摘要单独锁定，后续 `refresh` 不能覆盖。重新创建退役目录会使验证失败，重新引入必须经过显式来源登记。四类记录必须恰好覆盖全部原始身份，中央原始材料继续保留。
+当前清单使用 schema 9，以 `packages`、`merges`、`retired`、`superseded` 分别记录活动源码、组件内合并实现、已移除实现和已升级替换的原始身份，并保留后续命名、移动、整合与布局证明。退役记录保留最后源码摘要、原始身份及原因，记录摘要单独锁定，后续 `refresh` 不能覆盖。重新创建退役目录会使验证失败，重新引入必须经过显式来源登记。四类记录必须恰好覆盖全部原始身份，中央原始材料继续保留。
 
 同目录上游升级须先登记新发布包的原始身份与集中材料，再使用显式审阅的 `refresh --upgrade-plan PLAN.json`。计划采用 schema 1；`packages` 每项包含 `directory`、与上次活动收据完全一致的 `package`、`successor_origin_directory`、`reason` 和非空 `source_prefixes`（例如 `["src/"]`）。工具逐文件检查指定完整源码前缀与新发布包的路径、字节一致，不能仅提升版本号。`superseded` 以旧 `origin_directory` 为键，保留原收据、原因、已核对前缀与直接后继；`superseded_records_sha256` 固定历史记录摘要。连续升级保留原直接后继链，最终必须指向同目录的当前身份或显式退役记录。后续本地修改仍使用常规 `refresh`，不能重写原始来源或升级历史。
 

@@ -702,6 +702,10 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "磁盘根目录的 PortableName basename；不是内部槽位 ID。"
+                          },
                           "slot_id": {
                             "$ref": "#/components/schemas/SlotId"
                           },
@@ -745,6 +749,7 @@
                         },
                         "additionalProperties": false,
                         "required": [
+                          "name",
                           "slot_id",
                           "level",
                           "online",
@@ -2037,142 +2042,6 @@
           },
           "409": {
             "description": "DIRECTORY_SCOPE_REQUIRED：磁盘根包含多个旧命名空间，应选择具体文件夹。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "备份盘或当前目录引用只读。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "path": {
-                    "type": "string",
-                    "description": "受PortablePath约束的磁盘相对路径；空字符串表示当前磁盘根目录。不得传系统绝对路径。"
-                  },
-                  "name": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "operation_id": {
-                    "$ref": "#/components/schemas/OperationId"
-                  }
-                },
-                "additionalProperties": false,
-                "required": [
-                  "path",
-                  "name",
-                  "operation_id"
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/file-manager/disks/{slot}/directory-select": {
-      "post": {
-        "operationId": "selectDirectoryBranch",
-        "description": "按目录分支名称选择完整冻结子树，恢复成员、名称、层级及精确文件/子目录节点；不要求后代具有同名文件分支。子目录选择为父目录追加组成子树，不产生假的文件内容节点。",
-        "parameters": [
-          {
-            "name": "slot",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/SlotId"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "请求成功。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "operation_id": {
-                      "$ref": "#/components/schemas/OperationId"
-                    },
-                    "operation_kind": {
-                      "type": "string"
-                    },
-                    "request_digest": {
-                      "$ref": "#/components/schemas/Hash"
-                    },
-                    "state": {
-                      "enum": [
-                        "completed",
-                        "in_doubt"
-                      ]
-                    },
-                    "commit_state": {
-                      "type": "string"
-                    },
-                    "protection_at_publish": {
-                      "type": "string"
-                    },
-                    "publication_sequence": {
-                      "$ref": "#/components/schemas/UInt64"
-                    },
-                    "result": {
-                      "type": "object"
-                    },
-                    "error": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/Error"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "additionalProperties": false,
-                  "required": [
-                    "operation_id",
-                    "operation_kind",
-                    "request_digest",
-                    "state",
-                    "commit_state",
-                    "result",
-                    "error"
-                  ]
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "结构化错误；写操作结果不确定时按原operation_id查询，不能改key盲目重试。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "DIRECTORY_BRANCH_CONFLICT：目录选择或依据发生冲突。DIRECTORY_SCOPE_REQUIRED：请选择具体目录作用域。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4544,116 +4413,6 @@
           },
           "default": {
             "description": "结构化错误；不确定结果使用原 operation_id 查询或重试。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/repositories/{repo}/directory-scopes": {
-      "post": {
-        "operationId": "initializeDirectoryScope",
-        "description": "显式登记已有目录的基线组成，以便批量选择稳定分支；不复制正文、不切换已有选择。GET不隐式创建状态。",
-        "parameters": [
-          {
-            "name": "repo",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/RepositoryId"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "path": {
-                    "type": "string"
-                  },
-                  "operation_id": {
-                    "$ref": "#/components/schemas/OperationId"
-                  }
-                },
-                "additionalProperties": false,
-                "required": [
-                  "path",
-                  "operation_id"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "请求成功。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "operation_id": {
-                      "$ref": "#/components/schemas/OperationId"
-                    },
-                    "operation_kind": {
-                      "type": "string"
-                    },
-                    "request_digest": {
-                      "$ref": "#/components/schemas/Hash"
-                    },
-                    "state": {
-                      "enum": [
-                        "completed",
-                        "in_doubt"
-                      ]
-                    },
-                    "commit_state": {
-                      "type": "string"
-                    },
-                    "protection_at_publish": {
-                      "type": "string"
-                    },
-                    "publication_sequence": {
-                      "$ref": "#/components/schemas/UInt64"
-                    },
-                    "result": {
-                      "type": "object"
-                    },
-                    "error": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/Error"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "additionalProperties": false,
-                  "required": [
-                    "operation_id",
-                    "operation_kind",
-                    "request_digest",
-                    "state",
-                    "commit_state",
-                    "result",
-                    "error"
-                  ]
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "结构化错误；写操作结果不确定时按原operation_id查询，不能改key盲目重试。",
             "content": {
               "application/json": {
                 "schema": {
@@ -7601,7 +7360,7 @@
     "/api/admin/storage/discovery-root": {
       "get": {
         "operationId": "getStorageDiscoveryRoot",
-        "description": "读取持久发现根，默认 /zxs/data/disks；只有内部目录可作为候选，根本身只能浏览。",
+        "description": "只读返回systemd设置的发现父目录；无HTTP修改入口。",
         "responses": {
           "200": {
             "description": "成功。",
@@ -7623,44 +7382,6 @@
               }
             }
           }
-        }
-      },
-      "put": {
-        "operationId": "setStorageDiscoveryRoot",
-        "description": "当前管理员原值比较后持久更新发现根，验证已有目录且不修改权限或创建目录。未完成激活时拒绝；更改不移动或重新挂载已有存储。",
-        "responses": {
-          "200": {
-            "description": "成功。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StorageDiscoveryRootSettings"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "结构化错误；未知写入结果先查询存储状态，不盲目重新激活。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StorageSetDiscoveryRootRequest"
-              }
-            }
-          },
-          "x-maxBytes": 65536,
-          "description": "严格 JSON 请求，最多 65536 字节，十秒读取期限。"
         }
       }
     },
@@ -7960,7 +7681,7 @@
     "/api/repositories/{repo}/directories/{directory}/history": {
       "get": {
         "operationId": "listDirectoryHistoryNodes",
-        "description": "Read-only real immutable DirectoryTree history or DirectoryBranch summaries, scoped to repository and stable directory identity (entry_id; repository_id at root). No scope initialization, selection change or write privilege required. Historical paths never identify a scope: rename preserves history, delete retains recorded history, path recreation has another identity. Nodes have only actual parent_tree_id edges; pending branches can share one head without new nodes. Non-target collection array is empty. Sorted by descending sequence then ID. Current exact history_root and collection/limit-bound opaque cursors; HISTORY_CHANGED requires refresh, not page mixing. At most 128 records and 1 MiB encoded JSON; cancellable O(total directory headers) scans with O(limit) retained rows.",
+        "description": "Read explicit user directory commits and branch summaries, scoped to repository and stable directory identity. Internal durable staging checkpoints are omitted from nodes; parent edges resolve the previous explicit commit. Current/branch summaries distinguish working head, committed head and staged state. Reads do not initialize scopes or change selections. Exact metadata-root pagination and cancellation remain required.",
         "parameters": [
           {
             "name": "repo",
@@ -8050,7 +7771,7 @@
     "/api/repositories/{repo}/directories/{directory}/history/branches": {
       "get": {
         "operationId": "listDirectoryHistoryBranches",
-        "description": "Read-only real immutable DirectoryTree history or DirectoryBranch summaries, scoped to repository and stable directory identity (entry_id; repository_id at root). No scope initialization, selection change or write privilege required. Historical paths never identify a scope: rename preserves history, delete retains recorded history, path recreation has another identity. Nodes have only actual parent_tree_id edges; pending branches can share one head without new nodes. Non-target collection array is empty. Sorted by descending sequence then ID. Current exact history_root and collection/limit-bound opaque cursors; HISTORY_CHANGED requires refresh, not page mixing. At most 128 records and 1 MiB encoded JSON; cancellable O(total directory headers) scans with O(limit) retained rows.",
+        "description": "Read explicit user directory commits and branch summaries, scoped to repository and stable directory identity. Internal durable staging checkpoints are omitted from nodes; parent edges resolve the previous explicit commit. Current/branch summaries distinguish working head, committed head and staged state. Reads do not initialize scopes or change selections. Exact metadata-root pagination and cancellation remain required.",
         "parameters": [
           {
             "name": "repo",
@@ -8562,6 +8283,733 @@
           },
           "x-maxBytes": 16384,
           "description": "严格 JSON，请求最多 16384 字节，十秒读取期限。当前管理员会话、同源及 Cookie CSRF 验证仍适用。"
+        }
+      }
+    },
+    "/api/admin/storage/discovered-disks": {
+      "get": {
+        "operationId": "getDiscoveredDisks",
+        "description": "无查询参数，只读列举固定发现父目录的直接候选。已登记/停用路径排除，未支持与不可用候选保留诊断；空目录观察不是写入许可，ZXS识别不是本系统接纳。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageDiscoveredDisks"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "发现不可用或生命周期拒绝。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/directory-branches/{id}/staging": {
+      "get": {
+        "operationId": "getDirectoryStaging",
+        "description": "Read durable working-tree changes against the last explicit directory commit. File versions are already durable; staging is not volatile upload content. Counts compare namespace entries and exact file contexts.",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DirectoryBranchId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact staged tree and committed baseline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryStagingStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or revoked session."
+          },
+          "404": {
+            "description": "Directory branch not found."
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/directory-branches/{id}/commits": {
+      "post": {
+        "operationId": "commitDirectoryChanges",
+        "description": "只提交此显式初始化目录仓库的已暂存工作内容及已暂存的直接子仓库HEAD引用；不递归提交子仓库，不创建文件版本，不改变工作命名空间。expected_tree_id和必填十进制字符串expected_index_generation绑定准确审核结果；operation_id支持准确重放。独立子仓库边界变化须重新暂存。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DirectoryBranchId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryCommitBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published or no-change operation receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenericOperation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid message, identity or request."
+          },
+          "401": {
+            "description": "Missing or revoked session."
+          },
+          "409": {
+            "description": "Directory staged tree changed; review before committing."
+          },
+          "503": {
+            "description": "Publication unavailable; retain the operation ID and query its outcome."
+          }
+        }
+      }
+    },
+    "/api/admin/storage/conversion/preview": {
+      "post": {
+        "operationId": "ordinaryDiskConversionPreview",
+        "description": "已激活系统的普通来源→新空目标一级盘向导。源只读，固定父目录直接候选；先发布新一级登记，再将同一源清单导入空根。不能转为二/三级，不自动接纳外来ZXS，不覆盖目标。contents-only不保留权限、时间戳、ACL、扩展属性或来源历史。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrdinaryDiskConversionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功；阶段与永久回执分别报告。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdinaryDiskConversionPreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化拒绝；源和原工作区保留，未知结果查询同一operation。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/conversion/commit": {
+      "post": {
+        "operationId": "ordinaryDiskConversionCommit",
+        "description": "已激活系统的普通来源→新空目标一级盘向导。源只读，固定父目录直接候选；先发布新一级登记，再将同一源清单导入空根。不能转为二/三级，不自动接纳外来ZXS，不覆盖目标。contents-only不保留权限、时间戳、ACL、扩展属性或来源历史。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrdinaryDiskConversionCommit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功；阶段与永久回执分别报告。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdinaryDiskConversionStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化拒绝；源和原工作区保留，未知结果查询同一operation。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/conversion/resume": {
+      "post": {
+        "operationId": "ordinaryDiskConversionResume",
+        "description": "已激活系统的普通来源→新空目标一级盘向导。源只读，固定父目录直接候选；先发布新一级登记，再将同一源清单导入空根。不能转为二/三级，不自动接纳外来ZXS，不覆盖目标。contents-only不保留权限、时间戳、ACL、扩展属性或来源历史。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrdinaryDiskConversionResume"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功；阶段与永久回执分别报告。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdinaryDiskConversionStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化拒绝；源和原工作区保留，未知结果查询同一operation。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/conversion/status": {
+      "get": {
+        "operationId": "ordinaryDiskConversionStatus",
+        "description": "只查询原转换。已记录workspace或不确定导入不得自动重建新workspace；完成须核对原CommitRequest及永久publication。",
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OperationId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；阶段与永久回执分别报告。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdinaryDiskConversionStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化拒绝；源和原工作区保留，未知结果查询同一operation。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/conversion/stop": {
+      "post": {
+        "operationId": "stopOrdinaryDiskConversion",
+        "description": "显式停止原导入并保留来源、已登记目标根和暂存字节。仅在无未决发布且核心原停止回执持久后返回stopped，不表示转换成功。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrdinaryDiskConversionStop"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功；阶段与永久回执分别报告。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdinaryDiskConversionStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化拒绝；源和原工作区保留，未知结果查询同一operation。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/foreign/preview": {
+      "post": {
+        "operationId": "previewForeignDiskEvidence",
+        "description": "显式只读检查固定发现父目录的直接候选；重新验证登录和父/子目录身份，排除已登记与停止磁盘。返回本盘最后完整发布闭包、原一级来源身份和暂不可用正文，不代表全局最新状态或写入准入。上限128历史、10000版本、64MiB元数据、16MiB日志、8GiB本地正文校验、1MiB完整响应；超限整份拒绝。execution固定unavailable，无迁入、剪裁、格式化或删除命令。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForeignDiskPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "完整只读证据摘要；缺失正文仍保留历史并标记暂不可用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForeignDiskPreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/directory-git": {
+      "get": {
+        "operationId": "getDirectoryGitStatus",
+        "description": "只读准确目录状态，不隐式初始化、不暂存、不提交。父仓库所有权不等于本目录已初始化。完整JSON响应最多1MiB，超限返回RESPONSE_TOO_LARGE；未知/重复查询字段拒绝。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "准确目录仓库、工作树、HEAD与直接独立子仓库状态。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryGitStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；认证撤销、目录缺失或响应超限不返回成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/directory-git/initialize": {
+      "post": {
+        "operationId": "initializeDirectoryGit",
+        "description": "在准确工作命名空间HEAD上显式初始化此目录仓库。不会递归初始化子目录，也不创建首次提交。未知结果保留原operation_id查询或原请求重放。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryGitInitializeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "原操作的持久回执；不是正文写入回执。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenericOperation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "拒绝未知字段、错误归属、过期依据与未初始化目录；结果不明先查询原operation_id。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/directory-git/children/stage": {
+      "post": {
+        "operationId": "stageDirectoryGitChild",
+        "description": "只暂存一个直接独立子仓库的准确已提交HEAD引用；未提交孩子、错误归属、变化的子HEAD或父index代数均拒绝。不提交子仓库。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryGitStageChildBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "原操作的持久回执；不是正文写入回执。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenericOperation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "拒绝未知字段、错误归属、过期依据与未初始化目录；结果不明先查询原operation_id。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/directory-git/stage": {
+      "post": {
+        "operationId": "stageDirectoryGitOwned",
+        "description": "暂存此目录仓库自己拥有的工作树与当前独立子仓库边界；不会自动暂存孩子的新HEAD，更不会递归提交。expected_tree_id与index代数必须准确。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryGitStageOwnedBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "原操作的持久回执；不是正文写入回执。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenericOperation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "拒绝未知字段、错误归属、过期依据与未初始化目录；结果不明先查询原operation_id。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/foreign/plans/preview": {
+      "post": {
+        "operationId": "foreignPlanPreview",
+        "description": "复核原source摘要，按完整来源历史映射到已登记一级盘的空父目录；只读，不创建任何目录或计划。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForeignPlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "复核结果不是导入回执；execution始终unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForeignPlanPreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/foreign/plans/save": {
+      "post": {
+        "operationId": "foreignPlanSave",
+        "description": "明确acknowledge_plan_only后重读源闭包并复验目标映射，只在系统盘不可覆盖保存原复核计划；不授权数据盘写入或接纳。原ID不同内容拒绝，原样重放不宣称目标仍空。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForeignPlanSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "复核结果不是导入回执；execution始终unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForeignPlanStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/foreign/plans/revalidate": {
+      "post": {
+        "operationId": "foreignPlanRevalidate",
+        "description": "按原物理来源选择、全部证明和目标身份/序列/HEAD/空目录重新复核；不改存储记录或数据盘，匹配也仍execution=unavailable。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForeignPlanSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "复核结果不是导入回执；execution始终unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForeignPlanStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/foreign/plans/execute": {
+      "post": {
+        "operationId": "foreignPlanExecute",
+        "description": "只核对当前主体、已保存计划及摘要，始终FORMAT_UNSUPPORTED。没有外盘写协议或可由计划构造的执行能力，不接纳、剪裁或写入数据盘。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForeignPlanSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/foreign/plans/status": {
+      "get": {
+        "operationId": "foreignPlanStatus",
+        "description": "读取当前主体的已保存不可变复核计划，不访问源盘或目标盘。validation=required；不把上次复核结果缓存为执行能力。",
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OperationId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "复核结果不是导入回执；execution始终unavailable。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForeignPlanStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -11107,6 +11555,9 @@
               },
               "protection_policies": {
                 "$ref": "#/components/schemas/MetadataReference"
+              },
+              "directory_git_repositories": {
+                "$ref": "#/components/schemas/MetadataReference"
               }
             },
             "required": [
@@ -11139,7 +11590,8 @@
               "boundary_marks",
               "content_states",
               "placement_rules",
-              "protection_policies"
+              "protection_policies",
+              "directory_git_repositories"
             ],
             "additionalProperties": false
           }
@@ -11151,7 +11603,7 @@
           "maps"
         ],
         "additionalProperties": false,
-        "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定30个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。"
+        "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定31个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。"
       },
       "CapacityMeasure": {
         "type": "object",
@@ -11538,6 +11990,9 @@
               },
               "file_selection_generations": {
                 "$ref": "#/components/schemas/MetadataReference"
+              },
+              "directory_git_repositories": {
+                "$ref": "#/components/schemas/MetadataReference"
               }
             },
             "required": [
@@ -11575,7 +12030,8 @@
               "version_notes",
               "file_names",
               "directory_selection_generations",
-              "file_selection_generations"
+              "file_selection_generations",
+              "directory_git_repositories"
             ],
             "additionalProperties": false
           },
@@ -11596,7 +12052,7 @@
           "control_auth"
         ],
         "additionalProperties": false,
-        "description": "snapshot域固定35个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。"
+        "description": "snapshot域固定36个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。"
       },
       "InclusionProof": {
         "type": "object",
@@ -15097,22 +15553,6 @@
         ],
         "additionalProperties": false
       },
-      "StorageSetDiscoveryRootRequest": {
-        "type": "object",
-        "properties": {
-          "expected_discovery_root": {
-            "$ref": "#/components/schemas/StorageHostPath"
-          },
-          "discovery_root": {
-            "$ref": "#/components/schemas/StorageHostPath"
-          }
-        },
-        "required": [
-          "expected_discovery_root",
-          "discovery_root"
-        ],
-        "additionalProperties": false
-      },
       "FileHistoryMergeInput": {
         "type": "object",
         "properties": {
@@ -15193,11 +15633,26 @@
                 "type": "null"
               }
             ]
+          },
+          "committed_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "staged": {
+            "type": "boolean"
           }
         },
         "required": [
           "directory_branch_id",
-          "tree_id"
+          "tree_id",
+          "committed_tree_id",
+          "staged"
         ],
         "additionalProperties": false
       },
@@ -15240,6 +15695,11 @@
           },
           "sequence": {
             "$ref": "#/components/schemas/UInt64"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "x-maxUtf8Bytes": 128
           }
         },
         "required": [
@@ -15249,7 +15709,8 @@
           "parent_endpoint",
           "commit_id",
           "path",
-          "sequence"
+          "sequence",
+          "message"
         ],
         "additionalProperties": false
       },
@@ -15285,6 +15746,19 @@
           },
           "sequence": {
             "$ref": "#/components/schemas/UInt64"
+          },
+          "committed_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "staged": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -15294,7 +15768,9 @@
           "head_tree_id",
           "materialized",
           "current",
-          "sequence"
+          "sequence",
+          "committed_tree_id",
+          "staged"
         ],
         "additionalProperties": false
       },
@@ -16125,6 +16601,1615 @@
           }
         ],
         "description": "当前已认证登记与观察健康分离；Detached 不在列表。Unadmitted 不是空池；readmission=null 不允许恢复按钮。"
+      },
+      "StorageDirectorySource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "discovery_identity": {
+            "$ref": "#/components/schemas/StorageDirectoryIdentity"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/StorageDirectoryIdentity"
+          }
+        },
+        "required": [
+          "path",
+          "discovery_identity",
+          "identity"
+        ]
+      },
+      "StorageDiscoveredDiskState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "empty"
+              },
+              "selection": {
+                "$ref": "#/components/schemas/StorageCandidateSelection"
+              }
+            },
+            "required": [
+              "kind",
+              "selection"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "zxs"
+              },
+              "disk_id": {
+                "$ref": "#/components/schemas/DiskId"
+              },
+              "slot_id": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/components/schemas/StorageDirectorySource"
+              },
+              "role": {
+                "$ref": "#/components/schemas/StorageDiscoveredDiskRole"
+              }
+            },
+            "required": [
+              "kind",
+              "disk_id",
+              "slot_id",
+              "source",
+              "role"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "unsupported"
+              },
+              "code": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*(?![\\s\\S])"
+              },
+              "message": {
+                "type": "string"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StorageDirectorySource"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "code",
+              "message",
+              "source"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "unavailable"
+              },
+              "problem": {
+                "enum": [
+                  "symbolic_link",
+                  "permission_denied",
+                  "unavailable"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "problem"
+            ]
+          }
+        ]
+      },
+      "StorageDiscoveredDisk": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/StorageDiscoveredDiskState"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "state"
+        ]
+      },
+      "StorageDiscoveredDisks": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "discovery_root": {
+            "type": "string"
+          },
+          "candidates": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/StorageDiscoveredDisk"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "skipped_non_utf8": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "required": [
+          "discovery_root",
+          "candidates",
+          "truncated",
+          "skipped_non_utf8"
+        ]
+      },
+      "DirectoryStagingStatus": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "head_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "committed_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "staged": {
+            "type": "boolean"
+          },
+          "added": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "modified": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "deleted": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "repository_id",
+          "directory_branch_id",
+          "head_tree_id",
+          "committed_tree_id",
+          "staged",
+          "added",
+          "modified",
+          "deleted"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryCommitBody": {
+        "type": "object",
+        "properties": {
+          "expected_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "x-maxUtf8Bytes": 128
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "expected_index_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "expected_tree_id",
+          "message",
+          "operation_id",
+          "expected_index_generation"
+        ],
+        "additionalProperties": false
+      },
+      "StorageDiscoveredDiskRole": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "upstream_slot_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SlotId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata_member": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "enum": [
+              "initial_declaration",
+              "generation_evidence"
+            ]
+          }
+        },
+        "required": [
+          "level",
+          "upstream_slot_id",
+          "metadata_member",
+          "evidence"
+        ]
+      },
+      "StorageDirectoryAddition": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "selection": {
+            "$ref": "#/components/schemas/StorageCandidateSelection"
+          },
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "upstream_slot_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SlotId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata_member": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "selection",
+          "slot_id",
+          "level",
+          "upstream_slot_id",
+          "metadata_member"
+        ]
+      },
+      "StorageAdditionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "additions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/StorageDirectoryAddition"
+            }
+          }
+        },
+        "required": [
+          "operation_id",
+          "additions"
+        ]
+      },
+      "StorageAdditionAuthority": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "active_membership"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "terminal_management"
+              },
+              "terminal_authority_hash": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "terminal_operation_id": {
+                "$ref": "#/components/schemas/OperationId"
+              }
+            },
+            "required": [
+              "kind",
+              "terminal_authority_hash",
+              "terminal_operation_id"
+            ]
+          }
+        ]
+      },
+      "StorageAdditionPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "$ref": "#/components/schemas/StorageAdditionAuthority"
+          },
+          "request": {
+            "$ref": "#/components/schemas/StorageAdditionRequest"
+          },
+          "pool_id": {
+            "$ref": "#/components/schemas/PoolId"
+          },
+          "configuration_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "preview_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "original_metadata_members": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "target_metadata_members": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "added_directories": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "authority",
+          "request",
+          "pool_id",
+          "configuration_digest",
+          "preview_digest",
+          "original_metadata_members",
+          "target_metadata_members",
+          "added_directories"
+        ]
+      },
+      "StorageConversionPublication": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "commit_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "history_tree_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commit_state": {
+            "enum": [
+              "STAGING",
+              "SEALED",
+              "PREPARED",
+              "DECIDING",
+              "DECIDED",
+              "PROTECTED",
+              "PUBLISHED",
+              "ACKED",
+              "RECOVERING",
+              "RECOVERY_REQUIRED",
+              "IN_DOUBT",
+              "PUBLISHED_DEGRADED",
+              "ABORTED"
+            ]
+          },
+          "protection_at_publish": {
+            "enum": [
+              "NOT_APPLICABLE",
+              "TARGET_MET",
+              "BELOW_TARGET",
+              "UNCONFIRMED"
+            ]
+          },
+          "current_health": {
+            "enum": [
+              "HEALTHY",
+              "DEGRADED",
+              "UNAVAILABLE",
+              "UNKNOWN",
+              "RECOVERING"
+            ]
+          },
+          "request_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "result": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "commit_id",
+          "history_tree_id",
+          "branch_id",
+          "commit_state",
+          "protection_at_publish",
+          "current_health",
+          "request_digest",
+          "sequence",
+          "result"
+        ],
+        "additionalProperties": false
+      },
+      "StorageAdditionStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "state": {
+            "enum": [
+              "adding",
+              "cancelling",
+              "recovery_required",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "phase": {
+            "enum": [
+              "prepared",
+              "fencing",
+              "archiving",
+              "enrolling",
+              "joint_decision",
+              "resume_cancellable",
+              "resume_quorum_accepted",
+              "resume_cancellation_unknown",
+              "activating",
+              "certifying_abort",
+              "abort_certified",
+              "cancelling",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "continuation": {
+            "enum": [
+              "add",
+              "cancel"
+            ]
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageConversionPublication"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preview": {
+            "$ref": "#/components/schemas/StorageAdditionPreview"
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageReadmissionFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "state",
+          "phase",
+          "continuation",
+          "result",
+          "preview",
+          "failure"
+        ]
+      },
+      "OrdinaryDiskConversionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/StorageDirectorySource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/StorageCandidateSelection"
+          },
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "metadata_member": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation_id",
+          "source",
+          "target",
+          "slot_id",
+          "metadata_member"
+        ]
+      },
+      "OrdinarySourcePreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "files": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "directories": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "content_bytes": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "temporary_bytes": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "digest",
+          "files",
+          "directories",
+          "content_bytes",
+          "temporary_bytes"
+        ]
+      },
+      "OrdinaryDiskConversionPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "import_operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/StorageDirectorySource"
+          },
+          "source_preview": {
+            "$ref": "#/components/schemas/OrdinarySourcePreview"
+          },
+          "target": {
+            "$ref": "#/components/schemas/StorageAdditionPreview"
+          },
+          "preview_digest": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "operation_id",
+          "import_operation_id",
+          "source",
+          "source_preview",
+          "target",
+          "preview_digest"
+        ]
+      },
+      "OrdinaryDiskConversionCommit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "preview": {
+            "$ref": "#/components/schemas/OrdinaryDiskConversionPreview"
+          },
+          "acknowledge_contents_only": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "preview",
+          "acknowledge_contents_only"
+        ]
+      },
+      "OrdinaryDiskConversionResume": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "operation_id"
+        ]
+      },
+      "OrdinaryDiskConversionStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "preview": {
+            "$ref": "#/components/schemas/OrdinaryDiskConversionPreview"
+          },
+          "phase": {
+            "enum": [
+              "registering",
+              "importing",
+              "completed",
+              "recovery_required",
+              "stopping",
+              "stopped"
+            ]
+          },
+          "registration": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageAdditionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_operation_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OperationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageConversionPublication"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageReadmissionFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stop_result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StorageConversionPublication"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stop_operation_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OperationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "preview",
+          "phase",
+          "registration",
+          "workspace_id",
+          "root_operation_id",
+          "result",
+          "failure",
+          "stop_result",
+          "stop_operation_id"
+        ]
+      },
+      "OrdinaryDiskConversionStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrdinaryDiskConversionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "OrdinaryDiskConversionStop": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "acknowledge_retained_state": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "acknowledge_retained_state"
+        ]
+      },
+      "ForeignDiskPreviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/StorageDirectorySource"
+          }
+        }
+      },
+      "ForeignDiskIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pool_id",
+          "disk_id",
+          "slot_id",
+          "binding_generation"
+        ],
+        "properties": {
+          "pool_id": {
+            "type": "string"
+          },
+          "disk_id": {
+            "type": "string"
+          },
+          "slot_id": {
+            "type": "string"
+          },
+          "binding_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        }
+      },
+      "ForeignDiskCheckpoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_hash",
+          "publication_hash",
+          "sequence",
+          "authority_hash",
+          "unpublished_tail"
+        ],
+        "properties": {
+          "candidate_hash": {
+            "type": "string"
+          },
+          "publication_hash": {
+            "type": "string"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "authority_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unpublished_tail": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ForeignHistorySummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group_id",
+          "history_tree_id",
+          "repository_name",
+          "origin",
+          "manifest_hash",
+          "branches",
+          "directory_branches",
+          "directory_trees",
+          "commit_records",
+          "versions",
+          "verified_local_versions",
+          "temporarily_unavailable_versions",
+          "recorded_purged_versions",
+          "recorded_migrated_versions"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "history_tree_id": {
+            "type": "string"
+          },
+          "repository_name": {
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ForeignDiskIdentity"
+          },
+          "manifest_hash": {
+            "type": "string"
+          },
+          "branches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "directory_branches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "directory_trees": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "commit_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "versions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "verified_local_versions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "temporarily_unavailable_versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recorded_purged_versions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "recorded_migrated_versions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ForeignDiskPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "identity",
+          "source_level",
+          "role_evidence",
+          "seal_digest",
+          "review_digest",
+          "checkpoint",
+          "histories",
+          "execution"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/StorageDirectorySource"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/ForeignDiskIdentity"
+          },
+          "source_level": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "role_evidence": {
+            "type": "string",
+            "enum": [
+              "initial_declaration",
+              "generation_evidence"
+            ]
+          },
+          "seal_digest": {
+            "type": "string"
+          },
+          "review_digest": {
+            "type": "string"
+          },
+          "checkpoint": {
+            "$ref": "#/components/schemas/ForeignDiskCheckpoint"
+          },
+          "histories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ForeignHistorySummary"
+            }
+          },
+          "execution": {
+            "type": "string",
+            "enum": [
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "DirectoryGitChildReference": {
+        "type": "object",
+        "properties": {
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "directory_branch_id",
+          "tree_id"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryGitBranch": {
+        "type": "object",
+        "properties": {
+          "head_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "index_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "index_boundaries": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/EntryId"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+            }
+          },
+          "index_children": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/EntryId"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DirectoryGitChildReference"
+            }
+          }
+        },
+        "required": [
+          "head_tree_id",
+          "index_tree_id",
+          "index_generation",
+          "index_boundaries",
+          "index_children"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryGitRepository": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "initialized_sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "current_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "branches": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/DirectoryBranchId"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DirectoryGitBranch"
+            }
+          }
+        },
+        "required": [
+          "repository_id",
+          "directory_id",
+          "initialized_sequence",
+          "current_branch_id",
+          "branches"
+        ],
+        "additionalProperties": false,
+        "description": "显式初始化目录仓库的持久状态；HEAD、暂存树及独立子仓库精确引用分别保存。"
+      },
+      "DirectoryGitOwner": {
+        "type": "object",
+        "properties": {
+          "directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "path": {
+            "type": "string",
+            "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+          }
+        },
+        "required": [
+          "directory_id",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryGitChildStatus": {
+        "type": "object",
+        "properties": {
+          "directory_id": {
+            "$ref": "#/components/schemas/EntryId"
+          },
+          "path": {
+            "type": "string",
+            "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+          },
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "head_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "staged_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "committed_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dirty": {
+            "type": "boolean"
+          },
+          "reference_changed": {
+            "type": "boolean"
+          },
+          "staged": {
+            "type": "boolean"
+          },
+          "needs_restage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "directory_id",
+          "path",
+          "directory_branch_id",
+          "head_tree_id",
+          "staged_tree_id",
+          "committed_tree_id",
+          "dirty",
+          "reference_changed",
+          "staged",
+          "needs_restage"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryGitStatus": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "path": {
+            "type": "string",
+            "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+          },
+          "initialized": {
+            "type": "boolean"
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryGitOwner"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "directory_branch_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryBranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "working_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "head_tree_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryTreeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "staged": {
+            "type": "boolean"
+          },
+          "needs_restage": {
+            "type": "boolean"
+          },
+          "added": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "modified": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "deleted": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DirectoryGitChildStatus"
+            }
+          },
+          "legacy_history": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "repository_id",
+          "directory_id",
+          "path",
+          "initialized",
+          "owner",
+          "directory_branch_id",
+          "working_tree_id",
+          "head_tree_id",
+          "index_generation",
+          "staged",
+          "needs_restage",
+          "added",
+          "modified",
+          "deleted",
+          "children",
+          "legacy_history"
+        ],
+        "additionalProperties": false,
+        "description": "只读准确目录状态；未初始化目录可以显示最近所属祖先，但不因此成为独立仓库。所有nullable字段必须出现。完整响应限1MiB，超限拒绝而不截断孩子列表。"
+      },
+      "DirectoryGitInitializeBody": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+          },
+          "expected_namespace_head": {
+            "$ref": "#/components/schemas/CommitId"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "path",
+          "expected_namespace_head",
+          "operation_id"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryGitStageChildBody": {
+        "type": "object",
+        "properties": {
+          "directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "expected_index_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "child_directory_id": {
+            "$ref": "#/components/schemas/EntryId"
+          },
+          "expected_child_head_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "directory_id",
+          "directory_branch_id",
+          "expected_index_generation",
+          "child_directory_id",
+          "expected_child_head_tree_id",
+          "operation_id"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryGitStageOwnedBody": {
+        "type": "object",
+        "properties": {
+          "directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "expected_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "expected_index_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "directory_id",
+          "directory_branch_id",
+          "expected_tree_id",
+          "expected_index_generation",
+          "operation_id"
+        ],
+        "additionalProperties": false
+      },
+      "ForeignPlanTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slot_id",
+          "parent",
+          "history_names"
+        ],
+        "properties": {
+          "slot_id": {
+            "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history_names": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ForeignPlanRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "source",
+          "source_review_digest",
+          "target"
+        ],
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/StorageDirectorySource"
+          },
+          "source_review_digest": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ForeignPlanTarget"
+          }
+        }
+      },
+      "ForeignMappedHistory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group_id",
+          "history_tree_id",
+          "destination"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "history_tree_id": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          }
+        }
+      },
+      "ForeignTargetMapping": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "identity",
+          "sequence",
+          "source_digest",
+          "mapping_digest",
+          "histories"
+        ],
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/ForeignDiskIdentity"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "source_digest": {
+            "type": "string"
+          },
+          "mapping_digest": {
+            "type": "string"
+          },
+          "histories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ForeignMappedHistory"
+            }
+          }
+        }
+      },
+      "ForeignPlanPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request",
+          "source",
+          "target",
+          "review_digest",
+          "execution",
+          "blocker"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/ForeignPlanRequest"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ForeignDiskPreview"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ForeignTargetMapping"
+          },
+          "review_digest": {
+            "type": "string"
+          },
+          "execution": {
+            "type": "string",
+            "enum": [
+              "unavailable"
+            ]
+          },
+          "blocker": {
+            "type": "string",
+            "enum": [
+              "portable_import_writer_unavailable"
+            ]
+          }
+        }
+      },
+      "ForeignPlanSave": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "preview",
+          "acknowledge_plan_only"
+        ],
+        "properties": {
+          "preview": {
+            "$ref": "#/components/schemas/ForeignPlanPreview"
+          },
+          "acknowledge_plan_only": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ForeignPlanSelection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "review_digest"
+        ],
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "review_digest": {
+            "type": "string"
+          }
+        }
+      },
+      "ForeignPlanStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "preview",
+          "validation"
+        ],
+        "properties": {
+          "preview": {
+            "$ref": "#/components/schemas/ForeignPlanPreview"
+          },
+          "validation": {
+            "type": "string",
+            "enum": [
+              "required",
+              "matched_at_observation"
+            ]
+          }
+        }
       }
     }
   }

@@ -425,8 +425,8 @@ fn default_publication_unknown_preserves_preview_until_its_own_terminal_receipt(
             state.update(|s| {
                 s.files.default_operation = Some("original".into());
                 s.files.directory_preview = Some(crate::files::model::DirectoryPreview {
-                    branch: crate::files::test_entries::branch(
-                        json!({"directory_branch_id":"draft"}),
+                    source: crate::files::model::DirectoryPreviewSource::Branch(
+                        crate::files::test_entries::branch(json!({"directory_branch_id":"draft"})),
                     ),
                     path: String::new(),
                 });

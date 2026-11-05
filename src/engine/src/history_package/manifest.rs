@@ -22,6 +22,7 @@ pub struct HistoryManifest {
     pub file_selections: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub directory_branches: BTreeMap<String, DirectoryBranch>,
+    pub directory_git_repositories: BTreeMap<String, storage_contract::directory_git::DirectoryGitRepository>,
     #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
     pub directory_trees: SharedRecords<DirectoryTree>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -276,6 +277,7 @@ impl HistoryManifest {
                 .filter(|(_, branch)| branch.repository_id == repository_id)
                 .map(|(id, branch)| (id.clone(), branch.clone()))
                 .collect(),
+            directory_git_repositories: state.directory_git_repositories.iter().filter(|(_, git)| git.repository_id == repository_id).map(|(id, git)| (id.clone(), git.clone())).collect(),
             directory_trees: state.directory_trees.subset(|_, tree| {
                 state
                     .directory_branches
@@ -864,11 +866,13 @@ impl HistoryManifest {
             {
                 return Err(invalid("commit identity or parent closure differs"));
             }
-            if (id == &self.history.root_commit_id) != commit.parent_commit_ids.is_empty()
+            if (commit.kind != "directory_commit"
+                && (id == &self.history.root_commit_id) != commit.parent_commit_ids.is_empty())
+                || (commit.kind == "directory_commit" && id == &self.history.root_commit_id)
                 || commit.parent_commit_ids.len() > 1
             {
                 return Err(invalid(
-                    "history must have one root and single-parent commits",
+                    "history has an invalid namespace root or multi-parent commit",
                 ));
             }
             if let Some(deletions) = &commit.namespace_deletions {
@@ -940,14 +944,9 @@ impl HistoryManifest {
                 }
             }
         }
-        // Reachability also rejects cycles and detached subgraphs.
-        let reached = crate::business::descendant_commits(
-            self.commits.values(),
-            &self.history.root_commit_id,
-        );
-        if reached.len() != self.commits.len() {
-            return Err(invalid("history contains a cycle or detached commits"));
-        }
+        // Independent directory roots require exact user-commit markers; all
+        // roots still participate in one complete acyclic history closure.
+        self.validate_commit_forest()?;
         for (id, branch) in &self.branches {
             validate_id(id, "br")?;
             validate_branch_name(&branch.name)?;
@@ -1338,6 +1337,7 @@ impl HistoryManifest {
                 return Err(invalid("version checksum metadata is invalid"));
             }
         }
+        self.validate_directory_git()?;
         self.validate_file_nodes()?;
         for (id, link) in &self.merge_links {
             validate_id(id, "link")?;

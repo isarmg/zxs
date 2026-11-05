@@ -30,8 +30,8 @@ class NamingGate(unittest.TestCase):
         suggestions = self.root / 'src/foundation/tooling/command-line/src/parser/features/suggestions/mod.rs'
         suggestions.parent.mkdir(parents=True)
         suggestions.write_text('mod similarity;\nfn compare(v: &str, pv: &String) -> f64 { similarity::jaro(v, pv.as_ref()) }\n')
-        for component in ('server', 'rescue'):
-            p = self.root / 'src' / component / 'src/main.rs'
+        for component in ('src/server', 'rescue'):
+            p = self.root / component / 'src/main.rs'
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text('use command_line::Parser;')
         (self.root / 'compliance').mkdir()

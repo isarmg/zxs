@@ -17,7 +17,7 @@
 
 ## 21.1 配置示例
 
-以下 TOML 定义完整目标配置，不是现有进程直接读取的配置或可直接部署的 smb.conf。当前引擎读取严格 JSON `Config`；Web 公开一次性首次设置只创建管理员，登录后再浏览当前已挂载文件系统，分别选择挂载目录与实际存储子目录，无需候选目录白名单。此流程不挂载、分区或格式化设备。下述目标配置字段不表示 Web 已提供任意 Config 编辑器。实际接受的字段和限制见[服务端说明](components/server.md)、[救援配置草稿](components/rescue.md#uninitialized-configuration-drafts)及[当前限制](23-delivery-and-decisions.md#s23-03)。
+以下 TOML 定义完整目标配置，不是现有进程直接读取的配置或可直接部署的 smb.conf。当前引擎读取严格 JSON `Config`；Web 公开一次性首次设置只创建管理员，登录后由 `--storage-discovery-root`（默认 `/zxs/data/disks`）只读发现直接子目录，通过磁盘向导明确选择和确认；不提供任意路径、挂载目录或发现父目录编辑。此流程不挂载、分区或格式化设备。下述目标配置字段不表示 Web 已提供任意 Config 编辑器。实际接受的字段和限制见[服务端说明](components/server.md)、[救援配置草稿](components/rescue.md#uninitialized-configuration-drafts)及[当前限制](23-delivery-and-decisions.md#s23-03)。
 
 当前守护进程的 `--listen` 默认值为 `0.0.0.0:7400`，允许非回环 IPv4/IPv6 地址；网络可达范围与传输保护由部署者管理。直接 HTTP 与 HTTPS 反向代理的 Origin 配置见[服务端启动说明](components/server.md)。下方 `remote_transport` 是 HTTPS 部署目标示例，不是禁止非回环 HTTP 的进程准入规则。
 

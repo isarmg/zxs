@@ -44,7 +44,15 @@ fn fixture() -> Fixture {
         .unwrap();
     let management = data.join("management");
     drop(AuthStore::initialize_management(&management, "admin", "resume-password").unwrap());
-    let (backend, mut auth) = open_service(&data, &management).unwrap();
+    let (backend, mut auth) = open_service_with_options(
+        &data,
+        &management,
+        ManagementOptions {
+            discovery_root: discovery.to_str().unwrap().parse().unwrap(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let login = auth.login("admin", "resume-password").unwrap();
     let identity = auth.authenticate(&login.token).unwrap();
     let engine = Arc::new(EngineBackend::new(engine));
@@ -90,16 +98,7 @@ fn fixture() -> Fixture {
 fn request(f: &Fixture) -> AdditionRequest {
     let root = f.discovery.join("fresh-voter");
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-    let listing = crate::storage_directories::browse_fresh_within(
-        f.discovery.to_str().unwrap(),
-        root.to_str().unwrap(),
-        &f.original
-            .disks
-            .iter()
-            .map(|disk| disk.root.clone())
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
+    let listing = crate::storage_directories::browse(root.to_str().unwrap()).unwrap();
     let selection = crate::storage_directories::inspect_fresh_within(
         f.discovery.to_str().unwrap(),
         &InspectRequest {
@@ -131,9 +130,7 @@ fn command(
     input: Value,
     identity: &Identity,
 ) -> Result<Value, ApiError> {
-    f.backend.storage_addition(action, input, identity, || {
-        Ok(f.discovery.to_str().unwrap().into())
-    })
+    f.backend.storage_addition(action, input, identity)
 }
 fn directory(f: &Fixture) -> PrivateDirectory {
     PrivateDirectory::open_existing(&f.backend.inner.management_root)
@@ -487,26 +484,6 @@ fn terminal_preview_rejects_data_only_resume_and_never_discards_existing_history
 #[test]
 fn managed_discovery_skips_stopped_paths_and_allows_fresh_same_filesystem_directory() {
     let f = fixture();
-    let settings: storage_contract::storage_directories::DiscoveryRootSettings =
-        json_codec::from_value(
-            f.backend
-                .setup_operation("discovery_root", json!({}), None, Some(&f.identity))
-                .unwrap(),
-        )
-        .unwrap();
-    f.backend
-        .setup_operation(
-            "set_discovery_root",
-            json!(
-                storage_contract::storage_directories::SetDiscoveryRootRequest {
-                    expected_discovery_root: settings.discovery_root,
-                    discovery_root: f.discovery.to_str().unwrap().into(),
-                }
-            ),
-            None,
-            Some(&f.identity),
-        )
-        .unwrap();
     let listing: storage_contract::storage_directories::DirectoryListing = json_codec::from_value(
         f.backend
             .setup_operation(
@@ -547,7 +524,7 @@ fn managed_discovery_skips_stopped_paths_and_allows_fresh_same_filesystem_direct
             )
             .unwrap_err()
             .code,
-        ErrorCode::ConfigConflict
+        ErrorCode::UnsafePath
     );
 }
 

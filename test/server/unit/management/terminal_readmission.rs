@@ -411,7 +411,16 @@ fn cold_retained_resume_routes_from_system_proof_and_preserves_the_original_oper
     let f = fixture();
     let mut intent = record(&f);
     hold_pending(&f, &mut intent);
-    f.backend.inner.set(None, StorageState::RecoveryRequired);
+    // A crash drops the live writer. Inner::set deliberately cannot displace
+    // that owner when an ordinary recovery worker races with the handover.
+    let pending = {
+        let mut state = crate::lock(&f.backend.inner.state);
+        state.status = StorageState::RecoveryRequired;
+        state.admitted = false;
+        std::mem::replace(&mut state.backend, BackendState::Unopened)
+    };
+    assert!(matches!(&pending, BackendState::MetadataResume(_)));
+    drop(pending);
     f.backend.inner.recover_once().unwrap();
     assert!(matches!(
         crate::lock(&f.backend.inner.state).backend,

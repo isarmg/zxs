@@ -491,6 +491,15 @@ pub(crate) fn ensure_shared_file_branch(
     current: &Commit,
     original: &Entry,
 ) -> Result<String> {
+    ensure_shared_file_branch_with_ids(state, current, original, &mut |prefix| Ok(new_id(prefix)?))
+}
+
+pub(super) fn ensure_shared_file_branch_with_ids(
+    state: &mut State,
+    current: &Commit,
+    original: &Entry,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
     let file_id = original.file_id.as_str();
     if !state.file_selections.contains_key(file_id) {
         if let Some(id) = state
@@ -523,8 +532,8 @@ pub(crate) fn ensure_shared_file_branch(
             state.file_selections.insert(file_id.into(), id.clone());
             return Ok(id);
         }
-        let id = new_id("br")?;
-        let commit_id = new_id("commit")?;
+        let id = ids("br")?;
+        let commit_id = ids("commit")?;
         state.commits.insert(
             commit_id.clone(),
             Commit {
@@ -533,7 +542,7 @@ pub(crate) fn ensure_shared_file_branch(
                 history_tree_id: current.history_tree_id.clone(),
                 kind: "file_branch_root".into(),
                 parent_commit_ids: vec![current.commit_id.clone()],
-                tree_id: new_id("tree")?,
+                tree_id: ids("tree")?,
                 sequence: state.sequence,
                 operation_id: current.operation_id,
                 author: current.author.clone(),

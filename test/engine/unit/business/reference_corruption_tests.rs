@@ -37,6 +37,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
             request_digest: None,
         })
         .unwrap();
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "folder");
     let entry = engine.state.commits[&engine.state.branches[&repo.main_branch_id].head_commit_id]
         .entries
         .iter()

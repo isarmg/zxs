@@ -49,8 +49,20 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/setup/recovery-status` | 仅灾备 bootstrap 授权状态与 CSRF |
 | `POST /api/setup/initialize` | 无密钥一次性创建管理员，保留同源／Fetch Metadata／JSON／限流；请求 username/password，返回 initialized=true、storage_pending=true |
 | `GET /api/admin/storage/status` | 当前管理员查询 pending/active/recovery_required/unavailable、disk_ids、completion_available、allow_development |
-| `GET/PUT /api/admin/storage/discovery-root` | 持久发现根，默认 /zxs/data/disks；PUT要求expected_discovery_root原值 |
-| `GET /api/admin/storage/directories?path=…` | 仅浏览发现根内真实目录，返回当前目录与挂载身份、可浏览子项、截断及非 UTF-8 跳过计数 |
+| `GET /api/admin/storage/discovery-root` | 只读返回 systemd `--storage-discovery-root`，默认 /zxs/data/disks；不提供 HTTP 修改 |
+| `GET /api/admin/storage/discovered-disks` | 无路径参数，固定父目录的直接候选及空目录/已识别ZXS/未支持/不可用分类；仅空目录携带初始化观察，识别不等于接纳 |
+| `POST /api/admin/storage/conversion/preview` | 活动系统的普通来源清点与另一空目标的一级盘添加预览；只读，不支持外来ZXS历史迁入 |
+| `POST /api/admin/storage/conversion/commit` | 明确确认 contents-only 范围后执行新一级接纳和根内容导入；两个持久阶段，来源不变 |
+| `GET /api/admin/storage/conversion/status` | 查询最新或指定 operation_id；只按准确原工作区永久回执报告整体完成 |
+| `POST /api/admin/storage/conversion/resume` | 显式继续原 operation_id；未知导入结果保留工作区及恢复状态，不生成替代工作区 |
+| `POST /api/admin/storage/conversion/stop` | 注册已完成后明确停止原内容导入；核心关闭保留工作区并发布独立停止回执，不删除来源、已接纳磁盘或暂存字节 |
+| `POST /api/admin/storage/foreign/preview` | 显式只读验证发现候选的本盘发布闭包，返回来源分组、历史计数及正文暂不可用版本；`execution=unavailable`，不执行迁入或剪裁 |
+| `POST /api/admin/storage/foreign/plans/preview` | 绑定完整来源复核与已登记一级盘的空父目录/逐历史名称映射，只读且不预留目标 |
+| `POST /api/admin/storage/foreign/plans/save` | 明确仅保存计划后，重验并在系统盘不可覆盖保存原复核记录；不接纳或写入数据盘 |
+| `GET /api/admin/storage/foreign/plans/status?operation_id=…` | 只读取当前主体的已保存计划，`validation=required`，不扫描源盘或目标盘 |
+| `POST /api/admin/storage/foreign/plans/revalidate` | 重验原物理来源、全部闭包和空目标映射；匹配仍不可执行迁入 |
+| `POST /api/admin/storage/foreign/plans/execute` | 明确返回 `FORMAT_UNSUPPORTED`；保存计划不能构造外盘执行能力 |
+| `GET /api/admin/storage/directories?path=…` | 只能列举发现父目录本身，子目录请求拒绝；返回直接空目录及已识别ZXS目录和截断计数，不递归发现 |
 | `POST /api/admin/storage/directories/inspect` | 请求 mount_path/root_path，检查已存在的空私有目录并返回绑定身份的 CandidateSelection |
 | `POST /api/admin/storage/activate` | 首次激活：selections 与 production/development 模式；不提供已初始化池的热增盘 |
 | `POST /api/admin/storage/complete-activation` | 空对象，仅补全服务端证明可恢复的原激活意图；不重选目录或重置管理员 |
@@ -70,8 +82,12 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET/PUT /api/repositories/{repo}/default-branch` | 查询默认根目录分支；PUT 以 expected_tree_id/expected_head 显式发布根目录或子目录默认组合 |
 | `PATCH /api/repositories/{repo}/directory-branches/{id}` | 修改分支标签，身份、子树和内容不变 |
 | `POST /api/file-manager/disks/{slot}/write-sessions` | 取得该盘目录当前文件分支的写会话；随后通过通用工作区接口上传 |
+| `GET /api/repositories/{repo}/directory-git?path={path}` | 只读准确目录仓库、所属祖先、工作树、HEAD、index 代数和直接独立子仓库状态，不隐式初始化 |
+| `POST /api/repositories/{repo}/directory-git/initialize` | `{path,expected_namespace_head,operation_id}`：显式初始化此目录仓库，不递归初始化、不自动提交 |
+| `POST /api/repositories/{repo}/directory-git/stage` | 准确目录、分支、工作树和 index 代数：暂存自身工作内容，不自动纳入孩子的新 HEAD |
+| `POST /api/repositories/{repo}/directory-git/children/stage` | 准确父 index 代数和直接独立孩子已提交 HEAD：只暂存该引用，不替孩子提交 |
+| `POST /api/repositories/{repo}/directory-branches/{id}/commits` | `expected_tree_id`、必填十进制字符串 `expected_index_generation`、`message`、`operation_id`：只提交此仓库的暂存内容和明确子仓库引用 |
 | `POST /api/file-manager/disks/{slot}/directory-branches` | `{path,name,operation_id}`：登记命名目录分支，直接引用父子树；不提前创建文件分支、不复制正文、不创建占位文件、不自动选择 |
-| `POST /api/file-manager/disks/{slot}/directory-select` | 同结构请求；选择完整冻结目录子树，恢复成员、名称、层级及精确节点；不要求后代有同名文件分支 |
 | `GET /api/file-manager/files/{file}/history` | 当前根上的统一节点窗口及有界父边预览；可成对传入 repository_id/path 区分别名，支持 limit/cursor 或精确 anchor_node_id |
 | `POST /api/file-manager/files/{file}/branches` | 从选定版本登记公共文件分支；可传 source_node_id 固定路径节点来源，不复制正文或新增节点 |
 | `PATCH /api/file-manager/files/{file}/nodes/{node}` | 设置路径、标签或合并节点的独立备注，最多128 UTF-8字节；空字符串清空，不改正文备注或新增节点 |
@@ -201,7 +217,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 查询提取器拒绝的缺失字段、重复字段或非法参数值返回 400 `INVALID_REQUEST`；未知路由返回 404 `NOT_FOUND`，`/api` 与 `/api/` 命名空间不能落入同名静态文件。已知路由使用不支持的方法返回 405 `METHOD_NOT_ALLOWED` 并保留 `Allow`。这些错误不绕过原有认证与权限检查。
 
-有界 JSON 请求体超限返回 413 `PAYLOAD_TOO_LARGE`，包括未提供或不可信 `Content-Length` 的流式输入；登录、修改密码和一般业务 JSON 的上限分别为 8 KiB、16 KiB 和 1 MiB。登录与改密额度容纳合法密码的 JSON Unicode 转义膨胀，解码后的密码规则不变。未超限但发生读取错误的请求体返回 400 `INVALID_REQUEST`。普通 JSON 请求体（包括登录和改密）须在 30 秒内读完，期限到达返回 408 `REQUEST_TIMEOUT`；初始化/恢复 JSON 另有更严格的十秒外层期限。首次账户和恢复为16 KiB，目录检查／发现根修改为64 KiB，首次存储激活为4 MiB，覆盖32项目录身份及路径JSON转义。文件上传继续使用独立的流式长度、空闲/总期限及暂存准入规则，不套用 JSON 请求体上限或普通请求体期限。
+有界 JSON 请求体超限返回 413 `PAYLOAD_TOO_LARGE`，包括未提供或不可信 `Content-Length` 的流式输入；登录、修改密码和一般业务 JSON 的上限分别为 8 KiB、16 KiB 和 1 MiB。登录与改密额度容纳合法密码的 JSON Unicode 转义膨胀，解码后的密码规则不变。未超限但发生读取错误的请求体返回 400 `INVALID_REQUEST`。普通 JSON 请求体（包括登录和改密）须在 30 秒内读完，期限到达返回 408 `REQUEST_TIMEOUT`；初始化/恢复 JSON 另有更严格的十秒外层期限。首次账户和恢复为16 KiB，目录检查为64 KiB，首次存储激活为4 MiB，覆盖32项目录身份及路径JSON转义。文件上传继续使用独立的流式长度、空闲/总期限及暂存准入规则，不套用 JSON 请求体上限或普通请求体期限。
 
 阻塞请求任务异常退出或取消属于 500 `INTERNAL_ERROR`，不能误报为客户端输入错误或将 panic、内部路径等细节发给客户端；原有受控业务错误及监测服务的 503 语义保持不变。`retryable` 表示错误类别允许重试，不承诺原操作未执行；变更请求仍须按相同 `operation_id` 查询或重试。内容响应头已发送后发生的校验或读取失败只能中断响应流，不能再改写 HTTP 状态或伪装成 JSON 错误封套；HEAD 也不发送错误响应体。
 
@@ -435,7 +451,7 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 
 `GET /api/repositories/{repo}/directories/{directory}/history` 读取真实 `DirectoryTree` 节点，`.../history/branches` 读取真实 `DirectoryBranch` 摘要。`directory` 是目录条目的稳定 `entry_id`，根目录为 `repository_id`；路径仅是节点保存的历史属性，不能替代身份。改名沿用身份与历史，删除仍可读取已记录历史，同路径重建是新的身份，不混入旧图。读取不会调用目录 scope 初始化、生成节点或改变默认选择；没有记录的现存目录返回真实空数组。只读备份浏览可用同一仓库/目录身份读取，不能由此获得目录修改权限。
 
-两路返回 `DirectoryHistoryPage`：`identity:{repository_id,directory_id,history_tree_id,history_root,collection,limit}`、`current:{directory_branch_id,tree_id}`、`nodes`、`branches`、`page:{previous_cursor,next_cursor}`。非目标集合为空数组；没有当前选择时 current 两字段为 null。节点包含 `tree_id,directory_branch_id,parent_tree_id,parent_endpoint,commit_id,path,sequence`；父边仅来自真实 `parent_tree_id`，在页内为 `in_window`，页外为 `outside_window`，根节点两个父字段均为 null。子目录 composition 引用不是历史父边。分支包含 `directory_branch_id,name,parent_branch_id,head_tree_id,materialized,current,sequence`；`materialized:false` 的新分支可以共用同一个真实 head，不能据此伪造新节点。
+两路返回 `DirectoryHistoryPage`：`identity:{repository_id,directory_id,history_tree_id,history_root,collection,limit}`、`current:{directory_branch_id,tree_id,committed_tree_id,staged}`、`nodes`、`branches`、`page:{previous_cursor,next_cursor}`。非目标集合为空数组；没有当前选择时 current 三个 ID 为 null，staged 为 false。节点只包含显式用户提交，字段为 `tree_id,directory_branch_id,parent_tree_id,parent_endpoint,commit_id,message,path,sequence`；父边沿不可变父链跨过内部暂存检查点，指向前一次用户提交，在页内为 `in_window`，页外为 `outside_window`，首次提交两个父字段均为 null。子目录 composition 引用不是历史父边。分支包含 `directory_branch_id,name,parent_branch_id,head_tree_id,committed_tree_id,staged,materialized,current,sequence`；工作 head 不等于目录提交，尚无用户提交时 committed_tree_id 为 null，不能把内部工作检查点画成用户历史节点。
 
 `limit` 默认 64、最大 128，`sequence` 为十进制字符串；顺序按 sequence 降序再按 ID 升序。`cursor` 是最多 4096 字节的不透明游标，绑定仓库、稳定目录身份、集合、limit 和 exact `history_root`；调用方不可改写游标或跨集合复用。节点路支持 `anchor_tree_id` 从指定真实节点开始，不能与 cursor 同用。`history_root` 可显式提供；续页即使不传 root 也由 cursor 约束。root 变化返回 `HISTORY_CHANGED` (409)，必须重取当前窗口，不混接旧根。非法 scope/query/cursor 为 400，目录身份不存在为 `DIRECTORY_NOT_FOUND` (404)。取消沿既有 `OPERATION_ABORTED` (400)。
 
@@ -448,3 +464,16 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 祖先索引硬上限：同文件 65,536 个节点、262,144 条不同父边；扫描所有文件的 version/path/metadata/merge header 合计不超过 1,048,576，原始 parent record 合计不超过 1,048,576（重复记录不重复增加 distinct edge，但扫描仍计费）。来源候选分支 header、查 head 与最终 branch summary 投影所需 commit entry（包括明确作者/直接 head 成功路径）共享 1,048,576 上限。read 每步检查取消，查询为 O(上述全局 header + parent record + scoped graph 的索引/遍历工作)，不宣称 O(scoped) 或常数 CPU。全局索引容量不足或搜索不完整，明确 `RESOURCE_LIMIT_EXCEEDED` (429)，不能报“无来源”。响应最多 64 KiB，读取前后重查当前鉴权与 exact root。
 
 `merge-history` 在派生分支前，对相同 snapshot 完成 CAS、归属与有界祖先预验证；所有输入与 chosen 必须属于同一 history，混用返回 FILE_NODE_NOT_FOUND。`head == source` 与不可变节点明确作者不需要建图；其余来源按 reviewed head 分组，共用一次索引，一次 BFS 同时验证该 head 的所有来源。写请求累计搜索上限为 262,144 次唯一-per-head 节点访问与 1,048,576 次唯一-per-head 父边访问；chosen 标签继承只借用原始 first base parent，不克隆宽父数组，也共用该工作预算。前置预算失败不派生分支、不记录新回执、不发布状态。此处有界的是新增祖先搜索和标签继承，不改变旧分支命名/派生、路径核验、正文健康检查和持久发布的全局扫描或 I/O 成本，也不宣称整个合并耗时为常数。
+
+
+### 目录暂存与显式提交接口
+
+`GET /api/repositories/{repo}/directory-branches/{id}/staging` 读取持久化工作树、最近用户提交及新增／修改／删除计数。`POST /api/repositories/{repo}/directory-branches/{id}/commits` 需要 `expected_tree_id`、非空且不超过 128 UTF-8 字节的单行 `message`、永久 `operation_id`；JSON 严格拒绝未知字段。成功返回普通操作回执，重复同一操作返回原结果；树已变返回 `DIRECTORY_BRANCH_CONFLICT`，不能自动改用新基线提交。
+
+目录提交在同一元数据事务内冻结所选目录及其精确子目录组合，不增加文件版本、不切换默认命名空间；所选目录外的祖先和兄弟仍保持原暂存状态。文件保存即已持久化，未做目录提交不代表正文只在内存。发布结果未知时按原操作 ID 查询，不另换操作号重做。
+
+## 显式目录仓库边界
+
+目录 Git 初始化、暂存和提交使用独立接口，不把普通文件保存当成目录提交，也不递归提交子仓库。准确目录尚未初始化时，所属祖先可以返回，但列表的 `directory_branches_supported` 仍为 false。旧 `/api/repositories/{repo}/directory-scopes` 公开入口已移除，不自动迁移为 Git 初始化。
+
+状态 GET 必须给 `path`，根为显式空字符串，未知或重复查询字段拒绝。完整响应最多 1 MiB，超限失败而不截断；所有 nullable 字段必须出现。工作树与 index 代数在暂存/提交时同时复核，独立子仓库边界变化要求重新暂存。结果不明保留原操作 ID 查询，不以新 ID 盲重试。请求、状态与严格整数编码见机器契约，授权和实际归属仍由服务器及核心检查，详见[目录 Git HTTP 边界](components/server/src/directory-git.md)。

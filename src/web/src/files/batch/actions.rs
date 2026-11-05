@@ -411,8 +411,8 @@ pub(super) fn load_target(state: RwSignal<State>) {
                     draft.target_resolved = true;
                     if draft.targets.is_empty() {
                         draft.error = t(
-                            "目标尚无可操作的目录分支，请先登记目录分支。",
-                            "Register a destination folder branch before continuing.",
+                            "目标尚未独立初始化，请先初始化目标目录仓库。",
+                            "Initialize the destination directory as an independent repository first.",
                         );
                     }
                 }
@@ -459,15 +459,23 @@ pub(super) fn begin_scope_registration(
 }
 
 pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
-    let Some((repository, id, epoch)) = state.with_untracked(|s| {
-        if !file_actions::write_allowed(s) {
+    let Some((repository, id, epoch, namespace_head)) = state.with_untracked(|s| {
+        if !file_actions::write_allowed(s) || !s.files.loaded {
             return None;
         }
         let draft = s.files.batch.as_ref()?;
-        if draft.registration.is_some() || draft.loading {
+        if draft.registration.is_some()
+            || draft.loading
+            || draft.repository != s.files.repository_id
+        {
             return None;
         }
-        Some((draft.repository.clone(), draft.id.clone(), s.session_epoch))
+        Some((
+            draft.repository.clone(),
+            draft.id.clone(),
+            s.session_epoch,
+            s.files.namespace_head.clone(),
+        ))
     }) else {
         return;
     };
@@ -488,17 +496,14 @@ pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
     else {
         return;
     };
-    let endpoint = format!(
-        "/api/repositories/{}/directory-scopes",
-        api::segment(&repository)
+    let (endpoint, body) = initialization_request(
+        &repository,
+        &registration.path,
+        &namespace_head,
+        &operation_id,
     );
     spawn_local(async move {
-        let result = api::request(
-            "POST",
-            &endpoint,
-            Some(json!({"path":registration.path,"operation_id":operation_id})),
-        )
-        .await;
+        let result = api::request("POST", &endpoint, Some(body)).await;
         if !current_session(state, epoch) {
             return;
         }
@@ -529,6 +534,21 @@ pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
         // have started a follow-on read that this POST must not release.
         state.update(|s| s.files.mutation_pending = false);
     });
+}
+
+pub(super) fn initialization_request(
+    repository: &str,
+    path: &str,
+    namespace_head: &str,
+    operation_id: &str,
+) -> (String, Value) {
+    (
+        format!(
+            "/api/repositories/{}/directory-git/initialize",
+            api::segment(repository)
+        ),
+        json!({"path":path,"expected_namespace_head":namespace_head,"operation_id":operation_id}),
+    )
 }
 
 pub(crate) fn reload_registered_scope(state: RwSignal<State>) {

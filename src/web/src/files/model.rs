@@ -10,6 +10,7 @@ use web_interface::i18n::t;
 /// The file-manager disk contract is distinct from monitor/topology records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Disk {
+    pub name: String,
     pub slot_id: String,
     pub online: bool,
     pub writable: bool,
@@ -25,6 +26,7 @@ struct DiskList {
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct DiskRecord {
+    name: String,
     slot_id: String,
     #[serialization(rename = "level")]
     _level: u32,
@@ -53,7 +55,10 @@ pub(crate) fn parse_disks(value: Value) -> Result<Vec<Disk>, crate::api::Error> 
                 if disk.slot_id.is_empty() {
                     return Err(data_serialization::de::Error::custom("empty disk slot id"));
                 }
+                name_policy::validate_name(&disk.name)
+                    .map_err(data_serialization::de::Error::custom)?;
                 Ok(Disk {
+                    name: disk.name,
                     slot_id: disk.slot_id,
                     online: disk.online,
                     writable: disk.writable,
@@ -137,10 +142,33 @@ pub(crate) struct Model {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct DirectoryPreview {
-    pub branch: DirectoryBranch,
+    pub source: DirectoryPreviewSource,
     pub path: String,
 }
+#[derive(Clone, Debug)]
+pub(crate) enum DirectoryPreviewSource {
+    Branch(DirectoryBranch),
+    Snapshot { branch_id: String, tree_id: String },
+}
 impl DirectoryPreview {
+    pub(crate) fn branch(&self) -> Option<&DirectoryBranch> {
+        match &self.source {
+            DirectoryPreviewSource::Branch(branch) => Some(branch),
+            DirectoryPreviewSource::Snapshot { .. } => None,
+        }
+    }
+    pub(crate) fn branch_id(&self) -> &str {
+        match &self.source {
+            DirectoryPreviewSource::Branch(branch) => branch.id(),
+            DirectoryPreviewSource::Snapshot { branch_id, .. } => branch_id,
+        }
+    }
+    pub(crate) fn tree_id(&self) -> &str {
+        match &self.source {
+            DirectoryPreviewSource::Branch(branch) => branch.head_tree_id(),
+            DirectoryPreviewSource::Snapshot { tree_id, .. } => tree_id,
+        }
+    }
     pub(crate) fn at_directory(&self, path: &str) -> bool {
         name_policy::path_key(&self.path) == name_policy::path_key(path)
     }
@@ -455,7 +483,8 @@ pub(crate) fn viewed_directory_branch(model: &Model) -> Option<&DirectoryBranch>
     if let Some(preview) = &model.directory_preview {
         return preview
             .at_directory(&model.directory)
-            .then_some(&preview.branch);
+            .then_some(preview.branch())
+            .flatten();
     }
     model
         .directory_branches

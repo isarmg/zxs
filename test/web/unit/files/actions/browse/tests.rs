@@ -4,6 +4,61 @@ use crate::files::history::FileHistory;
 use json_codec::Value;
 
 #[test]
+fn explicit_snapshot_navigation_is_read_only_and_preserves_original_operation_fences() {
+    let mut state = State {
+        authenticated: true,
+        page: crate::ui::Page::Details,
+        ..Default::default()
+    };
+    state.files.slot = "P01".into();
+    state.files.directory = "Files".into();
+    state.files.writable = true;
+    state.files.loaded = true;
+    state.files.mutation_pending = true;
+    assert!(!begin_directory_snapshot(
+        &mut state,
+        "Files/folder".into(),
+        "dbr".into(),
+        "tree".into()
+    ));
+    assert_eq!(state.files.directory, "Files");
+    assert!(state.files.directory_preview.is_none());
+    state.files.mutation_pending = false;
+    state.files.loading = true;
+    assert!(!begin_directory_snapshot(
+        &mut state,
+        "Files/folder".into(),
+        "dbr".into(),
+        "tree".into()
+    ));
+    state.files.loading = false;
+    assert!(begin_directory_snapshot(
+        &mut state,
+        "Files/folder".into(),
+        "dbr".into(),
+        "tree".into()
+    ));
+    assert_eq!(state.page, crate::ui::Page::Files);
+    assert_eq!(state.files.directory, "Files/folder");
+    assert_eq!(state.files.slot, "P01");
+    assert!(!state.files.writable || !state.files.loaded);
+    let preview = state.files.directory_preview.as_ref().unwrap();
+    assert_eq!(preview.branch_id(), "dbr");
+    assert_eq!(preview.tree_id(), "tree");
+    assert!(preview.branch().is_none());
+    assert!(!super::super::default_write_allowed(&state));
+    state
+        .files
+        .navigate(Navigation::Directory("Files/folder/child".into()));
+    assert_eq!(
+        state.files.directory_preview.as_ref().unwrap().tree_id(),
+        "tree"
+    );
+    state.files.navigate(Navigation::Directory("Files".into()));
+    assert!(state.files.directory_preview.is_none());
+}
+
+#[test]
 fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
     use crate::ui::{Page, PasswordChangeState, SessionTransition};
     Owner::new().with(|| {
@@ -268,6 +323,7 @@ fn a_failed_disk_refresh_invalidates_readiness_without_discarding_cached_rows() 
         for disks in [
             vec![],
             vec![crate::files::model::Disk {
+                name: "disk-directory".into(),
                 slot_id: "P01".into(),
                 online: true,
                 writable: true,
@@ -315,6 +371,7 @@ fn disk_read_error(status: u16) -> api::Error {
 
 fn disk_snapshot(online: bool, available_bytes: u64) -> Vec<Disk> {
     vec![Disk {
+        name: "disk-directory".into(),
         slot_id: "B01".into(),
         online,
         writable: false,
@@ -731,7 +788,7 @@ fn choosing_a_directory_branch_only_changes_the_local_read_view() {
         preview_directory_branch(state, "draft".into());
         state.with_untracked(|s| {
             assert_eq!(
-                s.files.directory_preview.as_ref().unwrap().branch.id(),
+                s.files.directory_preview.as_ref().unwrap().branch_id(),
                 "draft"
             );
             assert_eq!(s.files.namespace_head, "unchanged-head");

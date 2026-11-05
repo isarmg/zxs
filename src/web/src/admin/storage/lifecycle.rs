@@ -62,6 +62,7 @@ pub(in crate::admin) fn can_preview(
         && !storage.busy
         && !storage.readmission.blocks_edit()
         && !storage.addition.blocks_edit()
+        && !storage.conversion.blocks_edit()
         && !storage.lifecycle.blocks_edit()
 }
 fn action_available(entry: &RegistrationEntry, action: ExitAction) -> bool {
@@ -189,7 +190,7 @@ pub(in crate::admin) fn preview(
 fn submit(state: RwSignal<State>, resume: bool) {
     let captured = state
         .try_update(|s| {
-            if !s.session_active() {
+            if !s.session_active() || s.admin_console.storage.conversion.blocks_edit() {
                 return None;
             }
             let model = &s.admin_console.storage.lifecycle;

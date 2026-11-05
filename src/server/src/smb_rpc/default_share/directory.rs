@@ -83,7 +83,7 @@ impl DefaultShare {
                 let exhausted = next_cursor.is_none();
                 (
                     slot.disk_id.clone(),
-                    slot.slot_id.clone(),
+                    slot.directory_name()?.as_str().to_owned(),
                     VirtualScope::Disk {
                         slot: slot.slot_id,
                         disk_id: slot.disk_id,
@@ -296,18 +296,23 @@ impl DefaultShare {
             .into_iter()
             .filter(|slot| slot.level == 1)
             .collect::<Vec<_>>();
-        slots.sort_by(|left, right| left.slot_id.cmp(&right.slot_id));
+        slots.sort_by(|left, right| {
+            left.name
+                .as_ref()
+                .map(|name| name.key())
+                .cmp(&right.name.as_ref().map(|name| name.key()))
+        });
         let more = slots.len() > after + MAX_DIRECTORY_PAGE_ENTRIES;
         let entries = slots
             .into_iter()
             .skip(after)
             .take(MAX_DIRECTORY_PAGE_ENTRIES)
             .map(|slot| {
+                let path = slot.directory_name()?.clone();
                 Ok(DirectoryEntry {
                     entry: Entry {
                         entry_id: slot.disk_id,
-                        path: name_policy::PortablePath::parse(&slot.slot_id)
-                            .map_err(ApiError::invalid_source)?,
+                        path,
                         kind: storage_contract::NamespaceEntryKind::Directory,
                         file_id: String::new(),
                         version_id: String::new(),

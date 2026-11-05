@@ -112,7 +112,7 @@ def safe_path(root, relative):
 
 def project_manifests(root):
     result = {"Cargo.toml"}
-    for base in ("src", "tools", "examples", "test"):
+    for base in ("src", "tools", "rescue", "examples", "test"):
         for path in (root / base).rglob("Cargo.toml"):
             result.add(path.relative_to(root).as_posix())
     return result
@@ -154,7 +154,7 @@ def structure(root, policy):
             for name in children + names:
                 if (root / relative / name).is_symlink():
                     raise ValueError(f"test source symlink: {relative / name}")
-        if relative.parts and relative.parts[0] in ("src", "tools", "test", "tests", "deploy", "examples"):
+        if relative.parts and relative.parts[0] in ("src", "tools", "rescue", "test", "tests", "deploy", "examples"):
             for name in names:
                 if Path(name).suffix.lower() in (".md", ".rst", ".adoc"):
                     raise ValueError(f"scattered documentation outside docs/: {relative / name}")

@@ -37,6 +37,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
             request_digest: None,
         })
         .unwrap();
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "folder");
     let branch = engine
         .create_directory_branches(
             &repo.repository_id,

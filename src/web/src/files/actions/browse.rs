@@ -146,7 +146,7 @@ pub(crate) fn preview_directory_branch(state: RwSignal<State>, id: String) {
     state.update(|s| {
         s.notices.leave();
         s.files.directory_preview = Some(crate::files::model::DirectoryPreview {
-            branch,
+            source: crate::files::model::DirectoryPreviewSource::Branch(branch),
             path: s.files.directory.clone(),
         });
         s.files.cancel_listing();
@@ -157,6 +157,38 @@ pub(crate) fn preview_directory_branch(state: RwSignal<State>, id: String) {
         s.files.writable = false;
     });
     load_entries(state);
+}
+fn begin_directory_snapshot(
+    state: &mut State,
+    path: String,
+    branch_id: String,
+    tree_id: String,
+) -> bool {
+    if !state.session_active() || state.files.loading || super::pending(state) {
+        return false;
+    }
+    state.notices.leave();
+    state.files.navigate(Navigation::Directory(path.clone()));
+    state.files.directory_preview = Some(crate::files::model::DirectoryPreview {
+        source: crate::files::model::DirectoryPreviewSource::Snapshot { branch_id, tree_id },
+        path,
+    });
+    state.change_page(crate::ui::Page::Files);
+    true
+}
+/// Only a node from the validated, current directory-history page supplies this
+/// immutable read target. It never acquires branch-checkout authority.
+pub(crate) fn preview_directory_snapshot(
+    state: RwSignal<State>,
+    path: String,
+    branch_id: String,
+    tree_id: String,
+) {
+    if state.try_update(|state| begin_directory_snapshot(state, path, branch_id, tree_id))
+        == Some(true)
+    {
+        load_entries(state);
+    }
 }
 pub(crate) fn return_to_default_file(state: RwSignal<State>) {
     if !state.with_untracked(|s| s.session_active() && !super::pending(s)) {
@@ -257,8 +289,8 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
         if let Some(preview) = &preview {
             endpoint.push_str(&format!(
                 "&directory_branch_id={}&expected_tree_id={}",
-                api::segment(preview.branch.id()),
-                api::segment(preview.branch.head_tree_id())
+                api::segment(preview.branch_id()),
+                api::segment(preview.tree_id())
             ));
         }
         if let Some(selected) = &selected {

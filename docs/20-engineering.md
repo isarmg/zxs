@@ -33,13 +33,13 @@ zxs/
 │   ├── engine/                  # 存储、历史、授权、发布及恢复
 │   ├── server/                  # zxs 服务入口、HTTP、认证、流式内容和本机 SMB RPC
 │   ├── client/                  # 运维 HTTP 会话、传输及完整性验证
-│   ├── rescue/                  # zxs-rescue 本机维护与离线恢复入口
 │   ├── web/                     # 浏览器 WASM 产品界面、声明式样式与字体
 │   ├── interface/               # 生命周期、主题、组件与合并后的 CSR 原语
 │   ├── macros/                  # 界面过程宏编译目标
 │   ├── smb/                     # Samba 协议桥接和 SCM_RIGHTS
 │   ├── smb-vfs/                 # Samba SDK 对接和 Rust C ABI
 │   └── foundation/              # 同仓维护的 Rust 基础实现
+├── rescue/                      # zxs-rescue 本机维护与离线恢复入口
 ├── tools/                       # 根工作区中的构建、来源和验收组件
 ├── docs/                        # 所有活动文档和原始上游说明
 │   ├── components/              # 自有组件说明
@@ -58,7 +58,7 @@ zxs/
 └── runtime/                     # 本机运行池、预览和回滚材料
 ```
 
-当前目录和集中维护约定见[单仓库结构](monorepo.md)。自有应用和工具属于根工作区；基础实现作为本地路径依赖接入，只有根 `Cargo.lock` 参与解析。`src/`、`tools/` 和 `test/` 中没有独立子工作区、活动子锁文件或嵌套 Git 仓库。来源身份和原始材料由 `compliance/provenance/` 统一保管。
+当前目录和集中维护约定见[单仓库结构](monorepo.md)。自有应用和工具属于根工作区；基础实现作为本地路径依赖接入，只有根 `Cargo.lock` 参与解析。`src/`、`rescue/`、`tools/` 和 `test/` 中没有独立子工作区、活动子锁文件或嵌套 Git 仓库。离线恢复工具独立放在根 `rescue/`，测试继续集中在根 `test/`。来源身份和原始材料由 `compliance/provenance/` 统一保管。
 
 构建按包和目标选择：默认成员为 Linux 服务及运维工具，Web 使用 `wasm32-unknown-unknown`，VFS 显式使用 Samba SDK。所有路径依赖均位于本仓库，禁止依赖其他项目绝对路径。
 
@@ -165,6 +165,8 @@ API 与 SMB 只映射认证主体、输入、句柄和传输错误。入口认�
 <a id="s20-03"></a>
 
 ## 20.3 离线工具
+
+离线恢复工具源码位于根 [`rescue/`](../rescue/)，Cargo 包为 `storage-rescue`；它与服务源码分开维护，共享同一工作区和锁文件。救援命令由操作员显式运行，不在服务启动时隐式调用。
 
 `zxs-rescue offline-check <disk>` 验证本盘版本、内容清单、发布回执和带状态页包含证明的内容墓碑；不修改盘数据。`zxs-rescue offline-export <disk> <version> <output>` 独立验证后输出完整文件，拒绝覆盖已有目标。导出不修改目标父目录权限，失败不把未完成复制发布成完整文件。
 

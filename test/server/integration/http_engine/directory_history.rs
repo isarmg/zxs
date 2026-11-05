@@ -64,6 +64,7 @@ async fn directory_history_http_is_read_only_root_bound_and_authenticated() {
         })),
     )
     .await;
+    manager_checkpoint_git(&app, &token, "docs").await;
     let request = DirectoryHistoryRequest::parse(
         repo,
         directory,
@@ -205,4 +206,126 @@ async fn directory_history_http_is_read_only_root_bound_and_authenticated() {
     let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     assert_eq!(typed_page(&app, &token, &request).await, before);
+}
+
+#[tokio::test]
+async fn directory_staging_http_requires_explicit_fenced_idempotent_commit() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "docs/a.txt", b"one").await;
+    manager_initialize_git(&app, &token, "docs").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries?path=docs",
+        None,
+    )
+    .await;
+    let repository = listing["context"]["repository_id"].as_str().unwrap();
+    let branch = listing["directory_branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|branch| branch["current"] == true)
+        .unwrap()["directory_branch_id"]
+        .as_str()
+        .unwrap();
+    let base = format!("/api/repositories/{repository}/directory-branches/{branch}");
+    let staged = success(&app, &token, "GET", &format!("{base}/staging"), None).await;
+    let git = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/repositories/{repository}/directory-git?path=docs"),
+        None,
+    )
+    .await;
+    assert_eq!(staged["staged"], true);
+    assert_eq!(staged["committed_tree_id"], Value::Null);
+    assert_eq!(
+        send(&app, None, "GET", &format!("{base}/staging"), None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    manager_upload(&app, &token, "docs/a.txt", b"two").await;
+    let stale = json!({"expected_tree_id":staged["head_tree_id"],"expected_index_generation":git["index_generation"],"message":"Commit reviewed folder","operation_id":new_id("op").unwrap()});
+    let rejected = send(
+        &app,
+        Some(&token),
+        "POST",
+        &format!("{base}/commits"),
+        Some(stale),
+    )
+    .await;
+    assert_eq!(rejected.0, StatusCode::CONFLICT);
+    assert_eq!(rejected.1["error"]["code"], "DIRECTORY_BRANCH_CONFLICT");
+    let staged = success(&app, &token, "GET", &format!("{base}/staging"), None).await;
+    let git = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/repositories/{repository}/directory-git?path=docs"),
+        None,
+    )
+    .await;
+    success(&app, &token, "POST", &format!("/api/repositories/{repository}/directory-git/stage"), Some(json!({"directory_id":git["directory_id"],"directory_branch_id":git["directory_branch_id"],"expected_tree_id":git["working_tree_id"],"expected_index_generation":git["index_generation"],"operation_id":new_id("op").unwrap()}))).await;
+    let git = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/repositories/{repository}/directory-git?path=docs"),
+        None,
+    )
+    .await;
+    let body = json!({"expected_tree_id":staged["head_tree_id"],"expected_index_generation":git["index_generation"],"message":"Commit reviewed folder","operation_id":new_id("op").unwrap()});
+    let first = success(
+        &app,
+        &token,
+        "POST",
+        &format!("{base}/commits"),
+        Some(body.clone()),
+    )
+    .await;
+    let retry = success(&app, &token, "POST", &format!("{base}/commits"), Some(body)).await;
+    assert_eq!(first, retry);
+    let revoked = revoked_session(&app).await;
+    for route in [format!("{base}/staging"), format!("{base}/commits")] {
+        let (method, body) = if route.ends_with("commits") {
+            (
+                "POST",
+                Some(
+                    json!({"expected_tree_id":staged["head_tree_id"],"expected_index_generation":git["index_generation"],"message":"Unauthorized commit","operation_id":new_id("op").unwrap()}),
+                ),
+            )
+        } else {
+            ("GET", None)
+        };
+        assert_eq!(
+            send(&app, None, method, &route, body.clone()).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(&app, Some(&revoked), method, &route, body).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let clean = success(&app, &token, "GET", &format!("{base}/staging"), None).await;
+    assert_eq!(clean["staged"], false);
+    assert!(clean["committed_tree_id"].is_string());
+    let invalid = json!({"expected_tree_id":clean["head_tree_id"],"expected_index_generation":git["index_generation"],"message":"","operation_id":new_id("op").unwrap()});
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "POST",
+            &format!("{base}/commits"),
+            Some(invalid)
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
 }

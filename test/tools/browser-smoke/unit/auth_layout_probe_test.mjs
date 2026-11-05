@@ -35,8 +35,8 @@ function fixture(empty=false) {
     const card=node('',100);card.className='authentication-card';card.box=box(100,216,292,14);card.style['--zxs-contour-extent']='48px';
     card.style.borderImageSource='url("blob:fill")';card.style.borderImageSlice='49.5050% fill';
     card.style.borderImageWidth='50px';card.style.borderImageOutset='2px';card.style.borderImageRepeat='stretch';card.dataset.zxsContourState='paint';
-    const header=node('',14);header.className='authentication-language';header.box=box(14,44,96,210);append(root,header,card);
-    const language=node('Language',14,'BUTTON'),theme=node('Theme',14,'BUTTON');language.box=box(14,44,44,210);theme.box=box(14,44,44,262);append(header,language,theme);
+    const header=node('',14);header.className='authentication-language';header.box=box(14,36,96,210);append(root,header,card);
+    const language=node('Language',14,'BUTTON'),theme=node('Theme',14,'BUTTON');language.box=box(14,36,36,210);theme.box=box(14,36,36,262);append(header,language,theme);
     const form=node('',100,'FORM');form.box=box(100,216);form.attributes[empty?'data-first-account-form':'data-auth-form']=empty?'':'login';append(card,form);
     const usernameLabel=node('Account name',100,'LABEL');usernameLabel.box=box(100,36);
     const username=node('',136,'INPUT'),passwordLabel=node('Password',172,'LABEL'),password=node('',208,'INPUT');passwordLabel.box=box(172,36);
@@ -121,7 +121,7 @@ for(const change of [
 assert.equal((await f.run()).valid,true,'Restoring the anonymous override fixes only the leaked surface');
 f=fixture(true);f.status.textContent='请设置账户名和密码';f.submit.textContent='设置账户';assert.equal((await f.run()).valid,true,'Chinese setup hint and action');
 f=fixture(true);for(const input of [f.username,f.password])input.required=false;assert.equal((await f.run()).valid,true,'Setup admission belongs to the disabled submit, not browser required attributes');
-f=fixture();f.username.focused=true;f.username.style.borderBottomWidth='3px';f.username.style.borderBottomStyle='solid';assert.equal((await f.run()).valid,true,'Focused solid underline retains the shared row target');
+f=fixture();f.username.focused=true;Object.assign(f.username.style,{outlineWidth:'2px',outlineStyle:'solid',outlineOffset:'-2px'});assert.equal((await f.run()).valid,true,'Focused inset ring preserves the shared row without an underline');
 // Preferred desktop 3:2 geometry never hides taller feedback; small viewports can grow naturally.
 for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
     f=fixture(true);f.innerWidth=width;f.innerHeight=height;f.root.clientWidth=width;f.root.scrollWidth=width;
@@ -208,7 +208,7 @@ for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
     f.card.box=box(100,216,f.card.box.width,14);result=await f.run();
     assert.equal(result.valid,false);assert.equal(result.formPresent,false);assert.equal(result.controls.slice(2).every(e=>!e.valid),true);
 }
-f=fixture();f.root.clientWidth=305;f.root.scrollWidth=305;f.card.box=box(100,216,277,14);f.header.box=box(14,44,96,195);f.language.box=box(14,44,44,195);f.theme.box=box(14,44,44,247);
+f=fixture();f.root.clientWidth=305;f.root.scrollWidth=305;f.card.box=box(100,216,277,14);f.header.box=box(14,36,96,195);f.language.box=box(14,36,36,195);f.theme.box=box(14,36,36,247);
 assert.equal((await f.run()).valid,true,'Content fits beside a classic scrollbar');
 f.clear.box=box(280,36,44,290); // Not in Existing form.
 assert.equal((await f.run()).valid,true,'Only the current state form is observed');
@@ -280,7 +280,7 @@ for(const empty of [false,true])for(const [name,change] of [
     ['panel too wide',f=>{f.innerWidth=980;f.root.clientWidth=980;f.root.scrollWidth=980;f.card.box=box(100,216,340,14);f.card.style.aspectRatio='3 / 2';}],
     ['panel clips lower rows',f=>{f.card.box=box(100,150,292,14);}],
     ['panel covers header',f=>{f.header.box=box(90,44,96,210);}],
-    ['header overflow',f=>{f.header.box=box(14,44,96,230);}],
+    ['header overflow',f=>{f.header.box=box(14,36,96,230);}],
     ['hidden panel',f=>{f.card.visible=false;}],
     ['hidden header',f=>{f.header.visible=false;}],
     ['wrong desktop ratio',f=>{f.innerWidth=980;f.card.style.aspectRatio='1 / 1';}],
@@ -298,8 +298,10 @@ for(const empty of [false,true])for(const [name,change] of [
     ['input contour',f=>{f.username.style['--zxs-contour-extent']='18px';}],
     ['unexpected resting underline',f=>{f.username.style.borderBottomWidth='1px';}],
     ['wrong normal underline width',f=>{f.username.style.borderBottomWidth='2px';}],
-    ['wrong focused underline width',f=>{f.username.focused=true;}],
-    ['small toolbar target',f=>{f.language.box=box(14,43,44,210);}],
+    ['missing focused ring',f=>{f.username.focused=true;}],
+    ['transparent focus ring',f=>{f.username.focused=true;Object.assign(f.username.style,{outlineWidth:'2px',outlineStyle:'solid',outlineOffset:'-2px',outlineColor:'transparent'});}],
+    ['clipped outside focus ring',f=>{f.username.focused=true;Object.assign(f.username.style,{outlineWidth:'2px',outlineStyle:'solid',outlineOffset:'3px'});}],
+    ['small toolbar target',f=>{f.language.box=box(14,35,36,210);}],
     ['resting dashed style',f=>{f.username.style.borderBottomStyle='dashed';}],
     ['focused dashed underline',f=>{f.username.focused=true;f.username.style.borderBottomWidth='3px';f.username.style.borderBottomStyle='dashed';}],
     ['transparent focused underline',f=>{f.username.focused=true;f.username.style.borderBottomWidth='3px';f.username.style.borderBottomStyle='solid';f.username.style.borderBottomColor='transparent';}],
@@ -500,7 +502,7 @@ if(!process.argv.includes('--models-only')) {
     assert.match(authCss,/--zxs-contour-extent: 48px/);
     assert.doesNotMatch(authCss,/dashed/);
     assert.match(authCss,/\.authentication-shell \.authentication-card input\.zxs-input \{[^}]*border: 0;[^}]*background: transparent;[^}]*outline: 0;/);
-    assert.match(authCss,/input\.zxs-input:focus-visible \{ border-bottom: 3px solid var\(--zxs-focus,Highlight\)/);
+    assert.match(authCss,/input\.zxs-input:focus-visible \{ outline: 2px solid var\(--zxs-focus,Highlight\); outline-offset: -2px;/);
     assert.doesNotMatch(authCss,/--zxs-contour-(?:panel|control|notification|dialog):/);
     assert.match(geometryCss,/--zxs-contour-control: calc\(var\(--zxs-compact-row-height\) \/ 2\)/);
     assert.match(geometryCss,/--zxs-contour-panel: var\(--zxs-contour-control\)/);

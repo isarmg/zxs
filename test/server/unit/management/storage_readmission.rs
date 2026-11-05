@@ -20,13 +20,30 @@ fn fixture(metadata_member: bool) -> Fixture {
         Config::development((0..3).map(|index| root.path().join(format!("disk-{index}")))).unwrap();
     let target = if metadata_member { 0 } else { 2 };
     original.disks[target].metadata_member = metadata_member;
-    let engine = storage_engine::Engine::initialize(&data, original.clone()).unwrap();
+    let mut engine = storage_engine::Engine::initialize(&data, original.clone()).unwrap();
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("readmission-source").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
     let management = data.join("management");
     drop(
         AuthStore::initialize_management(&management, "admin", "readmission-test-password")
             .unwrap(),
     );
-    let (backend, mut auth) = open_service(&data, &management).unwrap();
+    let (backend, mut auth) = open_service_with_options(
+        &data,
+        &management,
+        ManagementOptions {
+            discovery_root: root.path().to_str().unwrap().parse().unwrap(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let login = auth.login("admin", "readmission-test-password").unwrap();
     let identity = auth.authenticate(&login.token).unwrap();
     let engine = Arc::new(EngineBackend::new(engine));
@@ -825,8 +842,7 @@ fn add_readmission_successor(f: &Fixture) {
     let discovery = f._root.path().to_str().unwrap();
     let path = f._root.path().join("later-data");
     fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-    let listing =
-        crate::storage_directories::browse_within(discovery, path.to_str().unwrap()).unwrap();
+    let listing = crate::storage_directories::browse(path.to_str().unwrap()).unwrap();
     let selection = crate::storage_directories::inspect_within(
         discovery,
         &InspectRequest {
@@ -848,9 +864,7 @@ fn add_readmission_successor(f: &Fixture) {
     };
     let preview: AdditionPreview = json_codec::from_value(
         f.backend
-            .storage_addition("disk_add_preview", json!(request), &f.identity, || {
-                Ok(discovery.to_owned())
-            })
+            .storage_addition("disk_add_preview", json!(request), &f.identity)
             .unwrap(),
     )
     .unwrap();
@@ -859,7 +873,6 @@ fn add_readmission_successor(f: &Fixture) {
             "disk_add_commit",
             json!(AdditionCommit { preview }),
             &f.identity,
-            || Ok(discovery.to_owned()),
         )
         .unwrap();
 }

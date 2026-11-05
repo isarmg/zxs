@@ -413,6 +413,11 @@ fn directory_operation_events<'a>(
                 | "directory.branches.select"
                 | "directory.default.select"
                 | "directory.default.set"
+                | "directory.git.branch-create"
+                | "directory.git.checkout"
+                | "directory.git.initialize"
+                | "directory.git.stage-owned"
+                | "directory.git.stage-child"
                 | "directory.branch.rename"
                 | "directory.scope.initialize"
         ) && op.result.get("no_change").and_then(Value::as_bool) != Some(true)
@@ -587,7 +592,10 @@ fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
         // subtree. Its initialization is covered by the register event.
         if matches!(
             operation.kind.as_str(),
-            "directory.branches.create" | "directory.scope.initialize"
+            "directory.branches.create"
+                | "directory.scope.initialize"
+                | "directory.git.initialize"
+                | "directory.git.branch-create"
         ) {
             continue;
         }

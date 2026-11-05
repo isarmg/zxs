@@ -202,8 +202,64 @@ fn semantics(name: &str, value: &Value) -> Result {
             let _: storage_contract::storage_directories::DiscoveryRootSettings =
                 json_codec::from_value(value.clone())?;
         }
-        "StorageSetDiscoveryRootRequest" => {
-            let _: storage_contract::storage_directories::SetDiscoveryRootRequest =
+        "StorageDiscoveredDisks" => {
+            let _: storage_contract::storage_directories::DiscoveredDisks =
+                json_codec::from_value(value.clone())?;
+        }
+        "ForeignDiskPreviewRequest" => {
+            let _: storage_contract::storage_foreign::ForeignDiskPreviewRequest =
+                json_codec::from_value(value.clone())?;
+        }
+        "ForeignDiskPreview" => {
+            let _: storage_contract::storage_foreign::ForeignDiskPreview =
+                json_codec::from_value(value.clone())?;
+        }
+        "ForeignPlanRequest" => {
+            let _: storage_contract::storage_foreign_plan::ForeignPlanRequest =
+                json_codec::from_value(value.clone())?;
+        }
+        "ForeignPlanPreview" => {
+            let _: storage_contract::storage_foreign_plan::ForeignPlanPreview =
+                json_codec::from_value(value.clone())?;
+        }
+        "ForeignPlanSave" => {
+            let _: storage_contract::storage_foreign_plan::ForeignPlanSave =
+                json_codec::from_value(value.clone())?;
+        }
+        "ForeignPlanSelection" => {
+            let _: storage_contract::storage_foreign_plan::ForeignPlanSelection =
+                json_codec::from_value(value.clone())?;
+        }
+        "ForeignPlanStatus" => {
+            let _: storage_contract::storage_foreign_plan::ForeignPlanStatus =
+                json_codec::from_value(value.clone())?;
+        }
+        "OrdinaryDiskConversionRequest" => {
+            let _: storage_contract::storage_conversion::OrdinaryDiskConversionRequest =
+                json_codec::from_value(value.clone())?;
+        }
+        "OrdinaryDiskConversionPreview" => {
+            let _: storage_contract::storage_conversion::OrdinaryDiskConversionPreview =
+                json_codec::from_value(value.clone())?;
+        }
+        "OrdinaryDiskConversionCommit" => {
+            let _: storage_contract::storage_conversion::OrdinaryDiskConversionCommit =
+                json_codec::from_value(value.clone())?;
+        }
+        "OrdinaryDiskConversionResume" => {
+            let _: storage_contract::storage_conversion::OrdinaryDiskConversionResume =
+                json_codec::from_value(value.clone())?;
+        }
+        "OrdinaryDiskConversionStop" => {
+            let _: storage_contract::storage_conversion::OrdinaryDiskConversionStop =
+                json_codec::from_value(value.clone())?;
+        }
+        "OrdinaryDiskConversionStatus" => {
+            let _: storage_contract::storage_conversion::OrdinaryDiskConversionStatus =
+                json_codec::from_value(value.clone())?;
+        }
+        "OrdinaryDiskConversionStatusResponse" => {
+            let _: storage_contract::storage_conversion::OrdinaryDiskConversionStatusResponse =
                 json_codec::from_value(value.clone())?;
         }
         "StorageDirectoryIdentity" => {

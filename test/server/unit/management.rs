@@ -404,6 +404,7 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
         &data,
         &management,
         ManagementOptions {
+            discovery_root: discovery.to_str().unwrap().parse().unwrap(),
             allow_development_setup: true,
             ..Default::default()
         },
@@ -500,23 +501,61 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
     let (code, pending) = request(&app, "/api/admin/storage/status", Some(token), None).await;
     assert_eq!(code, StatusCode::OK, "{pending:?}");
     assert_eq!(pending["state"], "pending");
-    let (code, settings) = put_json(
+    assert_eq!(
+        request(&app, "/api/admin/storage/conversion/status", None, None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (code, conversion) = request(
         &app,
-        "/api/admin/storage/discovery-root",
-        token,
-        json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
+        "/api/admin/storage/conversion/status",
+        Some(token),
+        None,
     )
     .await;
+    assert_eq!(code, StatusCode::OK, "{conversion:?}");
+    assert_eq!(conversion, json!({"operation":null}));
+    assert_eq!(
+        request(
+            &app,
+            "/api/admin/storage/conversion/status?path=/",
+            Some(token),
+            None,
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/storage/conversion/commit")
+                .header("host", "127.0.0.1:7400")
+                .header("origin", "http://127.0.0.1:7400")
+                .header("content-type", "application/json")
+                .header("cookie", format!("zxs_session={token}"))
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+    assert!(!management.join("ordinary-disk-conversions").exists());
+    let (code, settings) =
+        request(&app, "/api/admin/storage/discovery-root", Some(token), None).await;
     assert_eq!(code, StatusCode::OK, "{settings:?}");
     assert_eq!(settings["discovery_root"], discovery.to_str().unwrap());
-    let (code, stale) = put_json(
+    let (code, _) = put_json(
         &app,
         "/api/admin/storage/discovery-root",
         token,
-        json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
+        json!({"expected_discovery_root":discovery,"discovery_root":"/elsewhere"}),
     )
     .await;
-    assert_eq!(code, StatusCode::CONFLICT, "{stale:?}");
+    assert_eq!(code, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(
         request(
             &app,
@@ -528,24 +567,38 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
         .0,
         StatusCode::BAD_REQUEST
     );
-    let mut selections = Vec::new();
-    for path in disks.values() {
-        let uri = format!(
-            "/api/admin/storage/directories?path={}",
-            storage_contract::client_protocol::uri_component_segment(path.to_str().unwrap())
-        );
-        let (code, listing) = request(&app, &uri, Some(token), None).await;
-        assert_eq!(code, StatusCode::OK, "{listing:?}");
-        let (code, selected) = request(
+    assert_eq!(
+        request(
             &app,
-            "/api/admin/storage/directories/inspect",
+            "/api/admin/storage/discovered-disks?path=/",
             Some(token),
-            Some(json!({"mount_path":listing["mount_path"],"root_path":path})),
+            None
         )
-        .await;
-        assert_eq!(code, StatusCode::OK, "{selected:?}");
-        selections.push(selected);
-    }
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (code, discovered) = request(
+        &app,
+        "/api/admin/storage/discovered-disks",
+        Some(token),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{discovered:?}");
+    let discovered: storage_contract::storage_directories::DiscoveredDisks =
+        json_codec::from_value(discovered).unwrap();
+    assert_eq!(discovered.candidates.len(), disks.len());
+    let selections = discovered
+        .candidates
+        .into_iter()
+        .map(|candidate| match candidate.state {
+            storage_contract::storage_directories::DiscoveredDiskState::Empty { selection } => {
+                json_codec::to_value(selection).unwrap()
+            }
+            other => panic!("expected untouched empty candidate, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
     let (code, activated) = request(
         &app,
         "/api/admin/storage/activate",
@@ -567,7 +620,13 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
             .count(),
         ids.len()
     );
-    let (code, repository) = request(&app, "/api/repositories", Some(token), Some(json!({"name":"single-copy","primary_slot_id":"P01","target_copies":1,"operation_id":storage_contract::new_id("op").unwrap()}))).await;
+    assert!(
+        config
+            .disks
+            .iter()
+            .all(|disk| disk.level == 1 && disk.upstream_slot_id.is_none())
+    );
+    let (code, repository) = request(&app, "/api/repositories", Some(token), Some(json!({"name":"single-copy","primary_slot_id":"D01","target_copies":1,"operation_id":storage_contract::new_id("op").unwrap()}))).await;
     assert_eq!(code, StatusCode::OK, "{repository:?}");
     if remove_data_disk {
         drop(app);
@@ -854,6 +913,7 @@ async fn activation_completion_uses_original_directories_and_preserves_current_a
         &data,
         &management,
         ManagementOptions {
+            discovery_root: discovery.to_str().unwrap().parse().unwrap(),
             allow_development_setup: true,
             ..Default::default()
         },
@@ -878,20 +938,8 @@ async fn activation_completion_uses_original_directories_and_preserves_current_a
     let token = login["token"].as_str().unwrap();
     let auth = backend.inner.auth.lock().unwrap().clone().unwrap();
     let identity = auth.lock().unwrap().authenticate(token).unwrap();
-    backend
-        .setup_operation(
-            "set_discovery_root",
-            json!({"expected_discovery_root":"/zxs/data/disks","discovery_root":discovery}),
-            None,
-            Some(&identity),
-        )
-        .unwrap();
     let before = std::fs::read(management.join("management-auth.json")).unwrap();
-    let listing = crate::storage_directories::browse_within(
-        discovery.to_str().unwrap(),
-        disk.to_str().unwrap(),
-    )
-    .unwrap();
+    let listing = crate::storage_directories::browse(disk.to_str().unwrap()).unwrap();
     let selection = crate::storage_directories::inspect_within(
         discovery.to_str().unwrap(),
         &storage_contract::storage_directories::InspectRequest {
@@ -907,6 +955,7 @@ async fn activation_completion_uses_original_directories_and_preserves_current_a
         Default::default(),
     )
     .unwrap()
+    .with_discovery_root(discovery.to_str().unwrap().parse().unwrap())
     .allow_development_mode();
     let error = service
         .activate(

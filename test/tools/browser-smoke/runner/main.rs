@@ -27,8 +27,10 @@ mod auth_layout;
 mod contour_evidence;
 mod contours;
 mod diagnostics;
+mod directory_git;
 mod directory_history;
 mod disk_health;
+mod disk_tree;
 mod error_feedback;
 mod file_pagination;
 mod file_row_visual;
@@ -187,6 +189,7 @@ struct Browser {
     port: u16,
     session: String,
 }
+
 /// Select keeps its options inside a dedicated scroll surface. Pin the owning
 /// listbox, the actual wrapper, enabled state and exact label together.
 fn select_option_xpath(panel: &str, label: &str) -> String {
@@ -319,6 +322,7 @@ fn exercise(
     assert_metadata_only(browser)?;
     println!("PASS engine-seeded file browsing in the real server namespace");
     metadata::backup_configuration_read(browser)?;
+    directory_git::children(browser)?;
     naming::run(browser)?;
     file_rows::run(browser)?;
     file_pagination::run(browser)?;
@@ -366,6 +370,7 @@ fn exercise(
     history_cancellation::monitor_range(browser)?;
     accessibility::run(browser)?;
     admin_language::run(browser)?;
+    disk_tree::run(browser)?;
     metadata::disk_notes(browser)?;
     disk_health::run(browser)?;
     single_account::run(browser, password)?;
@@ -438,6 +443,12 @@ fn exercise(
                 return Err(
                     format!("metadata-only Web requested a file-content route: {url}").into(),
                 );
+            }
+            if directory_git::retired_request(url, origin) {
+                return Err(format!(
+                    "Web requested a retired directory route or entry query: {url}"
+                )
+                .into());
             }
         }
         if event["message"]["method"] == "Network.responseReceived" {
@@ -565,6 +576,8 @@ fn run() -> Result<()> {
     command
         .arg("--root")
         .arg(&pool)
+        .arg("--storage-discovery-root")
+        .arg(root.join("disks"))
         .args(["--listen", &format!("127.0.0.1:{server_port}")]);
     server_web(&mut command, server_assets, root);
     let server = server_launcher::launch(&mut command, &server_log)?;

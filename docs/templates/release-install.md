@@ -79,7 +79,7 @@ chmod 755 "server-$VERSION/zxs"
 
 ```ini
 WorkingDirectory=/zxs
-ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400
+ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400
 ReadWritePaths=/zxs/data /zxs/config /zxs/log /zxs/run /zxs/tmp /zxs/cache /zxs/home
 ```
 

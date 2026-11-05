@@ -63,6 +63,7 @@ struct DirectoryCapture {
     within_key: String,
     namespace: storage_engine::NamespaceSnapshot,
     preview: Option<storage_engine::DirectoryBranchPreview>,
+    git_initialized: bool,
 }
 
 struct ListingScope {
@@ -183,12 +184,28 @@ impl DirectoryCapture {
                 "directory not found",
             ));
         }
+        let directory_id = match &preview {
+            Some(preview) => &preview.branch().directory_id,
+            None if within.is_empty() => &repository.repository_id,
+            None => {
+                &namespace
+                    .tree()
+                    .get_key(&within_key)
+                    .expect("invariant: the captured directory was resolved above")
+                    .entry_id
+            }
+        };
+        let git_initialized = engine
+            .state()
+            .directory_git_repositories
+            .contains_key(directory_id);
         Ok(Self {
             repository,
             within: within.into(),
             within_key,
             namespace,
             preview,
+            git_initialized,
         })
     }
 }
@@ -200,7 +217,10 @@ impl PrimaryListing {
         let Self { scope, request } = self;
         let state = &scope.view;
         let mut page = PageSelector::new(request);
-        let mut directory_branches_supported = true;
+        let mut directory_branches_supported = scope
+            .directory
+            .as_ref()
+            .is_some_and(|directory| directory.git_initialized);
         if scope.path.is_empty() {
             for repo in state
                 .repositories
@@ -219,7 +239,7 @@ impl PrimaryListing {
         if let Some(directory) = &scope.directory {
             let repo = &directory.repository;
             if let Some(preview) = &directory.preview {
-                directory_branches_supported = name_policy::path_key(preview.path())
+                directory_branches_supported &= name_policy::path_key(preview.path())
                     == name_policy::path_key(&directory.within);
             }
             if directory_branches_supported {

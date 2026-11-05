@@ -220,7 +220,7 @@ mod publication;
 mod recovery;
 pub(in crate::engine) mod root_extension;
 pub(in crate::engine) mod terminal_resume;
-pub(crate) use local::verify_local_membership;
+pub(crate) use local::{read_local_disk_configuration, verify_local_membership};
 pub(crate) use publication::predecessor_seal_matches;
 pub(crate) use recovery::{
     discover, discover_startup, discover_startup_in_store, latest_restore_config, restore_anchor,

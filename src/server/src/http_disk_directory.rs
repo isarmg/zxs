@@ -93,14 +93,6 @@ pub(crate) async fn create(
 ) -> Result<Json<Value>, ApiError> {
     submit(state, identity, slot, request, DiskDirectoryAction::Create).await
 }
-pub(crate) async fn select(
-    State(state): State<AppState>,
-    Extension(identity): Extension<Identity>,
-    ApiPath(slot): ApiPath<String>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    submit(state, identity, slot, request, DiskDirectoryAction::Select).await
-}
 
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_disk_directory.rs"]

@@ -126,7 +126,7 @@ async fn system_samba_real_engine_fixture() {
         engine_uid, 0,
         "real engine must run as its private service user"
     );
-    let (temp, shared, _backend, branch) = fixture();
+    let (temp, shared, fixture_backend, branch) = fixture();
     let repository = repository(&shared);
     // Default-share writes add a separate disk-root namespace. Keep all later
     // revocation operations attached to this exact existing named repository.
@@ -155,9 +155,10 @@ async fn system_samba_real_engine_fixture() {
         .backend
         .repository_snapshot(&identity(&shared), &repository)
         .unwrap();
-    let (selection_repository, default_main, default_draft) = directory_fixture(&shared);
+    let (selection_repository, default_main, default_draft) =
+        directory_fixture(&shared, &fixture_backend);
     assert_eq!(selection_repository, repository);
-    select_directory(&shared, &repository, &default_draft);
+    select_directory(&shared, &fixture_backend, &repository, &default_draft);
     {
         let mut selected = session(shared.clone(), &branch);
         let (opened, file) = open_file(&mut selected, true);
@@ -165,7 +166,7 @@ async fn system_samba_real_engine_fixture() {
         selected.dirty(opened.handle).unwrap();
         selected.close(opened.handle, false).unwrap();
     }
-    select_directory(&shared, &repository, &default_main);
+    select_directory(&shared, &fixture_backend, &repository, &default_main);
     let socket = temp.path().join("rpc/smb.sock");
     let config = crate::SmbConfig {
         socket: socket.clone(),
@@ -244,10 +245,10 @@ async fn system_samba_real_engine_fixture() {
     )
     .unwrap();
     marker(&root, "default-switch", &server).await;
-    select_directory(&shared, &repository, &default_draft);
+    select_directory(&shared, &fixture_backend, &repository, &default_draft);
     publish_marker(&directory, "default-switched");
     marker(&root, "default-restore", &server).await;
-    select_directory(&shared, &repository, &default_main);
+    select_directory(&shared, &fixture_backend, &repository, &default_main);
     publish_marker(&directory, "default-restored");
     marker(&root, "uploaded", &server).await;
     verify_body(&shared, &branch, "kept.txt", PAYLOAD);

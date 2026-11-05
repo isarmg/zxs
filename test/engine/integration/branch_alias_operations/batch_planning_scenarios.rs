@@ -1,23 +1,7 @@
 use super::*;
 
 fn initialize(pool: &mut Pool, path: &str) -> String {
-    pool.engine
-        .initialize_directory_scope(
-            &pool.repo.repository_id,
-            (if path.is_empty() {
-                None
-            } else {
-                Some(name_policy::LookupPath::parse(path).unwrap())
-            })
-            .as_ref(),
-            "admin",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap()
-        .result["directory_branch_id"]
-        .as_str()
-        .unwrap()
-        .to_owned()
+    pool.checkpoint(path).directory_branch_id.unwrap()
 }
 
 #[test]
@@ -166,7 +150,7 @@ fn frozen_batch_nonparticipating_target_collision_is_atomic() {
 }
 
 #[test]
-fn frozen_batch_overlapping_active_scopes_reject_before_losing_an_item() {
+fn frozen_batch_crossing_independent_scopes_rejects_before_losing_an_item() {
     let mut pool = Pool::new();
     pool.save("d/a.txt", b"A");
     pool.save("d/b.txt", b"B");
@@ -189,7 +173,7 @@ fn frozen_batch_overlapping_active_scopes_reject_before_losing_an_item() {
     match result {
         Err(error) => assert_eq!(
             error.code(),
-            storage_contract::ErrorCode::BatchScopeConflict
+            storage_contract::ErrorCode::DirectoryBranchScope
         ),
         Ok(_) => panic!(
             "overlapping scopes were published instead of rejected; final paths: {:?}",
@@ -218,11 +202,13 @@ fn frozen_batch_directory_swap_preserves_child_identities_and_references() {
     let mut pool = Pool::new();
     pool.save("a/one.txt", b"A");
     pool.save("b/two.txt", b"B");
-    let a_branch = initialize(&mut pool, "a");
-    let b_branch = initialize(&mut pool, "b");
+    // Ordinary child directories belong to the root repository. Explicitly
+    // initialized children are independent and cannot be moved by this batch.
     let root = initialize(&mut pool, "");
     let a = pool.current_entry("a");
     let b = pool.current_entry("b");
+    let a_branch = pool.engine.state().directory_selections[&a.entry_id].clone();
+    let b_branch = pool.engine.state().directory_selections[&b.entry_id].clone();
     let a_file = pool.current_entry("a/one.txt");
     let b_file = pool.current_entry("b/two.txt");
     let items = vec![
@@ -254,16 +240,17 @@ fn frozen_batch_directory_swap_preserves_child_identities_and_references() {
 #[test]
 fn frozen_batch_read_only_parent_scope_does_not_block_child_copy() {
     let mut pool = Pool::new();
-    pool.save("d/a.txt", b"source");
+    pool.save("source.txt", b"source");
+    pool.save("d/retained.txt", b"child-owned");
     let child = initialize(&mut pool, "d");
     let root = initialize(&mut pool, "");
-    let original = pool.current_entry("d/a.txt");
-    let items = vec![pool.mapping(&root, "d/a.txt", &child, "d/copy.txt")];
+    let original = pool.current_entry("source.txt");
+    let items = vec![pool.mapping(&root, "source.txt", &child, "d/copy.txt")];
     pool.batch(storage_contract::DirectoryBatchKind::Copy, items);
     let copied = pool.current_entry("d/copy.txt");
     assert_ne!(copied.file_id, original.file_id);
     assert_eq!(pool.bytes(&copied.version_id), b"source");
-    assert_eq!(pool.current_entry("d/a.txt").file_id, original.file_id);
+    assert_eq!(pool.current_entry("source.txt").file_id, original.file_id);
 }
 
 #[test]

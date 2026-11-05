@@ -2,6 +2,8 @@
 
 `storage-rescue` 生成 `zxs-rescue`，它是明确命名的命令行救援工具，不是日常管理客户端。正常入口是直接运行的 `zxs` 守护进程，首次初始化、唯一管理员改密及仓库、策略、计划等操作在 Web 管理面进行；不提供多账户或仓库授权管理。SMB 网络服务仍由独立 Samba/smbd 桥接提供。
 
+源码独立放在项目根 [`rescue/`](../../rescue/)，与服务源码分开维护，共享根工作区与锁文件；救援测试仍在 `test/rescue/`。在项目根执行 `cargo build --locked --offline -p storage-rescue`，命令名称和救援流程不因目录移动而改变。
+
 所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；工具没有管理员重置能力。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
 
 需要打开或恢复池的命令支持[四项保留证据运行期上限](../19-capacity-and-performance.md#runtime-retained-workspace-limits)，作为全局参数同时提供；不带时使用原配置基线。`offline-check` / `offline-export` 直接核验单盘，不借这些参数改变证明或载荷规则。恢复前应配置足够额度，不能通过删除已提交清单释放名额。

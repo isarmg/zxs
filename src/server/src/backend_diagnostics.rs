@@ -91,6 +91,7 @@ pub(crate) struct FileManagerDisksResponse {
 }
 #[derive(Serialize)]
 struct FileManagerDiskRecord {
+    name: String,
     slot_id: String,
     level: u32,
     online: bool,
@@ -102,8 +103,8 @@ struct FileManagerDiskRecord {
     used_bytes: u64,
     simulation: bool,
 }
-impl From<storage_contract::DiskStatus> for FileManagerDiskRecord {
-    fn from(disk: storage_contract::DiskStatus) -> Self {
+impl FileManagerDiskRecord {
+    fn new(disk: storage_contract::DiskStatus, name: String) -> Self {
         let storage_contract::DiskStatus {
             slot_id,
             level,
@@ -118,6 +119,7 @@ impl From<storage_contract::DiskStatus> for FileManagerDiskRecord {
             physical_device: _,
         } = disk;
         Self {
+            name,
             slot_id,
             level,
             online,
@@ -129,10 +131,36 @@ impl From<storage_contract::DiskStatus> for FileManagerDiskRecord {
         }
     }
 }
-impl From<Vec<storage_contract::DiskStatus>> for FileManagerDisksResponse {
-    fn from(disks: Vec<storage_contract::DiskStatus>) -> Self {
-        Self {
-            disks: disks.into_iter().map(FileManagerDiskRecord::from).collect(),
+impl FileManagerDisksResponse {
+    pub(crate) fn from_snapshot(
+        disks: Vec<storage_contract::DiskStatus>,
+        topology: crate::TopologySnapshot,
+    ) -> Result<Self, crate::ApiError> {
+        let mut slots = topology
+            .slots
+            .into_iter()
+            .map(|slot| (slot.slot_id.clone(), slot))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let changed = || {
+            crate::ApiError::conflict(
+                storage_contract::ErrorCode::ListingChanged,
+                "disk membership changed while reading the directory listing",
+            )
+        };
+        let mut records = Vec::with_capacity(disks.len());
+        for disk in disks {
+            let slot = slots.remove(&disk.slot_id).ok_or_else(changed)?;
+            if slot.disk_id != disk.disk_id || slot.level != disk.level {
+                return Err(changed());
+            }
+            records.push(FileManagerDiskRecord::new(
+                disk,
+                slot.directory_name()?.as_str().to_owned(),
+            ));
         }
+        if !slots.is_empty() {
+            return Err(changed());
+        }
+        Ok(Self { disks: records })
     }
 }

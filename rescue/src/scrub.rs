@@ -158,5 +158,5 @@ impl std::fmt::Display for WorkerPanic {
 impl std::error::Error for WorkerPanic {}
 
 #[cfg(test)]
-#[path = "../../../test/rescue/unit/scrub/tests.rs"]
+#[path = "../../test/rescue/unit/scrub/tests.rs"]
 mod tests;

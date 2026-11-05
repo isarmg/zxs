@@ -380,6 +380,7 @@ impl Plan {
             branches: _,
             file_selections: _,
             directory_branches: _,
+            directory_git_repositories: _,
             directory_trees: _,
             file_write_origins: _,
             file_contexts: _,
@@ -413,6 +414,7 @@ impl Plan {
         } = next;
         unchanged!(
             repositories,
+            directory_git_repositories,
             histories,
             file_selections,
             file_write_origins,

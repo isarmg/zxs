@@ -9,6 +9,7 @@ mod changes;
 #[cfg(test)]
 use crate::state_projection::DerivedOwners;
 use crate::state_projection::ProjectionTransition;
+mod directory_git;
 mod graph;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/history_package/delta/tests.rs"]
@@ -470,6 +471,16 @@ fn bound_history_graph_with<F: FnMut(&Error)>(
         return Err(error);
     }
     Ok((manifest, objects))
+}
+
+/// A foreign preview authenticates one already publication-bound graph through
+/// its held source only. This grants no restore or mutation authority.
+pub(crate) fn read_bound_foreign_manifest(
+    hash: &str,
+    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) -> Result<HistoryManifest> {
+    bound_history_graph_with(hash, &mut |_| {}, |kind, hash, _| load(kind, hash))
+        .map(|(manifest, _)| manifest)
 }
 
 /// Bind the exact authenticated graph to an admitted snapshot projection, or
@@ -1007,6 +1018,7 @@ impl Engine {
                 || manifest.commits.keys().any(|id| state.commits.contains_key(id))
                 || manifest.branches.keys().any(|id| state.branches.contains_key(id))
                 || manifest.directory_branches.keys().any(|id| state.directory_branches.contains_key(id))
+                || manifest.directory_git_repositories.keys().any(|id| state.directory_git_repositories.contains_key(id))
                 || manifest.directory_trees.keys().any(|id| state.directory_trees.contains_key(id))
                 || manifest.directory_selections.keys().any(|id| state.directory_selections.contains_key(id))
                 || manifest.directory_selection_generations.keys().any(|id| state.directory_selection_generations.contains_key(id))
@@ -1048,6 +1060,7 @@ impl Engine {
             state.file_selections.extend(manifest.file_selections.clone());
             state.directory_branches.extend(manifest.directory_branches.clone());
             state.directory_trees.extend_shared(&manifest.directory_trees);
+            state.directory_git_repositories.extend(manifest.directory_git_repositories.clone());
             state.directory_selections.extend(manifest.directory_selections.clone());
             state.directory_selection_generations.extend(manifest.directory_selection_generations.clone());
             state.file_write_origins.extend(manifest.file_write_origins.clone());

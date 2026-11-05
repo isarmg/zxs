@@ -1452,6 +1452,7 @@ async fn public_account_queries_share_bounded_source_admission_before_mutation()
 async fn authenticated_storage_request_budgets_accept_full_candidates_and_reject_overflow() {
     let (_temp, app, probe) = configured_app(false, true);
     let token = proxy_admin_token(&app).await;
+    let before = probe.mutations.load(Ordering::SeqCst);
     let vectors: Value =
         json_codec::from_str(include_str!("../../../../docs/contracts/vectors.json")).unwrap();
     let candidate = vectors["positive"]
@@ -1491,14 +1492,6 @@ async fn authenticated_storage_request_budgets_accept_full_candidates_and_reject
             json_codec::to_vec(&json!({"mount_path":path,"root_path":path})).unwrap(),
             MAX_DIRECTORY_BODY_BYTES,
         ),
-        (
-            "PUT",
-            "/api/admin/storage/discovery-root",
-            "192.0.2.3",
-            json_codec::to_vec(&json!({"expected_discovery_root":path,"discovery_root":path}))
-                .unwrap(),
-            MAX_DIRECTORY_BODY_BYTES,
-        ),
     ] {
         assert!(body.len() <= limit);
         body.resize(limit, b' ');
@@ -1526,7 +1519,7 @@ async fn authenticated_storage_request_budgets_accept_full_candidates_and_reject
             .unwrap();
         assert_eq!(rejected.status(), StatusCode::PAYLOAD_TOO_LARGE, "{path}");
     }
-    assert_eq!(probe.mutations.load(Ordering::SeqCst), 3);
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), before + 2);
 }
 
 #[tokio::test]
@@ -1534,6 +1527,13 @@ async fn existing_pool_addition_routes_keep_session_origin_and_csrf_boundaries()
     let (_temp, app, probe) = configured_app(false, true);
     let token = proxy_admin_token(&app).await;
     for (method, path) in [
+        ("POST", "/api/admin/storage/foreign/preview"),
+        ("POST", "/api/admin/storage/foreign/plans/preview"),
+        ("POST", "/api/admin/storage/foreign/plans/save"),
+        ("POST", "/api/admin/storage/foreign/plans/revalidate"),
+        ("POST", "/api/admin/storage/foreign/plans/execute"),
+        ("GET", "/api/admin/storage/foreign/plans/status"),
+        ("POST", "/api/admin/storage/conversion/stop"),
         ("POST", "/api/admin/disks/preview"),
         ("POST", "/api/admin/disks"),
         ("POST", "/api/admin/disks/addition/resume"),
@@ -1572,6 +1572,30 @@ async fn existing_pool_addition_routes_keep_session_origin_and_csrf_boundaries()
                 .unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
         }
+    }
+    for (path, body, expected) in [
+        (
+            "/api/admin/storage/foreign/preview?execute=true",
+            "{}".to_owned(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/api/admin/storage/foreign/preview",
+            " ".repeat(MAX_DIRECTORY_BODY_BYTES + 1),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                proxy_request("POST", path, "192.0.2.20")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{path}");
     }
     assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
 }

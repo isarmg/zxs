@@ -82,12 +82,12 @@ fn disk_roots(state: RwSignal<State>) -> impl IntoView {
                 <table class="zxs-table zxs-file-table zxs-disk-table">
                     <thead><tr><th scope="col"><span class="zxs-file-row-decoration" aria-hidden="true"></span>{t("名称","Name")}</th><th scope="col">{t("访问权限","Access")}</th><th scope="col">{t("可用空间","Available space")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
                     <tbody>{disks.into_iter().map(move |disk|{
-                        let id=disk.slot_id;let data_slot=id.clone();let row_slot=id.clone();let name_slot=id.clone();let action_slot=id.clone();
+                        let name=disk.name;let id=disk.slot_id;let data_slot=id.clone();let row_slot=id.clone();let name_slot=id.clone();let action_slot=id.clone();
                         let online=disk.online;let writable=disk.writable;
                         let available=disk_available_space(disk.available_bytes);
                         let observation=disk_observation_message(disk.observation_failure);
                         view!{<tr data-online=online.to_string() on:click=move |_|{if online{actions::open_disk(state,row_slot.clone());}}>
-                            <td><span class="zxs-file-row-decoration" aria-hidden="true"><span class="zxs-file-row-surface" aria-hidden="true"></span></span><button class="zxs-button zxs-file-name zxs-disk-entry" data-slot=data_slot disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,name_slot.clone());}><FileIcon name="folder"/><span>{id}</span></button></td>
+                            <td><span class="zxs-file-row-decoration" aria-hidden="true"><span class="zxs-file-row-surface" aria-hidden="true"></span></span><button class="zxs-button zxs-file-name zxs-disk-entry" data-slot=data_slot disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,name_slot.clone());}><FileIcon name="folder"/><span>{name}</span></button></td>
                             <td>{if online{if writable{t("可读写","Read and write")}else{t("只读","Read only")}}else{t("离线","Offline")}}</td>
                             <td title=observation>{available}</td>
                             <td><div class="zxs-entry-actions zxs-flow"><button class="zxs-button" disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,action_slot.clone());}>{t("打开","Open")}</button></div></td>
@@ -103,13 +103,20 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
         state.with(|s| {
             !actions::default_write_allowed(s)
                 || !s.files.loaded
-                || s.files
-                    .directory_preview
-                    .as_ref()
-                    .is_none_or(|preview| !preview.at_directory(&s.files.directory))
+                || !s.files.directory_branches_supported
+                || s.files.directory_preview.as_ref().is_none_or(|preview| {
+                    preview.branch().is_none() || !preview.at_directory(&s.files.directory)
+                })
         })
     });
-    let rename_branch = Memo::new(move |_| state.with(|s| selected_directory_branch(&s.files)));
+    let rename_branch = Memo::new(move |_| {
+        state.with(|s| {
+            s.files
+                .directory_branches_supported
+                .then(|| selected_directory_branch(&s.files))
+                .flatten()
+        })
+    });
     let folder_options = Signal::derive(move || {
         state.with(|s| {
             s.files
@@ -154,7 +161,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
     view! {
         <nav class="zxs-breadcrumb zxs-flow" aria-label=t("当前位置","Current location")>
             <button class="zxs-button" on:click=move |_|actions::go_root(state)><FileIcon name="home"/>{t("所有硬盘","All disks")}</button><span aria-hidden="true">"/"</span>
-            <button class="zxs-button" on:click=move |_|actions::go_directory(state,String::new())>{move ||state.with(|s|s.files.slot.clone())}</button>
+            <button class="zxs-button" on:click=move |_|actions::go_directory(state,String::new())>{move ||state.with(|s|s.files.disks.iter().find(|disk|disk.slot_id==s.files.slot).map(|disk|disk.name.clone()))}</button>
             {move ||breadcrumbs(&state.with(|s|s.files.directory.clone())).into_iter().map(move |(name,path)|view!{<span aria-hidden="true">"/"</span><button class="zxs-button" on:click=move |_|actions::go_directory(state,path.clone())>{name}</button>}).collect_view()}
         </nav>
         <div class="zxs-file-toolbar zxs-flow">
@@ -190,8 +197,10 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             <Show when=move ||state.with(|s|s.files.directory_preview.is_some())><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|actions::return_to_default(state)>{t("返回默认视图","Return to default view")}</button></Show>
             <p class="zxs-row">{t("切换仅浏览分支，不改变默认分支。设为默认后才更新默认读取，已启用的 SMB 共享使用该视图；目录外文件保持不变。","Switching only browses a branch. Set it as default to update default reads, including enabled SMB shares; files outside the folder stay unchanged.")}</p>
         </div>
-        <Show when=move ||state.with(|s|s.files.loaded&&s.files.writable&&!s.files.directory_branches_supported)><p class="zxs-row">{t("请选择具体文件夹后管理目录分支；此硬盘根目录包含多个已有的文件目录。","Select a specific folder to manage folder branches; this disk root contains multiple existing file namespaces.")}</p></Show>
+        <Show when=move ||state.with(|s|s.files.directory_preview.as_ref().is_some_and(|preview|preview.branch().is_none()))><p class="zxs-row" role="status" data-directory-snapshot-readonly="">{t("正在只读浏览明确选定的历史快照，不是当前工作内容。此快照不能直接设为默认；返回默认视图后继续当前工作。","You are viewing an explicitly selected immutable snapshot, not current working content. This snapshot cannot be set as default directly; return to the default view to continue current work.")}</p></Show>
+        <Show when=move ||state.with(|s|s.files.loaded&&s.files.writable&&!s.files.directory_branches_supported)><p class="zxs-row">{t("目录分支管理需要先手动初始化当前目录的独立仓库。","Initialize this directory as an independent repository before managing its branches.")}</p></Show>
         <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable&&s.files.directory_preview.is_none())><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
+        {super::staging::view(state)}
         {backup::view(state)}
         {super::placement::view(state)}
         {batch::view(state)}

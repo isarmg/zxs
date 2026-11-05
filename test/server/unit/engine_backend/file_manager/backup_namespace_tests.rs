@@ -1,5 +1,6 @@
 //! Real published metadata exercises global backup validation before page selection.
 use super::*;
+use crate::tests::directory_git_fixture::checkpoint;
 use storage_contract::{
     BranchName, Config, Entry, ErrorCode, NamespaceOperationKind, OperationId, RepositoryName,
 };
@@ -182,6 +183,7 @@ fn canonical_owner_wins_over_frozen_aliases_in_either_namespace_order() {
         save(&mut engine, &repo, &format!("{owner}/keep.txt"), b"keep");
         let scope = name_policy::LookupPath::parse(source).unwrap();
         let frozen = BranchName::parse("frozen alias").unwrap();
+        checkpoint(&mut engine, &repo, source, "owner");
         engine
             .create_directory_branches(
                 &repo.repository_id,
@@ -198,6 +200,7 @@ fn canonical_owner_wins_over_frozen_aliases_in_either_namespace_order() {
             &source_path,
             Some(&owner_path),
         );
+        checkpoint(&mut engine, &repo, source, "owner");
         engine
             .select_directory_branches(
                 &repo.repository_id,

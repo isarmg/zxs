@@ -11,6 +11,22 @@ SPEC.loader.exec_module(architecture)
 
 
 class ConsumerEdges(unittest.TestCase):
+    def test_root_rescue_is_indexed_as_a_foundation_consumer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'Cargo.toml').write_text(
+                '[workspace]\nmembers = ["rescue"]\n'
+                '[workspace.dependencies]\nmini = { path = "src/foundation/mini" }\n',
+                encoding='utf-8')
+            (root / 'rescue').mkdir()
+            (root / 'rescue/Cargo.toml').write_text(
+                '[package]\nname = "storage-rescue"\nversion = "1.0.0"\n'
+                '[dependencies]\nmini.workspace = true\n', encoding='utf-8')
+            documents = architecture.manifests(root)
+            self.assertEqual(set(documents), {'Cargo.toml', 'rescue/Cargo.toml'})
+            self.assertEqual(architecture.consumer_edges(root, documents)['src/foundation/mini'],
+                             ['rescue [normal]'])
+
     def test_merged_source_index_keeps_identity_without_reprinting_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

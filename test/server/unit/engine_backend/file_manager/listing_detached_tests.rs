@@ -1,5 +1,6 @@
 //! Primary listing interleavings at the real capture/scan boundary.
 use super::*;
+use crate::tests::directory_git_fixture::checkpoint;
 use crate::{
     Backend,
     auth::{AuthStore, Identity},
@@ -383,22 +384,8 @@ fn primary_capture_keeps_cursor_error_precedence_before_disk_and_directory_error
 fn primary_scan_preserves_virtual_root_recursive_counts_unicode_and_directory_choices() {
     let (_root, backend, _auth, _token, identity, repo) = fixture();
     backend.test_with_engine_locked(|engine| {
-        engine
-            .initialize_directory_scope(
-                &repo.repository_id,
-                None,
-                "owner",
-                OperationId::generate().unwrap(),
-            )
-            .unwrap();
-        engine
-            .initialize_directory_scope(
-                &repo.repository_id,
-                Some(&name_policy::LookupPath::parse("Café").unwrap()),
-                "owner",
-                OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        checkpoint(engine, &repo, "", "owner");
+        checkpoint(engine, &repo, "Café", "owner");
     });
     let root = read(backend.as_ref(), &identity, request("", &[])).unwrap();
     assert_eq!(root["entries"][0]["entry_id"], repo.repository_id);
@@ -562,6 +549,7 @@ fn preview_fixture() -> (Fixture, String, String, Value) {
     let fixture = fixture();
     let (_, backend, _, _, _, repo) = &fixture;
     let mut engine = backend.engine.lock().unwrap();
+    checkpoint(&mut engine, repo, "Café", "owner");
     let branch = engine
         .create_directory_branches(
             &repo.repository_id,

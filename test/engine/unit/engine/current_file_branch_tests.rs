@@ -278,6 +278,7 @@ impl Fixture {
 #[test]
 fn disk_exit_current_file_create_select_default_merge_and_restart_preserve_history() {
     let mut fixture = Fixture::new(2);
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "dir");
     let hidden_directory = fixture
         .engine
         .create_directory_branches(
@@ -684,6 +685,7 @@ fn disk_exit_current_file_merge_rejects_unavailable_chosen_historical_body() {
 #[test]
 fn disk_exit_current_file_merge_rejects_unclosed_frozen_child_references() {
     let mut fixture = Fixture::new(2);
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "");
     fixture
         .engine
         .create_directory_branches(

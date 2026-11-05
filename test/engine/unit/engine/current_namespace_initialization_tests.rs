@@ -177,6 +177,8 @@ fn membership_registry_current_initialize_preserves_alias_versions_and_path_cont
         "alias/keep",
         b"alias directory",
     );
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "dir");
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "alias");
     let frozen = fixture
         .engine
         .create_directory_branches(

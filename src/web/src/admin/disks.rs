@@ -1,5 +1,6 @@
 //! Informational hardware observations and CAS-protected, system-disk notes.
 mod health;
+mod tree;
 use crate::{
     api, format,
     ui::{State, accept_read_response},
@@ -10,6 +11,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use storage_contract::disk_details::{
     DiskDetailsRecord, DiskMapping, DiskNoteRequest, DiskNoteResponse,
 };
+use tree::read as read_list;
 use web_interface::{
     components::{EmptyState, ErrorState},
     i18n::t,
@@ -29,6 +31,8 @@ pub enum DecodeError {
     },
     #[error("duplicate or empty disk identity in the disk listing")]
     DiskList,
+    #[error("invalid backup topology: {0}")]
+    Topology(#[source] tree::InvalidTopology),
     #[error("invalid device-health observation: {0}")]
     Health(#[source] health::InvalidHealth),
 }
@@ -45,31 +49,6 @@ fn invalid(source: DecodeError) -> api::Error {
         request_id: None,
         source: Some(Arc::new(api::ErrorSource::DiskDetails(source))),
     }
-}
-
-#[derive(Deserialize)]
-struct DiskList {
-    disks: Vec<DiskIdentity>,
-}
-#[derive(Deserialize)]
-struct DiskIdentity {
-    slot_id: String,
-    disk_id: String,
-}
-
-fn read_list(value: Value) -> Result<BTreeMap<String, String>, api::Error> {
-    let listing =
-        DiskList::deserialize(value).map_err(|source| invalid(DecodeError::Json(source)))?;
-    let mut disks = BTreeMap::new();
-    for disk in listing.disks {
-        if disk.slot_id.is_empty()
-            || disk.disk_id.is_empty()
-            || disks.insert(disk.slot_id, disk.disk_id).is_some()
-        {
-            return Err(invalid(DecodeError::DiskList));
-        }
-    }
-    Ok(disks)
 }
 
 fn identity(field: &'static str, expected: &str, actual: &str) -> Result<(), api::Error> {
@@ -125,6 +104,8 @@ struct Card {
 #[derive(Clone, Default)]
 pub(super) struct Model {
     cards: BTreeMap<String, Card>,
+    topology: Arc<tree::Topology>,
+    selected: Option<String>,
     loading: bool,
     loaded: bool,
     generation: u64,
@@ -145,7 +126,7 @@ fn complete_list(
     state: RwSignal<State>,
     epoch: u64,
     generation: u64,
-    result: Result<BTreeMap<String, String>, api::Error>,
+    result: Result<tree::Topology, api::Error>,
 ) -> Option<Vec<String>> {
     if !accept_read_response(state, epoch, &result) {
         return None;
@@ -158,17 +139,19 @@ fn complete_list(
             }
             match result {
                 Ok(disks) => {
-                    model.cards.retain(|slot, _| disks.contains_key(slot));
-                    for (slot, disk_id) in disks {
-                        let card = model.cards.entry(slot).or_default();
-                        if card.disk_id != disk_id {
+                    model.cards.retain(|slot, _| disks.nodes.contains_key(slot));
+                    for (slot, node) in &disks.nodes {
+                        let card = model.cards.entry(slot.clone()).or_default();
+                        if card.disk_id != node.disk_id {
                             card.details = None;
                             card.loading = false;
                             model.next_owner += 1;
                             card.generation = model.next_owner;
                         }
-                        card.disk_id = disk_id;
+                        card.disk_id = node.disk_id.clone();
                     }
+                    model.selected = disks.selection(model.selected.as_deref());
+                    model.topology = Arc::new(disks);
                     model.loaded = true;
                     model.error = None;
                     Some(model.cards.keys().cloned().collect())
@@ -460,6 +443,14 @@ fn optional(value: Option<&str>) -> String {
         .map(str::to_owned)
         .unwrap_or_else(|| t("不可用", "Unavailable"))
 }
+
+fn select(state: RwSignal<State>, slot: &str) {
+    state.update(|s| {
+        if s.session_active() && s.admin_console.disks.cards.contains_key(slot) {
+            s.admin_console.disks.selected = Some(slot.to_owned());
+        }
+    });
+}
 fn mapping_label(mapping: DiskMapping) -> String {
     match mapping {
         DiskMapping::Single => t(
@@ -589,8 +580,14 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {<section class="zxs-stack zxs-disk-management" aria-busy=move ||state.with(|s|s.admin_console.disks.loading).to_string() aria-label=t("登记目录、磁盘健康与备注","Registered directories, disk health and notes")>
         <h2 class="zxs-row">{t("登记目录、磁盘健康与备注","Registered directories, disk health and notes")}</h2>
         {move ||state.with(|s|s.admin_console.disks.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
+        <Show when=move ||state.with(|s|s.admin_console.disks.loaded&&s.admin_console.disks.error.is_some())>
+            <p class="zxs-row" role="status">{t("刷新未成功，保留上次读取的磁盘关系，不代表当前状态。","Refresh failed. The last successful disk relationships are retained and do not represent current status.")}</p>
+        </Show>
         <Show when=move ||state.with(|s|s.admin_console.disks.loaded&&s.admin_console.disks.cards.is_empty())><EmptyState message=t("没有已登记的存储目录。","No storage directories are registered.")/></Show>
-        <For each=move ||state.with(|s|s.admin_console.disks.cards.keys().cloned().collect::<Vec<_>>()) key=|slot|slot.clone() children=move |slot|card(state,slot)/>
+        {tree::view(state)}
+        <div id="zxs-selected-disk-details" class="zxs-stack">
+            <For each=move ||state.with(|s|s.admin_console.disks.selected.iter().cloned().collect::<Vec<_>>()) key=|slot|slot.clone() children=move |slot|card(state,slot)/>
+        </div>
         {super::storage::lifecycle::view(state)}
         {super::storage::readmission::view(state)}
     </section>}

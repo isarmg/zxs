@@ -16,6 +16,8 @@
 | `engine/workspace_storage.rs` | 工作区清单的双位置持久化与重启协调 |
 | `engine/workspace_limits.rs` | 独立于持久配置的本机运行期保留证据上限 |
 | `engine/index.rs` | 可重建 SQLite 投影 |
+| `directory_conversion/` | [磁盘向导普通目录转换](engine/src/directory_conversion.md)：只读预览、非覆盖导入和显式当前视图导出，不接纳外来 ZXS 历史 |
+| `foreign_import/migration/` | [外来历史离线迁入包](engine/src/foreign_migration.md)：精确来源分组、完整独立副本、非覆盖发布和断点恢复；不是活动池接纳 |
 | `business/` | 仓库、命名空间、上传、文件分支、目录批量分支与历史查询 |
 | `business/namespace.rs` | 路径校验、父目录约束、命名空间改动与工作区冲突规则 |
 | `business/namespace/draft.rs` | 工作区提交内的临时路径索引与保序条目草稿，不用于读取或持久缓存 |
@@ -168,7 +170,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 ### 目录历史只读查询
 
-`capture_directory_history` 捕获共享业务元数据与精确 history manifest root，`DirectoryHistoryRead::page` 在锁外按稳定目录身份筛选真实树/分支，`recheck_directory_history` 在返回前校验当前 root 与选择。复用文件历史的有界 stable-key selector；节点只投影 `parent_tree_id`，不把 composition 的子目录引用画为祖先。pending 分支只共享已有 head。当前目录未初始化时读取不产生 mutation；rename/delete/recreate 按 entry 身份隔离。参见[目录只读历史窗口](../15-api-and-errors.md#目录只读历史窗口)。
+`capture_directory_history` 捕获共享业务元数据与精确 history manifest root，`DirectoryHistoryRead::page` 在锁外按稳定目录身份筛选真实树/分支，`recheck_directory_history` 在返回前校验当前 root 与选择。复用文件历史的有界 stable-key selector；节点只包含显式用户提交，沿 `parent_tree_id` 跨过内部暂存检查点解析前一次用户提交，不把 composition 的子目录引用画为祖先。pending 分支共享来源 head，工作 head 与最近已提交 head 分别返回。当前目录未初始化时读取不产生 mutation；rename/delete/recreate 按 entry 身份隔离。参见[目录只读历史窗口](../15-api-and-errors.md#目录只读历史窗口)。
 
 历史文件节点合并复用单次 mutation 与 `FileBranchMerge`，显式 `MergeResultPolicy::AlwaysNewNode` 保证新 `fmeta` 节点继承选择的正文与标签，所有原节点父关系不变；当前-head `/merge` 保留 `ReuseChosenInput` 规则。无需新增持久格式或迁移。
 
@@ -180,3 +182,21 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 `Engine::preview_disk_deregistration` 只回答假设移除一个准确登记后，哪些版本及冻结命名空间 occurrence 仍有其他登记持有者。它不会注销、写恢复入口、停止 I/O、修改 Config/State/索引或把备份升级为主盘。接口是受信本地域 API，应用仍负责当前管理员认证；预览不是执行权限或“可安全删除”结论。实现与后续边界见[纯影响规划](../design/disk-deregistration-preview.md)。
 
 修复与永久损失分类的 I/O 尾部回归源码及后续 GitHub 执行入口见[测试说明](../testing/repair-io-tails.md)。说明中的命令不代表本批已经执行。
+
+<a id="目录暂存与用户提交"></a>
+
+## 目录暂存与用户提交
+
+完整权威与边界决策见[独立目录仓库](../design/directory-git-repositories.md)。
+
+目录默认未初始化。`initialize_directory_git` 使用已审阅的主命名空间 HEAD 创建 `DirectoryGitRepository`，并登记初始无提交 HEAD 的分支。`directory_git_repositories` 在 State 快照、元数据投影、历史包分页、导入及恢复中均有显式覆盖；它随既有权威材料写入数据盘根目录，系统盘仅保存对应索引，不建立目录内数据库。当前格式不增加旧格式迁移。
+
+文件保存、改名、移动、文件分支选择等继续即时发布文件版本与工作组合。原不可变 DirectoryTree 仍是恢复及并发工作检查点，不自动显示为用户目录历史。已初始化仓库的自身文件修改为待提交内容，未初始化子目录递归归最近父仓库；初始化独立子仓库则改变所有权边界，使父暂存令牌失效，必须显式重新暂存。`directory_git_status` 区分工作树、Git HEAD、index generation、待确认边界、子仓库 dirty、未暂存引用变化和已暂存引用。
+
+`commit_directory_changes` 同时核对 `expected_tree_id`、`expected_index_generation`、非空说明及永久操作 ID。一次提交仅冻结当前仓库拥有的条目与明确暂存的子仓库提交 ID，只新建一个 `directory_commit`，不推进工作树、不改主命名空间，也不替子仓库提交。该事实通过 `Commit.provenance` 精确绑定新树；树的父边和 commit 父边精确对应前一次用户提交。初次提交可以是独立根，但导入/恢复必须验证反向 marker、身份、分支继承、全部 index/HEAD/child 边及完整无环覆盖，不能靠 kind 字符串放行断开图。
+
+`stage_directory_git_child` 固定用户审阅的子 HEAD，不自动跟随之后的子提交。`stage_directory_git_owned` 确认当前边界并从已准入当前命名空间更新工作组合；退出磁盘后的隐藏旧条目不能借提交重新进入当前视图。父提交之后子仓库仍可继续修改和提交，父只出现尚未暂存的引用变化。正常路径读取当前工作字节；显式历史快照预览读取对应不可变树。
+
+分支登记要求本仓库自己干净；checkout 检查自身待提交状态并只替换自己拥有的工作范围，独立子仓库的挂载条目、工作字节、选中分支与 HEAD 原样保留。创建、切换、初始化、暂存、提交在当前登记模式下均由可重放的闭合元数据计划证明，公开 operation kind allowlist 不授予这些操作通用权限。永久回执、发布前持久化和冷恢复沿用原协议，不削减同步阶段。
+
+单目录差异使用路径有序索引，成本随该目录工作树和已提交树增长；子仓库 dirty 检查访问其所有权树。当前登记完整计划验证包含全 State 比较，因此显式元数据操作存在随历史增长的成本。普通文件保存未增加新的 Git 元数据发布或同步阶段。没有声称内部检查点停止增长，也没有增加自动历史清理。

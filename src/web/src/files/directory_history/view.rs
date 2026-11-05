@@ -53,17 +53,18 @@ pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
             let mut heads = BTreeMap::<String, Vec<String>>::new();
             if let Some(page) = &model.branches {
                 for branch in &page.branches {
-                    heads.entry(branch.head_tree_id.clone()).or_default().push(
-                        if branch.materialized {
-                            branch.name.clone()
-                        } else {
-                            format!(
-                                "{} · {}",
-                                branch.name,
-                                t("尚未写入，引用父节点", "Unwritten, references parent node")
-                            )
-                        },
-                    );
+                    let Some(head) = branch.committed_tree_id.clone() else {
+                        continue;
+                    };
+                    heads.entry(head).or_default().push(if branch.materialized {
+                        branch.name.clone()
+                    } else {
+                        format!(
+                            "{} · {}",
+                            branch.name,
+                            t("尚未写入，引用父节点", "Unwritten, references parent node")
+                        )
+                    });
                 }
             }
             heads
@@ -92,23 +93,32 @@ pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
             <div class="zxs-file-toolbar zxs-flow"><h3 class="zxs-row">{t("目录分支树","Folder branch tree")}</h3>
                 <button class="zxs-button" disabled=move ||model.with(|model|model.loading) on:click=move |_|load(state,model,target,Read::Refresh)>{t("刷新目录历史","Refresh folder history")}</button>
             </div>
-            <p class="zxs-row">{t("每个节点是此目录及子目录的一次真实组合快照；连线表示历史父节点。未写入的分支可共用同一节点。分页仅显示已加载的关系，不代表完整历史的起点或末端。","Each node is a real composition snapshot of this folder and its subfolders. Lines show historical parents. Unwritten branches may share a node. A page shows only loaded relationships, not the beginning or tips of all history.")}</p>
+            <p class="zxs-row">{t("每个节点是用户明确提交的本仓库文件及已暂存子仓库版本引用。文件保存仅更新持久化暂存；父级不会代子仓库提交。连线连接前一次目录提交，分页只显示已加载的关系。","Each node commits this repository’s files and explicitly staged child-repository version references. File saves only update durable staging; a parent never commits a child. Lines connect previous directory commits; a page shows only loaded relationships.")}</p>
             <Show when=move ||model.with(|model|model.stale)><p class="zxs-row" role="status">{t("目录历史已改变；保留原图供查看，请刷新后继续定位节点。","The folder history changed. The previous graph remains visible; refresh before following nodes.")}</p></Show>
             <Show when=move ||model.with(|model|model.error.is_some())><p class="zxs-row zxs-inline-error" role="status">{move ||model.with(|model|model.error.as_ref().map(ToString::to_string).unwrap_or_default())}</p></Show>
             <Show when=move ||model.with(|model|!model.loading&&model.error.is_none()&&model.nodes.as_ref().is_some_and(|page|page.nodes.is_empty()))><p class="zxs-row" data-directory-history-empty="true">{t("此文件夹尚无目录历史记录。查看此图不会创建分支或写入记录。","This folder has no recorded history yet. Viewing this graph does not create branches or write records.")}</p></Show>
             <div class="zxs-file-toolbar zxs-flow">
                 <button class="zxs-button" disabled=move ||disabled.get()||model.with(|model|model.nodes.as_ref().is_none_or(|page|page.page.previous_cursor.is_none())) on:click=move |_|page(state,model,target,false,false)>{t("上一页目录历史","Previous folder history page")}</button>
                 <button class="zxs-button" disabled=move ||disabled.get()||model.with(|model|model.nodes.as_ref().is_none_or(|page|page.page.next_cursor.is_none())) on:click=move |_|page(state,model,target,false,true)>{t("下一页目录历史","Next folder history page")}</button>
-                <Show when=move ||model.with(|model|model.nodes.as_ref().and_then(|page|page.current.tree_id.as_ref().map(|id|!page.nodes.iter().any(|node|&node.tree_id==id))).unwrap_or(false))><button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|if let Some(id)=model.with_untracked(|model|model.nodes.as_ref().and_then(|page|page.current.tree_id.clone())){load(state,model,target,Read::Nodes{cursor:None,anchor:Some(id)});}>{t("定位默认目录节点","Locate default folder node")}</button></Show>
+                <Show when=move ||model.with(|model|model.nodes.as_ref().and_then(|page|page.current.committed_tree_id.as_ref().map(|id|!page.nodes.iter().any(|node|&node.tree_id==id))).unwrap_or(false))><button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|if let Some(id)=model.with_untracked(|model|model.nodes.as_ref().and_then(|page|page.current.committed_tree_id.clone())){load(state,model,target,Read::Nodes{cursor:None,anchor:Some(id)});}>{t("定位默认目录节点","Locate default folder node")}</button></Show>
             </div>
             {super::super::version_tree::ancestry_graph(layout, move |id| {
                 let id=StoredValue::new(id);
                 let node=Memo::new(move |_|nodes.with(|nodes|id.with_value(|id|nodes.get(id).cloned())));
-                let current=Signal::derive(move ||model.with(|model|model.nodes.as_ref().and_then(|page|page.current.tree_id.as_deref())==Some(id.get_value().as_str())));
+                let current=Signal::derive(move ||model.with(|model|model.nodes.as_ref().and_then(|page|page.current.committed_tree_id.as_deref())==Some(id.get_value().as_str())));
                 view!{<article class="zxs-content-panel zxs-version-node zxs-directory-tree-node zxs-frame zxs-stack zxs-stack--flush" data-version-id=id.get_value() data-directory-tree-id=id.get_value() aria-label=t("目录历史节点","Folder history node")>
                     <div class="zxs-version-date zxs-row zxs-row--center"><span>{move ||node.with(|node|node.as_ref().map(|node|format!("{} #{}",t("目录快照","Folder snapshot"),node.sequence)).unwrap_or_default())}</span><Show when=move ||current.get()><span class="zxs-version-current">{t("默认","Default")}</span></Show></div>
+                    <p class="zxs-row">{move ||node.with(|node|node.as_ref().map(|node|node.message.clone()).unwrap_or_default())}</p>
                     <p class="zxs-row">{move ||node.with(|node|node.as_ref().map(|node|if node.path.is_empty(){t("仓库根目录","Repository root")}else{node.path.clone()}).unwrap_or_default())}</p>
                     <For each=move ||heads.with(|heads|heads.get(&id.get_value()).cloned().unwrap_or_default()) key=|name|name.clone() children=move |name|view!{<span class="zxs-row zxs-directory-head-label">{name}</span>}/>
+                    <button type="button" class="zxs-button" data-directory-snapshot=id.get_value() disabled=move ||disabled.get()||state.with(|state|state.files.loading||super::super::actions::pending(state))
+                        on:click=move |_|{
+                            if disabled.get_untracked(){return;}
+                            if let Some(node)=node.get_untracked(){
+                                let path=target.with_value(|target|state.with_untracked(|state|target.current(state)).then(||target.path.clone()));
+                                if let Some(path)=path{super::super::actions::preview_directory_snapshot(state,path,node.directory_branch_id,node.tree_id);}
+                            }
+                        }>{t("浏览此快照","Browse this snapshot")}</button>
                     <Show when=move ||node.with(|node|node.as_ref().is_some_and(|node|node.parent_endpoint==Some(HistoryEndpoint::OutsideWindow)))><button class="zxs-button" data-directory-parent="outside_window" disabled=move ||disabled.get() on:click=move |_|if let Some(parent)=node.with_untracked(|node|node.as_ref().and_then(|node|node.parent_tree_id.clone())){load(state,model,target,Read::Nodes{cursor:None,anchor:Some(parent)});}>{t("查看前一个目录节点","Show previous folder node")}</button></Show>
                     <Show when=move ||node.with(|node|node.as_ref().is_some_and(|node|node.parent_tree_id.is_none()))><span class="zxs-row">{t("无父关系","No parent relationships")}</span></Show>
                 </article>}
@@ -116,8 +126,9 @@ pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
             <section class="zxs-stack zxs-directory-history-branches"><p class="zxs-row" role="heading" {web_interface::attr::custom::custom_attribute("aria-level", "4")}>{t("目录分支","Folder branches")}</p>
                 <p class="zxs-row">{t("下列分支名称来自独立分页；点击可定位该分支引用的真实节点。这里只查看历史，不改变默认分支。","Branch names are independently paginated. Locate the real node referenced by a branch. Viewing this history does not change the default branch.")}</p>
                 <For each=move ||model.with(|model|model.branches.as_ref().map(|page|page.branches.clone()).unwrap_or_default()) key=|branch|branch.directory_branch_id.clone() children=move |branch| {
-                    let tree=StoredValue::new(branch.head_tree_id);
-                    view!{<div class="zxs-file-toolbar zxs-flow zxs-hover-row" data-directory-branch-id=branch.directory_branch_id><span class="zxs-row">{branch.name}</span>{branch.current.then(||view!{<span class="zxs-row">{t("默认","Default")}</span>})}{(!branch.materialized).then(||view!{<span class="zxs-row">{t("尚未写入，引用父节点","Unwritten, references parent node")}</span>})}<button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|load(state,model,target,Read::Nodes{cursor:None,anchor:Some(tree.get_value())})>{t("定位分支节点","Locate branch node")}</button></div>}
+                    let staged=branch.staged;
+                    let tree=StoredValue::new(branch.committed_tree_id);
+                    view!{<div class="zxs-file-toolbar zxs-flow zxs-hover-row" data-directory-branch-id=branch.directory_branch_id><span class="zxs-row">{branch.name}</span>{staged.then(||view!{<span class="zxs-row">{t("有待提交更改","Staged changes")}</span>})}{branch.current.then(||view!{<span class="zxs-row">{t("默认","Default")}</span>})}{(!branch.materialized).then(||view!{<span class="zxs-row">{t("尚未写入，引用父节点","Unwritten, references parent node")}</span>})}<button class="zxs-button" disabled=move ||disabled.get()||tree.get_value().is_none() on:click=move |_|if let Some(id)=tree.get_value(){load(state,model,target,Read::Nodes{cursor:None,anchor:Some(id)})}>{t("定位分支节点","Locate branch node")}</button></div>}
                 }/>
                 <div class="zxs-file-toolbar zxs-flow">
                     <button class="zxs-button" disabled=move ||disabled.get()||model.with(|model|model.branches.as_ref().is_none_or(|page|page.page.previous_cursor.is_none())) on:click=move |_|page(state,model,target,true,false)>{t("上一页目录分支","Previous folder branch page")}</button>

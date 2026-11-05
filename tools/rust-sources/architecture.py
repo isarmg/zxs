@@ -20,7 +20,7 @@ def cell(text):
 
 def manifests(root):
     paths = [root / 'Cargo.toml']
-    for base in ('src', 'tools'):
+    for base in ('src', 'tools', 'rescue'):
         paths.extend((root / base).rglob('Cargo.toml'))
     return {path.relative_to(root).as_posix(): tomllib.loads(path.read_text(encoding='utf-8'))
             for path in sorted(set(paths))}

@@ -215,6 +215,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    crate::directory_git_fixture::checkpoint(&mut engine, &repo, "Folder");
     engine
         .create_directory_branches(
             &repo.repository_id,
@@ -236,6 +237,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    crate::directory_git_fixture::checkpoint(&mut engine, &other, "");
     engine
         .create_directory_branches(
             &other.repository_id,
@@ -298,6 +300,7 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
     assert!(engine.state().file_contexts.is_empty());
     for inherited in [false, true] {
         if inherited {
+            crate::directory_git_fixture::checkpoint(&mut engine, &repo, "Folder");
             engine
                 .create_directory_branches(
                     &repo.repository_id,
@@ -373,6 +376,7 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
     for inherited in [false, true] {
         let (_temporary, mut engine, repo) = fixture();
         if inherited {
+            crate::directory_git_fixture::checkpoint(&mut engine, &repo, "Folder");
             engine
                 .create_directory_branches(
                     &repo.repository_id,

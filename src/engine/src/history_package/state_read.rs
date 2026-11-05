@@ -117,6 +117,7 @@ history_coverage! {
     branches => branches,
     file_selections => file_selections,
     directory_branches => directory_branches,
+    directory_git_repositories => directory_git_repositories,
     directory_trees => directory_trees,
     file_write_origins => file_write_origins,
     file_contexts => file_contexts,

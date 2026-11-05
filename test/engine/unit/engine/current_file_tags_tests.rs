@@ -212,6 +212,7 @@ fn disk_exit_current_file_tags_references_query_retry_noop_and_cold_open() {
         MembershipExitAction::PlannedOffline,
     ] {
         let mut fixture = Fixture::new();
+        crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "dir");
         let unselected = fixture
             .engine
             .create_directory_branches(
@@ -1900,9 +1901,10 @@ fn current_file_tags_source_node_and_body_identities_remain_exact() {
 }
 
 #[test]
-fn current_file_tags_keep_selected_frozen_composition_apart_from_newer_named_heads() {
+fn current_file_tags_keep_selected_historical_content_apart_from_newer_file_heads() {
     let mut fixture = Fixture::new();
     let original = fixture.current.clone();
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "");
     let root = fixture
         .engine
         .create_directory_branches(
@@ -1925,6 +1927,7 @@ fn current_file_tags_keep_selected_frozen_composition_apart_from_newer_named_hea
     );
     assert_ne!(original.version_id, later.version_id);
     let stopped = fixture.exit(MembershipExitAction::Deregister);
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "");
     let tree = fixture.engine.state.directory_branches[&root]
         .head_tree_id
         .clone();
@@ -1950,11 +1953,18 @@ fn current_file_tags_keep_selected_frozen_composition_apart_from_newer_named_hea
     let directory = namespace.get("dir").unwrap().entry_id.clone();
     let child = fixture.engine.state.directory_selections[&directory].clone();
     let named = fixture.engine.state.directory_branches[&child].clone();
-    assert_ne!(
+    assert_eq!(
         fixture.engine.state.directory_tree_selections[&directory],
         named.head_tree_id
     );
-    assert!(named.entries.iter().any(|entry| entry == &later));
+    assert!(named.entries.iter().any(|entry| entry == &original));
+    assert!(!named.entries.iter().any(|entry| entry == &later));
+    let frozen_working = fixture.engine.state.directory_trees[&named.head_tree_id].clone();
+    let git_head = fixture.engine.state.directory_git_repositories
+        [&fixture.repository.repository_id]
+        .branches[&root]
+        .head_tree_id
+        .clone();
     let previous = Arc::clone(&fixture.engine.state);
     let view = fixture.engine.current_namespaces.clone().unwrap();
     let target = tag_target(&fixture.engine, &fixture.branch, &original.version_id);
@@ -1971,7 +1981,16 @@ fn current_file_tags_keep_selected_frozen_composition_apart_from_newer_named_hea
     .unwrap();
     let tagged = node(&receipt);
     assert_eq!(receipt.result["nodes"][0]["advanced"], false);
-    assert_eq!(fixture.engine.state.directory_branches[&child], named);
+    assert_eq!(
+        fixture.engine.state.directory_trees[&named.head_tree_id],
+        frozen_working
+    );
+    assert_eq!(
+        fixture.engine.state.directory_git_repositories[&fixture.repository.repository_id].branches
+            [&root]
+            .head_tree_id,
+        git_head
+    );
     assert_eq!(
         fixture.engine.state.branches[&fixture.branch],
         previous.branches[&fixture.branch]
@@ -2014,7 +2033,15 @@ fn current_file_tags_keep_selected_frozen_composition_apart_from_newer_named_hea
     let system = fixture.temp.path().join("system");
     drop(fixture.engine);
     let mut engine = Engine::open(&system).unwrap();
-    assert_eq!(engine.state.directory_branches[&child], named);
+    assert_eq!(
+        engine.state.directory_trees[&named.head_tree_id],
+        frozen_working
+    );
+    assert_eq!(
+        engine.state.directory_git_repositories[&fixture.repository.repository_id].branches[&root]
+            .head_tree_id,
+        git_head
+    );
     assert_eq!(
         engine
             .namespace_tree(&fixture.repository.main_branch_id)
@@ -2036,10 +2063,26 @@ fn current_file_tags_keep_selected_frozen_composition_apart_from_newer_named_hea
     )
     .unwrap();
     assert_eq!(next.result["nodes"][0]["advanced"], false);
-    assert_eq!(engine.state.directory_branches[&child], named);
+    assert_eq!(
+        engine.state.directory_trees[&named.head_tree_id],
+        frozen_working
+    );
+    assert_eq!(
+        engine.state.directory_git_repositories[&fixture.repository.repository_id].branches[&root]
+            .head_tree_id,
+        git_head
+    );
     drop(engine);
     let engine = Engine::open(&system).unwrap();
-    assert_eq!(engine.state.directory_branches[&child], named);
+    assert_eq!(
+        engine.state.directory_trees[&named.head_tree_id],
+        frozen_working
+    );
+    assert_eq!(
+        engine.state.directory_git_repositories[&fixture.repository.repository_id].branches[&root]
+            .head_tree_id,
+        git_head
+    );
     assert_eq!(
         engine.file_branch_head(&fixture.branch).unwrap(),
         later.version_id

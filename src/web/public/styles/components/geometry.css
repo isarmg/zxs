@@ -8,7 +8,7 @@
   --zxs-compact-font-size: calc(var(--zxs-compact-row-height) * var(--zxs-row-font-ratio));
   --zxs-block-gap: calc(var(--zxs-compact-row-height) / 2);
   --zxs-list-content-inset: calc((var(--zxs-compact-row-height) - var(--zxs-compact-font-size)) / 2);
-  --zxs-input-row-height: 44px;
+  --zxs-input-row-height: var(--zxs-compact-row-height);
   --zxs-control-border-width: 1px;
   --zxs-select-border-width: 2px;
   --zxs-contour-control: calc(var(--zxs-compact-row-height) / 2);
@@ -102,7 +102,7 @@
 }
 .zxs-app-shell .zxs-control-group--comfortable .zxs-button {
   --zxs-control-height: var(--zxs-input-row-height);
-  /* Keep a 44px target without enlarging the adjacent menu typography. */
+  /* Icon controls use the same row baseline as fields and navigation. */
   font-size: var(--zxs-compact-font-size);
   justify-content: center;
   flex-shrink: 0;

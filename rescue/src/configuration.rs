@@ -240,8 +240,8 @@ fn registration_backup(config: &Path) -> Result<std::path::PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "../../../test/rescue/unit/configuration/registration_tests.rs"]
+#[path = "../../test/rescue/unit/configuration/registration_tests.rs"]
 mod registration_tests;
 #[cfg(test)]
-#[path = "../../../test/rescue/unit/configuration/tests.rs"]
+#[path = "../../test/rescue/unit/configuration/tests.rs"]
 mod tests;

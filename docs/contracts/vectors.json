@@ -720,6 +720,10 @@
           "protection_policies": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         }
       }
@@ -1576,6 +1580,10 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
@@ -3644,15 +3652,6 @@
       }
     },
     {
-      "name": "storage-set-discovery-root",
-      "schema": "StorageSetDiscoveryRootRequest",
-      "layer": "schema",
-      "value": {
-        "expected_discovery_root": "/zxs/data/disks",
-        "discovery_root": "/srv/storage"
-      }
-    },
-    {
       "name": "readmission-request",
       "schema": "StorageReadmissionRequest",
       "layer": "schema",
@@ -3974,6 +3973,939 @@
             "readmission": "metadata_member"
           }
         ]
+      }
+    },
+    {
+      "name": "direct-disk-wizard-discovery",
+      "schema": "StorageDiscoveredDisks",
+      "layer": "schema",
+      "value": {
+        "discovery_root": "/mnt/disk/nested",
+        "candidates": [
+          {
+            "name": "storage",
+            "path": "/mnt/disk/nested/storage",
+            "state": {
+              "kind": "empty",
+              "selection": {
+                "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "mount_path": "/mnt/disk",
+                "root_path": "/mnt/disk/nested/storage",
+                "mount_identity": {
+                  "mount_id": "10",
+                  "device_major": 8,
+                  "device_minor": 1,
+                  "root_inode": "2",
+                  "filesystem": "ext4",
+                  "filesystem_root": "/"
+                },
+                "root_identity": {
+                  "device": "2049",
+                  "inode": "9007199254740993",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                },
+                "discovery_root": "/mnt/disk/nested",
+                "discovery_identity": {
+                  "device": "2049",
+                  "inode": "2",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                }
+              }
+            }
+          },
+          {
+            "name": "other",
+            "path": "/mnt/disk/nested/other",
+            "state": {
+              "kind": "unsupported",
+              "code": "FORMAT_UNSUPPORTED",
+              "message": "requires explicit source inspection",
+              "source": {
+                "path": "/mnt/disk/nested/other",
+                "identity": {
+                  "device": "2049",
+                  "inode": "9007199254740993",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                },
+                "discovery_identity": {
+                  "device": "2049",
+                  "inode": "2",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                }
+              }
+            }
+          }
+        ],
+        "truncated": false,
+        "skipped_non_utf8": 0
+      }
+    },
+    {
+      "name": "directory-staging",
+      "schema": "DirectoryStagingStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "head_tree_id": "dtree_00000000000000000000000000000001",
+        "committed_tree_id": null,
+        "staged": true,
+        "added": "2",
+        "modified": "1",
+        "deleted": "0"
+      }
+    },
+    {
+      "name": "directory-user-commit",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "message": "目录提交",
+        "operation_id": "op_00000000000000000000000000000001",
+        "expected_index_generation": "1"
+      }
+    },
+    {
+      "name": "ordinary-conversion-primary-only-request",
+      "schema": "OrdinaryDiskConversionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "source": {
+          "path": "/mnt/disk/nested/ordinary",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "target": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk/nested",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "D02",
+        "metadata_member": false
+      }
+    },
+    {
+      "name": "ordinary-conversion-no-record",
+      "schema": "OrdinaryDiskConversionStatusResponse",
+      "layer": "schema",
+      "value": {
+        "operation": null
+      }
+    },
+    {
+      "name": "ordinary-conversion-stop-preserves-state",
+      "schema": "OrdinaryDiskConversionStop",
+      "layer": "semantic",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "acknowledge_retained_state": true
+      }
+    },
+    {
+      "name": "foreign-readonly-preview-request",
+      "schema": "ForeignDiskPreviewRequest",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/disk/nested/other",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "foreign-readonly-retained-missing-history",
+      "schema": "ForeignDiskPreview",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/disk/nested/other",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "identity": {
+          "pool_id": "pool_00000000000000000000000000000001",
+          "disk_id": "disk_00000000000000000000000000000001",
+          "slot_id": "P01",
+          "binding_generation": "1"
+        },
+        "source_level": 2,
+        "role_evidence": "initial_declaration",
+        "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "checkpoint": {
+          "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "sequence": "12",
+          "authority_hash": null,
+          "unpublished_tail": false
+        },
+        "histories": [
+          {
+            "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "history_tree_id": "history_00000000000000000000000000000001",
+            "repository_name": "retained",
+            "origin": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "branches": 1,
+            "directory_branches": 1,
+            "directory_trees": 2,
+            "commit_records": 2,
+            "versions": 1,
+            "verified_local_versions": 0,
+            "temporarily_unavailable_versions": [
+              "ver_00000000000000000000000000000001"
+            ],
+            "recorded_purged_versions": 0,
+            "recorded_migrated_versions": 0
+          }
+        ],
+        "execution": "unavailable"
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitChildReference",
+      "schema": "DirectoryGitChildReference",
+      "layer": "schema",
+      "value": {
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "tree_id": null
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitBranch",
+      "schema": "DirectoryGitBranch",
+      "layer": "schema",
+      "value": {
+        "head_tree_id": null,
+        "index_tree_id": "dtree_00000000000000000000000000000001",
+        "index_generation": "1",
+        "index_boundaries": {
+          "entry_00000000000000000000000000000001": "docs/child"
+        },
+        "index_children": {
+          "entry_00000000000000000000000000000001": {
+            "directory_branch_id": "dbr_00000000000000000000000000000001",
+            "tree_id": null
+          }
+        }
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitRepository",
+      "schema": "DirectoryGitRepository",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "initialized_sequence": "1",
+        "current_branch_id": "dbr_00000000000000000000000000000001",
+        "branches": {
+          "dbr_00000000000000000000000000000001": {
+            "head_tree_id": null,
+            "index_tree_id": "dtree_00000000000000000000000000000001",
+            "index_generation": "1",
+            "index_boundaries": {
+              "entry_00000000000000000000000000000001": "docs/child"
+            },
+            "index_children": {
+              "entry_00000000000000000000000000000001": {
+                "directory_branch_id": "dbr_00000000000000000000000000000001",
+                "tree_id": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitOwner",
+      "schema": "DirectoryGitOwner",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": ""
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitChildStatus",
+      "schema": "DirectoryGitChildStatus",
+      "layer": "schema",
+      "value": {
+        "directory_id": "entry_00000000000000000000000000000001",
+        "path": "docs/child",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "head_tree_id": null,
+        "staged_tree_id": null,
+        "committed_tree_id": null,
+        "dirty": true,
+        "reference_changed": false,
+        "staged": false,
+        "needs_restage": false
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitStatus",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": "0",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitInitializeBody",
+      "schema": "DirectoryGitInitializeBody",
+      "layer": "schema",
+      "value": {
+        "path": "docs",
+        "expected_namespace_head": "commit_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitStageChildBody",
+      "schema": "DirectoryGitStageChildBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_index_generation": "18446744073709551615",
+        "child_directory_id": "entry_00000000000000000000000000000001",
+        "expected_child_head_tree_id": "dtree_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-DirectoryGitStageOwnedBody",
+      "schema": "DirectoryGitStageOwnedBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "expected_index_generation": "1",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-independent-child-status",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": true,
+        "owner": {
+          "directory_id": "repo_00000000000000000000000000000001",
+          "path": ""
+        },
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "working_tree_id": "dtree_00000000000000000000000000000001",
+        "head_tree_id": "dtree_00000000000000000000000000000001",
+        "index_generation": "18446744073709551615",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [
+          {
+            "directory_id": "entry_00000000000000000000000000000001",
+            "path": "docs/child",
+            "directory_branch_id": "dbr_00000000000000000000000000000001",
+            "head_tree_id": null,
+            "staged_tree_id": null,
+            "committed_tree_id": null,
+            "dirty": true,
+            "reference_changed": false,
+            "staged": false,
+            "needs_restage": false
+          }
+        ],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "foreign-plan-request",
+      "schema": "ForeignPlanRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_33333333333333333333333333333333",
+        "source": {
+          "path": "/mnt/disk/nested/other",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "target": {
+          "slot_id": "P01",
+          "parent": null,
+          "history_names": {
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+          }
+        }
+      }
+    },
+    {
+      "name": "foreign-plan-unavailable-review",
+      "schema": "ForeignPlanPreview",
+      "layer": "schema",
+      "value": {
+        "request": {
+          "operation_id": "op_33333333333333333333333333333333",
+          "source": {
+            "path": "/mnt/disk/nested/other",
+            "identity": {
+              "device": "2049",
+              "inode": "9007199254740993",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            },
+            "discovery_identity": {
+              "device": "2049",
+              "inode": "2",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            }
+          },
+          "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "target": {
+            "slot_id": "P01",
+            "parent": null,
+            "history_names": {
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+            }
+          }
+        },
+        "source": {
+          "source": {
+            "path": "/mnt/disk/nested/other",
+            "identity": {
+              "device": "2049",
+              "inode": "9007199254740993",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            },
+            "discovery_identity": {
+              "device": "2049",
+              "inode": "2",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            }
+          },
+          "identity": {
+            "pool_id": "pool_00000000000000000000000000000001",
+            "disk_id": "disk_00000000000000000000000000000001",
+            "slot_id": "P01",
+            "binding_generation": "1"
+          },
+          "source_level": 2,
+          "role_evidence": "initial_declaration",
+          "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "checkpoint": {
+            "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "sequence": "12",
+            "authority_hash": null,
+            "unpublished_tail": false
+          },
+          "histories": [
+            {
+              "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "history_tree_id": "history_00000000000000000000000000000001",
+              "repository_name": "retained",
+              "origin": {
+                "pool_id": "pool_00000000000000000000000000000001",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              },
+              "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "branches": 1,
+              "directory_branches": 1,
+              "directory_trees": 2,
+              "commit_records": 2,
+              "versions": 1,
+              "verified_local_versions": 0,
+              "temporarily_unavailable_versions": [
+                "ver_00000000000000000000000000000001"
+              ],
+              "recorded_purged_versions": 0,
+              "recorded_migrated_versions": 0
+            }
+          ],
+          "execution": "unavailable"
+        },
+        "target": {
+          "identity": {
+            "pool_id": "pool_00000000000000000000000000000002",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "slot_id": "P01",
+            "binding_generation": "1"
+          },
+          "sequence": "42",
+          "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "histories": [
+            {
+              "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "history_tree_id": "history_00000000000000000000000000000001",
+              "destination": "original-primary"
+            }
+          ]
+        },
+        "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "execution": "unavailable",
+        "blocker": "portable_import_writer_unavailable"
+      }
+    },
+    {
+      "name": "foreign-plan-save-only",
+      "schema": "ForeignPlanSave",
+      "layer": "schema",
+      "value": {
+        "preview": {
+          "request": {
+            "operation_id": "op_33333333333333333333333333333333",
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "target": {
+              "slot_id": "P01",
+              "parent": null,
+              "history_names": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+              }
+            }
+          },
+          "source": {
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "source_level": 2,
+            "role_evidence": "initial_declaration",
+            "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "checkpoint": {
+              "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "sequence": "12",
+              "authority_hash": null,
+              "unpublished_tail": false
+            },
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "repository_name": "retained",
+                "origin": {
+                  "pool_id": "pool_00000000000000000000000000000001",
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "slot_id": "P01",
+                  "binding_generation": "1"
+                },
+                "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "branches": 1,
+                "directory_branches": 1,
+                "directory_trees": 2,
+                "commit_records": 2,
+                "versions": 1,
+                "verified_local_versions": 0,
+                "temporarily_unavailable_versions": [
+                  "ver_00000000000000000000000000000001"
+                ],
+                "recorded_purged_versions": 0,
+                "recorded_migrated_versions": 0
+              }
+            ],
+            "execution": "unavailable"
+          },
+          "target": {
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000002",
+              "disk_id": "disk_00000000000000000000000000000002",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "sequence": "42",
+            "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "destination": "original-primary"
+              }
+            ]
+          },
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution": "unavailable",
+          "blocker": "portable_import_writer_unavailable"
+        },
+        "acknowledge_plan_only": true
+      }
+    },
+    {
+      "name": "foreign-plan-selection",
+      "schema": "ForeignPlanSelection",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_33333333333333333333333333333333",
+        "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "name": "foreign-plan-stored-requires-recheck",
+      "schema": "ForeignPlanStatus",
+      "layer": "schema",
+      "value": {
+        "preview": {
+          "request": {
+            "operation_id": "op_33333333333333333333333333333333",
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "target": {
+              "slot_id": "P01",
+              "parent": null,
+              "history_names": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+              }
+            }
+          },
+          "source": {
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "source_level": 2,
+            "role_evidence": "initial_declaration",
+            "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "checkpoint": {
+              "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "sequence": "12",
+              "authority_hash": null,
+              "unpublished_tail": false
+            },
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "repository_name": "retained",
+                "origin": {
+                  "pool_id": "pool_00000000000000000000000000000001",
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "slot_id": "P01",
+                  "binding_generation": "1"
+                },
+                "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "branches": 1,
+                "directory_branches": 1,
+                "directory_trees": 2,
+                "commit_records": 2,
+                "versions": 1,
+                "verified_local_versions": 0,
+                "temporarily_unavailable_versions": [
+                  "ver_00000000000000000000000000000001"
+                ],
+                "recorded_purged_versions": 0,
+                "recorded_migrated_versions": 0
+              }
+            ],
+            "execution": "unavailable"
+          },
+          "target": {
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000002",
+              "disk_id": "disk_00000000000000000000000000000002",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "sequence": "42",
+            "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "destination": "original-primary"
+              }
+            ]
+          },
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution": "unavailable",
+          "blocker": "portable_import_writer_unavailable"
+        },
+        "validation": "required"
+      }
+    },
+    {
+      "name": "foreign-plan-rechecked-still-unavailable",
+      "schema": "ForeignPlanStatus",
+      "layer": "schema",
+      "value": {
+        "preview": {
+          "request": {
+            "operation_id": "op_33333333333333333333333333333333",
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "target": {
+              "slot_id": "P01",
+              "parent": null,
+              "history_names": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+              }
+            }
+          },
+          "source": {
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "source_level": 2,
+            "role_evidence": "initial_declaration",
+            "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "checkpoint": {
+              "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "sequence": "12",
+              "authority_hash": null,
+              "unpublished_tail": false
+            },
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "repository_name": "retained",
+                "origin": {
+                  "pool_id": "pool_00000000000000000000000000000001",
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "slot_id": "P01",
+                  "binding_generation": "1"
+                },
+                "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "branches": 1,
+                "directory_branches": 1,
+                "directory_trees": 2,
+                "commit_records": 2,
+                "versions": 1,
+                "verified_local_versions": 0,
+                "temporarily_unavailable_versions": [
+                  "ver_00000000000000000000000000000001"
+                ],
+                "recorded_purged_versions": 0,
+                "recorded_migrated_versions": 0
+              }
+            ],
+            "execution": "unavailable"
+          },
+          "target": {
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000002",
+              "disk_id": "disk_00000000000000000000000000000002",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "sequence": "42",
+            "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "destination": "original-primary"
+              }
+            ]
+          },
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution": "unavailable",
+          "blocker": "portable_import_writer_unavailable"
+        },
+        "validation": "matched_at_observation"
       }
     }
   ],
@@ -5024,6 +5956,10 @@
           "protection_policies": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         }
       }
@@ -5179,6 +6115,10 @@
           "unexpected": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         }
       }
@@ -5328,6 +6268,10 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
@@ -5482,6 +6426,10 @@
           "protection_policies": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         }
       }
@@ -5634,6 +6582,10 @@
           "protection_policies": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         }
       }
@@ -5783,6 +6735,10 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
@@ -8032,6 +8988,10 @@
           "protection_policies": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         }
       }
@@ -8183,6 +9143,10 @@
           "protection_policies": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         }
       }
@@ -8332,6 +9296,10 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
@@ -8518,6 +9486,10 @@
           "file_selection_generations": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         },
         "events": {
@@ -8673,6 +9645,10 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
@@ -8840,6 +9816,10 @@
           "unknown": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         },
         "events": {
@@ -8999,6 +9979,10 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
@@ -9162,6 +10146,10 @@
           "file_selection_generations": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         },
         "events": [],
@@ -9318,6 +10306,10 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_git_repositories": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           }
@@ -15056,14 +16048,6 @@
       }
     },
     {
-      "name": "storage-set-root-missing-expectation",
-      "schema": "StorageSetDiscoveryRootRequest",
-      "layer": "schema",
-      "value": {
-        "discovery_root": "/srv/storage"
-      }
-    },
-    {
       "name": "setup-status-rejects-bootstrap-fields",
       "schema": "ManagementSetupStatus",
       "layer": "schema",
@@ -15242,6 +16226,1533 @@
       "schema": "StorageReadmissionStatusResponse",
       "layer": "schema",
       "value": {}
+    },
+    {
+      "name": "disk-wizard-discovery-unknown-write-capability",
+      "schema": "StorageDiscoveredDisks",
+      "layer": "schema",
+      "value": {
+        "discovery_root": "/mnt/disk/nested",
+        "candidates": [
+          {
+            "name": "storage",
+            "path": "/mnt/disk/nested/storage",
+            "state": {
+              "kind": "empty",
+              "selection": {
+                "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "mount_path": "/mnt/disk",
+                "root_path": "/mnt/disk/nested/storage",
+                "mount_identity": {
+                  "mount_id": "10",
+                  "device_major": 8,
+                  "device_minor": 1,
+                  "root_inode": "2",
+                  "filesystem": "ext4",
+                  "filesystem_root": "/"
+                },
+                "root_identity": {
+                  "device": "2049",
+                  "inode": "9007199254740993",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                },
+                "discovery_root": "/mnt/disk/nested",
+                "discovery_identity": {
+                  "device": "2049",
+                  "inode": "2",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                }
+              },
+              "auto_initialize": true
+            }
+          },
+          {
+            "name": "other",
+            "path": "/mnt/disk/nested/other",
+            "state": {
+              "kind": "unsupported",
+              "code": "FORMAT_UNSUPPORTED",
+              "message": "requires explicit source inspection",
+              "source": {
+                "path": "/mnt/disk/nested/other",
+                "identity": {
+                  "device": "2049",
+                  "inode": "9007199254740993",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                },
+                "discovery_identity": {
+                  "device": "2049",
+                  "inode": "2",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                }
+              }
+            }
+          }
+        ],
+        "truncated": false,
+        "skipped_non_utf8": 0
+      }
+    },
+    {
+      "name": "directory-commit-empty-message",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "message": "",
+        "operation_id": "op_00000000000000000000000000000001",
+        "expected_index_generation": "1"
+      }
+    },
+    {
+      "name": "directory-commit-invalid-baseline",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "commit_00000000000000000000000000000001",
+        "message": "目录提交",
+        "operation_id": "op_00000000000000000000000000000001",
+        "expected_index_generation": "1"
+      }
+    },
+    {
+      "name": "directory-commit-extra-field",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "message": "目录提交",
+        "operation_id": "op_00000000000000000000000000000001",
+        "auto_commit": true,
+        "expected_index_generation": "1"
+      }
+    },
+    {
+      "name": "ordinary-conversion-cannot-request-higher-tier",
+      "schema": "OrdinaryDiskConversionRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111",
+        "source": {
+          "path": "/mnt/disk/nested/ordinary",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "target": {
+          "selection_id": "directory_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mount_path": "/mnt/disk",
+          "root_path": "/mnt/disk/nested/storage",
+          "mount_identity": {
+            "mount_id": "10",
+            "device_major": 8,
+            "device_minor": 1,
+            "root_inode": "2",
+            "filesystem": "ext4",
+            "filesystem_root": "/"
+          },
+          "root_identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_root": "/mnt/disk/nested",
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "slot_id": "D02",
+        "metadata_member": false,
+        "level": 2
+      }
+    },
+    {
+      "name": "ordinary-conversion-stop-requires-explicit-scope",
+      "schema": "OrdinaryDiskConversionStop",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_11111111111111111111111111111111"
+      }
+    },
+    {
+      "name": "ordinary-conversion-status-must-name-nullable-operation",
+      "schema": "OrdinaryDiskConversionStatusResponse",
+      "layer": "schema",
+      "value": {}
+    },
+    {
+      "name": "foreign-no-execute-capability",
+      "schema": "ForeignDiskPreview",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/disk/nested/other",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "identity": {
+          "pool_id": "pool_00000000000000000000000000000001",
+          "disk_id": "disk_00000000000000000000000000000001",
+          "slot_id": "P01",
+          "binding_generation": "1"
+        },
+        "source_level": 2,
+        "role_evidence": "initial_declaration",
+        "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "checkpoint": {
+          "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "sequence": "12",
+          "authority_hash": null,
+          "unpublished_tail": false
+        },
+        "histories": [
+          {
+            "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "history_tree_id": "history_00000000000000000000000000000001",
+            "repository_name": "retained",
+            "origin": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "branches": 1,
+            "directory_branches": 1,
+            "directory_trees": 2,
+            "commit_records": 2,
+            "versions": 1,
+            "verified_local_versions": 0,
+            "temporarily_unavailable_versions": [
+              "ver_00000000000000000000000000000001"
+            ],
+            "recorded_purged_versions": 0,
+            "recorded_migrated_versions": 0
+          }
+        ],
+        "execution": "available"
+      }
+    },
+    {
+      "name": "foreign-checkpoint-null-field-required",
+      "schema": "ForeignDiskPreview",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/disk/nested/other",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "identity": {
+          "pool_id": "pool_00000000000000000000000000000001",
+          "disk_id": "disk_00000000000000000000000000000001",
+          "slot_id": "P01",
+          "binding_generation": "1"
+        },
+        "source_level": 2,
+        "role_evidence": "initial_declaration",
+        "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "checkpoint": {
+          "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "sequence": "12",
+          "unpublished_tail": false
+        },
+        "histories": [
+          {
+            "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "history_tree_id": "history_00000000000000000000000000000001",
+            "repository_name": "retained",
+            "origin": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "branches": 1,
+            "directory_branches": 1,
+            "directory_trees": 2,
+            "commit_records": 2,
+            "versions": 1,
+            "verified_local_versions": 0,
+            "temporarily_unavailable_versions": [
+              "ver_00000000000000000000000000000001"
+            ],
+            "recorded_purged_versions": 0,
+            "recorded_migrated_versions": 0
+          }
+        ],
+        "execution": "unavailable"
+      }
+    },
+    {
+      "name": "foreign-preview-rejects-write-command",
+      "schema": "ForeignDiskPreviewRequest",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/disk/nested/other",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "execute": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitChildReference",
+      "schema": "DirectoryGitChildReference",
+      "layer": "schema",
+      "value": {
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "tree_id": null,
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitBranch",
+      "schema": "DirectoryGitBranch",
+      "layer": "schema",
+      "value": {
+        "head_tree_id": null,
+        "index_tree_id": "dtree_00000000000000000000000000000001",
+        "index_generation": "1",
+        "index_boundaries": {
+          "entry_00000000000000000000000000000001": "docs/child"
+        },
+        "index_children": {
+          "entry_00000000000000000000000000000001": {
+            "directory_branch_id": "dbr_00000000000000000000000000000001",
+            "tree_id": null
+          }
+        },
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitRepository",
+      "schema": "DirectoryGitRepository",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "initialized_sequence": "1",
+        "current_branch_id": "dbr_00000000000000000000000000000001",
+        "branches": {
+          "dbr_00000000000000000000000000000001": {
+            "head_tree_id": null,
+            "index_tree_id": "dtree_00000000000000000000000000000001",
+            "index_generation": "1",
+            "index_boundaries": {
+              "entry_00000000000000000000000000000001": "docs/child"
+            },
+            "index_children": {
+              "entry_00000000000000000000000000000001": {
+                "directory_branch_id": "dbr_00000000000000000000000000000001",
+                "tree_id": null
+              }
+            }
+          }
+        },
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitOwner",
+      "schema": "DirectoryGitOwner",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitChildStatus",
+      "schema": "DirectoryGitChildStatus",
+      "layer": "schema",
+      "value": {
+        "directory_id": "entry_00000000000000000000000000000001",
+        "path": "docs/child",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "head_tree_id": null,
+        "staged_tree_id": null,
+        "committed_tree_id": null,
+        "dirty": true,
+        "reference_changed": false,
+        "staged": false,
+        "needs_restage": false,
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitStatus",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": "0",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false,
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitInitializeBody",
+      "schema": "DirectoryGitInitializeBody",
+      "layer": "schema",
+      "value": {
+        "path": "docs",
+        "expected_namespace_head": "commit_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001",
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitStageChildBody",
+      "schema": "DirectoryGitStageChildBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_index_generation": "18446744073709551615",
+        "child_directory_id": "entry_00000000000000000000000000000001",
+        "expected_child_head_tree_id": "dtree_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001",
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-unknown-DirectoryGitStageOwnedBody",
+      "schema": "DirectoryGitStageOwnedBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "expected_index_generation": "1",
+        "operation_id": "op_00000000000000000000000000000001",
+        "unknown": true
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitStatus-owner",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": "0",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitStatus-directory_branch_id",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": "0",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitStatus-working_tree_id",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "head_tree_id": null,
+        "index_generation": "0",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitStatus-head_tree_id",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "index_generation": "0",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitChildStatus-head_tree_id",
+      "schema": "DirectoryGitChildStatus",
+      "layer": "schema",
+      "value": {
+        "directory_id": "entry_00000000000000000000000000000001",
+        "path": "docs/child",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "staged_tree_id": null,
+        "committed_tree_id": null,
+        "dirty": true,
+        "reference_changed": false,
+        "staged": false,
+        "needs_restage": false
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitChildStatus-staged_tree_id",
+      "schema": "DirectoryGitChildStatus",
+      "layer": "schema",
+      "value": {
+        "directory_id": "entry_00000000000000000000000000000001",
+        "path": "docs/child",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "head_tree_id": null,
+        "committed_tree_id": null,
+        "dirty": true,
+        "reference_changed": false,
+        "staged": false,
+        "needs_restage": false
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitChildStatus-committed_tree_id",
+      "schema": "DirectoryGitChildStatus",
+      "layer": "schema",
+      "value": {
+        "directory_id": "entry_00000000000000000000000000000001",
+        "path": "docs/child",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "head_tree_id": null,
+        "staged_tree_id": null,
+        "dirty": true,
+        "reference_changed": false,
+        "staged": false,
+        "needs_restage": false
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitBranch-head_tree_id",
+      "schema": "DirectoryGitBranch",
+      "layer": "schema",
+      "value": {
+        "index_tree_id": "dtree_00000000000000000000000000000001",
+        "index_generation": "1",
+        "index_boundaries": {
+          "entry_00000000000000000000000000000001": "docs/child"
+        },
+        "index_children": {
+          "entry_00000000000000000000000000000001": {
+            "directory_branch_id": "dbr_00000000000000000000000000000001",
+            "tree_id": null
+          }
+        }
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitChildReference-tree_id",
+      "schema": "DirectoryGitChildReference",
+      "layer": "schema",
+      "value": {
+        "directory_branch_id": "dbr_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStatus-index_generation-None",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": null,
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStatus-index_generation-1",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": 1,
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStatus-index_generation-'01'",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": "01",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStatus-index_generation-'18446744073709551616'",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": "18446744073709551616",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitStatus-index_generation",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStageOwnedBody-expected_index_generation-None",
+      "schema": "DirectoryGitStageOwnedBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "expected_index_generation": null,
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStageOwnedBody-expected_index_generation-1",
+      "schema": "DirectoryGitStageOwnedBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "expected_index_generation": 1,
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStageOwnedBody-expected_index_generation-'01'",
+      "schema": "DirectoryGitStageOwnedBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "expected_index_generation": "01",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStageOwnedBody-expected_index_generation-'18446744073709551616'",
+      "schema": "DirectoryGitStageOwnedBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "expected_index_generation": "18446744073709551616",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitStageOwnedBody-expected_index_generation",
+      "schema": "DirectoryGitStageOwnedBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStageChildBody-expected_index_generation-None",
+      "schema": "DirectoryGitStageChildBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_index_generation": null,
+        "child_directory_id": "entry_00000000000000000000000000000001",
+        "expected_child_head_tree_id": "dtree_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStageChildBody-expected_index_generation-1",
+      "schema": "DirectoryGitStageChildBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_index_generation": 1,
+        "child_directory_id": "entry_00000000000000000000000000000001",
+        "expected_child_head_tree_id": "dtree_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStageChildBody-expected_index_generation-'01'",
+      "schema": "DirectoryGitStageChildBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_index_generation": "01",
+        "child_directory_id": "entry_00000000000000000000000000000001",
+        "expected_child_head_tree_id": "dtree_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryGitStageChildBody-expected_index_generation-'18446744073709551616'",
+      "schema": "DirectoryGitStageChildBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "expected_index_generation": "18446744073709551616",
+        "child_directory_id": "entry_00000000000000000000000000000001",
+        "expected_child_head_tree_id": "dtree_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitStageChildBody-expected_index_generation",
+      "schema": "DirectoryGitStageChildBody",
+      "layer": "schema",
+      "value": {
+        "directory_id": "repo_00000000000000000000000000000001",
+        "directory_branch_id": "dbr_00000000000000000000000000000001",
+        "child_directory_id": "entry_00000000000000000000000000000001",
+        "expected_child_head_tree_id": "dtree_00000000000000000000000000000001",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryCommitBody-expected_index_generation-None",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "message": "目录提交",
+        "operation_id": "op_00000000000000000000000000000001",
+        "expected_index_generation": null
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryCommitBody-expected_index_generation-1",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "message": "目录提交",
+        "operation_id": "op_00000000000000000000000000000001",
+        "expected_index_generation": 1
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryCommitBody-expected_index_generation-'01'",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "message": "目录提交",
+        "operation_id": "op_00000000000000000000000000000001",
+        "expected_index_generation": "01"
+      }
+    },
+    {
+      "name": "directory-git-invalid-DirectoryCommitBody-expected_index_generation-'18446744073709551616'",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "message": "目录提交",
+        "operation_id": "op_00000000000000000000000000000001",
+        "expected_index_generation": "18446744073709551616"
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryCommitBody-expected_index_generation",
+      "schema": "DirectoryCommitBody",
+      "layer": "schema",
+      "value": {
+        "expected_tree_id": "dtree_00000000000000000000000000000001",
+        "message": "目录提交",
+        "operation_id": "op_00000000000000000000000000000001"
+      }
+    },
+    {
+      "name": "directory-git-missing-root-Snapshot",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "directory-git-missing-root-PagedHistoryRoot",
+      "schema": "PagedHistoryRoot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "repository": {
+          "repository_id": "repo_11111111111111111111111111111111",
+          "name": "分页历史",
+          "history_tree_id": "history_11111111111111111111111111111111",
+          "main_branch_id": "br_11111111111111111111111111111111",
+          "primary_slot_id": "P01",
+          "target_copies": 3,
+          "name_policy": "PortableName",
+          "unicode_version": "16.0.0",
+          "smb_enabled": true,
+          "smb_binding_generation": "1"
+        },
+        "history": {
+          "history_tree_id": "history_11111111111111111111111111111111",
+          "repository_id": "repo_11111111111111111111111111111111",
+          "root_commit_id": "commit_11111111111111111111111111111111",
+          "main_branch_id": "br_11111111111111111111111111111111",
+          "generation": "18446744073709551615",
+          "state": "ACTIVE",
+          "provenance": null
+        },
+        "maps": {
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "boundary_marks": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "foreign-plan-parent-is-required-nullable",
+      "schema": "ForeignPlanRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_33333333333333333333333333333333",
+        "source": {
+          "path": "/mnt/disk/nested/other",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "target": {
+          "slot_id": "P01",
+          "history_names": {
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+          }
+        }
+      }
+    },
+    {
+      "name": "foreign-plan-cannot-manufacture-execution",
+      "schema": "ForeignPlanPreview",
+      "layer": "schema",
+      "value": {
+        "request": {
+          "operation_id": "op_33333333333333333333333333333333",
+          "source": {
+            "path": "/mnt/disk/nested/other",
+            "identity": {
+              "device": "2049",
+              "inode": "9007199254740993",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            },
+            "discovery_identity": {
+              "device": "2049",
+              "inode": "2",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            }
+          },
+          "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "target": {
+            "slot_id": "P01",
+            "parent": null,
+            "history_names": {
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+            }
+          }
+        },
+        "source": {
+          "source": {
+            "path": "/mnt/disk/nested/other",
+            "identity": {
+              "device": "2049",
+              "inode": "9007199254740993",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            },
+            "discovery_identity": {
+              "device": "2049",
+              "inode": "2",
+              "ctime_seconds": "1793750000",
+              "ctime_nanoseconds": 12
+            }
+          },
+          "identity": {
+            "pool_id": "pool_00000000000000000000000000000001",
+            "disk_id": "disk_00000000000000000000000000000001",
+            "slot_id": "P01",
+            "binding_generation": "1"
+          },
+          "source_level": 2,
+          "role_evidence": "initial_declaration",
+          "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "checkpoint": {
+            "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "sequence": "12",
+            "authority_hash": null,
+            "unpublished_tail": false
+          },
+          "histories": [
+            {
+              "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "history_tree_id": "history_00000000000000000000000000000001",
+              "repository_name": "retained",
+              "origin": {
+                "pool_id": "pool_00000000000000000000000000000001",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              },
+              "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "branches": 1,
+              "directory_branches": 1,
+              "directory_trees": 2,
+              "commit_records": 2,
+              "versions": 1,
+              "verified_local_versions": 0,
+              "temporarily_unavailable_versions": [
+                "ver_00000000000000000000000000000001"
+              ],
+              "recorded_purged_versions": 0,
+              "recorded_migrated_versions": 0
+            }
+          ],
+          "execution": "unavailable"
+        },
+        "target": {
+          "identity": {
+            "pool_id": "pool_00000000000000000000000000000002",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "slot_id": "P01",
+            "binding_generation": "1"
+          },
+          "sequence": "42",
+          "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "histories": [
+            {
+              "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "history_tree_id": "history_00000000000000000000000000000001",
+              "destination": "original-primary"
+            }
+          ]
+        },
+        "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "execution": "available",
+        "blocker": "portable_import_writer_unavailable"
+      }
+    },
+    {
+      "name": "foreign-plan-cannot-imply-new-role",
+      "schema": "ForeignPlanRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_33333333333333333333333333333333",
+        "source": {
+          "path": "/mnt/disk/nested/other",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "target": {
+          "slot_id": "P01",
+          "parent": null,
+          "history_names": {
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+          },
+          "level": 2
+        }
+      }
+    },
+    {
+      "name": "foreign-plan-save-needs-explicit-scope",
+      "schema": "ForeignPlanSave",
+      "layer": "schema",
+      "value": {
+        "preview": {
+          "request": {
+            "operation_id": "op_33333333333333333333333333333333",
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "target": {
+              "slot_id": "P01",
+              "parent": null,
+              "history_names": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+              }
+            }
+          },
+          "source": {
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "source_level": 2,
+            "role_evidence": "initial_declaration",
+            "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "checkpoint": {
+              "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "sequence": "12",
+              "authority_hash": null,
+              "unpublished_tail": false
+            },
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "repository_name": "retained",
+                "origin": {
+                  "pool_id": "pool_00000000000000000000000000000001",
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "slot_id": "P01",
+                  "binding_generation": "1"
+                },
+                "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "branches": 1,
+                "directory_branches": 1,
+                "directory_trees": 2,
+                "commit_records": 2,
+                "versions": 1,
+                "verified_local_versions": 0,
+                "temporarily_unavailable_versions": [
+                  "ver_00000000000000000000000000000001"
+                ],
+                "recorded_purged_versions": 0,
+                "recorded_migrated_versions": 0
+              }
+            ],
+            "execution": "unavailable"
+          },
+          "target": {
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000002",
+              "disk_id": "disk_00000000000000000000000000000002",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "sequence": "42",
+            "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "destination": "original-primary"
+              }
+            ]
+          },
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution": "unavailable",
+          "blocker": "portable_import_writer_unavailable"
+        }
+      }
     }
   ],
   "canonical": [

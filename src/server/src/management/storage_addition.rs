@@ -305,13 +305,23 @@ impl Inner {
     }
 }
 
+enum AdditionMutation {
+    Commit(Box<AdditionCommit>),
+    Continue {
+        operation: OperationId,
+        continuation: AdditionContinuation,
+        preview_digest: Option<String>,
+    },
+}
+
 impl ManagementBackend {
+    /// The wire adapter owns JSON. In-process wizard orchestration uses the
+    /// typed methods below and cannot override the immutable discovery parent.
     pub(super) fn storage_addition(
         &self,
         action: &'static str,
         input: Value,
         identity: &Identity,
-        discovery_root: impl FnOnce() -> Result<String, ApiError>,
     ) -> Result<Value, ApiError> {
         self.inner.current_management_identity(identity)?;
         if action == "disk_add_status" {
@@ -327,7 +337,46 @@ impl ManagementBackend {
                     json_codec::to_value(status).expect("invariant: addition status serializes")
                 });
         }
-        let _gate = self
+        if action == "disk_add_preview" {
+            let request = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            return self
+                .preview_storage_addition(identity, request)
+                .map(|preview| {
+                    json_codec::to_value(preview).expect("invariant: addition preview serializes")
+                });
+        }
+        let status = match action {
+            "disk_add_commit" => self.commit_storage_addition(
+                identity,
+                json_codec::from_value(input).map_err(ApiError::invalid_source)?,
+            )?,
+            "disk_add_resume" => self.resume_storage_addition(
+                identity,
+                json_codec::from_value(input).map_err(ApiError::invalid_source)?,
+            )?,
+            "disk_add_cancel" => {
+                let request: AdditionCancel =
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+                self.mutate_storage_addition(
+                    identity,
+                    AdditionMutation::Continue {
+                        operation: request.operation_id,
+                        continuation: AdditionContinuation::Cancel,
+                        preview_digest: Some(request.preview_digest),
+                    },
+                )?
+            }
+            _ => return Err(ApiError::invalid("unknown storage addition action")),
+        };
+        Ok(json_codec::to_value(status).expect("invariant: addition status serializes"))
+    }
+
+    fn addition_gate(
+        &self,
+        identity: &Identity,
+    ) -> Result<std::sync::MutexGuard<'_, ()>, ApiError> {
+        self.inner.current_management_identity(identity)?;
+        let gate = self
             .inner
             .storage_addition
             .try_lock()
@@ -348,124 +397,143 @@ impl ManagementBackend {
                 "wait for the current storage lifecycle operation before adding directories",
             ));
         }
-        let discovery_root = if matches!(action, "disk_add_preview" | "disk_add_commit") {
-            Some(discovery_root()?)
-        } else {
-            None
-        };
+        Ok(gate)
+    }
+
+    pub(super) fn preview_storage_addition(
+        &self,
+        identity: &Identity,
+        request: AdditionRequest,
+    ) -> Result<AdditionPreview, ApiError> {
+        let _gate = self.addition_gate(identity)?;
+        self.require_settled_exit()?;
+        self.require_no_pending_readmission()?;
         let backend = crate::lock(&self.inner.state).backend.engine().cloned();
-        if action == "disk_add_preview" {
-            self.require_settled_exit()?;
-            self.require_no_pending_readmission()?;
-            let request: AdditionRequest =
-                json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-            let (preview, _, _) = self.prepare_addition(
-                backend.as_deref(),
-                identity,
-                request,
-                discovery_root
-                    .as_deref()
-                    .expect("invariant: preview loads discovery settings"),
-            )?;
-            return Ok(
-                json_codec::to_value(preview).expect("invariant: addition preview serializes")
-            );
-        }
+        let (preview, _, _) = self.prepare_addition(
+            backend.as_deref(),
+            identity,
+            request,
+            self.inner.discovery_root.as_str(),
+        )?;
+        Ok(preview)
+    }
+
+    pub(super) fn commit_storage_addition(
+        &self,
+        identity: &Identity,
+        request: AdditionCommit,
+    ) -> Result<AdditionStatus, ApiError> {
+        self.mutate_storage_addition(identity, AdditionMutation::Commit(Box::new(request)))
+    }
+
+    pub(super) fn resume_storage_addition(
+        &self,
+        identity: &Identity,
+        request: AdditionResume,
+    ) -> Result<AdditionStatus, ApiError> {
+        self.mutate_storage_addition(
+            identity,
+            AdditionMutation::Continue {
+                operation: request.operation_id,
+                continuation: request.continuation,
+                preview_digest: None,
+            },
+        )
+    }
+
+    fn mutate_storage_addition(
+        &self,
+        identity: &Identity,
+        command: AdditionMutation,
+    ) -> Result<AdditionStatus, ApiError> {
+        let _gate = self.addition_gate(identity)?;
+        let backend = crate::lock(&self.inner.state).backend.engine().cloned();
         let parent =
             PrivateDirectory::open_existing(&self.inner.management_root).map_err(storage_error)?;
         let directory = parent
             .create_child(&EntryName::new(DIRECTORY).expect("invariant: static directory"))
             .map_err(storage_error)?;
         let mut held_directories = None;
-        let mut record = if action == "disk_add_commit" {
-            let request: AdditionCommit =
-                json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-            let operation = request.preview.request.operation_id;
-            if let Some(saved) = read_record(&directory, operation)? {
-                if saved.principal != identity.principal || saved.status.preview != request.preview
+        let mut record = match command {
+            AdditionMutation::Commit(request) => {
+                let operation = request.preview.request.operation_id;
+                if let Some(saved) = read_record(&directory, operation)? {
+                    if saved.principal != identity.principal
+                        || saved.status.preview != request.preview
+                    {
+                        return Err(conflict(
+                            "operation_id already belongs to a different addition",
+                        ));
+                    }
+                    saved
+                } else {
+                    self.require_settled_exit()?;
+                    self.require_no_pending_readmission()?;
+                    self.require_settled_addition(&directory)?;
+                    let (preview, target, directories) = self.prepare_addition(
+                        backend.as_deref(),
+                        identity,
+                        request.preview.request.clone(),
+                        self.inner.discovery_root.as_str(),
+                    )?;
+                    if preview != request.preview {
+                        return Err(ApiError::conflict(
+                            ErrorCode::GenerationMismatch,
+                            "addition preview changed; inspect and review the current directories and pool",
+                        ));
+                    }
+                    held_directories = Some(directories);
+                    let source = if preview.authority.is_terminal() {
+                        AdditionSource::TerminalManagement {
+                            original: self.inner.terminal_configuration(identity)?.0,
+                        }
+                    } else {
+                        AdditionSource::ActiveMembership
+                    };
+                    let record = StoredAddition {
+                        source,
+                        format: Format::Addition,
+                        principal: identity.principal.clone(),
+                        target,
+                        archive: None,
+                        status: AdditionStatus {
+                            operation_id: operation,
+                            state: AdditionState::Adding,
+                            phase: AdditionPhase::Prepared,
+                            continuation: AdditionContinuation::Add,
+                            result: None,
+                            preview,
+                            failure: None,
+                        },
+                    };
+                    save(&directory, &record)?;
+                    record
+                }
+            }
+            AdditionMutation::Continue {
+                operation,
+                continuation,
+                preview_digest,
+            } => {
+                let mut saved = read_record(&directory, operation)?.ok_or_else(|| {
+                    ApiError::new(
+                        http::StatusCode::NOT_FOUND,
+                        ErrorCode::OperationNotFound,
+                        "storage addition was not found",
+                    )
+                })?;
+                if preview_digest
+                    .is_some_and(|digest| digest != saved.status.preview.preview_digest)
                 {
                     return Err(conflict(
-                        "operation_id already belongs to a different addition",
+                        "cancellation does not bind the original addition preview",
                     ));
+                }
+                if !saved.status.state.is_terminal() {
+                    saved.status.continuation = continuation;
                 }
                 saved
-            } else {
-                self.require_settled_exit()?;
-                self.require_no_pending_readmission()?;
-                self.require_settled_addition(&directory)?;
-                let (preview, target, directories) = self.prepare_addition(
-                    backend.as_deref(),
-                    identity,
-                    request.preview.request.clone(),
-                    discovery_root
-                        .as_deref()
-                        .expect("invariant: new commit loads discovery settings"),
-                )?;
-                if preview != request.preview {
-                    return Err(ApiError::conflict(
-                        ErrorCode::GenerationMismatch,
-                        "addition preview changed; inspect and review the current directories and pool",
-                    ));
-                }
-                held_directories = Some(directories);
-                let source = if preview.authority.is_terminal() {
-                    AdditionSource::TerminalManagement {
-                        original: self.inner.terminal_configuration(identity)?.0,
-                    }
-                } else {
-                    AdditionSource::ActiveMembership
-                };
-                let record = StoredAddition {
-                    source,
-                    format: Format::Addition,
-                    principal: identity.principal.clone(),
-                    target,
-                    archive: None,
-                    status: AdditionStatus {
-                        operation_id: operation,
-                        state: AdditionState::Adding,
-                        phase: AdditionPhase::Prepared,
-                        continuation: AdditionContinuation::Add,
-                        result: None,
-                        preview,
-                        failure: None,
-                    },
-                };
-                save(&directory, &record)?;
-                record
             }
-        } else if matches!(action, "disk_add_resume" | "disk_add_cancel") {
-            let (operation, continuation, preview_digest) = if action == "disk_add_cancel" {
-                let request: AdditionCancel =
-                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                (
-                    request.operation_id,
-                    AdditionContinuation::Cancel,
-                    Some(request.preview_digest),
-                )
-            } else {
-                let request: AdditionResume =
-                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                (request.operation_id, request.continuation, None)
-            };
-            let mut saved = read_record(&directory, operation)?.ok_or_else(|| {
-                ApiError::new(
-                    http::StatusCode::NOT_FOUND,
-                    ErrorCode::OperationNotFound,
-                    "storage addition was not found",
-                )
-            })?;
-            if preview_digest.is_some_and(|digest| digest != saved.status.preview.preview_digest) {
-                return Err(conflict(
-                    "cancellation does not bind the original addition preview",
-                ));
-            }
-            if !saved.status.state.is_terminal() {
-                saved.status.continuation = continuation;
-            }
-            saved
-        } else {
-            return Err(ApiError::invalid("unknown storage addition action"));
         };
         if record.principal != identity.principal {
             return Err(ApiError::forbidden());
@@ -482,9 +550,7 @@ impl ManagementBackend {
         // Even exact terminal replay requires a currently valid system session.
         backend.addition_configuration(identity)?;
         if record.status.state.is_terminal() {
-            return Ok(
-                json_codec::to_value(record.status).expect("invariant: addition status serializes")
-            );
+            return Ok(record.status);
         }
         if let Some(latest) = read::<OperationId>(&directory, &latest_name())?
             && latest != record.status.operation_id
@@ -503,9 +569,7 @@ impl ManagementBackend {
         if let Some(result) = backend.storage_addition_result(identity, &record)? {
             finish(&mut record, result);
             save(&directory, &record)?;
-            return Ok(
-                json_codec::to_value(record.status).expect("invariant: addition status serializes")
-            );
+            return Ok(record.status);
         }
         // Save the selected continuation before any irreversible shared-slot vote.
         // Retrying an old commit body retains this choice rather than undoing Cancel.
@@ -533,8 +597,7 @@ impl ManagementBackend {
                     .lock()
                     .expect("invariant: observation lock")
                     .take();
-                Ok(json_codec::to_value(record.status)
-                    .expect("invariant: addition status serializes"))
+                Ok(record.status)
             }
             Err(error) => {
                 record.status.state = AdditionState::RecoveryRequired;

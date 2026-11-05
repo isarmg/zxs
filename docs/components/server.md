@@ -22,6 +22,7 @@ spool、管理及初始化恢复直接使用 Unix 权限与链接检查，不保
 | `transfer` / `uploads` | HTTP 内容流/范围/读租约；上传进度的有界读取与持久化 |
 | `web_assets` | 静态资源准入和 ETag，保留 `/api` API 命名空间 |
 | `engine_backend` / `file_manager` | 核心业务约束、业务动作和文件管理响应适配 |
+| `management/foreign_preview`、`management/foreign_plan` / `engine_backend/foreign_plan` | 显式只读来源验证、一级空目录映射及系统盘不可覆盖审核记录；查询与重验不赋予迁入执行能力 |
 | `engine_backend/file_manager/activity`、`backend_activity` | 在当前授权锁内捕获提交、文件元数据操作、目录分支操作、备份配置、路径节点及目录树六类活动的 typed 快照；按序号降序和事件 ID 保留最新 200 行，锁外转换 DTO/UTC 时间 |
 | `telemetry` | 有界可重建的主机采样和历史，不参与存储提交真相 |
 | `smb_rpc` | 本机 Samba 会话、句柄与工作区发布，不创建账户或仓库权限 |
@@ -30,11 +31,12 @@ spool、管理及初始化恢复直接使用 Unix 权限与链接检查，不保
 
 ## 启动
 
-从项目根目录构建 `CARGO_TARGET_DIR=target/native cargo build --locked --offline -p storage-server -p storage-rescue`。下面是已有池或诊断模式的最小启动样例。首次安装预置引导密钥并创建管理员，登录后再选择挂载文件系统和实际存储目录；创建管理员不依赖数据盘白名单：
+从项目根目录构建 `CARGO_TARGET_DIR=target/native cargo build --locked --offline -p storage-server -p storage-rescue`。下面是已有池或诊断模式的最小启动样例。首次安装预置引导密钥并创建管理员，登录后在固定发现父目录的直接子目录中运行磁盘向导；创建管理员不依赖数据盘白名单：
 
 ```sh
 target/native/debug/zxs --root /srv/zxs/system \
-  --listen 0.0.0.0:7400 --web-dir /srv/zxs/web/dist
+  --listen 0.0.0.0:7400 --web-dir /srv/zxs/web/dist \
+  --storage-discovery-root /srv/zxs/disks
 ```
 
 `RUST_LOG` 仅在环境变量缺失时默认 `warn`；已配置值交给当前本地 `EnvFilter` 严格解析，空值保留其显式关闭日志的语义，不当作缺失。无效 directive（包括合法项与无效项混合）或非 Unicode 值以退出码 1 拒绝启动，发生在创建 Tokio 运行时、状态目录及监听服务之前。stderr 分别报告 `zxs: RUST_LOG contains an invalid filter directive` 或 `zxs: RUST_LOG must contain valid Unicode`；具名错误保留原始解析／环境读取 source，但进程诊断不输出可能含凭据的环境值或 source 内容。`--help`、`--version` 和 CLI 语法检查仍先于日志配置，不受无效 `RUST_LOG` 影响。
@@ -53,9 +55,15 @@ HTTP 默认监听 `0.0.0.0:7400`，可通过 `--listen` 指定其他 IPv4 或 IP
 
 首次 `POST /api/setup/initialize` 只接收管理员 `username/password`，建立系统盘管理权威，返回 `initialized:true,storage_pending:true`，不创建零成员 Engine。首次账户无需授权密钥；仅在无账户且无历史权威时公开准入，并在锁内保证唯一创建。已有或损坏权威不能匿名重置。灾备恢复保留独立 bootstrap 授权。
 
-登录后，管理员使用 `/api/admin/storage/status`、`/directories`、`/directories/inspect` 查询首次存储状态和真实挂载目录；通过 `/activate` 提交已检查的选择，使用 `/complete-activation` 补全有持久证明的原意图。挂载路径与实际存储根分别保存，允许挂载点内的嵌套子目录。根须已存在、为空、由服务账号拥有且权限为 0700；操作不挂载、格式化或 chmod。仅本地开发测试可显式设置 `--allow-development-setup` 使用目录模拟盘，模拟盘不证明设备独立性或断电安全。
+登录后，管理员使用 `/api/admin/storage/status`、`/discovered-disks` 查询首次存储状态和直接候选，在磁盘向导中检查并明确确认。发现父目录由 systemd 的 `--storage-discovery-root` 固定，不提供网页修改、任意路径浏览或递归发现；未接纳候选仅列在磁盘树 -1 层。空目标须已存在、由服务账号拥有且权限为 0700；`/activate` 只初始化选择过的空目录，`/complete-activation` 只补全有持久证明的原意图。首次多个目录各自成为一级根，不按目录顺序形成备份链；底层仍使用现有共同元数据协议。挂载路径保留作物理校验，操作不挂载、格式化或 chmod。仅本地开发测试可显式设置 `--allow-development-setup` 使用目录模拟盘，模拟盘不证明设备独立性或断电安全。
 
 激活由有界服务任务持有，不因 HTTP 客户端断开而取消。结果未知先查询状态；补全只恢复原绑定意图，不重选目录或重置管理员。已有池的纯添加使用独立预览、提交和原操作恢复接口，见[在线目录成员管理](../design/online-disk-management.md)。`POST /api/admin/disks` 由持久管理协调器执行真实的 fence、受管控制归档、enroll、联合决定和 activation，不复用首次激活。移出、下线和擦除未接入产品入口。
+
+外来 ZXS 来源只读检查保留完整可验证历史和正文暂不可用状态。可进一步将来源
+历史映射到已有一级盘的空根或空目录，并在系统盘保存不可覆盖审核计划；这不
+预留目标或创建成员。相同计划重放和查询仍要求重新验证，显式复核匹配也不解除
+`execution=unavailable`，执行请求固定拒绝。当前没有外来盘历史迁入或数据库剪裁
+写者，见[持久审核计划验证范围](../validation/foreign-history-plan-20261105.md)。
 
 `--setup-disk` 白名单仍服务既有离线恢复用途，`POST /api/setup/restore-system` 保持原授权与凭据恢复语义。公开 `preset-preview`、`initialize-preset`、`complete-initialization` 路由已移除，不提供旧初始化格式兼容。缺少可信权威或凭据损坏不得推断为新安装，也不得自动创建管理员。
 
@@ -126,7 +134,7 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 | `/api/smb/account`、`/api/smb/password` | GET 显示生效 SMB 账号、代际、预置候选及客户端可用性；账号 POST 校验当前 Web 管理密码后持久切换候选并撤销旧 RPC 连接；密码 POST 校验代际及当前 Samba 密码后改密，不创建/改名系统账号 |
 | `/api/file-manager/disks`、`/disks/{slot}/entries` | GET 独立磁盘目录、文件列表与冻结目录分支组成 |
 | `/api/file-manager/disks/{slot}/write-sessions`、`/namespace` | POST 当前文件上传会话、仅创建目录（重命名/删除使用带身份和子树前置条件的 namespace-batch） |
-| `/api/file-manager/disks/{slot}/directory-branches`、`/directory-select` | POST 登记或选择目录分支的完整冻结子树 |
+| `/api/file-manager/disks/{slot}/directory-branches` | POST 登记当前显式目录仓库的完整冻结子树；选择走带稳定 ID 和 CAS 的仓库 `default-branch` 接口 |
 | `/api/file-manager/disks/{slot}/namespace-batch` | POST 显式源/目标目录分支映射，原子移动、复制、删除、重命名 |
 | `/api/repositories/{repo}/directory-branches`、`/directory-branches/{id}` | GET 全部或指定路径作用域与冻结条目；PATCH 分支标签 |
 | `/api/repositories/{repo}/default-branch` | GET/PUT Web/SMB 共用默认根目录分支 |
@@ -137,6 +145,7 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 | `/api/system/status` | GET 管理员 CPU、内存与磁盘真实容量采样 |
 | `/api/repositories`、`/api/repositories/{repo}` | GET 列表/详情，POST 建仓 |
 | `/api/repositories/{repo}/smb-binding` | GET/PUT 显式 SMB 分支绑定 |
+| `/api/repositories/{repo}/directory-git`、`/initialize`、`/stage`、`/children/stage` | GET 准确目录仓库状态；POST 显式初始化、暂存自身与孩子准确 HEAD，见[目录 Git 边界](server/src/directory-git.md) |
 | `/api/repositories/{repo}/branches` | GET 分支、POST 登记独立待写入分支 |
 | `/api/branches/{branch}`、`/tree`、`/resolve` | GET 元信息/目录树、POST 路径解析 |
 | `/api/branches/{branch}/write-sessions`、`/archive` | POST 工作区写会话或归档 |

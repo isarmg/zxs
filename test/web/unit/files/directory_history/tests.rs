@@ -20,16 +20,16 @@ fn state() -> State {
 }
 fn page(collection: Collection, root: char) -> DirectoryHistoryPage {
     let nodes = if collection == Collection::Nodes {
-        json!([{"tree_id":id("dtree",1),"directory_branch_id":id("dbr",1),"parent_tree_id":null,"parent_endpoint":null,"commit_id":id("commit",1),"path":"folder","sequence":"1"}])
+        json!([{"message":"Directory commit","tree_id":id("dtree",1),"directory_branch_id":id("dbr",1),"parent_tree_id":null,"parent_endpoint":null,"commit_id":id("commit",1),"path":"folder","sequence":"1"}])
     } else {
         json!([])
     };
     let branches = if collection == Collection::Branches {
-        json!([{"directory_branch_id":id("dbr",1),"name":"Main","parent_branch_id":null,"head_tree_id":id("dtree",1),"materialized":true,"current":true,"sequence":"1"}])
+        json!([{"committed_tree_id":id("dtree",1),"staged":false,"directory_branch_id":id("dbr",1),"name":"Main","parent_branch_id":null,"head_tree_id":id("dtree",1),"materialized":true,"current":true,"sequence":"1"}])
     } else {
         json!([])
     };
-    DirectoryHistoryPage::deserialize(json!({"identity":{"repository_id":id("repo",1),"directory_id":id("entry",1),"history_tree_id":id("history",1),"history_root":root.to_string().repeat(64),"collection":collection,"limit":64},"current":{"directory_branch_id":id("dbr",1),"tree_id":id("dtree",1)},"nodes":nodes,"branches":branches,"page":{"previous_cursor":null,"next_cursor":null}})).unwrap()
+    DirectoryHistoryPage::deserialize(json!({"identity":{"repository_id":id("repo",1),"directory_id":id("entry",1),"history_tree_id":id("history",1),"history_root":root.to_string().repeat(64),"collection":collection,"limit":64},"current":{"committed_tree_id":id("dtree",1),"staged":false,"directory_branch_id":id("dbr",1),"tree_id":id("dtree",1)},"nodes":nodes,"branches":branches,"page":{"previous_cursor":null,"next_cursor":null}})).unwrap()
 }
 #[test]
 fn readonly_folder_retains_real_stable_scope_and_never_requires_write_admission() {

@@ -31,3 +31,27 @@ fn write_admission_combines_session_location_and_publication_state() {
         "failed logout permits revocation retry only"
     );
 }
+
+#[test]
+fn immutable_directory_snapshots_never_authorize_default_publication() {
+    use crate::files::model::{DirectoryPreview, DirectoryPreviewSource};
+    let mut state = State {
+        authenticated: true,
+        ..Default::default()
+    };
+    state.management.storage = crate::management::Storage::Ready;
+    state.files.directory_preview = Some(DirectoryPreview {
+        source: DirectoryPreviewSource::Snapshot {
+            branch_id: "validated-history-branch".into(),
+            tree_id: "validated-history-tree".into(),
+        },
+        path: "Files/folder".into(),
+    });
+    assert!(!default_write_allowed(&state));
+    assert!(!write_allowed(&state));
+    // Even a stale writable listing must not turn a historical read into a
+    // publishable current-branch review.
+    state.files.writable = true;
+    assert!(!default_write_allowed(&state));
+    assert!(!write_allowed(&state));
+}

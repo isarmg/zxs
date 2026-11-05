@@ -46,8 +46,9 @@ class BrowserFuturesRetirement(unittest.TestCase):
             self.assertTrue((ROOT / path).is_file())
 
     def test_active_manifests_do_not_depend_on_shim(self):
-        for path in (ROOT / 'src').rglob('Cargo.toml'):
-            self.assertNotIn('wasm-bindgen-futures', path.read_text(), str(path))
+        for directory in ('src', 'rescue'):
+            for path in (ROOT / directory).rglob('Cargo.toml'):
+                self.assertNotIn('wasm-bindgen-futures', path.read_text(), str(path))
         script = (ROOT / '.github/scripts/check-csr-scope.py').read_text()
         self.assertNotIn('wasm-bindgen-futures', script)
         macros = ROOT / 'src/foundation/web-runtime/wasm-binding-macros/src'

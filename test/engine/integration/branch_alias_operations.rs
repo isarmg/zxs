@@ -2,9 +2,9 @@
 //! All storage, physical-container and restart checks use disposable pools.
 use std::{io::Read, path::PathBuf};
 use storage_engine::{
-    CommitRequest, Config, DirectoryBranch, DirectoryNamespaceBatch, DirectoryNamespaceItem,
-    DirectoryNamespaceSource, DirectoryNamespaceTarget, Engine, Entry, NamespaceOperation,
-    OperationResult, Repository, Workspace, new_id,
+    CommitRequest, Config, DirectoryBranch, DirectoryCommitRequest, DirectoryNamespaceBatch,
+    DirectoryNamespaceItem, DirectoryNamespaceSource, DirectoryNamespaceTarget, Engine, Entry,
+    NamespaceOperation, OperationResult, Repository, Workspace, new_id,
 };
 #[path = "branch_alias_operations/batch_planning_scenarios.rs"]
 mod batch_planning_scenarios;
@@ -12,6 +12,8 @@ mod batch_planning_scenarios;
 mod copy_alias_scenarios;
 #[path = "branch_alias_operations/deletion_rebase_scenarios.rs"]
 mod deletion_rebase_scenarios;
+#[path = "../support/directory_git_fixture.rs"]
+mod directory_fixture;
 #[path = "branch_alias_operations/file_history_merge_scenarios.rs"]
 mod file_history_merge_scenarios;
 #[path = "branch_alias_operations/file_merge_scenarios.rs"]
@@ -76,7 +78,11 @@ impl Pool {
             })
             .unwrap()
     }
+    fn checkpoint(&mut self, path: &str) -> storage_contract::directory_git::DirectoryGitStatus {
+        directory_fixture::checkpoint(&mut self.engine, &self.repo, path)
+    }
     fn register(&mut self, path: &str, name: &str) -> String {
+        self.checkpoint(path);
         self.engine
             .create_directory_branches(
                 &self.repo.repository_id,
@@ -97,6 +103,7 @@ impl Pool {
             .to_owned()
     }
     fn select(&mut self, path: &str, name: &str) {
+        self.checkpoint(path);
         self.engine
             .select_directory_branches(
                 &self.repo.repository_id,
@@ -359,6 +366,30 @@ fn selected_aliases(p: &mut Pool) -> (String, String, Entry) {
     );
     p.select("a", "n");
     p.select("b", "l");
+    select_alias_draft(p, &original);
+    (n, l, original)
+}
+
+// Both occurrences remain owned by one root Git repository. The child-scope
+// fixture above deliberately initializes independent a/b repositories instead.
+fn selected_root_aliases(p: &mut Pool) -> Entry {
+    p.save("a/report.txt", b"original");
+    p.save("b/stay.txt", b"sibling");
+    let source = p.register("", "source");
+    let target = p.register("", "aliases");
+    let original = p.entry(&source, "a/report.txt");
+    p.batch(
+        storage_contract::DirectoryBatchKind::Move,
+        vec![p.mapping(&source, "a/report.txt", &target, "b/report.txt")],
+    );
+    p.select("", "aliases");
+    assert_eq!(p.current_entry("a/report.txt").file_id, original.file_id);
+    assert_eq!(p.current_entry("b/report.txt").file_id, original.file_id);
+    select_alias_draft(p, &original);
+    original
+}
+
+fn select_alias_draft(p: &mut Pool, original: &Entry) {
     let draft = p
         .engine
         .create_file_branch(
@@ -383,7 +414,6 @@ fn selected_aliases(p: &mut Pool) -> (String, String, Entry) {
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
-    (n, l, original)
 }
 
 #[test]
@@ -555,7 +585,7 @@ fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contex
 #[test]
 fn deleting_one_inactive_root_alias_preserves_the_other_alias_and_its_context() {
     let mut p = Pool::new();
-    let (_, _, original) = selected_aliases(&mut p);
+    let original = selected_root_aliases(&mut p);
     let root = p.register("", "archive");
     let before = p.branch(&root);
     let b_context = before.file_contexts["b/report.txt"].clone();
@@ -1127,7 +1157,7 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
 fn batch_deletion_facts_cover_active_and_inactive_alias_scopes_without_move_deletions() {
     for active in [false, true] {
         let mut p = Pool::new();
-        let (_, _, original) = selected_aliases(&mut p);
+        let original = selected_root_aliases(&mut p);
         assert!(
             p.engine
                 .state()

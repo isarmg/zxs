@@ -407,7 +407,7 @@ required Backend::initialize_directory_scope 取代 JSON action；AuthorizedBack
 
 ### 文件管理器目录分支创建与选择
 
-磁盘路径的 directory-branches / directory-select 使用同一真实命令 MutateDiskDirectory 与封闭 Create / Select 动作，移除两个 BackendAction 的 JSON 分派。bounded HTTP 解析 slot/path/name/operation：省略 path 或空串都保持原磁盘根语义，显式非字符串仍拒绝；创建拼写 PortablePath 转为 LookupPath，BranchName 缓存名称 key，OperationId 按该路由原 INVALID_REQUEST 映射保留来源。原名称失败先于 operation 格式失败的顺序不变，未知字段仍拒绝。静态格式解析现位于 HTTP 阻塞任务内、先于排队后的 current 再验证；中间件认证仍先于 body，合法命令仍先验证当前身份再接触资源。
+磁盘路径的 directory-branches 使用真实命令 MutateDiskDirectory 与 Create 动作，不经过 BackendAction 的 JSON 分派。原只持 path/name 的 directory-select 公开路由已移除，选择必须经仓库 default-branch 接口提供稳定 directory_branch_id 及 expected_tree_id/expected_head。可信原生内部仍可即时按名称选取，不属于 HTTP 契约。bounded HTTP 解析 slot/path/name/operation：省略 path 或空串都保持原磁盘根语义，显式非字符串仍拒绝；创建拼写 PortablePath 转为 LookupPath，BranchName 缓存名称 key，OperationId 按该路由原 INVALID_REQUEST 映射保留来源。原名称失败先于 operation 格式失败的顺序不变，未知字段仍拒绝。静态格式解析现位于 HTTP 阻塞任务内、先于排队后的 current 再验证；中间件认证仍先于 body，合法命令仍先验证当前身份再接触资源。
 
 EngineBackend 在同锁 current 身份后进入真实目录命令。虚拟仓库目录需显式范围、备份盘只读、合并命名空间歧义与惰性根准入保持；只有 Create 且根路径才允许建磁盘根，已用 operation 和 main 基线名称碰撞在建根前失败。共享磁盘解析器返回输入路径的借用后缀，不先分配裸 String。命名仓库去掉一个已验证组件得到 LookupPath 后缀，直接复用 display/key；磁盘根路径直接移动原解析结果，没有内部重新 parse 或 re-hash。
 

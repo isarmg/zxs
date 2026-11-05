@@ -1,6 +1,7 @@
 //! Malformed requests must be rejected before lazy disk-root publication.
 use super::*;
 use crate::operation_wire::operation_wire;
+use crate::tests::directory_git_fixture::checkpoint;
 use std::path::{Path, PathBuf};
 
 fn disk_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -37,7 +38,7 @@ fn mkdir_fixture(
 }
 
 #[test]
-fn valid_creation_and_upload_still_create_the_lazy_root() {
+fn lazy_root_creation_keeps_directory_git_initialization_explicit() {
     enum Creation {
         Namespace,
         DirectoryBranch,
@@ -69,7 +70,11 @@ fn valid_creation_and_upload_still_create_the_lazy_root() {
                 mkdir_fixture(&mut engine,&identity,json!({"slot_id":"P01","kind":"mkdir","path":"folder","operation_id":storage_engine::new_id("op").unwrap()})).unwrap();
             }
             Creation::DirectoryBranch => {
-                directory_mutation(&mut engine,&identity,crate::DiskDirectoryAction::Create,json!({"slot_id":"P01","name":"branch","operation_id":storage_engine::new_id("op").unwrap()})).unwrap();
+                let error = directory_mutation(&mut engine,&identity,crate::DiskDirectoryAction::Create,json!({"slot_id":"P01","name":"branch","operation_id":storage_engine::new_id("op").unwrap()})).unwrap_err();
+                assert_eq!(
+                    error.code,
+                    storage_contract::ErrorCode::DirectoryScopeRequired
+                );
             }
             Creation::Upload => {
                 write_session(
@@ -94,6 +99,7 @@ fn valid_creation_and_upload_still_create_the_lazy_root() {
                 .unwrap()
                 .file_manager_root
         );
+        assert!(engine.state().directory_git_repositories.is_empty());
     }
 }
 
@@ -168,6 +174,8 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
         principal: "owner".into(),
     };
     mkdir_fixture(&mut engine,&identity,json!({"slot_id":"P01","kind":"mkdir","path":"target","operation_id":storage_engine::new_id("op").unwrap()})).unwrap();
+    let repository = engine.state().repositories.values().next().unwrap().clone();
+    checkpoint(&mut engine, &repository, "target", "owner");
     let frozen = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create,
         json!({"slot_id":"P01","path":"target","name":"frozen","operation_id":storage_engine::new_id("op").unwrap()})).unwrap();
     let old_branch = frozen["result"]["directory_branch_id"]
@@ -182,49 +190,30 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
         .unwrap()
         .repository_id
         .clone();
-    let root_scopes = scope_response(&engine, &repo, crate::DirectoryBranchFilter::Root).unwrap();
-    let root_scope = root_scopes["directory_branches"]
-        .as_array()
+    let old_directory = engine
+        .namespace_tree(&repository.main_branch_id)
         .unwrap()
-        .iter()
-        .find(|branch| branch["current"] == true)
-        .unwrap();
-    let target = root_scope["entries"]
-        .as_array()
+        .get("target")
         .unwrap()
-        .iter()
-        .find(|entry| entry["path"] == "target")
-        .unwrap();
-    let old_directory = target["entry_id"].clone();
-    Application::new(&mut engine, &identity)
-        .namespace_batch(crate::NamespaceBatch {
-            slot_id: "P01".into(),
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-            request: storage_contract::DirectoryNamespaceBatch {
-                kind: storage_contract::DirectoryBatchKind::Rename,
-                items: vec![storage_contract::DirectoryNamespaceItem {
-                    source: storage_contract::DirectoryNamespaceSource {
-                        directory_branch_id: root_scope["directory_branch_id"]
-                            .as_str()
-                            .unwrap()
-                            .into(),
-                        expected_tree_id: root_scope["head_tree_id"].as_str().unwrap().into(),
-                        path: "target".into(),
-                        entry_id: target["entry_id"].as_str().unwrap().into(),
-                    },
-                    target: Some(storage_contract::DirectoryNamespaceTarget {
-                        directory_branch_id: root_scope["directory_branch_id"]
-                            .as_str()
-                            .unwrap()
-                            .into(),
-                        expected_tree_id: root_scope["head_tree_id"].as_str().unwrap().into(),
-                        path: "archive".into(),
-                    }),
-                }],
-            },
-        })
+        .entry_id
+        .clone();
+    // Move the independent repository through the namespace operation, not a
+    // parent branch-scope batch that must refuse crossing repository boundaries.
+    engine
+        .file_namespace(
+            &repo,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "target",
+                Some("archive"),
+            )
+            .unwrap(),
+            &identity.principal,
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     mkdir_fixture(&mut engine,&identity, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op").unwrap(),"kind":"mkdir","path":"target"})).unwrap();
+    checkpoint(&mut engine, &repository, "target", "owner");
     let fresh = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op").unwrap(),"path":"target","name":"fresh"})).unwrap();
     let fresh_branch = fresh["result"]["directory_branch_id"].as_str().unwrap();
     let all = scope_response(&engine, &repo, crate::DirectoryBranchFilter::All).unwrap();

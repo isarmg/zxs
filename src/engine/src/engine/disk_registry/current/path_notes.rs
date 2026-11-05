@@ -275,6 +275,7 @@ fn verify_state_shape(previous: &State, next: &State, operation: OperationId) ->
         branches,
         file_selections,
         directory_branches,
+        directory_git_repositories,
         directory_trees,
         file_write_origins,
         file_contexts,

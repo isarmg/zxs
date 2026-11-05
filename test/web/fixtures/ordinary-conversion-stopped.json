@@ -1,0 +1,185 @@
+{
+  "preview": {
+    "operation_id": "op_5f3ef87c1ef04c2f849586d60c1b5b3e",
+    "import_operation_id": "op_30fa96abbba042acaf511ec80e7d66e8",
+    "source": {
+      "path": "/workspace/scratch/bae3caab1cb3/zxs/src/server/.tmp1TwnB3/disks/ordinary",
+      "discovery_identity": {
+        "device": "27",
+        "inode": "2622627",
+        "ctime_seconds": "1793888095",
+        "ctime_nanoseconds": 322073673
+      },
+      "identity": {
+        "device": "27",
+        "inode": "2623077",
+        "ctime_seconds": "1793888095",
+        "ctime_nanoseconds": 322073673
+      }
+    },
+    "source_preview": {
+      "digest": "1e3a1d80cb85dba2cdef024fd2e0dfb6e9c0c379d503de48acd5989f242108ae",
+      "files": 1,
+      "directories": 1,
+      "content_bytes": "21",
+      "temporary_bytes": "21"
+    },
+    "target": {
+      "authority": {
+        "kind": "active_membership"
+      },
+      "request": {
+        "operation_id": "op_267164dfdfcb40caabc03aa45d90ce89",
+        "additions": [
+          {
+            "selection": {
+              "selection_id": "directory_18189780809e8f45d9ed9d0d502a965784fede7901a144309992e389adb7100b",
+              "discovery_root": "/workspace/scratch/bae3caab1cb3/zxs/src/server/.tmp1TwnB3/disks",
+              "discovery_identity": {
+                "device": "27",
+                "inode": "2622627",
+                "ctime_seconds": "1793888095",
+                "ctime_nanoseconds": 322073673
+              },
+              "mount_path": "/workspace/scratch/bae3caab1cb3",
+              "root_path": "/workspace/scratch/bae3caab1cb3/zxs/src/server/.tmp1TwnB3/disks/new-primary",
+              "mount_identity": {
+                "mount_id": "342",
+                "device_major": 0,
+                "device_minor": 27,
+                "root_inode": "1573126",
+                "filesystem": "overlay",
+                "filesystem_root": "/workspace/scratch/bae3caab1cb3"
+              },
+              "root_identity": {
+                "device": "27",
+                "inode": "2623472",
+                "ctime_seconds": "1793888095",
+                "ctime_nanoseconds": 322073673
+              }
+            },
+            "slot_id": "D02",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": false
+          }
+        ]
+      },
+      "pool_id": "pool_3350f5b070ac49f9a0604d309407e824",
+      "configuration_digest": "be801d799d27e24d695e220d71177512c112cd091f78094afee7e2e1abc5d4b1",
+      "preview_digest": "819306eaddeb01f2e6f49d033379361e6c7a5196a9cf3aedb12b147748611623",
+      "original_metadata_members": 1,
+      "target_metadata_members": 1,
+      "added_directories": 1
+    },
+    "preview_digest": "ec5d6dae984ed48c1fe608ed99f961312205918b3da0a9aa3248f7a035ae4022"
+  },
+  "phase": "stopped",
+  "registration": {
+    "operation_id": "op_267164dfdfcb40caabc03aa45d90ce89",
+    "state": "completed",
+    "phase": "completed",
+    "continuation": "add",
+    "result": {
+      "operation_id": "op_267164dfdfcb40caabc03aa45d90ce89",
+      "kind": "membership-add",
+      "commit_id": null,
+      "history_tree_id": null,
+      "branch_id": null,
+      "commit_state": "PUBLISHED",
+      "protection_at_publish": "NOT_APPLICABLE",
+      "current_health": "HEALTHY",
+      "request_digest": "9c94ddeb1d544e7d25113ea89cb2ed5467bbbbfc4f8403ca5522f54b43dc2678",
+      "sequence": "2",
+      "result": {
+        "generation": "572396320719f0b4532123b95c31066905c22f83464528b9e2f22771c3b776f2",
+        "membership_epoch": "2",
+        "metadata_members": 1,
+        "topology_generation": "2"
+      }
+    },
+    "preview": {
+      "authority": {
+        "kind": "active_membership"
+      },
+      "request": {
+        "operation_id": "op_267164dfdfcb40caabc03aa45d90ce89",
+        "additions": [
+          {
+            "selection": {
+              "selection_id": "directory_18189780809e8f45d9ed9d0d502a965784fede7901a144309992e389adb7100b",
+              "discovery_root": "/workspace/scratch/bae3caab1cb3/zxs/src/server/.tmp1TwnB3/disks",
+              "discovery_identity": {
+                "device": "27",
+                "inode": "2622627",
+                "ctime_seconds": "1793888095",
+                "ctime_nanoseconds": 322073673
+              },
+              "mount_path": "/workspace/scratch/bae3caab1cb3",
+              "root_path": "/workspace/scratch/bae3caab1cb3/zxs/src/server/.tmp1TwnB3/disks/new-primary",
+              "mount_identity": {
+                "mount_id": "342",
+                "device_major": 0,
+                "device_minor": 27,
+                "root_inode": "1573126",
+                "filesystem": "overlay",
+                "filesystem_root": "/workspace/scratch/bae3caab1cb3"
+              },
+              "root_identity": {
+                "device": "27",
+                "inode": "2623472",
+                "ctime_seconds": "1793888095",
+                "ctime_nanoseconds": 322073673
+              }
+            },
+            "slot_id": "D02",
+            "level": 1,
+            "upstream_slot_id": null,
+            "metadata_member": false
+          }
+        ]
+      },
+      "pool_id": "pool_3350f5b070ac49f9a0604d309407e824",
+      "configuration_digest": "be801d799d27e24d695e220d71177512c112cd091f78094afee7e2e1abc5d4b1",
+      "preview_digest": "819306eaddeb01f2e6f49d033379361e6c7a5196a9cf3aedb12b147748611623",
+      "original_metadata_members": 1,
+      "target_metadata_members": 1,
+      "added_directories": 1
+    },
+    "failure": null
+  },
+  "workspace_id": "ws_0ade24e127504cb7a02057bf090ff726",
+  "root_operation_id": "op_037b536ef1a04dc9b63179eee23aa5f3",
+  "result": null,
+  "stop_operation_id": "op_0b74f50cf2e743e3bb7ac931582e4beb",
+  "stop_result": {
+    "operation_id": "op_0b74f50cf2e743e3bb7ac931582e4beb",
+    "kind": "directory.import.stop",
+    "commit_id": null,
+    "history_tree_id": null,
+    "branch_id": null,
+    "commit_state": "PUBLISHED",
+    "protection_at_publish": "NOT_APPLICABLE",
+    "current_health": "HEALTHY",
+    "request_digest": "89bd058ee2556d1a6d565faf57b041cd778bedcf36e8f964101efd52ac9bf35d",
+    "sequence": "4",
+    "result": {
+      "import_operation_id": "op_30fa96abbba042acaf511ec80e7d66e8",
+      "membership_epoch": "2",
+      "root_operation_id": "op_037b536ef1a04dc9b63179eee23aa5f3",
+      "source_preserved": true,
+      "target": {
+        "binding_generation": "1",
+        "disk_id": "disk_119b2955711560633422f4ccaefc6b04",
+        "pool_id": "pool_3350f5b070ac49f9a0604d309407e824",
+        "slot_id": "D02"
+      },
+      "target_preserved": true,
+      "timestamp": "1793888096",
+      "version_protection": [],
+      "workspace_id": "ws_0ade24e127504cb7a02057bf090ff726",
+      "workspace_retention": "aborted"
+    }
+  },
+  "failure": null
+}

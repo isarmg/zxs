@@ -95,10 +95,13 @@ fn directory_history_response_admission_rejects_fake_parent_boundaries_and_mixed
             limit: 64,
         },
         current: DirectoryHistoryCurrent {
+            committed_tree_id: None,
+            staged: false,
             directory_branch_id: None,
             tree_id: None,
         },
         nodes: vec![DirectoryHistoryNode {
+            message: "Commit directory".into(),
             tree_id: TREE.into(),
             directory_branch_id: "dbr_00000000000000000000000000000000".into(),
             parent_tree_id: Some("dtree_11111111111111111111111111111111".into()),

@@ -22,6 +22,8 @@ mod owned;
 pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
 mod fencing;
 pub(crate) use fencing::{DiskWriter, FenceOwner, WriterLocks};
+mod discovery;
+pub use discovery::{DiskRoleEvidence, RecognizedDisk, RecordedDiskRole, recognize_disk};
 
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     e.into()

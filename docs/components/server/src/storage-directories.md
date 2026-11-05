@@ -2,8 +2,8 @@
 
 `src/server/src/storage_directories.rs` 是只读目录边界，wire 类型位于
 `storage_contract::storage_directories`。它不创建目录、改权限、写探测文件、
-挂载、卸载、格式化或清除数据。管理面只发现默认或管理员明确设置的发现根
-内部子目录，不扫描整个文件系统，也不要求部署时预先枚举候选白名单。
+挂载、卸载、格式化或清除数据。管理面只发现 systemd/CLI 固定父目录
+下的直接子目录，不扫描整机或递归搜索，也不要求部署时预先枚举候选白名单。
 HTTP 管理面必须自行保留当前管理员认证、请求预算和后台任务所有权；
 模块本身不是公开匿名文件系统接口。
 
@@ -81,33 +81,50 @@ filesystem-root 映射检查 bind-mount 别名；未创建的排除目录使用�
 
 ## 管理面限定发现根
 
-管理面默认 `DEFAULT_DISCOVERY_ROOT = "/zxs/data/disks"`（复数），也可由
-当前管理员显式设置其他发现根。设置属于系统控制面持久状态，不接受
-浏览或检查请求自行声明新的授权根。`DiscoveryRootSettings` 与
-`SetDiscoveryRootRequest` 拒绝未知字段；更新请求带 `expected_discovery_root`
-供设置所有者作并发比较，不能悄悄覆盖另一项已完成的设置。
+`--storage-discovery-root` 默认 `/zxs/data/disks`，由 systemd/CLI 启动配置固定。
+`DiscoveryRoot` 在启动边界解析为绝对规范路径，可接受一个结尾 `/` 并规范化；
+不创建或探测该路径。`GET /api/admin/storage/discovery-root` 只报告配置，
+旧 PUT 和网页路径编辑已移除，不读取旧管理目录发现设置作为授权来源。
+缺失根如实报错，不创建、不退回 `/`。本服务不挂载设备。
 
-`validate_discovery_root(root, excluded_roots)` 只验证已经存在、无符号链接、
-具备实际读取/搜索/枚举权限且不重叠系统或管理根的目录。发现父目录不
-要求 0700，不创建缺失目录、不改权限。真正存储候选仍须通过原有私有、
-空目录与挂载检查。默认路径不存在时应如实显示不可用，不能创建它或退回 `/`。
+父目录只作为容器，自己的内容不能成为新磁盘。`browse_within(root,path)`
+仅接受 `path == root`；`inspect_within` 和 `revalidate_within` 仅接受直接子目录。
+例如父目录 `abc/` 中 `a/`、`b/`、`c/` 是三个候选，不发现 `a/nested/`。
+内部受控测试仍可用底层 `browse/inspect/revalidate`，HTTP 不能绕过固定根。
+实际挂载点可能在父目录之外，保留它作身份校验，不把它变成新的浏览范围。
 
-HTTP 浏览只可调用 `browse_within(root, path)`。根本身可以作为列表容器，
-只列其内部真实目录，不列普通文件或符号链接，也不扫描其他文件系统目录。
-可以继续进入合法子目录和其内部实际子挂载。路径组件前缀只是初筛；
-真正目录由持有的发现根 FD 通过 `openat2 BENEATH/NO_SYMLINKS` 打开，
-条目可访问性探测也相对于所列目录 FD，不通过可竞态替换的绝对子路径重开。
+`GET /api/admin/storage/discovered-disks` 不接受查询参数，按 held parent FD
+只读列举直接子目录。结果含 `empty`、`zxs`、`unsupported`、`unavailable`：
+只有通过空目录检查的 `empty` 携带初始化 `CandidateSelection`；其他项没有
+空目录写能力。ZXS 识别读取本盘 seal、固定配置锚或代际证明，不打开其他盘，
+返回记录的级别及证据强度；`initial_declaration` 只是身份一致的本地声明，
+`generation_evidence` 也不证明完整业务历史、最新 HEAD 或迁入权限。
+损坏、不支持或物理身份变化的盘明确拒绝，不能默认为一级或降级成普通导入。
 
-`inspect_within(root, request, exclusions)` 只接受发现根的严格后代；发现根
-自身不能作为候选。`mount_path` 仍是实际挂载点，可能位于发现根之外，
-与内部的 `root_path` 不混用。选择额外绑定 `discovery_root` 及发现根
-`device/inode/ctime`，一并进入内容摘要。
+候选展示在磁盘树的 -1 层，不进入已接纳拓扑，不画备份关系，也不自动写入。
+已登记、停用以及系统/管理目录在打开子项前排除，包含其挂载别名；临时缺失
+的已登记路径仍排除，不能视为新空盘替换。冷启动缺少已准入历史权威时先拒绝
+发现，不能因 Engine 尚未打开就忽略已知成员。
 
-执行器必须在生命周期/设置协调锁内读取当前设置并调用
-`revalidate_within(current_root, selection, exclusions)`，不能改用底层
-不限定管理面范围的 `revalidate`。更改配置发现根、替换发现根或短期目录
-变化会使旧预览失效，需要重新检查。旧 `browse/inspect/revalidate` 仅保留
-给已明确界定范围的内部调用和测试，不能作为公开管理接口。
+列表仍受 200 返回项、4096 扫描项预算约束并报告截断。`discover_empty` 是
+独立只读筛选器，清单截断时整次拒绝，不自行挑选前几项初始化；产品没有
+后台自动初始化循环。普通转换扫描是用户进入向导后的独立工作，不是递归发现。
 
-已开始激活的恢复仍根据原持久意图、原配置与核心 disk seal 完成，不以
-后来修改的发现根、ctime 或重启后的 mount ID 重新选择目录。
+来源 `DirectorySource` 只绑定路径、parent 身份和自身身份。`reopen_source`
+从固定 parent FD 重开并复验这两层观察，排除已知成员、停用根及新目标的
+真实文件系统别名，不授予写权限。转换还需完整源清点、确认摘要和原操作。
+两种选择均含 device/inode/ctime；更换父目录、条目或其短期状态使旧预览失效。
+已开始激活的恢复则使用原持久意图、配置和核心 seal，不以重启后的 mount ID
+或改变的 ctime 重新选择目录。
+
+## 普通来源转换
+
+已有活动系统可通过[普通盘转换协调器](../../../design/online-disk-management.md#ordinary-disk-conversion)
+把普通来源复制到另一直接空目录并接纳为新的一级盘。它保留来源，分开记录
+成员接纳和根内容发布，只有第二阶段的永久原回执才能显示整体完成。外来 ZXS
+的可移植身份、完整历史闭包和来源分组重建尚未由此实现，不开放伪成功入口。
+
+外来 ZXS 另有显式只读 `/api/admin/storage/foreign/preview`，使用同一来源观察
+与已登记根排除规则，核验本盘可读取的发布闭包并报告原一级来源和正文暂不可用
+状态；它不执行迁入、剪裁或初始化。详细预算、证据强度及多来源连通历史的
+拒绝边界见上述在线管理设计，不能把检查通过当作写入准入。

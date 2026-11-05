@@ -9,6 +9,7 @@ pub struct TopologySnapshot {
 }
 #[derive(Debug)]
 pub struct TopologySlot {
+    pub name: Option<name_policy::PortablePath>,
     pub slot_id: String,
     pub disk_id: String,
     pub level: u32,
@@ -16,6 +17,30 @@ pub struct TopologySlot {
     pub metadata_member: bool,
     pub binding_generation: u64,
 }
+impl TopologySlot {
+    pub(crate) fn directory_name(&self) -> Result<&name_policy::PortablePath, crate::ApiError> {
+        self.name.as_ref().ok_or_else(|| {
+            crate::ApiError::conflict(
+                storage_contract::ErrorCode::ListingChanged,
+                "disk directory name is unavailable after terminal disk exit",
+            )
+        })
+    }
+}
+
+#[cfg(feature = "core")]
+pub(crate) fn disk_directory_name(
+    root: &std::path::Path,
+) -> Result<name_policy::PortablePath, crate::ApiError> {
+    let name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            crate::ApiError::invalid("disk root must have a UTF-8 directory basename")
+        })?;
+    name_policy::PortablePath::parse(name).map_err(crate::ApiError::invalid_source)
+}
+
 #[derive(Serialize)]
 pub(crate) struct TopologyResponse {
     topology_id: &'static str,
@@ -43,6 +68,7 @@ impl From<TopologySnapshot> for TopologyResponse {
                 .into_iter()
                 .map(|slot| {
                     let TopologySlot {
+                        name: _,
                         slot_id,
                         disk_id,
                         level,

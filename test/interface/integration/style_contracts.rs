@@ -76,7 +76,7 @@ fn anonymous_forms_reuse_six_shared_height_rows_and_original_card_corner() {
         )
     );
     assert!(css.contains(
-        "input.zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }"
+        "input.zxs-input:focus-visible { outline: 2px solid var(--zxs-focus,Highlight); outline-offset: -2px; }"
     ));
     assert!(!css.contains("dashed"));
     let login = include_str!("../../../src/interface/src/components/login.rs");
@@ -327,14 +327,14 @@ fn shared_form_groups_align_fields_without_individual_input_boxes() {
     assert!(!css.contains("dashed"));
     assert!(
         css.contains(
-            ":root :is(input,textarea).zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }"
+            ":root :is(input,textarea).zxs-input:focus-visible { outline: 2px solid var(--zxs-focus,Highlight); outline-offset: -2px; }"
         )
     );
     assert!(css.contains(
         "background: transparent; outline: 0; --zxs-contour-extent: 0px; --zxs-contour-mode: none;"
     ));
     assert!(css.contains("@media (forced-colors: active)"));
-    assert!(css.contains(":focus-visible:not(.zxs-file-search > input) { outline: 2px solid Highlight; outline-offset: 2px; }"));
+    assert!(css.contains(":focus-visible:not(.zxs-file-search > input) { outline: 2px solid Highlight; outline-offset: -2px; }"));
     let geometry = include_str!("../../../src/web/public/styles/components/geometry.css");
     assert!(!geometry.contains(".zxs-input--underline"));
     assert!(!css.contains(".zxs-form-field + .zxs-form-field"));
@@ -386,7 +386,9 @@ fn folder_search_uses_one_input_surface_and_explicit_enter_submission() {
     assert!(search.contains("if !event.repeat()"));
     assert!(search.contains("actions::search(state,query)"));
     let css = include_str!("../../../src/web/public/styles/components/file-manager.css");
-    assert!(css.contains(".zxs-file-search > input.zxs-input:focus-visible { border: 0; }"));
+    assert!(
+        css.contains(".zxs-file-search > input.zxs-input:focus-visible { border: 0; outline: 0; }")
+    );
     let focus = css
         .split(".zxs-file-search:has(> input:focus-visible) {")
         .nth(1)
@@ -461,7 +463,7 @@ fn shared_rows_own_one_inset_without_wrapping_controls_in_extra_row_padding() {
     assert!(style_rule(files, ".zxs-file-properties dd").contains("margin: 0;"));
     assert!(!management.contains("class=\"zxs-flow zxs-row\""));
     assert!(geometry.contains("--zxs-compact-row-height: 36px;"));
-    assert!(geometry.contains("--zxs-input-row-height: 44px;"));
+    assert!(geometry.contains("--zxs-input-row-height: var(--zxs-compact-row-height);"));
 }
 
 #[test]

@@ -19,9 +19,11 @@ mod directory_selection;
 mod disk_monitor;
 mod error_registry;
 mod file_manager;
+pub(crate) mod foreign_plan;
 mod graph;
 mod integrity_scrub;
 mod operations;
+mod ordinary_conversion;
 mod read_projection;
 mod storage_addition;
 pub(crate) mod storage_lifecycle;
@@ -1447,13 +1449,11 @@ impl Backend for EngineBackend {
         current_protected_identity(&engine, identity)?;
         let repo = repository(&engine, repository_id)?;
         let state = engine.state();
-        let selected = state.directory_selections.get(repository_id).map(|id| {
-            let branch = state
-                .directory_branches
-                .get(id)
-                .expect("invariant: admitted directory selection references its branch");
+        let git = state.directory_git_repositories.get(repository_id);
+        let selected = git.map(|git| {
+            let branch = &state.directory_branches[&git.current_branch_id];
             crate::SelectedDirectoryBranch {
-                directory_branch_id: id.clone(),
+                directory_branch_id: git.current_branch_id.clone(),
                 name: branch.name.clone(),
             }
         });
@@ -1461,14 +1461,20 @@ impl Backend for EngineBackend {
             repository_id: repo.repository_id.clone(),
             namespace_branch_id: repo.main_branch_id.clone(),
             selected,
-            directory_branches: storage_contract::directory_branch_summaries(
-                state,
-                storage_contract::DirectoryBranchScope {
-                    repository_id,
-                    directory_id: repository_id,
-                    path: "",
-                },
-            ),
+            directory_branches: match git {
+                None => Vec::new(),
+                Some(git) => storage_contract::directory_branch_summaries(
+                    state,
+                    storage_contract::DirectoryBranchScope {
+                        repository_id,
+                        directory_id: repository_id,
+                        path: "",
+                    },
+                )
+                .into_iter()
+                .filter(|branch| git.branches.contains_key(&branch.directory_branch_id))
+                .collect(),
+            },
         })
     }
     fn file_history_source(
@@ -1495,6 +1501,123 @@ impl Backend for EngineBackend {
         current_protected_identity(&engine, identity)?;
         engine.recheck_file_history_source(&read).map_err(error)?;
         result
+    }
+    fn directory_git_status(
+        &self,
+        identity: &Identity,
+        repository_id: &str,
+        path: &str,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::directory_git::DirectoryGitStatus, ApiError> {
+        let read = {
+            let engine = self
+                .engine
+                .lock()
+                .expect("invariant: service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            repository(&engine, repository_id)?;
+            engine
+                .capture_directory_git_status(repository_id, path, cancellation)
+                .map_err(error)?
+        };
+        let result = read.status().map_err(error);
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        engine.recheck_directory_git_status(&read).map_err(error)?;
+        result
+    }
+
+    fn initialize_directory_git(
+        &self,
+        identity: &Identity,
+        repository_id: &str,
+        request: storage_contract::directory_git::DirectoryGitInitializeBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, repository_id)?;
+        engine
+            .initialize_directory_git(repository_id, &request, &current.principal)
+            .map_err(error)
+    }
+    fn stage_directory_git_child(
+        &self,
+        identity: &Identity,
+        repository_id: &str,
+        request: storage_contract::directory_git::DirectoryGitStageChildBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, repository_id)?;
+        engine
+            .stage_directory_git_child(repository_id, &request, &current.principal)
+            .map_err(error)
+    }
+    fn stage_directory_git_owned(
+        &self,
+        identity: &Identity,
+        repository_id: &str,
+        request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, repository_id)?;
+        engine
+            .stage_directory_git_owned(repository_id, &request, &current.principal)
+            .map_err(error)
+    }
+    fn directory_staging(
+        &self,
+        identity: &Identity,
+        repository_id: &str,
+        branch: &str,
+    ) -> Result<storage_contract::directory_staging::DirectoryStagingStatus, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        repository(&engine, repository_id)?;
+        engine
+            .directory_staging_status(repository_id, branch)
+            .map_err(error)
+    }
+    fn commit_directory_changes(
+        &self,
+        identity: &Identity,
+        repository_id: &str,
+        branch: &str,
+        request: storage_contract::directory_staging::DirectoryCommitBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, repository_id)?;
+        engine
+            .commit_directory_changes(storage_engine::DirectoryCommitRequest {
+                repository_id,
+                directory_branch_id: branch,
+                expected_tree_id: &request.expected_tree_id,
+                expected_index_generation: request.expected_index_generation,
+                message: &request.message,
+                principal: &current.principal,
+                operation_id: request.operation_id,
+            })
+            .map_err(error)
     }
     fn directory_history(
         &self,
@@ -1593,6 +1716,7 @@ impl Backend for EngineBackend {
     ) -> Result<crate::TopologySnapshot, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
+        let mut names = std::collections::BTreeSet::new();
         let slots = engine
             .config()
             .disks
@@ -1601,23 +1725,31 @@ impl Backend for EngineBackend {
                 let storage_contract::DiskConfig {
                     slot_id,
                     disk_id,
-                    root: _,
+                    root,
                     level,
                     upstream_slot_id,
                     metadata_member,
                     binding_generation,
                     capacity_bytes: _,
                 } = disk;
-                crate::TopologySlot {
+                let name = crate::backend_storage_metadata::disk_directory_name(root)?;
+                if !names.insert(name.key().to_owned()) {
+                    return Err(ApiError::conflict(
+                        storage_contract::ErrorCode::NameConflict,
+                        "disk directory basenames collide under the portable name policy",
+                    ));
+                }
+                Ok(crate::TopologySlot {
+                    name: Some(name),
                     slot_id: slot_id.clone(),
                     disk_id: disk_id.clone(),
                     level: *level,
                     upstream_slot_id: upstream_slot_id.clone(),
                     metadata_member: *metadata_member,
                     binding_generation: *binding_generation,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, ApiError>>()?;
         Ok(crate::TopologySnapshot {
             generation: engine.state().topology_generation,
             slots,

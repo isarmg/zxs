@@ -6,6 +6,8 @@ const BRANCH: &str = "browser-notice-lifecycle";
 const NOTICE: &str = ".zxs-inline-feedback > .zxs-status";
 const DEFAULT: &str = "button[data-zxs-set-directory-default='true']";
 const BROWSE: &str = "//div[contains(@class,'zxs-select')][./label[normalize-space(.)='Browse folder branch' or normalize-space(.)='浏览目录分支']]/button[@role='combobox' and not(@disabled)]";
+const DEFAULT_SUCCESS_EN: &str = "The default view is updated. Enabled SMB shares use this view.";
+const DEFAULT_SUCCESS_ZH: &str = "默认读取视图已更新；已启用的 SMB 共享使用该视图。";
 
 const OBSERVE_FETCH: &str = r#"
     const original=window.fetch;
@@ -108,13 +110,14 @@ fn saved(browser: &Browser) -> Result<()> {
         "real default branch publication success",
         &format!(
             r#"
-        const notice=document.querySelector({}),button=document.querySelector({});
+        const notice=document.querySelector({notice_selector}),button=document.querySelector({default_selector});
         return notice?.getAttribute('role')==='status'
-            &&/Default branch saved|已设为默认分支/.test(notice.textContent)
+            &&{messages}.includes(notice.textContent.trim())
             &&button?.disabled;
     "#,
-            json!(NOTICE),
-            json!(DEFAULT),
+            notice_selector = json!(NOTICE),
+            default_selector = json!(DEFAULT),
+            messages = json!([DEFAULT_SUCCESS_EN, DEFAULT_SUCCESS_ZH]),
         ),
     )
 }
@@ -193,9 +196,12 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     browser.click(&browser.button("Files", "文件")?)?;
     browser.click(&browser.button("All disks", "所有硬盘")?)?;
     browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
-    browser.click(&browser.element("xpath", "//tr[.//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-fixtures']]//button[normalize-space(.)='Details' or normalize-space(.)='详情']")?)?;
+    browser.click(&browser.element(
+        "xpath",
+        "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-fixtures']",
+    )?)?;
+    browser.css("[data-directory-git-initialized='true'][data-directory-git-staged='false'][data-directory-git-needs-restage='false']")?;
     create_branch(browser)?;
-    browser.click(&browser.button("Browse folder branch", "浏览目录分支")?)?;
     browser.script(OBSERVE_FETCH)?;
     with_cleanup(
         || exercise_notices(browser),

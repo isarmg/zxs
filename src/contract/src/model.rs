@@ -99,6 +99,23 @@ fn default_max_retained_workspace_metadata_bytes_per_principal() -> u64 {
     64 << 20
 }
 impl Config {
+    /// Draft fresh storage as independent level-one roots. No backup relationship
+    /// is inferred from directory order. Metadata membership still follows the
+    /// existing pool protocol; this does not create independent commit domains.
+    pub fn independent_roots(
+        mode: Mode,
+        disks: impl IntoIterator<Item = PathBuf>,
+    ) -> crate::Result<Self> {
+        let mut config = Self::development(disks)?;
+        config.mode = mode;
+        for (index, disk) in config.disks.iter_mut().enumerate() {
+            disk.slot_id = format!("D{:02}", index + 1);
+            disk.level = 1;
+            disk.upstream_slot_id = None;
+        }
+        Ok(config)
+    }
+
     /// Build a development draft with one primary and optional ordered backup tiers.
     /// Validate the draft before use; an empty iterator is not a valid pool.
     pub fn development(disks: impl IntoIterator<Item = PathBuf>) -> crate::Result<Self> {
@@ -1076,6 +1093,9 @@ pub struct State {
     pub file_selections: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub directory_branches: crate::TrackedMap<DirectoryBranch>,
+    /// Only an explicit initialization creates a directory repository. Legacy
+    /// composition rows alone do not enable Git-like staging or branch actions.
+    pub directory_git_repositories: crate::TrackedMap<crate::directory_git::DirectoryGitRepository>,
     #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
     pub directory_trees: crate::TrackedRecords<DirectoryTree>,
     /// Current projection intent, separate from each public file branch HEAD.
@@ -1159,6 +1179,7 @@ impl State {
             branches,
             file_selections,
             directory_branches,
+            directory_git_repositories,
             directory_trees,
             file_write_origins,
             file_contexts,
@@ -1196,6 +1217,7 @@ impl State {
         branches.begin_tracking();
         file_selections.begin_tracking();
         directory_branches.begin_tracking();
+        directory_git_repositories.begin_tracking();
         directory_trees.begin_tracking();
         file_write_origins.begin_tracking();
         file_contexts.begin_tracking();

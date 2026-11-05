@@ -13,6 +13,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 mod business;
 mod container_storage;
 mod degraded_recovery;
+mod directory_conversion;
+pub use directory_conversion::{
+    DirectoryConversionConfirmation, DirectoryConversionDigest, DirectoryConversionPreview,
+    DirectoryExportOutcome, DirectoryImportFailure, DirectoryImportProgress,
+    DirectoryImportStopOutcome, DirectoryImportStopRequest, OrdinaryDirectoryPreview,
+    ParseDirectoryConversionDigest, PreparedDirectoryExport, PreparedDirectoryImport,
+    PreparedOrdinaryDirectory,
+};
 mod disk;
 mod engine;
 pub use engine::RecoveryDataRoot;
@@ -22,6 +30,13 @@ pub use engine::{
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };
 mod file_stamp;
+mod foreign_import;
+pub use foreign_import::{
+    ForeignCheckpoint, ForeignEvidenceDigest, ForeignHistory, ForeignImportLimits,
+    ForeignImportMapping, ForeignImportPreview, ForeignLocalBinding, ForeignMappedHistory,
+    ForeignMigrationPlan, ForeignMigrationReceipt, ForeignMigrationTransaction,
+    ForeignPrimaryOrigin, ForeignSourceIdentity, ForeignVersionAvailability,
+};
 mod historical_save;
 pub use engine::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
@@ -53,15 +68,16 @@ mod repair;
 mod state_projection;
 mod wire;
 pub use business::{
-    DirectoryBranchPreview, DirectoryDefaultSelection, FileBranchMergeRequest,
-    FileDefaultSelection, FileHistoryMergeRequest, FileNodeProjectionRequest, FileNodeSummary,
-    FileNodeTagsUpdateRequest, NamespaceTree, PreparedUpload, UploadPreparation,
-    validate_branch_name,
+    DirectoryBranchPreview, DirectoryCommitRequest, DirectoryDefaultSelection, DirectoryGitStatusRead,
+    FileBranchMergeRequest, FileDefaultSelection, FileHistoryMergeRequest,
+    FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest, NamespaceTree,
+    PreparedUpload, UploadPreparation, validate_branch_name,
 };
 pub use degraded_recovery::RecoveryPlan;
 pub use disk::{
-    DiskFile, DiskObservationAccess, DiskObservationDirectory, DiskObservationMount, offline_check,
-    offline_export,
+    DiskFile, DiskObservationAccess, DiskObservationDirectory, DiskObservationMount,
+    DiskRoleEvidence, RecognizedDisk, RecordedDiskRole, offline_check, offline_export,
+    recognize_disk,
 };
 #[cfg(feature = "fault-injection")]
 pub use engine::DiskQuiesceFault;
@@ -97,3 +113,7 @@ mod repair_io_tail_support;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/support/directory_git_fixture.rs"]
+mod directory_git_fixture;

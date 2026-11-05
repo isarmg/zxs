@@ -58,12 +58,13 @@ fn capture_views(browser: &Browser, output: Option<&Path>) -> Result<()> {
         }
         let header = browser.script(r#"
             const font=parseFloat(getComputedStyle(document.querySelector('.zxs-header-navigation')).fontSize);
+            const row=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--zxs-compact-row-height'));
             const buttons=[...document.querySelectorAll('.zxs-header-actions > .zxs-button')];
             const navigation=[...document.querySelectorAll('.zxs-header-navigation button')].map(e=>e.textContent.trim());
             const expected=document.documentElement.lang==='zh-CN'?['文件','详情','状态','历史记录','系统管理']:['Files','Details','Status','History','Administration'];
             return { font, navigation, order:JSON.stringify(navigation)===JSON.stringify(expected), username:!!document.querySelector('.zxs-session-identity'), valid:buttons.length>=4&&buttons.every(e=>{
                 const r=e.getBoundingClientRect(),svg=e.querySelector('svg'),s=svg?.getBoundingClientRect();
-                return r.width>=44&&r.height>=44&&s&&Math.abs(s.height-font)<1&&!!e.getAttribute('aria-label');
+                return r.width>=row&&Math.abs(r.height-row)<.5&&s&&Math.abs(s.height-font)<1&&!!e.getAttribute('aria-label');
             })};
         "#)?;
         if header["valid"] != true || header["username"] != false || header["order"] != true {

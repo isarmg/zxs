@@ -289,7 +289,7 @@ impl SetupRecovery {
                 "select between one and 32 storage directories",
             ));
         }
-        let discovery = self.discovery_root()?;
+        let discovery = self.discovery_root();
         let mut paths = Vec::with_capacity(request.selections.len());
         let mut directories = Vec::with_capacity(request.selections.len());
         for selection in &request.selections {
@@ -306,8 +306,8 @@ impl SetupRecovery {
         if request.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
         }
-        let mut config = Config::development(paths).map_err(ApiError::contract_input)?;
-        config.mode = request.mode;
+        let config =
+            Config::independent_roots(request.mode, paths).map_err(ApiError::contract_input)?;
         let config = ValidatedConfig::try_from(config)
             .and_then(|config| config.with_workspace_limits(self.retained_workspace_limits))
             .map_err(engine_error)?;

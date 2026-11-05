@@ -7,6 +7,7 @@ fn topology_wire_exposes_only_fixed_public_metadata() {
         generation: u64::MAX,
         slots: vec![
             TopologySlot {
+                name: Some(name_policy::PortablePath::parse("disk").unwrap()),
                 slot_id: "P01".into(),
                 disk_id: "disk-primary".into(),
                 level: 1,
@@ -15,6 +16,7 @@ fn topology_wire_exposes_only_fixed_public_metadata() {
                 binding_generation: 7,
             },
             TopologySlot {
+                name: Some(name_policy::PortablePath::parse("disk").unwrap()),
                 slot_id: "B01".into(),
                 disk_id: "disk-backup".into(),
                 level: 2,
@@ -55,4 +57,23 @@ fn placement_wire_preserves_frozen_routes_and_decimal_binding_map() {
         storage_contract::canonical_json(&response).unwrap(),
         storage_contract::canonical_json(&expected).unwrap()
     );
+}
+
+#[test]
+#[cfg(feature = "core")]
+fn disk_directory_names_are_exact_portable_basenames() {
+    for (root, expected) in [("/abc/a", "a"), ("/abc/b/", "b"), ("/abc/资料", "资料")] {
+        assert_eq!(
+            disk_directory_name(std::path::Path::new(root))
+                .unwrap()
+                .as_str(),
+            expected
+        );
+    }
+    for root in ["/", "/abc/CON", "/abc/a:b", "/abc/cafe\u{301}"] {
+        assert!(
+            disk_directory_name(std::path::Path::new(root)).is_err(),
+            "{root}"
+        );
+    }
 }

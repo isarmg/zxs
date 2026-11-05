@@ -24,6 +24,73 @@ fn legacy_wire(engine: &Engine, repo: &storage_contract::Repository) -> Value {
     let branches=branches.into_iter().map(|branch|json!({"directory_branch_id":branch.directory_branch_id,"name":branch.name,"path":"","current":selected==Some(&branch.directory_branch_id),"materialized":branch.materialized,"head_tree_id":branch.head_tree_id,"file_count":branch.file_branches.len().to_string(),"parent_branch_id":branch.parent_branch_id})).collect::<Vec<_>>();
     json!({"repository_id":repo.repository_id,"namespace_branch_id":repo.main_branch_id,"directory_branch_id":selected,"name":name,"directory_branches":branches})
 }
+fn initialize_and_commit_root(engine: &mut Engine, repo: &storage_contract::Repository) {
+    let expected_namespace_head = engine.state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    engine
+        .initialize_directory_git(
+            &repo.repository_id,
+            &storage_contract::directory_git::DirectoryGitInitializeBody {
+                path: String::new(),
+                expected_namespace_head,
+                operation_id: storage_contract::OperationId::generate().unwrap(),
+            },
+            "owner",
+        )
+        .unwrap();
+    let status = engine
+        .directory_git_status(&repo.repository_id, "")
+        .unwrap();
+    engine
+        .commit_directory_changes(storage_engine::DirectoryCommitRequest {
+            repository_id: &repo.repository_id,
+            directory_branch_id: status.directory_branch_id.as_deref().unwrap(),
+            expected_tree_id: status.working_tree_id.as_deref().unwrap(),
+            expected_index_generation: status.index_generation,
+            message: "Explicit fixture root commit",
+            principal: "owner",
+            operation_id: storage_contract::OperationId::generate().unwrap(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn default_directory_metadata_does_not_expose_uninitialized_working_scopes() {
+    let (root, mut engine, repo, _) = fixture();
+    engine
+        .initialize_directory_scope(
+            &repo.repository_id,
+            None,
+            "owner",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    assert!(
+        engine
+            .state()
+            .directory_selections
+            .contains_key(&repo.repository_id)
+    );
+    assert!(
+        !engine
+            .state()
+            .directory_git_repositories
+            .contains_key(&repo.repository_id)
+    );
+    let (backend, _auth, _token, identity) = authenticated_backend(engine, root.path());
+    let before = storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap();
+    let snapshot = backend
+        .default_directory_branch(&identity, &repo.repository_id)
+        .unwrap();
+    assert!(snapshot.selected.is_none());
+    assert!(snapshot.directory_branches.is_empty());
+    assert_eq!(
+        storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap(),
+        before
+    );
+}
+
 #[test]
 fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
     let (root, engine, repo, _) = fixture();
@@ -46,14 +113,7 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
             "folder/file.txt",
             b"content",
         );
-        engine
-            .initialize_directory_scope(
-                &repo.repository_id,
-                None,
-                "owner",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        initialize_and_commit_root(&mut engine, &repo);
         engine
             .create_directory_branches(
                 &repo.repository_id,
@@ -131,14 +191,7 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
 #[test]
 fn typed_default_selection_retains_receipt_digest_and_admission_order() {
     let (root, mut engine, repo, _) = fixture();
-    engine
-        .initialize_directory_scope(
-            &repo.repository_id,
-            None,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    initialize_and_commit_root(&mut engine, &repo);
     let selected = engine.state().directory_selections[&repo.repository_id].clone();
     let expected_tree = engine.state().directory_branches[&selected]
         .head_tree_id
@@ -188,7 +241,7 @@ fn typed_default_selection_retains_receipt_digest_and_admission_order() {
             .unwrap(),
         result
     );
-    let expected=storage_contract::object_hash("request",&json!({"kind":"directory.default.set","principal":identity.principal,"body":{"repository_id":repo.repository_id,"directory_branch_id":selected,"expected_tree_id":expected_tree,"expected_head":expected_head}})).unwrap();
+    let expected=storage_contract::object_hash("request",&json!({"kind":"directory.git.checkout","principal":identity.principal,"body":{"repository_id":repo.repository_id,"directory_branch_id":selected,"expected_tree_id":expected_tree,"expected_head":expected_head}})).unwrap();
     assert_eq!(result.request_digest, expected);
     // A changed digest wins over the missing branch's dynamic scope failure.
     assert_eq!(
@@ -239,14 +292,7 @@ fn typed_default_selection_retains_receipt_digest_and_admission_order() {
 #[test]
 fn typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_policy() {
     let (root, mut engine, repo, _) = fixture();
-    engine
-        .initialize_directory_scope(
-            &repo.repository_id,
-            None,
-            "owner",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    initialize_and_commit_root(&mut engine, &repo);
     let branch = engine.state().directory_selections[&repo.repository_id].clone();
     engine
         .create_directory_branches(

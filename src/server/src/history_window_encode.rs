@@ -17,7 +17,7 @@ fn bounded_error(source: json_codec::Error) -> ApiError {
     ApiError::new(
         ::http::StatusCode::INTERNAL_SERVER_ERROR,
         ErrorCode::ResponseTooLarge,
-        "history page exceeds its encoded byte budget",
+        "JSON response exceeds its encoded byte budget",
     )
     .with_source(source)
 }

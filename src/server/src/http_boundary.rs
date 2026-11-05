@@ -28,6 +28,12 @@ pub(crate) enum ApiErrorSource {
     #[cfg(feature = "core")]
     #[error("{0}")]
     DeregistrationPlan(#[from] storage_engine::DeregistrationPlanError),
+    #[cfg(feature = "core")]
+    #[error("{0}")]
+    DirectoryImport(#[from] storage_engine::DirectoryImportFailure),
+    #[cfg(feature = "core")]
+    #[error("{0}")]
+    ConversionDigest(#[from] storage_engine::ParseDirectoryConversionDigest),
     #[error("{0}")]
     Json(#[from] json_codec::Error),
     #[error("{0}")]

@@ -238,7 +238,7 @@ fn authorize_read_rechecks_current_owner_and_account_for_every_open_handle_kind(
 #[test]
 fn authorize_read_keeps_read_semantics_after_normal_writes_and_default_selection() {
     let (_temp, shared, backend, branch) = fixture();
-    let (repository, _main, draft) = directory_fixture(&shared);
+    let (repository, _main, draft) = directory_fixture(&shared, &backend);
     let (mut client, worker, hello) = wire(shared.clone());
     assert!(matches!(hello, Response::Ok { .. }));
     let handles = open_authorization_handles(&mut client);
@@ -261,7 +261,7 @@ fn authorize_read_keeps_read_semantics_after_normal_writes_and_default_selection
     let mut bytes = [0; 3];
     bytes.copy_from_slice(&read_rpc(&mut client, handles[0].0.handle, 0, 3));
     assert_eq!(&bytes, b"old", "immutable reader keeps its opened version");
-    select_directory(&shared, &repository, &draft);
+    select_directory(&shared, &backend, &repository, &draft);
     // A changed write destination must not prevent reading an existing FD.
     check_read_authorization(&mut client, &backend, &branch, &handles, None);
     bytes.copy_from_slice(&read_rpc(&mut client, handles[0].0.handle, 0, 3));

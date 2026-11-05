@@ -2131,6 +2131,7 @@ fn published_candidate(engine: &Engine, sequence: u64) -> crate::journal::Candid
 #[test]
 fn current_copy_preflight_rebuilds_empty_targets_and_fresh_identities_before_body_io() {
     let mut fixture = Fixture::new();
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "");
     fixture
         .engine
         .initialize_directory_scope(&fixture.repository.repository_id, None, "admin", op())
@@ -2261,6 +2262,7 @@ fn current_copy_preflight_accepts_a_parent_copied_earlier_in_the_same_batch() {
         "source/nested",
         b"nested body",
     );
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "");
     fixture
         .engine
         .initialize_directory_scope(&fixture.repository.repository_id, None, "admin", op())

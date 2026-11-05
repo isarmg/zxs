@@ -16,7 +16,7 @@ async fn namespace_batch_requires_named_nested_objects_before_mutation() {
     )
     .await;
     let repo = listing["context"]["repository_id"].as_str().unwrap();
-    let branch = manager_directory_branch(&app, &token, "", "schema-check").await;
+    let branch = manager_prepare_directory_branch(&app, &token, "", "schema-check").await;
     let before = manager_scope(&app, &token, repo, &branch).await;
     let source = manager_batch_source(&before, "report.txt");
     let target = manager_batch_target(&before, "renamed.txt");
@@ -197,7 +197,7 @@ async fn namespace_batch_preserves_null_digest_and_replays_after_reopen() {
     )
     .await;
     let repo = listing["context"]["repository_id"].as_str().unwrap();
-    let branch = manager_directory_branch(&app, &token, "", "batch-replay").await;
+    let branch = manager_prepare_directory_branch(&app, &token, "", "batch-replay").await;
     let before = manager_scope(&app, &token, repo, &branch).await;
     let source = manager_batch_source(&before, "report.txt");
     let route = "/api/file-manager/disks/P01/namespace-batch";

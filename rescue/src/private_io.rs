@@ -284,5 +284,5 @@ fn write_atomic_at(
 }
 
 #[cfg(test)]
-#[path = "../../../test/rescue/unit/private_io/tests.rs"]
+#[path = "../../test/rescue/unit/private_io/tests.rs"]
 mod tests;

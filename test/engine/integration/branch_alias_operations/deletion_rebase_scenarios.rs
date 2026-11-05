@@ -6,6 +6,12 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
     pool.save("Straße/report.txt", b"retained historical content");
     let frozen = pool.register("Straße", "frozen");
     let original = pool.entry(&frozen, "Straße/report.txt");
+    let frozen_branch = pool.branch(&frozen);
+    let committed = pool.engine.state().directory_git_repositories[&frozen_branch.directory_id]
+        .branches[&frozen]
+        .head_tree_id
+        .clone()
+        .unwrap();
     pool.engine
         .file_namespace(
             &pool.repo.repository_id,
@@ -21,7 +27,20 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
         .unwrap();
     assert_eq!(pool.branch(&frozen).path, "Straße");
     pool.select("renamed", "frozen");
-    assert_eq!(pool.branch(&frozen).path, "Straße");
+    // Checkout rebases only the working composition. Its committed Git tree
+    // retains the historical spelling and stable identity.
+    assert_eq!(pool.branch(&frozen).path, "renamed");
+    assert_eq!(
+        pool.engine.state().directory_trees[&committed].path,
+        "Straße"
+    );
+    assert_eq!(
+        pool.engine.state().directory_git_repositories[&frozen_branch.directory_id].branches
+            [&frozen]
+            .head_tree_id
+            .as_ref(),
+        Some(&committed)
+    );
     assert_eq!(
         pool.current_entry("renamed/report.txt").file_id,
         original.file_id
@@ -39,7 +58,7 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
     let operation = pool.batch(
         storage_contract::DirectoryBatchKind::Delete,
         vec![DirectoryNamespaceItem {
-            source: pool.source(&frozen, "Straße/report.txt"),
+            source: pool.source(&frozen, "renamed/report.txt"),
             target: None,
         }],
     );

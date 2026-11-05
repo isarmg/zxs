@@ -47,6 +47,7 @@ fn disk_roots_preserve_order_access_capacity_and_ignore_directory_state() {
 
 fn disk(slot: &str, online: bool, writable: bool, available_bytes: u64) -> Disk {
     Disk {
+        name: "disk-directory".into(),
         slot_id: slot.into(),
         online,
         writable,

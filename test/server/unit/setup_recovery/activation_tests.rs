@@ -44,6 +44,7 @@ fn service_at(base: &Path, ids: &[&str]) -> SetupRecovery {
         .unwrap();
     SetupRecovery::new(data, management, disks)
         .unwrap()
+        .with_discovery_root(discovery.to_str().unwrap().parse().unwrap())
         .allow_development_mode()
 }
 fn admin() -> Identity {
@@ -81,19 +82,6 @@ fn request(service: &SetupRecovery, ids: &[&str]) -> StorageActivationRequest {
         .to_str()
         .unwrap()
         .to_owned();
-    let current = service.discovery_root().unwrap();
-    if current.discovery_root != root {
-        service
-            .set_discovery_root(
-                &admin(),
-                storage_contract::storage_directories::SetDiscoveryRootRequest {
-                    expected_discovery_root: current.discovery_root,
-                    discovery_root: root.clone(),
-                },
-                |_| Ok(()),
-            )
-            .unwrap();
-    }
     let selections = ids
         .iter()
         .map(|id| {
@@ -195,6 +183,13 @@ fn first_pair_genesis_retains_fixed_quorum_and_reopens() {
             |engine| {
                 assert_eq!(engine.config().disks.len(), 2);
                 assert_eq!(engine.config().metadata_quorum(), 2);
+                assert!(
+                    engine
+                        .config()
+                        .disks
+                        .iter()
+                        .all(|disk| { disk.level == 1 && disk.upstream_slot_id.is_none() })
+                );
                 assert_eq!(engine.state().topology_generation, 1);
                 Ok(())
             },
@@ -208,11 +203,118 @@ fn first_pair_genesis_retains_fixed_quorum_and_reopens() {
     let engine = Engine::open(&f.service.data_root).unwrap();
     assert_eq!(engine.config().disks.len(), 2);
     assert!(
+        engine
+            .config()
+            .disks
+            .iter()
+            .all(|disk| { disk.level == 1 && disk.upstream_slot_id.is_none() })
+    );
+    assert!(
         fs::read_dir(&f.service.disks["three"])
             .unwrap()
             .next()
             .is_none()
     );
+}
+
+#[test]
+fn interrupted_independent_roots_complete_without_rebinding_or_backup_edges() {
+    let f = fixture();
+    initialize(&f.service);
+    let failure = f.service.activate(
+        &admin(),
+        request(&f.service, &["two", "one"]),
+        |_| Ok(()),
+        |_| Err(ApiError::unauthorized()),
+    );
+    assert!(failure.is_err());
+    let original: Config = read_control(&f.service.data_root.join("config.json")).unwrap();
+    let seals = original
+        .disks
+        .iter()
+        .map(|disk| fs::read(disk.root.join("disk.json")).unwrap())
+        .collect::<Vec<_>>();
+    let restarted = SetupRecovery::new(
+        f.service.data_root.clone(),
+        f.service.management_root.clone(),
+        BTreeMap::new(),
+    )
+    .unwrap()
+    .with_discovery_root(f.service.discovery_root.clone());
+    restarted
+        .complete_activation(
+            &admin(),
+            |_| Ok(()),
+            |engine| {
+                assert_eq!(value_digest(engine.config())?, value_digest(&original)?);
+                assert!(
+                    engine
+                        .config()
+                        .disks
+                        .iter()
+                        .all(|disk| { disk.level == 1 && disk.upstream_slot_id.is_none() })
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+    restarted.activation_admitted().unwrap();
+    for (disk, seal) in original.disks.iter().zip(seals) {
+        assert_eq!(fs::read(disk.root.join("disk.json")).unwrap(), seal);
+    }
+}
+
+#[test]
+fn competing_first_activations_publish_one_identity_and_preserve_the_losing_root() {
+    let f = fixture();
+    initialize(&f.service);
+    let selections = [request(&f.service, &["one"]), request(&f.service, &["two"])];
+    let barrier = std::sync::Barrier::new(2);
+    let outcomes = std::thread::scope(|scope| {
+        let workers = selections.map(|selected| {
+            let service = &f.service;
+            let barrier = &barrier;
+            scope.spawn(move || {
+                let mut first = true;
+                service.activate(
+                    &admin(),
+                    selected,
+                    |_| {
+                        if first {
+                            first = false;
+                            barrier.wait();
+                        }
+                        Ok(())
+                    },
+                    |_| Ok(()),
+                )
+            })
+        });
+        workers.map(|worker| worker.join().unwrap())
+    });
+    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+    let rejected = outcomes.into_iter().find_map(Result::err).unwrap();
+    assert!(matches!(
+        rejected.code,
+        storage_contract::ErrorCode::SetupBusy | storage_contract::ErrorCode::RecoveryRequired
+    ));
+    f.service.activation_admitted().unwrap();
+    let engine = Engine::open(&f.service.data_root).unwrap();
+    let [disk] = engine.config().disks.as_slice() else {
+        panic!("exactly one first activation must win")
+    };
+    assert_eq!(disk.level, 1);
+    assert!(disk.upstream_slot_id.is_none());
+    for name in ["one", "two"] {
+        if f.service.disks[name] != disk.root {
+            assert!(
+                fs::read_dir(&f.service.disks[name])
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
+    }
 }
 
 #[test]
@@ -895,30 +997,9 @@ fn durable_credentials_before_authority_failure_restart_without_password_reset()
 }
 
 #[test]
-fn discovery_defaults_without_touching_storage_and_persists_compare_and_swap() {
-    use storage_contract::storage_directories::{DEFAULT_DISCOVERY_ROOT, SetDiscoveryRootRequest};
+fn discovery_uses_only_immutable_host_configuration_without_data_io() {
+    use storage_contract::storage_directories::DEFAULT_DISCOVERY_ROOT;
     let f = fixture();
-    assert_eq!(
-        f.service.discovery_root().unwrap().discovery_root,
-        "/zxs/data/disks"
-    );
-    assert_eq!(fs::read_dir(&f.service.data_root).unwrap().count(), 0);
-    initialize(&f.service);
-    let root = f.service.disks["one"].parent().unwrap();
-    let mode = fs::metadata(root).unwrap().mode();
-    let settings = f
-        .service
-        .set_discovery_root(
-            &admin(),
-            SetDiscoveryRootRequest {
-                expected_discovery_root: DEFAULT_DISCOVERY_ROOT.into(),
-                discovery_root: root.to_str().unwrap().into(),
-            },
-            |_| Ok(()),
-        )
-        .unwrap();
-    assert_eq!(fs::metadata(root).unwrap().mode(), mode);
-    assert_eq!(fs::read_dir(root).unwrap().count(), 3);
     let fresh = SetupRecovery::new(
         f.service.data_root.clone(),
         f.service.management_root.clone(),
@@ -926,82 +1007,44 @@ fn discovery_defaults_without_touching_storage_and_persists_compare_and_swap() {
     )
     .unwrap();
     assert_eq!(
-        fresh.discovery_root().unwrap().discovery_root,
-        settings.discovery_root
-    );
-    assert_eq!(
-        f.service
-            .set_discovery_root(
-                &admin(),
-                SetDiscoveryRootRequest {
-                    expected_discovery_root: DEFAULT_DISCOVERY_ROOT.into(),
-                    discovery_root: root.to_str().unwrap().into()
-                },
-                |_| Ok(())
-            )
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::ConfigConflict
-    );
-}
-
-#[test]
-fn discovery_root_changes_require_current_authority_and_existing_safe_directory() {
-    use storage_contract::storage_directories::{DEFAULT_DISCOVERY_ROOT, SetDiscoveryRootRequest};
-    let f = fixture();
-    let make = |path: &Path| SetDiscoveryRootRequest {
-        expected_discovery_root: DEFAULT_DISCOVERY_ROOT.into(),
-        discovery_root: path.to_str().unwrap().into(),
-    };
-    let root = f.service.disks["one"].parent().unwrap();
-    assert!(
-        f.service
-            .set_discovery_root(&admin(), make(root), |_| Ok(()))
-            .is_err()
-    );
-    initialize(&f.service);
-    assert!(
-        f.service
-            .set_discovery_root(&admin(), make(root), |_| Err(ApiError::unauthorized()))
-            .is_err()
-    );
-    for path in [
-        f.service.data_root.clone(),
-        f.service.management_root.clone(),
-        f._temp.path().join("missing"),
-    ] {
-        assert!(
-            f.service
-                .set_discovery_root(&admin(), make(&path), |_| Ok(()))
-                .is_err()
-        );
-    }
-    assert!(!f._temp.path().join("missing").exists());
-    assert_eq!(
-        f.service.discovery_root().unwrap().discovery_root,
+        fresh.discovery_root().discovery_root,
         DEFAULT_DISCOVERY_ROOT
     );
+    assert_eq!(fs::read_dir(&f.service.data_root).unwrap().count(), 0);
+    let unavailable = f._temp.path().join("unavailable-discovery");
+    let fresh = fresh.with_discovery_root(unavailable.to_str().unwrap().parse().unwrap());
+    assert_eq!(
+        fresh.discovery_root().discovery_root,
+        unavailable.to_str().unwrap()
+    );
+    assert!(!unavailable.exists());
+    assert_eq!(fs::read_dir(&f.service.data_root).unwrap().count(), 0);
+    initialize(&fresh);
+    fs::write(
+        fresh.data_root.join("storage-discovery.json"),
+        b"preserve-obsolete-settings",
+    )
+    .unwrap();
+    assert_eq!(
+        fresh.discovery_root().discovery_root,
+        unavailable.to_str().unwrap()
+    );
+    assert_eq!(
+        fs::read(fresh.data_root.join("storage-discovery.json")).unwrap(),
+        b"preserve-obsolete-settings"
+    );
 }
 
 #[test]
-fn changed_discovery_root_rejects_old_preview_before_intent_or_disk_writes() {
-    use storage_contract::storage_directories::SetDiscoveryRootRequest;
-    let f = fixture();
+fn changed_host_discovery_rejects_old_preview_before_intent_or_disk_writes() {
+    let mut f = fixture();
     initialize(&f.service);
     let selected = request(&f.service, &["one"]);
-    let old = f.service.discovery_root().unwrap().discovery_root;
     let other = f._temp.path().join("other");
     fs::create_dir(&other).unwrap();
-    f.service
-        .set_discovery_root(
-            &admin(),
-            SetDiscoveryRootRequest {
-                expected_discovery_root: old,
-                discovery_root: other.to_str().unwrap().into(),
-            },
-            |_| Ok(()),
-        )
-        .unwrap();
+    f.service = f
+        .service
+        .with_discovery_root(other.to_str().unwrap().parse().unwrap());
     assert!(
         f.service
             .activate(&admin(), selected, |_| Ok(()), |_| panic!())
@@ -1012,9 +1055,8 @@ fn changed_discovery_root_rejects_old_preview_before_intent_or_disk_writes() {
 }
 
 #[test]
-fn pending_activation_fences_discovery_changes_and_completion_keeps_original_roots() {
-    use storage_contract::storage_directories::SetDiscoveryRootRequest;
-    let f = fixture();
+fn pending_activation_completion_keeps_original_roots_after_host_config_change() {
+    let mut f = fixture();
     initialize(&f.service);
     assert!(
         f.service
@@ -1026,23 +1068,12 @@ fn pending_activation_fences_discovery_changes_and_completion_keeps_original_roo
             )
             .is_err()
     );
-    let old = f.service.discovery_root().unwrap().discovery_root;
     let other = f._temp.path().join("other");
-    fs::create_dir(&other).unwrap();
-    let change = || SetDiscoveryRootRequest {
-        expected_discovery_root: old.clone(),
-        discovery_root: other.to_str().unwrap().into(),
-    };
-    assert!(
-        f.service
-            .set_discovery_root(&admin(), change(), |_| Ok(()))
-            .is_err()
-    );
+    f.service = f
+        .service
+        .with_discovery_root(other.to_str().unwrap().parse().unwrap());
     f.service
         .complete_activation(&admin(), |_| Ok(()), |_| Ok(()))
-        .unwrap();
-    f.service
-        .set_discovery_root(&admin(), change(), |_| Ok(()))
         .unwrap();
     f.service
         .complete_activation(
@@ -1055,6 +1086,7 @@ fn pending_activation_fences_discovery_changes_and_completion_keeps_original_roo
         f.service.storage_status().state,
         StorageActivationState::Active
     );
+    assert!(!other.exists());
 }
 
 #[test]

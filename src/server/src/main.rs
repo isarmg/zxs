@@ -52,6 +52,9 @@ struct Args {
     /// System-disk management state; defaults to ROOT/management, never a data member.
     #[arg(long)]
     management_root: Option<PathBuf>,
+    /// Discover only immediate disk directories under this service-managed parent.
+    #[arg(long, default_value = "/zxs/data/disks")]
+    storage_discovery_root: storage_server::storage_directories::DiscoveryRoot,
     /// Locally approved existing disk root, repeated as opaque ID=/absolute/path.
     #[arg(long = "setup-disk")]
     setup_disks: Vec<String>,
@@ -183,6 +186,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
     let Args {
         root,
         management_root,
+        storage_discovery_root,
         setup_disks,
         setup_configs,
         allow_development_setup,
@@ -257,6 +261,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
         storage_server::management::ManagementOptions {
             scrub_policy,
             setup_disks: parse_setup_map(setup_disks, "--setup-disk")?,
+            discovery_root: storage_discovery_root,
             setup_configs: parse_setup_map(setup_configs, "--setup-config")?,
             allow_development_setup,
             retained_workspace_limits,

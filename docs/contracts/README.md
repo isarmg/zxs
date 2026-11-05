@@ -4,6 +4,18 @@
 
 本附件为 `0.1.0-draft`，用于使部分规范可以执行字段与向量校验。仓库已有核心、服务端和客户端实现；本附件的覆盖仍限于下表，不表示完整 API 或盘格式已冻结，也不替代实际 I/O 和平台验收。
 
+`StorageDiscoveredDisks` 区分空候选、本盘 ZXS 角色声明、未支持来源与不可用项。
+发现父目录只来自启动配置，旧修改根接口已移除；未知候选不自动获得写权限。
+`OrdinaryDiskConversion*` 定义活动系统下“普通来源＋另一空目标→新一级盘”的
+联合预览、明确范围确认和两阶段状态。UINT64 仍使用十进制字符串，未知字段
+拒绝；固定请求没有可伪造的 level/upstream 字段。真实源码另强制一级、来源与
+目标互斥、完整摘要、当前授权和准确原回执，schema 本身不证明这些时序条件。
+外来 ZXS 的可移植身份和完整历史闭包没有因这些 wire 定义而实现。
+普通转换的 `stopping/stopped` 与 `completed` 分开，`stop_operation_id` 和
+`stop_result` 是必需的 nullable 字段，不能省略后默认成没有停止意图。
+停止请求要求明确确认保留来源、已接纳目标与暂存数据；服务器只凭核心准确
+停止收据完成终止，不用本地缓存取消未决决议或清理工作区字节。
+
 ## 文件与覆盖范围
 
 | 文件 | 当前覆盖 | 尚未证明 |
@@ -11,7 +23,7 @@
 | [core.schema.json](core.schema.json) | UINT64 精确上界、实体 ID、Branch / Commit 待写入映射、泛型 Entry 及文件分支投影、唯一管理员认证请求/响应、版本描述、内容提交请求、操作结果、完整上传状态、内容保存 PUBLICATION 字段、当前有界快照、分页历史根、共享索引/引用/叶页及路径证明形状 | 完整命名规则、父边和来源闭合、授权、实际 I/O、Tree/日志完整格式及所有管理操作 |
 | [openapi.json](openapi.json) | 登录/当前会话/注销/改密、保存、结果查询、版本/校验/内容/上传状态、文件管理（含零正文分支创建、冻结父版本与自有版本分开的继承投影、目录分页与精确选择、目录批量分支准备查询和128字节单行备注）及管理员系统状态、真实功耗和监测历史 | bootstrap 与凭据恢复、工作区创建/上传写接口、事件及其余尚未建模的管理接口 |
 | [config-constraints.schema.json](config-constraints.schema.json) | 第 21 章关键常量、分支冻结引用/首写物化、当前 JSON/CLI 资源额度及明确标注的分页/告警设计目标投影 | 当前进程 JSON Config、完整部署配置、目录身份、拓扑和启动状态验证 |
-| [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照35映射与历史根30映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
+| [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照36映射与历史根31映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
 | [contract-check](../tools/contract-check.md) | Rust 实现的 schema/OpenAPI 有效性、两者定义一致性、固定向量、配置投影、文档本地链接和 JSON/TOML 语法校验 | 模型检查、平台测试、网络端点行为和性能 |
 
 新增 `StorageReadmission*` 与 `StorageRegistration*` 定义覆盖登记查询、纯元数据预览、明确提交、原操作查询及继续入口。UINT64 仍为十进制字符串，nullable 状态字段必须显式出现；未知字段、客户端替换路径/actor、Detached 登记模式与无回执 completed 均拒绝。固定向量是合成字段样例，不能证明来源权威、实际固定 quorum、真实目录身份或新的 I/O epoch；这些仍由服务器和核心执行。终态 authority 的 wire 形状不代表任意终态目录可恢复，须由已认证的可恢复角色与对应核心入口共同准入。
@@ -72,7 +84,7 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 
 `FileMetadataNode` 保存不可变标签/合并子节点，`FileBranchMerge` 独立保存全部合并来源和安全图边。文件合并请求要求明确确认、结果归属及每个参与head，标签批量请求固定源节点与branch head，scope备份配置同时固定稳定身份和自身代数。标签的16项/128字节限制、无控制字符和全部预检由共享Rust验证及业务事务执行；schema检查不代替真实发布。目录分支合并待用户确认，暂不实现，能力为false。
 
-`Snapshot`、`PagedHistoryRoot`、`MetadataIndex`、`MetadataReference` 和 `MetadataLeaf` 描述本次有界根实验源码的存储形状。两个根都必须携带 `format: "radix-map-roots"`，这是布局语义标识，不是项目发行版本号；分别要求准确35个 State 映射和30个历史映射，空映射也有引用。快照的三个代数使用 UInt64 十进制字符串，events 是独立映射根，control_auth 引用独立 `state-control-auth` 对象；该对象仍按原 `Option<Value>` 编码（包括 null）。历史根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。`Candidate.history_roots` 绑定 history ID→manifest hash 的映射根，替代旧 `history_manifest_hashes`；当前 Candidate 自身没有 format 字段。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影。这组存储组件在 OpenAPI 中保持镜像，HTTP 操作结果与诊断投影另按上文契约描述。
+`Snapshot`、`PagedHistoryRoot`、`MetadataIndex`、`MetadataReference` 和 `MetadataLeaf` 描述本次有界根实验源码的存储形状。两个根都必须携带 `format: "radix-map-roots"`，这是布局语义标识，不是项目发行版本号；分别要求准确36个 State 映射和31个历史映射，空映射也有引用。快照的三个代数使用 UInt64 十进制字符串，events 是独立映射根，control_auth 引用独立 `state-control-auth` 对象；该对象仍按原 `Option<Value>` 编码（包括 null）。历史根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。`Candidate.history_roots` 绑定 history ID→manifest hash 的映射根，替代旧 `history_manifest_hashes`；当前 Candidate 自身没有 format 字段。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影。这组存储组件在 OpenAPI 中保持镜像，HTTP 操作结果与诊断投影另按上文契约描述。
 
 字段向量使用合成摘要，只检查 schema，不能证明引用对象存在或摘要正确。已有历史根正反向量均使用有效 marker，另行覆盖 markerless 根、旧 `history-index` 引用和旧 flat Snapshot 的拒绝，避免负例只因缺 marker 通过。原固定 canonical bytes/BLAKE3 向量保持不变，不由被测编码器生成期望。
 
@@ -136,3 +148,9 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 设备身份校验、具体命令白名单、资源上限、官方来源和待执行验证见
 [SMART 查询生命周期边界](../validation/smart-query-lifetime.md)。健康观察不改变原设备权限、
 存储准入或 systemd 沙箱；真实设备验收必须由操作者另行授权。
+
+## 显式目录仓库
+
+`DirectoryGitRepository` 保存各目录仓库独立的 HEAD、index 与明确孩子引用。Snapshot 与 PagedHistoryRoot 的必需映射各增加 `directory_git_repositories`，总数分别为36与31；缺失此映射的根拒绝，不补空表迁移旧格式。原证明仍绑定完整根，这些 schema 不能证明跨源完整历史或引用闭包。
+
+`DirectoryGitStatus` 和孩子状态的 nullable 字段必须显式出现；目录初始化不创建提交，读取不初始化。暂存及提交请求必须携带规范十进制字符串 index 代数，未知字段、数值或遗漏代数拒绝。固定正反向量由 schema 及 Rust DTO 回归共同验证。HTTP 公开四个目录 Git 接口，旧 `/directory-scopes` 和按名 `/directory-select` 入口移除，目录选择改用稳定分支 ID 及双 HEAD CAS；父提交只采用明确暂存的孩子 HEAD，不递归提交。状态 GET 的完整编码上限为1MiB，超过失败而不截断。

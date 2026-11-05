@@ -166,6 +166,7 @@ impl Fixture {
         );
         save(&mut engine, &repo, "dest/anchor", b"retained destination");
         let original_child = entry(&engine, &repo, "dir/child/kept");
+        crate::directory_git_fixture::checkpoint(&mut engine, &repo, "");
         let root = engine
             .create_directory_branches(
                 &repo.repository_id,
@@ -182,8 +183,8 @@ impl Fixture {
         let inactive = engine
             .create_directory_branches(
                 &repo.repository_id,
-                Some(&name_policy::LookupPath::parse("dir").unwrap()),
-                &BranchName::parse("unselected dir").unwrap(),
+                None,
+                &BranchName::parse("unselected root").unwrap(),
                 "admin",
                 op(),
             )
@@ -236,6 +237,7 @@ impl Fixture {
             self.engine.disk_exit_status().unwrap().unwrap().phase,
             DiskExitPhase::Published
         );
+        crate::directory_git_fixture::checkpoint(&mut self.engine, &self.repo, "");
         let tree = self.engine.state.directory_branches[&self.root]
             .head_tree_id
             .clone();
@@ -364,13 +366,15 @@ fn disk_exit_selected_projection_batch_copies_exact_selected_versions_and_reopen
 }
 
 #[test]
-fn disk_exit_selected_projection_batch_moves_child_selection_not_its_newer_head() {
+fn disk_exit_selected_projection_batch_moves_historical_child_not_its_newer_file_head() {
     let mut fixture = Fixture::new();
     fixture.exit_and_select(MembershipExitAction::Deregister);
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "dir/child");
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "dest");
     let child = selected_branch(&fixture.engine, &fixture.repo, "dir/child");
     let destination = selected_branch(&fixture.engine, &fixture.repo, "dest");
     let directory = &fixture.engine.state.directory_branches[&child];
-    assert_ne!(
+    assert_eq!(
         fixture.engine.state.directory_tree_selections[&directory.directory_id],
         directory.head_tree_id
     );
@@ -583,8 +587,11 @@ fn disk_exit_selected_projection_batch_rejects_inactive_hidden_and_unselected_tr
         ErrorCode::EntryNotFound
     );
     let mut wrong_baseline = mapping(&fixture.engine, &fixture.repo, &fixture.root, "dir/b", None);
-    wrong_baseline.source.expected_tree_id =
-        fixture.engine.state.directory_tree_selections[&fixture.repo.repository_id].clone();
+    let unselected_tree = fixture.engine.state.directory_branches[&fixture.inactive]
+        .head_tree_id
+        .clone();
+    assert_ne!(wrong_baseline.source.expected_tree_id, unselected_tree);
+    wrong_baseline.source.expected_tree_id = unselected_tree;
     assert_eq!(
         apply(
             &mut fixture.engine,
@@ -611,6 +618,21 @@ fn disk_exit_selected_projection_batch_rejects_selected_graph_and_occurrence_tam
     let root_tree = state.directory_tree_selections[&fixture.repo.repository_id].clone();
     let child_id = entry(&fixture.engine, &fixture.repo, "dir/child").entry_id;
     let child_branch = state.directory_selections[&child_id].clone();
+    let unselected_child_tree = state
+        .directory_trees
+        .values()
+        .filter(|tree| {
+            state.directory_branches[&tree.directory_branch_id].directory_id == child_id
+                && tree.entries.contains(&fixture.later_child)
+        })
+        .max_by_key(|tree| tree.sequence)
+        .unwrap()
+        .tree_id
+        .clone();
+    assert_ne!(
+        state.directory_tree_selections[&child_id],
+        unselected_child_tree
+    );
     for corruption in [
         "hidden",
         "version",
@@ -628,10 +650,9 @@ fn disk_exit_selected_projection_batch_rejects_selected_graph_and_occurrence_tam
                     .sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
             }
             "version" => {
-                altered.directory_tree_selections.insert(
-                    child_id.clone(),
-                    state.directory_branches[&child_branch].head_tree_id.clone(),
-                );
+                altered
+                    .directory_tree_selections
+                    .insert(child_id.clone(), unselected_child_tree.clone());
             }
             "refs" => {
                 altered
@@ -641,7 +662,7 @@ fn disk_exit_selected_projection_batch_rejects_selected_graph_and_occurrence_tam
                     .directory_refs
                     .get_mut(&child_id)
                     .unwrap()
-                    .tree_id = state.directory_branches[&child_branch].head_tree_id.clone();
+                    .tree_id = unselected_child_tree.clone();
             }
             "context" => {
                 altered

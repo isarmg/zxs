@@ -262,3 +262,24 @@ fn smb_candidates_are_explicit_repeatable_and_require_bridge_configuration() {
     assert_eq!(args.smb_allowed_users, ["second", "third"]);
     assert!(Args::try_parse_from(["zxs", "--smb-allowed-user", "second"]).is_err());
 }
+
+#[test]
+fn storage_discovery_is_supplied_as_one_immutable_service_argument() {
+    assert_eq!(
+        Args::try_parse_from(["zxs"])
+            .unwrap()
+            .storage_discovery_root
+            .as_str(),
+        "/zxs/data/disks"
+    );
+    assert_eq!(
+        Args::try_parse_from(["zxs", "--storage-discovery-root", "/srv/disks"])
+            .unwrap()
+            .storage_discovery_root
+            .as_str(),
+        "/srv/disks"
+    );
+    for path in ["relative", "/srv/../disks", "/srv//disks"] {
+        assert!(Args::try_parse_from(["zxs", "--storage-discovery-root", path]).is_err());
+    }
+}

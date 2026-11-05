@@ -92,6 +92,10 @@ impl Fixture {
             principal: PRINCIPAL,
             operation_id: OperationId::generate()?,
         })?;
+        // The browser's later read-only branch must come from an explicitly
+        // initialized, committed directory repository, never an implicit scope.
+        crate::fixture::initialize_directory_fixture(&mut engine, &repository, "future")?;
+        crate::fixture::commit_directory_fixture(&mut engine, &repository.repository_id, "future")?;
         let entries = engine.list_tree(&repository.main_branch_id)?;
         let entry = |path: &str| {
             entries
@@ -242,3 +246,7 @@ impl Fixture {
         Ok(current.version_id)
     }
 }
+
+#[cfg(test)]
+#[path = "../../unit/placement_fixture_tests.rs"]
+mod tests;

@@ -465,6 +465,54 @@ impl<'a> PlanningContext<'a> {
         Ok(plan)
     }
 
+    /// Directory commits require a complete current-projection proof before
+    /// publication. A kind allowlist cannot prove their nested reference graph.
+    pub(super) fn plan_directory_commit_mutation<F>(
+        &self,
+        kind: &str,
+        principal: &str,
+        operation_id: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
+        if self.current_namespaces.is_none()
+            && self
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(super::disk_registry::current::pending_publication());
+        }
+        let plan = self.prepare_new_mutation(
+            kind,
+            principal,
+            operation_id,
+            digest,
+            change,
+        )?;
+        let MutationPlan::Prepared {
+            next,
+            prepared,
+            result,
+        } = &plan
+        else {
+            unreachable!("new directory commit planning does not replay old receipts");
+        };
+        if !prepared.is_empty() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "directory commits cannot prepare payload writes",
+            ));
+        }
+        if let Some(view) = self.current_namespaces {
+            view.verify_new_directory_commit(self.state, next, result)?;
+        }
+        Ok(plan)
+    }
+
     fn prepare_new_mutation<F>(
         &self,
         kind: &str,
@@ -476,6 +524,7 @@ impl<'a> PlanningContext<'a> {
     where
         F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
     {
+        crate::directory_conversion::require_import_not_stopped(self.state, operation_id)?;
         // Published and planning views share only the immutable base. Every
         // mutation still owns an independent next State until publication.
         let mut next = self.state.as_ref().clone();

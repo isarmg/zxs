@@ -49,10 +49,10 @@ fn file_manager_disk_wire_keeps_listing_fields_and_safe_failure_classification()
             simulation: true,
         })
         .collect();
-    let response = FileManagerDisksResponse::from(disks);
+    let response = file_response(disks);
     let expected = json!({"disks":[
-        {"slot_id":"slot-1","level":1,"online":false,"writable":true,"available_bytes":"18446744073709551615","observation_failure":null,"used_bytes":"7","simulation":true},
-        {"slot_id":"slot-2","level":2,"online":false,"writable":false,"available_bytes":"18446744073709551615","observation_failure":null,"used_bytes":"7","simulation":true}
+        {"name":"directory-slot-1","slot_id":"slot-1","level":1,"online":false,"writable":true,"available_bytes":"18446744073709551615","observation_failure":null,"used_bytes":"7","simulation":true},
+        {"name":"directory-slot-2","slot_id":"slot-2","level":2,"online":false,"writable":false,"available_bytes":"18446744073709551615","observation_failure":null,"used_bytes":"7","simulation":true}
     ]});
     assert_eq!(json_codec::to_value(&response).unwrap(), expected);
     assert_eq!(
@@ -75,8 +75,43 @@ fn offline_diagnostic_vectors_keep_unknown_distinct_from_successful_zero() {
     );
     let files: json_codec::Value =
         json_codec::from_str(include_str!("../fixtures/offline-file-manager-disks.json")).unwrap();
-    assert_eq!(
-        json_codec::to_value(FileManagerDisksResponse::from(disks)).unwrap(),
-        files
-    );
+    assert_eq!(json_codec::to_value(file_response(disks)).unwrap(), files);
+}
+
+fn topology(disks: &[storage_contract::DiskStatus]) -> crate::TopologySnapshot {
+    crate::TopologySnapshot {
+        generation: 1,
+        slots: disks
+            .iter()
+            .map(|disk| crate::TopologySlot {
+                name: Some(
+                    name_policy::PortablePath::parse(&format!("directory-{}", disk.slot_id))
+                        .unwrap(),
+                ),
+                slot_id: disk.slot_id.clone(),
+                disk_id: disk.disk_id.clone(),
+                level: disk.level,
+                upstream_slot_id: disk.upstream_slot_id.clone(),
+                metadata_member: disk.metadata_member,
+                binding_generation: 1,
+            })
+            .collect(),
+    }
+}
+fn file_response(disks: Vec<storage_contract::DiskStatus>) -> FileManagerDisksResponse {
+    let topology = topology(&disks);
+    FileManagerDisksResponse::from_snapshot(disks, topology).unwrap()
+}
+#[test]
+fn file_manager_rejects_changed_membership_and_missing_names() {
+    let admin: json_codec::Value =
+        json_codec::from_str(include_str!("../fixtures/offline-admin-disks.json")).unwrap();
+    let disks: Vec<storage_contract::DiskStatus> =
+        json_codec::from_value(admin["disks"].clone()).unwrap();
+    let mut changed = topology(&disks);
+    changed.slots[0].disk_id = "replacement".into();
+    assert!(FileManagerDisksResponse::from_snapshot(disks.clone(), changed).is_err());
+    let mut missing = topology(&disks);
+    missing.slots[0].name = None;
+    assert!(FileManagerDisksResponse::from_snapshot(disks, missing).is_err());
 }

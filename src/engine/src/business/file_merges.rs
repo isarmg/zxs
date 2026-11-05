@@ -437,6 +437,16 @@ pub(super) fn merge_change(
         MergeResultPolicy::AlwaysNewNode { current_inputs, .. } => current_inputs,
         MergeResultPolicy::ReuseChosenInput => None,
     };
+    let branches = inputs
+        .iter()
+        .map(|input| input.branch_id.clone())
+        .collect::<BTreeSet<_>>();
+    if branches.len() != inputs.len() {
+        return Err(Error::new(
+            storage_contract::ErrorCode::InvalidRequest,
+            "merge branch inputs must be distinct",
+        ));
+    }
     let projected = if let Some(view) = engine.admitted_current_namespaces()? {
         view.require_branch_write(state, &repository.main_branch_id)?;
         if !engine
@@ -455,21 +465,14 @@ pub(super) fn merge_change(
             // composition. No frozen unrelated directory tree is imported.
             Vec::new()
         } else {
-            view.file_merge_directories(state, &repository.repository_id)?
+            view.file_merge_directories(state, &repository.repository_id, file, &branches)?
         })
     } else {
         None
     };
-    let mut branches = BTreeSet::new();
     let mut heads = Vec::new();
     let mut survivor_entries = None;
     for input in inputs {
-        if !branches.insert(input.branch_id.clone()) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InvalidRequest,
-                "merge branch inputs must be distinct",
-            ));
-        }
         let branch = state
             .branches
             .get(&input.branch_id)

@@ -2529,6 +2529,9 @@
             },
             "protection_policies": {
               "$ref": "#/$defs/MetadataReference"
+            },
+            "directory_git_repositories": {
+              "$ref": "#/$defs/MetadataReference"
             }
           },
           "required": [
@@ -2561,7 +2564,8 @@
             "boundary_marks",
             "content_states",
             "placement_rules",
-            "protection_policies"
+            "protection_policies",
+            "directory_git_repositories"
           ],
           "additionalProperties": false
         }
@@ -2573,7 +2577,7 @@
         "maps"
       ],
       "additionalProperties": false,
-      "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定30个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。"
+      "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定31个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。"
     },
     "CapacityMeasure": {
       "type": "object",
@@ -2960,6 +2964,9 @@
             },
             "file_selection_generations": {
               "$ref": "#/$defs/MetadataReference"
+            },
+            "directory_git_repositories": {
+              "$ref": "#/$defs/MetadataReference"
             }
           },
           "required": [
@@ -2997,7 +3004,8 @@
             "version_notes",
             "file_names",
             "directory_selection_generations",
-            "file_selection_generations"
+            "file_selection_generations",
+            "directory_git_repositories"
           ],
           "additionalProperties": false
         },
@@ -3018,7 +3026,7 @@
         "control_auth"
       ],
       "additionalProperties": false,
-      "description": "snapshot域固定35个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。"
+      "description": "snapshot域固定36个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。"
     },
     "InclusionProof": {
       "type": "object",
@@ -6519,22 +6527,6 @@
       ],
       "additionalProperties": false
     },
-    "StorageSetDiscoveryRootRequest": {
-      "type": "object",
-      "properties": {
-        "expected_discovery_root": {
-          "$ref": "#/$defs/StorageHostPath"
-        },
-        "discovery_root": {
-          "$ref": "#/$defs/StorageHostPath"
-        }
-      },
-      "required": [
-        "expected_discovery_root",
-        "discovery_root"
-      ],
-      "additionalProperties": false
-    },
     "FileHistoryMergeInput": {
       "type": "object",
       "properties": {
@@ -6615,11 +6607,26 @@
               "type": "null"
             }
           ]
+        },
+        "committed_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "staged": {
+          "type": "boolean"
         }
       },
       "required": [
         "directory_branch_id",
-        "tree_id"
+        "tree_id",
+        "committed_tree_id",
+        "staged"
       ],
       "additionalProperties": false
     },
@@ -6662,6 +6669,11 @@
         },
         "sequence": {
           "$ref": "#/$defs/UInt64"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "x-maxUtf8Bytes": 128
         }
       },
       "required": [
@@ -6671,7 +6683,8 @@
         "parent_endpoint",
         "commit_id",
         "path",
-        "sequence"
+        "sequence",
+        "message"
       ],
       "additionalProperties": false
     },
@@ -6707,6 +6720,19 @@
         },
         "sequence": {
           "$ref": "#/$defs/UInt64"
+        },
+        "committed_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "staged": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -6716,7 +6742,9 @@
         "head_tree_id",
         "materialized",
         "current",
-        "sequence"
+        "sequence",
+        "committed_tree_id",
+        "staged"
       ],
       "additionalProperties": false
     },
@@ -7547,6 +7575,1615 @@
         }
       ],
       "description": "当前已认证登记与观察健康分离；Detached 不在列表。Unadmitted 不是空池；readmission=null 不允许恢复按钮。"
+    },
+    "StorageDirectorySource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "discovery_identity": {
+          "$ref": "#/$defs/StorageDirectoryIdentity"
+        },
+        "identity": {
+          "$ref": "#/$defs/StorageDirectoryIdentity"
+        }
+      },
+      "required": [
+        "path",
+        "discovery_identity",
+        "identity"
+      ]
+    },
+    "StorageDiscoveredDiskState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "empty"
+            },
+            "selection": {
+              "$ref": "#/$defs/StorageCandidateSelection"
+            }
+          },
+          "required": [
+            "kind",
+            "selection"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "zxs"
+            },
+            "disk_id": {
+              "$ref": "#/$defs/DiskId"
+            },
+            "slot_id": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/StorageDirectorySource"
+            },
+            "role": {
+              "$ref": "#/$defs/StorageDiscoveredDiskRole"
+            }
+          },
+          "required": [
+            "kind",
+            "disk_id",
+            "slot_id",
+            "source",
+            "role"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unsupported"
+            },
+            "code": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]*(?![\\s\\S])"
+            },
+            "message": {
+              "type": "string"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StorageDirectorySource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "code",
+            "message",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unavailable"
+            },
+            "problem": {
+              "enum": [
+                "symbolic_link",
+                "permission_denied",
+                "unavailable"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "problem"
+          ]
+        }
+      ]
+    },
+    "StorageDiscoveredDisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/StorageDiscoveredDiskState"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "state"
+      ]
+    },
+    "StorageDiscoveredDisks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "discovery_root": {
+          "type": "string"
+        },
+        "candidates": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/StorageDiscoveredDisk"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "skipped_non_utf8": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "discovery_root",
+        "candidates",
+        "truncated",
+        "skipped_non_utf8"
+      ]
+    },
+    "DirectoryStagingStatus": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "directory_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "head_tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "committed_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "staged": {
+          "type": "boolean"
+        },
+        "added": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "modified": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "deleted": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "repository_id",
+        "directory_branch_id",
+        "head_tree_id",
+        "committed_tree_id",
+        "staged",
+        "added",
+        "modified",
+        "deleted"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryCommitBody": {
+      "type": "object",
+      "properties": {
+        "expected_tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "x-maxUtf8Bytes": 128
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "expected_index_generation": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "expected_tree_id",
+        "message",
+        "operation_id",
+        "expected_index_generation"
+      ],
+      "additionalProperties": false
+    },
+    "StorageDiscoveredDiskRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "upstream_slot_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SlotId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata_member": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "enum": [
+            "initial_declaration",
+            "generation_evidence"
+          ]
+        }
+      },
+      "required": [
+        "level",
+        "upstream_slot_id",
+        "metadata_member",
+        "evidence"
+      ]
+    },
+    "StorageDirectoryAddition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "selection": {
+          "$ref": "#/$defs/StorageCandidateSelection"
+        },
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "upstream_slot_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SlotId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata_member": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "selection",
+        "slot_id",
+        "level",
+        "upstream_slot_id",
+        "metadata_member"
+      ]
+    },
+    "StorageAdditionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "additions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/StorageDirectoryAddition"
+          }
+        }
+      },
+      "required": [
+        "operation_id",
+        "additions"
+      ]
+    },
+    "StorageAdditionAuthority": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "active_membership"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "terminal_management"
+            },
+            "terminal_authority_hash": {
+              "$ref": "#/$defs/Hash"
+            },
+            "terminal_operation_id": {
+              "$ref": "#/$defs/OperationId"
+            }
+          },
+          "required": [
+            "kind",
+            "terminal_authority_hash",
+            "terminal_operation_id"
+          ]
+        }
+      ]
+    },
+    "StorageAdditionPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/StorageAdditionAuthority"
+        },
+        "request": {
+          "$ref": "#/$defs/StorageAdditionRequest"
+        },
+        "pool_id": {
+          "$ref": "#/$defs/PoolId"
+        },
+        "configuration_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "preview_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "original_metadata_members": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "target_metadata_members": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "added_directories": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "authority",
+        "request",
+        "pool_id",
+        "configuration_digest",
+        "preview_digest",
+        "original_metadata_members",
+        "target_metadata_members",
+        "added_directories"
+      ]
+    },
+    "StorageConversionPublication": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "commit_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "history_tree_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commit_state": {
+          "enum": [
+            "STAGING",
+            "SEALED",
+            "PREPARED",
+            "DECIDING",
+            "DECIDED",
+            "PROTECTED",
+            "PUBLISHED",
+            "ACKED",
+            "RECOVERING",
+            "RECOVERY_REQUIRED",
+            "IN_DOUBT",
+            "PUBLISHED_DEGRADED",
+            "ABORTED"
+          ]
+        },
+        "protection_at_publish": {
+          "enum": [
+            "NOT_APPLICABLE",
+            "TARGET_MET",
+            "BELOW_TARGET",
+            "UNCONFIRMED"
+          ]
+        },
+        "current_health": {
+          "enum": [
+            "HEALTHY",
+            "DEGRADED",
+            "UNAVAILABLE",
+            "UNKNOWN",
+            "RECOVERING"
+          ]
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "result": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation_id",
+        "kind",
+        "commit_id",
+        "history_tree_id",
+        "branch_id",
+        "commit_state",
+        "protection_at_publish",
+        "current_health",
+        "request_digest",
+        "sequence",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "StorageAdditionStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "state": {
+          "enum": [
+            "adding",
+            "cancelling",
+            "recovery_required",
+            "completed",
+            "cancelled"
+          ]
+        },
+        "phase": {
+          "enum": [
+            "prepared",
+            "fencing",
+            "archiving",
+            "enrolling",
+            "joint_decision",
+            "resume_cancellable",
+            "resume_quorum_accepted",
+            "resume_cancellation_unknown",
+            "activating",
+            "certifying_abort",
+            "abort_certified",
+            "cancelling",
+            "completed",
+            "cancelled"
+          ]
+        },
+        "continuation": {
+          "enum": [
+            "add",
+            "cancel"
+          ]
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageConversionPublication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preview": {
+          "$ref": "#/$defs/StorageAdditionPreview"
+        },
+        "failure": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageReadmissionFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "state",
+        "phase",
+        "continuation",
+        "result",
+        "preview",
+        "failure"
+      ]
+    },
+    "OrdinaryDiskConversionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "source": {
+          "$ref": "#/$defs/StorageDirectorySource"
+        },
+        "target": {
+          "$ref": "#/$defs/StorageCandidateSelection"
+        },
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "metadata_member": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation_id",
+        "source",
+        "target",
+        "slot_id",
+        "metadata_member"
+      ]
+    },
+    "OrdinarySourcePreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "directories": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content_bytes": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "temporary_bytes": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "digest",
+        "files",
+        "directories",
+        "content_bytes",
+        "temporary_bytes"
+      ]
+    },
+    "OrdinaryDiskConversionPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "import_operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "source": {
+          "$ref": "#/$defs/StorageDirectorySource"
+        },
+        "source_preview": {
+          "$ref": "#/$defs/OrdinarySourcePreview"
+        },
+        "target": {
+          "$ref": "#/$defs/StorageAdditionPreview"
+        },
+        "preview_digest": {
+          "$ref": "#/$defs/Hash"
+        }
+      },
+      "required": [
+        "operation_id",
+        "import_operation_id",
+        "source",
+        "source_preview",
+        "target",
+        "preview_digest"
+      ]
+    },
+    "OrdinaryDiskConversionCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preview": {
+          "$ref": "#/$defs/OrdinaryDiskConversionPreview"
+        },
+        "acknowledge_contents_only": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "preview",
+        "acknowledge_contents_only"
+      ]
+    },
+    "OrdinaryDiskConversionResume": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "operation_id"
+      ]
+    },
+    "OrdinaryDiskConversionStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preview": {
+          "$ref": "#/$defs/OrdinaryDiskConversionPreview"
+        },
+        "phase": {
+          "enum": [
+            "registering",
+            "importing",
+            "completed",
+            "recovery_required",
+            "stopping",
+            "stopped"
+          ]
+        },
+        "registration": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageAdditionStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "root_operation_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OperationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageConversionPublication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failure": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageReadmissionFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stop_result": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StorageConversionPublication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stop_operation_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OperationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "preview",
+        "phase",
+        "registration",
+        "workspace_id",
+        "root_operation_id",
+        "result",
+        "failure",
+        "stop_result",
+        "stop_operation_id"
+      ]
+    },
+    "OrdinaryDiskConversionStatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OrdinaryDiskConversionStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation"
+      ]
+    },
+    "OrdinaryDiskConversionStop": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "acknowledge_retained_state": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "acknowledge_retained_state"
+      ]
+    },
+    "ForeignDiskPreviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/StorageDirectorySource"
+        }
+      }
+    },
+    "ForeignDiskIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pool_id",
+        "disk_id",
+        "slot_id",
+        "binding_generation"
+      ],
+      "properties": {
+        "pool_id": {
+          "type": "string"
+        },
+        "disk_id": {
+          "type": "string"
+        },
+        "slot_id": {
+          "type": "string"
+        },
+        "binding_generation": {
+          "$ref": "#/$defs/UInt64"
+        }
+      }
+    },
+    "ForeignDiskCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_hash",
+        "publication_hash",
+        "sequence",
+        "authority_hash",
+        "unpublished_tail"
+      ],
+      "properties": {
+        "candidate_hash": {
+          "type": "string"
+        },
+        "publication_hash": {
+          "type": "string"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "authority_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unpublished_tail": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ForeignHistorySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_id",
+        "history_tree_id",
+        "repository_name",
+        "origin",
+        "manifest_hash",
+        "branches",
+        "directory_branches",
+        "directory_trees",
+        "commit_records",
+        "versions",
+        "verified_local_versions",
+        "temporarily_unavailable_versions",
+        "recorded_purged_versions",
+        "recorded_migrated_versions"
+      ],
+      "properties": {
+        "group_id": {
+          "type": "string"
+        },
+        "history_tree_id": {
+          "type": "string"
+        },
+        "repository_name": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/ForeignDiskIdentity"
+        },
+        "manifest_hash": {
+          "type": "string"
+        },
+        "branches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "directory_branches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "directory_trees": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "commit_records": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "versions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verified_local_versions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "temporarily_unavailable_versions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recorded_purged_versions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recorded_migrated_versions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ForeignDiskPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "identity",
+        "source_level",
+        "role_evidence",
+        "seal_digest",
+        "review_digest",
+        "checkpoint",
+        "histories",
+        "execution"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/StorageDirectorySource"
+        },
+        "identity": {
+          "$ref": "#/$defs/ForeignDiskIdentity"
+        },
+        "source_level": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "role_evidence": {
+          "type": "string",
+          "enum": [
+            "initial_declaration",
+            "generation_evidence"
+          ]
+        },
+        "seal_digest": {
+          "type": "string"
+        },
+        "review_digest": {
+          "type": "string"
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/ForeignDiskCheckpoint"
+        },
+        "histories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ForeignHistorySummary"
+          }
+        },
+        "execution": {
+          "type": "string",
+          "enum": [
+            "unavailable"
+          ]
+        }
+      }
+    },
+    "DirectoryGitChildReference": {
+      "type": "object",
+      "properties": {
+        "directory_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "directory_branch_id",
+        "tree_id"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryGitBranch": {
+      "type": "object",
+      "properties": {
+        "head_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "index_tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "index_generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "index_boundaries": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/EntryId"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+          }
+        },
+        "index_children": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/EntryId"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/DirectoryGitChildReference"
+          }
+        }
+      },
+      "required": [
+        "head_tree_id",
+        "index_tree_id",
+        "index_generation",
+        "index_boundaries",
+        "index_children"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryGitRepository": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "directory_id": {
+          "$ref": "#/$defs/DirectoryId"
+        },
+        "initialized_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "current_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "branches": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/DirectoryBranchId"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/DirectoryGitBranch"
+          }
+        }
+      },
+      "required": [
+        "repository_id",
+        "directory_id",
+        "initialized_sequence",
+        "current_branch_id",
+        "branches"
+      ],
+      "additionalProperties": false,
+      "description": "显式初始化目录仓库的持久状态；HEAD、暂存树及独立子仓库精确引用分别保存。"
+    },
+    "DirectoryGitOwner": {
+      "type": "object",
+      "properties": {
+        "directory_id": {
+          "$ref": "#/$defs/DirectoryId"
+        },
+        "path": {
+          "type": "string",
+          "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+        }
+      },
+      "required": [
+        "directory_id",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryGitChildStatus": {
+      "type": "object",
+      "properties": {
+        "directory_id": {
+          "$ref": "#/$defs/EntryId"
+        },
+        "path": {
+          "type": "string",
+          "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+        },
+        "directory_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "head_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "staged_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "committed_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "reference_changed": {
+          "type": "boolean"
+        },
+        "staged": {
+          "type": "boolean"
+        },
+        "needs_restage": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "directory_id",
+        "path",
+        "directory_branch_id",
+        "head_tree_id",
+        "staged_tree_id",
+        "committed_tree_id",
+        "dirty",
+        "reference_changed",
+        "staged",
+        "needs_restage"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryGitStatus": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "directory_id": {
+          "$ref": "#/$defs/DirectoryId"
+        },
+        "path": {
+          "type": "string",
+          "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+        },
+        "initialized": {
+          "type": "boolean"
+        },
+        "owner": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryGitOwner"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "directory_branch_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryBranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "working_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head_tree_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DirectoryTreeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "index_generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "staged": {
+          "type": "boolean"
+        },
+        "needs_restage": {
+          "type": "boolean"
+        },
+        "added": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "modified": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "deleted": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DirectoryGitChildStatus"
+          }
+        },
+        "legacy_history": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repository_id",
+        "directory_id",
+        "path",
+        "initialized",
+        "owner",
+        "directory_branch_id",
+        "working_tree_id",
+        "head_tree_id",
+        "index_generation",
+        "staged",
+        "needs_restage",
+        "added",
+        "modified",
+        "deleted",
+        "children",
+        "legacy_history"
+      ],
+      "additionalProperties": false,
+      "description": "只读准确目录状态；未初始化目录可以显示最近所属祖先，但不因此成为独立仓库。所有nullable字段必须出现。完整响应限1MiB，超限拒绝而不截断孩子列表。"
+    },
+    "DirectoryGitInitializeBody": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "仓库相对已有目录路径；空字符串表示根。服务端执行名称、结构和字节预算校验。"
+        },
+        "expected_namespace_head": {
+          "$ref": "#/$defs/CommitId"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "path",
+        "expected_namespace_head",
+        "operation_id"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryGitStageChildBody": {
+      "type": "object",
+      "properties": {
+        "directory_id": {
+          "$ref": "#/$defs/DirectoryId"
+        },
+        "directory_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "expected_index_generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "child_directory_id": {
+          "$ref": "#/$defs/EntryId"
+        },
+        "expected_child_head_tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "directory_id",
+        "directory_branch_id",
+        "expected_index_generation",
+        "child_directory_id",
+        "expected_child_head_tree_id",
+        "operation_id"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryGitStageOwnedBody": {
+      "type": "object",
+      "properties": {
+        "directory_id": {
+          "$ref": "#/$defs/DirectoryId"
+        },
+        "directory_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "expected_tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "expected_index_generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "directory_id",
+        "directory_branch_id",
+        "expected_tree_id",
+        "expected_index_generation",
+        "operation_id"
+      ],
+      "additionalProperties": false
+    },
+    "ForeignPlanTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot_id",
+        "parent",
+        "history_names"
+      ],
+      "properties": {
+        "slot_id": {
+          "type": "string"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "history_names": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ForeignPlanRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "source",
+        "source_review_digest",
+        "target"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "source": {
+          "$ref": "#/$defs/StorageDirectorySource"
+        },
+        "source_review_digest": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/ForeignPlanTarget"
+        }
+      }
+    },
+    "ForeignMappedHistory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_id",
+        "history_tree_id",
+        "destination"
+      ],
+      "properties": {
+        "group_id": {
+          "type": "string"
+        },
+        "history_tree_id": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        }
+      }
+    },
+    "ForeignTargetMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "sequence",
+        "source_digest",
+        "mapping_digest",
+        "histories"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/ForeignDiskIdentity"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "source_digest": {
+          "type": "string"
+        },
+        "mapping_digest": {
+          "type": "string"
+        },
+        "histories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ForeignMappedHistory"
+          }
+        }
+      }
+    },
+    "ForeignPlanPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "source",
+        "target",
+        "review_digest",
+        "execution",
+        "blocker"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/ForeignPlanRequest"
+        },
+        "source": {
+          "$ref": "#/$defs/ForeignDiskPreview"
+        },
+        "target": {
+          "$ref": "#/$defs/ForeignTargetMapping"
+        },
+        "review_digest": {
+          "type": "string"
+        },
+        "execution": {
+          "type": "string",
+          "enum": [
+            "unavailable"
+          ]
+        },
+        "blocker": {
+          "type": "string",
+          "enum": [
+            "portable_import_writer_unavailable"
+          ]
+        }
+      }
+    },
+    "ForeignPlanSave": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preview",
+        "acknowledge_plan_only"
+      ],
+      "properties": {
+        "preview": {
+          "$ref": "#/$defs/ForeignPlanPreview"
+        },
+        "acknowledge_plan_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ForeignPlanSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "review_digest"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "review_digest": {
+          "type": "string"
+        }
+      }
+    },
+    "ForeignPlanStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preview",
+        "validation"
+      ],
+      "properties": {
+        "preview": {
+          "$ref": "#/$defs/ForeignPlanPreview"
+        },
+        "validation": {
+          "type": "string",
+          "enum": [
+            "required",
+            "matched_at_observation"
+          ]
+        }
+      }
     }
   }
 }

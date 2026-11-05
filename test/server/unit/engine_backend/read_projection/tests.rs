@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine_backend::field;
+use crate::tests::directory_git_fixture::checkpoint;
 use crate::{
     Backend,
     auth::{AuthStore, Identity},
@@ -552,6 +553,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
         "folder/data.txt",
         b"inherited bytes",
     );
+    checkpoint(&mut engine, &repo, "folder", "owner");
     engine
         .create_directory_branches(
             &repo.repository_id,

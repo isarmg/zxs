@@ -1,4 +1,5 @@
 //! Acceptance of the documented composition and write-intent rules.
+use crate::directory_git_fixture as directory_fixture;
 use crate::*;
 use std::{collections::BTreeMap, io::Read};
 fn fixture() -> (tempfile::TempDir, Engine, Repository) {
@@ -50,6 +51,7 @@ fn body(e: &Engine, id: &str) -> Vec<u8> {
     o
 }
 fn create(e: &mut Engine, r: &Repository, path: &str, name: &str) -> String {
+    directory_fixture::checkpoint(e, r, path);
     e.create_directory_branches(
         &r.repository_id,
         (if (path).is_empty() {
@@ -69,6 +71,7 @@ fn create(e: &mut Engine, r: &Repository, path: &str, name: &str) -> String {
         .into()
 }
 fn select(e: &mut Engine, r: &Repository, path: &str, name: &str) {
+    directory_fixture::checkpoint(e, r, path);
     e.select_directory_branches(
         &r.repository_id,
         (if (path).is_empty() {
@@ -88,15 +91,26 @@ fn directory_registration_reuses_nodes_and_lazy_first_write_forks_one_public_fil
     let (_t, mut e, r) = fixture();
     save(&mut e, &r, "a/one.txt", b"one");
     save(&mut e, &r, "a/two.txt", b"two");
+    directory_fixture::checkpoint(&mut e, &r, "a");
     let before = entries(&e, &r);
     let branches = e.state().branches.len();
     let versions = e.state().versions.len();
     let draft = create(&mut e, &r, "a", "草稿");
     assert_eq!(e.state().branches.len(), branches);
     assert_eq!(e.state().versions.len(), versions);
-    let parent = e.state().directory_branches[&draft].head_tree_id.clone();
+    let directory = e.state().directory_branches[&draft].directory_id.clone();
+    let committed = e.state().directory_git_repositories[&directory].branches[&draft]
+        .head_tree_id
+        .clone();
+    let frozen = e.state().directory_branches[&draft].head_tree_id.clone();
+    let frozen_tree = e.state().directory_trees[&frozen].clone();
     select(&mut e, &r, "a", "草稿");
-    assert_eq!(e.state().directory_branches[&draft].head_tree_id, parent);
+    assert_eq!(
+        e.state().directory_git_repositories[&directory].branches[&draft].head_tree_id,
+        committed
+    );
+    assert_eq!(e.state().directory_trees[&frozen], frozen_tree);
+    let parent = e.state().directory_branches[&draft].head_tree_id.clone();
     assert_eq!(body(&e, &entries(&e, &r)["a/one.txt"].version_id), b"one");
     let main = e.state().file_selections[&before["a/one.txt"].file_id].clone();
     let parent_head = e.state().branches[&main].head_commit_id.clone();
@@ -134,7 +148,10 @@ fn selecting_old_directory_restores_names_membership_and_hierarchy() {
     let (_t, mut e, r) = fixture();
     save(&mut e, &r, "folder/old.txt", b"old");
     let draft = create(&mut e, &r, "folder", "snapshot");
-    let old = e.state().directory_branches[&draft].head_tree_id.clone();
+    let directory = e.state().directory_branches[&draft].directory_id.clone();
+    let old = e.state().directory_git_repositories[&directory].branches[&draft]
+        .head_tree_id
+        .clone();
     e.file_namespace(
         &r.repository_id,
         NamespaceOperation::parse(
@@ -153,12 +170,16 @@ fn selecting_old_directory_restores_names_membership_and_hierarchy() {
     assert!(view.contains_key("folder/old.txt"));
     assert!(!view.contains_key("folder/new.txt"));
     assert!(!view.contains_key("folder/nested"));
-    assert_eq!(e.state().directory_branches[&draft].head_tree_id, old);
+    assert_eq!(
+        e.state().directory_git_repositories[&directory].branches[&draft].head_tree_id,
+        old
+    );
 }
 #[test]
 fn explicit_same_node_selection_changes_intent_once_and_fences_old_workspaces() {
     let (_t, mut e, r) = fixture();
     save(&mut e, &r, "folder/a.txt", b"A");
+    directory_fixture::checkpoint(&mut e, &r, "folder");
     let file = entries(&e, &r)["folder/a.txt"].clone();
     let main = e.state().file_selections[&file.file_id].clone();
     create(&mut e, &r, "folder", "draft");

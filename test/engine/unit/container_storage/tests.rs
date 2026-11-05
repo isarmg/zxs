@@ -441,6 +441,8 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
                 request_digest: None,
             })
             .unwrap();
+        crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "a", "alice");
+        crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "b", "alice");
         let file = engine
             .list_tree(&repo.main_branch_id)
             .unwrap()

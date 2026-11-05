@@ -69,8 +69,8 @@ fn check(browser: &Browser) -> Result<()> {
                 "const e=document.querySelector('.zxs-account-form input[name=current_password]');\
                      const s=getComputedStyle(e);\
                      return document.activeElement===e && e.matches(':focus-visible') && \
-                     parseFloat(s.borderBottomWidth)===3 && s.borderBottomStyle==='solid' && \
-                     (parseFloat(s.outlineWidth)===0 || s.outlineStyle==='none')",
+                     parseFloat(s.borderBottomWidth)===0 && s.borderBottomStyle==='none' && \
+                     parseFloat(s.outlineWidth)>=2 && s.outlineStyle==='solid' && parseFloat(s.outlineOffset)===-2",
             )?;
             if focus == true {
                 Ok(())

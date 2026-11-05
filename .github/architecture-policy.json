@@ -107,7 +107,7 @@
       ]
     },
     "storage-rescue": {
-      "path": "src/rescue",
+      "path": "rescue",
       "runtime": [
         "authentication",
         "platform-io",

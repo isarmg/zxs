@@ -16,7 +16,7 @@ macro_rules! projection_fields {
         $consumer! {
             branch { branches, }
             history { histories, commits, versions, file_path_nodes, file_metadata_nodes, file_branch_merges, merge_links, history_boundaries, }
-            repository { repositories, directory_branches, placement_rules, protection_policies, }
+            repository { repositories, directory_branches, directory_git_repositories, placement_rules, protection_policies, }
             version { placements, content_states, file_node_parents, version_notes, }
             file { file_write_origins, file_locations, file_backup_paths, file_backup_policies, file_selection_generations, file_notes, file_names, }
             directory { directory_tree_selections, directory_selection_generations, }

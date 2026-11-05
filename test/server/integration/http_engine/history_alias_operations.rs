@@ -2,17 +2,6 @@
 use super::*;
 use std::collections::BTreeSet;
 
-async fn select_directory(app: &Router, token: &str, path: &str, name: &str) -> Value {
-    success(
-        app,
-        token,
-        "POST",
-        "/api/file-manager/disks/P01/directory-select",
-        Some(json!({"path":path,"name":name,"operation_id":new_id("op").unwrap()})),
-    )
-    .await
-}
-
 async fn prepare_aliases(app: &Router, token: &str) -> (Value, Value) {
     manager_upload(app, token, "a/report.txt", b"shared body").await;
     manager_upload(app, token, "b/stay.txt", b"unrelated body").await;
@@ -25,9 +14,9 @@ async fn prepare_aliases(app: &Router, token: &str) -> (Value, Value) {
     )
     .await;
     let repository = listing["context"]["repository_id"].as_str().unwrap();
-    let first = manager_directory_branch(app, token, "a", "first").await;
-    let second = manager_directory_branch(app, token, "a", "second").await;
-    let target = manager_directory_branch(app, token, "b", "target").await;
+    let first = manager_prepare_directory_branch(app, token, "a", "first").await;
+    let second = manager_prepare_directory_branch(app, token, "a", "second").await;
+    let target = manager_prepare_directory_branch(app, token, "b", "target").await;
     for (source, destination) in [(&first, "b/first.txt"), (&second, "b/second.txt")] {
         let source = manager_scope(app, token, repository, source).await;
         let target = manager_scope(app, token, repository, &target).await;
@@ -47,8 +36,8 @@ async fn prepare_aliases(app: &Router, token: &str) -> (Value, Value) {
     }
     // The source views are now empty. Select one so only the two target aliases
     // remain in the live namespace, without constructing synthetic state.
-    select_directory(app, token, "a", "first").await;
-    let selected = select_directory(app, token, "b", "target").await;
+    manager_checkpoint_and_select(app, token, repository, &first).await;
+    let selected = manager_checkpoint_and_select(app, token, repository, &target).await;
     let listing = success(
         app,
         token,
@@ -200,7 +189,7 @@ async fn selection_history_keeps_two_introduced_alias_paths() {
     let events = operation_events(&app, &token, &selected, &file).await;
     assert_paths(
         &events,
-        "directory_selection",
+        "directory_git_checkout",
         &["b/first.txt", "b/second.txt"],
     );
 }
