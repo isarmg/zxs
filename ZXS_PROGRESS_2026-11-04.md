@@ -23,6 +23,10 @@
 
 候选现有 32 场景观察源码覆盖 Engine/CLI、缺 Q、路径重叠、未列根及叶子/祖先链接、目标存在/缺失，并对 alias 本名与真实 stat/open 做正校准。**观察脚本未执行**，不能用错误码、文件未创建或静态 NOFOLLOW 阅读替代零 I/O 证据。该候选只做 rustfmt、差异及补丁应用检查，未编译、测试、Clippy、CI 或部署；新方案的并发替换与 SQLite 验证也全部未执行。
 
+## 2026-11-05 metadata-only 候选恢复防护
+
+针对已提交的 plan.cancel 和 branch.archive，在恢复发现 publication 之前核验认证 registry 与原 snapshot 回执，拒绝夹带非空版本证据的 metadata-only 候选；后续 State 证明仍保留。新增真实 accepted/published 冷回归及 data-only 目录零打开观察源码。引擎库编译与差异检查通过；新增定向测试尚未运行。registry 且含版本的历史候选可能增加一次有界 snapshot 解码，不称为零额外元数据 I/O。
+
 ## 2026-11-05 终态决议与搬迁回归
 
 补充目标真实 DecisionStore 决议缺失、损坏及错误 choice 的拒绝回归，以及原根搬迁、SYSTEM 丢失恢复、冷启动、Stop 和重新准入的 epoch 链回归源码。定向测试尚未执行：本地空间不足以链接引擎测试二进制；不得作为通过证据。

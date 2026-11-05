@@ -1270,6 +1270,7 @@ fn install_archive_decision(
     next: &State,
     result: &OperationResult,
     published: bool,
+    versions: Vec<crate::journal::VersionEvidence>,
 ) -> crate::journal::Candidate {
     use crate::journal::*;
 
@@ -1295,7 +1296,7 @@ fn install_archive_decision(
             request_digest: result.request_digest.clone(),
             previous_snapshot: engine.snapshot.clone(),
             snapshot_hash: snapshot.hash.clone(),
-            versions: Vec::new(),
+            versions,
             metadata_disk_ids: members.iter().map(|disk| disk.disk_id.clone()).collect(),
             history_roots: catalog.reference().clone(),
         },
@@ -1421,8 +1422,31 @@ fn cold_archive_rejects_rehashed_candidate_before_replica_repair_and_projection(
     use crate::journal::object_path;
 
     for published in [false, true] {
-        for attack in ["valid", "source", "location"] {
+        for attack in ["valid", "source", "location", "payload"] {
             let mut fixture = Fixture::new();
+            let versions = if attack == "payload" {
+                let branch = fixture.repository.main_branch_id.clone();
+                save(
+                    &mut fixture.engine,
+                    &branch,
+                    "payload-source",
+                    b"unrelated retained payload",
+                );
+                let version = fixture
+                    .engine
+                    .namespace_tree(&branch)
+                    .unwrap()
+                    .get("payload-source")
+                    .unwrap()
+                    .version_id
+                    .clone();
+                vec![crate::journal::VersionEvidence {
+                    version: fixture.engine.state.versions[&version].clone(),
+                    placement: fixture.engine.state.placements[&version].clone(),
+                }]
+            } else {
+                Vec::new()
+            };
             let stopped_bytes = fixture.exit(0, MembershipExitAction::Deregister);
             let parked = fixture.park_root(0);
             let view = fixture.engine.current_namespaces.clone().unwrap();
@@ -1462,7 +1486,7 @@ fn cold_archive_rejects_rehashed_candidate_before_replica_repair_and_projection(
             view.verify_new_branch_archive(&before, &next, &result)
                 .unwrap();
             match attack {
-                "valid" => (),
+                "valid" | "payload" => (),
                 "source" => {
                     result.result["namespace_archive"]["mask_hash"] = Value::Null;
                     next.operations.insert(operation, result.clone());
@@ -1477,8 +1501,26 @@ fn cold_archive_rejects_rehashed_candidate_before_replica_repair_and_projection(
                 }
                 _ => unreachable!(),
             }
+            // The payload evidence is outside the unchanged authenticated
+            // State. Rehash real fixed-member decisions so only the early
+            // candidate/metadata-only boundary prevents repair and proof I/O.
             let candidate =
-                install_archive_decision(&mut fixture.engine, &next, &result, published);
+                install_archive_decision(&mut fixture.engine, &next, &result, published, versions);
+            let payload_path = candidate.versions.first().map(|evidence| {
+                let disk = fixture
+                    .engine
+                    .disk(&evidence.placement.route_slot_ids[0])
+                    .unwrap();
+                assert!(
+                    !disk.metadata_member,
+                    "the attack must target a live data-only root"
+                );
+                crate::disk::version_dir(
+                    disk,
+                    &evidence.version.history_tree_id,
+                    &evidence.version.version_id,
+                )
+            });
             let members = fixture.engine.members();
             let live_roots = fixture
                 .engine
@@ -1498,7 +1540,15 @@ fn cold_archive_rejects_rehashed_candidate_before_replica_repair_and_projection(
                 .iter()
                 .map(|root| files(root))
                 .collect::<Vec<_>>();
+            // Directory watches observe opening/reading the real child proof,
+            // so ACCEPT-only publication discovery cannot silently inspect it.
+            let payload_watch = payload_path
+                .as_ref()
+                .map(|path| watch_candidate_payload(path));
             let opened = Engine::open(&system);
+            if let Some(watch) = payload_watch {
+                assert_no_candidate_payload_io(watch);
+            }
             if attack == "valid" {
                 let mut engine = opened.unwrap();
                 assert_eq!(fs::read(&missing).unwrap(), snapshot_bytes);
@@ -1523,6 +1573,14 @@ fn cold_archive_rejects_rehashed_candidate_before_replica_repair_and_projection(
                     ErrorCode::PublicationInvalid,
                     "{published} {attack}"
                 );
+                if attack == "payload" {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("metadata-only current-registry candidate"),
+                        "{error}"
+                    );
+                }
                 assert_eq!(
                     fs::symlink_metadata(&missing).unwrap_err().kind(),
                     std::io::ErrorKind::NotFound
@@ -1547,4 +1605,26 @@ fn cold_archive_rejects_rehashed_candidate_before_replica_repair_and_projection(
             );
         }
     }
+}
+
+fn watch_candidate_payload(path: &Path) -> rustix::fd::OwnedFd {
+    use rustix::fs::inotify;
+    let watch =
+        inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK).unwrap();
+    inotify::add_watch(
+        &watch,
+        path,
+        inotify::WatchFlags::OPEN | inotify::WatchFlags::ACCESS,
+    )
+    .unwrap();
+    watch
+}
+
+fn assert_no_candidate_payload_io(watch: rustix::fd::OwnedFd) {
+    let mut bytes = [0u8; 4096];
+    assert_eq!(
+        rustix::io::read(&watch, &mut bytes),
+        Err(rustix::io::Errno::WOULDBLOCK),
+        "a metadata-only candidate must not open or read its smuggled local proof or payload"
+    );
 }

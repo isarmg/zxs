@@ -79,11 +79,14 @@ impl Engine {
                 .candidates
                 .get_mut(&sequence)
                 .expect("invariant: preflight retains its latest published candidate");
-            let admitted = verified_recovery_snapshot_at(
-                &self.disk_resources,
-                &prepared.online,
-                &bound.candidate.snapshot_hash,
-            )?;
+            let admitted = match bound.snapshot.take() {
+                Some(snapshot) => snapshot.into_admitted(),
+                None => verified_recovery_snapshot_at(
+                    &self.disk_resources,
+                    &prepared.online,
+                    &bound.candidate.snapshot_hash,
+                )?,
+            };
             let state = admitted.for_candidate(&bound.candidate)?.state();
             let result = state
                 .operations
@@ -147,6 +150,23 @@ impl Engine {
                 "candidate does not extend the verified publication prefix",
             ));
         }
+        // Publication discovery can read local payload proofs even for an
+        // ACCEPT-only candidate. Authenticate the original snapshot receipt
+        // before letting a current-registry envelope drive any such I/O.
+        let snapshot = if candidate.registry().is_some() && !candidate.versions.is_empty() {
+            let admitted = verified_recovery_snapshot_at(
+                &self.disk_resources,
+                online,
+                &candidate.snapshot_hash,
+            )?;
+            verify_current_candidate_receipt(
+                &candidate,
+                admitted.for_candidate(&candidate)?.state(),
+            )?;
+            Some(admitted.into_shared())
+        } else {
+            None
+        };
         let publication = match receipts
             .iter()
             .find(|receipt| receipt.record.record_type == RecordType::Publication)
@@ -163,7 +183,7 @@ impl Engine {
             candidate,
             publication,
             barrier_failure: None,
-            snapshot: None,
+            snapshot,
         })
     }
 }
@@ -204,4 +224,39 @@ fn published_barrier(
         verified_publication_seal_at(&engine.disk_resources, online, candidate, publication)
             .map(|_| ())
     }
+}
+
+// State-only transition proofs cannot constrain Candidate.versions, which
+// separately drives payload repair and local proof reconstruction. The receipt
+// here is always from the original authenticated snapshot, never a recovered
+// publication's outcome overlay. Full current-view write-set checks still run.
+pub(super) fn verify_current_candidate_receipt(candidate: &Candidate, next: &State) -> Result<()> {
+    let result = next
+        .operations
+        .get(&candidate.operation_id)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::PublicationInvalid,
+                "current-registry candidate has no original operation receipt",
+            )
+        })?;
+    if next.sequence != candidate.sequence
+        || result.operation_id != candidate.operation_id
+        || result.sequence != candidate.sequence
+        || result.request_digest != candidate.request_digest
+    {
+        return Err(Error::new(
+            ErrorCode::PublicationInvalid,
+            "current-registry candidate differs from its original operation receipt",
+        ));
+    }
+    if matches!(result.kind.as_str(), "plan.cancel" | "branch.archive")
+        && !candidate.versions.is_empty()
+    {
+        return Err(Error::new(
+            ErrorCode::PublicationInvalid,
+            "metadata-only current-registry candidate contains payload writes",
+        ));
+    }
+    Ok(())
 }

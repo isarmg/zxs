@@ -1352,6 +1352,7 @@ fn install_cancellation_decision(
     next: &State,
     result: &OperationResult,
     published: bool,
+    versions: Vec<crate::journal::VersionEvidence>,
 ) -> crate::journal::Candidate {
     use crate::journal::*;
 
@@ -1377,7 +1378,7 @@ fn install_cancellation_decision(
             request_digest: result.request_digest.clone(),
             previous_snapshot: engine.snapshot.clone(),
             snapshot_hash: snapshot.hash.clone(),
-            versions: Vec::new(),
+            versions,
             metadata_disk_ids: members.iter().map(|disk| disk.disk_id.clone()).collect(),
             history_roots: catalog.reference().clone(),
         },
@@ -1503,7 +1504,14 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
     use crate::journal::object_path;
 
     for published in [false, true] {
-        for attack in ["valid", "actor", "digest", "prior-owner", "location"] {
+        for attack in [
+            "valid",
+            "actor",
+            "digest",
+            "prior-owner",
+            "location",
+            "payload",
+        ] {
             let mut fixture = Fixture::new();
             fixture.exit(0, MembershipExitAction::Deregister);
             let (parked, stopped_bytes) = fixture.replace_stopped_root(0);
@@ -1543,7 +1551,7 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
             };
             assert!(prepared.is_empty());
             match attack {
-                "valid" => (),
+                "valid" | "payload" => (),
                 "actor" => {
                     next.operation_principals.insert(operation, "other".into());
                 }
@@ -1566,8 +1574,39 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
                 }
                 _ => unreachable!(),
             }
-            let candidate =
-                install_cancellation_decision(&mut fixture.engine, &next, &result, published);
+            // Keep the original State, request and exact receipt valid, but
+            // independently smuggle an existing live data-only payload into the
+            // Candidate that drives repair. No planner may produce this pair.
+            let versions = if attack == "payload" {
+                vec![crate::journal::VersionEvidence {
+                    version: next.versions[&fixture.current.version_id].clone(),
+                    placement: next.placements[&fixture.current.version_id].clone(),
+                }]
+            } else {
+                Vec::new()
+            };
+            let candidate = install_cancellation_decision(
+                &mut fixture.engine,
+                &next,
+                &result,
+                published,
+                versions,
+            );
+            let payload_path = candidate.versions.first().map(|evidence| {
+                let disk = fixture
+                    .engine
+                    .disk(&evidence.placement.route_slot_ids[0])
+                    .unwrap();
+                assert!(
+                    !disk.metadata_member,
+                    "the attack must target a live data-only root"
+                );
+                crate::disk::version_dir(
+                    disk,
+                    &evidence.version.history_tree_id,
+                    &evidence.version.version_id,
+                )
+            });
             let members = fixture.engine.members();
             let missing = object_path(&members[0], "snapshot", &candidate.snapshot_hash);
             let snapshot_bytes = fs::read(&missing).unwrap();
@@ -1582,7 +1621,15 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
                 .collect::<Vec<_>>();
             let before_data = files(&fixture.config.disks[3].root);
             let before_plans = files(&system.join("plans"));
+            // Directory watches observe opening/reading the real child proof,
+            // so ACCEPT-only publication discovery cannot silently inspect it.
+            let payload_watch = payload_path
+                .as_ref()
+                .map(|path| watch_candidate_payload(path));
             let opened = Engine::open(&system);
+            if let Some(watch) = payload_watch {
+                assert_no_candidate_payload_io(watch);
+            }
             if attack == "valid" {
                 let mut engine = opened.unwrap();
                 assert_eq!(fs::read(&missing).unwrap(), snapshot_bytes);
@@ -1606,10 +1653,19 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
                     ErrorCode::PublicationInvalid,
                     "{published} {attack}"
                 );
-                assert!(
-                    error.to_string().contains("plan cancellation differs"),
-                    "{error}"
-                );
+                if attack == "payload" {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("metadata-only current-registry candidate"),
+                        "{error}"
+                    );
+                } else {
+                    assert!(
+                        error.to_string().contains("plan cancellation differs"),
+                        "{error}"
+                    );
+                }
                 assert_eq!(
                     fs::symlink_metadata(&missing).unwrap_err().kind(),
                     std::io::ErrorKind::NotFound
@@ -1631,4 +1687,26 @@ fn current_plan_cancellation_cold_proof_precedes_candidate_repairs_and_name_chan
             );
         }
     }
+}
+
+fn watch_candidate_payload(path: &Path) -> rustix::fd::OwnedFd {
+    use rustix::fs::inotify;
+    let watch =
+        inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK).unwrap();
+    inotify::add_watch(
+        &watch,
+        path,
+        inotify::WatchFlags::OPEN | inotify::WatchFlags::ACCESS,
+    )
+    .unwrap();
+    watch
+}
+
+fn assert_no_candidate_payload_io(watch: rustix::fd::OwnedFd) {
+    let mut bytes = [0u8; 4096];
+    assert_eq!(
+        rustix::io::read(&watch, &mut bytes),
+        Err(rustix::io::Errno::WOULDBLOCK),
+        "a metadata-only candidate must not open or read its smuggled local proof or payload"
+    );
 }

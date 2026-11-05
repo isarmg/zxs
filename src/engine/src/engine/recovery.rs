@@ -472,6 +472,7 @@ impl Engine {
             // candidate's replicas, payloads, names or publication receipts.
             // advance is pure: install the new view only after completion below.
             if let Some(view) = &self.current_namespaces {
+                workspace_receipts::verify_current_candidate_receipt(&candidate, next)?;
                 view.advance(&self.state, next)?;
             }
             if publication.is_none() && mode == RecoveryMode::PreservePending {
