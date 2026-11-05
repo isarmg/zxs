@@ -209,6 +209,37 @@ fn registration_projection(
     Ok((authority, registrations))
 }
 
+fn finish_registrations(
+    model: &mut Model,
+    generation: u64,
+    operation_generation: u64,
+    result: Result<(RegistrationAuthority, BTreeMap<String, RegistrationEntry>), api::Error>,
+) -> bool {
+    if !model.registrations_loading || model.registrations_generation != generation {
+        return false;
+    }
+    model.registrations_loading = false;
+    if model.generation != operation_generation {
+        // Completion may have requested fresh registration data while this read
+        // still occupied the slot. Discard its old view and start that refresh.
+        return true;
+    }
+    match result {
+        Ok((authority, entries)) => {
+            if model.authority != authority || model.registrations != entries {
+                model.authority = authority;
+                model.registrations = entries;
+            }
+        }
+        Err(error) => {
+            model.authority = RegistrationAuthority::Unadmitted;
+            model.registrations.clear();
+            model.error = Some(error);
+        }
+    }
+    false
+}
+
 pub(in crate::admin) fn load_registrations(state: RwSignal<State>) {
     let captured = state
         .try_update(|s| {
@@ -237,32 +268,20 @@ pub(in crate::admin) fn load_registrations(state: RwSignal<State>) {
         if !accept_read_response(state, epoch, &result) {
             return;
         }
-        state.update(|s| {
+        let refresh = state.try_update(|s| {
             if s.session_epoch != epoch {
-                return;
+                return false;
             }
-            let model = &mut s.admin_console.storage.readmission;
-            if model.registrations_generation != generation {
-                return;
-            }
-            model.registrations_loading = false;
-            if model.generation != operation_generation {
-                return;
-            }
-            match result {
-                Ok((authority, entries)) => {
-                    if model.authority != authority || model.registrations != entries {
-                        model.authority = authority;
-                        model.registrations = entries;
-                    }
-                }
-                Err(error) => {
-                    model.authority = RegistrationAuthority::Unadmitted;
-                    model.registrations.clear();
-                    model.error = Some(error);
-                }
-            }
-        });
+            finish_registrations(
+                &mut s.admin_console.storage.readmission,
+                generation,
+                operation_generation,
+                result,
+            )
+        }) == Some(true);
+        if refresh {
+            load_registrations(state);
+        }
     });
 }
 

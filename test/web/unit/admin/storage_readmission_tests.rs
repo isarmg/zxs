@@ -459,3 +459,75 @@ fn dismissing_unsubmitted_readmission_does_not_release_a_later_status_read() {
     assert!(model.finish_read(1));
     assert!(model.reading.is_none());
 }
+
+#[test]
+fn superseded_registration_read_schedules_one_refresh_after_readmission() {
+    let mut state = terminal_state();
+    let model = &mut state.admin_console.storage.readmission;
+    let previous = (model.authority, model.registrations.clone());
+    model.registrations_loading = true;
+    model.registrations_generation = 7;
+    let operation_generation = model.generation;
+
+    // The explicit submission finishes while the older registration GET owns
+    // the slot. Its completion refresh cannot start until this GET returns.
+    model.generation += 1;
+    assert!(finish_registrations(
+        model,
+        7,
+        operation_generation,
+        Ok(previous.clone()),
+    ));
+    assert!(!model.registrations_loading);
+    assert_eq!(model.registrations, previous.1);
+    assert!(!finish_registrations(
+        model,
+        7,
+        operation_generation,
+        Ok(previous.clone()),
+    ));
+
+    model.registrations_loading = true;
+    model.registrations_generation += 1;
+    let current_generation = model.generation;
+    let mut enabled = previous.1.clone();
+    let entry = enabled.get_mut("P01").unwrap();
+    entry.mode = RegistrationMode::Enabled;
+    entry.metadata_member = true;
+    entry.readmission = None;
+    assert!(!finish_registrations(
+        model,
+        7,
+        operation_generation,
+        Ok(previous),
+    ));
+    assert!(model.registrations_loading);
+    assert!(!finish_registrations(
+        model,
+        8,
+        current_generation,
+        Ok((RegistrationAuthority::Active, enabled.clone())),
+    ));
+    assert!(!model.registrations_loading);
+    assert_eq!(model.authority, RegistrationAuthority::Active);
+    assert_eq!(model.registrations, enabled);
+}
+
+#[test]
+fn leaving_registration_view_does_not_reschedule_an_invalidated_read() {
+    let mut model = Model {
+        registrations_generation: 7,
+        registrations_loading: true,
+        ..Default::default()
+    };
+    let operation_generation = model.generation;
+    model.leave_preview();
+    assert!(!finish_registrations(
+        &mut model,
+        7,
+        operation_generation,
+        Err(invalid(ResponseError::Identity)),
+    ));
+    assert!(!model.registrations_loading);
+    assert!(model.error.is_none());
+}

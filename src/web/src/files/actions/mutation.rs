@@ -146,8 +146,8 @@ fn publish_default(
         s.files.default_operation = Some(id.clone());
         s.files.mutation_pending = true;
         s.notices.operation_success(t(
-            "已设为默认分支，默认读取和 SMB 视图已更新。",
-            "Default branch saved. Default reads and the SMB view are updated.",
+            "默认读取视图已更新；已启用的 SMB 共享使用该视图。",
+            "The default view is updated. Enabled SMB shares use this view.",
         ));
     });
     spawn_local(async move {
