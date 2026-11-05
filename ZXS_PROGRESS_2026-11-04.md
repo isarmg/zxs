@@ -4,6 +4,25 @@
 
 本文记录本轮 ZXS 改进已落地的代码、已有验证证据、已知失败和剩余工作，供后续继续开发时核对。它是有时间边界的快照，不代替功能规范、发布说明或部署验收。提交和运行链接固定到具体版本；分支后续移动不改变本文所记录的历史结果。
 
+## 2026-11-05 显式数据根恢复候选与未闭合边界
+
+以下是基于 `db110ff9` 制作、尚未合入 `main` 的候选，不是 `5ec3a57f` 已提供的功能或通过证据。灾前从健康 Engine 的已准入 held handles 导出独立保留在 SYSTEM/存储根外的原始身份清单，CLI 与服务只明确选择清单内登记和本地授权路径；不得从待恢复盘自报 seal、重新 stat 的 device/inode 或 HTTP 请求构造预期身份。数据根不计入 metadata 多数，不支持身份重绑定或隐式探测。
+
+候选已按静态复核闭合两项首次准入缺陷：
+
+- 首先纯检查显式路径；取得固定 metadata 多数后，先按显式搬家投影纯检查全部认证登记根与 SYSTEM 的相同/父子重叠，再执行任何 data open。未列 A 不能冒充 SYSTEM 后借另选 B 提前发生数据 I/O。
+- SYSTEM 逐分量使用 `DIRECTORY|NOFOLLOW` 打开，config 存在性检查只基于 held fd；拒绝叶子/祖先及悬空链接。缺失 SYSTEM 延迟到数据身份通过后安全创建，保留原全链 fsync，已有目录前后比较 held dev/inode，不以裸路径 `try_exists` 或 canonicalize 跟随候选目标。
+
+**后续并发替换窗口仍未闭合。** `engine/config.rs::acquire_locks` 对 `writer.lock` 使用绝对路径 open，NOFOLLOW 仅保护叶子；`engine/index.rs` 的文件 stat、quarantine 目录创建和 SQLite 连接仍可能重开 SYSTEM 路径。`platform/sqlite/mod.rs` 目前只传 filename，SQLite 自行管理 WAL/SHM/journal 等旁文件。保留一个 SYSTEM fd、flock、权限检查或前后身份复验均不能证明这些操作之间没有跟随被替换祖先；事后发现身份不同也不能撤回已经发生的越界 I/O。本候选因此不能声明整个 SYSTEM 恢复过程抵抗并发路径替换，暂不作为完整安全闭环合入。
+
+后续最小安全方案须分别建立并验证：
+
+1. Engine 持续持有同一 SYSTEM 目录能力；先将 writer.lock 改为相对该 fd 的受限 openat2 和真实锁，再统一控制/工作区/索引文件的打开、创建、移动、删除和同步消费者，诊断路径不能重新变成 I/O 授权。缺失目录创建与重试也须保持该能力及准确身份，不能只增加“先检查、后按路径操作”。
+2. SQLite 需真正覆盖数据库、WAL、SHM、journal 与临时文件的 held-directory 适配/VFS，以及连接和后台 worker 的完整生命周期。现有 filename API 不足；单独拼接 `/proc/self/fd` 路径、事后检查或关闭索引检查都不能替代对 native 路径解析及旁文件操作的证明。这一方案尚未实现，不是本轮新增的安全保证。
+3. 保留固定 Q、原绑定、完整证据与禁止目标的边界；补充真实并发改名/祖先替换、创建竞争、SQLite 旁文件及恢复失败/续作的 syscall 观察，证明拒绝前未触及被禁目标且原证据保留，再决定候选是否可合入。
+
+候选现有 32 场景观察源码覆盖 Engine/CLI、缺 Q、路径重叠、未列根及叶子/祖先链接、目标存在/缺失，并对 alias 本名与真实 stat/open 做正校准。**观察脚本未执行**，不能用错误码、文件未创建或静态 NOFOLLOW 阅读替代零 I/O 证据。该候选只做 rustfmt、差异及补丁应用检查，未编译、测试、Clippy、CI 或部署；新方案的并发替换与 SQLite 验证也全部未执行。
+
 ## 2026-11-05 终态保留元数据重新准入
 
 终态池可使用已停用的原 metadata 登记建立受认证后继；保留旧固定多数、身份、Stop 和 epoch 证据，新决议由真实目标独立保存。冷入口持 SYSTEM writer 锁绑定完整 proposal 与 selected generation 后才同步 locator 或打开目标。新增受篡改来源、取消后不同 attempt 与零打开回归源码。服务库及依赖的引擎编译通过；新增定向测试尚未执行，目标独立决议损坏与 SYSTEM 丢失后搬迁的组合回归仍需补强。
