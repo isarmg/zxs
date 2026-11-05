@@ -5,6 +5,7 @@ use crate::{i18n::t, prelude::*};
 pub fn AccountPage(
     username_value: Signal<String>,
     pending: Signal<bool>,
+    disabled: Signal<bool>,
     remote_failure: Signal<Option<super::Feedback>>,
     on_submit: Callback<super::PasswordChange>,
 ) -> impl IntoView {
@@ -89,7 +90,7 @@ pub fn AccountPage(
                                                         .maxlength("1024")
                                                         .readonly(
                                                             ::web_interface::prelude::IntoAttributeValue::into_attribute_value(move ||
-                                                            pending.get()),
+                                                            pending.get() || disabled.get()),
                                                         ),
                                                 ))
                                                 .class("zxs-form-field"),
@@ -113,7 +114,7 @@ pub fn AccountPage(
                                                         .maxlength("1024")
                                                         .readonly(
                                                             ::web_interface::prelude::IntoAttributeValue::into_attribute_value(move ||
-                                                            pending.get()),
+                                                            pending.get() || disabled.get()),
                                                         ),
                                                 ))
                                                 .class("zxs-form-field"),
@@ -137,7 +138,7 @@ pub fn AccountPage(
                                                         .maxlength("1024")
                                                         .readonly(
                                                             ::web_interface::prelude::IntoAttributeValue::into_attribute_value(move ||
-                                                            pending.get()),
+                                                            pending.get() || disabled.get()),
                                                         ),
                                                 ))
                                                 .class("zxs-form-field"),
@@ -187,7 +188,7 @@ pub fn AccountPage(
                                                     .r#type("submit")
                                                     .disabled(
                                                         ::web_interface::prelude::IntoAttributeValue::into_attribute_value(move ||
-                                                        pending.get()),
+                                                        pending.get() || disabled.get()),
                                                     )
                                             },
                                         )
@@ -207,7 +208,7 @@ pub fn AccountPage(
                                     web_interface::ev::submit,
                                     move |event| {
                                         event.prevent_default();
-                                        if pending.get_untracked() {
+                                        if pending.get_untracked() || disabled.get_untracked() {
                                             return;
                                         }
                                         let secret = current.get_untracked().unwrap();

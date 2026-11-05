@@ -573,3 +573,31 @@ fn files_refresh_can_replace_history_while_preserving_the_busy_indicator() {
         "details require a selection"
     );
 }
+
+#[test]
+fn password_form_stops_showing_busy_when_an_unknown_result_keeps_submission_disabled() {
+    let mut state = State {
+        authenticated: true,
+        password_change: PasswordChangeState::Pending,
+        ..Default::default()
+    };
+    assert!(state.password_pending());
+    assert!(state.password_change_blocked());
+    reject_unconfirmed_password_change(&mut state);
+    assert!(!state.password_pending());
+    assert!(state.password_unknown());
+    assert!(state.password_change_blocked());
+    assert!(state.reload_blocked());
+
+    // Navigation cannot turn an outcome fence into an in-flight request or
+    // unlock the non-idempotent form. Only a settled new session clears it.
+    for page in [Page::Files, Page::Account] {
+        state.change_page(page);
+        assert!(!state.password_pending());
+        assert!(state.password_change_blocked());
+    }
+    state.password_change = PasswordChangeState::Idle;
+    state.session_transition = SessionTransition::LoggingOut;
+    assert!(!state.password_pending());
+    assert!(state.password_change_blocked());
+}

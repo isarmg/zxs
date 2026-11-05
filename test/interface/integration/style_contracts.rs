@@ -396,3 +396,21 @@ fn folder_search_uses_one_input_surface_and_explicit_enter_submission() {
     assert!(focus.contains("box-shadow: 0 0 0 3px"));
     assert!(focus.contains("0 0 0 5px var(--zxs-focus, Highlight)"));
 }
+
+#[test]
+fn account_form_keeps_unknown_outcomes_disabled_without_a_false_busy_indicator() {
+    let ui = include_str!("../../../src/web/src/ui.rs");
+    let account = include_str!("../../../src/interface/src/components/account.rs");
+    assert!(ui.contains("let pending = Memo::new(move |_| state.with(State::password_pending));"));
+    assert!(ui.contains(
+        "let disabled = Memo::new(move |_| state.with(State::password_change_blocked));"
+    ));
+    assert!(ui.contains("pending=pending.into() disabled=disabled.into()"));
+    assert!(account.contains("if pending.get_untracked() || disabled.get_untracked()"));
+    assert_eq!(
+        account.matches("pending.get() || disabled.get()").count(),
+        4
+    );
+    assert!(account.contains("pending.get().to_string()"));
+    assert!(account.contains("if pending.get()"));
+}

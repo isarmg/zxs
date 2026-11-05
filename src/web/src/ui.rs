@@ -478,7 +478,8 @@ fn end_session(state: RwSignal<State>, notice: String) {
 }
 fn account(state: RwSignal<State>) -> impl IntoView {
     let username = Memo::new(move |_| state.with(|s| s.principal.clone()));
-    let pending = Memo::new(move |_| state.with(State::password_change_blocked));
+    let pending = Memo::new(move |_| state.with(State::password_pending));
+    let disabled = Memo::new(move |_| state.with(State::password_change_blocked));
     let failure = Memo::new(move |_| state.with(|s| s.password_failure.clone()));
     let change = Callback::new(move |credentials: PasswordChange| {
         if state.with_untracked(State::password_change_blocked) {
@@ -505,7 +506,7 @@ fn account(state: RwSignal<State>) -> impl IntoView {
             complete_password_change(state, result);
         });
     });
-    view! { <section class="zxs-content-stack zxs-stack"><h2 class="zxs-row">{t("Web 账号与密码","Web account and password")}</h2><p class="zxs-row">{t("修改密码后，该账号的全部会话将失效。","Changing the password signs this account out on all devices.")}</p><Show when=move ||state.with(|s|s.password_unknown())><p class="zxs-row" role="alert">{t("改密结果未知，已禁用重复提交。请先退出登录，再核实可用的密码；不会自动重试改密。","The password change outcome is unknown; repeat submission is disabled. Sign out, then verify which password works. The change will not be retried automatically.")}</p></Show><AccountPage username_value=username.into() pending=pending.into() remote_failure=failure.into() on_submit=change/>{crate::smb_account::view(state)}</section> }
+    view! { <section class="zxs-content-stack zxs-stack"><h2 class="zxs-row">{t("Web 账号与密码","Web account and password")}</h2><p class="zxs-row">{t("修改密码后，该账号的全部会话将失效。","Changing the password signs this account out on all devices.")}</p><Show when=move ||state.with(|s|s.password_unknown())><p class="zxs-row" role="alert">{t("改密结果未知，已禁用重复提交。请先退出登录，再核实可用的密码；不会自动重试改密。","The password change outcome is unknown; repeat submission is disabled. Sign out, then verify which password works. The change will not be retried automatically.")}</p></Show><AccountPage username_value=username.into() pending=pending.into() disabled=disabled.into() remote_failure=failure.into() on_submit=change/>{crate::smb_account::view(state)}</section> }
 }
 fn complete_password_change(state: RwSignal<State>, result: Result<Value, api::Error>) {
     match result {
