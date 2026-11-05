@@ -3,12 +3,15 @@ mod root_extension;
 pub(crate) use root_extension::PreparedRootExtension;
 
 use super::*;
+#[path = "readmission.rs"]
+mod readmission;
 #[path = "stop_publication.rs"]
 mod stop_publication;
 use platform_io::fs_safety::{
     AdvisoryLock, AtomicFile, EntryName, PrivateDirectory,
     linux::{MountPolicy, OpenAt2Root, open_private_regular},
 };
+pub(in crate::engine) use readmission::PreparedReadmission;
 use std::{io::Read, os::unix::fs::MetadataExt};
 pub(in crate::engine) use stop_publication::PreparedStop;
 

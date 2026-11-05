@@ -11,6 +11,8 @@ mod archive;
 pub use abort::MembershipAbortStatus;
 mod decision;
 mod effect;
+pub(in crate::engine) mod readmission;
+pub use readmission::{DiskReadmissionPhase, DiskReadmissionStatus};
 pub(in crate::engine) mod terminal;
 pub(in crate::engine) mod terminal_resume;
 pub use effect::MembershipExitAction;
@@ -19,7 +21,10 @@ pub use pending::activation::exit::{DiskExitPhase, DiskExitStatus};
 pub use pending::activation::terminal_resume::{
     TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
 };
-pub use pending::terminal_resume::{TerminalMetadataResume, TerminalMetadataResumeStatus};
+pub use pending::terminal_resume::{
+    TerminalMetadataResume, TerminalMetadataResumeCancelOutcome,
+    TerminalMetadataResumeCancellationPhase, TerminalMetadataResumeStatus,
+};
 pub(crate) mod pending;
 pub use archive::{
     MembershipArchiveInspection, MembershipControlArchive, MembershipJournalInspection,
@@ -52,6 +57,11 @@ enum Origin {
         config: ValidatedConfig,
         predecessor_authority_hash: String,
     },
+    Readmission {
+        config: ValidatedConfig,
+        predecessor_authority_hash: String,
+        request: Box<readmission::ReadmissionRequest>,
+    },
     TerminalResume {
         config: ValidatedConfig,
         predecessor_authority_hash: Option<String>,
@@ -63,13 +73,18 @@ impl Origin {
         match self {
             Self::Genesis { config }
             | Self::Successor { config, .. }
-            | Self::TerminalResume { config, .. } => config,
+            | Self::TerminalResume { config, .. }
+            | Self::Readmission { config, .. } => config,
         }
     }
     fn predecessor(&self) -> Option<&str> {
         match self {
             Self::Genesis { .. } => None,
             Self::Successor {
+                predecessor_authority_hash,
+                ..
+            }
+            | Self::Readmission {
                 predecessor_authority_hash,
                 ..
             } => Some(predecessor_authority_hash),
@@ -116,6 +131,15 @@ enum FenceScope {
 }
 
 impl TransitionIntent {
+    fn verify_target(&self) -> Result<()> {
+        match &self.origin {
+            Origin::Readmission { request, .. } => request.verify_target(self),
+            _ => {
+                validate_transition_target(self.origin.config(), &self.target, self.effect.as_ref())
+            }
+        }
+    }
+
     fn verify_fence_scope(&self) -> Result<()> {
         if self.fence_scope.is_none() {
             return Ok(());
@@ -595,7 +619,7 @@ impl Engine {
             ));
         }
         self.config.verify_saved_metadata_membership(config)?;
-        validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
+        intent.verify_target()?;
         pending::reservation::verify_intent_roots(&intent)?;
         Self::require_actor(&intent.principal)?;
         let boundary_sequence = intent.boundary.as_ref().map_or(0, |base| base.sequence);

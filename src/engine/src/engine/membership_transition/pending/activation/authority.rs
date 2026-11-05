@@ -24,6 +24,7 @@ enum AuthorityCore {
     Abort(AbortCore),
     Exit(exit::ExitCore),
     TerminalResume(Box<ResumeCore>),
+    Readmission(Box<super::super::super::readmission::ReadmissionCore>),
 }
 
 pub(in crate::engine::membership_transition) trait AuthorityResolver {
@@ -31,12 +32,20 @@ pub(in crate::engine::membership_transition) trait AuthorityResolver {
     fn abort_evidence(&mut self, hash: &str) -> Result<AbortAuthorityEvidence>;
 }
 impl AuthorityCore {
+    fn stop_intent<'a>(&'a self, intent: &'a TransitionIntent) -> Option<&'a TransitionIntent> {
+        match self {
+            Self::Exit(_) => Some(intent),
+            Self::TerminalResume(core) => Some(core.terminal().intent()),
+            Self::Add(_) | Self::Abort(_) | Self::Readmission(_) => None,
+        }
+    }
     fn archive(&self) -> &ArchiveRoot {
         match self {
             Self::Add(node) => &node.archive,
             Self::Abort(core) => &core.archive,
             Self::Exit(core) => &core.archive,
             Self::TerminalResume(core) => core.archive(),
+            Self::Readmission(core) => core.archive(),
         }
     }
     fn intent(&self, evidence: Option<&AbortAuthorityEvidence>) -> Result<TransitionIntent> {
@@ -44,6 +53,7 @@ impl AuthorityCore {
             (Self::Add(node), None) => node.intent(),
             (Self::Exit(core), None) => core.intent(),
             (Self::TerminalResume(core), None) => core.intent(),
+            (Self::Readmission(core), None) => core.intent(),
             (Self::Abort(core), Some(evidence)) => evidence.verify(core),
             _ => Err(Error::new(
                 ErrorCode::ObjectCorrupt,
@@ -53,7 +63,9 @@ impl AuthorityCore {
     }
     fn effective_config<'a>(&self, intent: &'a TransitionIntent) -> &'a ValidatedConfig {
         match self {
-            Self::Add(_) | Self::Exit(_) | Self::TerminalResume(_) => &intent.target,
+            Self::Add(_) | Self::Exit(_) | Self::TerminalResume(_) | Self::Readmission(_) => {
+                &intent.target
+            }
             Self::Abort(_) => intent.origin.config(),
         }
     }
@@ -198,7 +210,10 @@ impl AuthorityNode {
         let verified = self.joint.verify()?;
         self.archive.verify_scope(&verified.intent)?;
         if verified.intent.effect.is_some()
-            || matches!(verified.intent.origin, Origin::TerminalResume { .. })
+            || matches!(
+                verified.intent.origin,
+                Origin::TerminalResume { .. } | Origin::Readmission { .. }
+            )
         {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -247,7 +262,9 @@ impl PortableAuthority {
         match &self.head {
             AuthorityCore::Add(node) => Ok(&node.joint),
             AuthorityCore::Exit(core) => Ok(&core.joint),
-            AuthorityCore::Abort(_) | AuthorityCore::TerminalResume(_) => Err(Error::new(
+            AuthorityCore::Abort(_)
+            | AuthorityCore::TerminalResume(_)
+            | AuthorityCore::Readmission(_) => Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "this authority has no Joint addition certificate",
             )),
@@ -275,12 +292,13 @@ impl PortableAuthority {
             AuthorityCore::Abort(core) => {
                 self.evidence[&self.hash()?].verify_member(core, root, disk)
             }
-            AuthorityCore::Add(_) | AuthorityCore::Exit(_) | AuthorityCore::TerminalResume(_) => {
-                Err(Error::new(
-                    ErrorCode::ConfigConflict,
-                    "expected Abort authority",
-                ))
-            }
+            AuthorityCore::Add(_)
+            | AuthorityCore::Exit(_)
+            | AuthorityCore::TerminalResume(_)
+            | AuthorityCore::Readmission(_) => Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "expected Abort authority",
+            )),
         }
     }
 
@@ -303,6 +321,7 @@ impl PortableAuthority {
                 .map(registry::RegistryContinuation::registry)),
             AuthorityCore::Exit(core) => Ok(Some(core.registry())),
             AuthorityCore::TerminalResume(core) => Ok(Some(core.registry())),
+            AuthorityCore::Readmission(core) => Ok(Some(core.registry())),
             AuthorityCore::Abort(_) => {
                 let hash = object_hash(AUTHORITY_KIND, node)?;
                 let intent = node.intent(self.evidence.get(&hash))?;
@@ -336,6 +355,7 @@ impl PortableAuthority {
                 .transpose(),
             AuthorityCore::Exit(core) => core.verified_registry().map(Some),
             AuthorityCore::TerminalResume(core) => core.verified_registry().map(Some),
+            AuthorityCore::Readmission(core) => core.verified_registry().map(Some),
             AuthorityCore::Abort(_) => {
                 let hash = object_hash(AUTHORITY_KIND, node)?;
                 let intent = node.intent(self.evidence.get(&hash))?;
@@ -357,6 +377,7 @@ impl PortableAuthority {
                 core.registry_from_source(source)?;
             }
             AuthorityCore::TerminalResume(core) => core.verify_source(source)?,
+            AuthorityCore::Readmission(core) => core.verify_source(source)?,
             AuthorityCore::Abort(_) => (),
         }
         Ok(())
@@ -389,6 +410,28 @@ impl PortableAuthority {
         }
         if let AuthorityCore::Exit(core) = &self.head {
             return core.current_namespaces(source, previous);
+        }
+        if let AuthorityCore::Readmission(core) = &self.head {
+            core.verify_source(source)?;
+            let registry = core.verified_registry()?;
+            let request = super::super::super::readmission::request(&intent)?;
+            return previous
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "readmission lacks its current namespace source",
+                    )
+                })?
+                .prepare_readmission(
+                    source,
+                    &intent
+                        .boundary
+                        .as_ref()
+                        .expect("invariant: readmission source")
+                        .snapshot_hash,
+                    &registry,
+                    &request.target,
+                );
         }
         if let AuthorityCore::Add(node) = &self.head
             && let Some(registry) = &node.registry
@@ -445,6 +488,110 @@ impl PortableAuthority {
             _ => None,
         }
     }
+    pub(in crate::engine::membership_transition) fn readmission_intent(
+        &self,
+        operation: OperationId,
+    ) -> Result<Option<TransitionIntent>> {
+        Ok(self.lineage()?.into_iter().find_map(|(_, intent)| {
+            (intent.operation_id == operation
+                && matches!(intent.origin, Origin::Readmission { .. }))
+            .then_some(intent)
+        }))
+    }
+    pub(in crate::engine) fn readmission_core(
+        &self,
+    ) -> Option<&super::super::super::readmission::ReadmissionCore> {
+        match &self.head {
+            AuthorityCore::Readmission(core) => Some(core),
+            _ => None,
+        }
+    }
+    pub(in crate::engine) fn io_admission_epoch(&self, disk_id: &str) -> Result<Option<String>> {
+        let mut epoch = None;
+        for (hash, intent) in self.lineage()? {
+            if matches!(self.node(&hash)?, AuthorityCore::Readmission(_))
+                && super::super::super::readmission::request(&intent)?
+                    .target
+                    .disk_id
+                    == disk_id
+            {
+                epoch = Some(object_hash(INTENT_KIND, &intent)?);
+            }
+        }
+        Ok(epoch)
+    }
+    /// Resolve one currently active epoch only from the complete authenticated
+    /// lineage. A historical readmission cannot revive a later Disabled/Detached root.
+    pub(in crate::engine::membership_transition) fn readmission_epoch_intent(
+        &self,
+        identity: &crate::DiskRegistrationIdentity,
+        epoch: &str,
+    ) -> Result<TransitionIntent> {
+        let registry = self.verified_registry()?.ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "readmission recovery has no registry",
+            )
+        })?;
+        if registry.registration(identity)? != Some(crate::RegistrationMode::Enabled)
+            || self.io_admission_epoch(&identity.disk_id)?.as_deref() != Some(epoch)
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "readmission recovery does not name the current Enabled epoch",
+            ));
+        }
+        for (_, intent) in self.lineage()? {
+            if let Origin::Readmission { request, .. } = &intent.origin
+                && request.target == *identity
+                && object_hash(INTENT_KIND, &intent)? == epoch
+            {
+                return Ok(intent);
+            }
+        }
+        Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "readmission epoch is absent from authenticated lineage",
+        ))
+    }
+
+    pub(in crate::engine) fn retired_io_epochs(
+        &self,
+        disk_id: &str,
+    ) -> Result<BTreeSet<Option<String>>> {
+        let mut retired = BTreeSet::new();
+        for (hash, intent) in self.lineage()? {
+            if matches!(self.node(&hash)?, AuthorityCore::Readmission(_)) {
+                let request = super::super::super::readmission::request(&intent)?;
+                if request.target.disk_id == disk_id {
+                    retired.insert(request.previous_admission.clone());
+                }
+            }
+        }
+        Ok(retired)
+    }
+
+    pub(in crate::engine) fn historical_bootstrap_stops(
+        &self,
+    ) -> Result<Vec<(crate::DiskRegistrationIdentity, OperationId, String)>> {
+        let mut stops = Vec::new();
+        for (hash, intent) in self.lineage()? {
+            let Some(stopped) = self.node(&hash)?.stop_intent(&intent) else {
+                continue;
+            };
+            let effect = stopped
+                .effect
+                .as_ref()
+                .expect("invariant: verified stop effect");
+            stops.push((
+                effect.identity(&stopped.origin.config().pool_id),
+                stopped.operation_id,
+                object_hash(INTENT_KIND, stopped)?,
+            ));
+        }
+        Ok(stops)
+    }
+
     pub(in crate::engine) fn bootstrap_stops(
         &self,
     ) -> Result<Vec<(crate::DiskRegistrationIdentity, OperationId, String)>> {
@@ -456,6 +603,14 @@ impl PortableAuthority {
                 AuthorityCore::TerminalResume(core) => {
                     terminal_intent = core.terminal().intent();
                     Some(terminal_intent)
+                }
+                AuthorityCore::Readmission(_) => {
+                    stops.remove(
+                        &super::super::super::readmission::request(&intent)?
+                            .target
+                            .disk_id,
+                    );
+                    None
                 }
                 AuthorityCore::Add(_) | AuthorityCore::Abort(_) => None,
             };
@@ -492,7 +647,6 @@ impl PortableAuthority {
             .map(|(binding, _, _)| binding.disk_id)
             .collect())
     }
-
     pub(in crate::engine) fn verify_bootstrap_stop(
         &self,
         binding: &crate::DiskRegistrationIdentity,
@@ -500,7 +654,7 @@ impl PortableAuthority {
         intent_hash: &str,
     ) -> Result<()> {
         if self
-            .bootstrap_stops()?
+            .historical_bootstrap_stops()?
             .iter()
             .any(|(identity, operation, hash)| {
                 identity == binding && *operation == operation_id && hash == intent_hash
@@ -510,9 +664,74 @@ impl PortableAuthority {
         } else {
             Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                "bootstrap stop has no exact first authenticated exit authority",
+                "bootstrap stop has no exact authenticated exit authority",
             ))
         }
+    }
+    pub(in crate::engine) fn verify_bootstrap_stop_epoch(
+        &self,
+        binding: &crate::DiskRegistrationIdentity,
+        operation: OperationId,
+        transition: &str,
+        epoch: Option<&str>,
+    ) -> Result<()> {
+        let mut epochs = BTreeMap::new();
+        for (hash, intent) in self.lineage()? {
+            let node = self.node(&hash)?;
+            if let Some(stopped) = node.stop_intent(&intent) {
+                let effect = stopped
+                    .effect
+                    .as_ref()
+                    .expect("invariant: verified stop effect");
+                if effect.identity(&stopped.origin.config().pool_id) == *binding
+                    && stopped.operation_id == operation
+                    && object_hash(INTENT_KIND, stopped)? == transition
+                {
+                    if epochs.get(&binding.disk_id).map(String::as_str) == epoch {
+                        return Ok(());
+                    }
+                    return Err(Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "bootstrap stop closes another I/O epoch",
+                    ));
+                }
+            }
+            if let Origin::Readmission { request, .. } = &intent.origin {
+                epochs.insert(
+                    request.target.disk_id.clone(),
+                    object_hash(INTENT_KIND, &intent)?,
+                );
+            }
+        }
+        Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "bootstrap stop epoch lacks exact authenticated authority",
+        ))
+    }
+
+    pub(in crate::engine) fn verify_readmission_hint(
+        &self,
+        identity: &crate::DiskRegistrationIdentity,
+        operation: OperationId,
+        transition: &str,
+        stopped: &str,
+    ) -> Result<()> {
+        for (hash, intent) in self.lineage()? {
+            if matches!(self.node(&hash)?, AuthorityCore::Readmission(_)) {
+                let request = super::super::super::readmission::request(&intent)?;
+                if request.target == *identity
+                    && intent.operation_id == operation
+                    && object_hash(INTENT_KIND, &intent)? == transition
+                    && request.stopped_transition == stopped
+                {
+                    return Ok(());
+                }
+            }
+        }
+        Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "bootstrap readmission has no exact authenticated authority",
+        ))
     }
 
     pub(in crate::engine::membership_transition) fn is_abort(&self) -> bool {
@@ -552,6 +771,12 @@ impl PortableAuthority {
         // The lineage proves additions are permanent and identities never change.
         self.lineage()?;
         for node in std::iter::once(&self.head).chain(self.predecessors.values()) {
+            if let AuthorityCore::TerminalResume(core) = node {
+                if let Some(dependency) = core.data_dependency(disk_id)? {
+                    return Ok(Some(dependency));
+                }
+                continue;
+            }
             let AuthorityCore::Add(node) = node else {
                 continue;
             };
@@ -735,6 +960,21 @@ impl PortableAuthority {
         Ok(object_hash(INTENT_KIND, &self.archive_intent()?)?)
     }
 
+    pub(in crate::engine::membership_transition) fn new_readmission(
+        core: super::super::super::readmission::ReadmissionCore,
+        previous: &Self,
+    ) -> Result<Self> {
+        let mut predecessors = previous.predecessors.clone();
+        predecessors.insert(previous.hash()?, previous.head.clone());
+        let authority = Self {
+            head: AuthorityCore::Readmission(Box::new(core)),
+            predecessors,
+            evidence: previous.evidence.clone(),
+        };
+        authority.lineage()?;
+        Ok(authority)
+    }
+
     pub(crate) fn hash(&self) -> Result<String> {
         Ok(object_hash(AUTHORITY_KIND, &self.head)?)
     }
@@ -814,6 +1054,7 @@ impl PortableAuthority {
                     .predecessor()
                     .and_then(PortableAuthority::exit_registry),
                 AuthorityCore::Abort(_) => previous,
+                AuthorityCore::Readmission(core) => Some(core.registry_parent()),
             };
             if carried != previous {
                 return Err(Error::new(
@@ -839,6 +1080,48 @@ impl PortableAuthority {
             ));
         }
         chain.reverse();
+        let mut stopped = BTreeMap::new();
+        let mut epochs = BTreeMap::new();
+        for (hash, intent) in &chain {
+            let node = self.node(hash)?;
+            if let Some(stopped_intent) = node.stop_intent(intent) {
+                let effect = stopped_intent
+                    .effect
+                    .as_ref()
+                    .expect("invariant: verified exit effect");
+                stopped.entry(effect.disk_id.clone()).or_insert((
+                    stopped_intent.operation_id,
+                    object_hash(INTENT_KIND, stopped_intent)?,
+                    stopped_intent.origin.predecessor().map_or(
+                        DiskSealFormat::ManagedDirectory,
+                        |authority_hash| DiskSealFormat::MembershipGeneration {
+                            authority_hash: authority_hash.into(),
+                        },
+                    ),
+                ));
+            }
+            if matches!(node, AuthorityCore::Readmission(_)) {
+                let request = super::super::super::readmission::request(intent)?;
+                if stopped.get(&request.target.disk_id)
+                    != Some(&(
+                        request.stopped_operation,
+                        request.stopped_transition.clone(),
+                        request.original_seal.format.clone(),
+                    ))
+                    || epochs.get(&request.target.disk_id) != request.previous_admission.as_ref()
+                {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "readmission does not consume the exact stopped I/O lifetime",
+                    ));
+                }
+                stopped.remove(&request.target.disk_id);
+                epochs.insert(
+                    request.target.disk_id.clone(),
+                    object_hash(INTENT_KIND, intent)?,
+                );
+            }
+        }
         Ok(chain)
     }
 

@@ -7,6 +7,7 @@ fn install_envelope(
     root: &DiskRoot,
     path: &Path,
     generation: &Generation,
+    disk: &DiskConfig,
     advance: bool,
 ) -> Result<()> {
     if let Some(file) = root.open_optional_read_regular(path)? {
@@ -16,7 +17,16 @@ fn install_envelope(
         if hash == generation.hash {
             return root.write_atomic(path, &bytes, false);
         }
-        if !advance || Some(hash.as_str()) != generation.intent.origin.predecessor() {
+        let readmission_predecessor = generation
+            .portable
+            .readmission_core()
+            .map(|core| core.permits_prior_marker(&disk.disk_id, &hash))
+            .transpose()?
+            .unwrap_or(false);
+        if !advance
+            || (Some(hash.as_str()) != generation.intent.origin.predecessor()
+                && !readmission_predecessor)
+        {
             return Err(Error::new(
                 ErrorCode::LogFork,
                 "generation marker is not this authority or its exact predecessor",
@@ -60,6 +70,12 @@ pub(in crate::engine::membership_transition) fn install_marker(
                     let hash = saved.hash()?;
                     if hash != generation.hash
                         && Some(hash.as_str()) != generation.intent.origin.predecessor()
+                        && !generation
+                            .portable
+                            .readmission_core()
+                            .map(|core| core.permits_prior_marker(&disk.disk_id, &hash))
+                            .transpose()?
+                            .unwrap_or(false)
                     {
                         return Err(Error::new(
                             ErrorCode::LogFork,
@@ -118,8 +134,20 @@ pub(in crate::engine::membership_transition) fn install_marker(
     for object in generation.portable.node_objects()? {
         object.store_at_root(root, disk)?;
     }
-    install_envelope(root, &directory.join("authority.json"), generation, false)?;
-    install_envelope(root, &disk.root.join(GENERATION_FILE), generation, true)
+    install_envelope(
+        root,
+        &directory.join("authority.json"),
+        generation,
+        disk,
+        false,
+    )?;
+    install_envelope(
+        root,
+        &disk.root.join(GENERATION_FILE),
+        generation,
+        disk,
+        true,
+    )
 }
 
 pub(crate) fn predecessor_seal_matches(
@@ -153,6 +181,14 @@ pub(crate) fn predecessor_seal_matches(
                 ));
             }
             return validate_stored_seal(&stored, expected);
+        }
+        if let Some(core) = generation.portable.readmission_core()
+            && let Some(predecessor) = core.target_predecessor_seal(&disk.disk_id)?
+        {
+            let mut physical = expected.clone();
+            physical.format = predecessor.format.clone();
+            validate_stored_seal(&predecessor, &physical)?;
+            return validate_stored_seal(&stored, &predecessor);
         }
         let mut predecessor = expected.clone();
         predecessor.format = match generation.intent.origin.predecessor() {
@@ -474,6 +510,9 @@ impl Engine {
         if generation.portable.is_exit() {
             return self.promote_disk_exit_resources();
         }
+        if generation.portable.readmission_core().is_some() {
+            return self.promote_readmission_resources();
+        }
         if self.disk_resources.handles().count() != self.config.io_disks().count() {
             return Err(Error::new(
                 ErrorCode::MetadataQuorumUnavailable,
@@ -641,6 +680,7 @@ impl Engine {
             self.restore_current_disk_exit()?;
             write_json(&self.root.join("config.json"), &self.config, true)?;
             super::root_extension::complete(self)?;
+            self.retire_published_readmission_plan()?;
             return Ok(result);
         }
         if self.disk_resources.handles().count() != self.config.io_disks().count()
@@ -680,6 +720,7 @@ impl Engine {
         self.failpoint("before_membership_activation_projection")?;
         write_json(&self.root.join("config.json"), &self.config, true)?;
         super::root_extension::complete(self)?;
+        self.retire_published_readmission_plan()?;
         Ok(result)
     }
 }

@@ -1,6 +1,7 @@
 //! Existing Add endpoints, backed by the authenticated terminal authority.
 //! HTTP intent is only retry context; real new-Q publication is core authority.
 use super::*;
+mod cancel;
 use platform_io::fs_safety::PrivateDirectory;
 use storage_addition::{
     AdditionSource, ArchiveBinding, StoredAddition, configuration_digest, finish, latest_name,
@@ -9,7 +10,8 @@ use storage_addition::{
 use storage_contract::{Config, ErrorCode, OperationId, OperationResult, storage_addition::*};
 use storage_engine::{
     PendingMemberDirectory, TerminalManagement, TerminalMetadataResume,
-    TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
+    TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
+    TerminalMetadataResumeRecovery,
 };
 
 fn recovery(message: &'static str) -> ApiError {
@@ -30,7 +32,10 @@ pub(crate) fn exact_result(
         ));
     };
     if result.operation_id != intent.status.operation_id
-        || result.kind != "terminal-metadata-resume"
+        || !matches!(
+            result.kind.as_str(),
+            "terminal-metadata-resume" | "terminal-metadata-resume-cancelled"
+        )
         || result.commit_state != storage_contract::CommitState::Published
         || intent
             .archive
@@ -52,6 +57,73 @@ pub(crate) fn exact_result(
         ));
     }
     Ok(result)
+}
+
+/// No I/O: reject another actor, target or terminal source before
+/// taking the exclusive live owner out of the dispatcher.
+fn require_resume_owner(
+    pending: &TerminalMetadataResume,
+    intent: &StoredAddition,
+) -> Result<(), ApiError> {
+    let terminal = pending.terminal_management();
+    let status = terminal.status();
+    let expected = AdditionAuthority::TerminalManagement {
+        terminal_authority_hash: status.authority_hash,
+        terminal_operation_id: status.operation_id,
+    };
+    if pending.operation_id() != intent.status.operation_id
+        || pending.principal() != intent.principal
+        || expected != intent.status.preview.authority
+        || configuration_digest(terminal.original_configuration())
+            != intent.status.preview.configuration_digest
+        || configuration_digest(pending.target_configuration())
+            != configuration_digest(&intent.target)
+    {
+        return Err(ApiError::conflict(
+            ErrorCode::IdempotencyKeyReused,
+            "fresh resume does not own this exact actor, operation, source and target",
+        ));
+    }
+    Ok(())
+}
+
+fn bind_held_resume(
+    pending: &TerminalMetadataResume,
+    intent: &mut StoredAddition,
+) -> Result<(), ApiError> {
+    require_resume_owner(pending, intent)?;
+    let status = pending.status().map_err(crate::engine_backend::error)?;
+    let archive = pending.control_archive();
+    let binding = ArchiveBinding {
+        archive_path: archive.archive_path,
+        root_hash: archive.root_hash,
+        transition_hash: status.transition_hash,
+    };
+    let AdditionAuthority::TerminalManagement {
+        terminal_authority_hash,
+        ..
+    } = &intent.status.preview.authority
+    else {
+        return Err(recovery(
+            "the held resume has no terminal authority binding",
+        ));
+    };
+    if pending.principal() != intent.principal
+        || status.operation_id != intent.status.operation_id
+        || &status.terminal_authority_hash != terminal_authority_hash
+        || status.original_metadata_members != intent.status.preview.original_metadata_members
+        || status.target_metadata_members != intent.status.preview.target_metadata_members
+        || intent
+            .archive
+            .as_ref()
+            .is_some_and(|saved| saved != &binding)
+    {
+        return Err(recovery(
+            "the held resume belongs to another exact operation",
+        ));
+    }
+    intent.archive = Some(binding);
+    Ok(())
 }
 
 enum ResumeOwner {
@@ -104,6 +176,9 @@ impl Inner {
         intent: &StoredAddition,
     ) -> Result<Option<OperationResult>, ApiError> {
         self.current_management_identity(identity)?;
+        // Only an admitted owner supplies permanent results. A cancellation
+        // certificate merely readable after a failed fsync is not completion;
+        // explicit recovery opens TerminalManagement and repeats its barriers.
         if let Some(terminal) = self.terminal(identity)? {
             if let Some(result) = terminal.operation(intent.status.operation_id) {
                 if terminal
@@ -133,6 +208,35 @@ impl Inner {
         }
     }
 
+    /// Read only the exact already-held pending owner. A cold HTTP progress
+    /// record cannot establish whether a real new quorum has chosen Resume.
+    pub(super) fn terminal_resume_cancellation_phase(
+        &self,
+        intent: &StoredAddition,
+    ) -> Result<AdditionPhase, ApiError> {
+        let state = crate::lock(&self.state);
+        let BackendState::MetadataResume(pending) = &state.backend else {
+            return Ok(AdditionPhase::ResumeCancellationUnknown);
+        };
+        require_resume_owner(pending, intent)?;
+        let observed = pending
+            .cancellation_phase()
+            .map_err(crate::engine_backend::error)?;
+        Ok(match observed {
+            TerminalMetadataResumeCancellationPhase::Cancellable => {
+                AdditionPhase::ResumeCancellable
+            }
+            TerminalMetadataResumeCancellationPhase::Cancelling => AdditionPhase::CertifyingAbort,
+            TerminalMetadataResumeCancellationPhase::ResumeQuorumAccepted
+            | TerminalMetadataResumeCancellationPhase::GenerationSelected => {
+                AdditionPhase::ResumeQuorumAccepted
+            }
+            // This still needs explicit durable handover; it is not a completed
+            // HTTP operation and may only offer continuation of cancellation.
+            TerminalMetadataResumeCancellationPhase::Cancelled => AdditionPhase::Cancelling,
+        })
+    }
+
     fn restore_resume(&self, pending: TerminalMetadataResume) {
         let mut state = crate::lock(&self.state);
         state.backend = BackendState::MetadataResume(Box::new(pending));
@@ -147,14 +251,16 @@ impl Inner {
     ) -> Result<(), ApiError> {
         let AdditionAuthority::TerminalManagement {
             terminal_authority_hash,
-            ..
+            terminal_operation_id,
         } = &intent.status.preview.authority
         else {
             return Err(recovery(
                 "resume proof requires the original terminal preview",
             ));
         };
-        if proof.operation_id != intent.status.operation_id
+        if &proof.terminal_operation_id != terminal_operation_id
+            || configuration_digest(&proof.original) != intent.status.preview.configuration_digest
+            || proof.operation_id != intent.status.operation_id
             || proof.principal != intent.principal
             || configuration_digest(&proof.target) != configuration_digest(&intent.target)
             || &proof.terminal_authority_hash != terminal_authority_hash
@@ -220,13 +326,13 @@ impl Inner {
             .collect()
     }
 
-    fn run_terminal_resume(
+    fn acquire_terminal_resume(
         self: &Arc<Self>,
         identity: &Identity,
         intent: &mut StoredAddition,
         directories: Option<Vec<PendingMemberDirectory>>,
         directory: &PrivateDirectory,
-    ) -> Result<OperationResult, ApiError> {
+    ) -> Result<ResumeOwner, ApiError> {
         self.current_management_identity(identity)?;
         // An Engine can already own the permanent result after auth replication
         // or the HTTP record write failed. Never initialize or prepare again.
@@ -236,10 +342,14 @@ impl Inner {
                 .terminal_resume_result(identity, intent)?
                 .ok_or_else(|| {
                     recovery("the recovered Engine has no matching metadata-resume publication")
-                });
+                })
+                .map(|result| ResumeOwner::Published(Box::new(result)));
         }
         let previous = {
             let mut state = crate::lock(&self.state);
+            if let BackendState::MetadataResume(pending) = &state.backend {
+                require_resume_owner(pending, intent)?;
+            }
             state.admitted = false;
             state.status = StorageState::RecoveryRequired;
             std::mem::replace(&mut state.backend, BackendState::ChangingAuthority)
@@ -270,9 +380,8 @@ impl Inner {
                 ));
             }
         };
-        let mut pending = match pending {
-            Ok(ResumeOwner::Pending(pending)) => *pending,
-            Ok(ResumeOwner::Published(result)) => return Ok(*result),
+        match pending {
+            Ok(owner) => Ok(owner),
             Err(error) => {
                 if matches!(
                     crate::lock(&self.state).backend,
@@ -280,44 +389,28 @@ impl Inner {
                 ) {
                     crate::lock(&self.state).backend = BackendState::ResumeRecovery;
                 }
-                return Err(error);
+                Err(error)
             }
-        };
+        }
+    }
+
+    fn run_terminal_resume(
+        self: &Arc<Self>,
+        identity: &Identity,
+        intent: &mut StoredAddition,
+        directories: Option<Vec<PendingMemberDirectory>>,
+        directory: &PrivateDirectory,
+    ) -> Result<OperationResult, ApiError> {
+        let mut pending =
+            match self.acquire_terminal_resume(identity, intent, directories, directory)? {
+                ResumeOwner::Pending(pending) => *pending,
+                ResumeOwner::Published(result) => return Ok(*result),
+            };
         // The pending owner is put back on EVERY pre-activation error. Its
         // actual locks/FDs are not dropped because an HTTP save or auth failed.
         let prepared = (|| {
             self.current_management_identity(identity)?;
-            let status = pending.status().map_err(crate::engine_backend::error)?;
-            let archive = pending.control_archive();
-            let binding = ArchiveBinding {
-                archive_path: archive.archive_path,
-                root_hash: archive.root_hash,
-                transition_hash: status.transition_hash,
-            };
-            let AdditionAuthority::TerminalManagement {
-                terminal_authority_hash,
-                ..
-            } = &intent.status.preview.authority
-            else {
-                return Err(recovery(
-                    "the held resume has no terminal authority binding",
-                ));
-            };
-            if status.operation_id != intent.status.operation_id
-                || &status.terminal_authority_hash != terminal_authority_hash
-                || status.original_metadata_members
-                    != intent.status.preview.original_metadata_members
-                || status.target_metadata_members != intent.status.preview.target_metadata_members
-                || intent
-                    .archive
-                    .as_ref()
-                    .is_some_and(|saved| saved != &binding)
-            {
-                return Err(recovery(
-                    "the held resume belongs to another exact operation",
-                ));
-            }
-            intent.archive = Some(binding);
+            bind_held_resume(&pending, intent)?;
             intent.status.phase = AdditionPhase::JointDecision;
             save(directory, intent)?;
             self.with_resume_authorization(identity, || pending.synchronize())?;
@@ -445,6 +538,21 @@ impl Inner {
         let Some(proof) = proof else {
             let terminal =
                 TerminalManagement::open(&self.data_root).map_err(crate::engine_backend::error)?;
+            if let Some(result) = terminal.operation(intent.status.operation_id) {
+                if terminal
+                    .state()
+                    .operation_principals
+                    .get(&intent.status.operation_id)
+                    .map(String::as_str)
+                    != Some(identity.principal.as_str())
+                {
+                    self.install_terminal(terminal);
+                    return Err(ApiError::forbidden());
+                }
+                let result = exact_result(result.clone(), intent);
+                self.install_terminal(terminal);
+                return result.map(|result| ResumeOwner::Published(Box::new(result)));
+            }
             return self
                 .prepare_terminal_resume(identity, intent, terminal, directories, directory)
                 .map(|pending| ResumeOwner::Pending(Box::new(pending)));
@@ -464,6 +572,14 @@ impl Inner {
                 .map(|pending| ResumeOwner::Pending(Box::new(pending)))
             }
             TerminalMetadataResumePhase::CompleteGeneration => {
+                if intent.status.continuation == AdditionContinuation::Cancel {
+                    // Cancellation cannot implicitly publish a selected resume.
+                    // Keep the protected selector for an explicit Add retry.
+                    intent.status.phase = AdditionPhase::ResumeQuorumAccepted;
+                    return Err(recovery(
+                        "the selected metadata resume cannot be cancelled; explicitly continue the original recovery",
+                    ));
+                }
                 // Activation consumed its pending owner. Restore through the
                 // protected selector, not the HTTP progress field.
                 let engine = self.with_resume_authorization(identity, || {
@@ -505,13 +621,6 @@ impl ManagementBackend {
         held: Option<Vec<PendingMemberDirectory>>,
     ) -> Result<Value, ApiError> {
         self.inner.current_management_identity(identity)?;
-        if record.status.continuation != AdditionContinuation::Add {
-            return Err(ApiError::new(
-                http::StatusCode::NOT_IMPLEMENTED,
-                ErrorCode::UnsupportedOperation,
-                "cancellation is not implemented for this metadata-resume stage",
-            ));
-        }
         if let Some(result) = self.inner.terminal_resume_result(identity, &record)? {
             finish(&mut record, result);
             save(directory, &record)?;
@@ -532,16 +641,32 @@ impl ManagementBackend {
         }
         let _recovery = RecoveryPermit(&self.inner.recovering);
         record.status.result = None;
-        record.status.state = AdditionState::Adding;
+        record.status.state = match record.status.continuation {
+            AdditionContinuation::Add => AdditionState::Adding,
+            AdditionContinuation::Cancel => AdditionState::Cancelling,
+        };
         record.status.failure = None;
-        if record.status.phase == AdditionPhase::Completed {
-            record.status.phase = AdditionPhase::Activating;
+        if matches!(
+            record.status.phase,
+            AdditionPhase::Completed | AdditionPhase::Cancelled
+        ) {
+            record.status.phase = match record.status.continuation {
+                AdditionContinuation::Add => AdditionPhase::Activating,
+                AdditionContinuation::Cancel => AdditionPhase::CertifyingAbort,
+            };
         }
         save(directory, &record)?;
         write(directory, &latest_name(), &record.status.operation_id)?;
-        let outcome = self
-            .inner
-            .run_terminal_resume(identity, &mut record, held, directory);
+        let outcome = match record.status.continuation {
+            AdditionContinuation::Add => {
+                self.inner
+                    .run_terminal_resume(identity, &mut record, held, directory)
+            }
+            AdditionContinuation::Cancel => {
+                self.inner
+                    .run_terminal_resume_cancel(identity, &mut record, directory)
+            }
+        };
         let result = match outcome {
             Ok(result) => result,
             Err(error) => {
@@ -551,6 +676,12 @@ impl ManagementBackend {
                     result
                 } else {
                     record.status.state = AdditionState::RecoveryRequired;
+                    // An observation failure must not replace the original
+                    // error or imply that cancellation is available.
+                    record.status.phase = self
+                        .inner
+                        .terminal_resume_cancellation_phase(&record)
+                        .unwrap_or(AdditionPhase::ResumeCancellationUnknown);
                     record.status.failure = Some(AdditionFailure {
                         code: error.code,
                         message: error.message.clone(),

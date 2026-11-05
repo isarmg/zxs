@@ -87,6 +87,9 @@ pub enum AdditionPhase {
     Archiving,
     Enrolling,
     JointDecision,
+    ResumeCancellable,
+    ResumeQuorumAccepted,
+    ResumeCancellationUnknown,
     Activating,
     CertifyingAbort,
     AbortCertified,
@@ -96,13 +99,26 @@ pub enum AdditionPhase {
 }
 
 impl AdditionPhase {
+    pub fn is_terminal_resume_observation(self) -> bool {
+        matches!(
+            self,
+            Self::ResumeCancellable | Self::ResumeQuorumAccepted | Self::ResumeCancellationUnknown
+        )
+    }
+
     pub fn is_metadata_resume(self) -> bool {
         matches!(
             self,
             Self::Prepared
                 | Self::Enrolling
                 | Self::JointDecision
+                | Self::ResumeCancellable
+                | Self::ResumeQuorumAccepted
+                | Self::ResumeCancellationUnknown
                 | Self::Activating
+                | Self::CertifyingAbort
+                | Self::Cancelling
+                | Self::Cancelled
                 | Self::Completed
         )
     }

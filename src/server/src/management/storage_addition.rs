@@ -142,11 +142,11 @@ pub(super) fn read_record(
                 || !terminal_authority_hash
                     .bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                || preview
+                || !preview
                     .request
                     .additions
                     .iter()
-                    .any(|add| !add.metadata_member)
+                    .any(|add| add.metadata_member)
             {
                 return Err(corrupt());
             }
@@ -184,7 +184,10 @@ fn running_state(continuation: AdditionContinuation) -> AdditionState {
 }
 
 pub(super) fn finish(record: &mut StoredAddition, result: storage_contract::OperationResult) {
-    let cancelled = result.kind == "membership-add-cancelled";
+    let cancelled = matches!(
+        result.kind.as_str(),
+        "membership-add-cancelled" | "terminal-metadata-resume-cancelled"
+    );
     record.status.state = if cancelled {
         AdditionState::Cancelled
     } else {
@@ -205,13 +208,17 @@ pub(super) fn finish(record: &mut StoredAddition, result: storage_contract::Oper
 }
 
 fn valid_status(status: &AdditionStatus, archive: Option<&ArchiveBinding>) -> bool {
-    if (status.preview.authority.is_terminal()
-        && (status.continuation != AdditionContinuation::Add
-            || matches!(
-                status.state,
-                AdditionState::Cancelling | AdditionState::Cancelled
-            )
-            || !status.phase.is_metadata_resume()))
+    if (status.preview.authority.is_terminal() && !status.phase.is_metadata_resume())
+        || (!status.preview.authority.is_terminal()
+            && status.phase.is_terminal_resume_observation())
+        || (matches!(
+            status.state,
+            AdditionState::Cancelling | AdditionState::Cancelled
+        ) && status.continuation != AdditionContinuation::Cancel)
+        || (matches!(
+            status.state,
+            AdditionState::Adding | AdditionState::Completed
+        ) && status.continuation != AdditionContinuation::Add)
         || (status.state == AdditionState::Completed) != (status.phase == AdditionPhase::Completed)
         || (status.state == AdditionState::Cancelled) != (status.phase == AdditionPhase::Cancelled)
         || status.state.is_terminal() != status.result.is_some()
@@ -224,7 +231,11 @@ fn valid_status(status: &AdditionStatus, archive: Option<&ArchiveBinding>) -> bo
             && result.commit_state == storage_contract::CommitState::Published
             && result.kind
                 == if status.preview.authority.is_terminal() {
-                    "terminal-metadata-resume"
+                    if status.state == AdditionState::Cancelled {
+                        "terminal-metadata-resume-cancelled"
+                    } else {
+                        "terminal-metadata-resume"
+                    }
                 } else if status.state == AdditionState::Cancelled {
                     "membership-add-cancelled"
                 } else {
@@ -447,15 +458,6 @@ impl ManagementBackend {
                     "cancellation does not bind the original addition preview",
                 ));
             }
-            if saved.status.preview.authority.is_terminal()
-                && continuation == AdditionContinuation::Cancel
-            {
-                return Err(ApiError::new(
-                    http::StatusCode::NOT_IMPLEMENTED,
-                    ErrorCode::UnsupportedOperation,
-                    "cancellation is not implemented for this metadata-resume stage; continue the original operation",
-                ));
-            }
             if !saved.status.state.is_terminal() {
                 saved.status.continuation = continuation;
             }
@@ -640,9 +642,7 @@ impl ManagementBackend {
             } else {
                 record.status.result = None;
                 record.status.state = AdditionState::RecoveryRequired;
-                if record.status.phase == AdditionPhase::Completed {
-                    record.status.phase = AdditionPhase::Activating;
-                }
+                record.status.phase = self.inner.terminal_resume_cancellation_phase(&record)?;
             }
         } else if !running && !record.status.state.is_terminal() {
             let backend = crate::lock(&self.inner.state).backend.engine().cloned();
@@ -653,6 +653,14 @@ impl ManagementBackend {
             } else {
                 record.status.state = AdditionState::RecoveryRequired;
             }
+        }
+        if running
+            && record.status.preview.authority.is_terminal()
+            && !record.status.state.is_terminal()
+        {
+            // The owner is executing elsewhere. Do not display a stale saved
+            // cancellation observation while its actual votes can advance.
+            record.status.phase = AdditionPhase::ResumeCancellationUnknown;
         }
         Ok(AdditionStatusResponse {
             operation: Some(record.status),
@@ -706,9 +714,9 @@ impl ManagementBackend {
                     ));
                 }
                 let (config, authority) = self.inner.terminal_configuration(identity)?;
-                if request.additions.iter().any(|add| !add.metadata_member) {
+                if !request.additions.iter().any(|add| add.metadata_member) {
                     return Err(ApiError::invalid(
-                        "metadata resume requires fresh metadata directories",
+                        "resuming active writes requires at least one fresh metadata voter; other fresh directories may be data only",
                     ));
                 }
                 let stopped = config.disks.iter().map(|disk| disk.root.clone()).collect();

@@ -1,5 +1,5 @@
 //! Exact continuation of the no-voter management registry. Historical bindings,
-//! detach masks and disabled registrations survive; only fresh metadata members
+//! detach masks and disabled registrations survive; only fresh registered directories
 //! are introduced. This graph alone never admits an active Engine.
 use super::continuation::RegistryBoundary;
 use super::terminal::TerminalRegistry;
@@ -80,15 +80,14 @@ impl TerminalRegistry {
                 }
                 continue;
             }
-            if !disk.metadata_member
-                || disk.binding_generation != 1
+            if disk.binding_generation != 1
                 || next
                     .topology
                     .values()
                     .any(|old| old.identity.slot_id == disk.slot_id)
             {
                 return Err(invalid(
-                    "resume requires fresh metadata identities and historical-slot separation",
+                    "resume requires fresh identities and historical-slot separation",
                 ));
             }
             let identity = DiskRegistrationIdentity {
@@ -103,7 +102,7 @@ impl TerminalRegistry {
                     identity: identity.clone(),
                     level: disk.level,
                     upstream_slot_id: disk.upstream_slot_id.clone(),
-                    original_metadata_member: true,
+                    original_metadata_member: disk.metadata_member,
                     capacity_bytes: disk.capacity_bytes,
                 },
             );
@@ -114,7 +113,9 @@ impl TerminalRegistry {
                     mode: RegistrationMode::Enabled,
                 },
             );
-            next.voters.insert(disk.disk_id.clone(), identity);
+            if disk.metadata_member {
+                next.voters.insert(disk.disk_id.clone(), identity);
+            }
         }
         if next.voters.is_empty() {
             return Err(invalid(

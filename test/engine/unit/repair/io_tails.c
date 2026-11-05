@@ -62,6 +62,20 @@ static int gate(int fd, const char *kind) {
     if (!watch_root(path, root, watched)) return 0;
     if (strcmp(kind, "sync") == 0) {
         if (access(watched, F_OK) == 0 || errno != ENOENT) return 0;
+        /* An optional exact target lets cancellation tests stop at the final
+         * directory barrier rather than an earlier regular-file barrier. */
+        if (!child(marker, root, ".repair-tail-sync-target")) return EIO;
+        int selected = open(marker, O_RDONLY | O_CLOEXEC);
+        if (selected >= 0) {
+            char target[PATH_MAX];
+            ssize_t count = read(selected, target, sizeof(target) - 1);
+            int closed = close(selected);
+            if (count <= 0 || closed != 0) return EIO;
+            target[count] = '\0';
+            if (strcmp(path, target) != 0) return 0;
+        } else if (errno != ENOENT) {
+            return errno;
+        }
         if (!child(marker, root, ".repair-tail-seen-first")) return EIO;
         int written = write_marker(marker, path, 1);
         if (written == 0) {

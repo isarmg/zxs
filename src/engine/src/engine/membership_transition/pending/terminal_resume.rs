@@ -1,8 +1,14 @@
 //! Explicit terminal resumption holds SYSTEM and all selected fresh directories.
-//! Every new member receives and rereads the complete old archive before voting.
+//! Every new voter rereads the complete old archive; nonvoters prove readiness.
+mod cancellation;
+mod data;
+use super::super::terminal_resume::cancellation::attempts;
 use super::super::terminal_resume::{ResumeCore, ResumeProposal, validate_target};
 use super::*;
 use crate::engine::disk_lifecycle::terminal::TerminalManagement;
+pub use cancellation::{
+    TerminalMetadataResumeCancelOutcome, TerminalMetadataResumeCancellationPhase,
+};
 use reservation::terminal_resume::ResumeRoot;
 use std::collections::BTreeSet;
 
@@ -17,6 +23,9 @@ pub struct TerminalMetadataResumeStatus {
     pub target_metadata_quorum: usize,
     pub synchronized_target_votes: Vec<String>,
     pub installed_certificates: Vec<String>,
+    pub added_data_disks: usize,
+    pub ready_data_disks: Vec<String>,
+    pub cancellation_phase: TerminalMetadataResumeCancellationPhase,
 }
 impl TerminalMetadataResumeStatus {
     pub fn target_quorum_accepted(&self) -> bool {
@@ -34,15 +43,17 @@ pub struct TerminalMetadataResume {
     management: TerminalManagement,
     source: PendingControlArchive,
     proposal: ResumeProposal,
+    // All selected fresh directories, including nonvoters, retain their real owners.
     members: BTreeMap<String, PendingDisk>,
     votes: BTreeMap<String, super::super::decision::DecisionReceipt>,
     installed: BTreeSet<String>,
+    ready_data_disks: BTreeSet<String>,
     core: Option<ResumeCore>,
 }
 
 impl TerminalManagement {
-    /// Select fresh metadata directories for this exact completed terminal
-    /// authority. All old registrations remain unchanged and no old root opens.
+    /// Select fresh directories, including at least one metadata voter, for this
+    /// exact terminal authority. Old registrations remain and no old root opens.
     /// On failure, reopen the same management request, never initialize Genesis.
     pub fn prepare_metadata_resume(
         self,
@@ -100,21 +111,15 @@ impl TerminalManagement {
             boundary: authority.intent().boundary.clone(),
             fence_sequence: self.management_state().sequence,
         };
-        let proposal = ResumeProposal::prepare(verified, &source, intent)?;
+        let attempts = attempts::load(self.system_root(), verified)?;
+        let mut proposal = ResumeProposal::prepare(verified, &source, intent)?;
+        proposal.follow_cancellation(attempts.previous_hash()?);
         for root in &roots {
             root.inspect(&proposal.intent, &archive.root_hash)?;
         }
-        let path = resume_path(&self);
-        if let Some(file) = self.system_root().open_optional_read_regular(&path)? {
-            let saved: ResumeProposal = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
-            if saved.hash()? != proposal.hash()? {
-                return Err(Error::new(
-                    ErrorCode::IdempotencyKeyReused,
-                    "terminal authority already reserves another exact resume request",
-                ));
-            }
-        }
-        self.system_root().write_json(&path, &proposal, false)?;
+        proposal.preflight_outcomes(&attempts.cancelled)?;
+        attempts::synchronize_history(self.system_root(), verified)?;
+        attempts.persist_request(self.system_root(), &proposal)?;
         let mut members = BTreeMap::new();
         for root in roots {
             let disk_id = root.disk.disk_id.clone();
@@ -143,6 +148,7 @@ impl TerminalManagement {
             members,
             votes: BTreeMap::new(),
             installed: BTreeSet::new(),
+            ready_data_disks: BTreeSet::new(),
             core: None,
         })
     }
@@ -154,11 +160,14 @@ impl TerminalManagement {
         directories: Vec<PendingMemberDirectory>,
     ) -> Result<TerminalMetadataResume> {
         let management = Self::open_for_resume(root)?;
-        let proposal: ResumeProposal = decode_strict(
-            &management
-                .system_root()
-                .read_bytes(&resume_path(&management), MAX_METADATA)?,
-        )?;
+        let proposal = attempts::load(management.system_root(), management.verified_authority())?
+            .current
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "terminal has no pending resume request",
+                )
+            })?;
         if proposal.terminal.hash()? != management.verified_authority().authority.hash()? {
             return Err(Error::new(
                 ErrorCode::LogFork,
@@ -176,19 +185,11 @@ impl TerminalManagement {
     }
 }
 
-fn resume_path(management: &TerminalManagement) -> PathBuf {
-    management
-        .system_root()
-        .path()
-        .join("terminal-management")
-        .join(
-            management
-                .verified_authority()
-                .authority
-                .operation_id()
-                .to_string(),
-        )
-        .join("resume.json")
+fn resume_path(management: &TerminalManagement) -> Result<PathBuf> {
+    Ok(
+        attempts::selected_path(management.system_root(), management.verified_authority())?
+            .join("resume.json"),
+    )
 }
 
 fn hold_roots(
@@ -198,13 +199,21 @@ fn hold_roots(
     source: &PendingControlArchive,
 ) -> Result<Vec<ResumeRoot>> {
     let selected = target
-        .metadata_members()
+        .disks
+        .iter()
+        .filter(|disk| {
+            !management
+                .original_configuration()
+                .disks
+                .iter()
+                .any(|old| old.disk_id == disk.disk_id)
+        })
         .map(|disk| (disk.disk_id.as_str(), disk))
         .collect::<BTreeMap<_, _>>();
     if directories.len() != selected.len() {
         return Err(Error::new(
             ErrorCode::ConfigConflict,
-            "resume must hold every fresh metadata directory exactly once",
+            "resume must hold every fresh directory exactly once",
         ));
     }
     let system = FileIdentity::from_fd(
@@ -235,7 +244,7 @@ fn hold_roots(
         let disk = selected.get(directory.disk_id.as_str()).ok_or_else(|| {
             Error::new(
                 ErrorCode::ConfigConflict,
-                "resume directory is outside its fresh metadata group",
+                "resume directory is outside its selected additions",
             )
         })?;
         if !supplied.insert(directory.disk_id) {
@@ -261,7 +270,7 @@ fn hold_roots(
                 },
                 &disk.root,
                 &directory.directory,
-                true,
+                disk.metadata_member,
             )
             .map_err(crate::engine::disk_lifecycle::bootstrap::runtime::management_error)?,
         );
@@ -289,6 +298,20 @@ fn hold_roots(
 }
 
 impl TerminalMetadataResume {
+    /// Immutable request identity, without reading or changing any directory.
+    pub fn operation_id(&self) -> OperationId {
+        self.proposal.intent.operation_id
+    }
+    pub fn principal(&self) -> &str {
+        &self.proposal.intent.principal
+    }
+    pub fn target_configuration(&self) -> &ValidatedConfig {
+        &self.proposal.intent.target
+    }
+    pub fn terminal_management(&self) -> &TerminalManagement {
+        &self.management
+    }
+
     /// Exact old control closure selected by this owned pending operation.
     /// This accessor performs no I/O and grants no additional authority.
     pub fn control_archive(&self) -> crate::MembershipControlArchive {
@@ -307,22 +330,38 @@ impl TerminalMetadataResume {
             target_metadata_quorum: self.proposal.intent.target.metadata_quorum(),
             synchronized_target_votes: self.votes.keys().cloned().collect(),
             installed_certificates: self.installed.iter().cloned().collect(),
+            added_data_disks: self
+                .proposal
+                .intent
+                .target
+                .disks
+                .iter()
+                .filter(|disk| {
+                    !disk.metadata_member
+                        && self.proposal.intent.added_roots.contains_key(&disk.disk_id)
+                })
+                .count(),
+            ready_data_disks: self.ready_data_disks.iter().cloned().collect(),
+            cancellation_phase: self.cancellation_phase()?,
         })
     }
 
     /// Partial writes remain reserved for the same request. Every retry clears
     /// cached observations and repeats independent archive/read/decision barriers.
     pub fn synchronize(&mut self) -> Result<TerminalMetadataResumeStatus> {
+        self.require_resume_allowed()?;
         self.votes.clear();
         self.installed.clear();
+        self.ready_data_disks.clear();
         self.core = None;
         self.management.system_root().write_json(
-            &resume_path(&self.management),
+            &resume_path(&self.management)?,
             &self.proposal,
             false,
         )?;
         let transition = object_hash(INTENT_KIND, &self.proposal.intent)?;
         let proposal_hash = self.proposal.hash()?;
+        self.synchronize_data()?;
         for disk in self.proposal.intent.target.metadata_members() {
             let member = &self.members[&disk.disk_id];
             reservation::verify_writer(&member.root, &member._lock)?;
@@ -361,7 +400,16 @@ impl TerminalMetadataResume {
             )?;
             self.votes.insert(disk.disk_id.clone(), receipt);
         }
-        let core = ResumeCore::new(self.proposal.clone(), self.votes.clone())?;
+        self.verify_data_ready()?;
+        let attempts = attempts::load(
+            self.management.system_root(),
+            self.management.verified_authority(),
+        )?;
+        let core = ResumeCore::with_cancellations(
+            self.proposal.clone(),
+            self.votes.clone(),
+            attempts.cancelled,
+        )?;
         for disk in self.proposal.intent.target.metadata_members() {
             let member = &self.members[&disk.disk_id];
             let parent = member

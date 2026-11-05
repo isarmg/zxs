@@ -110,7 +110,7 @@ impl Inner {
         Ok(true)
     }
 
-    fn install_terminal(&self, terminal: TerminalManagement) {
+    pub(super) fn install_terminal(&self, terminal: TerminalManagement) {
         let mut state = crate::lock(&self.state);
         state.backend = BackendState::Terminal(Arc::new(terminal));
         state.admitted = false;

@@ -110,7 +110,7 @@ pub(super) fn verify_marker(root: &DiskRoot, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn lock(file: &File) -> Result<()> {
+pub(in crate::engine::membership_transition) fn lock(file: &File) -> Result<()> {
     rustix::fs::flock(file, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
         |error| {
             Error::from(std::io::Error::from(error)).context(
@@ -122,7 +122,10 @@ pub(super) fn lock(file: &File) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn verify_writer(root: &DiskRoot, held: &crate::disk::FenceOwner) -> Result<()> {
+pub(in crate::engine::membership_transition) fn verify_writer(
+    root: &DiskRoot,
+    held: &crate::disk::FenceOwner,
+) -> Result<()> {
     let named = root.open_regular(&root.path().join(".writer.lock"))?;
     if FileIdentity::from_fd(&named)? != held.writer_identity()? || named.metadata()?.len() != 0 {
         return Err(Error::new(

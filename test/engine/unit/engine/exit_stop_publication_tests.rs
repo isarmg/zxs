@@ -30,6 +30,18 @@ impl Fixture {
             Config::development((0..count).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
         let system = temp.path().join("system");
         let mut engine = Engine::initialize(&system, config.clone()).unwrap();
+        let old_operation = OperationId::generate().unwrap();
+        let repository = engine
+            .create_repository(
+                &RepositoryName::parse("unchanged").unwrap(),
+                "P01",
+                1,
+                "admin",
+                old_operation,
+            )
+            .unwrap();
+        // Relocate before creating absolute workspace staging paths. Genesis
+        // has no authenticated historical aliases for an old staging address.
         if relocate {
             let next = engine.config.clone();
             drop(engine);
@@ -47,16 +59,6 @@ impl Fixture {
             write_json(&system.join("config.json"), &next, true).unwrap();
             engine = Engine::open(&system).unwrap();
         }
-        let old_operation = OperationId::generate().unwrap();
-        let repository = engine
-            .create_repository(
-                &RepositoryName::parse("unchanged").unwrap(),
-                "P01",
-                1,
-                "admin",
-                old_operation,
-            )
-            .unwrap();
         let workspace = engine
             .create_workspace(&repository.main_branch_id, "admin")
             .unwrap();

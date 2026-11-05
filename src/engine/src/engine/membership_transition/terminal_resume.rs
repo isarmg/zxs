@@ -13,6 +13,9 @@ use crate::engine::disk_registry::{
 };
 use std::{collections::BTreeSet, sync::Arc};
 
+pub(in crate::engine) mod cancellation;
+use cancellation::ResumeCancellation;
+
 pub(in crate::engine::membership_transition) const PROPOSAL_KIND: &str = "terminal-resume-proposal";
 const ACCEPTANCE_KIND: &str = "terminal-resume-acceptance";
 
@@ -44,9 +47,11 @@ pub(in crate::engine::membership_transition) struct ResumeProposal {
     #[serialization(with = "storage_contract::u64_string")]
     source_topology_generation: u64,
     objects: BTreeMap<String, GraphObject>,
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
+    previous_cancellation_hash: Option<String>,
 }
 
-/// Every configured target has one immutable vote. Requiring full installation
+/// Every configured metadata target has one immutable vote. Full installation
 /// is stronger than the independent target Q, and keeps one deterministic core
 /// rather than changing G when another equivalent quorum becomes available.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,6 +60,8 @@ pub(in crate::engine) struct ResumeCore {
     format: ResumeFormat,
     pub(super) proposal: ResumeProposal,
     votes: BTreeMap<String, DecisionReceipt>,
+    #[serialization(default, skip_serializing_if = "Vec::is_empty")]
+    cancelled_attempts: Vec<ResumeCancellation>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,6 +114,7 @@ impl ResumeProposal {
             source_business_generation: verified.state.business_generation,
             source_topology_generation: verified.state.topology_generation,
             objects,
+            previous_cancellation_hash: None,
         };
         proposal.verify()?;
         proposal.verify_source(&verified.state)?;
@@ -137,6 +145,15 @@ impl ResumeProposal {
     }
 
     pub(super) fn verify(&self) -> Result<VerifiedDiskRegistry> {
+        if let Some(hash) = &self.previous_cancellation_hash {
+            hash.parse::<storage_contract::ContentHash>()
+                .map_err(|source| {
+                    Error::from(std::io::Error::other(source)).context(
+                        ErrorCode::ObjectCorrupt,
+                        "invalid resume cancellation predecessor digest",
+                    )
+                })?;
+        }
         self.terminal.validate_intent()?;
         let (old_intent, old_members) = self
             .old_members
@@ -283,22 +300,13 @@ impl ResumeProposal {
 }
 
 impl ResumeCore {
-    pub(super) fn new(
-        proposal: ResumeProposal,
-        votes: BTreeMap<String, DecisionReceipt>,
-    ) -> Result<Self> {
-        let core = Self {
-            format: ResumeFormat::TerminalResume,
-            proposal,
-            votes,
-        };
-        core.intent()?;
-        PreparedMetadataObject::new(pending::activation::AUTHORITY_KIND, &core, MAX_METADATA)?;
-        Ok(core)
-    }
-
     pub(in crate::engine::membership_transition) fn intent(&self) -> Result<TransitionIntent> {
         self.proposal.verify()?;
+        cancellation::verify_history(
+            &self.proposal.terminal,
+            &self.cancelled_attempts,
+            Some(&self.proposal),
+        )?;
         let intent = &self.proposal.intent;
         if self.votes.len() != intent.target.metadata_members().len() {
             return Err(Error::new(
@@ -347,14 +355,27 @@ impl ResumeCore {
         &self,
         source: &State,
     ) -> Result<()> {
-        self.proposal.verify_source(source)
+        self.proposal.verify_source(source)?;
+        for cancelled in &self.cancelled_attempts {
+            cancelled.proposal.verify_source(source)?;
+        }
+        cancellation::verify_history(
+            &self.proposal.terminal,
+            &self.cancelled_attempts,
+            Some(&self.proposal),
+        )
     }
     pub(in crate::engine::membership_transition) fn management_state(
         &self,
         source: &State,
     ) -> Result<Arc<State>> {
         self.verify_source(source)?;
-        Ok(self.proposal.terminal.management_state(source)?.0)
+        let mut state = self.proposal.terminal.management_state(source)?.0;
+        cancellation::apply_history(
+            Arc::get_mut(&mut state).expect("invariant: a new management projection has one owner"),
+            &self.cancelled_attempts,
+        )?;
+        Ok(state)
     }
 
     pub(in crate::engine::membership_transition) fn verify_member(
@@ -440,13 +461,10 @@ pub(in crate::engine::membership_transition) fn validate_target(
         .iter()
         .filter(|disk| !original.disks.iter().any(|old| old.disk_id == disk.disk_id))
     {
-        if !new.metadata_member
-            || new.binding_generation != 1
-            || old_slots.contains(&new.slot_id.to_ascii_lowercase())
-        {
+        if new.binding_generation != 1 || old_slots.contains(&new.slot_id.to_ascii_lowercase()) {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,
-                "resume accepts only fresh generation-one metadata directories",
+                "resume accepts only fresh generation-one directories",
             ));
         }
     }
@@ -573,7 +591,9 @@ impl ResumeCore {
         self.verify_source(&terminal.state)?;
         Ok(intent
             .target
-            .metadata_members()
+            .disks
+            .iter()
+            .filter(|disk| intent.added_roots.contains_key(&disk.disk_id))
             .map(|disk| {
                 (
                     disk.clone(),

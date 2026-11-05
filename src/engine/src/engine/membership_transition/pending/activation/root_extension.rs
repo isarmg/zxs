@@ -339,7 +339,9 @@ pub(super) fn prepare_resume(
     let locator = bootstrap
         .root_extension_locator(&plan.extension)
         .map_err(management_error)?;
-    let config = recovery::verify_prepared_add(&locator, plan.authority.clone(), projected)?;
+    let admissions = bootstrap.readmission_probe_admissions(&locator)?;
+    let config =
+        recovery::verify_prepared_add(&locator, plan.authority.clone(), projected, &admissions)?;
     Ok(Some(PreparedResume {
         config,
         bootstrap,

@@ -58,10 +58,14 @@ pub struct TerminalManagement {
 /// bootstrap stop. It cannot certify runtime drain; the disk layer does that.
 pub(crate) struct VerifiedTerminalStop {
     identity: DiskRegistrationIdentity,
+    admission_epoch: Option<String>,
 }
 impl VerifiedTerminalStop {
     pub(crate) fn identity(&self) -> &DiskRegistrationIdentity {
         &self.identity
+    }
+    pub(crate) fn admission_epoch(&self) -> Option<String> {
+        self.admission_epoch.clone()
     }
 }
 
@@ -165,6 +169,7 @@ impl TerminalManagement {
         let (store, locks) = TerminalStore::open(root)?;
         store.require_no_resume()?;
         let verified = store.load_authority()?;
+        crate::engine::membership_transition::terminal_resume::cancellation::attempts::synchronize_history(store.system(), &verified)?;
         store.synchronize_preparation(&verified.authority)?;
         let stop = synchronize_stop(&store, &verified, None)?;
         let target_stop = RecoveredDiskIo::admit_terminal(&stop)?;
@@ -192,7 +197,16 @@ impl TerminalManagement {
         target_stop: RecoveredDiskIo,
     ) -> Result<Self> {
         store.verify_publication(&verified.authority)?;
-        let (state, result) = verified.authority.management_state(&verified.state)?;
+        let (mut state, result) = verified.authority.management_state(&verified.state)?;
+        let attempts =
+            crate::engine::membership_transition::terminal_resume::cancellation::attempts::load(
+                store.system(),
+                &verified,
+            )?;
+        crate::engine::membership_transition::terminal_resume::cancellation::apply_history(
+            Arc::get_mut(&mut state).expect("invariant: a new management projection has one owner"),
+            &attempts.cancelled,
+        )?;
         Ok(Self {
             store,
             verified,
@@ -286,6 +300,25 @@ impl TerminalManagement {
     pub(in crate::engine) fn writer_locks(&self) -> Result<WriterLocks> {
         self._locks.retain()
     }
+
+    pub(in crate::engine) fn refresh_cancelled_resume_results(&mut self) -> Result<()> {
+        let attempts =
+            crate::engine::membership_transition::terminal_resume::cancellation::attempts::load(
+                self.system_root(),
+                &self.verified,
+            )?;
+        let mut state = self
+            .verified
+            .authority
+            .management_state(&self.verified.state)?
+            .0;
+        crate::engine::membership_transition::terminal_resume::cancellation::apply_history(
+            Arc::get_mut(&mut state).expect("invariant: a new management projection has one owner"),
+            &attempts.cancelled,
+        )?;
+        self.state = state;
+        Ok(())
+    }
 }
 
 fn synchronize_stop(
@@ -294,9 +327,13 @@ fn synchronize_stop(
     live_binding: Option<&DiskIoBinding>,
 ) -> Result<VerifiedTerminalStop> {
     let identity = verified.authority.target();
+    let admission_epoch = verified.authority.io_admission_epoch(&identity.disk_id)?;
     let mut bootstrap = open_store(store.system().path())?;
     store.synchronize_stop_plan(&mut bootstrap, verified, live_binding)?;
-    Ok(VerifiedTerminalStop { identity })
+    Ok(VerifiedTerminalStop {
+        identity,
+        admission_epoch,
+    })
 }
 
 /// Called before any configured storage directory is opened by normal startup.

@@ -82,7 +82,7 @@ impl VerifiedDiskRegistry {
         })
     }
 
-    fn continuation_state(
+    pub(super) fn continuation_state(
         &self,
         source: &ValidatedConfig,
         target: &ValidatedConfig,

@@ -85,6 +85,15 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    /// The latest authenticated readmission defines only this directory's I/O
+    /// lifetime. It is never part of Config serialization or historical binding.
+    pub(crate) fn io_admission_epoch(&self, disk_id: &str) -> Result<Option<String>> {
+        self.generation()
+            .map(|generation| generation.portable.io_admission_epoch(disk_id))
+            .transpose()
+            .map(Option::flatten)
+    }
+
     /// Actual startup resources are a subset of the authenticated configuration.
     /// Historical registration and fixed voter denominators remain unchanged.
     pub(crate) fn io_disks(&self) -> impl Iterator<Item = &DiskConfig> {
@@ -94,6 +103,16 @@ impl ValidatedConfig {
                 .as_ref()
                 .is_none_or(|ids| ids.contains(&disk.disk_id))
         })
+    }
+
+    pub(crate) fn retired_io_epochs(
+        &self,
+        disk_id: &str,
+    ) -> Result<std::collections::BTreeSet<Option<String>>> {
+        self.generation()
+            .map(|generation| generation.portable.retired_io_epochs(disk_id))
+            .transpose()
+            .map(Option::unwrap_or_default)
     }
 
     pub(crate) fn excludes_io_disk(&self, disk_id: &str) -> bool {

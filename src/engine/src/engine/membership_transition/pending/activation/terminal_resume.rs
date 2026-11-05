@@ -11,7 +11,7 @@ use crate::engine::disk_lifecycle::{
 };
 use crate::engine::membership_transition::{
     terminal::{TerminalAuthority, VerifiedTerminalAuthority},
-    terminal_resume::{ResumeCore, ResumeProposal},
+    terminal_resume::{ResumeCore, ResumeProposal, cancellation::attempts},
 };
 
 const PREPARED_FILE: &str = "resume-generation.json";
@@ -45,18 +45,8 @@ struct Completion {
     operation: OperationResult,
 }
 
-fn operation_directory(management: &TerminalManagement) -> PathBuf {
-    management
-        .system_root()
-        .path()
-        .join("terminal-management")
-        .join(
-            management
-                .verified_authority()
-                .authority
-                .operation_id()
-                .to_string(),
-        )
+fn operation_directory(management: &TerminalManagement) -> Result<PathBuf> {
+    attempts::selected_path(management.system_root(), management.verified_authority())
 }
 
 pub(in crate::engine::membership_transition::pending) fn activate(
@@ -108,7 +98,7 @@ pub(in crate::engine::membership_transition::pending) fn activate(
     let allowed = restricted
         .io_disks()
         .map(|disk| disk.disk_id.clone())
-        .chain(config.metadata_members().map(|disk| disk.disk_id.clone()))
+        .chain(intent.added_roots.keys().cloned())
         .collect();
     let config = config
         .with_disk_roots(
@@ -145,11 +135,11 @@ pub(in crate::engine::membership_transition::pending) fn activate(
     // The selected core is durable before any active marker or locator expands.
     // This is the exact cold-resume selector, never an authority hash alone.
     management.system_root().write_json(
-        &operation_directory(&management).join(PREPARED_FILE),
+        &operation_directory(&management)?.join(PREPARED_FILE),
         &generation.portable,
         false,
     )?;
-    let plan_path = operation_directory(&management).join(BOOTSTRAP_FILE);
+    let plan_path = operation_directory(&management)?.join(BOOTSTRAP_FILE);
     let extension = match management
         .system_root()
         .open_optional_read_regular(&plan_path)?
@@ -190,8 +180,8 @@ pub(in crate::engine::membership_transition::pending) fn activate(
             .find(|handle| handle.seal.disk_id == disk.disk_id)
             .expect("invariant: held exact resume resources")
             .root;
-        if disk.metadata_member {
-            core.verify_member(root, disk)?;
+        if intent.added_roots.contains_key(&disk.disk_id) {
+            core.verify_selected_root(root, disk)?;
         }
         publication::install_marker(root, disk, &generation)?;
     }
@@ -224,7 +214,7 @@ pub(in crate::engine::membership_transition::pending) fn activate(
         ));
     }
     management.system_root().write_json(
-        &operation_directory(&management).join(COMPLETE_FILE),
+        &operation_directory(&management)?.join(COMPLETE_FILE),
         &Completion {
             format: CompletionFormat::Published,
             terminal_authority_hash: core.terminal().hash()?,
@@ -244,16 +234,32 @@ fn hold_resources(
 ) -> Result<(Vec<Arc<DiskHandle>>, crate::disk::WriterLocks)> {
     let mut locks = management.writer_locks()?;
     let mut handles = Vec::new();
+    let intent = core.intent()?;
+    // Every fresh resource must still have real readiness/control evidence
+    // before any retained non-target directory is opened by its recorded name.
+    for disk in config
+        .io_disks()
+        .filter(|disk| intent.added_roots.contains_key(&disk.disk_id))
+    {
+        let member = members.get(&disk.disk_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "resume lost an explicitly held new directory",
+            )
+        })?;
+        reservation::verify_writer(&member.root, &member._lock)?;
+        core.verify_selected_root(&member.root, disk)?;
+    }
     for disk in config.io_disks() {
-        let (root, writer) = if disk.metadata_member {
+        let (root, writer) = if intent.added_roots.contains_key(&disk.disk_id) {
             let member = members.get(&disk.disk_id).ok_or_else(|| {
                 Error::new(
                     ErrorCode::DiskIdentityMismatch,
-                    "resume lost an explicitly held new member",
+                    "resume lost an explicitly held new directory",
                 )
             })?;
             reservation::verify_writer(&member.root, &member._lock)?;
-            core.verify_member(&member.root, disk)?;
+            core.verify_selected_root(&member.root, disk)?;
             (
                 member.root.retained(disk.root.clone())?,
                 Arc::clone(&member._lock),
@@ -309,11 +315,11 @@ pub(in crate::engine::membership_transition) fn reopen(root: &Path) -> Result<En
     let management = TerminalManagement::open_for_resume(root)?;
     let proposal: super::super::super::terminal_resume::ResumeProposal =
         decode_strict(&management.system_root().read_bytes(
-            &operation_directory(&management).join("resume.json"),
+            &operation_directory(&management)?.join("resume.json"),
             MAX_METADATA,
         )?)?;
     let portable: PortableAuthority = decode_strict(&management.system_root().read_bytes(
-        &operation_directory(&management).join(PREPARED_FILE),
+        &operation_directory(&management)?.join(PREPARED_FILE),
         MAX_METADATA,
     )?)?;
     let core = portable
@@ -343,7 +349,12 @@ pub(in crate::engine::membership_transition) fn reopen(root: &Path) -> Result<En
         &archive.transition_hash,
     )?;
     let mut members = BTreeMap::new();
-    for disk in intent.target.metadata_members() {
+    for disk in intent
+        .target
+        .disks
+        .iter()
+        .filter(|disk| intent.added_roots.contains_key(&disk.disk_id))
+    {
         let identity = intent.added_roots[&disk.disk_id].clone();
         let root = DiskRoot::open(&disk.root)?;
         identity.verify_physical_root(&root)?;
@@ -354,7 +365,7 @@ pub(in crate::engine::membership_transition) fn reopen(root: &Path) -> Result<En
         reservation::lock(&writer)?;
         let owner = crate::disk::FenceOwner::new(writer, Some(directory));
         reservation::verify_writer(&root, &owner)?;
-        core.verify_member(&root, disk)?;
+        core.verify_selected_root(&root, disk)?;
         members.insert(
             disk.disk_id.clone(),
             PendingDisk {
@@ -462,7 +473,12 @@ impl CompletedTerminalResume {
 pub(in crate::engine) fn completed_selector(
     root: &Path,
 ) -> Result<Option<CompletedTerminalResume>> {
-    let system = DiskRoot::open(root)?;
+    let system = DiskRoot::open(root).map_err(|source| {
+        source.context(
+            ErrorCode::RecoveryRequired,
+            "system state is unavailable; use explicit retained metadata roots for management recovery",
+        )
+    })?;
     let directory = system.path().join("terminal-management");
     if system.optional_metadata(&directory)?.is_none()
         || system
@@ -472,10 +488,7 @@ pub(in crate::engine) fn completed_selector(
         return Ok(None);
     }
     let (system, verified) = TerminalManagement::verified_completed_source(root)?;
-    let path = system
-        .path()
-        .join("terminal-management")
-        .join(verified.authority.operation_id().to_string());
+    let path = attempts::selected_path(&system, &verified)?;
     let bytes = system
         .read_bytes(&path.join(COMPLETE_FILE), MAX_METADATA)
         .map_err(|error| {
@@ -537,14 +550,11 @@ pub(in crate::engine) fn completed_selector(
     }))
 }
 
-fn selected_portable(
+pub(in crate::engine::membership_transition) fn selected_portable(
     system: &DiskRoot,
     verified: &VerifiedTerminalAuthority,
 ) -> Result<PortableAuthority> {
-    let path = system
-        .path()
-        .join("terminal-management")
-        .join(verified.authority.operation_id().to_string());
+    let path = attempts::selected_path(system, verified)?;
     let proposal: ResumeProposal =
         decode_strict(&system.read_bytes(&path.join("resume.json"), MAX_METADATA)?)?;
     let portable: PortableAuthority =
@@ -576,10 +586,11 @@ pub(in crate::engine) fn resume_bootstrap_extension(
     system: &DiskRoot,
     verified: &VerifiedTerminalAuthority,
 ) -> Result<()> {
-    let path = system
-        .path()
-        .join("terminal-management")
-        .join(verified.authority.operation_id().to_string());
+    let attempts = attempts::load(system, verified)?;
+    if attempts.current.is_none() {
+        return Ok(());
+    }
+    let path = attempts.path;
     let Some(file) = system.open_optional_read_regular(&path.join(BOOTSTRAP_FILE))? else {
         return Ok(());
     };
@@ -608,6 +619,8 @@ pub enum TerminalMetadataResumePhase {
 
 #[derive(Clone, Debug)]
 pub struct TerminalMetadataResumeRecovery {
+    pub original: Config,
+    pub terminal_operation_id: OperationId,
     pub operation_id: OperationId,
     pub principal: String,
     pub target: Config,
@@ -621,36 +634,27 @@ impl TerminalManagement {
     /// SYSTEM-only routing, not proof that a target is writable. Each selected
     /// route reauthenticates its actual directories and independent new quorum.
     pub fn metadata_resume_recovery(root: &Path) -> Result<Option<TerminalMetadataResumeRecovery>> {
-        let management = Self::open_for_resume(root)?;
-        let path = operation_directory(&management);
-        let system = management.system_root();
+        let (system, verified) = Self::verified_completed_source(root)?;
+        let attempts = attempts::load(&system, &verified)?;
+        let Some(proposal) = attempts.current else {
+            // Loading the exact chain already rejects orphan selectors. A
+            // cancelled request does not require its next directory to exist.
+            return Ok(None);
+        };
+        let path = attempts.path;
         let selected = system
             .open_optional_read_regular(&path.join(PREPARED_FILE))?
             .is_some();
-        let Some(file) = system.open_optional_read_regular(&path.join("resume.json"))? else {
-            if selected
-                || system
-                    .open_optional_read_regular(&path.join(COMPLETE_FILE))?
-                    .is_some()
-            {
-                return Err(Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "terminal resume selector has no protected request",
-                ));
-            }
-            return Ok(None);
-        };
-        let proposal: ResumeProposal = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
         proposal.verify()?;
-        proposal.verify_source(&management.verified_authority().state)?;
-        if proposal.terminal.hash()? != management.verified_authority().authority.hash()? {
+        proposal.verify_source(&verified.state)?;
+        if proposal.terminal.hash()? != verified.authority.hash()? {
             return Err(Error::new(
                 ErrorCode::LogFork,
                 "resume recovery selects another terminal authority",
             ));
         }
         let phase = if selected {
-            selected_portable(system, management.verified_authority())?;
+            selected_portable(&system, &verified)?;
             TerminalMetadataResumePhase::CompleteGeneration
         } else {
             if system
@@ -665,12 +669,14 @@ impl TerminalManagement {
             TerminalMetadataResumePhase::ResupplyDirectories
         };
         Ok(Some(TerminalMetadataResumeRecovery {
+            original: (**proposal.terminal.original()).clone(),
+            terminal_operation_id: proposal.terminal.operation_id(),
             operation_id: proposal.intent.operation_id,
             principal: proposal.intent.principal.clone(),
             target: (*proposal.intent.target).clone(),
             terminal_authority_hash: proposal.terminal.hash()?,
             transition_hash: object_hash(INTENT_KIND, &proposal.intent)?,
-            control_archive: management.control_archive(),
+            control_archive: verified.authority.archive(system.path()),
             phase,
         }))
     }

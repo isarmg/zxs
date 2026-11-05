@@ -100,3 +100,232 @@ fn prepared_exit_stop_probes_neither_old_nor_partial_stops_at_any_real_barrier()
         }
     }
 }
+
+struct ReadmittedFixture {
+    temp: tempfile::TempDir,
+    original: Config,
+    projected: ValidatedConfig,
+    operation: OperationId,
+    authority: PortableAuthority,
+    stop: PreparedStop,
+    before: Arc<State>,
+}
+impl ReadmittedFixture {
+    fn new(phase: WriteFault) -> Self {
+        let temp = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let original =
+            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        let system = temp.path().join("system");
+        let mut engine = Engine::initialize(&system, original.clone()).unwrap();
+        engine
+            .create_repository(
+                &RepositoryName::parse("retained-readmission").unwrap(),
+                "P01",
+                1,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        for disk in &original.disks {
+            prepare_exit(&mut engine, &disk.disk_id, OperationId::generate().unwrap());
+            engine.activate_pending_disk_exit().unwrap();
+            let directory = || PendingMemberDirectory {
+                disk_id: disk.disk_id.clone(),
+                directory: File::open(&disk.root).unwrap(),
+            };
+            engine
+                .begin_disk_readmission(
+                    &disk.disk_id,
+                    "admin",
+                    OperationId::generate().unwrap(),
+                    directory(),
+                )
+                .unwrap();
+            let archive = engine.build_managed_membership_control_archive().unwrap();
+            engine
+                .activate_disk_readmission(&archive.archive_path, &archive.root_hash, directory())
+                .unwrap();
+        }
+        let before = Arc::clone(&engine.state);
+        let operation = OperationId::generate().unwrap();
+        prepare_exit(&mut engine, &original.disks[0].disk_id, operation);
+        inject_next(phase);
+        assert!(engine.activate_pending_disk_exit().is_err(), "{phase:?}");
+        assert!(!engine.state.operations.contains_key(&operation));
+        let projected = engine.config.clone();
+        let value: json_codec::Value = decode_strict(
+            &fs::read(
+                system
+                    .join("membership-exit-stops")
+                    .join(operation.to_string())
+                    .join("plan.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let stop = json_codec::from_value(value["stop"].clone()).unwrap();
+        let authority = json_codec::from_value(value["authority"].clone()).unwrap();
+        drop(engine);
+        Self {
+            temp,
+            original,
+            projected,
+            operation,
+            authority,
+            stop,
+            before,
+        }
+    }
+    fn system(&self) -> PathBuf {
+        self.temp.path().join("system")
+    }
+    fn verify(&self, io: &mut CountedIo) -> Result<ValidatedConfig> {
+        let store = open_store(&self.system())?;
+        verify_prepared_exit_stop_with_io(&store, &self.stop, &self.authority, &self.projected, io)
+    }
+}
+fn prepare_exit(engine: &mut Engine, disk: &str, operation: OperationId) {
+    engine
+        .begin_disk_exit(
+            disk,
+            MembershipExitAction::PlannedOffline,
+            "admin",
+            operation,
+        )
+        .unwrap();
+    let archive = engine.build_managed_membership_control_archive().unwrap();
+    engine
+        .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+        .unwrap();
+    let decision = engine.resume_membership_joint_decision().unwrap();
+    assert!(decision.original_quorum_accepted());
+    assert!(decision.target_quorum_accepted());
+    assert!(decision.all_certificates_synchronized());
+}
+
+#[test]
+fn prepared_exit_stop_uses_readmitted_survivors_at_every_locator_barrier() {
+    for phase in [
+        WriteFault::BeforeRecord,
+        WriteFault::AfterRecord,
+        WriteFault::BeforeHead,
+        WriteFault::AfterHead,
+    ] {
+        let fixture = ReadmittedFixture::new(phase);
+        let mut io = CountedIo::default();
+        let verified = fixture.verify(&mut io).unwrap();
+        assert_eq!(
+            (
+                verified.metadata_members().len(),
+                verified.metadata_quorum()
+            ),
+            (2, 2)
+        );
+        assert_eq!(io.stats.len(), 2);
+        assert_eq!(io.opens.len(), 2);
+        assert!(!io.stats.contains(&fixture.original.disks[0].root));
+        assert!(!io.opens.contains(&fixture.original.disks[0].root));
+        for disk in &fixture.original.disks[1..] {
+            assert!(io.stats.contains(&disk.root));
+            assert!(io.opens.contains(&disk.root));
+            let epoch = fixture.projected.io_admission_epoch(&disk.disk_id).unwrap();
+            assert!(epoch.is_some());
+            assert_eq!(verified.io_admission_epoch(&disk.disk_id).unwrap(), epoch);
+        }
+        let mut resumed = Engine::resume_membership_activation(&fixture.system()).unwrap();
+        let result = resumed.activate_pending_disk_exit().unwrap();
+        assert_eq!(result.operation_id, fixture.operation);
+        for (operation, result) in fixture.before.operations.iter() {
+            assert_eq!(
+                resumed.operation_record(*operation).unwrap().result(),
+                result
+            );
+        }
+        assert!(
+            resumed
+                .config
+                .excludes_io_disk(&fixture.original.disks[0].disk_id)
+        );
+        drop(resumed);
+        let reopened = Engine::open(&fixture.system()).unwrap();
+        assert_eq!(
+            reopened
+                .operation_record(fixture.operation)
+                .unwrap()
+                .result(),
+            &result
+        );
+        assert_eq!(
+            (
+                reopened.config.metadata_members().len(),
+                reopened.config.metadata_quorum()
+            ),
+            (2, 2)
+        );
+    }
+}
+
+#[test]
+fn prepared_exit_stop_requires_surviving_epoch_proofs_before_storage_io() {
+    for corrupt in [false, true] {
+        let fixture = ReadmittedFixture::new(WriteFault::AfterRecord);
+        let epoch = fixture
+            .projected
+            .io_admission_epoch(&fixture.original.disks[1].disk_id)
+            .unwrap()
+            .unwrap();
+        let certificate = fixture
+            .system()
+            .join("readmission-probe-admissions")
+            .join(format!("{epoch}.json"));
+        let saved = fs::read(&certificate).unwrap();
+        if corrupt {
+            fs::write(&certificate, b"{truncated retained probe").unwrap();
+        } else {
+            fs::rename(
+                &certificate,
+                fixture.temp.path().join("preserved-probe.json"),
+            )
+            .unwrap();
+        }
+        let mut io = CountedIo::default();
+        assert!(fixture.verify(&mut io).is_err());
+        assert!(io.stats.is_empty() && io.opens.is_empty());
+        fs::write(&certificate, saved).unwrap();
+        let mut resumed = Engine::resume_membership_activation(&fixture.system()).unwrap();
+        assert_eq!(
+            resumed.activate_pending_disk_exit().unwrap().operation_id,
+            fixture.operation
+        );
+    }
+}
+
+#[test]
+fn prepared_exit_stop_readmission_proof_never_substitutes_for_actual_retained_quorum() {
+    let fixture = ReadmittedFixture::new(WriteFault::AfterRecord);
+    let missing = &fixture.original.disks[1].root;
+    let preserved = fixture.temp.path().join("preserved-missing-voter");
+    fs::rename(missing, &preserved).unwrap();
+    let mut io = CountedIo::default();
+    assert_eq!(
+        fixture.verify(&mut io).unwrap_err().code(),
+        ErrorCode::MetadataQuorumUnavailable
+    );
+    assert!(io.stats.contains(missing));
+    assert!(!io.opens.contains(missing));
+    assert!(!io.stats.contains(&fixture.original.disks[0].root));
+    assert!(!io.opens.contains(&fixture.original.disks[0].root));
+    fs::rename(preserved, missing).unwrap();
+    let mut io = CountedIo::default();
+    let verified = fixture.verify(&mut io).unwrap();
+    assert_eq!(
+        (
+            verified.metadata_members().len(),
+            verified.metadata_quorum()
+        ),
+        (2, 2)
+    );
+}

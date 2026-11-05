@@ -75,9 +75,19 @@ impl RootRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct StopRecord {
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
+    pub(super) admission_epoch: Option<IntentDigest>,
     pub(super) disk_id: String,
     pub(super) operation_id: OperationId,
     pub(super) intent_digest: IntentDigest,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(super) struct ReadmissionRecord {
+    pub(super) disk_id: String,
+    pub(super) operation_id: OperationId,
+    pub(super) intent_digest: IntentDigest,
+    pub(super) stopped_intent: IntentDigest,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -90,6 +100,12 @@ pub(super) struct Record {
     pub(super) roots: Vec<RootRecord>,
     pub(super) retained: Vec<String>,
     pub(super) stops: Vec<StopRecord>,
+    #[serialization(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) readmissions: Vec<ReadmissionRecord>,
+    // Seeds of already authenticated active epochs after explicit SYSTEM loss.
+    // These never remove prior stops in an existing locator chain.
+    #[serialization(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(super) recovered_readmissions: std::collections::BTreeMap<String, ReadmissionRecord>,
 }
 impl Record {
     pub(super) fn initial(pool_id: &str, observations: Vec<RootObservation>) -> Result<Self> {
@@ -121,6 +137,8 @@ impl Record {
             roots,
             retained,
             stops: Vec::new(),
+            readmissions: Vec::new(),
+            recovered_readmissions: std::collections::BTreeMap::new(),
         };
         record.validate()?;
         Ok(record)
@@ -172,7 +190,9 @@ impl Record {
                 let mut observed = observation.record;
                 // A stop may remove the current voter role, never its historical identity.
                 observed.metadata_member = existing.metadata_member;
-                if !record.stops.is_empty() && observed.path != existing.path {
+                if (!record.stops.is_empty() || !record.recovered_readmissions.is_empty())
+                    && observed.path != existing.path
+                {
                     return Err(BootstrapError::ManagementOnly(
                         "stopped locator cannot relocate recorded addresses",
                     ));
@@ -197,10 +217,7 @@ impl Record {
         record.retained = record
             .roots
             .iter()
-            .filter(|root| {
-                root.metadata_member
-                    && !record.stops.iter().any(|stop| stop.disk_id == root.disk_id)
-            })
+            .filter(|root| root.metadata_member && !record.is_stopped(&root.disk_id))
             .map(|root| root.disk_id.clone())
             .collect();
         record.generation =
@@ -278,11 +295,11 @@ impl Record {
                 "stop target binding differs",
             ));
         }
-        if source
-            .stops
-            .iter()
-            .any(|stop| stop.disk_id == target.disk_id || stop.operation_id == operation_id)
-        {
+        if source.stops.iter().any(|stop| {
+            (stop.disk_id == target.disk_id
+                && stop.admission_epoch == source.admission_epoch(&target.disk_id))
+                || stop.operation_id == operation_id
+        }) {
             return Err(BootstrapError::ManagementOnly(
                 "stop target or operation already recorded",
             ));
@@ -299,11 +316,91 @@ impl Record {
         record.previous = Some(previous.head.clone());
         record.retained.retain(|disk_id| disk_id != &target.disk_id);
         record.stops.push(StopRecord {
+            admission_epoch: source.admission_epoch(&target.disk_id),
             disk_id: target.disk_id.clone(),
             operation_id,
             intent_digest,
         });
-        record.stops.sort_by(|a, b| a.disk_id.cmp(&b.disk_id));
+        record.stops.sort_by(|a, b| {
+            (&a.disk_id, a.admission_epoch.map(|value| value.to_string()))
+                .cmp(&(&b.disk_id, b.admission_epoch.map(|value| value.to_string())))
+        });
+        record.validate()?;
+        Ok(record)
+    }
+    pub(super) fn admission_epoch(&self, disk_id: &str) -> Option<IntentDigest> {
+        self.readmissions
+            .iter()
+            .rev()
+            .find(|admission| admission.disk_id == disk_id)
+            .or_else(|| self.recovered_readmissions.get(disk_id))
+            .map(|admission| admission.intent_digest)
+    }
+    pub(super) fn readmission_events(&self) -> impl Iterator<Item = &ReadmissionRecord> {
+        self.recovered_readmissions
+            .values()
+            .chain(self.readmissions.iter())
+    }
+    pub(super) fn is_stopped(&self, disk_id: &str) -> bool {
+        self.stops.iter().any(|stop| {
+            stop.disk_id == disk_id && stop.admission_epoch == self.admission_epoch(disk_id)
+        })
+    }
+    pub(super) fn readmit(
+        previous: &LoadedLocator,
+        admission: &crate::engine::membership_transition::readmission::AdmittedReadmission,
+    ) -> Result<Self> {
+        let request = admission.request();
+        let source = &previous.record;
+        let root = source
+            .roots
+            .iter()
+            .find(|root| root.disk_id == request.target.disk_id)
+            .ok_or(BootstrapError::ManagementOnly(
+                "readmission root was not recorded",
+            ))?;
+        if source.is_terminal()
+            || source.pool_id != request.target.pool_id
+            || root.slot_id != request.target.slot_id
+            || root.binding_generation != request.target.binding_generation
+            || root.device != request.directory.device
+            || root.inode != request.directory.inode
+            || source
+                .admission_epoch(&root.disk_id)
+                .map(|value| value.to_string())
+                != request.previous_admission
+            || !source.stops.iter().any(|stop| {
+                stop.disk_id == root.disk_id
+                    && stop.operation_id == request.stopped_operation
+                    && stop.intent_digest.to_string() == request.stopped_transition
+                    && stop.admission_epoch == source.admission_epoch(&root.disk_id)
+            })
+        {
+            return Err(BootstrapError::ManagementOnly(
+                "readmission differs from the exact stopped directory lifetime",
+            ));
+        }
+        let mut record = source.clone();
+        record.generation =
+            source
+                .generation
+                .checked_add(1)
+                .ok_or(BootstrapError::ManagementOnly(
+                    "locator generation overflow",
+                ))?;
+        record.previous = Some(previous.head.clone());
+        record.readmissions.push(ReadmissionRecord {
+            disk_id: request.target.disk_id.clone(),
+            operation_id: admission.operation(),
+            intent_digest: IntentDigest::parse(admission.transition())?,
+            stopped_intent: IntentDigest::parse(&request.stopped_transition)?,
+        });
+        record.retained = record
+            .roots
+            .iter()
+            .filter(|root| root.metadata_member && !record.is_stopped(&root.disk_id))
+            .map(|root| root.disk_id.clone())
+            .collect();
         record.validate()?;
         Ok(record)
     }
@@ -345,18 +442,18 @@ impl Record {
     fn validate(&self) -> Result<()> {
         storage_contract::validate_id(&self.pool_id, "pool")
             .map_err(|e| BootstrapError::encoding("record pool", e))?;
-        if self.generation == 0
-            || self.roots.is_empty()
-            || self.roots.len() > MAX_ROOTS
-            || self.stops.len() > self.roots.len()
-            || (!self.is_terminal() && self.stops.len() == self.roots.len())
-        {
+        if self.generation == 0 || self.roots.is_empty() || self.roots.len() > MAX_ROOTS {
             return Err(BootstrapError::ManagementOnly(
                 "locator counts or generation exceed bounds",
             ));
         }
         match &self.previous {
-            None if self.generation == 1 && self.stops.is_empty() => (),
+            None if self.generation == 1
+                && self.stops.is_empty()
+                && self.readmissions.is_empty() =>
+            {
+                ()
+            }
             Some(head)
                 if head.pool_id == self.pool_id
                     && head.generation.checked_add(1) == Some(self.generation) => {}
@@ -370,7 +467,11 @@ impl Record {
         let mut previous = None;
         let mut operations = std::collections::BTreeSet::new();
         for stop in &self.stops {
-            if previous.is_some_and(|id: &str| id >= stop.disk_id.as_str())
+            let key = (
+                stop.disk_id.clone(),
+                stop.admission_epoch.map(|value| value.to_string()),
+            );
+            if previous.as_ref().is_some_and(|old| old >= &key)
                 || !operations.insert(stop.operation_id)
                 || !self.roots.iter().any(|root| root.disk_id == stop.disk_id)
             {
@@ -378,14 +479,50 @@ impl Record {
                     "stop bindings are duplicated, unsorted or unknown",
                 ));
             }
-            previous = Some(stop.disk_id.as_str());
+            previous = Some(key);
+        }
+        let mut epochs = std::collections::BTreeMap::new();
+        for (disk_id, admission) in &self.recovered_readmissions {
+            if disk_id != &admission.disk_id
+                || !self.roots.iter().any(|root| root.disk_id == *disk_id)
+                || !operations.insert(admission.operation_id)
+            {
+                return Err(BootstrapError::ManagementOnly(
+                    "recovered epoch is duplicated or outside observed roots",
+                ));
+            }
+            epochs.insert(disk_id.clone(), admission.intent_digest);
+        }
+        for admission in &self.readmissions {
+            let previous = epochs.get(&admission.disk_id).copied();
+            if !operations.insert(admission.operation_id)
+                || !self.stops.iter().any(|stop| {
+                    stop.disk_id == admission.disk_id
+                        && stop.intent_digest == admission.stopped_intent
+                        && stop.admission_epoch == previous
+                })
+            {
+                return Err(BootstrapError::ManagementOnly(
+                    "readmission does not extend its exact stopped lifetime",
+                ));
+            }
+            epochs.insert(admission.disk_id.clone(), admission.intent_digest);
+        }
+        for stop in &self.stops {
+            if let Some(epoch) = stop.admission_epoch
+                && !self.readmission_events().any(|admission| {
+                    admission.disk_id == stop.disk_id && admission.intent_digest == epoch
+                })
+            {
+                return Err(BootstrapError::ManagementOnly(
+                    "stop has no authenticated admission event",
+                ));
+            }
         }
         let retained: Vec<_> = self
             .roots
             .iter()
-            .filter(|root| {
-                root.metadata_member && !self.stops.iter().any(|stop| stop.disk_id == root.disk_id)
-            })
+            .filter(|root| root.metadata_member && !self.is_stopped(&root.disk_id))
             .map(|root| root.disk_id.clone())
             .collect();
         if retained != self.retained
@@ -426,23 +563,42 @@ impl Record {
                 .find(|root| root.disk_id == old.disk_id)
                 .is_some_and(|new| {
                     let mut rebound = new.clone();
-                    if self.stops.is_empty() && older.record.stops.is_empty() {
+                    if self.stops.is_empty()
+                        && older.record.stops.is_empty()
+                        && self.recovered_readmissions.is_empty()
+                    {
                         rebound.path.clone_from(&old.path);
                     }
                     &rebound == old
                 })
         });
-        let adds_stop =
-            self.roots == older.record.roots && self.stops.len() == older.record.stops.len() + 1;
+        let adds_stop = self.roots == older.record.roots
+            && self.stops.len() == older.record.stops.len() + 1
+            && self.readmissions == older.record.readmissions
+            && self.stops.iter().any(|stop| {
+                !older.record.stops.contains(stop)
+                    && !older.record.is_stopped(&stop.disk_id)
+                    && stop.admission_epoch == older.record.admission_epoch(&stop.disk_id)
+            });
+        let readmits = self.roots == older.record.roots
+            && self.stops == older.record.stops
+            && self.readmissions.len() == older.record.readmissions.len() + 1
+            && self.readmissions.starts_with(&older.record.readmissions)
+            && self
+                .readmissions
+                .last()
+                .is_some_and(|entry| older.record.is_stopped(&entry.disk_id));
         let updates_roots = self.roots != older.record.roots
             && self.roots.len() >= older.record.roots.len()
-            && self.stops == older.record.stops;
-        if self.previous.as_ref() != Some(&older.head)
+            && self.stops == older.record.stops
+            && self.readmissions == older.record.readmissions;
+        if self.recovered_readmissions != older.record.recovered_readmissions
+            || self.previous.as_ref() != Some(&older.head)
             || (older.record.is_terminal()
                 && (self.is_terminal() || !updates_roots || self.retained.is_empty()))
             || (self.is_terminal() && !adds_stop)
             || !preserves_roots
-            || !(adds_stop || updates_roots)
+            || !(adds_stop || updates_roots || readmits)
             || !older
                 .record
                 .stops

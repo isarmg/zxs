@@ -13,6 +13,8 @@ type WorkspaceRootAliases = BTreeMap<(String, String, u64), BTreeSet<PathBuf>>;
 
 mod authority;
 pub(in crate::engine) mod exit;
+#[path = "../readmission/activation.rs"]
+mod readmission;
 mod registry;
 pub(in crate::engine::membership_transition) use authority::AuthorityResolver;
 pub(crate) use authority::PortableAuthority;
@@ -95,11 +97,19 @@ impl Generation {
             .into();
             outcome["target_io"] = "closed".into();
         }
+        if let Origin::Readmission { request, .. } = &self.intent.origin {
+            outcome["disk_id"] = request.target.disk_id.clone().into();
+            outcome["slot_id"] = request.target.slot_id.clone().into();
+            outcome["binding_generation"] = request.target.binding_generation.to_string().into();
+            outcome["registration"] = "enabled".into();
+            outcome["io_admission_epoch"] = object_hash(INTENT_KIND, &self.intent)?.into();
+        }
         Ok(OperationResult {
             operation_id: self.intent.operation_id,
             kind: match self.intent.effect.as_ref().map(|effect| effect.action) {
                 Some(MembershipExitAction::PlannedOffline) => "disk-planned-offline",
                 Some(MembershipExitAction::Deregister) => "disk-deregister",
+                None if self.portable.readmission_core().is_some() => "disk-readmit",
                 None if self.portable.is_abort() => "membership-add-cancelled",
                 None if self.portable.terminal_resume_core().is_some() => {
                     "terminal-metadata-resume"

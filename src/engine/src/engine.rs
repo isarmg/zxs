@@ -68,15 +68,17 @@ mod history_window;
 pub use history_window::{FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead};
 pub(crate) mod membership_transition;
 pub use membership_transition::{
-    DiskExitPhase, DiskExitStatus, MembershipAbortStatus, MembershipArchiveInspection,
-    MembershipControlArchive, MembershipExitAction, MembershipFenceStatus,
-    MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
-    MembershipJournalInspection, PendingMemberControlReceipt, PendingMemberDirectory,
-    PendingMembershipStatus, verify_membership_control_archive,
+    DiskExitPhase, DiskExitStatus, DiskReadmissionPhase, DiskReadmissionStatus,
+    MembershipAbortStatus, MembershipArchiveInspection, MembershipControlArchive,
+    MembershipExitAction, MembershipFenceStatus, MembershipJointDecisionStatus,
+    MembershipJointRole, MembershipJointVote, MembershipJournalInspection,
+    PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
+    verify_membership_control_archive,
 };
 pub use membership_transition::{
-    TerminalMetadataResume, TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
-    TerminalMetadataResumeStatus,
+    TerminalMetadataResume, TerminalMetadataResumeCancelOutcome,
+    TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
+    TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus,
 };
 mod recovery;
 use recovery::RecoveryMode;
@@ -606,6 +608,7 @@ impl Engine {
             engine.blocked = true;
         }
         engine.restore_current_disk_exit()?;
+        engine.retire_published_readmission_plan()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -646,6 +649,7 @@ impl Engine {
             }
         }
         engine.restore_current_disk_exit()?;
+        engine.retire_published_readmission_plan()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -1011,6 +1015,7 @@ impl Engine {
             engine.complete_generation_activation()?;
         }
         engine.restore_current_disk_exit()?;
+        engine.retire_published_readmission_plan()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)

@@ -557,17 +557,49 @@ fn production_startup_missing_corrupt_or_absent_system_locator_never_stats_stora
         let error = discover_startup_with_io(&fixture.system, fixture.config.clone(), &mut io)
             .err()
             .unwrap();
-        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert!(io.touches.is_empty(), "case {failure}: {:?}", io.touches);
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired, "case {failure}");
         assert!(std::error::Error::source(&error).is_some());
         if failure == 3 {
             assert_eq!(io_cause(&error).kind(), std::io::ErrorKind::NotFound);
         }
-        assert!(io.touches.is_empty());
         assert_eq!(
             Engine::open(&fixture.system).err().unwrap().code(),
             ErrorCode::RecoveryRequired
         );
     }
+}
+
+#[test]
+fn production_startup_absent_genesis_roots_cannot_supply_a_quorum_from_projection() {
+    let fixture = StartupFixture::new();
+    let unchanged = canonical_json(&fixture.config).unwrap();
+    for (index, disk) in fixture.config.disks.iter().enumerate() {
+        fs::rename(
+            &disk.root,
+            fixture._temp.path().join(format!("absent-genesis-{index}")),
+        )
+        .unwrap();
+    }
+    let mut io = CountedIo::default();
+    let error = discover_startup_with_io(&fixture.system, fixture.config.clone(), &mut io)
+        .err()
+        .unwrap();
+    assert_eq!(io.touches.len(), fixture.config.metadata_members().len());
+    for disk in &fixture.config.disks {
+        assert_eq!(
+            io.touches
+                .iter()
+                .filter(|touch| **touch == Touch::Stat(disk.root.clone()))
+                .count(),
+            1
+        );
+    }
+    assert_eq!(error.code(), ErrorCode::MetadataQuorumUnavailable);
+    assert_eq!(io_cause(&error).kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(fixture.config.metadata_members().len(), 3);
+    assert_eq!(fixture.config.metadata_quorum(), 2);
+    assert_eq!(canonical_json(&fixture.config).unwrap(), unchanged);
 }
 
 #[test]

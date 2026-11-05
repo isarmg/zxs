@@ -289,6 +289,8 @@ fn a_durable_local_plan_preserves_the_published_state_and_exact_roots_after_rest
         )
         .unwrap();
     let new_view = engine.metadata_view();
+    // Each view owns a separate projection; only the authoritative published
+    // State must keep its identity when a local Ready plan is saved.
     assert!(Arc::ptr_eq(&published, &engine.state));
     assert_eq!(
         old_view.business_projection(),

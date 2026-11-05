@@ -20,7 +20,7 @@ impl RootObservation {
                     path: canonical_root(&disk.root).map_err(runtime::management_error)?,
                     device: physical.device,
                     inode: physical.inode,
-                    metadata_member: true,
+                    metadata_member: disk.metadata_member,
                 };
                 record.validate().map_err(runtime::management_error)?;
                 Ok(Self {

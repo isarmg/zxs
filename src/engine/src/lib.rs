@@ -17,16 +17,18 @@ mod disk;
 mod engine;
 pub use engine::RecoveryDataRoot;
 pub use engine::{
-    TerminalMetadataResume, TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
-    TerminalMetadataResumeStatus,
+    TerminalMetadataResume, TerminalMetadataResumeCancelOutcome,
+    TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
+    TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus,
 };
 mod file_stamp;
 mod historical_save;
 pub use engine::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
-    DirectoryNamespaceView, DiskExitPhase, DiskExitStatus, DiskRegistrationIdentity,
-    DiskRegistryCommitment, FrozenDeregistrationBoundary, HistoricalDiskDefinition, ImpactPage,
-    ImpactPageSize, NamespaceDeregistrationPreview, NamespaceEntries, NamespaceOccurrenceImpact,
+    DirectoryNamespaceView, DiskExitPhase, DiskExitStatus, DiskReadmissionPhase,
+    DiskReadmissionStatus, DiskRegistrationIdentity, DiskRegistryCommitment,
+    FrozenDeregistrationBoundary, HistoricalDiskDefinition, ImpactPage, ImpactPageSize,
+    NamespaceDeregistrationPreview, NamespaceEntries, NamespaceOccurrenceImpact,
     NamespaceOccurrenceScan, NamespaceSnapshot, NamespaceSnapshotWitness, OccurrenceVisibility,
     PreparedDiskRegistry, RegisteredDisk, RegisteredHolders, RegistrationEffect, RegistrationMode,
     RegistryExitEffect, RegistryExitRequest, TargetPlacementRole, TerminalDiskExit,

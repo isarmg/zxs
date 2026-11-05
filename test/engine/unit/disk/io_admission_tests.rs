@@ -739,13 +739,12 @@ fn final_closure_proof_waits_for_real_tail_and_pins_the_closed_domain() {
     proof.verify_binding(&binding).unwrap();
     let seal = handle.seal.clone();
     drop(handle);
-    drop(binding);
-    let reopened = DiskIoBinding::new(&seal, &config).unwrap();
     assert_eq!(
-        reopened.admit().unwrap_err().code(),
+        DiskIoBinding::new(&seal, &config).unwrap_err().code(),
         ErrorCode::DiskUnavailable
     );
-    proof.verify_binding(&reopened).unwrap();
+    proof.verify_binding(&binding).unwrap();
+    drop(binding);
     let (_other_directory, _other_config, other) = disk();
     assert_eq!(
         proof
@@ -767,7 +766,7 @@ fn recovered_stop_waits_for_every_physical_domain_of_the_logical_binding() {
         binding_generation: handle.seal.binding_generation,
     };
     assert_eq!(
-        RecoveredDiskIo::admit_identity(&identity)
+        RecoveredDiskIo::admit_identity(&identity, None)
             .unwrap_err()
             .code(),
         ErrorCode::DiskUnavailable
@@ -777,13 +776,13 @@ fn recovered_stop_waits_for_every_physical_domain_of_the_logical_binding() {
     let relocated = DiskIoBinding::new(&relocated_seal, &config).unwrap();
     drop(binding.begin_quiesce().unwrap().unwrap());
     assert_eq!(
-        RecoveredDiskIo::admit_identity(&identity)
+        RecoveredDiskIo::admit_identity(&identity, None)
             .unwrap_err()
             .code(),
         ErrorCode::DiskUnavailable
     );
     drop(relocated.begin_quiesce().unwrap().unwrap());
-    let stopped = RecoveredDiskIo::admit_identity(&identity).unwrap();
+    let stopped = RecoveredDiskIo::admit_identity(&identity, None).unwrap();
     assert_eq!(stopped.identity(), &identity);
     relocated_seal.inode += 1;
     assert_eq!(
@@ -792,7 +791,7 @@ fn recovered_stop_waits_for_every_physical_domain_of_the_logical_binding() {
             .code(),
         ErrorCode::DiskUnavailable
     );
-    let retained = RecoveredDiskIo::admit_identity(&identity).unwrap();
+    let retained = RecoveredDiskIo::admit_identity(&identity, None).unwrap();
     drop(stopped);
     assert_eq!(
         DiskIoBinding::new(&relocated_seal, &config)
@@ -801,8 +800,74 @@ fn recovered_stop_waits_for_every_physical_domain_of_the_logical_binding() {
         ErrorCode::DiskUnavailable
     );
     drop(retained);
-    // Only the process-local guard ends here; the persistent bootstrap stop
-    // remains a separate mandatory authority boundary for every Engine opener.
-    let new_domain = DiskIoBinding::new(&relocated_seal, &config).unwrap();
-    drop(new_domain.admit().unwrap());
+    // Ending a guard does not revoke the process-lifetime epoch tombstone.
+    assert_eq!(
+        DiskIoBinding::new(&relocated_seal, &config)
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+}
+
+#[test]
+fn quiescing_retires_the_logical_epoch_before_any_existing_tail_finishes() {
+    let (directory, config, handle) = disk();
+    let bytes = b"offline preserves stored bytes";
+    let path = directory.path().join("retained-body");
+    std::fs::write(&path, bytes).unwrap();
+    let binding = handle.root.io_binding().unwrap();
+    let tail = binding.admit().unwrap();
+    let transition = binding.begin_quiesce().unwrap().unwrap();
+    assert_eq!(binding.status().unwrap().ordinary, 1);
+    assert_eq!(binding.status().unwrap().control, 1);
+    assert!(!binding.status().unwrap().drained());
+    assert_eq!(
+        binding.closed_proof().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+
+    for inode in [handle.seal.inode, handle.seal.inode + 1] {
+        let mut seal = handle.seal.clone();
+        seal.inode = inode;
+        assert_eq!(
+            DiskIoBinding::new(&seal, &config).unwrap_err().code(),
+            ErrorCode::DiskUnavailable
+        );
+    }
+    assert_eq!(config.disks.len(), 1);
+    assert_eq!(config.disks[0].disk_id, handle.seal.disk_id);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+    drop(transition);
+    assert!(!binding.status().unwrap().drained());
+    drop(tail);
+    binding.closed_proof().unwrap();
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn expired_last_gate_cannot_reopen_before_its_destructor_records_cleanup() {
+    let (_directory, config, handle) = disk();
+    let binding = handle.root.io_binding().unwrap().clone();
+    let seal = handle.seal.clone();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    drop(handle);
+
+    let weak = Arc::downgrade(&binding.gate);
+    let DiskIoBinding { gate, .. } = binding;
+    // Isolate the exact weak-expiration/destructor gap without timing sleeps
+    // or a production test hook. The real gate destructor has not run yet.
+    let retired_gate = Arc::try_unwrap(gate).unwrap();
+    assert!(weak.upgrade().is_none());
+    assert_eq!(
+        DiskIoBinding::new(&seal, &config).unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    drop(retired_gate);
+    assert_eq!(
+        DiskIoBinding::new(&seal, &config).unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
 }

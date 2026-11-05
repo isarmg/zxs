@@ -60,6 +60,7 @@ pub(in crate::engine) struct VerifiedExitStopSource {
     identity: DiskRegistrationIdentity,
     operation_id: OperationId,
     intent_digest: IntentDigest,
+    admission_epoch: Option<String>,
     observations: Vec<RootObservation>,
 }
 impl VerifiedExitStopSource {
@@ -71,6 +72,10 @@ impl VerifiedExitStopSource {
     }
     pub(in crate::engine) fn intent_digest(&self) -> IntentDigest {
         self.intent_digest
+    }
+
+    pub(in crate::engine) fn admission_epoch(&self) -> Option<&str> {
+        self.admission_epoch.as_deref()
     }
 
     pub(in crate::engine) fn observations(&self) -> &[RootObservation] {
@@ -95,14 +100,19 @@ impl VerifiedExitStopSource {
         let identity = effect.identity(&intent.origin.config().pool_id);
         let operation_id = intent.operation_id;
         let transition = object_hash(INTENT_KIND, &intent)?;
-        generation
-            .portable
-            .verify_bootstrap_stop(&identity, operation_id, &transition)?;
+        let admission_epoch = generation.portable.io_admission_epoch(&identity.disk_id)?;
+        generation.portable.verify_bootstrap_stop_epoch(
+            &identity,
+            operation_id,
+            &transition,
+            admission_epoch.as_deref(),
+        )?;
         Ok(Self {
             generation,
             identity,
             operation_id,
             intent_digest: IntentDigest::parse(&transition).map_err(management_error)?,
+            admission_epoch,
             observations,
         })
     }
@@ -426,10 +436,14 @@ pub(in crate::engine) fn synchronize(
         let locator = store
             .reload(&engine.config.pool_id)
             .map_err(management_error)?;
+        let admission_epoch = engine.config.io_admission_epoch(&binding.disk_id)?;
         if locator.stop_hints().any(|stop| {
             stop.disk_id == binding.disk_id
+                && stop.slot_id == binding.slot_id
+                && stop.binding_generation == binding.binding_generation
                 && stop.operation_id == operation
                 && stop.intent_digest == digest
+                && stop.admission_epoch.map(|epoch| epoch.to_string()) == admission_epoch
         }) {
             return Ok(None);
         }
@@ -534,12 +548,14 @@ pub(in crate::engine) fn require_no_pending_stop(
         .as_ref()
         .expect("invariant: Exit stop plan authority");
     let transition = object_hash(INTENT_KIND, &intent)?;
+    let admission_epoch = plan.authority.io_admission_epoch(&effect.disk_id)?;
     if !locator.stop_hints().any(|stop| {
         stop.disk_id == effect.disk_id
             && stop.slot_id == effect.slot_id
             && stop.binding_generation == effect.binding_generation
             && stop.operation_id == intent.operation_id
             && stop.intent_digest.to_string() == transition
+            && stop.admission_epoch.map(|epoch| epoch.to_string()) == admission_epoch
     }) {
         return Err(Error::new(
             ErrorCode::RecoveryRequired,

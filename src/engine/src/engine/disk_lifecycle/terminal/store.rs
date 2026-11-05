@@ -193,19 +193,36 @@ impl TerminalStore {
     }
 
     pub(super) fn require_no_resume(&self) -> Result<()> {
-        if self
-            .operation
-            .open_optional_read_regular(&self.operation.path().join("resume.json"))?
-            .is_some()
-            || self
+        for name in [
+            "resume.json",
+            "resume-complete.json",
+            "resume-generation.json",
+            "resume-bootstrap.json",
+            "resume-cancel-intent.json",
+            "resume-cancel.json",
+            "resume-attempts",
+        ] {
+            if self
                 .operation
-                .open_optional_read_regular(&self.operation.path().join("resume-complete.json"))?
-                .is_some()
-        {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "terminal authority has a metadata resumption; continue that exact authenticated request",
-            ));
+                .optional_metadata(&self.operation.path().join(name))?
+                .is_none()
+            {
+                continue;
+            }
+            let verified = self.load_authority()?;
+            let attempts = crate::engine::membership_transition::terminal_resume::cancellation::attempts::load(&self.system, &verified)
+                .map_err(|source| source.context(
+                    ErrorCode::RecoveryRequired,
+                    "terminal resumption evidence cannot authorize ordinary management",
+                ))?;
+            return if attempts.has_current() {
+                Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "terminal authority has a metadata resumption; continue that exact authenticated request",
+                ))
+            } else {
+                Ok(())
+            };
         }
         Ok(())
     }
@@ -334,11 +351,23 @@ fn read_management_selection(root: &Path) -> Result<bool> {
     let Some(file) = system.open_optional_read_regular(&directory.join(HEAD))? else {
         return Ok(false);
     };
-    let head: Head = crate::decode_strict(&crate::disk::read_file_bytes(file, MAX_METADATA)?)?;
-    let completion = directory
-        .join(head.operation_id.to_string())
-        .join("resume-complete.json");
-    if system.open_optional_read_regular(&completion)?.is_none() {
+    let _: Head = crate::decode_strict(&crate::disk::read_file_bytes(file, MAX_METADATA)?)?;
+    let store = TerminalStore::read_system(system)?;
+    let verified = store.load_authority()?;
+    let attempts =
+        crate::engine::membership_transition::terminal_resume::cancellation::attempts::load(
+            store.system(),
+            &verified,
+        )?;
+    if !attempts.has_current() {
+        return Ok(true);
+    }
+    let completion = attempts.path.join("resume-complete.json");
+    if store
+        .system()
+        .open_optional_read_regular(&completion)?
+        .is_none()
+    {
         return Ok(true);
     }
     crate::engine::membership_transition::pending::activation::terminal_resume::completed_selector(

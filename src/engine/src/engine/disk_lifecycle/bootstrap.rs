@@ -160,6 +160,80 @@ pub(crate) struct LoadedLocator {
     record: Record,
 }
 impl LoadedLocator {
+    pub(in crate::engine) fn recorded_admission_epoch(
+        &self,
+        identity: &DiskRegistrationIdentity,
+    ) -> Result<Option<String>> {
+        let root = self
+            .record
+            .roots
+            .iter()
+            .find(|root| root.disk_id == identity.disk_id)
+            .ok_or(BootstrapError::ManagementOnly(
+                "admission epoch has no recorded binding",
+            ))?;
+        if identity.pool_id != self.record.pool_id
+            || identity.slot_id != root.slot_id
+            || identity.binding_generation != root.binding_generation
+        {
+            return Err(BootstrapError::ManagementOnly(
+                "admission epoch names another binding",
+            ));
+        }
+        Ok(self
+            .record
+            .admission_epoch(&identity.disk_id)
+            .map(|value| value.to_string()))
+    }
+    pub(in crate::engine) fn verify_stopped_directory(
+        &self,
+        identity: &DiskRegistrationIdentity,
+        path: &Path,
+        physical: FileIdentity,
+    ) -> Result<()> {
+        let root = self
+            .record
+            .roots
+            .iter()
+            .find(|root| root.disk_id == identity.disk_id)
+            .ok_or(BootstrapError::ManagementOnly(
+                "readmission directory was not recorded",
+            ))?;
+        if self.record.pool_id != identity.pool_id
+            || root.slot_id != identity.slot_id
+            || root.binding_generation != identity.binding_generation
+            || root.path != canonical_root(path)?
+            || root.device != physical.device
+            || root.inode != physical.inode
+            || !self.record.is_stopped(&identity.disk_id)
+        {
+            return Err(BootstrapError::ManagementOnly(
+                "readmission descriptor differs from the stopped recorded directory",
+            ));
+        }
+        Ok(())
+    }
+    pub(in crate::engine) fn verify_readmissions(
+        &self,
+        authority: &crate::engine::membership_transition::pending::activation::PortableAuthority,
+    ) -> crate::Result<()> {
+        for admission in self.record.readmission_events() {
+            let root = self.record.root(&admission.disk_id);
+            authority.verify_readmission_hint(
+                &DiskRegistrationIdentity {
+                    pool_id: self.record.pool_id.clone(),
+                    disk_id: root.disk_id.clone(),
+                    slot_id: root.slot_id.clone(),
+                    binding_generation: root.binding_generation,
+                },
+                admission.operation_id,
+                &admission.intent_digest.to_string(),
+                &admission.stopped_intent.to_string(),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Pure alias/history validation. Only the typed terminal store methods may
     /// persist this change; this inspection never opens or admits a root.
     pub(in crate::engine) fn validate_terminal_root_expansion(
@@ -171,6 +245,7 @@ impl LoadedLocator {
 
     fn permits_unstopped_relocation(&self, config: &Config) -> bool {
         self.record.stops.is_empty()
+            && self.record.recovered_readmissions.is_empty()
             && config.disks.len() == self.record.roots.len()
             && config.disks.iter().all(|disk| {
                 self.record
@@ -190,11 +265,7 @@ impl LoadedLocator {
                 .is_none_or(|root| {
                     root.slot_id == binding.slot_id
                         && root.binding_generation == binding.binding_generation
-                        && self
-                            .record
-                            .stops
-                            .iter()
-                            .any(|stop| stop.disk_id == binding.disk_id)
+                        && self.record.is_stopped(&binding.disk_id)
                 })
     }
 
@@ -223,11 +294,12 @@ impl LoadedLocator {
                         "bootstrap binding differs from independently authenticated configuration",
                     ));
                 }
-                if !self
-                    .record
-                    .stops
-                    .iter()
-                    .any(|stop| stop.disk_id == disk.disk_id)
+                if !self.record.is_stopped(&disk.disk_id)
+                    && self
+                        .record
+                        .admission_epoch(&disk.disk_id)
+                        .map(|value| value.to_string())
+                        == config.io_admission_epoch(&disk.disk_id)?
                 {
                     allowed.insert(disk.disk_id.clone());
                 }
@@ -265,6 +337,7 @@ impl LoadedLocator {
                 binding_generation: root.binding_generation,
                 operation_id: stop.operation_id,
                 intent_digest: stop.intent_digest,
+                admission_epoch: stop.admission_epoch,
             }
         })
     }
@@ -273,7 +346,16 @@ impl LoadedLocator {
     /// selection or remap any recorded binding. Before the first stop only, a
     /// complete projection may relocate the same observed directory identity.
     /// Once restricted, changed addresses require explicit retained-root recovery.
+    #[cfg(test)]
     pub(crate) fn select<'a>(&'a self, config: &'a Config) -> Result<RestrictedProbes<'a>> {
+        self.select_readmission_probes(config, &[])
+    }
+
+    pub(in crate::engine) fn select_readmission_probes<'a>(
+        &'a self,
+        config: &'a Config,
+        admissions: &[crate::engine::membership_transition::readmission::ReadmissionProbeAdmission],
+    ) -> Result<RestrictedProbes<'a>> {
         if self.record.is_terminal() {
             return Err(BootstrapError::ManagementOnly(
                 "terminal locator permits no storage-root discovery; authenticate protected management authority",
@@ -320,6 +402,36 @@ impl LoadedLocator {
         let mut roots = Vec::new();
         for disk_id in &self.record.retained {
             let root = self.record.root(disk_id);
+            if let Some(epoch) = self.record.admission_epoch(disk_id) {
+                let event = self
+                    .record
+                    .readmission_events()
+                    .find(|event| event.disk_id == *disk_id && event.intent_digest == epoch)
+                    .expect("invariant: ledger admission epoch exists");
+                let identity = DiskRegistrationIdentity {
+                    pool_id: self.record.pool_id.clone(),
+                    disk_id: root.disk_id.clone(),
+                    slot_id: root.slot_id.clone(),
+                    binding_generation: root.binding_generation,
+                };
+                if !admissions.iter().any(|proof| {
+                    proof.admits(
+                        &identity,
+                        Path::new(&root.path),
+                        FileIdentity {
+                            device: root.device,
+                            inode: root.inode,
+                        },
+                        event.operation_id,
+                        &epoch.to_string(),
+                        &event.stopped_intent.to_string(),
+                    )
+                }) {
+                    // An event alone never widens discovery. Callers without a
+                    // certified exact probe scope retain the safe restricted set.
+                    continue;
+                }
+            }
             let path = if permits_relocation {
                 config
                     .disks
@@ -350,6 +462,7 @@ pub(crate) struct StopHint<'a> {
     pub(crate) binding_generation: u64,
     pub(crate) operation_id: OperationId,
     pub(crate) intent_digest: IntentDigest,
+    pub(crate) admission_epoch: Option<IntentDigest>,
 }
 
 /// Only addresses permitted for read-only authority discovery, NOT trusted

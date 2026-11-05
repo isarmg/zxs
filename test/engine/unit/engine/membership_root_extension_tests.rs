@@ -165,7 +165,7 @@ impl Fixture {
         let locator = store
             .root_extension_locator(&plan)
             .map_err(management_error)?;
-        verify_prepared_add_with_io(&locator, authority, &self.engine.config, io)
+        verify_prepared_add_with_io(&locator, authority, &self.engine.config, &[], io)
     }
 }
 

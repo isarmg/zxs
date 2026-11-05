@@ -4,12 +4,16 @@ use super::*;
 #[path = "exit_stop.rs"]
 mod exit_stop;
 use crate::engine::disk_lifecycle::bootstrap::{
-    BootstrapError, LoadedLocator, ReadProbe, RestrictedProbes, StopHint,
+    LoadedLocator, ReadProbe, RestrictedProbes, StopHint,
     runtime::{management_error, open_store},
     store::BootstrapStore,
 };
 pub(in crate::engine::membership_transition::pending::activation) use exit_stop::verify_prepared_exit_stop;
 
+#[cfg(test)]
+use crate::engine::disk_lifecycle::bootstrap::BootstrapError;
+
+#[cfg(test)]
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum RestrictedDiscoveryFailure {
     #[error(transparent)]
@@ -91,11 +95,12 @@ fn discover_startup_in_store_with_io(
     io: &mut impl RootIo,
 ) -> Result<ValidatedConfig> {
     let locator = store.reload(&projected.pool_id).map_err(management_error)?;
-    let evidence =
-        discover_locator_with_io(&locator, &projected, io).map_err(|error| match error {
-            RestrictedDiscoveryFailure::Bootstrap(error) => management_error(error),
-            RestrictedDiscoveryFailure::Verification(error) => error,
-        })?;
+    let admissions = store.readmission_probe_admissions(&locator)?;
+    let probes = locator
+        .select_readmission_probes(&projected, &admissions)
+        .map_err(management_error)?;
+    let hints = locator.stop_hints().collect::<Vec<_>>();
+    let evidence = discover_probes_with_io(probes, &projected, &hints, io)?;
     for stop in locator.stop_hints() {
         let generation = evidence.config.generation().ok_or_else(|| {
             Error::new(
@@ -103,7 +108,7 @@ fn discover_startup_in_store_with_io(
                 "pending bootstrap stop requires explicit retained-root management recovery",
             )
         })?;
-        generation.portable.verify_bootstrap_stop(
+        generation.portable.verify_bootstrap_stop_epoch(
             &crate::DiskRegistrationIdentity {
                 pool_id: stop.pool_id.into(),
                 disk_id: stop.disk_id.into(),
@@ -112,7 +117,13 @@ fn discover_startup_in_store_with_io(
             },
             stop.operation_id,
             &stop.intent_digest.to_string(),
+            stop.admission_epoch
+                .map(|epoch| epoch.to_string())
+                .as_deref(),
         )?;
+    }
+    if let Some(generation) = evidence.config.generation() {
+        locator.verify_readmissions(&generation.portable)?;
     }
     let forbidden = evidence
         .config
@@ -200,6 +211,7 @@ fn discover_store_with_io(
     discover_locator_with_io(&locator, config, io)
 }
 
+#[cfg(test)]
 fn discover_locator_with_io(
     locator: &LoadedLocator,
     config: &ValidatedConfig,
@@ -349,7 +361,7 @@ fn discover_root_authority(
             continue;
         };
         let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
-        portable.verify_bootstrap_stop(
+        portable.verify_bootstrap_stop_epoch(
             &crate::DiskRegistrationIdentity {
                 pool_id: stop.pool_id.into(),
                 disk_id: stop.disk_id.into(),
@@ -358,6 +370,9 @@ fn discover_root_authority(
             },
             stop.operation_id,
             &stop.intent_digest.to_string(),
+            stop.admission_epoch
+                .map(|epoch| epoch.to_string())
+                .as_deref(),
         )?;
         select_authority(&mut selected, Arc::new(portable))?;
     }
@@ -406,7 +421,10 @@ fn verify_held_generation_from(
     let hash = portable.hash()?;
     let transition = object_hash(INTENT_KIND, &intent)?;
     let effective = portable.effective_config()?;
-    let joint = if portable.is_abort() || portable.terminal_resume_core().is_some() {
+    let joint = if portable.is_abort()
+        || portable.terminal_resume_core().is_some()
+        || portable.readmission_core().is_some()
+    {
         None
     } else {
         Some(portable.add_joint()?.verify()?)
@@ -488,7 +506,9 @@ fn verify_held_generation_from(
                 .private_child(&member_directory(&disk, &transition))?;
             match &joint {
                 None => {
-                    if let Some(core) = portable.terminal_resume_core() {
+                    if let Some(core) = portable.readmission_core() {
+                        core.verify_member(&held.root, &disk, &hash, false)?;
+                    } else if let Some(core) = portable.terminal_resume_core() {
                         core.verify_member(&held.root, &disk)?;
                     } else {
                         portable.verify_abort_member(&held.root, &disk)?;
@@ -594,14 +614,16 @@ pub(in crate::engine::membership_transition::pending::activation) fn verify_prep
     locator: &LoadedLocator,
     portable: PortableAuthority,
     projected: &ValidatedConfig,
+    admissions: &[crate::engine::membership_transition::readmission::ReadmissionProbeAdmission],
 ) -> Result<ValidatedConfig> {
-    verify_prepared_add_with_io(locator, portable, projected, &mut NamedRootIo)
+    verify_prepared_add_with_io(locator, portable, projected, admissions, &mut NamedRootIo)
 }
 
 fn verify_prepared_add_with_io(
     locator: &LoadedLocator,
     portable: PortableAuthority,
     projected: &ValidatedConfig,
+    admissions: &[crate::engine::membership_transition::readmission::ReadmissionProbeAdmission],
     io: &mut impl RootIo,
 ) -> Result<ValidatedConfig> {
     portable.add_joint()?.verify()?;
@@ -616,7 +638,7 @@ fn verify_prepared_add_with_io(
         ));
     }
     for stop in locator.stop_hints() {
-        portable.verify_bootstrap_stop(
+        portable.verify_bootstrap_stop_epoch(
             &crate::DiskRegistrationIdentity {
                 pool_id: stop.pool_id.into(),
                 disk_id: stop.disk_id.into(),
@@ -625,13 +647,19 @@ fn verify_prepared_add_with_io(
             },
             stop.operation_id,
             &stop.intent_digest.to_string(),
+            stop.admission_epoch
+                .map(|epoch| epoch.to_string())
+                .as_deref(),
         )?;
     }
+    locator.verify_readmissions(&portable)?;
     let effective = portable.effective_config()?;
     let bounded = locator.restrict_config(effective.clone(), &effective)?;
     let hash = portable.hash()?;
     let candidates = candidates(
-        locator.select(&bounded).map_err(management_error)?,
+        locator
+            .select_readmission_probes(&bounded, admissions)
+            .map_err(management_error)?,
         &bounded,
     )?;
     let mut held = Vec::with_capacity(candidates.len());

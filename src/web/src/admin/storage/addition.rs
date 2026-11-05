@@ -60,7 +60,14 @@ fn terminal(model: &super::Model) -> bool {
 }
 fn can_cancel(model: &Model) -> bool {
     model.status.as_ref().is_some_and(|status| {
-        !status.state.is_terminal() && !status.preview.authority.is_terminal()
+        !status.state.is_terminal()
+            && (!status.preview.authority.is_terminal()
+                || matches!(
+                    status.phase,
+                    AdditionPhase::ResumeCancellable
+                        | AdditionPhase::CertifyingAbort
+                        | AdditionPhase::Cancelling
+                ))
     }) && !model.sending
 }
 pub(super) fn selected(model: &mut super::Model) {
@@ -114,10 +121,16 @@ fn make_request(
                 slot_id: fields.slot.clone(),
                 level,
                 upstream_slot_id: (!fields.upstream.is_empty()).then(|| fields.upstream.clone()),
-                metadata_member: terminal(model) || fields.metadata,
+                metadata_member: fields.metadata,
             })
         })
         .collect::<Result<Vec<_>, api::Error>>()?;
+    if terminal(model) && !additions.iter().any(|addition| addition.metadata_member) {
+        return Err(input_error(t(
+            "恢复活动写服务至少需要一个新的元数据成员；其余新目录可以仅存数据。",
+            "Resuming active writes requires at least one new metadata voter; other new directories may be data only.",
+        )));
+    }
     Ok(AdditionRequest {
         operation_id,
         additions,
@@ -361,12 +374,13 @@ fn validate_preview(preview: &AdditionPreview) -> Result<(), api::Error> {
                 !digest(terminal_authority_hash)
                     || terminal_operation_id == &preview.request.operation_id
                     || preview.target_metadata_members == 0
-                    || preview.target_metadata_members != preview.request.additions.len()
-                    || preview
-                        .request
-                        .additions
-                        .iter()
-                        .any(|addition| !addition.metadata_member)
+                    || preview.target_metadata_members
+                        != preview
+                            .request
+                            .additions
+                            .iter()
+                            .filter(|addition| addition.metadata_member)
+                            .count()
             }
         }
         || !digest(&preview.preview_digest)
@@ -384,13 +398,17 @@ fn validate_status(
     validate_preview(&status.preview)?;
     if expected.is_some_and(|id| id != status.operation_id)
         || status.preview.request.operation_id != status.operation_id
-        || (status.preview.authority.is_terminal()
-            && (status.continuation != AdditionContinuation::Add
-                || matches!(
-                    status.state,
-                    AdditionState::Cancelling | AdditionState::Cancelled
-                )
-                || !status.phase.is_metadata_resume()))
+        || (status.preview.authority.is_terminal() && !status.phase.is_metadata_resume())
+        || (!status.preview.authority.is_terminal()
+            && status.phase.is_terminal_resume_observation())
+        || (matches!(
+            status.state,
+            AdditionState::Cancelling | AdditionState::Cancelled
+        ) && status.continuation != AdditionContinuation::Cancel)
+        || (matches!(
+            status.state,
+            AdditionState::Adding | AdditionState::Completed
+        ) && status.continuation != AdditionContinuation::Add)
         || (status.state == AdditionState::Completed) != (status.phase == AdditionPhase::Completed)
         || (status.state == AdditionState::Cancelled) != (status.phase == AdditionPhase::Cancelled)
         || status.state.is_terminal() != status.result.is_some()
@@ -405,7 +423,11 @@ fn validate_status(
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 || result.kind
                     != if status.preview.authority.is_terminal() {
-                        "terminal-metadata-resume"
+                        if status.state == AdditionState::Cancelled {
+                            "terminal-metadata-resume-cancelled"
+                        } else {
+                            "terminal-metadata-resume"
+                        }
                     } else if status.state == AdditionState::Cancelled {
                         "membership-add-cancelled"
                     } else {
@@ -595,7 +617,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||state.with(|s|active(&s.admin_console.storage))>
             <p class="zxs-row">{move ||state.with(|s|if terminal(&s.admin_console.storage) {
-                t("从已认证的完整历史恢复当前池的新元数据组。选择全新空目录与槽位，所有新目录须保存元数据；保留原池身份、历史与现有登记，不初始化新池。同一文件系统中的不同目录允许使用，但不构成独立磁盘故障冗余。", "Restore a new metadata group for this pool from its authenticated complete history. Select fresh empty directories and slots; every new directory stores metadata. The existing pool identity, history and registrations are retained. Different directories on one filesystem are allowed, but do not provide independent disk-failure redundancy.")
+                t("从已认证的完整历史恢复当前池。选择全新空目录与槽位；恢复活动写服务至少需要一个新的元数据成员，其余新目录可以仅存数据。保留原池身份、历史与现有登记，不初始化新池。同一文件系统中的不同目录允许使用，但不构成独立磁盘故障冗余。", "Restore this pool from its authenticated complete history. Select fresh empty directories and slots. Resuming active writes requires at least one new metadata voter; other new directories may be data only. The existing pool identity, history and registrations are retained. Different directories on one filesystem are allowed, but do not provide independent disk-failure redundancy.")
             } else { t("向当前存储池登记目录。允许同一文件系统中的不同目录，但它们不提供独立磁盘故障冗余。新增目录不会自动搬移已有文件或改变现有放置规则。", "Register directories in the current pool. Different directories on one filesystem are allowed, but do not provide independent disk-failure redundancy. Adding directories does not move existing files or change placement rules.") })}</p>
             <For each=move ||state.with(|s|s.admin_console.storage.selections.clone()) key=|item|item.selection_id.clone() children=move |selection|{
                 let id = StoredValue::new(selection.selection_id);
@@ -603,13 +625,13 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     {field(state,id,"slot",t("新槽位（唯一）", "New slot (unique)"))}
                     {field(state,id,"level",t("层级（1 为主存储）", "Level (1 for primary storage)"))}
                     {field(state,id,"upstream",t("上游槽位（备份层必填）", "Upstream slot (required for backup tiers)"))}
-                </div><label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|!s.admin_console.storage.editable()||terminal(&s.admin_console.storage)) prop:checked=move ||state.with(|s|terminal(&s.admin_console.storage)||s.admin_console.storage.addition.fields.get(&id.get_value()).is_some_and(|fields|fields.metadata)) on:change=move |event|state.update(|s|{if s.session_active()&&s.admin_console.storage.editable(){let model=&mut s.admin_console.storage.addition;model.fields.get_mut(&id.get_value()).expect("invariant: selection fields").metadata=event_target_checked(&event);model.invalidate();}})/>{t("同时保存元数据（不勾选则仅存数据）", "Also store metadata (unchecked means data only)")}</label></section>}
+                </div><label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:checked=move ||state.with(|s|s.admin_console.storage.addition.fields.get(&id.get_value()).is_some_and(|fields|fields.metadata)) on:change=move |event|state.update(|s|{if s.session_active()&&s.admin_console.storage.editable(){let model=&mut s.admin_console.storage.addition;model.fields.get_mut(&id.get_value()).expect("invariant: selection fields").metadata=event_target_checked(&event);model.invalidate();}})/>{t("同时保存元数据（不勾选则仅存数据）", "Also store metadata (unchecked means data only)")}</label></section>}
             }/>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.editable()||s.admin_console.storage.selections.is_empty()) on:click=move |_|preview(state)>{move ||state.with(|s|if terminal(&s.admin_console.storage){t("预览恢复元数据组", "Preview metadata group recovery")}else{t("预览在线添加", "Preview online addition")})}</button>
             {move ||state.with(|s|s.admin_console.storage.addition.preview.clone()).map(|preview|view!{
                 <p class="zxs-row">{preview_counts(&preview)}</p>
                 <p class="zxs-row">{if preview.authority.is_terminal() {
-                    t("提交后复制并核验完整历史，由新组真实多数决定并发布后才恢复服务。本阶段尚不支持取消，提交后只能保留原操作编号继续恢复；关闭页面不会取消。这里的旧成员数仅是历史认证分母，不表示旧目录重新上线。", "Submitting copies and verifies complete history. Service resumes only after the new group's actual quorum decision and publication. Cancellation is not implemented for this stage. After submission, continue recovery using the same operation; closing this page does not cancel it. The old member count describes historical authority, not reactivated directories.")
+                    t("提交后复制并核验完整历史，由新组真实多数决定并发布后才恢复服务。取消需要新组实际的不可逆阻断决定，已获多数决定的恢复不能撤销；关闭页面不会取消。这里的旧成员数仅是历史认证分母，不表示旧目录重新上线。", "Submitting copies and verifies complete history. Service resumes only after the new group's actual quorum decision and publication. Cancellation requires an actual irreversible blocking decision from the new group. An accepted quorum decision cannot be undone; closing this page does not cancel it. The old member count describes historical authority, not reactivated directories.")
                 } else { t("提交后将暂停本代写入，复制并验证控制元数据，再发布新成员。中断后保留原操作编号。关闭页面不会取消；明确申请取消也必须由原成员固定多数的真实决定许可，已经发布的添加不会改称取消。", "Submitting pauses writes for this generation, copies and verifies control metadata, then publishes the new membership. Keep the original operation after interruption. Closing the page does not cancel it. Explicit cancellation requires the original fixed quorum's actual decision; a published addition cannot become cancelled.") }}</p>
                 <label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|s.admin_console.storage.addition.blocks_edit()) prop:checked=move ||state.with(|s|s.admin_console.storage.addition.acknowledged) on:change=move |event|state.update(|s|{if s.session_active()&&!s.admin_console.storage.addition.blocks_edit(){s.admin_console.storage.addition.acknowledged=event_target_checked(&event);}})/>{t("已核对目录、槽位、层级和元数据角色，确认添加。", "I reviewed the directories, slots, levels and metadata roles and confirm this addition.")}</label>
                 <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.addition.blocks_edit()||!s.admin_console.storage.addition.acknowledged) on:click=move |_|submit(state, Submit::Commit)>{move ||state.with(|s|if terminal(&s.admin_console.storage){t("恢复当前池的新元数据组", "Restore this pool's metadata group")}else{t("添加到当前存储池", "Add to current pool")})}</button>
@@ -625,7 +647,11 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.addition.reading) on:click=move |_|load(state)>{t("核对原操作", "Check original operation")}</button>
         </Show>
         <Show when=move ||state.with(|s|can_cancel(&s.admin_console.storage.addition))>
-            <p class="zxs-row">{t("取消仅适用于尚能取得原成员固定多数取消票的添加。已形成联合多数时不可取消；取消不会删除新目录或已写入的准备材料。", "Cancellation requires the original fixed quorum's Abort votes. An existing joint quorum cannot be cancelled. Cancellation does not delete new directories or preparation data.")}</p>
+            <p class="zxs-row">{move || state.with(|s| if s.admin_console.storage.addition.status.as_ref().is_some_and(|status| status.preview.authority.is_terminal()) {
+                t("取消元数据组恢复需要新组持久化足以阻断其固定多数的互斥取消决定。已有多数决定不可撤销；取消不删除新目录和准备材料，也不重新打开旧目录。", "Cancelling metadata group recovery requires immutable decisions that block its fixed new quorum. An accepted quorum decision cannot be reversed. Cancellation preserves new directories and preparation data and does not reopen old directories.")
+            } else {
+                t("取消仅适用于尚能取得原成员固定多数取消票的添加。已形成联合多数时不可取消；取消不会删除新目录或已写入的准备材料。", "Cancellation requires the original fixed quorum's Abort votes. An existing joint quorum cannot be cancelled. Cancellation does not delete new directories or preparation data.")
+            })}</p>
             <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.addition.cancel_acknowledged) on:change=move |event|state.update(|s|{if s.session_active(){s.admin_console.storage.addition.cancel_acknowledged=event_target_checked(&event);}})/>{t("确认申请取消此原添加操作，并保留所有目录数据。", "I confirm cancellation of this original addition, retaining all directory data.")}</label>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.addition.cancel_acknowledged) on:click=move |_|submit(state, Submit::Cancel)>{t("申请取消原添加", "Request original addition cancellation")}</button>
             <Show when=move ||state.with(|s|s.admin_console.storage.addition.status.as_ref().is_some_and(|status|status.continuation==AdditionContinuation::Cancel&&status.state==AdditionState::RecoveryRequired))>
@@ -668,8 +694,11 @@ fn status_text(status: &AdditionStatus) -> String {
             }
             AdditionState::RecoveryRequired => t("需要继续原恢复", "Continue original recovery"),
             AdditionState::Adding => t("元数据组恢复中", "Recovering metadata group"),
-            AdditionState::Cancelling | AdditionState::Cancelled => {
-                unreachable!("invariant: validated terminal recovery does not claim cancellation")
+            AdditionState::Cancelling => {
+                t("申请取消元数据组恢复", "Cancelling metadata group recovery")
+            }
+            AdditionState::Cancelled => {
+                t("元数据组恢复已取消", "Metadata group recovery cancelled")
             }
         };
         let phase = if status.phase == AdditionPhase::JointDecision {
@@ -677,6 +706,13 @@ fn status_text(status: &AdditionStatus) -> String {
                 "新组多数决定与完整历史同步",
                 "New quorum decision and complete history synchronization",
             )
+        } else if status.phase == AdditionPhase::CertifyingAbort {
+            t(
+                "认证新组不可逆取消决定",
+                "Certifying the new group's irreversible cancellation",
+            )
+        } else if status.phase == AdditionPhase::Cancelling {
+            t("持久化取消证明", "Persisting cancellation evidence")
         } else {
             phase_text(status.phase)
         };
@@ -702,6 +738,15 @@ fn phase_text(phase: AdditionPhase) -> String {
         AdditionPhase::Archiving => t("归档控制元数据", "Archiving control metadata"),
         AdditionPhase::Enrolling => t("准备新增目录", "Preparing new directories"),
         AdditionPhase::JointDecision => t("确认联合决定", "Confirming joint decision"),
+        AdditionPhase::ResumeCancellable => t("已核验可取消", "Cancellation verified available"),
+        AdditionPhase::ResumeQuorumAccepted => t(
+            "新多数已决定，仅可继续原恢复",
+            "New quorum decided; continue the original recovery",
+        ),
+        AdditionPhase::ResumeCancellationUnknown => t(
+            "需恢复原操作以核验取消状态",
+            "Recover the original operation to check cancellation",
+        ),
         AdditionPhase::Activating => t("发布新成员", "Publishing membership"),
         AdditionPhase::CertifyingAbort => {
             t("认证原成员取消票", "Certifying original-member Abort votes")

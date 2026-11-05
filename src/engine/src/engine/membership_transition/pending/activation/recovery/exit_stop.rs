@@ -46,7 +46,8 @@ fn verify_prepared_exit_stop_with_io(
         ));
     }
     for stop in &hints {
-        portable.verify_bootstrap_stop(
+        let epoch = stop.admission_epoch.map(|epoch| epoch.to_string());
+        portable.verify_bootstrap_stop_epoch(
             &crate::DiskRegistrationIdentity {
                 pool_id: stop.pool_id.into(),
                 disk_id: stop.disk_id.into(),
@@ -55,12 +56,19 @@ fn verify_prepared_exit_stop_with_io(
             },
             stop.operation_id,
             &stop.intent_digest.to_string(),
+            epoch.as_deref(),
         )?;
     }
+    locator.verify_readmissions(portable)?;
+    // Validate every active retained epoch before the first storage-root syscall.
+    // These SYSTEM proofs permit probing, never replace actual retained voters.
+    let admissions = bootstrap.readmission_probe_admissions(&locator)?;
     // Addresses come only from the exact immutable plan/chain. Rebinding the
     // projection here grants read-only probes, never the voter set or quorum.
     let probe_config = locator.restrict_config(projected.clone(), projected)?;
-    let probes = locator.select(&probe_config).map_err(management_error)?;
+    let probes = locator
+        .select_readmission_probes(&probe_config, &admissions)
+        .map_err(management_error)?;
     let evidence = discover_probes_with_io(probes, &probe_config, &hints, io)?;
     if evidence.config.generation_hash() != Some(portable.hash()?.as_str()) {
         return Err(Error::new(

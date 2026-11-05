@@ -57,16 +57,16 @@ impl PendingMembershipStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-pub(super) struct MemberIdentity {
+pub(in crate::engine) struct MemberIdentity {
     pool_id: String,
     disk_id: String,
     slot_id: String,
     #[serialization(with = "storage_contract::u64_string")]
     binding_generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
-    device: u64,
+    pub(in crate::engine) device: u64,
     #[serialization(with = "storage_contract::u64_string")]
-    inode: u64,
+    pub(in crate::engine) inode: u64,
     simulation: bool,
 }
 impl MemberIdentity {

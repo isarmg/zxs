@@ -8,6 +8,9 @@ use std::{fs, os::unix::fs::PermissionsExt};
 #[path = "terminal_head_rotation_tests.rs"]
 mod head_rotation;
 
+#[path = "terminal_resume_mixed_tests.rs"]
+mod mixed;
+
 struct Fixture {
     temporary: tempfile::TempDir,
     original: Config,
@@ -182,7 +185,13 @@ fn terminal_resume_preserves_all_history_and_distinct_disable_detach_namespaces(
         let original_files = files(&fixture.original.disks[0].root);
         let moved = fixture.temporary.path().join("stopped-old-directory");
         fs::rename(&fixture.original.disks[0].root, &moved).unwrap();
-        let target = fixture.target(3);
+        let mut target = fixture.target(3);
+        // This case creates a repository on a fresh primary after cold reopen.
+        // Config::development's later disks are backup levels, not primaries.
+        for disk in target.disks.iter_mut().skip(fixture.original.disks.len()) {
+            disk.level = 1;
+            disk.upstream_slot_id = None;
+        }
         let mut pending = fixture.prepare(&target);
         let status = pending.synchronize().unwrap();
         assert_eq!(
@@ -425,3 +434,6 @@ fn completed_terminal_resume_never_reduces_new_fixed_quorum() {
         "one surviving new member cannot become N1/Q1"
     );
 }
+
+#[path = "terminal_resume_cancel_tests.rs"]
+mod cancellation_tests;

@@ -35,6 +35,13 @@ record 或 head 写入结果不确定时，只有已完成真实来源验证和�
 它同样先持久化计划和原 head，再发布 Stop；不确定发布会关闭活跃目标准入，但仍要求独立的真实尾部证明。
 新计划不替代终态完成记录，也不修改主线对损坏 completion 或 selector 的具体错误来源。
 
+## 与重新接纳协同
+
+当 Disabled 磁盘已经显式重新接纳，Stop 必须关闭权威链证明的当前 admission epoch。
+精确计划、真实来源许可和最终关闭证明都绑定这个 epoch；历史 Stop 不能关闭重新接纳后的新准入。
+冷恢复先认证所有 Stop 的历史 epoch 和保留根的 SYSTEM probe 证书，再进行任何 storage stat/open。
+probe 证书只给出只读探测许可，实际 certificate、完整 archive、原固定多数和物理身份仍独立核验。
+
 ## 成本和验证
 
 每次停止新增一份受 MAX_METADATA 约束的 SYSTEM 计划，普通 Exit 另有选择 head 和完成标记。

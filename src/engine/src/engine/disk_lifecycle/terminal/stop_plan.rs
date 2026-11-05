@@ -45,6 +45,17 @@ impl TerminalStore {
                     .reload(&self.head.pool_id)
                     .map_err(management_error)?;
                 let identity = verified.authority.target();
+                let admission_epoch = verified.authority.io_admission_epoch(&identity.disk_id)?;
+                if previous
+                    .recorded_admission_epoch(&identity)
+                    .map_err(management_error)?
+                    != admission_epoch
+                {
+                    return Err(Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "terminal stop locator differs from its verified admission epoch",
+                    ));
+                }
                 let digest = IntentDigest::parse(&verified.authority.transition_hash()?)
                     .map_err(management_error)?;
                 if previous.stop_hints().any(|stop| {
@@ -53,6 +64,7 @@ impl TerminalStore {
                         && stop.binding_generation == identity.binding_generation
                         && stop.operation_id == verified.authority.operation_id()
                         && stop.intent_digest == digest
+                        && stop.admission_epoch.map(|epoch| epoch.to_string()) == admission_epoch
                 }) {
                     bootstrap
                         .sync_current(&previous)
@@ -111,6 +123,9 @@ impl TerminalStore {
                     | "resume-complete.json"
                     | "resume-generation.json"
                     | "resume-bootstrap.json"
+                    | "resume-cancel-intent.json"
+                    | "resume-cancel.json"
+                    | "resume-attempts"
             ) {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,

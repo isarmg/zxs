@@ -511,3 +511,50 @@ pub(in crate::engine::membership_transition) fn prepared_authority_path(
         .join(transition)
         .join("authority.json")
 }
+
+impl Engine {
+    /// The old stop remains durable and its runtime epoch stays tombstoned. Only
+    /// its obsolete current-owner slot is retired after the new certified epoch
+    /// has obtained its own resource. Other stopped directories keep their guards.
+    pub(in crate::engine::membership_transition) fn release_readmitted_exclusion(
+        &mut self,
+        admission: &crate::engine::membership_transition::readmission::AdmittedReadmission,
+    ) -> Result<()> {
+        let target = &admission.request().target;
+        if self.config.excludes_io_disk(&target.disk_id)
+            || self.config.io_admission_epoch(&target.disk_id)?.as_deref()
+                != Some(admission.transition())
+            || !self
+                .disk_resources
+                .handles()
+                .any(|handle| handle.seal.disk_id == target.disk_id)
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "new readmission lifetime has no admitted runtime owner",
+            ));
+        }
+        let Some(pending) = self.pending_disk_exit.as_mut() else {
+            return Ok(());
+        };
+        if let Some(owner) = pending.ownership.get(&target.disk_id) {
+            match owner {
+                ExitIoOwner::Live(binding) => {
+                    binding.closed_proof()?;
+                }
+                ExitIoOwner::Recovered(guard) if guard.identity() == target => (),
+                _ => {
+                    return Err(Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "old readmission lifetime has no closed owner",
+                    ));
+                }
+            }
+        }
+        pending.ownership.remove(&target.disk_id);
+        if pending.ownership.is_empty() {
+            self.pending_disk_exit = None;
+        }
+        Ok(())
+    }
+}

@@ -34,7 +34,8 @@
 - 系统管理目录永久保存原动作、actor、准确原配置、预览、archive/transition 绑定和完整回执。添加／退出共用一个受停机等待保护的协调器门，未结算持久意图互相阻止新计划。HTTP 断开不释放任务所有者，错误后保留具体阶段并显式继续原 operation_id。
 - 恢复根据引擎 `disk_exit_status` 的真实 `Fenced/Activating/Published` 分流；只有 Fenced 可以重建原控制准备，Activating 直接继续退出，不能因 HTTP phase 缓存而重开已 stop 的目标。GET 仅在引擎同时确认实际当前 view 与永久结果时补出已发布状态。
 - 首次 setup 记录不改写。管理恢复准入流式校验 Add/Exit 意图的配置摘要边，要求当前端点能连接到初始激活配置；同配置的 Disabled→Detached 不产生循环。全部池设置和历史绑定不变。该控制记录只用于准入，引擎随后必须验证真实 authority、持久 stop、registry 和 D3，不靠控制记录降低 quorum。
-- 后继 Add、再次 Exit 和 Disabled→Deregister 已有真实 registry-lineage 与恢复源码；旧操作回执可在后续代际继续查询。Disabled→Deregister 复用原 durable stop，不能重开目标。唯一 old-only voter 或 data-only 退出目标缺席的准备/恢复已有[严格证明源码](../validation/missing-exit-members.md)，前者须原固定 Q 与全部 retained target，后者保留完整原 metadata 格式。最终元数据 voter 退出、没有已发布源边界、必要历史闭包或另一 retained metadata 成员缺失，以及重新启用／重新登记仍未实现或明确拒绝；不会伪造完成或创建绕过核心的路径。
+- 后继 Add、再次 Exit 和 Disabled→Deregister 已有真实 registry-lineage 与恢复源码；旧操作回执可在后续代际继续查询。Disabled→Deregister 复用原 durable stop，不能重开目标。唯一 old-only voter 或 data-only 退出目标缺席的准备/恢复已有[严格证明源码](../validation/missing-exit-members.md)，前者须原固定 Q 与全部 retained target，后者保留完整原 metadata 格式。最终元数据 voter 退出、没有已发布源边界、必要历史闭包或另一 retained metadata 成员缺失，以及 Detached 重新登记仍明确拒绝；不会伪造完成或创建绕过核心的路径。
+- 活动 metadata 组中，保留的 Disabled 目录可通过[认证重新准入](../architecture/retained-directory-readmission.md)恢复历史原角色。原登记和 binding generation 不变，仅目标建立独立新 I/O epoch；旧 stop、字节、永久收据与已隐藏 occurrence 保留。该核心接口不代替服务端认证，也不允许将 Detached 或终态池借此重新启用。
 
 ## 验证边界
 

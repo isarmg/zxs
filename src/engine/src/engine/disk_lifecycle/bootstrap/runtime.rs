@@ -72,10 +72,17 @@ pub(crate) fn initialize(
     resources: &DiskResources,
 ) -> crate::Result<()> {
     let observations = observe(config, resources.handles())?;
+    let recovered =
+        crate::engine::membership_transition::readmission::persist_recovered_admissions(
+            root, config, resources,
+        )?;
     let mut store = create_store(root)?;
-    let locator = store
-        .initialize(&config.pool_id, observations)
-        .map_err(management_error)?;
+    let locator = if recovered.is_empty() {
+        store.initialize(&config.pool_id, observations)
+    } else {
+        store.initialize_recovered_readmissions(&config.pool_id, observations, &recovered)
+    }
+    .map_err(management_error)?;
     store.sync_current(&locator).map_err(management_error)
 }
 
@@ -186,6 +193,10 @@ pub(crate) struct RecoveredDiskStop {
     _admission: ValidatedConfig,
 }
 impl RecoveredDiskStop {
+    pub(crate) fn admission_epoch(&self) -> crate::Result<Option<String>> {
+        self._admission.io_admission_epoch(&self.binding.disk_id)
+    }
+
     pub(crate) fn identity(&self) -> &DiskRegistrationIdentity {
         &self.binding
     }

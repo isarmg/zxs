@@ -257,3 +257,9 @@ scrub 按确切旧 publication 的序号顺序恢复已承认不可用的副本�
 新的 `disk-lifecycle-candidate` 显式绑定 authority hash 与 registry commitment。既有 Candidate 原表示不变。当前实现提供对象图和 Candidate/Publication 绑定的窄证明，尚未把它们接为当前服务权威；普通成员准入拒绝新格式，避免以相同 voter 集合越过登记和 I/O 边界。独立的 D3 发布证明不以主操作成功为前提，也不能冒充完整生命周期已完成。
 
 只有后续规定 snapshot、联合 authority、持久停止策略、registry-bound WriteProjection、资源关闭和永久主操作结果共同闭合后，才可将这类登记用于活动读写。最后 voter 退出仍需独立终止协议；去掉目标恢复文件要求不补足这些缺口。当前纯准备不会替换现有 `CurrentDiskRegistry`、隐藏文件或停止磁盘 I/O。[验证范围与剩余条件](../validation/authenticated-disk-registry.md) 明确区分对象图证明和真实执行。
+
+### Disabled 目录的独立 I/O 准入 epoch
+
+保留登记的重新启用不改写历史 binding generation，也不清除 Stop。活动 metadata 组对准确 Disabled 目录的原角色、真实物理身份、完整原组控制归档及逐成员不可覆写决定进行认证后，以新 intent hash 创建独立 I/O epoch。Detached 不可通过该路径复活，旧句柄、workspace、墓碑和隐藏 occurrence 不能借新 epoch 取得权利。
+
+选择追加 epoch 而非 reopen 原 gate，是为了把不可逆排空与重新准入分开。普通启动先从受保护 SYSTEM 的有界证书取得准确只读探测范围，再从真实独立根验证当前固定 Q；证书和 locator 均不替代成员票。SYSTEM 丢失后的显式恢复只在验证真实 Q 和持有资源后重建已发布的起始 epoch，不伪造历史 Stop、不扩大根集合。完整顺序、代价、拒绝条件和源码回归范围见[保留目录重新准入](../architecture/retained-directory-readmission.md)。

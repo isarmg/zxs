@@ -81,3 +81,71 @@ impl CurrentNamespaces {
         Ok(PreparedCurrentNamespaces { view })
     }
 }
+
+impl CurrentNamespaces {
+    /// Carry only the already admitted current entries. Detached masks, hidden
+    /// identities and unavailable versions are never reconstructed from history.
+    pub(in crate::engine) fn prepare_readmission(
+        &self,
+        source: &crate::State,
+        snapshot: &str,
+        successor: &VerifiedDiskRegistry,
+        identity: &crate::DiskRegistrationIdentity,
+    ) -> Result<PreparedCurrentNamespaces> {
+        if self.registry_state.registration(identity)? != Some(crate::RegistrationMode::Disabled)
+            || successor.registration(identity)? != Some(crate::RegistrationMode::Enabled)
+        {
+            return Err(Error::new(
+                crate::ErrorCode::PublicationInvalid,
+                "namespace readmission is not Disabled to Enabled",
+            ));
+        }
+        let mut prepared = self.prepare_continuation(source, snapshot, successor)?;
+        for (id, scope) in Arc::make_mut(&mut prepared.view.branches) {
+            let branch = source
+                .branches
+                .get(id)
+                .expect("invariant: continuation retains source branches");
+            let history = source
+                .histories
+                .get(&branch.history_tree_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        crate::ErrorCode::PublicationInvalid,
+                        "readmitted branch has no history",
+                    )
+                })?;
+            let repository = source
+                .repositories
+                .get(&history.repository_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        crate::ErrorCode::PublicationInvalid,
+                        "readmitted branch has no repository",
+                    )
+                })?;
+            if repository.primary_slot_id == identity.slot_id {
+                Arc::make_mut(scope).writable = true;
+            }
+        }
+        for (id, scope) in Arc::make_mut(&mut prepared.view.directories) {
+            let branch = source
+                .directory_branches
+                .get(id)
+                .expect("invariant: continuation retains source directories");
+            let repository = source
+                .repositories
+                .get(&branch.repository_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        crate::ErrorCode::PublicationInvalid,
+                        "readmitted directory has no repository",
+                    )
+                })?;
+            if repository.primary_slot_id == identity.slot_id {
+                Arc::make_mut(scope).writable = true;
+            }
+        }
+        Ok(prepared)
+    }
+}

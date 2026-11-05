@@ -30,6 +30,10 @@ enum DecisionFormat {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", deny_unknown_fields)]
 enum Choice {
+    Readmission {
+        proposal_hash: String,
+        acceptance_hash: String,
+    },
     Joint {
         proposal_hash: String,
         acceptance_hash: String,
@@ -39,6 +43,10 @@ enum Choice {
         acceptance_hash: String,
     },
     TerminalResume {
+        core_hash: String,
+        acceptance_hash: String,
+    },
+    TerminalResumeCancel {
         core_hash: String,
         acceptance_hash: String,
     },
@@ -63,12 +71,20 @@ impl DecisionRecord {
             Choice::Joint {
                 proposal_hash,
                 acceptance_hash,
+            }
+            | Choice::Readmission {
+                proposal_hash,
+                acceptance_hash,
             } => (proposal_hash, acceptance_hash),
             Choice::Abort {
                 core_hash,
                 acceptance_hash,
             }
             | Choice::TerminalResume {
+                core_hash,
+                acceptance_hash,
+            }
+            | Choice::TerminalResumeCancel {
                 core_hash,
                 acceptance_hash,
             } => (core_hash, acceptance_hash),
@@ -88,6 +104,67 @@ pub(super) struct DecisionReceipt {
     record: DecisionRecord,
 }
 impl DecisionReceipt {
+    /// Pure deterministic encoding for pre-decision metadata budgeting. Like a
+    /// decoded receipt, this is not evidence of any local selected or synced slot.
+    pub(super) fn plan_terminal_resume(
+        transition: &str,
+        identity: &MemberIdentity,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<Self> {
+        let record = terminal_resume_record(transition, identity, core, acceptance)?;
+        Ok(Self {
+            record_hash: object_hash(DECISION_KIND, &record)?,
+            record,
+        })
+    }
+
+    pub(super) fn plan_terminal_resume_cancel(
+        transition: &str,
+        identity: &MemberIdentity,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<Self> {
+        let record = terminal_resume_cancel_record(transition, identity, core, acceptance)?;
+        Ok(Self {
+            record_hash: object_hash(DECISION_KIND, &record)?,
+            record,
+        })
+    }
+    pub(super) fn verify_terminal_resume_cancel(
+        &self,
+        transition: &str,
+        identity: &MemberIdentity,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<()> {
+        let expected = terminal_resume_cancel_record(transition, identity, core, acceptance)?;
+        if self.record != expected || self.record_hash != object_hash(DECISION_KIND, &expected)? {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "terminal resume cancellation decision differs",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn verify_readmission(
+        &self,
+        transition: &str,
+        identity: &MemberIdentity,
+        proposal: &str,
+        acceptance: &str,
+    ) -> Result<()> {
+        let expected = readmission_record(transition, identity, proposal, acceptance)?;
+        if self.record != expected || self.record_hash != object_hash(DECISION_KIND, &expected)? {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "readmission decision differs",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn hash(&self) -> &str {
         &self.record_hash
     }
@@ -172,7 +249,113 @@ pub(super) struct DecisionStore {
     root: DiskRoot,
     binding: Binding,
 }
+pub(super) enum TerminalResumeChoice {
+    Vacant,
+    Resume,
+    Cancel,
+}
+
 impl DecisionStore {
+    /// A missing exact slot is neutral. Existing neutral binding staging is
+    /// inspected without installing, synchronizing or choosing anything.
+    pub(super) fn observe_terminal_resume(
+        disk: &DiskRoot,
+        identity: &MemberIdentity,
+        transition: &str,
+        proposal: &str,
+        resume_acceptance: &str,
+        cancellation: &str,
+        cancel_acceptance: &str,
+    ) -> Result<TerminalResumeChoice> {
+        identity.verify_physical_root(disk)?;
+        let mut path = disk.path().to_path_buf();
+        for component in ["metadata", "membership-decisions", transition] {
+            path.push(component);
+            if disk.optional_metadata(&path)?.is_none() {
+                return Ok(TerminalResumeChoice::Vacant);
+            }
+            disk.directory_identity(&path)?;
+        }
+        Self::inspect_preparation(disk, identity, transition)?;
+        if disk
+            .open_optional_read_regular(&path.join(BINDING_FILE))?
+            .is_none()
+        {
+            return Ok(TerminalResumeChoice::Vacant);
+        }
+        let store = Self::open(disk, identity, transition, false)?;
+        let Some((file, record)) = store.observe()? else {
+            return Ok(TerminalResumeChoice::Vacant);
+        };
+        store.verify_named_record(&file, &record)?;
+        let receipt = DecisionReceipt {
+            record_hash: object_hash(DECISION_KIND, &record)?,
+            record,
+        };
+        match &receipt.record.choice {
+            Choice::TerminalResume { .. } => {
+                receipt.verify_terminal_resume(
+                    transition,
+                    identity,
+                    proposal,
+                    resume_acceptance,
+                )?;
+                Ok(TerminalResumeChoice::Resume)
+            }
+            Choice::TerminalResumeCancel { .. } => {
+                receipt.verify_terminal_resume_cancel(
+                    transition,
+                    identity,
+                    cancellation,
+                    cancel_acceptance,
+                )?;
+                Ok(TerminalResumeChoice::Cancel)
+            }
+            _ => Err(Error::new(
+                ErrorCode::LogFork,
+                "terminal resume slot contains a different decision kind",
+            )),
+        }
+    }
+
+    pub(super) fn terminal_resume_cancel_receipt(
+        &self,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<DecisionReceipt> {
+        let record = terminal_resume_cancel_record(
+            &self.binding.transition_hash,
+            &self.binding.identity,
+            core,
+            acceptance,
+        )?;
+        self.select(
+            &record,
+            true,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
+    }
+
+    pub(super) fn readmission_receipt(
+        &self,
+        proposal: &str,
+        acceptance: &str,
+    ) -> Result<DecisionReceipt> {
+        let record = readmission_record(
+            &self.binding.transition_hash,
+            &self.binding.identity,
+            proposal,
+            acceptance,
+        )?;
+        self.select(
+            &record,
+            true,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
+    }
+
     pub(super) fn open(
         disk: &DiskRoot,
         identity: &MemberIdentity,
@@ -765,6 +948,26 @@ fn injected_io() -> Error {
     std::io::Error::from_raw_os_error(5).into()
 }
 
+fn readmission_record(
+    transition: &str,
+    identity: &MemberIdentity,
+    proposal: &str,
+    acceptance: &str,
+) -> Result<DecisionRecord> {
+    validate_hash(transition)?;
+    validate_hash(proposal)?;
+    validate_hash(acceptance)?;
+    Ok(DecisionRecord {
+        format: DecisionFormat::Decision,
+        transition_hash: transition.to_owned(),
+        identity: identity.clone(),
+        choice: Choice::Readmission {
+            proposal_hash: proposal.to_owned(),
+            acceptance_hash: acceptance.to_owned(),
+        },
+    })
+}
+
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/engine/membership_decision_tests.rs"]
 mod tests;
@@ -783,6 +986,26 @@ fn terminal_resume_record(
         transition_hash: transition.to_owned(),
         identity: identity.clone(),
         choice: Choice::TerminalResume {
+            core_hash: core.to_owned(),
+            acceptance_hash: acceptance.to_owned(),
+        },
+    })
+}
+
+fn terminal_resume_cancel_record(
+    transition: &str,
+    identity: &MemberIdentity,
+    core: &str,
+    acceptance: &str,
+) -> Result<DecisionRecord> {
+    validate_hash(transition)?;
+    validate_hash(core)?;
+    validate_hash(acceptance)?;
+    Ok(DecisionRecord {
+        format: DecisionFormat::Decision,
+        transition_hash: transition.to_owned(),
+        identity: identity.clone(),
+        choice: Choice::TerminalResumeCancel {
             core_hash: core.to_owned(),
             acceptance_hash: acceptance.to_owned(),
         },

@@ -76,6 +76,13 @@ impl TerminalAuthority {
     pub(in crate::engine) fn original(&self) -> &ValidatedConfig {
         self.intent.origin.config()
     }
+    pub(in crate::engine) fn io_admission_epoch(&self, disk_id: &str) -> Result<Option<String>> {
+        self.predecessor
+            .as_ref()
+            .map(|authority| authority.io_admission_epoch(disk_id))
+            .transpose()
+            .map(Option::flatten)
+    }
     pub(in crate::engine) fn management_state(
         &self,
         frozen: &State,

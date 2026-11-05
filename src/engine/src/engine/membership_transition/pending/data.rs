@@ -123,57 +123,73 @@ pub(super) struct PendingDataDisk {
 }
 impl PendingDataDisk {
     pub(super) fn validate(&self) -> Result<()> {
-        admission::verify_named_root(&self.resource.root)?;
-        reservation::verify_writer(&self.resource.root, &self.resource._lock)?;
-        admission::inspect_new_root(
-            &self.resource.root,
-            &self.resource.seal,
-            &self.resource.reservation_name,
-        )?;
-        Ok(())
+        validate_resource(&self.resource)
     }
     pub(super) fn synchronize(&self) -> Result<()> {
-        self.validate()?;
-        let root = &self.resource.root;
-        let directory = member_directory(&self.disk, &self.resource.seal.transition_hash);
-        root.private_dir(&directory)?;
-        let held = root.private_child(&directory)?;
-        let names = held
-            .entries(&directory)?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(fs_error)?;
-        let path = self.dependency.path(&self.disk.root);
-        let expected = encode_metadata(&self.dependency, MAX_METADATA)?;
-        if let Some(file) = held.open_optional_read_regular(&path)? {
-            self.dependency
-                .verify_bytes(&read_file_bytes(file, MAX_METADATA)?)?;
-        }
-        for name in names {
-            if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
-                let bytes = held.read_bytes(&directory.join(name.as_path()), MAX_METADATA)?;
-                // The already-admitted seal binds this private operation namespace.
-                // A staging artifact can explain an interrupted exact write, never
-                // supply a different readiness or authorize another operation.
-                if !expected.starts_with(&bytes) {
-                    return Err(Error::new(
-                        ErrorCode::ObjectCorrupt,
-                        "data readiness staging differs from its exact pending dependency",
-                    ));
-                }
-            } else if name.as_os_str() != READY_FILE {
-                return Err(Error::new(
-                    ErrorCode::UnsafePath,
-                    "nonvoting readiness contains unrelated material",
-                ));
-            }
-        }
-        // Preserve staging evidence. Publish a fresh complete immutable file only
-        // after every existing artifact is accounted for; never rename a prefix.
-        held.write_atomic(&path, &expected, false)?;
-        self.verify_ready()
+        synchronize_resource(&self.disk, &self.resource, &self.dependency)
     }
     pub(super) fn verify_ready(&self) -> Result<()> {
-        self.validate()?;
-        self.dependency.synchronize_local(&self.resource.root)
+        verify_ready_resource(&self.resource, &self.dependency)
     }
+}
+
+fn validate_resource(resource: &PendingDisk) -> Result<()> {
+    admission::verify_named_root(&resource.root)?;
+    reservation::verify_writer(&resource.root, &resource._lock)?;
+    admission::inspect_new_root(&resource.root, &resource.seal, &resource.reservation_name)?;
+    Ok(())
+}
+
+/// Add and terminal resumption share the same nonvoting enrollment and actual
+/// file/directory synchronization barriers while retaining their original FDs.
+pub(super) fn synchronize_resource(
+    disk: &DiskConfig,
+    resource: &PendingDisk,
+    dependency: &DataDependency,
+) -> Result<()> {
+    validate_resource(resource)?;
+    let root = &resource.root;
+    let directory = member_directory(disk, &resource.seal.transition_hash);
+    root.private_dir(&directory)?;
+    let held = root.private_child(&directory)?;
+    let names = held
+        .entries(&directory)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(fs_error)?;
+    let path = dependency.path(&disk.root);
+    let expected = encode_metadata(dependency, MAX_METADATA)?;
+    if let Some(file) = held.open_optional_read_regular(&path)? {
+        dependency.verify_bytes(&read_file_bytes(file, MAX_METADATA)?)?;
+    }
+    for name in names {
+        if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
+            let bytes = held.read_bytes(&directory.join(name.as_path()), MAX_METADATA)?;
+            // The already-admitted seal binds this private operation namespace.
+            // A staging artifact can explain an interrupted exact write, never
+            // supply a different readiness or authorize another operation.
+            if !expected.starts_with(&bytes) {
+                return Err(Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "data readiness staging differs from its exact pending dependency",
+                ));
+            }
+        } else if name.as_os_str() != READY_FILE {
+            return Err(Error::new(
+                ErrorCode::UnsafePath,
+                "nonvoting readiness contains unrelated material",
+            ));
+        }
+    }
+    // Preserve staging evidence. Publish a fresh complete immutable file only
+    // after every existing artifact is accounted for; never rename a prefix.
+    held.write_atomic(&path, &expected, false)?;
+    verify_ready_resource(resource, dependency)
+}
+
+pub(super) fn verify_ready_resource(
+    resource: &PendingDisk,
+    dependency: &DataDependency,
+) -> Result<()> {
+    validate_resource(resource)?;
+    dependency.synchronize_local(&resource.root)
 }

@@ -16,7 +16,7 @@ use super::fencing::{FenceDescriptor, FenceOwner};
 use crate::{Error, ErrorCode, Result, ValidatedConfig};
 use platform_io::fs_safety::{EntryName, linux::DirectoryEntries};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{File, Metadata},
     io::{self, Read, Seek, SeekFrom, Write},
     os::unix::fs::FileExt,
@@ -59,6 +59,7 @@ pub(crate) struct DiskIoBinding {
 #[derive(Debug)]
 struct DiskIoGate {
     identity: DiskIoIdentity,
+    admission_epoch: Option<String>,
     state: Mutex<GateState>,
 }
 
@@ -91,8 +92,11 @@ impl From<&crate::DiskRegistrationIdentity> for LogicalDiskIdentity {
 }
 #[derive(Default)]
 struct BindingRegistry {
-    gates: BTreeMap<DiskIoIdentity, Weak<DiskIoGate>>,
-    stopped: BTreeMap<LogicalDiskIdentity, Weak<LogicalDiskStop>>,
+    gates: BTreeMap<(DiskIoIdentity, Option<String>), Weak<DiskIoGate>>,
+    stopped: BTreeMap<(LogicalDiskIdentity, Option<String>), Weak<LogicalDiskStop>>,
+    // Irreversible process-lifetime revocations. Dropping every old handle is
+    // not permission for a stale configuration to mint that lifetime again.
+    closed: BTreeSet<(LogicalDiskIdentity, Option<String>)>,
 }
 fn binding_gates() -> &'static Mutex<BindingRegistry> {
     static GATES: OnceLock<Mutex<BindingRegistry>> = OnceLock::new();
@@ -103,14 +107,26 @@ impl Drop for DiskIoGate {
     fn drop(&mut self) {
         match binding_gates().lock() {
             Ok(mut gates) => {
+                if self
+                    .state
+                    .get_mut()
+                    .map_or(true, |state| !matches!(state.phase, Phase::Active))
+                {
+                    gates.closed.insert((
+                        LogicalDiskIdentity::from(&self.identity),
+                        self.admission_epoch.clone(),
+                    ));
+                }
                 // Another opener may have replaced an expired weak entry while
                 // this last owner's destructor was waiting for the registry.
                 if gates
                     .gates
-                    .get(&self.identity)
+                    .get(&(self.identity.clone(), self.admission_epoch.clone()))
                     .is_some_and(|gate| std::ptr::eq(gate.as_ptr(), std::ptr::from_ref(self)))
                 {
-                    gates.gates.remove(&self.identity);
+                    gates
+                        .gates
+                        .remove(&(self.identity.clone(), self.admission_epoch.clone()));
                 }
             }
             Err(_) => tracing::error!("disk I/O binding registry poisoned during cleanup"),
@@ -203,54 +219,128 @@ impl DiskIoBinding {
     }
 
     pub(crate) fn new(seal: &DiskSeal, authority: &ValidatedConfig) -> Result<Self> {
+        if authority.excludes_io_disk(&seal.disk_id) {
+            return Err(Error::new(
+                ErrorCode::DiskUnavailable,
+                "configuration excludes this I/O lifetime",
+            ));
+        }
         let identity = DiskIoIdentity::from(seal);
+        let admission_epoch = authority.io_admission_epoch(&seal.disk_id)?;
+        let retired_epochs = authority.retired_io_epochs(&seal.disk_id)?;
+        let logical = LogicalDiskIdentity::from(&identity);
+        let key = (identity.clone(), admission_epoch.clone());
         let mut gates = binding_gates().lock().map_err(|_| {
             Error::new(
                 ErrorCode::RecoveryRequired,
                 "disk I/O binding registry poisoned",
             )
         })?;
-        // The registry lock linearizes recovered exclusion with creation of
-        // every physical incarnation of the same logical binding. Do not
-        // upgrade the weak stop while locked: its last Drop takes this lock.
-        if gates
-            .stopped
-            .get(&LogicalDiskIdentity::from(&identity))
-            .is_some_and(|stop| stop.strong_count() != 0)
-        {
-            return Err(Error::new(
-                ErrorCode::DiskUnavailable,
-                "recovered disk stop forbids a new I/O admission domain",
-            ));
-        }
-        let gate = match gates.gates.get(&identity).and_then(Weak::upgrade) {
-            Some(gate) => gate,
-            None => {
-                let gate = Arc::new(DiskIoGate {
-                    identity: identity.clone(),
-                    state: Mutex::new(GateState {
-                        authority: authority.clone(),
-                        phase: Phase::Active,
-                        ordinary: 0,
-                        control: 0,
-                        failed: false,
-                        resources: BTreeMap::new(),
-                        roots: BTreeMap::new(),
-                        fence: Weak::new(),
-                        fence_descriptor: None,
-                        active_fence: None,
-                    }),
-                });
-                gates.gates.insert(identity, Arc::downgrade(&gate));
-                gate
+        // Hold upgraded old domains past unlock: their final destructors also
+        // own the registry. Only the target directory needs to have drained.
+        let previous = gates
+            .gates
+            .iter()
+            .filter(|((physical, epoch), _)| {
+                LogicalDiskIdentity::from(physical) == logical && epoch != &admission_epoch
+            })
+            .filter_map(|(_, gate)| gate.upgrade())
+            .collect::<Vec<_>>();
+        let admitted = (|| {
+            if gates
+                .closed
+                .contains(&(logical.clone(), admission_epoch.clone()))
+                || gates
+                    .stopped
+                    .get(&(logical.clone(), admission_epoch.clone()))
+                    .is_some_and(|stop| stop.strong_count() != 0)
+            {
+                return Err(Error::new(
+                    ErrorCode::DiskUnavailable,
+                    "durable stop forbids this I/O lifetime",
+                ));
             }
-        };
-        // Schema admission and matching physical identity never change an
-        // existing gate's authority. Only verified generation activation does.
-        Ok(Self {
-            gate,
-            authority: authority.clone(),
-        })
+            for old in &previous {
+                let state = old.state()?;
+                if !matches!(state.phase, Phase::Closed(_))
+                    || state.ordinary != 0
+                    || state.control != 0
+                {
+                    return Err(Error::new(
+                        ErrorCode::DiskUnavailable,
+                        "readmission is waiting for every previous I/O lifetime to close",
+                    ));
+                }
+            }
+            for retired in &retired_epochs {
+                gates.closed.insert((logical.clone(), retired.clone()));
+            }
+            let gate = match gates.gates.get(&key).and_then(Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(DiskIoGate {
+                        identity,
+                        admission_epoch,
+                        state: Mutex::new(GateState {
+                            authority: authority.clone(),
+                            phase: Phase::Active,
+                            ordinary: 0,
+                            control: 0,
+                            failed: false,
+                            resources: BTreeMap::new(),
+                            roots: BTreeMap::new(),
+                            fence: Weak::new(),
+                            fence_descriptor: None,
+                            active_fence: None,
+                        }),
+                    });
+                    gates.gates.insert(key, Arc::downgrade(&gate));
+                    gate
+                }
+            };
+            Ok(Self {
+                gate,
+                authority: authority.clone(),
+            })
+        })();
+        drop(gates);
+        drop(previous);
+        admitted
+    }
+
+    /// The explicit directory admission may inspect its new control namespace
+    /// only after every old logical incarnation has finished real cleanup.
+    pub(crate) fn require_closed_lifetimes(
+        identity: &crate::DiskRegistrationIdentity,
+    ) -> Result<()> {
+        let logical = LogicalDiskIdentity::from(identity);
+        let registry = binding_gates().lock().map_err(|_| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "disk I/O binding registry poisoned",
+            )
+        })?;
+        let domains = registry
+            .gates
+            .iter()
+            .filter(|((physical, _), _)| LogicalDiskIdentity::from(physical) == logical)
+            .filter_map(|(_, gate)| gate.upgrade())
+            .collect::<Vec<_>>();
+        let result = domains.iter().try_for_each(|gate| {
+            let state = gate.state()?;
+            if !matches!(state.phase, Phase::Closed(_)) || state.ordinary != 0 || state.control != 0
+            {
+                Err(Error::new(
+                    ErrorCode::DiskUnavailable,
+                    "readmission requires all previous logical I/O tails to close",
+                ))
+            } else {
+                Ok(())
+            }
+        });
+        drop(registry);
+        drop(domains);
+        result
     }
 
     pub(crate) fn for_authority(
@@ -258,7 +348,9 @@ impl DiskIoBinding {
         seal: &DiskSeal,
         authority: &ValidatedConfig,
     ) -> Result<Self> {
-        if self.gate.identity != DiskIoIdentity::from(seal) {
+        if self.gate.identity != DiskIoIdentity::from(seal)
+            || self.gate.admission_epoch != authority.io_admission_epoch(&seal.disk_id)?
+        {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,
                 "retained I/O gate belongs to a different disk binding",
@@ -447,6 +539,15 @@ impl DiskIoBinding {
     /// The caller persists the stop barrier before invoking this irreversible
     /// runtime gate; this method performs no membership or registry publication.
     pub(crate) fn begin_quiesce(&self) -> Result<Option<DiskIoTransition>> {
+        // Match admission's registry -> gate lock order. Retire the logical
+        // epoch at the same boundary as this physical gate: a relocated root
+        // must not mint another domain while the original tails are draining.
+        let mut registry = binding_gates().lock().map_err(|_| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "disk I/O binding registry poisoned",
+            )
+        })?;
         let mut state = self.gate.state()?;
         if !same_authority(&state.authority, &self.authority) {
             return Err(Error::new(
@@ -459,6 +560,10 @@ impl DiskIoBinding {
         }
         let transition = Arc::new(());
         state.phase = Phase::Quiescing(Arc::clone(&transition));
+        registry.closed.insert((
+            LogicalDiskIdentity::from(&self.gate.identity),
+            self.gate.admission_epoch.clone(),
+        ));
         state.control = 1;
         if state.active_fence.is_none() {
             state.active_fence = state.fence.upgrade();
@@ -474,6 +579,7 @@ impl DiskIoBinding {
         // Never acquire a resource mutex while holding the gate. Resource I/O
         // holds its own mutex and then checks the gate, in that fixed order.
         drop(state);
+        drop(registry);
         for resource in resources
             .into_values()
             .filter_map(|resource| resource.upgrade())
@@ -517,7 +623,7 @@ impl ClosedDiskIo {
 #[derive(Debug)]
 struct LogicalDiskStop {
     identity: crate::DiskRegistrationIdentity,
-    key: LogicalDiskIdentity,
+    key: (LogicalDiskIdentity, Option<String>),
 }
 impl Drop for LogicalDiskStop {
     fn drop(&mut self) {
@@ -546,16 +652,20 @@ pub(crate) struct RecoveredDiskIo {
 }
 impl RecoveredDiskIo {
     pub(crate) fn admit_terminal(stop: &crate::engine::VerifiedTerminalStop) -> Result<Self> {
-        Self::admit_identity(stop.identity())
+        Self::admit_identity(stop.identity(), stop.admission_epoch())
     }
     pub(crate) fn admit(stop: &crate::engine::RecoveredDiskStop) -> Result<Self> {
-        Self::admit_identity(stop.identity())
+        Self::admit_identity(stop.identity(), stop.admission_epoch()?)
     }
     pub(crate) fn identity(&self) -> &crate::DiskRegistrationIdentity {
         &self.stop.identity
     }
-    fn admit_identity(identity: &crate::DiskRegistrationIdentity) -> Result<Self> {
-        let key = LogicalDiskIdentity::from(identity);
+    fn admit_identity(
+        identity: &crate::DiskRegistrationIdentity,
+        epoch: Option<String>,
+    ) -> Result<Self> {
+        let logical = LogicalDiskIdentity::from(identity);
+        let key = (logical.clone(), epoch);
         let mut registry = binding_gates().lock().map_err(|_| {
             Error::new(
                 ErrorCode::RecoveryRequired,
@@ -567,7 +677,7 @@ impl RecoveredDiskIo {
         let domains: Vec<_> = registry
             .gates
             .iter()
-            .filter(|(physical, _)| LogicalDiskIdentity::from(*physical) == key)
+            .filter(|((physical, _), _)| LogicalDiskIdentity::from(physical) == logical)
             .filter_map(|(_, gate)| gate.upgrade())
             .collect();
         let admitted = (|| {
@@ -583,6 +693,7 @@ impl RecoveredDiskIo {
                     ));
                 }
             }
+            registry.closed.insert(key.clone());
             if let Some(existing) = registry.stopped.get(&key).and_then(Weak::upgrade) {
                 return Ok(existing);
             }

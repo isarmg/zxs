@@ -405,7 +405,7 @@ impl AuthorityResolver for &ArchiveStore {
         self.evidence(hash, &mut |_| Ok(()))
     }
 }
-fn valid_hash(hash: &str) -> bool {
+pub(in crate::engine::membership_transition) fn valid_hash(hash: &str) -> bool {
     hash.len() == 64
         && hash
             .bytes()
@@ -1086,7 +1086,7 @@ fn verify_epoch(
     let epoch = FrozenEpoch::read(&intent, source)?;
     let config = epoch.config;
     Engine::require_actor(&intent.principal)?;
-    validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
+    intent.verify_target()?;
     if intent.fence_sequence == u64::MAX
         || intent.fence_sequence <= intent.boundary.as_ref().map_or(0, |base| base.sequence)
     {

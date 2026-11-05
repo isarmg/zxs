@@ -873,23 +873,19 @@ fn terminal_resume_source_cannot_create_a_missing_completion_or_ignore_resume_co
             .downcast_ref::<std::io::Error>()
             .unwrap();
         assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
-        assert_eq!(
-            TerminalManagement::open(&saved.system())
-                .err()
-                .unwrap()
-                .code(),
-            ErrorCode::RecoveryRequired
-        );
         for error in [
+            TerminalManagement::open(&saved.system()).err().unwrap(),
             Engine::open(&saved.system()).err().unwrap(),
             Engine::open_for_recovery(&saved.system()).err().unwrap(),
         ] {
-            assert_eq!(error.code(), ErrorCode::RecoveryRequired);
-            if record == "resume-complete.json" {
-                let source = recovery_cause(&error)
-                    .downcast_ref::<std::io::Error>()
-                    .unwrap();
-                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            let source = recovery_cause(&error);
+            if record == "resume.json" {
+                assert!(source.is::<json_codec::Error>());
+            } else {
+                assert_eq!(
+                    source.downcast_ref::<Error>().unwrap().code(),
+                    ErrorCode::PublicationInvalid
+                );
             }
         }
         assert_no_root_open(&watch);

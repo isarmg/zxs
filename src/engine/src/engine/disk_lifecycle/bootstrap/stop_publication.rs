@@ -127,6 +127,11 @@ impl BootstrapStore {
             ));
         }
         let (locator, current) = self.check_stop_plan(plan)?;
+        if locator.recorded_admission_epoch(&plan.target)?.as_deref() != source.admission_epoch() {
+            return Err(BootstrapError::ManagementOnly(
+                "stop plan closes another verified Exit admission epoch",
+            ));
+        }
         for observed in source.observations() {
             let expected = locator
                 .record
@@ -167,6 +172,18 @@ impl BootstrapStore {
             ));
         }
         let (stopped, current) = self.check_stop_plan(plan)?;
+        let admission_epoch =
+            authority
+                .io_admission_epoch(&plan.target.disk_id)
+                .map_err(|source| BootstrapError::Io {
+                    stage: "verified terminal stop admission epoch",
+                    source: std::io::Error::other(source),
+                })?;
+        if stopped.recorded_admission_epoch(&plan.target)? != admission_epoch {
+            return Err(BootstrapError::ManagementOnly(
+                "stop plan closes another verified terminal admission epoch",
+            ));
+        }
         Ok(AdmittedStopPublication {
             plan,
             stopped,

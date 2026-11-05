@@ -412,7 +412,10 @@ pub(crate) fn restore_anchor(
     // count the anchor toward the fixed quorum or inspect any explicit data root.
     let hash = portable.hash()?;
     let parent = root.private_child(&member_directory(disk, &transition))?;
-    if let Some(core) = portable.terminal_resume_core() {
+    if let Some(core) = portable.readmission_core() {
+        core.verify_member(&root, disk, &hash, false)?;
+        require_abort_journal(&root, disk, &hash)?;
+    } else if let Some(core) = portable.terminal_resume_core() {
         core.verify_member(&root, disk)?;
         require_abort_journal(&root, disk, &hash)?;
     } else if portable.is_abort() {
@@ -526,7 +529,10 @@ impl Engine {
                 let parent = handle
                     .root
                     .private_child(&member_directory(disk, &transition))?;
-                if let Some(core) = generation.portable.terminal_resume_core() {
+                if let Some(core) = generation.portable.readmission_core() {
+                    core.verify_member(&handle.root, disk, &generation.hash, true)?;
+                    require_abort_journal(&handle.root, disk, &generation.hash)?;
+                } else if let Some(core) = generation.portable.terminal_resume_core() {
                     core.verify_member(&handle.root, disk)?;
                     require_abort_journal(&handle.root, disk, &generation.hash)?;
                 } else if generation.portable.is_abort() {
@@ -586,6 +592,13 @@ impl Engine {
             .iter()
             .filter(|disk| !disk.metadata_member)
         {
+            if let Some(core) = generation.portable.readmission_core()
+                && core.target_predecessor_seal(&disk.disk_id)?.is_some()
+                && let Some(handle) = self.disk_resources.available(disk)
+            {
+                core.verify_member(&handle.root, disk, &generation.hash, true)?;
+            }
+
             let Some(handle) = self.disk_resources.available(disk) else {
                 continue;
             };
