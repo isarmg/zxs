@@ -187,6 +187,14 @@ struct Browser {
     port: u16,
     session: String,
 }
+/// Select keeps its options inside a dedicated scroll surface. Pin the owning
+/// listbox, the actual wrapper, enabled state and exact label together.
+fn select_option_xpath(panel: &str, label: &str) -> String {
+    format!(
+        "//*[@id='{panel}' and @role='listbox']/div[@class='zxs-select-options']/div[@role='option' and @aria-disabled='false' and normalize-space(.)='{label}']"
+    )
+}
+
 impl Browser {
     fn command(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
         let (status, bytes) = http(

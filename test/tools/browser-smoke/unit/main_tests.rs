@@ -3,6 +3,29 @@ fn decode_http(response: &[u8]) -> Result<(u16, Vec<u8>)> {
 }
 
 use super::*;
+
+#[test]
+fn select_option_locator_pins_scroll_wrapper_enabled_state_and_exact_label() {
+    let locator = select_option_xpath("zxs-select-54-list", "browser-notice-lifecycle");
+    assert_eq!(
+        locator,
+        "//*[@id='zxs-select-54-list' and @role='listbox']/div[@class='zxs-select-options']/div[@role='option' and @aria-disabled='false' and normalize-space(.)='browser-notice-lifecycle']"
+    );
+    let component = include_str!("../../../../src/interface/src/components/select.rs");
+    assert!(component.contains("<div class=\"zxs-select-options\" node_ref=scroller>"));
+    assert!(component.contains("role=\"option\""));
+    assert!(component.contains("aria-disabled=option.disabled.to_string()"));
+    for scene in [
+        include_str!("../runner/feedback_lifecycle.rs"),
+        include_str!("../runner/directory_history.rs"),
+    ] {
+        assert!(scene.contains("select_option_xpath(panel,"));
+        assert!(
+            !scene.contains("/*[@role='option'"),
+            "the listbox does not own options as direct children"
+        );
+    }
+}
 #[test]
 fn fault_injection_cleanup_runs_after_success_and_failure() {
     for succeed in [true, false] {

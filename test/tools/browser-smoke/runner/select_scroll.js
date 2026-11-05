@@ -40,7 +40,7 @@ const done = arguments[arguments.length - 1];
     const aligned = (actual, expected) => Object.keys(expected).every(name =>
         Number.isFinite(actual[name]) && Math.abs(actual[name] - expected[name]) <= .5);
     const initial = {panel: box(panel), top: scroller.scrollTop, optionY: box(option).y,
-        pageX: scrollX, pageY: scrollY, path: path.getAttribute('d')};
+        pageX: scrollX, pageY: scrollY, path: path.getAttribute('d'), fill: getComputedStyle(path).fill};
     const samples = [];
     let raf, trustedWheels = 0, trustedScrolls = 0, overflow = false;
     const probe = {scrolling: true};
@@ -56,7 +56,7 @@ const done = arguments[arguments.length - 1];
                 visible: panel.matches(':popover-open') && foreground.checkVisibility({opacityProperty: true, visibilityProperty: true}),
                 local: css.position === 'absolute' && foreground.parentElement === panel && panel.dataset.zxsContourForegroundAnchor === 'local',
                 aligned: aligned(foregroundBox, panelBox), stableBox: aligned(panelBox, initial.panel),
-                stablePaint: path.getAttribute('d') === initial.path && paint.fill === 'rgb(0, 0, 0)' && paint.fillRule === 'evenodd' && paint.stroke === 'none',
+                stablePaint: path.getAttribute('d') === initial.path && paint.fill === initial.fill && paint.fillRule === 'evenodd' && paint.stroke === 'none',
                 innerScroll: panelCss.overflowY === 'visible' && scrollCss.overflowY === 'auto' && panel.scrollTop === 0 && panel.scrollLeft === 0 && scrollX === initial.pageX && scrollY === initial.pageY,
                 movedContent: Math.abs(optionY - initial.optionY + currentTop - initial.top) <= .5,
             };

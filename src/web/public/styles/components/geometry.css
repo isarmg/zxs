@@ -10,6 +10,7 @@
   --zxs-list-content-inset: calc((var(--zxs-compact-row-height) - var(--zxs-compact-font-size)) / 2);
   --zxs-input-row-height: 44px;
   --zxs-control-border-width: 1px;
+  --zxs-select-border-width: 2px;
   --zxs-contour-control: calc(var(--zxs-compact-row-height) / 2);
   --zxs-contour-panel: var(--zxs-contour-control);
   --zxs-contour-notification: var(--zxs-contour-control);

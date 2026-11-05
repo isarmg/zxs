@@ -8,8 +8,8 @@ function fixture() {
     const listeners = new Map(), callbacks = new Map();
     let nextFrame = 0, timestamp = 0;
     const box = {x: 20, y: 80, width: 200, height: 100};
-    const path = {isConnected: true, d: 'M0 0h200v100H0Z M1 1v98h198V1Z',
-        css: {fill: 'rgb(0, 0, 0)', fillRule: 'evenodd', stroke: 'none'},
+    const path = {isConnected: true, d: 'M0 0h200v100H0Z M2 2v96h196V2Z',
+        css: {fill: 'rgb(31, 37, 42)', fillRule: 'evenodd', stroke: 'none'},
         getAttribute(name) { assert.equal(name, 'd'); return this.d; }};
     const panel = {isConnected: true, open: true, scrollTop: 0, scrollLeft: 0,
         dataset: {zxsContourForegroundAnchor: 'local'}, css: {overflowY: 'visible'},
@@ -92,7 +92,7 @@ await rejectInitial(f => { f.panel.css.overflowY = 'auto'; }, 'outer card cannot
 await rejectInitial(f => { f.scroller.css.overflowY = 'hidden'; }, 'inner scrolling must remain enabled');
 await rejectInitial(f => { f.scroller.scrollHeight = 100; }, 'non-overflowing fixture cannot claim scroll evidence');
 await rejectInitial(f => { f.missingScroller = true; }, 'missing inner scroller');
-await rejectInitial(f => { f.missingForeground = true; }, 'missing black border paint');
+await rejectInitial(f => { f.missingForeground = true; }, 'missing palette-derived border paint');
 await rejectInitial(f => { f.hit = {}; }, 'wheel input must target the actual scroll container');
 await rejectInitial(f => { f.panel.open = false; }, 'closed panel');
 for (const axis of ['x', 'y', 'width', 'height']) {
@@ -102,8 +102,8 @@ await rejectDuring((f, index) => { f.box.y = index === 2 ? 82 : 80; }, 'border a
 await rejectDuring((f, index) => { f.foreground.css.position = index === 2 ? 'fixed' : 'absolute'; }, 'one fixed-overlay frame');
 await rejectDuring((f, index) => { f.foreground.visible = index !== 2; }, 'border disappearing during the gesture');
 await rejectDuring((f, index) => { f.panel.open = index !== 2; }, 'inner scrolling must not close the menu');
-await rejectDuring((f, index) => { f.path.css.fill = index === 2 ? 'rgb(90, 90, 90)' : 'rgb(0, 0, 0)'; }, 'transient gray border');
-await rejectDuring((f, index) => { f.path.d = index === 2 ? 'M0 0' : 'M0 0h200v100H0Z M1 1v98h198V1Z'; }, 'path mutation during scroll');
+await rejectDuring((f, index) => { f.path.css.fill = index === 2 ? 'rgb(90, 90, 90)' : 'rgb(31, 37, 42)'; }, 'transient wrong-palette border');
+await rejectDuring((f, index) => { f.path.d = index === 2 ? 'M0 0' : 'M0 0h200v100H0Z M2 2v96h196V2Z'; }, 'path mutation during scroll');
 await rejectDuring((f, index) => { f.panel.scrollTop = index === 2 ? 10 : 0; }, 'scrolling the painted outer box');
 await rejectDuring((f, index) => { f.foreground.isConnected = index !== 2; }, 'detached paint during scroll');
 await rejectDuring(f => { f.frozenContent = true; }, 'scrollTop without actual option movement is insufficient');

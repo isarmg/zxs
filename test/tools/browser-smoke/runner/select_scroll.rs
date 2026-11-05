@@ -48,9 +48,9 @@ fn gesture(browser: &Browser, theme: &str) -> Result<()> {
         )
         .into());
     }
-    black_select_borders(browser, theme)?;
+    palette_select_borders(browser, theme)?;
     println!(
-        "PASS Select {theme} fast wheel reversals: {} moving frames, {} native scroll samples; local black border remains on its outer card",
+        "PASS Select {theme} fast wheel reversals: {} moving frames, {} native scroll samples; local palette-derived border remains on its outer card",
         evidence["movingFrames"], evidence["trustedScrolls"]
     );
     Ok(())
@@ -82,7 +82,7 @@ pub(super) fn run(browser: &Browser, theme: &str) -> Result<()> {
             )?;
             browser.click(&trigger)?;
             visible_menu(browser, false, theme, "before fast scrolling")?;
-            black_select_borders(browser, theme)?;
+            palette_select_borders(browser, theme)?;
             gesture(browser, theme)
         },
         || {

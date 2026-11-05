@@ -87,10 +87,7 @@ fn open_readonly_child_history(browser: &Browser) -> Result<()> {
     browser.click(&combo)?;
     browser.click(&browser.element(
         "xpath",
-        &format!(
-            "//*[@id='{panel}']/*[@role='option' and normalize-space(.)='{}']",
-            fixture::DIRECTORY_PREVIEW
-        ),
+        &select_option_xpath(panel, fixture::DIRECTORY_PREVIEW),
     )?)?;
     check(
         browser,

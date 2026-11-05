@@ -2,14 +2,27 @@
 // No product style, geometry or interaction state is changed by this observer.
 const done=arguments[arguments.length-1];
 (async () => {
-    const black='rgb(0, 0, 0)';
     const rgba=value=>{
         if(!value) return [];
         const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
         const context=canvas.getContext('2d');context.fillStyle=value;context.fillRect(0,0,1,1);
         return [...context.getImageData(0,0,1,1).data];
     };
-    const sameColor=(actual,expected)=>expected.length===4&&actual.every((value,index)=>Math.abs(value-expected[index])<=1);
+    const sameColor=(actual,expected)=>actual.length===4&&expected.length===4&&actual.every((value,index)=>Math.abs(value-expected[index])<=1);
+    const imagePixels=async source=>{
+        const image=new Image();image.src=source;await image.decode();
+        const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+        const context=canvas.getContext('2d');context.drawImage(image,0,0);
+        return {pixels:context.getImageData(0,0,canvas.width,canvas.height).data,w:canvas.width,h:canvas.height};
+    };
+    const centerOf=({pixels,w,h})=>[...pixels.slice((Math.floor(h/2)*w+Math.floor(w/2))*4,(Math.floor(h/2)*w+Math.floor(w/2))*4+4)];
+    const surfaceMatches=async (node,css,expected)=>{
+        const property=css.borderImageSource!=='none'?'borderImageSource':'backgroundImage',source=css[property];
+        const match=source.match(/^url\(["']?(blob:[^"')]+)["']?\)$/);
+        if(!match)return sameColor(rgba(css.backgroundColor),expected);
+        const center=centerOf(await imagePixels(match[1]));
+        return node.isConnected&&getComputedStyle(node)[property]===source&&sameColor(center,expected);
+    };
     const rendered=e=>e.checkVisibility({opacityProperty:true,visibilityProperty:true});
     const triggers=[...document.querySelectorAll('.zxs-select-trigger')].filter(rendered);
     const panels=[...document.querySelectorAll('.zxs-select-panel:popover-open')];
@@ -17,7 +30,10 @@ const done=arguments[arguments.length-1];
         const css=getComputedStyle(node), box=node.getBoundingClientRect();
         const sides=['Top','Right','Bottom','Left'];
         const widths=sides.map(side=>parseFloat(css[`border${side}Width`]));
-        const expectedFill=expanded?null:rgba(css.getPropertyValue('--zxs-bg-panel').trim());
+        const expectedFill=rgba(css.getPropertyValue('--zxs-bg-panel').trim());
+        // The fill stays unchanged. Only the 2px ring mixes 15% black into the
+        // current panel palette, preserving its hue in both light and dark mode.
+        const expectedBorder=expectedFill.map((value,index)=>index===3?value:Math.round(value*.85));
         let paint;
         const foreground=node.querySelector(':scope > svg[data-zxs-contour-decoration="foreground"]');
         let source, property, ownedUrl, livePath, pathData;
@@ -29,10 +45,10 @@ const done=arguments[arguments.length-1];
             const path=foreground.querySelector('path'), style=getComputedStyle(path);
             livePath=path;pathData=path.getAttribute('d');
             const svgBox=foreground.getBoundingClientRect();
-            if(!rendered(foreground)||style.fill!==black||style.fillRule!=='evenodd'||style.stroke!=='none'||
+            if(!rendered(foreground)||!sameColor(rgba(style.fill),expectedBorder)||style.fillRule!=='evenodd'||style.stroke!=='none'||
                 Math.abs(svgBox.width-box.width)>1||Math.abs(svgBox.height-box.height)>1||
                 Math.abs(svgBox.x-box.x)>1||Math.abs(svgBox.y-box.y)>1) {
-                return {valid:false,reason:'missing, misplaced or nonblack G4 foreground',fill:style.fill};
+                return {valid:false,reason:'missing, misplaced or wrong-palette G4 foreground',fill:style.fill,expectedBorder};
             }
             // Rasterize the real foreground path with its real even-odd fill,
             // rather than accepting its color attribute or state marker alone.
@@ -55,39 +71,34 @@ const done=arguments[arguments.length-1];
         const match=source.match(/^url\(["']?(blob:[^"')]+)["']?\)$/);
         if(match) {
             try {
-                const image=new Image();image.src=match[1];await image.decode();
-                const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
-                const context=canvas.getContext('2d');context.drawImage(image,0,0);
-                const {width:w,height:h}=canvas;
-                const pixels=context.getImageData(0,0,w,h).data;
-                const isBlack=(x,y)=>{const i=(y*w+x)*4;return pixels[i]===0&&pixels[i+1]===0&&pixels[i+2]===0&&pixels[i+3]>=128;};
+                const raster=await imagePixels(match[1]),{pixels,w,h}=raster;
+                const isEdge=(x,y)=>{const i=(y*w+x)*4,actual=[...pixels.slice(i,i+3),255];return pixels[i+3]>=128&&(expanded?sameColor(actual,expectedBorder):!sameColor(actual,expectedFill));};
                 // Search each edge's central strip, clear of curved corners.
-                // A black icon, text, or focus ring cannot satisfy all four sides.
+                // An icon, text, or focus ring cannot satisfy all four sides.
                 const horizontal=(start,end)=>{
                     let count=0;
-                    for(let y=start;y<end;y++)for(let x=Math.floor(w*.4);x<Math.ceil(w*.6);x++)if(isBlack(x,y))count++;
+                    for(let y=start;y<end;y++)for(let x=Math.floor(w*.4);x<Math.ceil(w*.6);x++)if(isEdge(x,y))count++;
                     return count;
                 };
                 const vertical=(start,end)=>{
                     let count=0;
-                    for(let x=start;x<end;x++)for(let y=Math.floor(h*.4);y<Math.ceil(h*.6);y++)if(isBlack(x,y))count++;
+                    for(let x=start;x<end;x++)for(let y=Math.floor(h*.4);y<Math.ceil(h*.6);y++)if(isEdge(x,y))count++;
                     return count;
                 };
                 const edgePixels=[horizontal(0,Math.ceil(h*.25)),vertical(Math.floor(w*.75),w),horizontal(Math.floor(h*.75),h),vertical(0,Math.ceil(w*.25))];
-                const centerAlpha=pixels[(Math.floor(h/2)*w+Math.floor(w/2))*4+3];
-                const stable=node.isConnected&&(foreground?foreground.isConnected&&livePath.getAttribute('d')===pathData&&getComputedStyle(livePath).fill===black&&getComputedStyle(livePath).fillRule==='evenodd':getComputedStyle(node)[property]===source);
-                // A transparent Select surface is intentional in content-blocks.
-                // Only a foreground overlay must leave its content hole clear.
-                const center=[...pixels.slice((Math.floor(h/2)*w+Math.floor(w/2))*4,(Math.floor(h/2)*w+Math.floor(w/2))*4+4)];
-                const surface=expanded||sameColor(center,expectedFill);
-                paint={valid:stable&&surface&&(expanded?edgePixels.every(n=>n>0):edgePixels.every(n=>n===0))&&(!foreground||centerAlpha===0),property,stable,edgePixels,centerAlpha,surface};
+                const center=centerOf(raster),centerAlpha=center[3];
+                const stable=node.isConnected&&(foreground?foreground.isConnected&&livePath.getAttribute('d')===pathData&&sameColor(rgba(getComputedStyle(livePath).fill),expectedBorder)&&getComputedStyle(livePath).fillRule==='evenodd':getComputedStyle(node)[property]===source);
+                const surface=foreground?await surfaceMatches(node,css,expectedFill):sameColor(center,expectedFill)||(expanded&&centerAlpha===0&&sameColor(rgba(css.backgroundColor),expectedFill));
+                const spans=[Math.ceil(w*.6)-Math.floor(w*.4),Math.ceil(h*.6)-Math.floor(h*.4)];
+                const thickness=edgePixels.map((count,index)=>count/spans[index%2]);
+                paint={valid:stable&&surface&&(expanded?thickness.every(n=>n>=2):edgePixels.every(n=>n===0))&&(!foreground||centerAlpha===0),property,stable,edgePixels,thickness,centerAlpha,surface};
             } finally {
                 if(ownedUrl)URL.revokeObjectURL(ownedUrl);
             }
         } else {
-            paint={valid:expanded?sides.every(side=>css[`border${side}Color`]===black&&css[`border${side}Style`]==='solid'):sides.every(side=>css[`border${side}Style`]==='none')&&sameColor(rgba(css.backgroundColor),expectedFill),property:expanded?'native-border':'borderless'};
+            paint={valid:(expanded?sides.every(side=>sameColor(rgba(css[`border${side}Color`]),expectedBorder)&&css[`border${side}Style`]==='solid'):sides.every(side=>css[`border${side}Style`]==='none'))&&sameColor(rgba(css.backgroundColor),expectedFill),property:expanded?'native-border':'borderless'};
         }
-        return {valid:rendered(node)&&Number(css.opacity)===1&&box.width>0&&box.height>=36&&widths.every(w=>w===(expanded?1:0))&&paint.valid,
+        return {valid:rendered(node)&&Number(css.opacity)===1&&box.width>0&&box.height>=36&&widths.every(w=>w===(expanded?2:0))&&paint.valid,
             role:node.getAttribute('role'),expanded,opacity:css.opacity,disabled:node.disabled===true,state:node.dataset.zxsContourState,
             width:box.width,height:box.height,widths,paint};
     };

@@ -86,7 +86,7 @@ fn check(browser: &Browser) -> Result<()> {
         }
         browser.click(&trigger)?;
         visible_menu(browser, false, theme, "normal paint")?;
-        black_select_borders(browser, theme)?;
+        palette_select_borders(browser, theme)?;
         select_focus(
             browser,
             ".zxs-history-toolbar .zxs-select-trigger",
@@ -95,7 +95,7 @@ fn check(browser: &Browser) -> Result<()> {
         browser.keys(&trigger, "\u{e00c}")?; // Escape.
         browser.keys(&trigger, "\u{e015}")?; // ArrowDown reopens with keyboard focus.
         visible_menu(browser, false, theme, "keyboard reopen")?;
-        black_select_borders(browser, theme)?;
+        palette_select_borders(browser, theme)?;
         select_focus(
             browser,
             ".zxs-history-toolbar .zxs-select-trigger",
@@ -131,10 +131,10 @@ fn check(browser: &Browser) -> Result<()> {
             );
         }
         visible_menu(browser, true, theme, "unsupported inset shadow")?;
-        black_select_borders(browser, theme)?;
+        palette_select_borders(browser, theme)?;
         restore_decoration(browser)?;
         visible_menu(browser, false, theme, "after decoration restoration")?;
-        black_select_borders(browser, theme)?;
+        palette_select_borders(browser, theme)?;
         browser.keys(&trigger, "\u{e00c}")?;
         select_focus_viewports(browser, theme)?;
         select_scroll::run(browser, theme)?;
@@ -191,7 +191,7 @@ fn select_focus_viewports(browser: &Browser, theme: &str) -> Result<()> {
                 }
                 visible_menu(browser, false, theme, "pointer input")?;
                 select_focus(browser, selector, "pointer")?;
-                black_select_borders(browser, theme)?;
+                palette_select_borders(browser, theme)?;
                 browser.keys(&trigger, "\u{e00c}")?;
                 // Real Shift+Tab then Tab must blur and restore keyboard focus.
                 browser.keys(&trigger, "\u{e008}\u{e004}\u{e000}")?;
@@ -201,7 +201,7 @@ fn select_focus_viewports(browser: &Browser, theme: &str) -> Result<()> {
                 browser.keys(&trigger, "\u{e015}")?;
                 visible_menu(browser, false, theme, "Tab and ArrowDown")?;
                 select_focus(browser, selector, "keyboard")?;
-                black_select_borders(browser, theme)?;
+                palette_select_borders(browser, theme)?;
                 browser.keys(&trigger, "\u{e00c}")?;
                 select_focus(browser, selector, "keyboard")?;
                 browser.cdp(
@@ -287,9 +287,9 @@ fn visible_menu(browser: &Browser, fallback: bool, theme: &str, mode: &str) -> R
     })
 }
 
-fn black_select_borders(browser: &Browser, theme: &str) -> Result<()> {
+fn palette_select_borders(browser: &Browser, theme: &str) -> Result<()> {
     wait_for(
-        "borderless Select triggers and pure-black expanded menu paint",
+        "borderless Select triggers and 2px palette-derived expanded menu paint and unchanged fill",
         || {
             let evidence = browser.command(
                 "POST",

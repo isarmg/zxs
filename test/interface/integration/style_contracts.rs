@@ -432,9 +432,11 @@ fn decorative_borders_are_exclusive_to_the_expanded_select_card() {
         );
     }
     let panel = style_rule(select, ".zxs-select .zxs-select-panel");
-    assert!(panel.contains("border: var(--zxs-control-border-width) solid #000;"));
-    assert!(panel.contains("--zxs-row-border: var(--zxs-control-border-width);"));
+    assert!(panel.contains("border: var(--zxs-select-border-width) solid color-mix(in srgb, var(--zxs-bg-panel) 85%, #000);"));
+    assert!(panel.contains("--zxs-row-border: var(--zxs-select-border-width);"));
     assert!(!select.contains("border-color: #000"));
+    assert!(geometry.contains("--zxs-select-border-width: 2px;"));
+    assert!(panel.contains("background: var(--zxs-bg-panel, #fff);"));
     assert!(!files.contains("border-block") && !history.contains("border-block"));
     assert!(select.contains(":focus-visible"));
     assert!(select.contains("outline: 2px solid Highlight;"));
@@ -539,7 +541,7 @@ fn select_ring_and_fill_stay_with_the_card_while_only_options_scroll() {
     let panel = style_rule(css, ".zxs-select .zxs-select-panel");
     assert!(panel.contains("overflow: visible;"));
     assert!(!panel.contains("overflow: auto;"));
-    assert!(panel.contains("border: var(--zxs-control-border-width) solid #000;"));
+    assert!(panel.contains("border: var(--zxs-select-border-width) solid color-mix(in srgb, var(--zxs-bg-panel) 85%, #000);"));
     let scroller = style_rule(css, ".zxs-select-options");
     assert!(scroller.contains("position: relative; min-height: 0; overflow: auto;"));
     assert!(scroller.contains("overscroll-behavior: contain;"));

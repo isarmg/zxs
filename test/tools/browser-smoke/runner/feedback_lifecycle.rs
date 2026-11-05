@@ -82,10 +82,7 @@ fn preview_branch(browser: &Browser) -> Result<()> {
     )?;
     let panel = panel.as_str().ok_or("folder combobox lacks a listbox")?;
     browser.click(&combo)?;
-    browser.click(&browser.element(
-        "xpath",
-        &format!("//*[@id='{panel}']/*[@role='option' and normalize-space(.)='{BRANCH}']"),
-    )?)?;
+    browser.click(&browser.element("xpath", &select_option_xpath(panel, BRANCH))?)?;
     check(
         browser,
         "read-only folder preview settled without mutation or notice",
