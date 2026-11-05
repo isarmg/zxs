@@ -4,7 +4,7 @@
 
 ## 范围和对象
 
-本协议仅用于仍有活动 metadata 组的 `Disabled → Enabled`。对象是登记目录，不是 OS 磁盘、独立文件系统或硬件故障域。允许恢复原 data-only 角色或原 metadata 角色；`Detached` 永久拒绝。终态管理池中的旧 Disabled 目录不属于本入口。
+本协议仅用于仍有活动 metadata 组的 `Disabled → Enabled`。对象是登记目录，不是 OS 磁盘、独立文件系统或硬件故障域。允许恢复原 data-only 角色或原 metadata 角色；`Detached` 永久拒绝。终态管理池中的旧 Disabled metadata 目录使用独立的[终态重新准入](terminal-directory-readmission.md)，不借本入口跳过 terminal 证明或虚构活动 Engine。
 
 `DiskRegistrationIdentity`、历史拓扑定义、binding_generation、旧 Config 和 Candidate 编码不变。原目录数据、历史、旧 stop、所有永久操作收据不删除；不在下线或删除目标上创建恢复备份。本协议新增的仅为必要控制证据，存储于活动控制根、明确准入目标和 SYSTEM。
 

@@ -17,9 +17,9 @@ mod disk;
 mod engine;
 pub use engine::RecoveryDataRoot;
 pub use engine::{
-    TerminalMetadataResume, TerminalMetadataResumeCancelOutcome,
+    TerminalMetadataResume, TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
-    TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus,
+    TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };
 mod file_stamp;
 mod historical_save;

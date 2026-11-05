@@ -21,6 +21,7 @@ pub(in crate::engine) mod continuation;
 pub(in crate::engine) mod occurrence;
 mod readmission;
 pub(in crate::engine) mod terminal;
+mod terminal_readmission;
 mod terminal_resume;
 
 const REGISTRY_KIND: &str = "disk-lifecycle-registry";

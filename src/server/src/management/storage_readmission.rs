@@ -271,6 +271,9 @@ impl ManagementBackend {
         if latest.is_some_and(|latest| latest != record.status.operation_id) {
             self.require_no_pending_readmission()?;
         }
+        if record.status.preview.authority.is_terminal() {
+            return self.execute_terminal_readmission(identity, &directory, record);
+        }
         let mut linked = latest == Some(record.status.operation_id);
         let intent = record.clone();
         let backend = self.readmission_backend(identity, &intent)?;
@@ -336,6 +339,9 @@ impl ManagementBackend {
         identity: &Identity,
         request: ReadmissionRequest,
     ) -> Result<(ReadmissionPreview, Config), ApiError> {
+        if let Some(terminal) = self.inner.terminal(identity)? {
+            return super::terminal_readmission::preview(&terminal, &identity.principal, request);
+        }
         self.inner
             .addition_backend()?
             .preview_storage_readmission(identity, request)
@@ -429,8 +435,16 @@ impl ManagementBackend {
             return Ok(RegistrationSnapshot::TerminalManagement {
                 registrations: terminal
                     .registered_disks()
-                    .map(crate::engine_backend::storage_readmission::registration_entry)
-                    .collect(),
+                    .map(|disk| {
+                        let mut entry =
+                            crate::engine_backend::storage_readmission::registration_entry(disk);
+                        entry.readmission = terminal
+                            .readmission_metadata_member(&entry.disk_id)
+                            .map_err(crate::engine_backend::error)?
+                            .map(|_| ReadmissionRole::MetadataMember);
+                        Ok(entry)
+                    })
+                    .collect::<Result<Vec<_>, ApiError>>()?,
             });
         }
         let backend = crate::lock(&self.inner.state)

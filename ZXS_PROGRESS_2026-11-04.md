@@ -4,6 +4,10 @@
 
 本文记录本轮 ZXS 改进已落地的代码、已有验证证据、已知失败和剩余工作，供后续继续开发时核对。它是有时间边界的快照，不代替功能规范、发布说明或部署验收。提交和运行链接固定到具体版本；分支后续移动不改变本文所记录的历史结果。
 
+## 2026-11-05 终态保留元数据重新准入
+
+终态池可使用已停用的原 metadata 登记建立受认证后继；保留旧固定多数、身份、Stop 和 epoch 证据，新决议由真实目标独立保存。冷入口持 SYSTEM writer 锁绑定完整 proposal 与 selected generation 后才同步 locator 或打开目标。新增受篡改来源、取消后不同 attempt 与零打开回归源码。服务库及依赖的引擎编译通过；新增定向测试尚未执行，目标独立决议损坏与 SYSTEM 丢失后搬迁的组合回归仍需补强。
+
 ## 2026-11-05 未准入响应严格解析
 
 修复内部标签单元变体吞掉未知字段的问题，保留既有 JSON 与 Rust API。原失败的 registration_modes_are_required_and_unknown_never_defaults_to_enabled 定向测试已通过；新增 round-trip/未知字段回归与完整 workspace 待运行。

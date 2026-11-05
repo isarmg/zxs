@@ -19,6 +19,7 @@ mod probe;
 mod runtime;
 pub(in crate::engine::membership_transition) use core::ReadmissionCore;
 pub(in crate::engine::membership_transition) use probe::persist_probe_admission;
+pub(in crate::engine::membership_transition) use probe::persist_terminal_probe_admission;
 pub(in crate::engine) use probe::{
     ReadmissionProbeAdmission, RecoveredReadmission, persist_recovered_admissions,
 };

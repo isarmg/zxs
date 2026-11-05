@@ -218,12 +218,14 @@ fn authenticated_terminal_extension(
 ) -> crate::Result<Record> {
     let target = terminal.authority.target();
     let digest = terminal.authority.transition_hash()?;
+    let epoch = terminal.authority.io_admission_epoch(&target.disk_id)?;
     if !previous.stop_hints().any(|stop| {
         stop.disk_id == target.disk_id
             && stop.slot_id == target.slot_id
             && stop.binding_generation == target.binding_generation
             && stop.operation_id == terminal.authority.operation_id()
             && stop.intent_digest.to_string() == digest
+            && stop.admission_epoch.map(|value| value.to_string()) == epoch
     }) {
         return Err(crate::Error::new(
             crate::ErrorCode::PublicationInvalid,
@@ -231,6 +233,31 @@ fn authenticated_terminal_extension(
         ));
     }
     let selected = RootObservation::from_terminal_resume(terminal, core)?;
+    if let Some((request, operation, transition)) = core.retained_event()? {
+        let expected = Record::resume_terminal_readmission(
+            previous,
+            selected,
+            request,
+            operation,
+            &transition,
+        )
+        .map_err(runtime::management_error)?;
+        let observed = Record::resume_terminal_readmission(
+            previous,
+            observations,
+            request,
+            operation,
+            &transition,
+        )
+        .map_err(runtime::management_error)?;
+        if observed != expected {
+            return Err(crate::Error::new(
+                crate::ErrorCode::DiskIdentityMismatch,
+                "terminal readmission differs from its independently certified root identity",
+            ));
+        }
+        return Ok(expected);
+    }
     let expected =
         Record::resume_terminal(previous, selected).map_err(runtime::management_error)?;
     let observed =

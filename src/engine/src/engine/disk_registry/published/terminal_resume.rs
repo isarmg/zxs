@@ -8,20 +8,10 @@ use super::*;
 impl TerminalRegistry {
     pub(in crate::engine) fn prepare_resume(
         &self,
-        terminal_authority: &str,
-        source: &State,
-        snapshot: &str,
+        boundary: RegistryBoundary<'_>,
         target: &ValidatedConfig,
     ) -> Result<PreparedDiskRegistry> {
-        encode_registry(self.resume_state_at(
-            RegistryBoundary {
-                authority: terminal_authority,
-                snapshot,
-                sequence: source.sequence,
-                topology_generation: source.topology_generation,
-            },
-            target,
-        )?)
+        encode_registry(self.resume_state_at(boundary, target)?)
     }
 
     pub(in crate::engine) fn verify_resume_at(

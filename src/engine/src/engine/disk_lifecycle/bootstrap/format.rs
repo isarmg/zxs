@@ -2,6 +2,7 @@
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{canonical_json, decode_strict, encode_hashed_object};
+mod terminal_readmission;
 
 const RECORD_DOMAIN: &str = "bootstrap-locator";
 
@@ -592,7 +593,7 @@ impl Record {
         if self.recovered_readmissions != older.record.recovered_readmissions
             || self.previous.as_ref() != Some(&older.head)
             || (older.record.is_terminal()
-                && (self.is_terminal() || !updates_roots || self.retained.is_empty()))
+                && (self.is_terminal() || !(updates_roots || readmits) || self.retained.is_empty()))
             || (self.is_terminal() && !adds_stop)
             || !preserves_roots
             || !(adds_stop || updates_roots || readmits)

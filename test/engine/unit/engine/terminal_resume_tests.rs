@@ -10,6 +10,8 @@ mod head_rotation;
 
 #[path = "terminal_resume_mixed_tests.rs"]
 mod mixed;
+#[path = "terminal_readmission_tests.rs"]
+mod retained_readmission;
 
 struct Fixture {
     temporary: tempfile::TempDir,
@@ -437,3 +439,152 @@ fn completed_terminal_resume_never_reduces_new_fixed_quorum() {
 
 #[path = "terminal_resume_cancel_tests.rs"]
 mod cancellation_tests;
+
+fn watch_resume_recovery_paths(paths: impl IntoIterator<Item = PathBuf>) -> rustix::fd::OwnedFd {
+    use rustix::fs::inotify;
+    let watch =
+        inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK).unwrap();
+    for path in paths {
+        inotify::add_watch(
+            &watch,
+            &path,
+            inotify::WatchFlags::OPEN | inotify::WatchFlags::ACCESS,
+        )
+        .unwrap();
+    }
+    watch
+}
+
+fn assert_no_resume_recovery_path_open(watch: &rustix::fd::OwnedFd) {
+    let mut bytes = [0u8; 4096];
+    assert_eq!(
+        rustix::io::read(watch, &mut bytes),
+        Err(rustix::io::Errno::WOULDBLOCK)
+    );
+}
+
+// Copy every caller-visible field but retain the private exact proposal and
+// selected-generation hashes from the older observation. The checked boundary
+// must not mistake a matching public projection for that complete authority.
+fn copy_resume_recovery_projection(
+    to: &mut crate::TerminalMetadataResumeRecovery,
+    from: &crate::TerminalMetadataResumeRecovery,
+) {
+    to.original = from.original.clone();
+    to.terminal_operation_id = from.terminal_operation_id;
+    to.admission = from.admission.clone();
+    to.readmission_preview = from.readmission_preview.clone();
+    to.operation_id = from.operation_id;
+    to.principal = from.principal.clone();
+    to.target = from.target.clone();
+    to.terminal_authority_hash = from.terminal_authority_hash.clone();
+    to.transition_hash = from.transition_hash.clone();
+    to.control_archive = from.control_archive.clone();
+    to.phase = from.phase;
+}
+
+#[test]
+fn checked_resume_rejects_a_new_attempt_before_opening_locator_or_storage() {
+    let mut fixture = Fixture::new(MembershipExitAction::Deregister, 0);
+    let first_target = fixture.target(1);
+    let mut pending = fixture.prepare(&first_target);
+    let mut previous = TerminalManagement::metadata_resume_recovery(&fixture.system())
+        .unwrap()
+        .unwrap();
+    let status = pending.status().unwrap();
+    let cancelled = match pending
+        .cancel("admin", status.operation_id, &status.transition_hash)
+        .unwrap()
+    {
+        crate::TerminalMetadataResumeCancelOutcome::Cancelled(result) => result,
+        crate::TerminalMetadataResumeCancelOutcome::ContinueOriginal(_) => {
+            panic!("an unpublished fresh attempt must remain cancellable")
+        }
+    };
+    let management = pending.into_cancelled_management().unwrap();
+    let mut target = first_target.clone();
+    for disk in target.disks.iter_mut().filter(|disk| disk.metadata_member) {
+        disk.root = fixture
+            .temporary
+            .path()
+            .join(format!("next-{}", disk.disk_id));
+        fs::create_dir(&disk.root).unwrap();
+        fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let operation = OperationId::generate().unwrap();
+    drop(
+        management
+            .prepare_metadata_resume(target.clone(), "admin", operation, directories(&target))
+            .unwrap(),
+    );
+    let current = TerminalManagement::metadata_resume_recovery(&fixture.system())
+        .unwrap()
+        .unwrap();
+    assert_ne!(previous.operation_id, current.operation_id);
+    copy_resume_recovery_projection(&mut previous, &current);
+    let before = files(&fixture.system());
+    let watch = watch_resume_recovery_paths(
+        first_target
+            .disks
+            .iter()
+            .chain(&target.disks)
+            .map(|disk| disk.root.clone())
+            .chain([fixture.system().join("bootstrap-discovery")]),
+    );
+    let error = TerminalManagement::open_metadata_resume_checked(&fixture.system(), &previous)
+        .err()
+        .expect("a different exact attempt cannot consume the caller's old proof");
+    assert_eq!(error.code(), ErrorCode::IdempotencyKeyReused);
+    assert_no_resume_recovery_path_open(&watch);
+    drop(watch);
+    assert_eq!(files(&fixture.system()), before);
+    let owner =
+        TerminalManagement::open_metadata_resume_checked(&fixture.system(), &current).unwrap();
+    let engine = owner
+        .reopen_metadata_resume_held(directories(&target))
+        .unwrap()
+        .activate()
+        .unwrap();
+    assert_eq!(engine.state.operations[&fixture.resume], cancelled);
+    assert_eq!(engine.state.operations[&operation].operation_id, operation);
+}
+
+#[test]
+fn checked_resume_rejects_new_selected_generation_before_locator_or_root_io() {
+    let mut fixture = Fixture::new(MembershipExitAction::Deregister, 0);
+    let target = fixture.target(1);
+    let mut pending = fixture.prepare(&target);
+    let mut previous = TerminalManagement::metadata_resume_recovery(&fixture.system())
+        .unwrap()
+        .unwrap();
+    pending.synchronize().unwrap();
+    select_generation(&pending);
+    drop(pending);
+    let current = TerminalManagement::metadata_resume_recovery(&fixture.system())
+        .unwrap()
+        .unwrap();
+    assert_ne!(previous.phase, current.phase);
+    copy_resume_recovery_projection(&mut previous, &current);
+    let before = files(&fixture.system());
+    let watch = watch_resume_recovery_paths(
+        target
+            .disks
+            .iter()
+            .map(|disk| disk.root.clone())
+            .chain([fixture.system().join("bootstrap-discovery")]),
+    );
+    let error = TerminalManagement::open_metadata_resume_checked(&fixture.system(), &previous)
+        .err()
+        .expect("a selected generation must be bound by the caller's exact proof");
+    assert_eq!(error.code(), ErrorCode::IdempotencyKeyReused);
+    assert_no_resume_recovery_path_open(&watch);
+    drop(watch);
+    assert_eq!(files(&fixture.system()), before);
+    let owner =
+        TerminalManagement::open_metadata_resume_checked(&fixture.system(), &current).unwrap();
+    let engine = owner.complete_metadata_resume_held(None).unwrap();
+    assert_eq!(
+        engine.state.operations[&fixture.resume].operation_id,
+        fixture.resume
+    );
+}

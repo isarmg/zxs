@@ -74,9 +74,7 @@ impl ReadmissionProbeAdmission {
             }
         };
         let intent = authority.intent()?;
-        if authority.readmission_core().is_none()
-            || object_hash(INTENT_KIND, &intent)? != transition
-        {
+        if object_hash(INTENT_KIND, &intent)? != transition {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,
                 "readmission probe certificate has another epoch",
@@ -84,7 +82,24 @@ impl ReadmissionProbeAdmission {
         }
         // intent() closes the complete immutable lineage, original fixed voter
         // set, all member decisions, exact old stop and registry transition.
-        let request = request(&intent)?.clone();
+        let request = match authority.terminal_resume_core() {
+            Some(core) => core
+                .retained_request()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "fresh terminal resume cannot authorize a retained probe",
+                    )
+                })?
+                .clone(),
+            None if authority.readmission_core().is_some() => request(&intent)?.clone(),
+            None => {
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "probe certificate is not a retained-directory admission",
+                ));
+            }
+        };
         let root = intent
             .target
             .disks
@@ -102,11 +117,11 @@ impl ReadmissionProbeAdmission {
     }
 
     fn from_recovered(certificate: RecoveredProbe, transition: &str) -> Result<Self> {
-        let intent = certificate
+        let (intent, request) = certificate
             .authority
-            .readmission_epoch_intent(&certificate.target, transition)?;
+            .readmission_epoch(&certificate.target, transition)?;
         Ok(Self {
-            request: request(&intent)?.clone(),
+            request,
             operation: intent.operation_id,
             transition: transition.to_owned(),
             root: certificate.root,
@@ -130,6 +145,35 @@ impl ReadmissionProbeAdmission {
             && self.transition == transition
             && self.request.stopped_transition == stopped
     }
+}
+
+pub(in crate::engine::membership_transition) fn persist_terminal_probe_admission(
+    system: &Path,
+    authority: &PortableAuthority,
+    admission: &crate::engine::membership_transition::terminal_resume::AdmittedTerminalReadmission,
+) -> Result<()> {
+    let intent = authority.intent()?;
+    if authority.hash()? != admission.generation()
+        || admission.operation() != intent.operation_id
+        || admission.transition() != object_hash(INTENT_KIND, &intent)?
+        || authority
+            .terminal_resume_core()
+            .and_then(|core| core.retained_request())
+            .is_none_or(|request| request.target != admission.request().target)
+    {
+        return Err(Error::new(
+            ErrorCode::PublicationInvalid,
+            "terminal probe differs from its actual independent member admission",
+        ));
+    }
+    let system = DiskRoot::open(system)?;
+    let directory = system.path().join(DIRECTORY);
+    system.private_dir(&directory)?;
+    system.write_json(
+        &directory.join(format!("{}.json", admission.transition())),
+        authority,
+        false,
+    )
 }
 
 pub(in crate::engine::membership_transition) fn persist_probe_admission(
@@ -188,12 +232,8 @@ pub(in crate::engine) fn persist_recovered_admissions(
             slot_id: disk.slot_id.clone(),
             binding_generation: disk.binding_generation,
         };
-        let intent = generation
-            .portable
-            .readmission_epoch_intent(&identity, &epoch)?;
-        request(&intent)?
-            .directory
-            .verify_physical_root(&handle.root)?;
+        let (_, request) = generation.portable.readmission_epoch(&identity, &epoch)?;
+        request.directory.verify_physical_root(&handle.root)?;
         let expected = identity_at(config, disk, &handle.root.directory(handle.root.path())?)?;
         let stored = decode_seal(
             &handle

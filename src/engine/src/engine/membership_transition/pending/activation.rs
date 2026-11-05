@@ -85,6 +85,9 @@ impl Generation {
         let mut outcome = json_codec::json!({"generation": self.hash, "membership_epoch": self.membership_epoch().to_string(), "metadata_members": effective.metadata_members().len(), "topology_generation": self.base.topology_generation.checked_add(topology_steps).ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "topology generation exhausted"))?.to_string()});
         if let Some(core) = self.portable.terminal_resume_core() {
             outcome["terminal_authority"] = core.terminal().hash()?.into();
+            if core.retained_request().is_some() {
+                outcome["authority_kind"] = "terminal-metadata-resume".into();
+            }
         }
         if let Some(effect) = &self.intent.effect {
             outcome["disk_id"] = effect.disk_id.clone().into();
@@ -97,7 +100,14 @@ impl Generation {
             .into();
             outcome["target_io"] = "closed".into();
         }
-        if let Origin::Readmission { request, .. } = &self.intent.origin {
+        let readmission = match &self.intent.origin {
+            Origin::Readmission { request, .. } => Some(request.as_ref()),
+            _ => self
+                .portable
+                .terminal_resume_core()
+                .and_then(|core| core.retained_request()),
+        };
+        if let Some(request) = readmission {
             outcome["disk_id"] = request.target.disk_id.clone().into();
             outcome["slot_id"] = request.target.slot_id.clone().into();
             outcome["binding_generation"] = request.target.binding_generation.to_string().into();
@@ -109,7 +119,7 @@ impl Generation {
             kind: match self.intent.effect.as_ref().map(|effect| effect.action) {
                 Some(MembershipExitAction::PlannedOffline) => "disk-planned-offline",
                 Some(MembershipExitAction::Deregister) => "disk-deregister",
-                None if self.portable.readmission_core().is_some() => "disk-readmit",
+                None if readmission.is_some() => "disk-readmit",
                 None if self.portable.is_abort() => "membership-add-cancelled",
                 None if self.portable.terminal_resume_core().is_some() => {
                     "terminal-metadata-resume"

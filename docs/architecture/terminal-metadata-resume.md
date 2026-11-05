@@ -44,7 +44,7 @@ fresh resume 在新的固定 Q 决定或 generation selector 之前，可以显�
 
 ## 尚未闭合的功能与验证
 
-- 已 Disabled 的相同 disk/slot/binding 作为终态第一组重新启用，尚无本批实现。普通 readmission 不能自动替代 terminal 认证流程。
+- 已 Disabled 的相同 disk/slot/binding 可通过独立的[保留目录重新准入分支](terminal-directory-readmission.md)恢复首个 metadata authority。它保留旧 stop 和历史身份，不把原目录当新目录，不以普通活动池 readmission 替代 terminal 认证。
 - 在一次 resume 后再次退出最后成员时，terminal head 轮换必须验证当前 lineage、前一终态及接续的永久收据；先持久化新 authority 和 archive，再原子替换 head，保留旧证据。组合回归结果见根进度记录。
 - 未声明支持损坏／丢失 authority、完整归档或未知 staging 的自动修复。
 - 源测试覆盖删除与下线的可见性差异、完整旧历史／永久结果、新组固定 N/Q、同文件系统目录、两种冷恢复路由、每个真实 Record/Head barrier、独立新 archive 缺失、actor/op 改写和停止根不再接触。

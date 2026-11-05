@@ -181,9 +181,29 @@ impl TerminalManagement {
     /// resume request exists. This never completes a pending terminal exit and
     /// never grants ordinary management or storage writes.
     pub(in crate::engine) fn open_for_resume(root: &Path) -> Result<Self> {
+        Self::open_for_resume_with(root, |_, _| Ok(()))
+    }
+
+    /// Acquire the existing SYSTEM writer and recheck the complete source that
+    /// the caller authorized before any locator repair or Stop synchronization.
+    /// Keep this owner through directory resupply or selected-generation completion.
+    pub fn open_metadata_resume_checked(
+        root: &Path,
+        expected: &crate::TerminalMetadataResumeRecovery,
+    ) -> Result<Self> {
+        Self::open_for_resume_with(root, |system, verified| {
+            expected.verify_locked(system, verified)
+        })
+    }
+
+    fn open_for_resume_with(
+        root: &Path,
+        verify: impl FnOnce(&DiskRoot, &VerifiedTerminalAuthority) -> Result<()>,
+    ) -> Result<Self> {
         let (store, locks) = TerminalStore::open(root)?;
         let verified = store.load_authority()?;
         store.verify_publication(&verified.authority)?;
+        verify(store.system(), &verified)?;
         crate::engine::membership_transition::pending::activation::terminal_resume::resume_bootstrap_extension(store.system(), &verified)?;
         let stop = synchronize_stop(&store, &verified, None)?;
         let target_stop = RecoveredDiskIo::admit_terminal(&stop)?;

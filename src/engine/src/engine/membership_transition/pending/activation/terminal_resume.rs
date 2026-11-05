@@ -54,6 +54,7 @@ pub(in crate::engine::membership_transition::pending) fn activate(
     source: PendingControlArchive,
     core: ResumeCore,
     members: BTreeMap<String, PendingDisk>,
+    limits: Option<crate::RetainedWorkspaceLimits>,
 ) -> Result<Engine> {
     let portable = PortableAuthority::new_terminal_resume(core.clone())?;
     let intent = portable.intent()?;
@@ -86,6 +87,7 @@ pub(in crate::engine::membership_transition::pending) fn activate(
         intent
             .target
             .clone()
+            .with_workspace_limits(limits)?
             .with_generation(Arc::clone(&generation))?,
     )?;
     // New roots were explicitly selected. Existing addresses may only come from
@@ -99,6 +101,10 @@ pub(in crate::engine::membership_transition::pending) fn activate(
         .io_disks()
         .map(|disk| disk.disk_id.clone())
         .chain(intent.added_roots.keys().cloned())
+        .chain(
+            core.retained_request()
+                .map(|request| request.target.disk_id.clone()),
+        )
         .collect();
     let config = config
         .with_disk_roots(
@@ -139,6 +145,25 @@ pub(in crate::engine::membership_transition::pending) fn activate(
         &generation.portable,
         false,
     )?;
+    if let Some(admission) =
+        super::super::super::terminal_resume::AdmittedTerminalReadmission::verify(&core, |disk| {
+            members
+                .get(&disk.disk_id)
+                .map(|member| member.root.as_ref())
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::DiskIdentityMismatch,
+                        "retained resume lost its explicitly held member",
+                    )
+                })
+        })?
+    {
+        super::super::super::readmission::persist_terminal_probe_admission(
+            management.system_root().path(),
+            &generation.portable,
+            &admission,
+        )?;
+    }
     let plan_path = operation_directory(&management)?.join(BOOTSTRAP_FILE);
     let extension = match management
         .system_root()
@@ -180,7 +205,11 @@ pub(in crate::engine::membership_transition::pending) fn activate(
             .find(|handle| handle.seal.disk_id == disk.disk_id)
             .expect("invariant: held exact resume resources")
             .root;
-        if intent.added_roots.contains_key(&disk.disk_id) {
+        if intent.added_roots.contains_key(&disk.disk_id)
+            || core
+                .retained_request()
+                .is_some_and(|request| request.target.disk_id == disk.disk_id)
+        {
             core.verify_selected_root(root, disk)?;
         }
         publication::install_marker(root, disk, &generation)?;
@@ -237,10 +266,12 @@ fn hold_resources(
     let intent = core.intent()?;
     // Every fresh resource must still have real readiness/control evidence
     // before any retained non-target directory is opened by its recorded name.
-    for disk in config
-        .io_disks()
-        .filter(|disk| intent.added_roots.contains_key(&disk.disk_id))
-    {
+    for disk in config.io_disks().filter(|disk| {
+        intent.added_roots.contains_key(&disk.disk_id)
+            || core
+                .retained_request()
+                .is_some_and(|request| request.target.disk_id == disk.disk_id)
+    }) {
         let member = members.get(&disk.disk_id).ok_or_else(|| {
             Error::new(
                 ErrorCode::DiskIdentityMismatch,
@@ -251,7 +282,11 @@ fn hold_resources(
         core.verify_selected_root(&member.root, disk)?;
     }
     for disk in config.io_disks() {
-        let (root, writer) = if intent.added_roots.contains_key(&disk.disk_id) {
+        let (root, writer) = if intent.added_roots.contains_key(&disk.disk_id)
+            || core
+                .retained_request()
+                .is_some_and(|request| request.target.disk_id == disk.disk_id)
+        {
             let member = members.get(&disk.disk_id).ok_or_else(|| {
                 Error::new(
                     ErrorCode::DiskIdentityMismatch,
@@ -312,7 +347,20 @@ impl Engine {
 /// A prepared generation is chosen by protected SYSTEM state, then every fresh
 /// member is checked against that exact core before any promotion is repeated.
 pub(in crate::engine::membership_transition) fn reopen(root: &Path) -> Result<Engine> {
-    let management = TerminalManagement::open_for_resume(root)?;
+    reopen_with_workspace_limits(root, None)
+}
+
+pub(in crate::engine::membership_transition) fn reopen_with_workspace_limits(
+    root: &Path,
+    limits: Option<crate::RetainedWorkspaceLimits>,
+) -> Result<Engine> {
+    reopen_held(TerminalManagement::open_for_resume(root)?, limits)
+}
+
+pub(in crate::engine::membership_transition) fn reopen_held(
+    management: TerminalManagement,
+    limits: Option<crate::RetainedWorkspaceLimits>,
+) -> Result<Engine> {
     let proposal: super::super::super::terminal_resume::ResumeProposal =
         decode_strict(&management.system_root().read_bytes(
             &operation_directory(&management)?.join("resume.json"),
@@ -349,13 +397,13 @@ pub(in crate::engine::membership_transition) fn reopen(root: &Path) -> Result<En
         &archive.transition_hash,
     )?;
     let mut members = BTreeMap::new();
-    for disk in intent
-        .target
-        .disks
-        .iter()
-        .filter(|disk| intent.added_roots.contains_key(&disk.disk_id))
-    {
-        let identity = intent.added_roots[&disk.disk_id].clone();
+    for disk in intent.target.disks.iter().filter(|disk| {
+        intent.added_roots.contains_key(&disk.disk_id)
+            || core
+                .retained_request()
+                .is_some_and(|request| request.target.disk_id == disk.disk_id)
+    }) {
+        let identity = core.member_identity(&disk.disk_id)?.clone();
         let root = DiskRoot::open(&disk.root)?;
         identity.verify_physical_root(&root)?;
         let directory = root.directory(root.path())?;
@@ -388,7 +436,7 @@ pub(in crate::engine::membership_transition) fn reopen(root: &Path) -> Result<En
             },
         );
     }
-    activate(management, source, core, members)
+    activate(management, source, core, members, limits)
 }
 
 /// Authenticated SYSTEM selector only. Actual target roots, fixed NEW-Q and
@@ -619,8 +667,15 @@ pub enum TerminalMetadataResumePhase {
 
 #[derive(Clone, Debug)]
 pub struct TerminalMetadataResumeRecovery {
+    // A transition intent alone omits retained admission and cancellation
+    // ancestry. Bind the complete proposal and any selected generation too.
+    proposal_hash: String,
+    generation_hash: Option<String>,
     pub original: Config,
     pub terminal_operation_id: OperationId,
+    pub admission: super::super::super::terminal_resume::TerminalMetadataResumeAdmission,
+    pub readmission_preview:
+        Option<super::super::super::terminal_resume::TerminalReadmissionPreview>,
     pub operation_id: OperationId,
     pub principal: String,
     pub target: Config,
@@ -635,7 +690,44 @@ impl TerminalManagement {
     /// route reauthenticates its actual directories and independent new quorum.
     pub fn metadata_resume_recovery(root: &Path) -> Result<Option<TerminalMetadataResumeRecovery>> {
         let (system, verified) = Self::verified_completed_source(root)?;
-        let attempts = attempts::load(&system, &verified)?;
+        TerminalMetadataResumeRecovery::load(&system, &verified)
+    }
+}
+
+impl TerminalMetadataResumeRecovery {
+    pub(in crate::engine) fn verify_locked(
+        &self,
+        system: &DiskRoot,
+        verified: &VerifiedTerminalAuthority,
+    ) -> Result<()> {
+        let changed = || {
+            Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "terminal resume no longer selects the caller's checked complete source",
+            )
+        };
+        let current = Self::load(system, verified)?.ok_or_else(changed)?;
+        if self.proposal_hash != current.proposal_hash
+            || self.generation_hash != current.generation_hash
+            || canonical_json(&self.original)? != canonical_json(&current.original)?
+            || self.terminal_operation_id != current.terminal_operation_id
+            || self.admission != current.admission
+            || self.readmission_preview != current.readmission_preview
+            || self.operation_id != current.operation_id
+            || self.principal != current.principal
+            || canonical_json(&self.target)? != canonical_json(&current.target)?
+            || self.terminal_authority_hash != current.terminal_authority_hash
+            || self.transition_hash != current.transition_hash
+            || self.control_archive != current.control_archive
+            || self.phase != current.phase
+        {
+            return Err(changed());
+        }
+        Ok(())
+    }
+
+    fn load(system: &DiskRoot, verified: &VerifiedTerminalAuthority) -> Result<Option<Self>> {
+        let attempts = attempts::load(system, verified)?;
         let Some(proposal) = attempts.current else {
             // Loading the exact chain already rejects orphan selectors. A
             // cancelled request does not require its next directory to exist.
@@ -653,9 +745,8 @@ impl TerminalManagement {
                 "resume recovery selects another terminal authority",
             ));
         }
-        let phase = if selected {
-            selected_portable(&system, &verified)?;
-            TerminalMetadataResumePhase::CompleteGeneration
+        let generation_hash = if selected {
+            Some(selected_portable(system, verified)?.hash()?)
         } else {
             if system
                 .open_optional_read_regular(&path.join(COMPLETE_FILE))?
@@ -666,11 +757,28 @@ impl TerminalManagement {
                     "resume completion has no selected generation",
                 ));
             }
+            None
+        };
+        let phase = if generation_hash.is_some() {
+            TerminalMetadataResumePhase::CompleteGeneration
+        } else {
             TerminalMetadataResumePhase::ResupplyDirectories
         };
-        Ok(Some(TerminalMetadataResumeRecovery {
+        Ok(Some(Self {
+            proposal_hash: proposal.hash()?,
+            generation_hash,
             original: (**proposal.terminal.original()).clone(),
             terminal_operation_id: proposal.terminal.operation_id(),
+            admission: proposal.admission(),
+            readmission_preview: proposal
+                .retained_request()
+                .map(|request| {
+                    super::super::super::terminal_resume::TerminalReadmissionPreview::from_verified(
+                        verified,
+                        &request.target.disk_id,
+                    )
+                })
+                .transpose()?,
             operation_id: proposal.intent.operation_id,
             principal: proposal.intent.principal.clone(),
             target: (*proposal.intent.target).clone(),

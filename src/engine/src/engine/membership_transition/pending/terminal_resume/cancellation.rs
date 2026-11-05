@@ -11,6 +11,7 @@ const CANCEL_INTENT_FILE: &str = "resume-cancel-intent.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalMetadataResumeCancellationPhase {
+    RetainedReadmission,
     Cancellable,
     Cancelling,
     ResumeQuorumAccepted,
@@ -34,6 +35,9 @@ impl TerminalMetadataResume {
     /// Read actual held roots and exact SYSTEM evidence. This chooses nothing,
     /// synchronizes nothing, and does not infer absence from a cached vote map.
     pub fn cancellation_phase(&self) -> Result<TerminalMetadataResumeCancellationPhase> {
+        if self.proposal.retained_request().is_some() {
+            return Ok(TerminalMetadataResumeCancellationPhase::RetainedReadmission);
+        }
         let attempts = attempts::load(
             self.management.system_root(),
             self.management.verified_authority(),
@@ -85,6 +89,12 @@ impl TerminalMetadataResume {
         transition_hash: &str,
     ) -> Result<TerminalMetadataResumeCancelOutcome> {
         require_request(&self.proposal, principal, operation_id, transition_hash)?;
+        if self.proposal.retained_request().is_some() {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "fresh-directory cancellation cannot consume retained readmission authority",
+            ));
+        }
         let attempts = attempts::load(
             self.management.system_root(),
             self.management.verified_authority(),
@@ -213,7 +223,8 @@ impl TerminalMetadataResume {
             )),
             TerminalMetadataResumeCancellationPhase::Cancellable
             | TerminalMetadataResumeCancellationPhase::ResumeQuorumAccepted
-            | TerminalMetadataResumeCancellationPhase::GenerationSelected => Ok(()),
+            | TerminalMetadataResumeCancellationPhase::GenerationSelected
+            | TerminalMetadataResumeCancellationPhase::RetainedReadmission => Ok(()),
         }
     }
 

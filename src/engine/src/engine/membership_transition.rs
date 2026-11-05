@@ -25,6 +25,7 @@ pub use pending::terminal_resume::{
     TerminalMetadataResume, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumeStatus,
 };
+pub use terminal_resume::{TerminalMetadataResumeAdmission, TerminalReadmissionPreview};
 pub(crate) mod pending;
 pub use archive::{
     MembershipArchiveInspection, MembershipControlArchive, MembershipJournalInspection,

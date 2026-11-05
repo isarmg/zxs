@@ -11,9 +11,11 @@ pub use cancellation::{
 };
 use reservation::terminal_resume::ResumeRoot;
 use std::collections::BTreeSet;
+mod retained;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalMetadataResumeStatus {
+    pub admission: super::super::terminal_resume::TerminalMetadataResumeAdmission,
     pub operation_id: OperationId,
     pub terminal_authority_hash: String,
     pub transition_hash: String,
@@ -159,7 +161,16 @@ impl TerminalManagement {
         root: &Path,
         directories: Vec<PendingMemberDirectory>,
     ) -> Result<TerminalMetadataResume> {
-        let management = Self::open_for_resume(root)?;
+        Self::open_for_resume(root)?.reopen_metadata_resume_held(directories)
+    }
+
+    /// Continue with the same SYSTEM owner, without another pathname selector.
+    /// Cold consumers first bind their saved proof with open_metadata_resume_checked.
+    pub fn reopen_metadata_resume_held(
+        self,
+        directories: Vec<PendingMemberDirectory>,
+    ) -> Result<TerminalMetadataResume> {
+        let management = self;
         let proposal = attempts::load(management.system_root(), management.verified_authority())?
             .current
             .ok_or_else(|| {
@@ -176,6 +187,23 @@ impl TerminalManagement {
         }
         proposal.verify()?;
         proposal.verify_source(&management.verified_authority().state)?;
+        if let Some(request) = proposal.retained_request() {
+            if directories.len() != 1 {
+                return Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "retained terminal readmission requires exactly its original directory",
+                ));
+            }
+            return management.prepare_disk_readmission(
+                &request.target.disk_id,
+                &proposal.intent.principal,
+                proposal.intent.operation_id,
+                directories
+                    .into_iter()
+                    .next()
+                    .expect("invariant: one retained directory"),
+            );
+        }
         management.prepare_metadata_resume(
             (*proposal.intent.target).clone(),
             &proposal.intent.principal,
@@ -298,6 +326,10 @@ fn hold_roots(
 }
 
 impl TerminalMetadataResume {
+    pub fn admission(&self) -> super::super::terminal_resume::TerminalMetadataResumeAdmission {
+        self.proposal.admission()
+    }
+
     /// Immutable request identity, without reading or changing any directory.
     pub fn operation_id(&self) -> OperationId {
         self.proposal.intent.operation_id
@@ -321,6 +353,7 @@ impl TerminalMetadataResume {
     pub fn status(&self) -> Result<TerminalMetadataResumeStatus> {
         let original = self.proposal.terminal.original();
         Ok(TerminalMetadataResumeStatus {
+            admission: self.proposal.admission(),
             operation_id: self.proposal.intent.operation_id,
             terminal_authority_hash: self.proposal.terminal.hash()?,
             transition_hash: object_hash(INTENT_KIND, &self.proposal.intent)?,
@@ -365,10 +398,7 @@ impl TerminalMetadataResume {
         for disk in self.proposal.intent.target.metadata_members() {
             let member = &self.members[&disk.disk_id];
             reservation::verify_writer(&member.root, &member._lock)?;
-            admission::inspect_new_root(&member.root, &member.seal, &member.reservation_name)?;
-            member
-                .root
-                .write_json(&disk.root.join("disk.json"), &member.seal, false)?;
+            self.synchronize_admitted_seal(member, disk)?;
             let parent_path = member_directory(disk, &transition);
             member.root.private_dir(&parent_path)?;
             let parent = member.root.private_child(&parent_path)?;
@@ -427,13 +457,26 @@ impl TerminalMetadataResume {
 impl TerminalMetadataResume {
     /// Completes real first-generation publication and returns an admitted
     /// Engine. Any error preserves the exact pending request for explicit retry.
-    pub fn activate(mut self) -> Result<Engine> {
+    pub fn activate(self) -> Result<Engine> {
+        self.activate_with_workspace_limits(None)
+    }
+
+    pub fn activate_with_workspace_limits(
+        mut self,
+        limits: Option<crate::RetainedWorkspaceLimits>,
+    ) -> Result<Engine> {
         self.synchronize()?;
         let core = self
             .core
             .take()
             .expect("invariant: synchronization installed every certificate");
-        activation::terminal_resume::activate(self.management, self.source, core, self.members)
+        activation::terminal_resume::activate(
+            self.management,
+            self.source,
+            core,
+            self.members,
+            limits,
+        )
     }
 }
 
@@ -442,6 +485,20 @@ impl TerminalManagement {
     /// between any marker, journal, seal, publication or completion barrier.
     pub fn complete_metadata_resume(root: &Path) -> Result<Engine> {
         activation::terminal_resume::reopen(root)
+    }
+    pub fn complete_metadata_resume_with_workspace_limits(
+        root: &Path,
+        limits: Option<crate::RetainedWorkspaceLimits>,
+    ) -> Result<Engine> {
+        activation::terminal_resume::reopen_with_workspace_limits(root, limits)
+    }
+
+    /// Complete the selected generation while retaining the checked SYSTEM owner.
+    pub fn complete_metadata_resume_held(
+        self,
+        limits: Option<crate::RetainedWorkspaceLimits>,
+    ) -> Result<Engine> {
+        activation::terminal_resume::reopen_held(self, limits)
     }
 }
 

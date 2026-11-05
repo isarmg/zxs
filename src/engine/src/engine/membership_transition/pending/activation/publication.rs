@@ -41,10 +41,7 @@ fn install_envelope(
         }
         let readmission_predecessor = generation
             .portable
-            .readmission_core()
-            .map(|core| core.permits_prior_marker(&disk.disk_id, &hash))
-            .transpose()?
-            .unwrap_or(false);
+            .permits_retained_prior_marker(&disk.disk_id, &hash)?;
         if !advance
             || (Some(hash.as_str()) != generation.intent.origin.predecessor()
                 && !readmission_predecessor)
@@ -94,10 +91,7 @@ pub(in crate::engine::membership_transition) fn install_marker(
                         && Some(hash.as_str()) != generation.intent.origin.predecessor()
                         && !generation
                             .portable
-                            .readmission_core()
-                            .map(|core| core.permits_prior_marker(&disk.disk_id, &hash))
-                            .transpose()?
-                            .unwrap_or(false)
+                            .permits_retained_prior_marker(&disk.disk_id, &hash)?
                     {
                         return Err(Error::new(
                             ErrorCode::LogFork,
@@ -204,9 +198,7 @@ pub(crate) fn predecessor_seal_matches(
             }
             return validate_stored_seal(&stored, expected);
         }
-        if let Some(core) = generation.portable.readmission_core()
-            && let Some(predecessor) = core.target_predecessor_seal(&disk.disk_id)?
-        {
+        if let Some(predecessor) = generation.portable.target_predecessor_seal(&disk.disk_id)? {
             let mut physical = expected.clone();
             physical.format = predecessor.format.clone();
             validate_stored_seal(&predecessor, &physical)?;

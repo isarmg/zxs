@@ -22,6 +22,7 @@ use std::{
 
 mod disk_notes;
 mod terminal_backend;
+mod terminal_readmission;
 pub(crate) mod terminal_resume;
 use terminal_backend::BackendState;
 mod integrity_scrub;

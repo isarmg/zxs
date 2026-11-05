@@ -76,12 +76,7 @@ impl ResumeProposal {
         let mut resume = BTreeMap::new();
         let mut cancel = BTreeMap::new();
         for disk in self.intent.target.metadata_members() {
-            let identity = self.intent.added_roots.get(&disk.disk_id).ok_or_else(|| {
-                Error::new(
-                    ErrorCode::DiskIdentityMismatch,
-                    "resume voter lacks its fresh directory identity",
-                )
-            })?;
+            let identity = self.member_identity(&disk.disk_id)?;
             resume.insert(
                 disk.disk_id.clone(),
                 DecisionReceipt::plan_terminal_resume(
@@ -91,18 +86,22 @@ impl ResumeProposal {
                     &self.acceptance_hash(&disk.disk_id)?,
                 )?,
             );
-            cancel.insert(
-                disk.disk_id.clone(),
-                DecisionReceipt::plan_terminal_resume_cancel(
-                    &transition,
-                    identity,
-                    &self.cancellation_hash()?,
-                    &self.cancel_acceptance(&disk.disk_id)?,
-                )?,
-            );
+            if self.retained_request().is_none() {
+                cancel.insert(
+                    disk.disk_id.clone(),
+                    DecisionReceipt::plan_terminal_resume_cancel(
+                        &transition,
+                        identity,
+                        &self.cancellation_hash()?,
+                        &self.cancel_acceptance(&disk.disk_id)?,
+                    )?,
+                );
+            }
         }
         ResumeCore::with_cancellations(self.clone(), resume, cancelled.to_vec())?;
-        ResumeCancellation::new(self.clone(), cancel)?;
+        if self.retained_request().is_none() {
+            ResumeCancellation::new(self.clone(), cancel)?;
+        }
         Ok(())
     }
     pub(in crate::engine::membership_transition) fn follow_cancellation(
@@ -216,6 +215,12 @@ impl ResumeCancellation {
 
     pub(in crate::engine) fn verify(&self) -> Result<()> {
         self.proposal.verify()?;
+        if self.proposal.retained_request().is_some() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "fresh resume cancellation cannot certify retained readmission",
+            ));
+        }
         if self.decisions.len() < self.proposal.cancellation_threshold() {
             return Err(Error::new(
                 ErrorCode::MetadataQuorumUnavailable,

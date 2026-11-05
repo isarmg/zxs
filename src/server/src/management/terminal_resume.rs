@@ -10,8 +10,8 @@ use storage_addition::{
 use storage_contract::{Config, ErrorCode, OperationId, OperationResult, storage_addition::*};
 use storage_engine::{
     PendingMemberDirectory, TerminalManagement, TerminalMetadataResume,
-    TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
-    TerminalMetadataResumeRecovery,
+    TerminalMetadataResumeAdmission, TerminalMetadataResumeCancellationPhase,
+    TerminalMetadataResumePhase, TerminalMetadataResumeRecovery,
 };
 
 fn recovery(message: &'static str) -> ApiError {
@@ -71,7 +71,8 @@ fn require_resume_owner(
         terminal_authority_hash: status.authority_hash,
         terminal_operation_id: status.operation_id,
     };
-    if pending.operation_id() != intent.status.operation_id
+    if pending.admission() != TerminalMetadataResumeAdmission::FreshDirectories
+        || pending.operation_id() != intent.status.operation_id
         || pending.principal() != intent.principal
         || expected != intent.status.preview.authority
         || configuration_digest(terminal.original_configuration())
@@ -108,7 +109,8 @@ fn bind_held_resume(
             "the held resume has no terminal authority binding",
         ));
     };
-    if pending.principal() != intent.principal
+    if status.admission != TerminalMetadataResumeAdmission::FreshDirectories
+        || pending.principal() != intent.principal
         || status.operation_id != intent.status.operation_id
         || &status.terminal_authority_hash != terminal_authority_hash
         || status.original_metadata_members != intent.status.preview.original_metadata_members
@@ -234,6 +236,11 @@ impl Inner {
             // This still needs explicit durable handover; it is not a completed
             // HTTP operation and may only offer continuation of cancellation.
             TerminalMetadataResumeCancellationPhase::Cancelled => AdditionPhase::Cancelling,
+            TerminalMetadataResumeCancellationPhase::RetainedReadmission => {
+                return Err(recovery(
+                    "fresh cancellation cannot own retained readmission",
+                ));
+            }
         })
     }
 
@@ -258,7 +265,8 @@ impl Inner {
                 "resume proof requires the original terminal preview",
             ));
         };
-        if &proof.terminal_operation_id != terminal_operation_id
+        if proof.admission != TerminalMetadataResumeAdmission::FreshDirectories
+            || &proof.terminal_operation_id != terminal_operation_id
             || configuration_digest(&proof.original) != intent.status.preview.configuration_digest
             || proof.operation_id != intent.status.operation_id
             || proof.principal != intent.principal
@@ -436,7 +444,9 @@ impl Inner {
             self.restore_resume(pending);
             return Err(error);
         }
-        let activated = pending.activate().map_err(crate::engine_backend::error);
+        let activated = pending
+            .activate_with_workspace_limits(self.retained_workspace_limits)
+            .map_err(crate::engine_backend::error);
         drop(current);
         let engine = match activated {
             Ok(engine) => engine,
@@ -562,12 +572,15 @@ impl Inner {
         self.current_management_identity(identity)?;
         match proof.phase {
             TerminalMetadataResumePhase::ResupplyDirectories => {
+                let management = self.with_resume_authorization(identity, || {
+                    TerminalManagement::open_metadata_resume_checked(&self.data_root, &proof)
+                })?;
                 let held = match directories {
                     Some(held) => held,
                     None => self.open_resume_directories(intent)?,
                 };
                 self.with_resume_authorization(identity, || {
-                    TerminalManagement::reopen_metadata_resume(&self.data_root, held)
+                    management.reopen_metadata_resume_held(held)
                 })
                 .map(|pending| ResumeOwner::Pending(Box::new(pending)))
             }
@@ -583,7 +596,8 @@ impl Inner {
                 // Activation consumed its pending owner. Restore through the
                 // protected selector, not the HTTP progress field.
                 let engine = self.with_resume_authorization(identity, || {
-                    TerminalManagement::complete_metadata_resume(&self.data_root)
+                    TerminalManagement::open_metadata_resume_checked(&self.data_root, &proof)?
+                        .complete_metadata_resume_held(self.retained_workspace_limits)
                 })?;
                 self.install_resumed_engine(identity, intent, engine)
                     .map(|result| ResumeOwner::Published(Box::new(result)))

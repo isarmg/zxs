@@ -15,6 +15,10 @@ use std::{collections::BTreeSet, sync::Arc};
 
 pub(in crate::engine) mod cancellation;
 use cancellation::ResumeCancellation;
+mod retained;
+pub(in crate::engine) use retained::AdmittedTerminalReadmission;
+pub(in crate::engine::membership_transition) use retained::{ResumeAdmission, stopped_source};
+pub use retained::{TerminalMetadataResumeAdmission, TerminalReadmissionPreview};
 
 pub(in crate::engine::membership_transition) const PROPOSAL_KIND: &str = "terminal-resume-proposal";
 const ACCEPTANCE_KIND: &str = "terminal-resume-acceptance";
@@ -37,6 +41,8 @@ struct GraphObject {
 #[serialization(deny_unknown_fields)]
 pub(in crate::engine::membership_transition) struct ResumeProposal {
     format: ResumeFormat,
+    #[serialization(default, skip_serializing_if = "ResumeAdmission::is_fresh")]
+    admission: ResumeAdmission,
     pub(super) terminal: TerminalAuthority,
     pub(super) archive: ArchiveRoot,
     old_members: PortableAbortArchive,
@@ -79,16 +85,29 @@ impl ResumeProposal {
         archive: &PendingControlArchive,
         intent: TransitionIntent,
     ) -> Result<Self> {
+        Self::prepare_admission(verified, archive, intent, ResumeAdmission::FreshDirectories)
+    }
+
+    pub(super) fn prepare_admission(
+        verified: &VerifiedTerminalAuthority,
+        archive: &PendingControlArchive,
+        intent: TransitionIntent,
+        admission: ResumeAdmission,
+    ) -> Result<Self> {
         let terminal = &verified.authority;
         let boundary = terminal
             .intent()
             .boundary
             .as_ref()
             .expect("invariant: verified terminal boundary");
-        let prepared = verified.registry.prepare_resume(
-            &terminal.hash()?,
-            &verified.state,
-            &boundary.snapshot_hash,
+        let prepared = admission.prepare_registry(
+            &verified.registry,
+            RegistryBoundary {
+                authority: &terminal.hash()?,
+                snapshot: &boundary.snapshot_hash,
+                sequence: verified.state.sequence,
+                topology_generation: verified.state.topology_generation,
+            },
             &intent.target,
         )?;
         let (_, old_members) = archive.abort_material()?;
@@ -106,6 +125,7 @@ impl ResumeProposal {
             .collect::<Result<_>>()?;
         let proposal = Self {
             format: ResumeFormat::TerminalResume,
+            admission,
             terminal: terminal.clone(),
             archive: archive.generation_root(),
             old_members,
@@ -127,12 +147,7 @@ impl ResumeProposal {
     }
 
     pub(super) fn acceptance_hash(&self, disk_id: &str) -> Result<String> {
-        let identity = self.intent.added_roots.get(disk_id).ok_or_else(|| {
-            Error::new(
-                ErrorCode::DiskIdentityMismatch,
-                "resume acceptance is outside the exact target set",
-            )
-        })?;
+        let identity = self.member_identity(disk_id)?;
         Ok(object_hash(
             ACCEPTANCE_KIND,
             &Acceptance {
@@ -202,7 +217,8 @@ impl ResumeProposal {
             .boundary
             .as_ref()
             .expect("invariant: verified terminal boundary");
-        terminal.verify_resume_at(
+        self.admission.verify_registry(
+            &terminal,
             RegistryBoundary {
                 authority: &self.terminal.hash()?,
                 snapshot: &boundary.snapshot_hash,
@@ -249,7 +265,7 @@ impl ResumeProposal {
             ));
         }
         Engine::require_actor(&self.intent.principal)?;
-        validate_target(config, &self.intent.target)?;
+        self.admission.verify_target(&self.terminal, &self.intent)?;
         pending::reservation::verify_intent_roots(&self.intent)?;
         Ok(())
     }
@@ -317,7 +333,7 @@ impl ResumeCore {
         let transition = object_hash(INTENT_KIND, intent)?;
         let proposal = self.proposal.hash()?;
         for disk in intent.target.metadata_members() {
-            let identity = &intent.added_roots[&disk.disk_id];
+            let identity = self.proposal.member_identity(&disk.disk_id)?;
             let vote = self.votes.get(&disk.disk_id).ok_or_else(|| {
                 Error::new(
                     ErrorCode::MetadataQuorumUnavailable,
@@ -384,13 +400,9 @@ impl ResumeCore {
         disk: &DiskConfig,
     ) -> Result<()> {
         let intent = self.intent()?;
-        let identity = intent.added_roots.get(&disk.disk_id).ok_or_else(|| {
-            Error::new(
-                ErrorCode::DiskIdentityMismatch,
-                "resume member is outside its fixed target set",
-            )
-        })?;
+        let identity = self.member_identity(&disk.disk_id)?;
         identity.verify_physical_root(root)?;
+        self.verify_retained_seal(root, disk)?;
         let transition = object_hash(INTENT_KIND, &intent)?;
         let store = decision::DecisionStore::open(root, identity, &transition, false)?;
         let observed = store.terminal_resume_receipt(
@@ -589,6 +601,15 @@ impl ResumeCore {
             ));
         }
         self.verify_source(&terminal.state)?;
+        if let Some(request) = self.retained_request() {
+            let disk = intent
+                .target
+                .disks
+                .iter()
+                .find(|disk| disk.disk_id == request.target.disk_id)
+                .expect("invariant: verified retained resume target");
+            return Ok(vec![(disk.clone(), request.directory.physical_identity())]);
+        }
         Ok(intent
             .target
             .disks
