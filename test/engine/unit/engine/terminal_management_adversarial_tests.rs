@@ -883,7 +883,7 @@ fn terminal_resume_source_cannot_create_a_missing_completion_or_ignore_resume_co
                 assert!(source.is::<json_codec::Error>());
             } else {
                 assert_eq!(
-                    source.downcast_ref::<Error>().unwrap().code(),
+                    source.downcast_ref::<Box<Error>>().unwrap().code(),
                     ErrorCode::PublicationInvalid
                 );
             }

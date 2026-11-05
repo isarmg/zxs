@@ -347,12 +347,34 @@ fn terminal_startup_rejects_unverified_resume_and_changed_authority() {
         } else {
             fs::write(directory.join("resume.json"), b"{}").unwrap();
         }
-        assert!(TerminalManagement::requires_management(&system).unwrap());
+        let before = files(fixture.temp.path());
+        // Selection now authenticates the complete authority and attempt chain,
+        // so corrupt evidence is a recovery error, not a presence-only route.
+        let error = TerminalManagement::requires_management(&system).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert!(!error.is_retryable());
+        let mut source = std::error::Error::source(&error)
+            .expect("selector recovery error preserves its concrete cause");
+        while let Some(next) = source.source() {
+            source = next;
+        }
+        if corrupt_authority {
+            assert_eq!(
+                source.downcast_ref::<Box<Error>>().unwrap().code(),
+                ErrorCode::ObjectCorrupt
+            );
+        } else {
+            assert!(source.is::<json_codec::Error>());
+        }
         assert!(TerminalManagement::open(&system).is_err());
-        assert_eq!(
-            Engine::open(&system).err().unwrap().code(),
-            ErrorCode::RecoveryRequired
-        );
+        for error in [
+            Engine::open(&system).err().unwrap(),
+            Engine::open_for_recovery(&system).err().unwrap(),
+        ] {
+            assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+            assert!(!error.is_retryable());
+        }
+        assert_eq!(files(fixture.temp.path()), before);
     }
 }
 
