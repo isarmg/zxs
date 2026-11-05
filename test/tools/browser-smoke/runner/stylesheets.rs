@@ -185,11 +185,54 @@ fn blocked_resource(browser: &Browser, origin: &str, path: &str) -> Result<()> {
         }
         Ok(())
     })?;
+    // WASM initialization begins only after both required stylesheets load.
+    // A JS import can fail earlier; unavailable CSS cannot promise this paint.
+    if path == "/pkg/zxs_bg.wasm" {
+        startup_retry_style(browser)?;
+    }
     browser.cdp("Network.setBlockedURLs", json!({"urls":[]}))?;
     browser.click(&browser.css("#zxs-startup-error button")?)?;
     browser.css("input[autocomplete='current-password']")?;
     normal_bundle(browser)?;
     println!("PASS browser-blocked JS/WASM transport {path}, terminal startup and real reload");
+    Ok(())
+}
+
+fn startup_retry_style(browser: &Browser) -> Result<()> {
+    let observe = |expected: &str| -> Result<Value> {
+        let state = browser.script(&format!(
+            "return (function(expected){{ {} }})({});",
+            include_str!("startup_retry.js"),
+            json!(expected)
+        ))?;
+        if state["valid"] != true {
+            return Err(format!("startup retry surface or focus: {state}").into());
+        }
+        Ok(state)
+    };
+    browser.cdp(
+        "Input.dispatchMouseEvent",
+        json!({"type":"mouseMoved","x":0,"y":0}),
+    )?;
+    let rest = observe("rest")?;
+    let point = browser.script("const r=document.querySelector('#zxs-startup-error button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}")?;
+    browser.cdp(
+        "Input.dispatchMouseEvent",
+        json!({"type":"mouseMoved","x":point["x"],"y":point["y"]}),
+    )?;
+    wait_for("rounded startup retry hover", || {
+        let hovered = observe("hover")?;
+        if hovered["background"] == rest["background"] {
+            return Err(format!("startup retry hover has no fill change: {hovered}").into());
+        }
+        Ok(())
+    })?;
+    // The real loader focused this section. Send native Tab to reach its retry
+    // control without activating it or substituting a scripted focus event.
+    browser.keys(&browser.css("#zxs-startup-error")?, "\u{e004}")?;
+    wait_for("visible startup retry keyboard focus", || {
+        observe("keyboard").map(|_| ())
+    })?;
     Ok(())
 }
 

@@ -7,15 +7,15 @@ const css = readFileSync(new URL('../../../../src/web/public/styles/components/s
 assert.match(css, /:focus-visible\s*\{\s*outline: 0;\s*box-shadow: 0 0 0 3px var\(--zxs-bg-page, #fff\), 0 0 0 5px var\(--zxs-focus, Highlight\);\s*--zxs-contour-mode: paint;/);
 assert.match(css, /@media \(forced-colors: active\)[\s\S]*outline: 2px solid Highlight;/);
 function fixture(expected = 'keyboard') {
-    const f = {expected, focused: expected !== 'blurred', focusVisible: expected === 'keyboard' || expected === 'forced', forced: expected === 'forced', ring: [68, 68, 68, 255], gap: [255, 255, 255, 255], border: [0, 0, 0, 255], corner: 0, decode: () => {}};
+    const f = {expected, focused: expected !== 'blurred', focusVisible: expected === 'keyboard' || expected === 'forced', forced: expected === 'forced', ring: [68, 68, 68, 255], gap: [255, 255, 255, 255], border: [255, 255, 255, 255], hover: false, fine: true, row: false, corner: 0, decode: () => {}};
     const keyboard = expected === 'keyboard';
     f.style = {outlineWidth: expected === 'forced' ? '2px' : '0px', outlineStyle: expected === 'forced' ? 'solid' : 'none',
-        borderImageSource: keyboard ? 'url("blob:paint")' : 'none', backgroundImage: keyboard ? 'none' : 'url("blob:rest")',
-        boxShadow: 'none', maskImage: 'none', clipPath: 'none', borderImageOutset: '7px', borderImageRepeat: 'stretch',
+        borderImageSource: keyboard ? 'url("blob:paint")' : 'url("blob:rest")', backgroundImage: 'none',
+        boxShadow: 'none', maskImage: 'none', clipPath: 'none', borderImageOutset: keyboard ? '7px' : '2px', borderImageRepeat: 'stretch',
         getPropertyValue(name) {return name === '--zxs-focus' ? '#444' : '#fff';}};
-    for (const side of ['Top', 'Right', 'Bottom', 'Left']) f.style[`border${side}Width`] = '1px';
+    for (const side of ['Top', 'Right', 'Bottom', 'Left']) f.style[`border${side}Width`] = '0px';
     f.node = {isConnected: true, visible: true, dataset: {zxsContourState: keyboard ? 'paint' : 'clip'}, box: {width: 100, height: 36},
-        checkVisibility() {return this.visible;}, getBoundingClientRect() {return this.box;}, matches() {return f.focusVisible;}};
+        checkVisibility() {return this.visible;}, getBoundingClientRect() {return this.box;}, matches(selector) {return selector === ':hover' ? f.hover : f.focusVisible;}, closest() {return f.row ? {} : null;}};
     f.run = () => new Promise(resolve => {
         const document = {get activeElement() {return f.focused ? f.node : null;}, querySelector() {return f.node;},
             createElement(tag) {
@@ -36,7 +36,7 @@ function fixture(expected = 'keyboard') {
                 return canvas;
             }};
         runInNewContext(source, {arguments: ['.zxs-select-trigger', f.expected, resolve], document, getComputedStyle: () => f.style,
-            matchMedia: () => ({matches: f.forced}), Image: class {naturalWidth = 114; naturalHeight = 50; async decode() {f.decode();}}});
+            matchMedia: query => ({matches: query === '(forced-colors: active)' ? f.forced : f.fine}), Image: class {naturalWidth = 114; naturalHeight = 50; async decode() {f.decode();}}});
     });
     return f;
 }
@@ -45,7 +45,7 @@ async function check(name, mutate, valid = false, expected = 'keyboard') {
     const result = await f.run();
     assert.equal(result.valid, valid, `${name}: ${JSON.stringify(result)}`);
 }
-await check('actual ring, gap, black border and curved corners', () => {}, true);
+await check('actual ring and gap around a borderless curved surface', () => {}, true);
 await check('square outline still present', f => Object.assign(f.style, {outlineWidth: '2px', outlineStyle: 'solid'}));
 await check('focus was removed', f => {f.focused = false;});
 await check('keyboard modality missing', f => {f.focusVisible = false;});
@@ -58,18 +58,23 @@ await check('outset cannot display ring', f => {f.style.borderImageOutset = '0px
 await check('image dimensions do not match control', f => {f.node.box.width = 90;});
 await check('focus color missing from pixels', f => {f.ring = [0, 0, 0, 0];});
 await check('gap missing', f => {f.gap = f.ring;});
-await check('black border removed', f => {f.border = [68, 68, 68, 255];});
-await check('near-black border is not pure black', f => {f.border = [1, 1, 1, 255];});
+await check('one-pixel decorative border is rejected', f => {f.style.borderLeftWidth = '1px';});
 await check('square corners', f => {f.corner = 255;});
 await check('control border grew', f => {f.style.borderTopWidth = '3px';});
 await check('stale image', f => {f.decode = () => {f.style.borderImageSource = 'url("blob:other")';};});
 await check('disconnected during decoding', f => {f.decode = () => {f.node.isConnected = false;};});
 await check('image decode failed', f => {f.decode = () => {throw new Error('decode failed');};});
-await check('pointer keeps resting G4 border', () => {}, true, 'pointer');
+await check('pointer keeps resting borderless G4 fill', () => {}, true, 'pointer');
 await check('pointer must not retain keyboard indicator', f => {f.focusVisible = true;}, false, 'pointer');
-await check('pointer must not retain focus image', f => {f.style.borderImageSource = 'url("blob:paint")';}, false, 'pointer');
+await check('pointer must not retain focus ring outset', f => {f.style.borderImageOutset = '7px';}, false, 'pointer');
+await check('pointer hover paints only a rounded fill', f => {f.hover = true; f.node.dataset.zxsContourState = 'paint';}, true, 'pointer');
+await check('hover cannot silently lose its paint', f => {f.hover = true;}, false, 'pointer');
+await check('touch does not require a hover highlight', f => {f.hover = true; f.fine = false;}, true, 'pointer');
+await check('parent row owns the hover fill', f => {f.hover = true; f.row = true;}, true, 'pointer');
+await check('blurred hovered trigger retains fill without focus', f => {f.hover = true; f.node.dataset.zxsContourState = 'paint';}, true, 'blurred');
+await check('resting fill cannot lose its G4 image', f => {f.style.borderImageSource = 'none';}, false, 'pointer');
 await check('blur restores resting paint', () => {}, true, 'blurred');
 await check('blur must remove focus ownership', f => {f.focused = true;}, false, 'blurred');
 await check('forced colors keeps system outline', () => {}, true, 'forced');
 await check('forced colors must not lose indicator', f => {f.style.outlineWidth = '0px';}, false, 'forced');
-console.log('PASS 27 Select focus observer model cases; no browser rendering executed');
+console.log('PASS 32 Select focus observer model cases; no browser rendering executed');

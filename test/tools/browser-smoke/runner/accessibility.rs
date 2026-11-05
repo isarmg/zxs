@@ -1,6 +1,9 @@
 //! Actual product controls and computed styles, with bounded decoration fault injection.
 use super::*;
 
+#[path = "select_scroll.rs"]
+mod select_scroll;
+
 pub(super) fn run(browser: &Browser) -> Result<()> {
     let original_theme = browser.script("return document.documentElement.dataset.zxsTheme")?;
     let result = check(browser);
@@ -66,7 +69,7 @@ fn check(browser: &Browser) -> Result<()> {
                 "const e=document.querySelector('.zxs-account-form input[name=current_password]');\
                      const s=getComputedStyle(e);\
                      return document.activeElement===e && e.matches(':focus-visible') && \
-                     parseFloat(s.borderBottomWidth)===3 && s.borderBottomStyle==='dashed' && \
+                     parseFloat(s.borderBottomWidth)===3 && s.borderBottomStyle==='solid' && \
                      (parseFloat(s.outlineWidth)===0 || s.outlineStyle==='none')",
             )?;
             if focus == true {
@@ -134,6 +137,7 @@ fn check(browser: &Browser) -> Result<()> {
         black_select_borders(browser, theme)?;
         browser.keys(&trigger, "\u{e00c}")?;
         select_focus_viewports(browser, theme)?;
+        select_scroll::run(browser, theme)?;
     }
     Ok(())
 }
@@ -225,7 +229,7 @@ fn select_focus_viewports(browser: &Browser, theme: &str) -> Result<()> {
 /// Observe real text controls without adding, disabling or restyling product DOM.
 pub(super) fn input_surfaces(browser: &Browser) -> Result<()> {
     wait_for(
-        "native text fields follow their scoped line and focus policy with no stale G4 paint",
+        "native text fields are borderless with a distinct solid focus indicator with no stale G4 paint",
         || {
             let evidence = browser.script(include_str!("input_surfaces.js"))?;
             if evidence["valid"] == true {
@@ -284,18 +288,21 @@ fn visible_menu(browser: &Browser, fallback: bool, theme: &str, mode: &str) -> R
 }
 
 fn black_select_borders(browser: &Browser, theme: &str) -> Result<()> {
-    wait_for("actual pure-black Select border paint", || {
-        let evidence = browser.command(
-            "POST",
-            "/execute/async",
-            Some(json!({"script": include_str!("select_borders.js"), "args": []})),
-        )?;
-        if evidence["valid"] == true {
-            Ok(())
-        } else {
-            Err(format!("Select border paint in {theme}: {evidence}").into())
-        }
-    })
+    wait_for(
+        "borderless Select triggers and pure-black expanded menu paint",
+        || {
+            let evidence = browser.command(
+                "POST",
+                "/execute/async",
+                Some(json!({"script": include_str!("select_borders.js"), "args": []})),
+            )?;
+            if evidence["valid"] == true {
+                Ok(())
+            } else {
+                Err(format!("Select border paint in {theme}: {evidence}").into())
+            }
+        },
+    )
 }
 
 #[cfg(test)]

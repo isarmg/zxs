@@ -1,19 +1,25 @@
 :where(button,input,select,textarea) { font: inherit; }
 :where(button,[href],input,select,textarea,[tabindex]):focus-visible { outline: 3px solid var(--zxs-focus,#2563eb); outline-offset: 3px; }
-.zxs-button,.zxs-input { min-height: 44px; border: 1px solid currentColor; border-radius: 0; padding: .5rem .8rem; color: inherit; background: var(--zxs-bg-panel,#fff); }
+.zxs-button,.zxs-input { min-height: 44px; border: 0; border-radius: 0; padding: .5rem .8rem; color: inherit; background: var(--zxs-bg-panel,#fff); }
 .zxs-button { cursor: pointer; touch-action: manipulation; }
 .zxs-button:disabled { opacity: .6; cursor: not-allowed; }
 .zxs-danger,.zxs-error { color: var(--zxs-text-danger,#b91c1c); }
 .zxs-input { width: 100%; box-sizing: border-box; }
 /* A field group owns one surface; every row shares responsive label/input tracks. */
-.zxs-form-grid { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; max-width: 100%; gap: 0; border: 1px solid var(--zxs-block-muted,currentColor); background: var(--zxs-bg-panel,#fff); --zxs-contour-extent: var(--zxs-contour-control,22px); --zxs-contour-mode: clip; --zxs-contour-foreground: 1; }
-.zxs-form-field { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,2fr); align-items: center; column-gap: .75rem; min-width: 0; width: 100%; margin: 0; }
-.zxs-form-grid > .zxs-form-field { padding: .25rem var(--zxs-list-content-inset,.75rem); }
+.zxs-form-grid { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; max-width: 100%; gap: 0; border: 0; background: var(--zxs-bg-panel,#fff); --zxs-contour-extent: var(--zxs-contour-control,22px); --zxs-contour-mode: clip; --zxs-contour-foreground: 1; }
+.zxs-form-field { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,2fr); align-items: center; column-gap: .75rem; min-width: 0; width: 100%; margin: 0; padding-inline: var(--zxs-list-content-inset,.75rem); }
+/* The field owns its one horizontal inset; a labeled row must not add another. */
+.zxs-app-shell .zxs-form-field > .zxs-row { padding-inline: 0; }
 .zxs-form-field > span { min-width: 0; overflow-wrap: anywhere; }
 /* Native text fields share one paint policy, including editors outside form groups.
  * Buttons used by Select and non-input tag chips keep their own surface rules. */
-:root :is(input,textarea).zxs-input { min-width: 0; max-width: 100%; border: 0; border-bottom: 1px dashed var(--zxs-block-muted,currentColor); background: transparent; outline: 0; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
-:root :is(input,textarea).zxs-input:focus-visible { border-bottom-width: 3px; border-bottom-color: var(--zxs-focus,Highlight); }
+:root :is(input,textarea).zxs-input { min-width: 0; max-width: 100%; border: 0; background: transparent; outline: 0; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
+:root :is(input,textarea).zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }
+@media (forced-colors: active) {
+  /* Search owns its focus on the outer label; all other text controls retain
+   * a system indicator even when author paint is suppressed. */
+  :root :is(input,textarea).zxs-input:focus-visible:not(.zxs-file-search > input) { outline: 2px solid Highlight; outline-offset: 2px; }
+}
 :root :is(input,textarea).zxs-input:disabled { opacity: .6; cursor: not-allowed; }
 .zxs-form-field > :is(input,textarea).zxs-input { padding-inline: 0; }
 .zxs-dialog { width: min(36rem,calc(100% - 3rem)); max-height: calc(100dvh - 3rem); overflow: auto; padding: 1rem; border: 0; border-radius: 0; color: var(--zxs-text-primary,#18181b); background: var(--zxs-bg-panel,#fff); --zxs-contour-extent: var(--zxs-contour-dialog); }
@@ -24,7 +30,7 @@
 .zxs-table-scroll { max-width: 100%; overflow: auto; }
 .zxs-table { width: 100%; border-collapse: collapse; }
 .zxs-error,.zxs-empty,.zxs-loading { padding: 1rem; overflow-wrap: anywhere; }
-.zxs-error { border: 1px solid currentColor; border-radius: 0; }
+.zxs-error { border: 0; border-radius: 0; }
 .zxs-request-id { font-size: inherit; overflow-wrap: anywhere; }
 .zxs-request-id code { font-family: var(--zxs-font-mono,monospace); user-select: all; }
 .zxs-toast-stack { margin: 1rem; display: grid; gap: var(--zxs-block-gap); min-width: 0; }

@@ -10,16 +10,23 @@ const done = arguments[arguments.length - 1];
     const outline = parseFloat(css.outlineWidth) > 0 && !['none', 'hidden'].includes(css.outlineStyle);
     const visible = node.checkVisibility({opacityProperty: true, visibilityProperty: true});
     const forced = matchMedia('(forced-colors: active)').matches;
-    const state = {expected, focused, focusVisible, outline, forced, contour: node.dataset.zxsContourState};
+    const borderless = ['Top', 'Right', 'Bottom', 'Left'].every(side => parseFloat(css[`border${side}Width`]) === 0);
+    const state = {expected, focused, focusVisible, outline, forced, borderless, contour: node.dataset.zxsContourState};
     if (expected === 'forced') {
-        return {...state, valid: visible && focused && focusVisible && forced && outline && css.outlineStyle === 'solid' && parseFloat(css.outlineWidth) >= 2};
+        return {...state, valid: visible && borderless && focused && focusVisible && forced && outline && css.outlineStyle === 'solid' && parseFloat(css.outlineWidth) >= 2};
     }
-    if (!visible || forced || outline || focused !== (expected !== 'blurred') || focusVisible !== (expected === 'keyboard')) {
+    if (!visible || !borderless || forced || outline || focused !== (expected !== 'blurred') || focusVisible !== (expected === 'keyboard')) {
         return {...state, valid: false, reason: 'wrong focus modality or rectangular outline'};
     }
     if (expected !== 'keyboard') {
-        // Resting Selects use the exact, clipped G4 image without any outset.
-        return {...state, valid: state.contour === 'clip' && css.boxShadow === 'none' && css.borderImageSource === 'none' && css.backgroundImage.startsWith('url("blob:')};
+        // Pointer hover paints the rounded fill; a resting control clips it.
+        // Neither state may retain the keyboard ring or a decorative border.
+        const hovering = matchMedia('(hover: hover) and (pointer: fine)').matches && node.matches(':hover')
+            && !node.closest('.zxs-row,.zxs-hover-row,.zxs-form-field,.zxs-file-table,.zxs-auth-actions');
+        const fill = state.contour === (hovering ? 'paint' : 'clip')
+            && css.borderImageSource.startsWith('url("blob:') && parseFloat(css.borderImageOutset) === 2
+            && css.borderImageRepeat === 'stretch' && css.backgroundImage === 'none';
+        return {...state, hovering, valid: fill && css.boxShadow === 'none'};
     }
     const source = css.borderImageSource;
     const match = source.match(/^url\(["']?(blob:[^"')]+)["']?\)$/);
@@ -44,15 +51,15 @@ const done = arguments[arguments.length - 1];
     const pixel = (x, y) => [...pixels.slice((Math.floor(y) * width + Math.floor(x)) * 4, (Math.floor(y) * width + Math.floor(x)) * 4 + 4)];
     const matches = (actual, target, alpha = 250) => actual[3] >= alpha && target.slice(0, 3).every((value, i) => Math.abs(actual[i] - value) <= 2);
     const edges = distance => [pixel(width / 2, outset - distance), pixel(width - outset + distance - 1, height / 2), pixel(width / 2, height - outset + distance - 1), pixel(outset - distance, height / 2)];
-    const ring = edges(4), separation = edges(2), border = edges(0);
+    const ring = edges(4), separation = edges(2);
     const corners = [[outset - 4, outset - 4], [width - outset + 3, outset - 4], [outset - 4, height - outset + 3], [width - outset + 3, height - outset + 3]].map(([x, y]) => pixel(x, y)[3]);
     const live = getComputedStyle(node);
     const stable = node.isConnected && document.activeElement === node && node.matches(':focus-visible') && live.borderImageSource === source;
     const checks = {
         stable, dimensions: Math.abs(width - box.width - 2 * outset) <= 1 && Math.abs(height - box.height - 2 * outset) <= 1,
         focusPixels: ring.every(p => matches(p, focus)), gapPixels: separation.every(p => matches(p, gap)),
-        blackBorder: border.every(p => p[0] === 0 && p[1] === 0 && p[2] === 0 && p[3] >= 128), curvedCorners: corners.every(alpha => alpha === 0),
-        unchangedBorder: ['Top', 'Right', 'Bottom', 'Left'].every(side => parseFloat(live[`border${side}Width`]) === 1),
+        curvedCorners: corners.every(alpha => alpha === 0),
+        unchangedBorder: ['Top', 'Right', 'Bottom', 'Left'].every(side => parseFloat(live[`border${side}Width`]) === 0),
     };
-    return {...state, valid: Object.values(checks).every(Boolean), checks, ring, separation, border, corners};
+    return {...state, valid: Object.values(checks).every(Boolean), checks, ring, separation, corners};
 })().then(done, error => done({valid: false, error: String(error)}));

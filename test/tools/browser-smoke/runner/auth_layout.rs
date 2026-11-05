@@ -122,6 +122,18 @@ fn geometry(browser: &Browser, setup: SetupState, phase: &str) -> Result<Value> 
     // Clicking below the fold scrolls the page. Measure after restoring the
     // viewport and allowing ResizeObserver/G4 to reposition real foregrounds.
     browser.script("window.scrollTo(0,0);return true")?;
+    // This capture verifies the resting surfaces. A prior click can leave the
+    // pointer over a now legitimately highlighted row; move it without changing
+    // focus, form state or product DOM before measuring the transparent rows.
+    browser.command(
+        "POST",
+        "/actions",
+        Some(
+            json!({"actions":[{"type":"pointer","id":"auth-layout-mouse",
+            "parameters":{"pointerType":"mouse"},"actions":[{"type":"pointerMove",
+                "duration":0,"origin":"viewport","x":0,"y":0}]}]}),
+        ),
+    )?;
     thread::sleep(Duration::from_millis(150));
     browser.command(
         "POST",

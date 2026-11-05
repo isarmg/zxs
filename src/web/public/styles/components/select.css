@@ -6,15 +6,12 @@
   --zxs-contour-extent: calc(var(--zxs-select-row-height, 36px) / 2);
   --zxs-contour-mode: clip;
 }
-.zxs-select-trigger.zxs-input { border: var(--zxs-control-border-width) solid #000; background: var(--zxs-bg-panel); text-decoration: none; }
-/* Anonymous setup also uses Select inside the higher-specificity auth form.
- * Override only its border color, retaining the auth dimensions/background. */
-:root .zxs-select .zxs-select-trigger.zxs-input { border-color: #000; }
+.zxs-select-trigger.zxs-input { border: 0; background: var(--zxs-bg-panel); text-decoration: none; }
 .zxs-select-trigger:disabled { opacity: 1; cursor: not-allowed; }
 .zxs-select-trigger:disabled :is(.zxs-select-value, .zxs-select-arrow) { opacity: .6; }
 /* The shared G4 painter follows these shadow offsets around its exact contour.
  * Paint mode keeps the outer ring intact at the corners; the label clips itself.
- * Keep the 1px black control border and a distinct 2px keyboard ring with a gap. */
+ * The resting control has no border; keyboard focus adds a distinct outer ring. */
 :root .zxs-select .zxs-select-trigger:focus-visible {
   outline: 0;
   box-shadow: 0 0 0 3px var(--zxs-bg-page, #fff), 0 0 0 5px var(--zxs-focus, Highlight);
@@ -27,13 +24,14 @@
 .zxs-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zxs-select-trigger .zxs-select-arrow { display: block; flex: none; width: 1em; height: 1em; fill: none; transform-origin: center; }
 .zxs-select-trigger[aria-expanded=true] .zxs-select-arrow { transform: rotate(90deg); }
-/* Match the shared frame specificity so its theme border cannot replace the
- * Select border. G4 reads this author color for its image and foreground paint. */
+/* Only the expanded list has a decorative border. Match the shared frame
+ * specificity; G4 consumes this author color for its foreground paint. */
 .zxs-select .zxs-select-panel {
   position: fixed; inset: auto; margin: 0; padding: 0; box-sizing: border-box;
   min-width: 0; max-width: calc(100vw - 16px); overflow: auto; overscroll-behavior: contain;
   color: var(--zxs-text-primary, #18181b); background: var(--zxs-bg-panel, #fff);
   border: var(--zxs-control-border-width) solid #000; font: inherit; font-size: var(--zxs-compact-font-size);
+  --zxs-row-border: var(--zxs-control-border-width);
   --zxs-contour-extent: var(--zxs-contour-panel, 18px);
   --zxs-contour-mode: clip;
   --zxs-contour-foreground: 1;
@@ -47,7 +45,7 @@
   display: block; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   --zxs-contour-extent: 0px;
 }
-.zxs-select-option[data-active=true] { background: var(--zxs-bg-page, #edf2f7); color: var(--zxs-text-primary, #18181b); }
+.zxs-select-option[data-active=true] { background: var(--zxs-row-hover-bg); color: var(--zxs-text-primary, #18181b); --zxs-contour-extent: var(--zxs-contour-control); --zxs-contour-mode: paint; }
 .zxs-select-option[aria-selected=true] { font-weight: 700; }
 .zxs-select-option[aria-disabled=true] { opacity: .5; cursor: not-allowed; }
 .zxs-select-empty { color: var(--zxs-block-muted); }

@@ -810,9 +810,9 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
         <article class="zxs-content-panel zxs-version-node zxs-frame zxs-stack zxs-stack--flush" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|node.as_ref().and_then(FileNode::version_id).map(str::to_owned).unwrap_or_default()) data-node-kind=move ||version.with(|node|node.as_ref().map(|node|kind_name(node.kind())).unwrap_or_default())
             data-parent-set=move ||boundary.with(|boundary|if boundary.more.is_some(){"more"}else{"complete"})
             aria-label=move ||if current.get(){if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前版本","Current version")}}else{t("历史版本","Historical version")}>
-            <div class="zxs-version-date zxs-row" title=id.get_value()>
+            <div class="zxs-version-date zxs-row zxs-row--center" title=id.get_value()>
                 <Show when=move ||can_modify.get()><input class="zxs-node-checkbox" type="checkbox" aria-label=t("选择此节点","Select this node") disabled=move ||disabled.get()||state.with(|s|s.files.tag_edit.is_some()) prop:checked=move ||state.with(|s|s.files.checked_nodes.contains(&id.get_value())) on:change=move |event|super::tags::toggle(state,id.get_value(),event_target_checked(&event))/></Show>
-                <span class="zxs-row">{t("日期未加载","Date not loaded")}</span>
+                <span>{t("日期未加载","Date not loaded")}</span>
                 <button class="zxs-button" data-history-field="created_at" disabled=move ||navigation_disabled.get() on:click=move |_|actions::load_history_field(state,id.get_value(),HistoryField::CreatedAt,None)>{t("读取日期","Load date")}</button>
                 <Show when=move ||current.get()><span class="zxs-version-current">{move ||if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前","Current")}}</span></Show>
             </div>

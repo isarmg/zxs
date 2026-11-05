@@ -10,6 +10,7 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   --zxs-focus: #444;
   --zxs-block-muted: #5f5f5f;
   --zxs-block-border: #e3e3e3;
+  --zxs-row-hover-bg: color-mix(in srgb, var(--zxs-text-primary) 10%, var(--zxs-bg-panel));
   --zxs-content-spacing: var(--zxs-space-4,16px);
   color: var(--zxs-text-primary);
   background: var(--zxs-bg-page);
@@ -42,7 +43,7 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   .zxs-button { border: 0; background: transparent; color: var(--zxs-text-link); font-weight: 400; }
   .zxs-button:hover { text-decoration: underline; }
   .zxs-button:disabled:hover { text-decoration: none; }
-  .zxs-input:not(input,textarea) { border-color: var(--zxs-block-border); background: transparent; }
+  .zxs-input:not(input,textarea) { background: transparent; }
   .zxs-error,.zxs-empty,.zxs-loading { border: 0; border-radius: 0; background: var(--zxs-bg-panel); --zxs-contour-extent: var(--zxs-contour-notification); }
   .zxs-app-shell :is(.zxs-empty,.zxs-loading) { display: flex; align-items: center; }
   .zxs-header-actions { max-width: 100%; margin-inline-start: auto; flex-shrink: 0; }
@@ -53,6 +54,19 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   .zxs-header-actions svg { width: var(--zxs-header-icon-size,1em); height: var(--zxs-header-icon-size,1em); }
   &:not([data-zxs-selection="custom"]) .zxs-header-navigation [aria-current="page"] { text-decoration: underline; text-underline-offset: .25em; }
   &:not([data-zxs-selection="custom"]) .zxs-button[aria-pressed="true"] { background: transparent; color: var(--zxs-text-primary); text-decoration: underline; text-underline-offset: .25em; text-decoration-thickness: 1px; }
+}
+
+/* A row owns its highlight, including labels and embedded controls. G4 paint
+ * rounds only the background and never clips text, caret or keyboard focus. */
+@media (hover: hover) and (pointer: fine) {
+  .zxs-app-shell :is(.zxs-row, .zxs-form-field, .zxs-hover-row):not(:where(.zxs-hover-row *, .zxs-form-field *, .zxs-select-option)):hover,
+  .zxs-app-shell :is(.zxs-button, .zxs-select-trigger):not(:disabled):not(:where(.zxs-row *, .zxs-hover-row *, .zxs-form-field *, .zxs-file-table *, .zxs-auth-actions *)):hover,
+  :root .authentication-card :is(.zxs-auth-label, .zxs-auth-input-row, .zxs-auth-information, .zxs-auth-actions):hover {
+    background: var(--zxs-row-hover-bg);
+    --zxs-contour-extent: var(--zxs-contour-control);
+    --zxs-contour-mode: paint;
+    --zxs-contour-foreground: 0;
+  }
 }
 
 /* The gap returns to its upper-right resting position when the read settles. */

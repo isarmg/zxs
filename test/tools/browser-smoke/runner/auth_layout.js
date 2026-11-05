@@ -108,7 +108,8 @@ const semanticChildren=[...card.children].filter(e=>!e.matches('svg[data-zxs-con
 const formPresent=forms.length===1&&forms[0]===form&&present(form)&&form.parentElement===card
     &&semanticChildren.length===1&&semanticChildren[0]===form&&within(form)&&inside(rect(form),panel);
 const rows=form?[...form.children]:[],rowBoxes=rows.map(rect);
-const sixRows=rows.length===6&&rows.map(e=>e.tagName).join(',')==='LABEL,INPUT,LABEL,INPUT,DIV,DIV'
+const sixRows=rows.length===6&&rows.map(e=>e.tagName).join(',')==='LABEL,DIV,LABEL,DIV,DIV,DIV'
+    &&[rows[1],rows[3]].every(e=>e.matches('.zxs-auth-input-row.zxs-hover-row'))
     &&rows[4].matches('.zxs-auth-information')&&rows[5].matches('.zxs-auth-actions');
 const controls=form?[...form.querySelectorAll('input,textarea,button')]:[];
 const noSurface=e=>{
@@ -142,9 +143,12 @@ const noInternalBoxes=interiors.every(noSurface)&&card.querySelectorAll('.zxs-fo
     &&(form?.querySelectorAll('svg[data-zxs-contour-decoration]').length===0);
 let fieldsValid=false,stateValid=false,informationValid=false,actionsValid=false;
 if(sixRows) {
-    const [userLabel,user,passwordLabel,password,information,actions]=rows;
+    const [userLabel,userRow,passwordLabel,passwordRow,information,actions]=rows;
+    const user=userRow.querySelector('input'),password=passwordRow.querySelector('input');
     const inputs=[...form.querySelectorAll('input')],submit=[...actions.querySelectorAll('button[type=submit]')];
     fieldsValid=inputs.length===2&&inputs[0]===user&&inputs[1]===password
+        &&[[userRow,user],[passwordRow,password]].every(([row,input])=>input&&row.children.length===1
+            &&row.children[0]===input&&input.parentElement===row&&equal(rect(row),rect(input)))
         &&[user,password].every(e=>!e.disabled&&!e.readOnly&&e.tabIndex>=0)
         &&user.name==='username'&&user.type==='text'&&user.autocomplete==='username'
         &&password.name==='password'&&password.type==='password'

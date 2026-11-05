@@ -29,7 +29,7 @@ fn search(browser: &Browser, empty: bool) -> Result<()> {
     };
     browser.script(&format!("const input=document.querySelector('.zxs-file-search input');input.value={};input.dispatchEvent(new Event('input',{{bubbles:true}}));return true",json!(query)))?;
     browser.keys(&browser.css(".zxs-file-search input")?, "\u{e007}")?;
-    wait_for("real file query for separator layout", || {
+    wait_for("real file query for borderless row layout", || {
         if browser.script(&format!("const page=document.querySelector('.zxs-file-manager'),nav=page.querySelector('.zxs-file-pagination');return page.getAttribute('aria-busy')==='false'&&(page.querySelectorAll('tbody tr').length===0)==={empty}&&![...nav.querySelectorAll('button')].some(e=>['Retry','重试'].includes(e.textContent.trim()))"))? == true { Ok(()) } else { Err("real file query is pending or failed".into()) }
     })
 }
@@ -75,13 +75,13 @@ pub(super) fn files(browser: &Browser) -> Result<()> {
         },
     )?;
     println!(
-        "PASS inset file-row and pagination separators with shared G4 row surfaces, nonempty and empty real results in both themes at four viewports"
+        "PASS borderless file rows and pagination with shared G4 row surfaces, nonempty and empty real results in both themes at four viewports"
     );
     Ok(())
 }
 // Also called with the five-row synthetic page to cover first, middle and last.
 pub(super) fn file_row_geometry(browser: &Browser) -> Result<()> {
-    wait_for("inset file separators and shared G4 row surfaces", || {
+    wait_for("borderless file rows and shared G4 row surfaces", || {
         let geometry = browser.script(include_str!("file_row_layout.js"))?;
         if geometry["valid"] == true {
             Ok(())

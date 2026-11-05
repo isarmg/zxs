@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
     "compliance/external-tests/foundation.json": "7553f119ba2b1a530ea7c8126701f0410a88945425a76ceb7e7643f6cbb1fecf",
-    "compliance/external-tests/integrated.json": "34dd3e9b6167bffb48c9bbf6fba6bbcf190bfc1e1983f90924eda1bc3a673f6d",
+    "compliance/external-tests/integrated.json": "206cc3e851a771a402188ebf04aaa6c53d088698aa8f1dc4fc98cca5e2a49ce0",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79149,7 +79149,7 @@
       ]
     },
     "src/interface": {
-      "bytes": 86152,
+      "bytes": 94192,
       "directory": "src/interface",
       "file_count": 18,
       "files": [
@@ -79173,7 +79173,7 @@
         },
         {
           "path": "test/interface/integration/style_contracts.rs",
-          "sha256": "aba708b72274b84329a0998bb5362556e0b2b8e60affa4e298839a2c0ce18caa",
+          "sha256": "510711ec4b3ccc6c4cdb5e1f63ea1c72b19b284423ab62f26fbad5c66400c190",
           "source": "src/interface/tests/style_contracts.rs",
           "source_sha256_before": "82c878873c25b7f1a59261e4a577dd68c5cc0dd48eb986cb32b221f33f2826b8"
         },
@@ -79814,10 +79814,10 @@
         "src/browser_support.rs": "45b0881fd8b443f3062bb2ff9893e667b6f480c77d9d728ace8e98a076a114ab",
         "src/children.rs": "774081a72328ff254cd3f087335688fe63c0925fe8b46e4407c4ffb7cdbd96ff",
         "src/component.rs": "4b2ca289417e0075ad8ea42486daca256505125f6d8a73455ac663fd6f84cec4",
-        "src/components/account.rs": "26d0ffc9a770b62a2ca840e220a8162ec47b261464694df7bd1169ddac79d14c",
+        "src/components/account.rs": "343dc9aa0f5e947239205127ef67ee2346d8e83756c28dc1eac18b00f1504a9f",
         "src/components/dialog.rs": "9ceaeb3ca91c2d3155e33b63f5723574a11f8e07a9ce6477900843484d5c3119",
         "src/components/header.rs": "fadcf0d8f898a4d1b6400d2f1fa7356367cf1125cacacf91c36c78092f750353",
-        "src/components/login.rs": "bfff50bf545c905d0651152a5f1a9d8ccc86a63b09098a0ba257c041078fcf53",
+        "src/components/login.rs": "1646308eb176cf99517e1f2017238d7afdbc4514bb326c1a1b1075257fa7ae02",
         "src/components/mod.rs": "10cd01e58a8ae9a376fb13a9144de6034bd9194f79db61da0b2b8ca6e46d08ad",
         "src/components/notification.rs": "121a99dcc2522db1a0e6600ccfc74edc2a935d547f0d069ebcfc7a1c987f9ba0",
         "src/components/select.rs": "850f7a9b2956d047a9d1dc254118454f6e3e89bd1efc4bc6ee2ad75dbf029ef4",

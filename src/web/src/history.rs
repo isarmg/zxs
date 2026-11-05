@@ -177,7 +177,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             visible_events.get().into_iter().map(|event|{
                 let time=event.timestamp.as_deref().map(format::timestamp).unwrap_or_else(||t("未记录时间","Time not recorded"));
                 let path=event.path;let slot=event.slot_id;let principal=event.principal.unwrap_or_default();
-                view!{<li class="zxs-history-row zxs-flow zxs-flow--stretch"><span class="zxs-history-action zxs-row">{action_label(&event.action)}</span><span class="zxs-history-path zxs-row">{if slot.is_empty(){path}else{format!("{slot}/{path}")}}</span><time class="zxs-row">{time}</time><span class="zxs-history-principal zxs-row">{if principal.is_empty(){"–".into()}else{principal}}</span></li>}
+                view!{<li class="zxs-history-row zxs-flow zxs-flow--stretch zxs-hover-row"><span class="zxs-history-action zxs-row">{action_label(&event.action)}</span><span class="zxs-history-path zxs-row">{if slot.is_empty(){path}else{format!("{slot}/{path}")}}</span><time class="zxs-row">{time}</time><span class="zxs-history-principal zxs-row">{if principal.is_empty(){"–".into()}else{principal}}</span></li>}
             }).collect_view()
         }}</ul></div></Show>
         <Show when=move ||state.with(|s|s.activity.loaded && s.activity.failure.is_none())&&visible_events.with(Vec::is_empty)><EmptyState message=t("尚无文件操作记录。","No file operations have been recorded.")/></Show>

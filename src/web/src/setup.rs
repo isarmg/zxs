@@ -280,9 +280,13 @@ fn account_form(state: RwSignal<Model>) -> impl IntoView {
     view! {
         <form data-first-account-form="" aria-label=t("设置账户", "Set up account") aria-busy=move ||state.with(|s|s.pending).to_string() on:submit=move |event|{event.prevent_default();initialize(state);}>
             <label class="zxs-auth-label" for="zxs-setup-username">{t("账户名", "Account name")}</label>
-            <input id="zxs-setup-username" class="zxs-input" name="username" data-setup-user="" autocomplete="username" maxlength="64" prop:value=move ||state.with(|s|s.username.clone()) disabled=move ||state.with(|s|s.pending) on:input=move |event|state.update(|s|{s.username=event_target_value(&event);s.failure=None;})/>
+            <div class="zxs-auth-input-row zxs-hover-row">
+                <input id="zxs-setup-username" class="zxs-input" name="username" data-setup-user="" autocomplete="username" maxlength="64" prop:value=move ||state.with(|s|s.username.clone()) disabled=move ||state.with(|s|s.pending) on:input=move |event|state.update(|s|{s.username=event_target_value(&event);s.failure=None;})/>
+            </div>
             <label class="zxs-auth-label" for="zxs-setup-password">{t("密码", "Password")}</label>
-            <input id="zxs-setup-password" class="zxs-input" name="password" data-setup-password="" type="password" autocomplete="new-password" maxlength="1024" prop:value=move ||state.with(|s|s.password.clone()) disabled=move ||state.with(|s|s.pending) on:input=move |event|state.update(|s|{s.password=event_target_value(&event);s.failure=None;})/>
+            <div class="zxs-auth-input-row zxs-hover-row">
+                <input id="zxs-setup-password" class="zxs-input" name="password" data-setup-password="" type="password" autocomplete="new-password" maxlength="1024" prop:value=move ||state.with(|s|s.password.clone()) disabled=move ||state.with(|s|s.pending) on:input=move |event|state.update(|s|{s.password=event_target_value(&event);s.failure=None;})/>
+            </div>
             <div class="zxs-auth-information" data-setup-unknown=move ||state.with(|s|s.unknown.then_some(""))>
                 {move ||feedback.get().map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
                 <Show when=move ||feedback.get().is_none()><span role="status">{t("请设置账户名和密码", "Set a name and password.")}</span></Show>

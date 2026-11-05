@@ -125,6 +125,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "directory SVG draws exactly the real parent edges at the measured nodes",
                 include_str!("directory_tree_edges.js"),
             )?;
+            check(
+                browser,
+                "folder history titles use one compact row without doubled text insets",
+                include_str!("history_title_rows.js"),
+            )?;
             browser.script("const p=window.__zxsDirectoryHistory;p.originalNode=document.querySelector('[data-directory-tree-id]');p.originalEdge=document.querySelector('path[data-parent-tree][data-child-tree]');p.hold=true;return true")?;
             browser.click(&browser.button("Refresh folder history", "刷新目录历史")?)?;
             check(

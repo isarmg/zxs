@@ -1,6 +1,7 @@
 // Synchronous computed-style observation of actual text controls. This probe
 // never focuses, enables, styles, or reads the value of a product control.
 const layoutWidth = document.documentElement.clientWidth;
+const forced = matchMedia('(forced-colors: active)').matches;
 const excludedTypes = new Set(['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit']);
 const candidates = [...document.querySelectorAll('input.zxs-input,textarea.zxs-input')];
 const textControls = candidates.filter(node => node.tagName === 'TEXTAREA' || !excludedTypes.has(node.type));
@@ -60,20 +61,21 @@ const controls = visible.map((node, index) => {
             && Math.abs(frameRect.right - rect.right - parseFloat(frameCss.borderRightWidth)) <= 1,
         fullHeight: Math.abs(rect.top - frameRect.top - parseFloat(frameCss.borderTopWidth)) <= 1
             && Math.abs(frameRect.bottom - rect.bottom - parseFloat(frameCss.borderBottomWidth)) <= 1,
-        noRectangle: !frameOutline,
-        keyboardFocus: !focusVisible || (searchFrame.getAttribute('data-zxs-contour-state') === 'paint'
+        noBorder: ['Top', 'Right', 'Bottom', 'Left'].every(side => parseFloat(frameCss[`border${side}Width`]) === 0),
+        noRectangle: !frameOutline || (forced && focusVisible),
+        keyboardFocus: !focusVisible || (forced ? frameOutline && frameCss.outlineStyle === 'solid' && parseFloat(frameCss.outlineWidth) >= 2 : (searchFrame.getAttribute('data-zxs-contour-state') === 'paint'
                 && frameCss.maskImage === 'none' && frameCss.clipPath === 'none'
                 && frameCss.borderImageSource.startsWith('url("blob:')
-                && parseFloat(frameCss.borderImageOutset) >= 5),
+                && parseFloat(frameCss.borderImageOutset) >= 5)),
     } : null;
     const checks = {
         connected: node.isConnected,
         noRectangle: ['top', 'right', 'left'].every(side => borders[side].width === 0),
-        bottomStyle: search || (anonymous && !focusVisible) ? borders.bottom.style === 'none'
-            : borders.bottom.style === (anonymous ? 'solid' : 'dashed') && alpha(borders.bottom.color) > 0,
-        bottomWidth: borders.bottom.width === (search ? 0 : focusVisible ? 3 : anonymous ? 0 : 1),
+        bottomStyle: search || !focusVisible ? borders.bottom.style === 'none'
+            : borders.bottom.style === 'solid' && alpha(borders.bottom.color) > 0,
+        bottomWidth: borders.bottom.width === (!search && focusVisible ? 3 : 0),
         searchSurface: !search || Object.values(searchSurface).every(Boolean),
-        noOutline: !outlineVisible,
+        noOutline: forced && focusVisible && !search ? outlineVisible && outline.style === 'solid' && outline.width >= 2 : !outlineVisible,
         noImages: css.backgroundImage === 'none' && css.borderImageSource === 'none',
         noShadow: css.boxShadow === 'none',
         transparentBackground: alpha(css.backgroundColor) === 0,
@@ -88,7 +90,7 @@ const controls = visible.map((node, index) => {
     return {
         valid: failures.length === 0, failures, checks, index,
         tag: node.tagName, type: node.type, name: node.getAttribute('name'), label: node.getAttribute('aria-label'),
-        disabled, effectiveDisabled, focusVisible, anonymous, search, searchSurface, opacity,
+        disabled, effectiveDisabled, focusVisible, forced, anonymous, search, searchSurface, opacity,
         rect: {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height},
         borders, outline, outlineVisible, contour,
         backgroundColor: css.backgroundColor, backgroundImage: css.backgroundImage,

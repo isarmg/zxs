@@ -54,9 +54,13 @@ pub fn LoginPage(
                 on_submit.run(credentials);
             }>
             <label class="zxs-auth-label" for="zxs-login-username">{t("账户名", "Account name")}</label>
-            <input id="zxs-login-username" class="zxs-input" node_ref=username name="username" autocomplete="username" required maxlength="64" readonly=move ||pending.get()/>
+            <div class="zxs-auth-input-row zxs-hover-row">
+                <input id="zxs-login-username" class="zxs-input" node_ref=username name="username" autocomplete="username" required maxlength="64" readonly=move ||pending.get()/>
+            </div>
             <label class="zxs-auth-label" for="zxs-login-password">{t("密码", "Password")}</label>
-            <input id="zxs-login-password" class="zxs-input" node_ref=password name="password" type="password" autocomplete="current-password" required maxlength="1024" readonly=move ||pending.get()/>
+            <div class="zxs-auth-input-row zxs-hover-row">
+                <input id="zxs-login-password" class="zxs-input" node_ref=password name="password" type="password" autocomplete="current-password" required maxlength="1024" readonly=move ||pending.get()/>
+            </div>
             <div class="zxs-auth-information">
                 {move ||failure.get().map(|(message,id)|view!{<ErrorState message=message request_id=id/>})}
                 <Show when=move ||failure.get().is_none()><span role="status">{move ||notice.get()}</span></Show>

@@ -22,29 +22,23 @@
   box-shadow: 0 0 0 3px var(--zxs-bg-page, #fff), 0 0 0 5px var(--zxs-focus, Highlight);
   --zxs-contour-mode: paint;
 }
+/* High-contrast modes suppress shadows, so retain a native keyboard indicator. */
+@media (forced-colors: active) {
+  .zxs-file-search:has(> input:focus-visible) { outline: 2px solid Highlight; outline-offset: 3px; box-shadow: none; }
+}
 .zxs-file-list-panel { --zxs-file-row-height: var(--zxs-compact-row-height); --zxs-file-icon-size: 1em; }
 .zxs-file-list-panel .zxs-table-scroll { container-type: inline-size; --zxs-file-scroll-left: 0px; min-width: 0; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; --zxs-contour-extent: 0px; }
 .zxs-file-table { width: 100%; border-collapse: collapse; text-align: start; }
 .zxs-file-table :is(th,td) { box-sizing: border-box; height: var(--zxs-file-row-height); padding: 0 var(--zxs-list-content-inset); border: 0; font: inherit; font-weight: 400; text-align: inherit; vertical-align: middle; }
 .zxs-file-table th { color: var(--zxs-block-muted); white-space: nowrap; }
 .zxs-file-table td { white-space: nowrap; }
-/* Each line belongs to one row boundary, inset by the shared frame corner.
- * Absolute decoration keeps native table sizing and hit targets unchanged.
+/* Absolute decoration keeps native table sizing and hit targets unchanged.
  * The query container is the visible scrollport, not the wider native table;
- * one scroll offset keeps the lines and G4 fill anchored to that viewport. */
+ * one scroll offset keeps the borderless G4 fill anchored to that viewport. */
 .zxs-file-table tr { position: relative; isolation: isolate; }
 /* Clip decoration only. A stale offset during resize must not contribute to
  * scrollWidth or prevent the native scrollport from clamping back to zero. */
 .zxs-file-row-decoration { display: block; position: absolute; inset: 0; overflow: clip; z-index: -1; pointer-events: none; }
-.zxs-file-row-decoration::after,.zxs-file-pagination::before { position: absolute; inset-inline: var(--zxs-contour-panel); border-block-end: var(--zxs-control-border-width) solid var(--zxs-block-border); pointer-events: none; }
-.zxs-file-row-decoration::after { inset-block-end: 0; left: calc(var(--zxs-file-scroll-left) + var(--zxs-contour-panel)); right: auto; width: calc(100cqw - var(--zxs-contour-panel) * 2); }
-.zxs-file-table:has(> tbody > tr) > thead > tr > th > .zxs-file-row-decoration::after,
-.zxs-file-table > tbody > tr:not(:last-child) > td > .zxs-file-row-decoration::after,
-.zxs-file-pagination::before { content: ""; }
-/* Pagination owns the final line, even for an empty table. The transparent
- * border retains its original layout height; the inset line paints over it. */
-.zxs-file-pagination { position: relative; border-block-start: var(--zxs-control-border-width) solid transparent; }
-.zxs-file-pagination::before { inset-block-start: calc(0px - var(--zxs-control-border-width)); }
 .zxs-app-shell .zxs-file-table tbody .zxs-button { min-height: calc(var(--zxs-file-row-height) - 2px); height: calc(var(--zxs-file-row-height) - 2px); padding: 0; font-size: inherit; white-space: nowrap; }
 .zxs-file-list-panel .zxs-entry-actions { flex-wrap: nowrap; }
 .zxs-file-table td:first-child { min-width: 10rem; overflow-wrap: anywhere; }
@@ -54,7 +48,7 @@
 /* A block inside the first cell paints the visible row with shared G4 corners.
  * Table rows cannot host G4 paint themselves. The layer never clips controls
  * or intercepts clicks, and only its opacity changes on hover/selection. */
-.zxs-file-row-surface { display: block; position: absolute; inset-block: 0; left: var(--zxs-file-scroll-left); width: 100cqw; pointer-events: none; background: var(--zxs-bg-page); opacity: 0; --zxs-contour-extent: var(--zxs-contour-panel); }
+.zxs-file-row-surface { display: block; position: absolute; inset-block: 0; left: var(--zxs-file-scroll-left); width: 100cqw; pointer-events: none; background: var(--zxs-row-hover-bg); opacity: 0; --zxs-contour-extent: var(--zxs-contour-panel); }
 .zxs-file-table tr[aria-selected=true] > td > .zxs-file-row-decoration > .zxs-file-row-surface { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
   .zxs-file-table tbody tr:hover > td > .zxs-file-row-decoration > .zxs-file-row-surface { opacity: 1; }
@@ -86,6 +80,7 @@
 .zxs-file-properties { display: grid; grid-template-columns: max-content minmax(0,1fr); align-items: stretch; gap: 0; margin: 0; }
 .zxs-file-properties > div { display: contents; }
 .zxs-file-properties :is(dt,dd) { display: flex; align-items: center; }
+.zxs-file-properties dd { margin: 0; }
 .zxs-file-properties dt { color: var(--zxs-block-muted); }
 .zxs-file-empty { margin: 0; padding: var(--zxs-block-gap); color: var(--zxs-block-muted); text-align: center; }
 .zxs-file-pagination > .zxs-file-empty { min-width: 0; margin-inline-start: var(--zxs-list-content-inset); padding: 0; text-align: start; overflow-wrap: anywhere; }
@@ -114,10 +109,10 @@
 .zxs-merge-review > .zxs-inline-error:empty { display: none; }
 /* Node chips retain inherited labels without introducing another card row. */
 .zxs-version-note-row,.zxs-node-tags { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
-.zxs-app-shell .zxs-node-tag { display: inline-flex; align-items: center; width: auto; max-width: 100%; height: auto; min-height: var(--zxs-compact-row-height); border: var(--zxs-control-border-width) solid var(--zxs-block-border); background: var(--zxs-bg-page); overflow-wrap: anywhere; }
+.zxs-app-shell .zxs-node-tag { display: inline-flex; align-items: center; width: auto; max-width: 100%; height: auto; min-height: var(--zxs-compact-row-height); border: 0; background: var(--zxs-bg-page); overflow-wrap: anywhere; }
 .zxs-app-shell .zxs-version-note-row:has(.zxs-node-tag) { padding-block: 0; }
 .zxs-app-shell .zxs-tag-choice { padding: 0; }
-.zxs-tag-choice[aria-pressed=true] .zxs-node-tag { border-color: var(--zxs-focus); text-decoration: underline; text-underline-offset: .2em; }
+.zxs-tag-choice[aria-pressed=true] .zxs-node-tag { text-decoration: underline; text-underline-offset: .2em; }
 .zxs-node-checkbox { flex: 0 0 1em; width: 1em; height: 1em; margin: 0; accent-color: var(--zxs-text-link); }
 .zxs-tag-review > .zxs-inline-error:empty { display: none; }
 .zxs-backup-review > .zxs-inline-error:empty { display: none; }

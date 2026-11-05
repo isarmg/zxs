@@ -15,7 +15,7 @@ function fixture({count = 3, width = 960, viewport = width, extent = 18, paginat
     const row = (index, header = false) => {
         const node = {selected: false, hovered: false, box: rect(width, index * 36),
             style: style({display: 'table-row', backgroundColor: 'rgba(0, 0, 0, 0)', clipPath: 'none', maskImage: 'none'}),
-            line: separator(header ? count > 0 : index < count, viewport),
+            line: separator(false, viewport),
             cells: [{style: style({borderBottomWidth: '0px'})}],
             getBoundingClientRect() { return screen(this.box); },
             getAttribute(name) { assert.equal(name, 'aria-selected'); return String(this.selected); },
@@ -39,7 +39,7 @@ function fixture({count = 3, width = 960, viewport = width, extent = 18, paginat
     const scroll = {scrollLeft: 0, clientLeft: 0, clientWidth: Math.round(viewport), offsetWidth: Math.round(viewport), currentCSSZoom: zoom,
         getBoundingClientRect: () => screen(rect(viewport, 0, (count + 1) * 36))};
     const table = {parentElement: scroll, tBodies: [{rows}], tHead: {rows: [header]}};
-    const nav = pagination ? {line: separator(true, viewport), getBoundingClientRect: () => screen(rect(viewport, (count + 1) * 36))} : null;
+    const nav = pagination ? {line: separator(false, viewport), getBoundingClientRect: () => screen(rect(viewport, (count + 1) * 36))} : null;
     const panel = {style: style({}), querySelector(selector) {return {'.zxs-file-table': table, '.zxs-file-pagination': nav}[selector];}};
     const document = {documentElement: {scrollWidth: viewport, clientWidth: viewport},
         querySelector(selector) { assert.equal(selector, '.zxs-file-list-panel'); return panel; },
@@ -73,14 +73,11 @@ for (const count of [0, 1, 3, 5]) {
     }
 }
 // Real CSS zoom scales bounding rects, not computed CSS lengths. Keep the
-// screen-space 0.5px tolerance and reject a truncated native half-pixel offset.
+// screen-space 0.5px tolerance and reject a displaced half-pixel highlight.
 for (const zoom of [1.25, 2]) {
     const model = fixture({count:5, width:600, viewport:135.5, zoom});
     for (const offset of [0.5, 1.5, 7.5, 600 - 135.5]) { model.setScroll(offset); valid(model); }
 }
-const truncated = fixture({width:600, viewport:135.5, zoom:2});
-truncated.setScroll(.5); truncated.rows[0].line.left = '18px';
-assert.equal(truncated.run().valid, false); checks++;
 const displaced = fixture({width:600, viewport:135.5, zoom:2});
 displaced.setScroll(.5); displaced.rows[0].surface.box.left = -.5;
 assert.equal(displaced.run().valid, false); checks++;
@@ -93,14 +90,12 @@ for (const index of [0, 1, 2]) {
     model = fixture(); model.rows[index].selected = true; model.rows[index].surface.style.opacity = '1'; valid(model);
     model = fixture(); model.pointer = false; model.rows[index].hovered = true; valid(model);
 }
-invalid(model => {model.rows[0].line.left = '0px';});
-invalid(model => {model.rows[1].line.left = '0px';});
-invalid(model => {model.rows[1].line.width = '960px';});
-invalid(model => {model.rows[2].line.content = '""';});
-invalid(model => {model.rows[0].line.content = 'none';});
-invalid(model => {model.header.line.content = 'none';});
-invalid(model => {model.nav.line.content = 'none';});
-invalid(model => {model.nav.line.left = '0px';});
+for (const node of ['header', 'nav']) {
+    invalid(model => {model[node].line.content = '""';});
+}
+for (const index of [0, 1, 2]) {
+    invalid(model => {model.rows[index].line.content = '""';});
+}
 invalid(model => {model.rows[1].surface = null;});
 invalid(model => {model.rows[1].surface.box.width = 200;});
 invalid(model => {model.rows[1].surface.state = 'fallback';});
@@ -126,7 +121,7 @@ for (const offset of [0, 312]) {
     wide.rows[1].surface.box = {...wide.rows[1].box};
     assert.equal(wide.run().valid, false); checks++;
     const line = fixture({width: 600, viewport: 288}); line.setScroll(offset);
-    line.rows[1].line.width = '564px'; line.rows[1].line.left = '18px';
+    line.rows[1].line.content = '""';
     assert.equal(line.run().valid, false); checks++;
 }
 const empty = fixture({count: 0}); empty.header.line.content = '""';

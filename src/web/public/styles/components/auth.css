@@ -9,6 +9,8 @@
 .authentication-card > form { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(6, minmax(var(--zxs-compact-row-height), max-content)); margin: 0; padding: 0; min-width: 0; font-size: max(1rem, 16px); font-weight: 400; line-height: 1.5; }
 .authentication-card > form > * { box-sizing: border-box; min-width: 0; min-height: var(--zxs-compact-row-height); margin: 0; }
 .authentication-card :is(label, input, button) { font: inherit; }
+.authentication-card .zxs-auth-input-row { display: grid; min-width: 0; }
+.authentication-card :is(.zxs-auth-label, .zxs-auth-input-row) { --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 .authentication-card .zxs-auth-label { display: flex; align-items: center; gap: 1ch; }
 .authentication-shell .authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border: 0; border-radius: 0; background: transparent; outline: 0; }
 .authentication-shell .authentication-card input.zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }

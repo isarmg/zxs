@@ -38,6 +38,16 @@ fn exercise(browser: &Browser) -> Result<()> {
         json!({"width":390,"height":844,"deviceScaleFactor":1,"mobile":false}),
     )?;
     evaluate(browser, "window.__zxsTreeFrames.settle()")?;
+    wait_for(
+        "file history titles retain compact controls and one text inset",
+        || {
+            if browser.script(include_str!("history_title_rows.js"))? == true {
+                Ok(())
+            } else {
+                Err("file history title row geometry is not compact and aligned".into())
+            }
+        },
+    )?;
     println!(
         "PASS tree incremental registration/output isolation (synthetic DOM fixture): {}",
         evaluate(browser, "window.__zxsTreeFrames.registrationMatrix()")?

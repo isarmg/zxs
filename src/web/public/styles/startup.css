@@ -12,6 +12,9 @@ html[data-zxs-startup="failed"] body > :not(#zxs-startup-error) { display: none 
 }
 #zxs-startup-error, #zxs-startup-error * { font-family: system-ui, sans-serif !important; }
 #zxs-startup-error h1 { font-size: 1.5rem; }
-#zxs-startup-error button { padding: .5rem 1rem; cursor: pointer; }
+#zxs-startup-error button { appearance: none; padding: .5rem 1rem; border: 0; border-radius: .5rem; background: ButtonFace; color: ButtonText; box-shadow: none; cursor: pointer; }
+@media (hover: hover) and (pointer: fine) {
+  #zxs-startup-error button:hover { background: color-mix(in srgb, ButtonText 12%, ButtonFace); }
+}
 #zxs-startup-error button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 @media (max-width: 40rem) { #zxs-startup-error { margin: 1rem; padding: 1rem; } }

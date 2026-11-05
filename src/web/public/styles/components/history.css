@@ -1,6 +1,5 @@
 .zxs-activity-list { display: grid; grid-template-columns: minmax(0,1fr); gap: 0; list-style: none; padding: 0; margin: 0; }
-.zxs-activity-list > li { display: grid; gap: 0; min-width: 0; padding: 0; border-block-end: var(--zxs-control-border-width) solid var(--zxs-block-border); }
-.zxs-activity-list > li:last-child { border-block-end: 0; }
+.zxs-activity-list > li { display: grid; gap: 0; min-width: 0; padding: 0; }
 .zxs-activity-list > li > :is(strong,span,p,time) { display: flex; align-items: center; }
 .zxs-activity-list time { color: var(--zxs-block-muted); }
 .zxs-history-toolbar > .zxs-select { flex: 0 1 24rem; max-width: 100%; }

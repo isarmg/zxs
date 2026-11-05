@@ -13,8 +13,8 @@ const makeControl = (tag = 'INPUT', type = 'text') => {
         getPropertyValue(property) { return this[property]; },
     };
     for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
-        style[`border${side}Width`] = side === 'Bottom' ? '1px' : '0px';
-        style[`border${side}Style`] = side === 'Bottom' ? 'dashed' : 'none';
+        style[`border${side}Width`] = '0px';
+        style[`border${side}Style`] = 'none';
         style[`border${side}Color`] = 'rgb(0, 0, 0)';
     }
     return {
@@ -47,6 +47,7 @@ function fixture() {
             querySelectorAll(selector) { assert.equal(selector, 'input.zxs-input,textarea.zxs-input'); return f.controls; },
         },
         getComputedStyle(node) { return node.style; },
+        matchMedia(query) { assert.equal(query, '(forced-colors: active)'); return {matches: f.forced ?? false}; },
     });
     return f;
 }
@@ -70,7 +71,8 @@ check('modern transparent color', f => { f.input.style.backgroundColor = 'color(
 check('disabled text', f => { f.input.disabled = true; f.input.style.opacity = '0.6'; }, true);
 check('fieldset-disabled text', f => { f.input.inheritedDisabled = true; f.input.style.opacity = '0.6'; }, true);
 check('narrow layout viewport', f => { f.clientWidth = 240; for (const node of f.controls) node.box = box(12, 216); }, true);
-check('keyboard focus uses thicker dashed bottom', f => { f.input.focusVisible = true; f.input.style.borderBottomWidth = '3px'; }, true);
+const focus = f => { f.input.focusVisible = true; Object.assign(f.input.style, {borderBottomWidth: '3px', borderBottomStyle: 'solid'}); };
+check('keyboard focus uses a solid bottom', focus, true);
 check('invisible outline color', f => { Object.assign(f.input.style, {outlineWidth: '3px', outlineStyle: 'solid', outlineColor: 'rgba(0, 0, 0, 0)'}); }, true);
 check('hidden controls are outside current scene', f => { f.textarea.visible = false; f.textarea.style.borderLeftWidth = '2px'; }, true);
 const closed = check('closed disclosure is outside current scene even with layout rects', f => {
@@ -101,10 +103,12 @@ for (const property of ['backgroundImage', 'borderImageSource']) {
     check(`stale G4 ${property}`, f => { f.input.style[property] = 'url("blob:stale-g4")'; }, false, 'noImages');
 }
 check('rectangular keyboard outline', f => { f.input.focusVisible = true; Object.assign(f.input.style, {borderBottomWidth: '3px', outlineWidth: '2px', outlineStyle: 'solid'}); }, false, 'noOutline');
-check('solid bottom is not dashed', f => { f.input.style.borderBottomStyle = 'solid'; }, false, 'bottomStyle');
-check('transparent bottom is not visible', f => { f.input.style.borderBottomColor = 'rgba(0, 0, 0, 0)'; }, false, 'bottomStyle');
-check('modern transparent bottom is not visible', f => { f.input.style.borderBottomColor = 'rgb(0 0 0 / 0%)'; }, false, 'bottomStyle');
-check('missing bottom', f => { f.input.style.borderBottomWidth = '0px'; }, false, 'bottomWidth');
+check('idle dashed bottom is rejected', f => { f.input.style.borderBottomStyle = 'dashed'; }, false, 'bottomStyle');
+check('idle solid bottom is rejected', f => { f.input.style.borderBottomStyle = 'solid'; }, false, 'bottomStyle');
+check('keyboard dashed bottom is rejected', f => { focus(f); f.input.style.borderBottomStyle = 'dashed'; }, false, 'bottomStyle');
+check('transparent focus bottom is not visible', f => { focus(f); f.input.style.borderBottomColor = 'rgba(0, 0, 0, 0)'; }, false, 'bottomStyle');
+check('modern transparent focus bottom is not visible', f => { focus(f); f.input.style.borderBottomColor = 'rgb(0 0 0 / 0%)'; }, false, 'bottomStyle');
+check('missing focused bottom', f => { focus(f); f.input.style.borderBottomWidth = '0px'; }, false, 'bottomWidth');
 check('unfocused thick bottom', f => { f.input.style.borderBottomWidth = '3px'; }, false, 'bottomWidth');
 check('focus without thicker bottom', f => { f.input.focusVisible = true; }, false, 'bottomWidth');
 check('box shadow creates a second border', f => { f.input.style.boxShadow = 'rgb(0, 0, 0) 0px 0px 0px 2px'; }, false, 'noShadow');
@@ -127,7 +131,7 @@ check('no current text controls cannot silently pass', f => { f.controls = []; }
 const anonymous=f=>{f.input.anonymous=true;f.input.style.borderBottomWidth='0px';f.input.style.borderBottomStyle='none';};
 check('anonymous idle input is unlined', anonymous, true);
 check('anonymous keyboard focus is solid', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='solid';}, true);
-check('anonymous policy does not relax other controls', f=>{anonymous(f);f.textarea.style.borderBottomWidth='0px';}, false);
+check('anonymous policy does not relax other controls', f=>{anonymous(f);f.textarea.style.borderBottomWidth='1px';}, false);
 check('anonymous idle dashed line is rejected', f=>{anonymous(f);f.input.style.borderBottomWidth='1px';f.input.style.borderBottomStyle='dashed';}, false, 'bottomWidth');
 check('anonymous zero-width dashed style is rejected', f=>{anonymous(f);f.input.style.borderBottomStyle='dashed';}, false, 'bottomStyle');
 check('anonymous solid line at rest is rejected', f=>{anonymous(f);f.input.style.borderBottomWidth='1px';f.input.style.borderBottomStyle='solid';}, false, 'bottomWidth');
@@ -145,10 +149,10 @@ const folderSearch = f => {
         style: {...input.style, maskImage: 'none', clipPath: 'none', borderImageOutset: '0px'},
         attrs: {'data-zxs-contour-state': 'clip'},
         getAttribute(name) { return this.attrs[name] ?? null; },
-        getBoundingClientRect: () => ({left: 31, top: 39, right: 273, bottom: 85, width: 242, height: 46}),
+        getBoundingClientRect: () => box(),
         querySelectorAll(selector) { assert.equal(selector, 'input'); return [input]; },
     };
-    for (const side of ['Top', 'Right', 'Bottom', 'Left']) frame.style[`border${side}Width`] = '1px';
+    for (const side of ['Top', 'Right', 'Bottom', 'Left']) frame.style[`border${side}Width`] = '0px';
     input.searchFrame = frame;
     input.parentElement = frame;
 };
@@ -193,6 +197,22 @@ check('folder search cannot leave vertical dead space', f => {
     folderSearch(f); f.input.box = {...f.input.box, top: 44, height: 40};
 }, false, 'searchSurface');
 check('folder search does not relax unrelated input styles', f => {
-    folderSearch(f); f.textarea.style.borderBottomWidth = '0px';
+    folderSearch(f); f.textarea.style.borderBottomWidth = '1px';
 }, false);
+check('folder search frame must also be borderless', f => {
+    folderSearch(f); f.input.searchFrame.style.borderTopWidth = '1px';
+}, false, 'searchSurface');
+check('forced colors retain a native input focus outline', f => {
+    focus(f); f.forced = true; Object.assign(f.input.style, {outlineWidth: '2px', outlineStyle: 'solid'});
+}, true);
+check('forced colors cannot lose native input focus', f => {
+    focus(f); f.forced = true;
+}, false, 'noOutline');
+check('forced colors search uses its native outer outline', f => {
+    folderSearch(f); f.input.focusVisible = true; f.forced = true;
+    Object.assign(f.input.searchFrame.style, {outlineWidth: '2px', outlineStyle: 'solid'});
+}, true);
+check('forced colors search cannot lose native focus', f => {
+    roundedSearchFocus(f); f.forced = true;
+}, false, 'searchSurface');
 console.log(`PASS ${cases} text input observer model cases; no browser rendering executed`);

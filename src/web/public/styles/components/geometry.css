@@ -39,7 +39,7 @@
 .zxs-app-shell .zxs-flow--end { align-items: flex-end; }
 .zxs-app-shell .zxs-flow--stretch { align-items: stretch; }
 .zxs-app-shell .zxs-frame {
-  --zxs-row-border: var(--zxs-control-border-width);
+  --zxs-row-border: 0px;
   --zxs-contour-extent: var(--zxs-contour-panel);
   --zxs-contour-mode: clip;
   --zxs-contour-foreground: 1;
@@ -47,12 +47,12 @@
   min-width: 0;
   margin: 0;
   padding: 0;
-  border: var(--zxs-control-border-width) solid var(--zxs-block-border);
+  border: 0;
   border-radius: 0;
   background: var(--zxs-bg-panel);
   overflow-wrap: anywhere;
 }
-.zxs-app-shell .zxs-frame--inset { padding-inline: calc(var(--zxs-list-content-inset) - var(--zxs-control-border-width)); }
+.zxs-app-shell .zxs-frame--inset { padding-inline: var(--zxs-list-content-inset); }
 .zxs-app-shell :is(.zxs-row, .zxs-button) {
   --zxs-control-height: var(--zxs-compact-row-height);
   --zxs-control-content-size: 1em;
@@ -78,6 +78,8 @@
 }
 .zxs-app-shell .zxs-row--flush { padding: 0; }
 .zxs-app-shell .zxs-row--center { display: flex; align-items: center; padding-block: 0; }
+/* Child controls already own a full row height; flex alignment centers text. */
+.zxs-app-shell .zxs-flow.zxs-row { padding-block: 0; }
 .zxs-app-shell .zxs-row--option { height: var(--zxs-control-height); padding-block: 0; line-height: var(--zxs-control-height); }
 .zxs-app-shell .zxs-input {
   --zxs-control-height: var(--zxs-input-row-height);

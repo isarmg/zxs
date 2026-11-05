@@ -3,17 +3,31 @@
 const done=arguments[arguments.length-1];
 (async () => {
     const black='rgb(0, 0, 0)';
+    const rgba=value=>{
+        if(!value) return [];
+        const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+        const context=canvas.getContext('2d');context.fillStyle=value;context.fillRect(0,0,1,1);
+        return [...context.getImageData(0,0,1,1).data];
+    };
+    const sameColor=(actual,expected)=>expected.length===4&&actual.every((value,index)=>Math.abs(value-expected[index])<=1);
     const rendered=e=>e.checkVisibility({opacityProperty:true,visibilityProperty:true});
     const triggers=[...document.querySelectorAll('.zxs-select-trigger')].filter(rendered);
     const panels=[...document.querySelectorAll('.zxs-select-panel:popover-open')];
-    const inspect=async node=>{
+    const inspect=async (node, expanded)=>{
         const css=getComputedStyle(node), box=node.getBoundingClientRect();
         const sides=['Top','Right','Bottom','Left'];
         const widths=sides.map(side=>parseFloat(css[`border${side}Width`]));
+        const hovering=!expanded&&!node.disabled&&matchMedia('(hover: hover) and (pointer: fine)').matches&&node.matches(':hover')
+            &&!node.closest('.zxs-row,.zxs-hover-row,.zxs-form-field,.zxs-file-table,.zxs-auth-actions');
+        const expectedFill=expanded?null:rgba(css.getPropertyValue(hovering?'--zxs-row-hover-bg':'--zxs-bg-panel').trim());
         let paint;
         const foreground=node.querySelector(':scope > svg[data-zxs-contour-decoration="foreground"]');
         let source, property, ownedUrl, livePath, pathData;
+        if(!expanded && foreground) return {valid:false,reason:'collapsed trigger retains a foreground border'};
         if(foreground) {
+            if(node.getAttribute('data-zxs-contour-foreground-anchor')!=='local'||getComputedStyle(foreground).position!=='absolute') {
+                return {valid:false,reason:'menu border must be locally anchored, not a fixed scroll overlay'};
+            }
             const path=foreground.querySelector('path'), style=getComputedStyle(path);
             livePath=path;pathData=path.getAttribute('d');
             const svgBox=foreground.getBoundingClientRect();
@@ -66,17 +80,19 @@ const done=arguments[arguments.length-1];
                 const stable=node.isConnected&&(foreground?foreground.isConnected&&livePath.getAttribute('d')===pathData&&getComputedStyle(livePath).fill===black&&getComputedStyle(livePath).fillRule==='evenodd':getComputedStyle(node)[property]===source);
                 // A transparent Select surface is intentional in content-blocks.
                 // Only a foreground overlay must leave its content hole clear.
-                paint={valid:stable&&edgePixels.every(n=>n>0)&&(!foreground||centerAlpha===0),property,stable,edgePixels,centerAlpha};
+                const center=[...pixels.slice((Math.floor(h/2)*w+Math.floor(w/2))*4,(Math.floor(h/2)*w+Math.floor(w/2))*4+4)];
+                const surface=expanded||sameColor(center,expectedFill);
+                paint={valid:stable&&surface&&(expanded?edgePixels.every(n=>n>0):edgePixels.every(n=>n===0))&&(!foreground||centerAlpha===0),property,stable,edgePixels,centerAlpha,surface};
             } finally {
                 if(ownedUrl)URL.revokeObjectURL(ownedUrl);
             }
         } else {
-            paint={valid:sides.every(side=>css[`border${side}Color`]===black&&css[`border${side}Style`]==='solid'),property:'native-border'};
+            paint={valid:expanded?sides.every(side=>css[`border${side}Color`]===black&&css[`border${side}Style`]==='solid'):sides.every(side=>css[`border${side}Style`]==='none')&&sameColor(rgba(css.backgroundColor),expectedFill),property:expanded?'native-border':'borderless'};
         }
-        return {valid:rendered(node)&&Number(css.opacity)===1&&box.width>0&&box.height>=36&&widths.every(w=>w===1)&&paint.valid,
-            role:node.getAttribute('role'),opacity:css.opacity,disabled:node.disabled===true,state:node.dataset.zxsContourState,
+        return {valid:rendered(node)&&Number(css.opacity)===1&&box.width>0&&box.height>=36&&widths.every(w=>w===(expanded?1:0))&&paint.valid,
+            role:node.getAttribute('role'),expanded,opacity:css.opacity,disabled:node.disabled===true,state:node.dataset.zxsContourState,
             width:box.width,height:box.height,widths,paint};
     };
-    const controls=await Promise.all([...triggers,...panels].map(inspect));
+    const controls=await Promise.all([...triggers.map(node=>inspect(node,false)),...panels.map(node=>inspect(node,true))]);
     return {valid:triggers.length>0&&panels.length===1&&controls.every(c=>c.valid),controls};
 })().then(done,error=>done({valid:false,error:String(error)}));

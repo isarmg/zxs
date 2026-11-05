@@ -150,7 +150,9 @@ fn file_rows_use_checked_selection_and_pointer_capable_hover() {
     assert!(!view.contains("selected: Memo<Option<String>>"));
     assert!(css.contains(".zxs-file-table tbody tr { background: transparent; }"));
     assert!(css.contains("@media (hover: hover) and (pointer: fine)"));
-    assert!(css.contains("inset-inline: var(--zxs-contour-panel);"));
+    assert!(css.contains("left: var(--zxs-file-scroll-left); width: 100cqw;"));
+    assert!(!css.contains(".zxs-file-row-decoration::after"));
+    assert!(!css.contains(".zxs-file-pagination::before"));
     assert!(css.contains("--zxs-contour-extent: var(--zxs-contour-panel);"));
     assert!(css.contains("tr[aria-selected=true] > td > .zxs-file-row-decoration > .zxs-file-row-surface { opacity: 1; }"));
     assert!(css.contains(
@@ -322,16 +324,17 @@ fn shared_form_groups_align_fields_without_individual_input_boxes() {
     assert!(css.contains(".zxs-form-grid {"));
     assert!(css.contains(".zxs-form-field {"));
     assert!(css.contains("align-items: center; column-gap:"));
-    assert!(css.contains("border: 0; border-bottom: 1px dashed"));
+    assert!(!css.contains("dashed"));
     assert!(
         css.contains(
-            ":root :is(input,textarea).zxs-input:focus-visible { border-bottom-width: 3px;"
+            ":root :is(input,textarea).zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }"
         )
     );
     assert!(css.contains(
         "background: transparent; outline: 0; --zxs-contour-extent: 0px; --zxs-contour-mode: none;"
     ));
-    assert!(!css.contains("@media (forced-colors: active)"));
+    assert!(css.contains("@media (forced-colors: active)"));
+    assert!(css.contains(":focus-visible:not(.zxs-file-search > input) { outline: 2px solid Highlight; outline-offset: 2px; }"));
     let geometry = include_str!("../../../src/web/public/styles/components/geometry.css");
     assert!(!geometry.contains(".zxs-input--underline"));
     assert!(!css.contains(".zxs-form-field + .zxs-form-field"));
@@ -362,7 +365,7 @@ fn smb_selection_and_passwords_share_aligned_form_groups() {
     assert_eq!(smb.matches("<div class=\"zxs-form-grid\">").count(), 2);
     let css = include_str!("../../../src/web/public/styles/components/base.css");
     assert!(css.contains(":root :is(input,textarea).zxs-input {"));
-    assert!(css.contains("border: 0; border-bottom: 1px dashed"));
+    assert!(!css.contains("dashed"));
 }
 
 #[test]
@@ -395,6 +398,98 @@ fn folder_search_uses_one_input_surface_and_explicit_enter_submission() {
     assert!(focus.contains("--zxs-contour-mode: paint;"));
     assert!(focus.contains("box-shadow: 0 0 0 3px"));
     assert!(focus.contains("0 0 0 5px var(--zxs-focus, Highlight)"));
+    assert!(css.contains("@media (forced-colors: active)"));
+    assert!(css.contains("outline: 2px solid Highlight; outline-offset: 3px; box-shadow: none;"));
+}
+
+fn style_rule<'a>(css: &'a str, selector: &str) -> &'a str {
+    let opening = format!("{selector} {{");
+    let (start, _) = css
+        .match_indices(&opening)
+        .find(|(start, _)| *start == 0 || css.as_bytes()[start - 1] == b'\n')
+        .unwrap_or_else(|| panic!("missing style rule: {selector}"));
+    css[start + opening.len()..].split('}').next().unwrap()
+}
+
+#[test]
+fn decorative_borders_are_exclusive_to_the_expanded_select_card() {
+    let base = include_str!("../../../src/web/public/styles/components/base.css");
+    let geometry = include_str!("../../../src/web/public/styles/components/geometry.css");
+    let select = include_str!("../../../src/web/public/styles/components/select.css");
+    let files = include_str!("../../../src/web/public/styles/components/file-manager.css");
+    let history = include_str!("../../../src/web/public/styles/components/history.css");
+    for (css, selector) in [
+        (base, ".zxs-button,.zxs-input"),
+        (base, ".zxs-form-grid"),
+        (base, ".zxs-error"),
+        (geometry, ".zxs-app-shell .zxs-frame"),
+        (select, ":root .zxs-select-trigger.zxs-input"),
+        (files, ".zxs-app-shell .zxs-node-tag"),
+    ] {
+        assert!(
+            style_rule(css, selector).contains("border: 0;"),
+            "{selector}"
+        );
+    }
+    let panel = style_rule(select, ".zxs-select .zxs-select-panel");
+    assert!(panel.contains("border: var(--zxs-control-border-width) solid #000;"));
+    assert!(panel.contains("--zxs-row-border: var(--zxs-control-border-width);"));
+    assert!(!select.contains("border-color: #000"));
+    assert!(!files.contains("border-block") && !history.contains("border-block"));
+    assert!(select.contains(":focus-visible"));
+    assert!(select.contains("outline: 2px solid Highlight;"));
+}
+
+#[test]
+fn shared_rows_own_one_inset_without_wrapping_controls_in_extra_row_padding() {
+    let base = include_str!("../../../src/web/public/styles/components/base.css");
+    let geometry = include_str!("../../../src/web/public/styles/components/geometry.css");
+    let files = include_str!("../../../src/web/public/styles/components/file-manager.css");
+    let management = include_str!("../../../src/web/src/management.rs");
+    assert!(
+        style_rule(base, ".zxs-form-field")
+            .contains("padding-inline: var(--zxs-list-content-inset,.75rem);")
+    );
+    assert!(!base.contains(".zxs-form-grid > .zxs-form-field"));
+    assert!(
+        style_rule(base, ".zxs-app-shell .zxs-form-field > .zxs-row")
+            .contains("padding-inline: 0;")
+    );
+    assert!(style_rule(geometry, ".zxs-app-shell .zxs-flow.zxs-row").contains("padding-block: 0;"));
+    assert!(style_rule(files, ".zxs-file-properties dd").contains("margin: 0;"));
+    assert!(!management.contains("class=\"zxs-flow zxs-row\""));
+    assert!(geometry.contains("--zxs-compact-row-height: 36px;"));
+    assert!(geometry.contains("--zxs-input-row-height: 44px;"));
+}
+
+#[test]
+fn shared_row_hover_uses_borderless_g4_without_touch_or_nested_highlights() {
+    let appearance = include_str!("../../../src/web/public/styles/components/content-blocks.css");
+    let files = include_str!("../../../src/web/public/styles/components/file-manager.css");
+    let select = include_str!("../../../src/web/public/styles/components/select.css");
+    assert!(appearance.contains("@media (hover: hover) and (pointer: fine)"));
+    assert!(appearance.contains(":is(.zxs-row, .zxs-form-field, .zxs-hover-row)"));
+    assert!(
+        appearance
+            .contains(":not(:where(.zxs-hover-row *, .zxs-form-field *, .zxs-select-option))")
+    );
+    assert!(appearance.contains("background: var(--zxs-row-hover-bg);"));
+    assert!(appearance.contains("--zxs-contour-mode: paint;"));
+    let hover = appearance
+        .split("@media (hover: hover) and (pointer: fine)")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(!hover.contains("border-radius:") && !hover.contains("border:"));
+    assert!(
+        style_rule(files, ".zxs-file-row-surface").contains("background: var(--zxs-row-hover-bg);")
+    );
+    assert!(
+        style_rule(select, ".zxs-select-option[data-active=true]")
+            .contains("--zxs-contour-mode: paint;")
+    );
 }
 
 #[test]
@@ -413,4 +508,55 @@ fn account_form_keeps_unknown_outcomes_disabled_without_a_false_busy_indicator()
     );
     assert!(account.contains("pending.get().to_string()"));
     assert!(account.contains("if pending.get()"));
+}
+
+#[test]
+fn anonymous_input_hover_hosts_preserve_the_six_rows_and_native_controls() {
+    for (source, prefix) in [
+        (
+            include_str!("../../../src/interface/src/components/login.rs"),
+            "login",
+        ),
+        (include_str!("../../../src/web/src/setup.rs"), "setup"),
+    ] {
+        let hosts = source
+            .split("<div class=\"zxs-auth-input-row zxs-hover-row\">")
+            .skip(1)
+            .map(|part| part.split("</div>").next().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(hosts.len(), 2);
+        for (host, field) in hosts.iter().zip(["username", "password"]) {
+            assert_eq!(host.matches("<input ").count(), 1);
+            assert!(!host.contains("<label") && !host.contains("<button"));
+            assert!(host.contains(&format!("id=\"zxs-{prefix}-{field}\"")));
+            assert!(source.contains(&format!("for=\"zxs-{prefix}-{field}\"")));
+            assert!(host.contains(&format!("name=\"{field}\"")));
+            assert!(host.contains("class=\"zxs-input\""));
+        }
+    }
+}
+
+#[test]
+fn select_ring_and_fill_stay_with_the_card_while_only_options_scroll() {
+    let css = include_str!("../../../src/web/public/styles/components/select.css");
+    let trigger = style_rule(css, ":root .zxs-select-trigger.zxs-input");
+    assert!(trigger.contains("background: var(--zxs-bg-panel);"));
+    assert!(trigger.contains("border: 0;"));
+    let panel = style_rule(css, ".zxs-select .zxs-select-panel");
+    assert!(panel.contains("overflow: visible;"));
+    assert!(!panel.contains("overflow: auto;"));
+    assert!(panel.contains("border: var(--zxs-control-border-width) solid #000;"));
+    let scroller = style_rule(css, ".zxs-select-options");
+    assert!(scroller.contains("position: relative; min-height: 0; overflow: auto;"));
+    assert!(scroller.contains("overscroll-behavior: contain;"));
+    let component = include_str!("../../../src/interface/src/components/select.rs");
+    assert!(component.contains("data-zxs-contour-foreground-anchor=\"local\""));
+    assert!(component.contains("<div class=\"zxs-select-options\" node_ref=scroller>"));
+    assert!(component.contains("scroller.set_scroll_top(bottom - scroller.client_height())"));
+    assert!(!component.contains("panel.set_scroll_top("));
+    let controller = include_str!("../../../src/interface/src/contours/controller.rs");
+    assert!(
+        controller.contains("set_css_text(&paint::foreground_style(width, height, &css, local))")
+    );
+    assert!(controller.contains("== \"fixed\""));
 }

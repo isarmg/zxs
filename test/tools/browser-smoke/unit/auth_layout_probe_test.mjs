@@ -55,9 +55,13 @@ function fixture(empty=false) {
         button.className='zxs-button';button.attributes[`data-setup-${key}`]='';button.attributes['aria-label']=text;button.attributes.title=text;
     }
     if(empty){submit.box=box(280,36,140);check.box=box(280,36,44,186);clear.box=box(280,36,44,238);append(actions,submit,check,clear);}else append(actions,submit);
-    append(form,usernameLabel,username,passwordLabel,password,information,actions);
+    const usernameRow=node('',136),passwordRow=node('',208);
+    for(const [row,input] of [[usernameRow,username],[passwordRow,password]]) {
+        row.className='zxs-auth-input-row zxs-hover-row';row.box={...input.box};append(row,input);
+    }
+    append(form,usernameLabel,usernameRow,passwordLabel,passwordRow,information,actions);
     let decoded=0;
-    const f={root,card,header,language,theme,form,usernameLabel,username,passwordLabel,password,information,status,actions,submit,check,clear,node,append,expectedSetup:empty?'empty':'existing',phase:'initial',innerWidth:320,innerHeight:568,
+    const f={root,card,header,language,theme,form,usernameLabel,username,usernameRow,passwordLabel,password,passwordRow,information,status,actions,submit,check,clear,node,append,expectedSetup:empty?'empty':'existing',phase:'initial',innerWidth:320,innerHeight:568,
         decoded:()=>decoded,onDecode:()=>{},fillShape:'round',fillAlpha:255,fillColor:[242,242,242],tileWidth:101,tileHeight:101};
     class Image {
         naturalWidth=f.tileWidth;naturalHeight=f.tileHeight;
@@ -129,7 +133,8 @@ for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
 // These rectangles replay the failure classification, not CSS layout itself.
 f=fixture(true);f.innerWidth=980;f.innerHeight=760;f.root.clientWidth=980;f.root.scrollWidth=980;
 f.card.style.aspectRatio='3 / 2';f.card.box=box(301,216,324,328);f.form.box=box(301,228,272,354);
-for(const [i,node] of [f.usernameLabel,f.username,f.passwordLabel,f.password].entries())node.box=box(301+i*36,36,272,354);
+for(const [i,node] of [f.usernameLabel,f.usernameRow,f.passwordLabel,f.passwordRow].entries())node.box=box(301+i*36,36,272,354);
+f.username.box={...f.usernameRow.box};f.password.box={...f.passwordRow.box};
 f.information.box=box(445,48,272,354);f.status.box=box(445,48,272,354);
 f.status.textContent='Please set an account name and password.';f.actions.box=box(493,36,272,354);
 f.submit.box=box(493,36,160,354);f.check.box=box(493,36,36,523.59375);f.clear.box=box(493,36,36,569.1875);
@@ -162,7 +167,8 @@ requestId.box=box(352,24);result=await f.run();assert.equal(result.valid,false);
 f=fixture();f.expectedSetup='rate-limited';f.phase='status-rejected';f.innerWidth=980;f.innerHeight=760;
 f.root.clientWidth=980;f.root.scrollWidth=980;f.card.style.aspectRatio='3 / 2';
 f.card.box=box(301,216,324,328);f.form.box=box(301,396,272,354);
-for(const [i,node] of [f.usernameLabel,f.username,f.passwordLabel,f.password].entries())node.box=box(301+i*36,36,272,354);
+for(const [i,node] of [f.usernameLabel,f.usernameRow,f.passwordLabel,f.passwordRow].entries())node.box=box(301+i*36,36,272,354);
+f.username.box={...f.usernameRow.box};f.password.box={...f.passwordRow.box};
 f.information.box=box(445,216,272,354);f.status.box=box(445,216,272,354);f.status.tagName='DIV';f.status.className='zxs-error zxs-row';f.status.attributes.role='alert';
 f.status.textContent='RESOURCE_LIMIT_EXCEEDED · too many setup attempts; retry after 60 seconds (retryable; check the original save status before retrying)';
 const rateId=f.node('Request ID: req_00000000000000000000000000000012',589,'P');rateId.className='zxs-request-id';rateId.box=box(589,72,272,354);
@@ -172,7 +178,7 @@ result=await f.run();assert.equal(result.valid,false);assert.equal(result.formPr
 assert.equal(result.preferredRatio,false,'Desktop error feedback must release the preferred ratio');
 assert.equal(result.informationValid,true);assert.equal(result.stateValid,true);assert.equal(result.controls.slice(2).every(e=>!e.valid),true);
 f.card.style.aspectRatio='auto';result=await f.run();assert.equal(result.preferredRatio,true);assert.equal(result.valid,false,'Changing the declaration alone never excuses overflow');
-const rateNodes=[f.card,f.form,f.usernameLabel,f.username,f.passwordLabel,f.password,f.information,f.status,rateId,rateCode,f.actions,f.submit,f.check];
+const rateNodes=[f.card,f.form,f.usernameLabel,f.usernameRow,f.username,f.passwordLabel,f.passwordRow,f.password,f.information,f.status,rateId,rateCode,f.actions,f.submit,f.check];
 for(const node of rateNodes)node.box=box(node.box.y-48,node.box.height,node.box.width,node.box.x-295);
 f.innerWidth=390;f.innerHeight=844;f.root.clientWidth=390;f.root.scrollWidth=390;f.card.box=box(253,396,324,33);
 result=await f.run();assert.equal(result.valid,true,'Measured 390x844 content-sized card contains all six rows and both actions');
@@ -220,7 +226,14 @@ for(const empty of [false,true])for(const [name,change] of [
     ['missing row',f=>{f.form.children.splice(0,1);}],
     ['seventh row',f=>{f.append(f.form,f.node('extra',316));}],
     ['wrong row order',f=>{[f.form.children[0],f.form.children[1]]=[f.form.children[1],f.form.children[0]];}],
-    ['wrapped field box',f=>{f.form.children[0].tagName='DIV';}],
+    ['wrapped label box',f=>{f.form.children[0].tagName='DIV';}],
+    ['missing input row role',f=>{f.usernameRow.className='zxs-hover-row';}],
+    ['missing input hover role',f=>{f.passwordRow.className='zxs-auth-input-row';}],
+    ['duplicate input wrapper child',f=>{f.append(f.usernameRow,f.node('',136));}],
+    ['unwrapped input',f=>{f.form.children[1]=f.username;f.username.parentElement=f.form;}],
+    ['input wrapper not aligned',f=>{f.usernameRow.box=box(136,36,240,42);}],
+    ['input wrapper has border',f=>{f.usernameRow.style.borderBottomWidth='1px';}],
+    ['input wrapper painted while resting',f=>{f.usernameRow.style.borderImageSource='url("blob:fill")';}],
     ['wrong hint row',f=>{f.information.className='';}],
     ['wrong action row',f=>{f.actions.className='';}],
     ['hidden label',f=>{f.usernameLabel.visible=false;}],
@@ -431,7 +444,9 @@ if(!process.argv.includes('--models-only')) {
     assert.match(management,/super::auth_layout::rate_limited\(browser, output\)/);
     assert.match(host,/browser.command\("POST", "\/refresh"/);
     assert.match(host,/:focus-visible/);assert.match(host,/\.zxs-auth-information \.zxs-error/);
-    assert.ok(host.indexOf('window.scrollTo(0,0)')<host.indexOf('Duration::from_millis(150)'));
+    assert.ok(host.indexOf('window.scrollTo(0,0)')<host.indexOf('\"id\":\"auth-layout-mouse\"'));
+    assert.ok(host.indexOf('\"id\":\"auth-layout-mouse\"')<host.indexOf('Duration::from_millis(150)'));
+    assert.match(host,/\"origin\":\"viewport\",\"x\":0,\"y\":0/);
     assert.ok(host.indexOf('Duration::from_millis(150)')<host.indexOf('"/execute/async"'));
     assert.ok(host.indexOf('dir.join(&name)')<host.indexOf('if geometry["valid"] != true'));
     assert.ok(host.indexOf('dir.join("login-layout.json")')<host.indexOf('if geometry["valid"] != true'));
@@ -447,6 +462,11 @@ if(!process.argv.includes('--models-only')) {
     assert.ok(fresh.indexOf('SetupFixture::new(')<fresh.indexOf('fixture.open(browser)?'));
     assert.ok(fresh.indexOf('fixture.open(browser)?')<fresh.indexOf('credentials('));
     assert.match(setupSource,/<form data-first-account-form=""/);assert.match(loginSource,/<form data-auth-form="login"/);
+    for(const formSource of [setupSource,loginSource]) {
+        assert.equal((formSource.match(/<div class="zxs-auth-input-row zxs-hover-row">/g)||[]).length,2);
+        assert.equal((formSource.match(/<label class="zxs-auth-label"/g)||[]).length,2);
+        assert.equal((formSource.match(/<input id=/g)||[]).length,2);
+    }
     for(const text of ['请设置账户名和密码','Set a name and password.','设置账户','Set up account'])assert.ok(setupSource.includes(text));
     assert.doesNotMatch(setupSource,/Please set an account name and password\./);
     for(const marker of ['data-setup-check','data-setup-clear','data-setup-user','data-setup-password'])assert.ok(setupSource.includes(marker));
