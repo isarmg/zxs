@@ -322,8 +322,6 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     {storage::view(state)}
     {disks::view(state)}
     <section class="zxs-flow" aria-label=Message::Title.text()>
-    <h2>{Message::Title.text()}</h2>
-    <p>{Message::Introduction.text()}</p>
     <nav class="zxs-flow">{messages::ACTIONS.into_iter().map(move |(kind,label)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy||s.admin_console.uncertain_operation.is_some()) on:click=move |_|select(state,kind)>{label.text()}</button>}).collect_view()}</nav>
     <p role="alert">{move ||state.with(|s|s.admin_console.error.as_ref().map(Failure::display))}</p>
     <Show when=move ||state.with(|s|s.admin_console.uncertain_operation.is_some())><p role="alert">{Message::UnknownOutcome.text()}</p><p>{move ||state.with(|s|s.admin_console.uncertain_operation.as_ref().map(|operation| operation.label()))}</p><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,false)||s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).is_none()) on:click=move |_|{let Some(id)=state.with_untracked(|s|s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).map(str::to_owned)) else {return};execute(state,request::operation_outcome(&id))}>{Message::CheckOriginalOperation.text()}</button></Show>

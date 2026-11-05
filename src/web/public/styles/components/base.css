@@ -15,6 +15,8 @@
  * Buttons used by Select and non-input tag chips keep their own surface rules. */
 :root :is(input,textarea).zxs-input { min-width: 0; max-width: 100%; border: 0; background: transparent; outline: 0; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 :root :is(input,textarea).zxs-input:focus-visible { border-bottom: 3px solid var(--zxs-focus,Highlight); }
+/* Directory settings use the shared compact row and the native editing caret. */
+:root .zxs-storage-activation input.zxs-input:focus-visible { border-bottom: 0; }
 @media (forced-colors: active) {
   /* Search owns its focus on the outer label; all other text controls retain
    * a system indicator even when author paint is suppressed. */

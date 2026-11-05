@@ -17,9 +17,7 @@ const done=arguments[arguments.length-1];
         const css=getComputedStyle(node), box=node.getBoundingClientRect();
         const sides=['Top','Right','Bottom','Left'];
         const widths=sides.map(side=>parseFloat(css[`border${side}Width`]));
-        const hovering=!expanded&&!node.disabled&&matchMedia('(hover: hover) and (pointer: fine)').matches&&node.matches(':hover')
-            &&!node.closest('.zxs-row,.zxs-hover-row,.zxs-form-field,.zxs-file-table,.zxs-auth-actions');
-        const expectedFill=expanded?null:rgba(css.getPropertyValue(hovering?'--zxs-row-hover-bg':'--zxs-bg-panel').trim());
+        const expectedFill=expanded?null:rgba(css.getPropertyValue('--zxs-bg-panel').trim());
         let paint;
         const foreground=node.querySelector(':scope > svg[data-zxs-contour-decoration="foreground"]');
         let source, property, ownedUrl, livePath, pathData;

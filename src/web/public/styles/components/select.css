@@ -6,7 +6,8 @@
   --zxs-contour-extent: calc(var(--zxs-select-row-height, 36px) / 2);
   --zxs-contour-mode: clip;
 }
-.zxs-select-trigger.zxs-input { border: 0; background: var(--zxs-bg-panel); text-decoration: none; }
+/* The trigger owns its persistent fill above the shared input reset. */
+:root .zxs-select-trigger.zxs-input { border: 0; background: var(--zxs-bg-panel); text-decoration: none; }
 .zxs-select-trigger:disabled { opacity: 1; cursor: not-allowed; }
 .zxs-select-trigger:disabled :is(.zxs-select-value, .zxs-select-arrow) { opacity: .6; }
 /* The shared G4 painter follows these shadow offsets around its exact contour.
@@ -45,7 +46,12 @@
   display: block; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   --zxs-contour-extent: 0px;
 }
-.zxs-select-option[data-active=true] { background: var(--zxs-row-hover-bg); color: var(--zxs-text-primary, #18181b); --zxs-contour-extent: var(--zxs-contour-control); --zxs-contour-mode: paint; }
+/* Pointer feedback belongs only to the enabled row under the pointer. The
+ * active descendant also remains visible during keyboard navigation. */
+@media (hover: hover) and (pointer: fine) {
+  .zxs-select-panel:popover-open .zxs-select-option[data-active=true][aria-disabled=false]:hover { background: var(--zxs-row-hover-bg); color: var(--zxs-text-primary, #18181b); --zxs-contour-extent: var(--zxs-contour-control); --zxs-contour-mode: paint; }
+}
+.zxs-select:has(> .zxs-select-trigger:focus-visible) .zxs-select-panel:popover-open .zxs-select-option[data-active=true] { background: var(--zxs-row-hover-bg); color: var(--zxs-text-primary, #18181b); --zxs-contour-extent: var(--zxs-contour-control); --zxs-contour-mode: paint; }
 .zxs-select-option[aria-selected=true] { font-weight: 700; }
 .zxs-select-option[aria-disabled=true] { opacity: .5; cursor: not-allowed; }
 .zxs-select-empty { color: var(--zxs-block-muted); }

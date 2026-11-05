@@ -588,7 +588,6 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {<section class="zxs-stack zxs-disk-management" aria-busy=move ||state.with(|s|s.admin_console.disks.loading).to_string() aria-label=t("登记目录、磁盘健康与备注","Registered directories, disk health and notes")>
         <h2 class="zxs-row">{t("登记目录、磁盘健康与备注","Registered directories, disk health and notes")}</h2>
-        <p class="zxs-row">{t("P01、B01 是登记目录的逻辑角色，不是机箱盘位。同一磁盘上的多个目录会显示同一设备的健康信息。身份与健康信息仅供观察，不参与存储准入。","P01 and B01 are logical directory roles, not chassis bays. Directories on the same disk report that same device. Identity and health are observations, not storage admission criteria.")}</p>
         {move ||state.with(|s|s.admin_console.disks.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
         <Show when=move ||state.with(|s|s.admin_console.disks.loaded&&s.admin_console.disks.cards.is_empty())><EmptyState message=t("没有已登记的存储目录。","No storage directories are registered.")/></Show>
         <For each=move ||state.with(|s|s.admin_console.disks.cards.keys().cloned().collect::<Vec<_>>()) key=|slot|slot.clone() children=move |slot|card(state,slot)/>

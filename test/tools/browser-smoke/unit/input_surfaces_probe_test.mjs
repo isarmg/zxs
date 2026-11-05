@@ -9,7 +9,7 @@ const makeControl = (tag = 'INPUT', type = 'text') => {
     const style = {
         opacity: '1', backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none', borderImageSource: 'none', boxShadow: 'none',
         outlineWidth: '0px', outlineStyle: 'none', outlineColor: 'rgb(0, 0, 0)',
-        '--zxs-contour-extent': '0px', '--zxs-contour-foreground': '0',
+        '--zxs-contour-extent': '0px', '--zxs-contour-foreground': '0', '--zxs-compact-row-height': '36px',
         getPropertyValue(property) { return this[property]; },
     };
     for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
@@ -30,6 +30,7 @@ const makeControl = (tag = 'INPUT', type = 'text') => {
         },
         closest(selector) {
             if (selector === '.zxs-file-search') return this.searchFrame ?? null;
+            if (selector === '.zxs-storage-activation') return this.storageDirectory ? {} : null;
             assert.equal(selector, '.authentication-shell .authentication-card'); return this.anonymous ? {} : null;
         },
         querySelectorAll(selector) { assert.equal(selector, '[data-zxs-contour-decoration]'); return this.decorations; },
@@ -73,6 +74,12 @@ check('fieldset-disabled text', f => { f.input.inheritedDisabled = true; f.input
 check('narrow layout viewport', f => { f.clientWidth = 240; for (const node of f.controls) node.box = box(12, 216); }, true);
 const focus = f => { f.input.focusVisible = true; Object.assign(f.input.style, {borderBottomWidth: '3px', borderBottomStyle: 'solid'}); };
 check('keyboard focus uses a solid bottom', focus, true);
+const directory = f => { f.input.storageDirectory = true; f.input.box = {...box(), bottom: 76, height: 36}; };
+check('directory input matches the ordinary row', directory, true);
+check('directory input stays unlined while editing', f => { directory(f); f.input.focusVisible = true; }, true);
+check('directory input rejects the old focus underline', f => { directory(f); focus(f); }, false, 'bottomWidth');
+check('directory input rejects the old tall row', f => { directory(f); f.input.box = box(); }, false, 'directoryRowHeight');
+check('directory exception preserves other input focus', f => { directory(f); f.textarea.focusVisible = true; }, false);
 check('invisible outline color', f => { Object.assign(f.input.style, {outlineWidth: '3px', outlineStyle: 'solid', outlineColor: 'rgba(0, 0, 0, 0)'}); }, true);
 check('hidden controls are outside current scene', f => { f.textarea.visible = false; f.textarea.style.borderLeftWidth = '2px'; }, true);
 const closed = check('closed disclosure is outside current scene even with layout rects', f => {

@@ -67,11 +67,11 @@ await check('image decode failed', f => {f.decode = () => {throw new Error('deco
 await check('pointer keeps resting borderless G4 fill', () => {}, true, 'pointer');
 await check('pointer must not retain keyboard indicator', f => {f.focusVisible = true;}, false, 'pointer');
 await check('pointer must not retain focus ring outset', f => {f.style.borderImageOutset = '7px';}, false, 'pointer');
-await check('pointer hover paints only a rounded fill', f => {f.hover = true; f.node.dataset.zxsContourState = 'paint';}, true, 'pointer');
-await check('hover cannot silently lose its paint', f => {f.hover = true;}, false, 'pointer');
+await check('pointer hover must not add trigger paint', f => {f.hover = true; f.node.dataset.zxsContourState = 'paint';}, false, 'pointer');
+await check('pointer hover keeps the resting clipped fill', f => {f.hover = true;}, true, 'pointer');
 await check('touch does not require a hover highlight', f => {f.hover = true; f.fine = false;}, true, 'pointer');
-await check('parent row owns the hover fill', f => {f.hover = true; f.row = true;}, true, 'pointer');
-await check('blurred hovered trigger retains fill without focus', f => {f.hover = true; f.node.dataset.zxsContourState = 'paint';}, true, 'blurred');
+await check('nested trigger keeps the resting clipped fill', f => {f.hover = true; f.row = true;}, true, 'pointer');
+await check('blurred hovered trigger must not add paint', f => {f.hover = true; f.node.dataset.zxsContourState = 'paint';}, false, 'blurred');
 await check('resting fill cannot lose its G4 image', f => {f.style.borderImageSource = 'none';}, false, 'pointer');
 await check('blur restores resting paint', () => {}, true, 'blurred');
 await check('blur must remove focus ownership', f => {f.focused = true;}, false, 'blurred');

@@ -19,14 +19,12 @@ const done = arguments[arguments.length - 1];
         return {...state, valid: false, reason: 'wrong focus modality or rectangular outline'};
     }
     if (expected !== 'keyboard') {
-        // Pointer hover paints the rounded fill; a resting control clips it.
-        // Neither state may retain the keyboard ring or a decorative border.
-        const hovering = matchMedia('(hover: hover) and (pointer: fine)').matches && node.matches(':hover')
-            && !node.closest('.zxs-row,.zxs-hover-row,.zxs-form-field,.zxs-file-table,.zxs-auth-actions');
-        const fill = state.contour === (hovering ? 'paint' : 'clip')
+        // Pointer hover leaves the trigger's resting fill unchanged. Only the
+        // expanded options highlight; the keyboard ring belongs to focus-visible.
+        const fill = state.contour === 'clip'
             && css.borderImageSource.startsWith('url("blob:') && parseFloat(css.borderImageOutset) === 2
             && css.borderImageRepeat === 'stretch' && css.backgroundImage === 'none';
-        return {...state, hovering, valid: fill && css.boxShadow === 'none'};
+        return {...state, valid: fill && css.boxShadow === 'none'};
     }
     const source = css.borderImageSource;
     const match = source.match(/^url\(["']?(blob:[^"')]+)["']?\)$/);

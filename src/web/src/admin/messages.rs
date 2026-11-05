@@ -37,7 +37,6 @@ pub(super) fn query_label(id: QueryId) -> Message<'static> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Message<'a> {
     Title,
-    Introduction,
     UnknownOutcome,
     ResponseUnconfirmed,
     CheckOriginalOperation,
@@ -101,7 +100,6 @@ impl Message<'_> {
     fn translations(self) -> (Cow<'static, str>, Cow<'static, str>) {
         match self {
             Self::Title => ("日常管理".into(), "Daily administration".into()),
-            Self::Introduction => ("唯一账户管理全部存储。数据盘不可写时，存储操作禁用。账号设置可修改密码；文件内容请使用 SMB。".into(), "The sole account manages all storage. Storage changes require writable data storage. Change the password in account settings; use SMB for file contents.".into()),
             Self::ResponseUnconfirmed => ("响应未能确认所请求的操作。重试前请检查原操作。".into(), "The response did not confirm the requested action. Inspect the original operation before retrying.".into()),
             Self::UnknownOutcome => ("结果未确认，禁止重复修改。请查询原操作结果，不要改用新操作 ID 重发；无法查询时请在服务器本地核实。".into(), "Outcome unknown; do not repeat mutations. Check the original operation instead of resending under a new ID. Verify locally on the server if its outcome cannot be queried.".into()),
             Self::CheckOriginalOperation => ("查询原操作".into(), "Check original operation".into()),

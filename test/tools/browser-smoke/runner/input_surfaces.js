@@ -31,6 +31,8 @@ const controls = visible.map((node, index) => {
     const anonymous = node.closest('.authentication-shell .authentication-card') !== null;
     const searchFrame = node.closest('.zxs-file-search');
     const search = searchFrame !== null;
+    const storageDirectory = node.closest('.zxs-storage-activation') !== null;
+    const underline = focusVisible && !search && !storageDirectory;
     const css = getComputedStyle(node);
     const rect = node.getBoundingClientRect();
     const borders = Object.fromEntries(['Top', 'Right', 'Bottom', 'Left'].map(side => [side.toLowerCase(), {
@@ -71,9 +73,10 @@ const controls = visible.map((node, index) => {
     const checks = {
         connected: node.isConnected,
         noRectangle: ['top', 'right', 'left'].every(side => borders[side].width === 0),
-        bottomStyle: search || !focusVisible ? borders.bottom.style === 'none'
+        bottomStyle: !underline ? borders.bottom.style === 'none'
             : borders.bottom.style === 'solid' && alpha(borders.bottom.color) > 0,
-        bottomWidth: borders.bottom.width === (!search && focusVisible ? 3 : 0),
+        bottomWidth: borders.bottom.width === (underline ? 3 : 0),
+        directoryRowHeight: !storageDirectory || rect.height === parseFloat(css.getPropertyValue('--zxs-compact-row-height')),
         searchSurface: !search || Object.values(searchSurface).every(Boolean),
         noOutline: forced && focusVisible && !search ? outlineVisible && outline.style === 'solid' && outline.width >= 2 : !outlineVisible,
         noImages: css.backgroundImage === 'none' && css.borderImageSource === 'none',
@@ -90,7 +93,7 @@ const controls = visible.map((node, index) => {
     return {
         valid: failures.length === 0, failures, checks, index,
         tag: node.tagName, type: node.type, name: node.getAttribute('name'), label: node.getAttribute('aria-label'),
-        disabled, effectiveDisabled, focusVisible, forced, anonymous, search, searchSurface, opacity,
+        disabled, effectiveDisabled, focusVisible, forced, anonymous, search, storageDirectory, searchSurface, opacity,
         rect: {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height},
         borders, outline, outlineVisible, contour,
         backgroundColor: css.backgroundColor, backgroundImage: css.backgroundImage,

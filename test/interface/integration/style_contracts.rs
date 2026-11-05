@@ -406,7 +406,7 @@ fn style_rule<'a>(css: &'a str, selector: &str) -> &'a str {
     let opening = format!("{selector} {{");
     let (start, _) = css
         .match_indices(&opening)
-        .find(|(start, _)| *start == 0 || css.as_bytes()[start - 1] == b'\n')
+        .find(|(start, _)| css[..*start].rsplit('\n').next().unwrap().trim().is_empty())
         .unwrap_or_else(|| panic!("missing style rule: {selector}"));
     css[start + opening.len()..].split('}').next().unwrap()
 }
@@ -463,31 +463,25 @@ fn shared_rows_own_one_inset_without_wrapping_controls_in_extra_row_padding() {
 }
 
 #[test]
-fn shared_row_hover_uses_borderless_g4_without_touch_or_nested_highlights() {
+fn select_option_hover_is_scoped_to_the_open_menu() {
     let appearance = include_str!("../../../src/web/public/styles/components/content-blocks.css");
     let files = include_str!("../../../src/web/public/styles/components/file-manager.css");
     let select = include_str!("../../../src/web/public/styles/components/select.css");
-    assert!(appearance.contains("@media (hover: hover) and (pointer: fine)"));
-    assert!(appearance.contains(":is(.zxs-row, .zxs-form-field, .zxs-hover-row)"));
-    assert!(
-        appearance
-            .contains(":not(:where(.zxs-hover-row *, .zxs-form-field *, .zxs-select-option))")
+    assert!(!appearance.contains("background: var(--zxs-row-hover-bg);"));
+    assert!(!appearance.contains("--zxs-contour-mode: paint;"));
+    assert!(select.contains("@media (hover: hover) and (pointer: fine)"));
+    let hover = style_rule(
+        select,
+        ".zxs-select-panel:popover-open .zxs-select-option[data-active=true][aria-disabled=false]:hover",
     );
-    assert!(appearance.contains("background: var(--zxs-row-hover-bg);"));
-    assert!(appearance.contains("--zxs-contour-mode: paint;"));
-    let hover = appearance
-        .split("@media (hover: hover) and (pointer: fine)")
-        .nth(1)
-        .unwrap()
-        .split('}')
-        .next()
-        .unwrap();
+    assert!(hover.contains("background: var(--zxs-row-hover-bg);"));
+    assert!(hover.contains("--zxs-contour-mode: paint;"));
     assert!(!hover.contains("border-radius:") && !hover.contains("border:"));
     assert!(
         style_rule(files, ".zxs-file-row-surface").contains("background: var(--zxs-row-hover-bg);")
     );
     assert!(
-        style_rule(select, ".zxs-select-option[data-active=true]")
+        style_rule(select, ".zxs-select:has(> .zxs-select-trigger:focus-visible) .zxs-select-panel:popover-open .zxs-select-option[data-active=true]")
             .contains("--zxs-contour-mode: paint;")
     );
 }

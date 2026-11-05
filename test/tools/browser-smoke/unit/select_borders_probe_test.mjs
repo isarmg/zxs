@@ -117,8 +117,8 @@ f=fixture().withForeground();f.panel.anchor=null;assert.equal((await f.run()).va
 f=fixture().withForeground();f.foreground.style.position='relative';assert.equal((await f.run()).valid,false,'flow-relative foreground is not a border-box overlay');
 f=fixture();f.trigger.style.backgroundColor='transparent';assert.equal((await f.run()).valid,false,'collapsed trigger must retain its original fill');
 f=fixture();f.trigger.style.borderImageSource='url("blob:trigger")';f.pixelColor=60;f.centerAlpha=0;assert.equal((await f.run()).valid,false,'generated trigger paint cannot lose its fill');
-f=fixture();f.trigger.hover=true;f.trigger.style.borderImageSource='url("blob:trigger")';f.pixelColor=60;assert.equal((await f.run()).valid,true,'hover fill is not mistaken for a border');
+f=fixture();f.trigger.hover=true;f.trigger.style.borderImageSource='url("blob:trigger")';f.pixelColor=60;assert.equal((await f.run()).valid,true,'hovered trigger retains its original fill');
 f=fixture();f.trigger.style.backgroundColor='#b4b4b4';assert.equal((await f.run()).valid,false,'native resting fill must match its original palette');
 f=fixture();f.trigger.style.borderImageSource='url("blob:trigger")';f.pixelColor=60;f.centerColor=210;assert.equal((await f.run()).valid,false,'generated resting fill must match the actual palette');
-f=fixture();f.trigger.hover=true;f.trigger.style.borderImageSource='url("blob:trigger")';f.pixelColor=60;f.centerColor=180;f.trigger.style.getPropertyValue=name=>name==='--zxs-row-hover-bg'?'#b4b4b4':'#c8c8c8';assert.equal((await f.run()).valid,true,'real hover color replaces fill without adding a border');
+f=fixture();f.trigger.hover=true;f.trigger.style.borderImageSource='url("blob:trigger")';f.pixelColor=60;f.centerColor=180;f.trigger.style.getPropertyValue=name=>name==='--zxs-row-hover-bg'?'#b4b4b4':'#c8c8c8';assert.equal((await f.run()).valid,false,'hover must not replace the collapsed trigger fill');
 console.log('PASS 45 Select border observer model cases; no browser rendering executed');

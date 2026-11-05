@@ -10,11 +10,6 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
         ),
         (Message::Title, "日常管理", "Daily administration"),
         (
-            Message::Introduction,
-            "唯一账户管理全部存储。数据盘不可写时，存储操作禁用。账号设置可修改密码；文件内容请使用 SMB。",
-            "The sole account manages all storage. Storage changes require writable data storage. Change the password in account settings; use SMB for file contents.",
-        ),
-        (
             Message::UnknownOutcome,
             "结果未确认，禁止重复修改。请查询原操作结果，不要改用新操作 ID 重发；无法查询时请在服务器本地核实。",
             "Outcome unknown; do not repeat mutations. Check the original operation instead of resending under a new ID. Verify locally on the server if its outcome cannot be queried.",

@@ -622,7 +622,7 @@ fn finish_activation(model: &mut Model, result: Result<Success, api::Error>) {
 }
 
 fn input(state: RwSignal<State>, field: &'static str, label: String) -> impl IntoView {
-    view! {<label class="zxs-form-field"><span>{label}</span><input class="zxs-input" data-storage-field=field type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:value=move ||state.with(|s|match field { "mount" => s.admin_console.storage.mount_path.clone(), "root" => s.admin_console.storage.root_path.clone(), "browse" => s.admin_console.storage.browse_path.clone(), _ => unreachable!("invariant: storage input field") }) on:input=move |event|change(state,field,event_target_value(&event))/></label>}
+    view! {<label class="zxs-form-field"><span>{label}</span><input class="zxs-input zxs-input--compact" data-storage-field=field type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:value=move ||state.with(|s|match field { "mount" => s.admin_console.storage.mount_path.clone(), "root" => s.admin_console.storage.root_path.clone(), "browse" => s.admin_console.storage.browse_path.clone(), _ => unreachable!("invariant: storage input field") }) on:input=move |event|change(state,field,event_target_value(&event))/></label>}
 }
 
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
@@ -638,7 +638,9 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         })}</p>
         <button type="button" class="zxs-button" disabled=move ||state.with(|s|!can_load(s)) on:click=move |_|load(state)>{t("刷新存储状态", "Refresh storage status")}</button>
         <p class="zxs-row">{t("只发现存储发现目录内的目录，默认 /zxs/data/disks，可指定其他目录。修改此设置不会移动已有存储或挂载磁盘。", "Only directories within the discovery directory are listed. The default is /zxs/data/disks; you can choose another directory. Changing it does not move existing storage or mount disks.")}</p>
-        <label class="zxs-form-field"><span>{t("存储发现目录", "Storage discovery directory")}</span><input class="zxs-input" data-storage-discovery-root="" type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.can_set_root()) prop:value=move ||state.with(|s|s.admin_console.storage.discovery_input.clone()) on:input=move |event|state.update(|s|{if s.session_active() && s.admin_console.storage.can_set_root(){s.admin_console.storage.discovery_input=event_target_value(&event);}})/></label>
+        <div class="zxs-form-grid">
+            <label class="zxs-form-field"><span>{t("存储发现目录", "Storage discovery directory")}</span><input class="zxs-input zxs-input--compact" data-storage-discovery-root="" type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.can_set_root()) prop:value=move ||state.with(|s|s.admin_console.storage.discovery_input.clone()) on:input=move |event|state.update(|s|{if s.session_active() && s.admin_console.storage.can_set_root(){s.admin_console.storage.discovery_input=event_target_value(&event);}})/></label>
+        </div>
         <button type="button" class="zxs-button" data-storage-save-discovery-root="" disabled=move ||state.with(|s|!s.admin_console.storage.can_set_root()||s.admin_console.storage.discovery_input==s.admin_console.storage.discovery_root||s.admin_console.storage.discovery_input.is_empty()) on:click=move |_|save_discovery_root(state)>{t("保存发现目录", "Save discovery directory")}</button>
         <Show when=move ||state.with(|s|s.admin_console.storage.discovery_unknown)><p class="zxs-row" role="alert">{t("目录设置结果未知，请刷新状态核对后再继续。", "The directory setting outcome is unknown. Refresh status before continuing.")}</p></Show>
         {move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().and_then(|snapshot|snapshot.terminal.clone())).map(|terminal|view!{

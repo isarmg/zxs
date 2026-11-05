@@ -56,19 +56,6 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   &:not([data-zxs-selection="custom"]) .zxs-button[aria-pressed="true"] { background: transparent; color: var(--zxs-text-primary); text-decoration: underline; text-underline-offset: .25em; text-decoration-thickness: 1px; }
 }
 
-/* A row owns its highlight, including labels and embedded controls. G4 paint
- * rounds only the background and never clips text, caret or keyboard focus. */
-@media (hover: hover) and (pointer: fine) {
-  .zxs-app-shell :is(.zxs-row, .zxs-form-field, .zxs-hover-row):not(:where(.zxs-hover-row *, .zxs-form-field *, .zxs-select-option)):hover,
-  .zxs-app-shell :is(.zxs-button, .zxs-select-trigger):not(:disabled):not(:where(.zxs-row *, .zxs-hover-row *, .zxs-form-field *, .zxs-file-table *, .zxs-auth-actions *)):hover,
-  :root .authentication-card :is(.zxs-auth-label, .zxs-auth-input-row, .zxs-auth-information, .zxs-auth-actions):hover {
-    background: var(--zxs-row-hover-bg);
-    --zxs-contour-extent: var(--zxs-contour-control);
-    --zxs-contour-mode: paint;
-    --zxs-contour-foreground: 0;
-  }
-}
-
 /* The gap returns to its upper-right resting position when the read settles. */
 .zxs-header-refresh[aria-busy=true] > .zxs-refresh-icon { animation: zxs-refresh-spin .8s linear infinite; transform-origin: center; }
 @keyframes zxs-refresh-spin { to { transform: rotate(360deg); } }
