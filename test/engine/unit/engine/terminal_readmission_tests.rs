@@ -326,6 +326,9 @@ fn retained_resume_faults_recover_only_the_exact_original_operation() {
         WriteFault::AfterHead,
     ] {
         let mut fixture = Fixture::new(MembershipExitAction::PlannedOffline, 0);
+        let terminal = fixture.management.as_ref().unwrap().result().clone();
+        let locator_path = fixture.system().join("bootstrap-discovery");
+        let stopped_locator = files(&locator_path);
         let pending = prepare_retained(&mut fixture);
         inject_next(phase);
         assert!(pending.activate().is_err(), "{phase:?}");
@@ -340,12 +343,32 @@ fn retained_resume_faults_recover_only_the_exact_original_operation() {
             TerminalMetadataResumeAdmission::RetainedMetadata { .. }
         ));
         let engine = TerminalManagement::complete_metadata_resume(&fixture.system()).unwrap();
+        let result = engine.state.operations[&fixture.resume].clone();
+        assert_eq!(result.kind, "disk-readmit");
+        assert_eq!(engine.state.operations[&fixture.terminal], terminal);
         assert_eq!(
-            engine.state.operations[&fixture.resume].kind,
-            "disk-readmit"
+            engine
+                .config
+                .io_admission_epoch(&fixture.original.disks[0].disk_id)
+                .unwrap(),
+            Some(result.request_digest.clone())
         );
+        let resumed_locator = files(&locator_path);
+        assert_ne!(
+            resumed_locator[Path::new("head.json")],
+            stopped_locator[Path::new("head.json")],
+            "readmission must select its new epoch, not roll back the old Stop"
+        );
+        for (path, bytes) in stopped_locator {
+            if path.file_name().unwrap() != "head.json" {
+                assert_eq!(resumed_locator[&path], bytes);
+            }
+        }
         drop(engine);
-        assert!(Engine::open(&fixture.system()).is_ok());
+        let reopened = Engine::open(&fixture.system()).unwrap();
+        assert_eq!(reopened.state.operations[&fixture.resume], result);
+        assert_eq!(reopened.state.operations[&fixture.terminal], terminal);
+        assert_eq!(files(&locator_path), resumed_locator);
     }
 }
 

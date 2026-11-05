@@ -126,14 +126,18 @@ impl BootstrapStore {
                 "stop plan differs from verified Exit authority",
             ));
         }
-        let (locator, current) = self.check_stop_plan(plan)?;
-        if locator.recorded_admission_epoch(&plan.target)?.as_deref() != source.admission_epoch() {
+        let (selected, current) = self.check_stop_plan(plan)?;
+        // A later readmission may legitimately change the current epoch. Bind
+        // this authority to the exact historical stop node checked above, while
+        // publication retains the latest authenticated locator and its head.
+        let stopped = locator(&plan.stopped)?;
+        if stopped.recorded_admission_epoch(&plan.target)?.as_deref() != source.admission_epoch() {
             return Err(BootstrapError::ManagementOnly(
                 "stop plan closes another verified Exit admission epoch",
             ));
         }
         for observed in source.observations() {
-            let expected = locator
+            let expected = stopped
                 .record
                 .roots
                 .iter()
@@ -143,7 +147,7 @@ impl BootstrapStore {
                 ))?;
             let mut record = observed.record.clone();
             record.metadata_member = expected.metadata_member;
-            if observed.pool_id != locator.record.pool_id || &record != expected {
+            if observed.pool_id != stopped.record.pool_id || &record != expected {
                 return Err(BootstrapError::ManagementOnly(
                     "stop plan differs from independently verified retained root",
                 ));
@@ -151,7 +155,7 @@ impl BootstrapStore {
         }
         Ok(AdmittedStopPublication {
             plan,
-            stopped: locator,
+            stopped: selected,
             current,
         })
     }
@@ -171,7 +175,10 @@ impl BootstrapStore {
                 "stop plan differs from verified terminal authority",
             ));
         }
-        let (stopped, current) = self.check_stop_plan(plan)?;
+        let (selected, current) = self.check_stop_plan(plan)?;
+        // Replaying an old Stop must prove its original lifetime, not reject
+        // the separately certified epoch in a later readmission successor.
+        let stopped = locator(&plan.stopped)?;
         let admission_epoch =
             authority
                 .io_admission_epoch(&plan.target.disk_id)
@@ -186,7 +193,7 @@ impl BootstrapStore {
         }
         Ok(AdmittedStopPublication {
             plan,
-            stopped,
+            stopped: selected,
             current,
         })
     }
