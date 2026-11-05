@@ -56,7 +56,11 @@ fn aggregate_snapshot_roots_are_fixed_schema_not_flat_page_lists() {
     let root = canonical_json(&prepared.descriptor).unwrap();
     assert!(root.len() < 8192);
     assert_eq!(prepared.descriptor.maps.len(), empty.descriptor.maps.len());
-    assert_eq!(prepared.descriptor.maps.len(), 35);
+    assert_eq!(prepared.descriptor.maps.len(), 36);
+    assert_eq!(
+        prepared.descriptor.maps["directory_git_repositories"],
+        empty.descriptor.maps["directory_git_repositories"]
+    );
     assert!(matches!(
         prepared.descriptor.events.kind(),
         crate::metadata_map::ReferenceKind::Index

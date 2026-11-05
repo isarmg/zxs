@@ -19,6 +19,9 @@ impl Fixture {
         let mut config =
             Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
         config.disks[0].metadata_member = metadata;
+        Self::with_config(temp, config, relocate)
+    }
+    fn with_config(temp: tempfile::TempDir, mut config: Config, relocate: bool) -> Self {
         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
         if relocate {
             // Move before creating a workspace: Genesis has no historical
@@ -43,7 +46,7 @@ impl Fixture {
         let repository = engine
             .create_repository(
                 &RepositoryName::parse("readmit-source").unwrap(),
-                "P01",
+                &config.disks[0].slot_id,
                 1,
                 "admin",
                 OperationId::generate().unwrap(),
@@ -383,7 +386,13 @@ fn disabled_metadata_and_data_only_readmit_into_new_io_lifetime_and_cold_restart
 
 #[test]
 fn readmission_preserves_detached_masks_and_cannot_restore_a_deleted_registration() {
-    let mut fixture = Fixture::new(true);
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::independent_roots(
+        storage_contract::Mode::Development,
+        (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+    )
+    .unwrap();
+    let mut fixture = Fixture::with_config(temp, config, false);
     let other = fixture.config.disks[1].clone();
     let repository = fixture
         .engine
@@ -645,6 +654,10 @@ fn readmission_every_durable_cut_resumes_only_exact_saved_operation() {
         assert_eq!(
             engine.state.operations[&operation].kind, "disk-readmit",
             "{point}"
+        );
+        assert!(
+            !engine.is_read_only(),
+            "published readmission remains read-only at {point}"
         );
         write(
             &mut engine,
@@ -975,4 +988,202 @@ fn stop_hint_cannot_move_a_real_stop_to_a_different_admission_epoch() {
             ErrorCode::RecoveryRequired
         );
     }
+}
+
+#[cfg(feature = "fault-injection")]
+fn readmission_partial_publication() -> (Fixture, OperationId) {
+    let mut fixture = Fixture::new(true);
+    fixture.disable();
+    let operation = OperationId::generate().unwrap();
+    let archive = fixture.begin(operation);
+    fixture.engine.inject_fault_once("after_publication_1");
+    let error = fixture
+        .engine
+        .activate_disk_readmission(
+            &archive.archive_path,
+            &archive.root_hash,
+            directory(&fixture.config.disks[0]),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InDoubt);
+    assert!(fixture.engine.is_read_only());
+    assert!(!fixture.engine.state.operations.contains_key(&operation));
+    assert!(Engine::readmission_recovery_pending(&fixture.temp.path().join("system")).unwrap());
+    (fixture, operation)
+}
+
+#[cfg(feature = "fault-injection")]
+fn readmission_storage_bytes(roots: &[PathBuf]) -> BTreeMap<PathBuf, Vec<u8>> {
+    roots.iter().flat_map(|root| files(root)).collect()
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn cold_published_readmission_requires_every_original_member_before_becoming_writable() {
+    let (fixture, operation) = readmission_partial_publication();
+    let mut roots = fixture
+        .config
+        .disks
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect::<Vec<_>>();
+    let original = roots[1].clone();
+    let parked = fixture.temp.path().join("preserved-original-member");
+    let system = fixture.temp.path().join("system");
+    let plan = fs::read(system.join("readmission-activation.json")).unwrap();
+    drop(fixture.engine);
+    fs::rename(&original, &parked).unwrap();
+    roots[1] = parked.clone();
+    let before = readmission_storage_bytes(&roots);
+    assert!(
+        Engine::resume_disk_readmission_operation(&system, operation, "admin", None).is_err(),
+        "one missing fixed original member cannot be replaced by the other original and target"
+    );
+    assert_eq!(readmission_storage_bytes(&roots), before);
+    assert_eq!(
+        fs::read(system.join("readmission-activation.json")).unwrap(),
+        plan
+    );
+    fs::rename(parked, original).unwrap();
+    let mut engine =
+        Engine::resume_disk_readmission_operation(&system, operation, "admin", None).unwrap();
+    assert!(!engine.is_read_only());
+    assert_eq!(engine.state.operations[&operation].kind, "disk-readmit");
+    write(
+        &mut engine,
+        &fixture.branch,
+        "after-original-member-restored.txt",
+        b"the exact original member returned",
+    );
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn cold_published_readmission_rejects_a_corrupt_current_journal_without_replacing_it() {
+    let (fixture, operation) = readmission_partial_publication();
+    let roots = fixture
+        .config
+        .disks
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect::<Vec<_>>();
+    let journal = crate::engine::membership_transition::pending::activation::log_path(
+        &fixture.engine.config,
+        &fixture.config.disks[1],
+    );
+    let original = fs::read(&journal).unwrap();
+    assert!(
+        original.len() > 44,
+        "a complete frame must exist before corruption"
+    );
+    let mut corrupt = original.clone();
+    // Keep the complete frame and its original digest, but alter its payload.
+    // This is corruption, not an incomplete tail that recovery may repair.
+    corrupt[12] ^= 1;
+    let system = fixture.temp.path().join("system");
+    let plan = fs::read(system.join("readmission-activation.json")).unwrap();
+    drop(fixture.engine);
+    fs::write(&journal, &corrupt).unwrap();
+    let before = readmission_storage_bytes(&roots);
+    let error = match Engine::resume_disk_readmission_operation(&system, operation, "admin", None) {
+        Ok(_) => panic!("a published operation cannot bypass a corrupt current journal"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), ErrorCode::LogCorrupt);
+    assert_eq!(readmission_storage_bytes(&roots), before);
+    assert_eq!(
+        fs::read(system.join("readmission-activation.json")).unwrap(),
+        plan
+    );
+    fs::write(&journal, original).unwrap();
+    let mut engine =
+        Engine::resume_disk_readmission_operation(&system, operation, "admin", None).unwrap();
+    assert!(!engine.is_read_only());
+    assert_eq!(engine.state.operations[&operation].kind, "disk-readmit");
+    write(
+        &mut engine,
+        &fixture.branch,
+        "after-exact-journal-restored.txt",
+        b"the original complete journal was restored",
+    );
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn stale_readmission_plan_cannot_unlock_a_real_later_membership_fence() {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+
+    let (fixture, operation) = readmission_partial_publication();
+    let roots = fixture
+        .config
+        .disks
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect::<Vec<_>>();
+    let system = fixture.temp.path().join("system");
+    let plan_path = system.join("readmission-activation.json");
+    let plan = fs::read(&plan_path).unwrap();
+    drop(fixture.engine);
+    let mut engine =
+        Engine::resume_disk_readmission_operation(&system, operation, "admin", None).unwrap();
+    assert!(!engine.is_read_only());
+    let published = engine.state.operations[&operation].clone();
+    let later = OperationId::generate().unwrap();
+    engine
+        .begin_disk_exit(
+            &fixture.config.disks[0].disk_id,
+            MembershipExitAction::PlannedOffline,
+            "admin",
+            later,
+        )
+        .unwrap();
+    let fence = engine.membership_fence_status().unwrap();
+    assert_eq!(fence.operation_id, later);
+    assert!(fence.all_members_fenced());
+    assert!(engine.is_read_only());
+    assert!(!engine.state.operations.contains_key(&later));
+    for disk in engine.config.metadata_members() {
+        let scan = crate::journal::scan_configured_at(
+            &engine.disk_resources.get(disk).unwrap().root,
+            disk,
+            &engine.config,
+        )
+        .unwrap();
+        assert!(scan.records.iter().any(|(record, _)| {
+            record.record_type == crate::journal::RecordType::MembershipFence
+        }));
+    }
+    drop(engine);
+    // Reintroduce the exact older SYSTEM hint, not a forged authority or fence.
+    let mut restored_plan = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&plan_path)
+        .unwrap();
+    restored_plan.write_all(&plan).unwrap();
+    restored_plan.sync_all().unwrap();
+    drop(restored_plan);
+    fs::File::open(&system).unwrap().sync_all().unwrap();
+    let before = readmission_storage_bytes(&roots);
+    match Engine::resume_disk_readmission_operation(&system, operation, "admin", None) {
+        Ok(mut engine) => {
+            assert!(
+                engine.is_read_only(),
+                "the later durable fence still blocks writes"
+            );
+            assert_eq!(
+                engine.membership_fence_status().unwrap().operation_id,
+                later
+            );
+            assert_eq!(engine.state.operations[&operation], published);
+            assert!(!engine.state.operations.contains_key(&later));
+            let error = engine
+                .create_workspace(&fixture.branch, "admin")
+                .unwrap_err();
+            assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        }
+        Err(error) => assert_eq!(error.code(), ErrorCode::RecoveryRequired),
+    }
+    assert_eq!(readmission_storage_bytes(&roots), before);
 }

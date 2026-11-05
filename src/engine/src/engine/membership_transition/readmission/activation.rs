@@ -529,7 +529,6 @@ impl Engine {
         drop(original);
         let resources = Arc::new(DiskResources::open_activation(&config)?);
         let mut engine = Self::prepare_recovery_resources(root, config, resources)?;
-        engine.blocked = true;
         let admission = AdmittedReadmission::verify(portable, |disk| {
             Ok(&engine.disk_resources.get(disk)?.root)
         })?;
