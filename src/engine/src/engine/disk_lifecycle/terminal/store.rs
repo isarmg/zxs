@@ -111,6 +111,7 @@ impl TerminalStore {
     }
 
     pub(super) fn open(root: &Path) -> Result<(Self, WriterLocks)> {
+        let selection = crate::authority_selection::SelectionGuard::legacy(root)?;
         let system = DiskRoot::open(root)?;
         system.private_directory(system.path())?;
         // Use the existing system writer, never create a replacement lock for a
@@ -126,7 +127,8 @@ impl TerminalStore {
                 )
             },
         )?;
-        let locks = WriterLocks::new(lock);
+        selection.require_legacy()?;
+        let locks = WriterLocks::new(lock, selection);
         Ok((Self::read_system(system)?, locks))
     }
 

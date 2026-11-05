@@ -1,4 +1,5 @@
 //! Deliberately small offline rescue utility. Stop the daemon before using it.
+mod authority;
 mod configuration;
 mod private_io;
 mod scrub;
@@ -38,6 +39,11 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Explicit independent disk journal, separate from online pools. Stop all writers first.
+    Authority {
+        #[command(subcommand)]
+        command: authority::Command,
+    },
     /// Prepare or safely edit uninitialized topology drafts; never mutates a live pool.
     Configuration {
         #[command(subcommand)]
@@ -190,6 +196,7 @@ fn run(args: Args) -> Result<()> {
     let root = args.root;
     match args.command {
         Command::Configuration { command } => configuration::run(command),
+        Command::Authority { command } => authority::run(command),
         Command::Package { command } => match command {
             PackageCommand::Check { package } => {
                 print(storage_engine::offline_check_history_package(&package)?)

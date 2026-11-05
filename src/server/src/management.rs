@@ -1649,6 +1649,9 @@ impl Backend for ManagementBackend {
                 | "foreign_plan_preview"
                 | "foreign_plan_save"
                 | "foreign_plan_revalidate"
+                | "foreign_intent_preview"
+                | "foreign_intent_save"
+                | "foreign_intent_status"
         ) {
             let gate = self.inner.storage_addition.try_lock().map_err(|_| {
                 ApiError::conflict(
@@ -1699,6 +1702,9 @@ impl Backend for ManagementBackend {
                     | "foreign_plan_preview"
                     | "foreign_plan_save"
                     | "foreign_plan_revalidate"
+                    | "foreign_intent_preview"
+                    | "foreign_intent_save"
+                    | "foreign_intent_status"
             ) && crate::lock(&self.inner.state).backend.terminal().is_none()))
         {
             return Err(ApiError::conflict(
@@ -1831,6 +1837,9 @@ impl Backend for ManagementBackend {
                 | "foreign_plan_save"
                 | "foreign_plan_status"
                 | "foreign_plan_revalidate"
+                | "foreign_intent_preview"
+                | "foreign_intent_save"
+                | "foreign_intent_status"
                 | "foreign_plan_execute"
         ) {
             return self.foreign_plan_operation(

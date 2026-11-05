@@ -4,6 +4,7 @@ use crate::engine_backend::foreign_plan::ForeignDestination;
 use platform_io::fs_safety::{AtomicFile, EntryName, PrivateDirectory};
 use storage_contract::{ErrorCode, OperationId, storage_foreign::*, storage_foreign_plan::*};
 
+mod intent;
 mod persist;
 use persist::{StoredPlan, open, owned, read, store};
 
@@ -63,6 +64,9 @@ impl ManagementBackend {
     ) -> Result<Value, ApiError> {
         self.inner.current_management_identity(identity)?;
         match action {
+            "foreign_intent_preview" | "foreign_intent_save" | "foreign_intent_status" => {
+                self.foreign_intent_operation(action, input, identity)
+            }
             "foreign_plan_preview" => {
                 let request = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 let preview = self.preview_foreign_plan(identity, request)?;

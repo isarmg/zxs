@@ -17,7 +17,7 @@ data-serialization.workspace = true
 json-codec.workspace = true
 blake3.workspace = true
 rustix.workspace = true
-sqlite-access.workspace = true
+sqlite-access = { workspace = true, features = ["sqlite-deserialize"] }
 tempfile.workspace = true
 date-time = { version = "=0.3.55", features = ["formatting", "parsing"], path = "../foundation/core-types/date-time"}
 

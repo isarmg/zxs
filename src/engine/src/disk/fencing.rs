@@ -114,13 +114,15 @@ impl DiskWriter {
 #[derive(Clone)]
 pub(crate) struct WriterLocks {
     system: Arc<File>,
+    selection: Arc<crate::authority_selection::SelectionGuard>,
     disks: BTreeMap<String, DiskWriter>,
 }
 
 impl WriterLocks {
-    pub(crate) fn new(system: File) -> Self {
+    pub(crate) fn new(system: File, selection: crate::authority_selection::SelectionGuard) -> Self {
         Self {
             system: Arc::new(system),
+            selection: Arc::new(selection),
             disks: BTreeMap::new(),
         }
     }
@@ -145,6 +147,7 @@ impl WriterLocks {
     pub(crate) fn system_only(&self) -> Self {
         Self {
             system: Arc::clone(&self.system),
+            selection: Arc::clone(&self.selection),
             disks: BTreeMap::new(),
         }
     }
@@ -197,6 +200,7 @@ impl WriterLocks {
         closed.verify_binding(&writer.binding)?;
         Ok(Self {
             system: Arc::clone(&self.system),
+            selection: Arc::clone(&self.selection),
             disks: self
                 .disks
                 .iter()

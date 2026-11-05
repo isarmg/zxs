@@ -187,6 +187,11 @@ impl Drop for StagingCleanup<'_> {
     }
 }
 
+/// Read a user-selected bounded, owned regular input without following its leaf.
+pub(crate) fn read_owned(path: &Path, maximum: usize) -> Result<Vec<u8>> {
+    AnchoredPath::open(path)?.read_owned_bytes(maximum)
+}
+
 /// Publish only a complete 0600 file; existing files, directories and links win.
 /// A directory-sync failure after rename preserves PublishedDurabilityUnknown.
 pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {

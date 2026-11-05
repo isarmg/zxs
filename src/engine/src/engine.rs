@@ -410,6 +410,7 @@ impl Engine {
         }
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
+        let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
         let mut roots = Vec::with_capacity(config.disks.len());
         for disk in &config.disks {
             private_dir(&disk.root)?;
@@ -424,7 +425,7 @@ impl Engine {
         }
         let config = config.with_disk_roots(roots)?;
         let disk_resources = Arc::new(DiskResources::open(&config, false)?);
-        Self::initialize_resources(root, config, disk_resources)
+        Self::initialize_resources(root, config, disk_resources, selection)
     }
 
     /// Initialize exactly the selected, already-open empty storage directories.
@@ -441,6 +442,7 @@ impl Engine {
         directories: Vec<File>,
     ) -> Result<Self> {
         let root = existing_private_dir(root)?.path().to_path_buf();
+        let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
         if root.join("config.json").try_exists()? {
             return Err(Error::new(
                 ErrorCode::AlreadyInitialized,
@@ -458,13 +460,14 @@ impl Engine {
             ));
         }
         let disk_resources = Arc::new(DiskResources::initialize_held(&config, directories)?);
-        Self::initialize_resources(root, config, disk_resources)
+        Self::initialize_resources(root, config, disk_resources, selection)
     }
 
     fn initialize_resources(
         root: PathBuf,
         config: ValidatedConfig,
         disk_resources: Arc<DiskResources>,
+        selection: crate::authority_selection::SelectionGuard,
     ) -> Result<Self> {
         // Hold the same directory-before-writer lock order as online preparation
         // through all initialization writes and index construction. A losing
@@ -473,7 +476,24 @@ impl Engine {
             membership_transition::pending::reservation::lock_initialization_directories(
                 &disk_resources,
             )?;
-        let locks = acquire_locks(&root, &disk_resources)?;
+        // The same directory lock arbitrates independent-format creation.
+        // Admit every root before creating even a legacy writer sidecar, so a
+        // different SYSTEM cannot claim an existing independent disk or SYSTEM.
+        for disk in disk_resources.handles() {
+            if disk
+                .root
+                .entries(disk.root.path())?
+                .next()
+                .transpose()?
+                .is_some()
+            {
+                return Err(Error::new(
+                    ErrorCode::DiskAlreadyEnrolled,
+                    "storage initialization requires empty directories; existing contents are preserved",
+                ));
+            }
+        }
+        let locks = config::acquire_locks_selected(&root, &disk_resources, selection)?;
         // Recheck after locking: an earlier empty-root observation can be stale.
         for disk in disk_resources.handles() {
             membership_transition::pending::reservation::reject_reserved_initialization(
@@ -622,6 +642,7 @@ impl Engine {
             ErrorCode::RecoveryRequired,
             "system state is unavailable; use explicit retained metadata roots for management recovery",
         ))?.path().to_path_buf();
+        crate::authority_selection::require_legacy(&root)?;
         disk_lifecycle::terminal::require_active_startup(&root)?;
         let config = read_json::<Config>(&root.join("config.json")).map_err(|source| source.context(
             ErrorCode::RecoveryRequired,
@@ -700,6 +721,7 @@ impl Engine {
         disk_resources: Arc<DiskResources>,
         locks: crate::disk::WriterLocks,
     ) -> Result<Self> {
+        crate::authority_selection::require_legacy(&root)?;
         let engine = Self {
             root,
             config,

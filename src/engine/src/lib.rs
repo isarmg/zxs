@@ -10,6 +10,7 @@ pub use error::{
     RecoveryReconciliationStage,
 };
 pub type Result<T> = std::result::Result<T, Error>;
+mod authority_selection;
 mod business;
 mod container_storage;
 mod degraded_recovery;
@@ -22,6 +23,7 @@ pub use directory_conversion::{
     PreparedOrdinaryDirectory,
 };
 mod disk;
+pub mod disk_authority;
 mod engine;
 pub use engine::RecoveryDataRoot;
 pub use engine::{
@@ -32,10 +34,12 @@ pub use engine::{
 mod file_stamp;
 mod foreign_import;
 pub use foreign_import::{
-    ForeignCheckpoint, ForeignEvidenceDigest, ForeignHistory, ForeignImportLimits,
-    ForeignImportMapping, ForeignImportPreview, ForeignLocalBinding, ForeignMappedHistory,
-    ForeignMigrationPlan, ForeignMigrationReceipt, ForeignMigrationTransaction,
-    ForeignPrimaryOrigin, ForeignSourceIdentity, ForeignVersionAvailability,
+    ConfirmedForeignImportIntent, ForeignCheckpoint, ForeignEvidenceDigest, ForeignHistory,
+    ForeignImportIntentInfo, ForeignImportIntentRequest, ForeignImportIntentSource,
+    ForeignImportIntentTarget, ForeignImportLimits, ForeignImportMapping, ForeignImportPreview,
+    ForeignLocalBinding, ForeignMappedHistory, ForeignMigrationPlan, ForeignMigrationReceipt,
+    ForeignMigrationTransaction, ForeignPrimaryOrigin, ForeignSourceIdentity,
+    ForeignVersionAvailability, PreparedForeignImportIntent,
 };
 mod historical_save;
 pub use engine::{

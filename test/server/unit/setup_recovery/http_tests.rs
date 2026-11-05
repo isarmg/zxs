@@ -1599,3 +1599,87 @@ async fn existing_pool_addition_routes_keep_session_origin_and_csrf_boundaries()
     }
     assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn foreign_intent_routes_enforce_http_admission_and_exact_body_limits() {
+    let (_temp, app, probe) = configured_app(false, true);
+    let token = proxy_admin_token(&app).await;
+    for (action, limit) in [
+        ("preview", super::super::MAX_SETUP_BODY_BYTES),
+        ("save", 2 * crate::JSON_BODY_LIMIT),
+        ("status", super::super::MAX_SETUP_BODY_BYTES),
+    ] {
+        let path = format!("/api/admin/storage/foreign/execution-intents/{action}");
+        for rejection in [
+            "session",
+            "csrf",
+            "origin",
+            "duplicate-json",
+            "query",
+            "overflow",
+        ] {
+            let url = if rejection == "query" {
+                format!("{path}?execute=true")
+            } else {
+                path.clone()
+            };
+            let mut request = proxy_request("POST", &url, "192.0.2.21");
+            if rejection == "csrf" {
+                request = request.header("cookie", format!("zxs_session={token}"));
+            } else if rejection != "session" {
+                request = request.header("authorization", format!("Bearer {token}"));
+            }
+            if rejection == "origin" {
+                // A duplicate conflicting Origin must not be collapsed to the
+                // expected one by any proxy/header normalization shortcut.
+                request = request.header("origin", "https://elsewhere.invalid");
+            }
+            let body = match rejection {
+                "duplicate-json" => {
+                    "{\"operation_id\":\"one\",\"operation_id\":\"two\"}".to_owned()
+                }
+                "overflow" => " ".repeat(limit + 1),
+                _ => "{}".to_owned(),
+            };
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from(body)).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                match rejection {
+                    "session" => StatusCode::UNAUTHORIZED,
+                    "csrf" | "origin" => StatusCode::FORBIDDEN,
+                    "overflow" => StatusCode::PAYLOAD_TOO_LARGE,
+                    _ => StatusCode::BAD_REQUEST,
+                },
+                "{path}: {rejection}"
+            );
+        }
+    }
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
+    // This probe tests only HTTP admission, not intent or namespace completion.
+    // The real manager/Engine integration is exercised by foreign_intent tests.
+    for (index, action, limit) in [
+        (1, "preview", super::super::MAX_SETUP_BODY_BYTES),
+        (2, "save", 2 * crate::JSON_BODY_LIMIT),
+        (3, "status", super::super::MAX_SETUP_BODY_BYTES),
+    ] {
+        let path = format!("/api/admin/storage/foreign/execution-intents/{action}");
+        let mut bytes = b"{}".to_vec();
+        bytes.resize(limit, b' ');
+        let response = app
+            .clone()
+            .oneshot(
+                proxy_request("POST", &path, &format!("192.0.2.{}", 30 + index))
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), 3);
+}

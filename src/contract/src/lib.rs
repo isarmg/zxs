@@ -16,6 +16,7 @@ pub mod storage_addition;
 pub mod storage_conversion;
 pub mod storage_directories;
 pub mod storage_foreign;
+pub mod storage_foreign_intent;
 pub mod storage_foreign_plan;
 pub mod storage_lifecycle;
 pub mod storage_readmission;

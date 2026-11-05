@@ -32,6 +32,10 @@
 | `repair.rs` / `degraded_recovery.rs` | 修复原始候选与显式永久丢失恢复 |
 | `wire.rs` / `protection.rs` | 冻结上传清单、请求摘要、后续版本放置与保护规则 |
 
+## 显式逐盘格式切片
+
+`disk_authority.rs` 与 `disk_authority/` 为独立新格式提供真实持久日志、文件版本链、来源 checkpoint 备份和可重建系统投影，调用方是 `zxs-rescue authority`。它不接入当前 Engine 的池 State、命名空间或在线写者准入。边界、命令、恢复与未切换消费者见[逐盘权威切片](../design/independent-disk-journal.md)。
+
 ## 权威数据与投影
 
 ### 磁盘资源生命周期

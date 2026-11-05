@@ -4907,6 +4907,315 @@
         },
         "validation": "matched_at_observation"
       }
+    },
+    {
+      "name": "foreign-intent-request",
+      "schema": "ForeignIntentRequest",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_66666666666666666666666666666666",
+        "plan": {
+          "operation_id": "op_33333333333333333333333333333333",
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    },
+    {
+      "name": "foreign-intent-preview",
+      "schema": "ForeignIntentPreview",
+      "layer": "schema",
+      "value": {
+        "request": {
+          "operation_id": "op_66666666666666666666666666666666",
+          "plan": {
+            "operation_id": "op_33333333333333333333333333333333",
+            "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        "plan": {
+          "request": {
+            "operation_id": "op_33333333333333333333333333333333",
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "target": {
+              "slot_id": "P01",
+              "parent": null,
+              "history_names": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+              }
+            }
+          },
+          "source": {
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "source_level": 2,
+            "role_evidence": "initial_declaration",
+            "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "checkpoint": {
+              "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "sequence": "12",
+              "authority_hash": null,
+              "unpublished_tail": false
+            },
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "repository_name": "retained",
+                "origin": {
+                  "pool_id": "pool_00000000000000000000000000000001",
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "slot_id": "P01",
+                  "binding_generation": "1"
+                },
+                "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "branches": 1,
+                "directory_branches": 1,
+                "directory_trees": 2,
+                "commit_records": 2,
+                "versions": 1,
+                "verified_local_versions": 0,
+                "temporarily_unavailable_versions": [
+                  "ver_00000000000000000000000000000001"
+                ],
+                "recorded_purged_versions": 0,
+                "recorded_migrated_versions": 0
+              }
+            ],
+            "execution": "unavailable"
+          },
+          "target": {
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000002",
+              "disk_id": "disk_00000000000000000000000000000002",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "sequence": "42",
+            "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "destination": "original-primary"
+              }
+            ]
+          },
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution": "unavailable",
+          "blocker": "portable_import_writer_unavailable"
+        },
+        "principal": "admin",
+        "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "effect": "save_execution_intent",
+        "execution": "unavailable"
+      }
+    },
+    {
+      "name": "foreign-intent-save",
+      "schema": "ForeignIntentSave",
+      "layer": "schema",
+      "value": {
+        "preview": {
+          "request": {
+            "operation_id": "op_66666666666666666666666666666666",
+            "plan": {
+              "operation_id": "op_33333333333333333333333333333333",
+              "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          },
+          "plan": {
+            "request": {
+              "operation_id": "op_33333333333333333333333333333333",
+              "source": {
+                "path": "/mnt/disk/nested/other",
+                "identity": {
+                  "device": "2049",
+                  "inode": "9007199254740993",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                },
+                "discovery_identity": {
+                  "device": "2049",
+                  "inode": "2",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                }
+              },
+              "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "target": {
+                "slot_id": "P01",
+                "parent": null,
+                "history_names": {
+                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+                }
+              }
+            },
+            "source": {
+              "source": {
+                "path": "/mnt/disk/nested/other",
+                "identity": {
+                  "device": "2049",
+                  "inode": "9007199254740993",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                },
+                "discovery_identity": {
+                  "device": "2049",
+                  "inode": "2",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                }
+              },
+              "identity": {
+                "pool_id": "pool_00000000000000000000000000000001",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              },
+              "source_level": 2,
+              "role_evidence": "initial_declaration",
+              "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "checkpoint": {
+                "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "sequence": "12",
+                "authority_hash": null,
+                "unpublished_tail": false
+              },
+              "histories": [
+                {
+                  "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "history_tree_id": "history_00000000000000000000000000000001",
+                  "repository_name": "retained",
+                  "origin": {
+                    "pool_id": "pool_00000000000000000000000000000001",
+                    "disk_id": "disk_00000000000000000000000000000001",
+                    "slot_id": "P01",
+                    "binding_generation": "1"
+                  },
+                  "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "branches": 1,
+                  "directory_branches": 1,
+                  "directory_trees": 2,
+                  "commit_records": 2,
+                  "versions": 1,
+                  "verified_local_versions": 0,
+                  "temporarily_unavailable_versions": [
+                    "ver_00000000000000000000000000000001"
+                  ],
+                  "recorded_purged_versions": 0,
+                  "recorded_migrated_versions": 0
+                }
+              ],
+              "execution": "unavailable"
+            },
+            "target": {
+              "identity": {
+                "pool_id": "pool_00000000000000000000000000000002",
+                "disk_id": "disk_00000000000000000000000000000002",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              },
+              "sequence": "42",
+              "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "histories": [
+                {
+                  "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "history_tree_id": "history_00000000000000000000000000000001",
+                  "destination": "original-primary"
+                }
+              ]
+            },
+            "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "execution": "unavailable",
+            "blocker": "portable_import_writer_unavailable"
+          },
+          "principal": "admin",
+          "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "effect": "save_execution_intent",
+          "execution": "unavailable"
+        },
+        "confirm_save_intent": true
+      }
+    },
+    {
+      "name": "foreign-intent-query",
+      "schema": "ForeignIntentQuery",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_66666666666666666666666666666666",
+        "target": {
+          "pool_id": "pool_00000000000000000000000000000002",
+          "disk_id": "disk_00000000000000000000000000000002",
+          "slot_id": "P01",
+          "binding_generation": "1"
+        },
+        "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    },
+    {
+      "name": "foreign-intent-status",
+      "schema": "ForeignIntentStatus",
+      "layer": "schema",
+      "value": {
+        "address": {
+          "operation_id": "op_66666666666666666666666666666666",
+          "target": {
+            "pool_id": "pool_00000000000000000000000000000002",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "slot_id": "P01",
+            "binding_generation": "1"
+          },
+          "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "plan": {
+          "operation_id": "op_33333333333333333333333333333333",
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "stage": "intent_saved",
+        "histories": 1,
+        "temporarily_unavailable_versions": 1,
+        "execution": "unavailable"
+      }
     }
   ],
   "negative": [
@@ -17752,6 +18061,336 @@
           "execution": "unavailable",
           "blocker": "portable_import_writer_unavailable"
         }
+      }
+    },
+    {
+      "name": "foreign-intent-missing-explicit-confirmation",
+      "schema": "ForeignIntentSave",
+      "layer": "schema",
+      "value": {
+        "preview": {
+          "request": {
+            "operation_id": "op_66666666666666666666666666666666",
+            "plan": {
+              "operation_id": "op_33333333333333333333333333333333",
+              "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          },
+          "plan": {
+            "request": {
+              "operation_id": "op_33333333333333333333333333333333",
+              "source": {
+                "path": "/mnt/disk/nested/other",
+                "identity": {
+                  "device": "2049",
+                  "inode": "9007199254740993",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                },
+                "discovery_identity": {
+                  "device": "2049",
+                  "inode": "2",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                }
+              },
+              "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "target": {
+                "slot_id": "P01",
+                "parent": null,
+                "history_names": {
+                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+                }
+              }
+            },
+            "source": {
+              "source": {
+                "path": "/mnt/disk/nested/other",
+                "identity": {
+                  "device": "2049",
+                  "inode": "9007199254740993",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                },
+                "discovery_identity": {
+                  "device": "2049",
+                  "inode": "2",
+                  "ctime_seconds": "1793750000",
+                  "ctime_nanoseconds": 12
+                }
+              },
+              "identity": {
+                "pool_id": "pool_00000000000000000000000000000001",
+                "disk_id": "disk_00000000000000000000000000000001",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              },
+              "source_level": 2,
+              "role_evidence": "initial_declaration",
+              "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "checkpoint": {
+                "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "sequence": "12",
+                "authority_hash": null,
+                "unpublished_tail": false
+              },
+              "histories": [
+                {
+                  "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "history_tree_id": "history_00000000000000000000000000000001",
+                  "repository_name": "retained",
+                  "origin": {
+                    "pool_id": "pool_00000000000000000000000000000001",
+                    "disk_id": "disk_00000000000000000000000000000001",
+                    "slot_id": "P01",
+                    "binding_generation": "1"
+                  },
+                  "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "branches": 1,
+                  "directory_branches": 1,
+                  "directory_trees": 2,
+                  "commit_records": 2,
+                  "versions": 1,
+                  "verified_local_versions": 0,
+                  "temporarily_unavailable_versions": [
+                    "ver_00000000000000000000000000000001"
+                  ],
+                  "recorded_purged_versions": 0,
+                  "recorded_migrated_versions": 0
+                }
+              ],
+              "execution": "unavailable"
+            },
+            "target": {
+              "identity": {
+                "pool_id": "pool_00000000000000000000000000000002",
+                "disk_id": "disk_00000000000000000000000000000002",
+                "slot_id": "P01",
+                "binding_generation": "1"
+              },
+              "sequence": "42",
+              "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "histories": [
+                {
+                  "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "history_tree_id": "history_00000000000000000000000000000001",
+                  "destination": "original-primary"
+                }
+              ]
+            },
+            "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "execution": "unavailable",
+            "blocker": "portable_import_writer_unavailable"
+          },
+          "principal": "admin",
+          "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "effect": "save_execution_intent",
+          "execution": "unavailable"
+        }
+      }
+    },
+    {
+      "name": "foreign-intent-cannot-request-execution",
+      "schema": "ForeignIntentPreview",
+      "layer": "schema",
+      "value": {
+        "request": {
+          "operation_id": "op_66666666666666666666666666666666",
+          "plan": {
+            "operation_id": "op_33333333333333333333333333333333",
+            "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        "plan": {
+          "request": {
+            "operation_id": "op_33333333333333333333333333333333",
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "source_review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "target": {
+              "slot_id": "P01",
+              "parent": null,
+              "history_names": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "original-primary"
+              }
+            }
+          },
+          "source": {
+            "source": {
+              "path": "/mnt/disk/nested/other",
+              "identity": {
+                "device": "2049",
+                "inode": "9007199254740993",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              },
+              "discovery_identity": {
+                "device": "2049",
+                "inode": "2",
+                "ctime_seconds": "1793750000",
+                "ctime_nanoseconds": 12
+              }
+            },
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000001",
+              "disk_id": "disk_00000000000000000000000000000001",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "source_level": 2,
+            "role_evidence": "initial_declaration",
+            "seal_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "review_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "checkpoint": {
+              "candidate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "publication_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "sequence": "12",
+              "authority_hash": null,
+              "unpublished_tail": false
+            },
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "repository_name": "retained",
+                "origin": {
+                  "pool_id": "pool_00000000000000000000000000000001",
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "slot_id": "P01",
+                  "binding_generation": "1"
+                },
+                "manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "branches": 1,
+                "directory_branches": 1,
+                "directory_trees": 2,
+                "commit_records": 2,
+                "versions": 1,
+                "verified_local_versions": 0,
+                "temporarily_unavailable_versions": [
+                  "ver_00000000000000000000000000000001"
+                ],
+                "recorded_purged_versions": 0,
+                "recorded_migrated_versions": 0
+              }
+            ],
+            "execution": "unavailable"
+          },
+          "target": {
+            "identity": {
+              "pool_id": "pool_00000000000000000000000000000002",
+              "disk_id": "disk_00000000000000000000000000000002",
+              "slot_id": "P01",
+              "binding_generation": "1"
+            },
+            "sequence": "42",
+            "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "mapping_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "histories": [
+              {
+                "group_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "history_tree_id": "history_00000000000000000000000000000001",
+                "destination": "original-primary"
+              }
+            ]
+          },
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution": "unavailable",
+          "blocker": "portable_import_writer_unavailable"
+        },
+        "principal": "admin",
+        "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "effect": "execute",
+        "execution": "unavailable"
+      }
+    },
+    {
+      "name": "foreign-intent-cannot-claim-completion",
+      "schema": "ForeignIntentStatus",
+      "layer": "schema",
+      "value": {
+        "address": {
+          "operation_id": "op_66666666666666666666666666666666",
+          "target": {
+            "pool_id": "pool_00000000000000000000000000000002",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "slot_id": "P01",
+            "binding_generation": "1"
+          },
+          "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "plan": {
+          "operation_id": "op_33333333333333333333333333333333",
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "stage": "completed",
+        "histories": 1,
+        "temporarily_unavailable_versions": 1,
+        "execution": "unavailable"
+      }
+    },
+    {
+      "name": "foreign-intent-cannot-grant-execution",
+      "schema": "ForeignIntentStatus",
+      "layer": "schema",
+      "value": {
+        "address": {
+          "operation_id": "op_66666666666666666666666666666666",
+          "target": {
+            "pool_id": "pool_00000000000000000000000000000002",
+            "disk_id": "disk_00000000000000000000000000000002",
+            "slot_id": "P01",
+            "binding_generation": "1"
+          },
+          "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "plan": {
+          "operation_id": "op_33333333333333333333333333333333",
+          "review_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "stage": "intent_saved",
+        "histories": 1,
+        "temporarily_unavailable_versions": 1,
+        "execution": "available"
+      }
+    },
+    {
+      "name": "foreign-intent-requires-target-local-address",
+      "schema": "ForeignIntentQuery",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_66666666666666666666666666666666",
+        "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    },
+    {
+      "name": "foreign-intent-rejects-numeric-target-generation",
+      "schema": "ForeignIntentQuery",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_66666666666666666666666666666666",
+        "target": {
+          "pool_id": "pool_00000000000000000000000000000002",
+          "disk_id": "disk_00000000000000000000000000000002",
+          "slot_id": "P01",
+          "binding_generation": 1
+        },
+        "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       }
     }
   ],

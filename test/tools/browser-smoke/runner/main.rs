@@ -39,6 +39,7 @@ mod fixture;
 use fixture::seed_files;
 mod feedback_lifecycle;
 mod fonts;
+mod foreign_review;
 mod history_cancellation;
 mod history_windows;
 mod integrity_scrub;
@@ -510,11 +511,13 @@ fn run() -> Result<()> {
     let mut screenshot: Option<PathBuf> = None;
     let mut contour_evidence: Option<PathBuf> = None;
     let mut placement_only = false;
+    let mut foreign_review_only = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cli-bin" => cli_binary = args.next().ok_or("--cli-bin requires a path")?.into(),
             "--embedded-web" => embedded_web = true,
             "--placement-only" => placement_only = true,
+            "--foreign-review-only" => foreign_review_only = true,
             "--server-container-image" => {
                 server_container_image = Some(
                     args.next()
@@ -534,7 +537,7 @@ fn run() -> Result<()> {
             }
             _ => {
                 return Err(format!(
-                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR] [--placement-only]"
+                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR] [--placement-only] [--foreign-review-only]"
                 )
                 .into());
             }
@@ -548,6 +551,10 @@ fn run() -> Result<()> {
             "--placement-only cannot be combined with contour or file-manager screenshot modes"
                 .into(),
         );
+    }
+    if foreign_review_only && (placement_only || contour_evidence.is_some() || screenshot.is_some())
+    {
+        return Err("--foreign-review-only is a separate validation mode".into());
     }
     server_launcher::configure(server_container_image, embedded_web)?;
     let cli_binary = cli_binary.canonicalize()?;
@@ -645,6 +652,8 @@ fn run() -> Result<()> {
         };
         let result = if placement_only {
             placement_configuration::run(&browser, &cli_binary, server_assets, &pool, root, &password)
+        } else if foreign_review_only {
+            foreign_review::run(&browser, &cli_binary, server_assets, &pool, root, &password)
         } else if let Some(directory) = &contour_evidence {
             contour_evidence::run(&browser, &origin, &web, directory)
         } else {

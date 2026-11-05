@@ -65,6 +65,11 @@ HTTP 默认监听 `0.0.0.0:7400`，可通过 `--listen` 指定其他 IPv4 或 IP
 `execution=unavailable`，执行请求固定拒绝。当前没有外来盘历史迁入或数据库剪裁
 写者，见[持久审核计划验证范围](../validation/foreign-history-plan-20261105.md)。
 
+独立的 `execution-intents/preview`、`save`、`status` 允许明确确认后把完整执行意图
+不可覆盖保留到准确目标数据盘；这不是现有 plans/execute 的开放。返回仅有
+`intent_saved` 与 `execution=unavailable`，没有正文复制、全池 ID 预留或 namespace
+完成。实时会话、停止/成员围栏与同 FD 耐久性边界见[执行意图设计](../design/foreign-import-writer-first-slice.md)。
+
 `--setup-disk` 白名单仍服务既有离线恢复用途，`POST /api/setup/restore-system` 保持原授权与凭据恢复语义。公开 `preset-preview`、`initialize-preset`、`complete-initialization` 路由已移除，不提供旧初始化格式兼容。缺少可信权威或凭据损坏不得推断为新安装，也不得自动创建管理员。
 
 ## 唯一管理员认证

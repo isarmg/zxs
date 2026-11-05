@@ -145,6 +145,10 @@ class SuiteCoverageTests(unittest.TestCase):
             "tool": "python3", "args": [".github/scripts/check-rescue-publication-io.py"],
         })
         self.assertEqual(calls.count(calls[13]), 1)
+        self.assertEqual(calls[14], {
+            "tool": "python3", "args": [".github/scripts/check-independent-disk-publication-io.py"],
+        })
+        self.assertEqual(calls.count(calls[14]), 1)
 
     def test_history_io_rejects_successful_children_without_completion(self):
         root = Path(__file__).resolve().parents[2]

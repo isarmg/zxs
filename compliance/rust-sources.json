@@ -79502,11 +79502,11 @@
   },
   "manifests_sha256": {
     "Cargo.toml": "a9cf1c527b394650c1bc3d97e7caeb259949bbb90a553f4113423860c0915cbd",
-    "rescue/Cargo.toml": "4adf84f3aedd2073c8ee29874d43ed4164a7f658d18da8b6c752bf837ebaaff6",
+    "rescue/Cargo.toml": "f574e2888ac8a3484e35d33cbac791a6fda6871987da3be0e404801894d70839",
     "src/auth/Cargo.toml": "f315d7648a6399f68f04ec5e49d9df3f69d9254b68c6f5e8369e87fb1e8282f9",
     "src/client/Cargo.toml": "e52f0f1e11816d9fb28c4b0bfbe607ff3342b30493a92fbb7a75847a1f96b7b6",
     "src/contract/Cargo.toml": "c78a39f40d067f1267d056f0f51c17ada5b2c365556fac2a8c54f9b488f3649f",
-    "src/engine/Cargo.toml": "400229309b643096f3800ad1411dd5fefcea1f554da1656ba8324b2af31d4228",
+    "src/engine/Cargo.toml": "c38ae887bdf900248f32f70a3e3be25839500a28618eb204e5a962377a12a60d",
     "src/foundation/code-generation/derive-where/Cargo.toml": "dac6d156693a9ca4d661e41d456a17154836e90ca1d9be52e85b86b5264f1725",
     "src/foundation/code-generation/displaydoc/Cargo.toml": "bffb4f3a7d1b0aa79151f31872f40b7b7bcac575fbeea5e628b30a523a883d8e",
     "src/foundation/code-generation/pastey/Cargo.toml": "0dcbf18a646aff0eb601f5efffc2294b82470a5c44b744778ac6920b536e5991",
@@ -113693,7 +113693,8 @@
         },
         "src/foundation/data-storage/sqlite-access": {
           "features": [
-            "sqlite-bundled"
+            "sqlite-bundled",
+            "sqlite-deserialize"
           ],
           "roles": [
             "runtime"
@@ -116655,7 +116656,8 @@
         },
         "src/foundation/data-storage/sqlite-access": {
           "features": [
-            "sqlite-bundled"
+            "sqlite-bundled",
+            "sqlite-deserialize"
           ],
           "roles": [
             "compile"
@@ -117786,7 +117788,8 @@
         "src/foundation/data-storage/sqlite-access": {
           "features": [
             "pool",
-            "sqlite-bundled"
+            "sqlite-bundled",
+            "sqlite-deserialize"
           ],
           "roles": [
             "compile"

@@ -9012,6 +9012,120 @@
           }
         }
       }
+    },
+    "/api/admin/storage/foreign/execution-intents/preview": {
+      "post": {
+        "operationId": "foreignIntentPreview",
+        "description": "读取完整已保存 plan，重新捕获所有来源历史和正文可用性，并复验已登记一级空目标。效果仅 save_execution_intent，不写数据盘。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForeignIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "仅是当前意图观察；保存后 stage=intent_saved，execution=unavailable。不是 namespace 发布或导入回执。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForeignIntentPreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/foreign/execution-intents/save": {
+      "post": {
+        "operationId": "foreignIntentSave",
+        "description": "明确确认原样意图后，在准确目标数据盘不可覆盖保存。当前会话、停止状态、成员围栏和目标基线在首次写前再验证。相同目标和 ID 原样重试同步同一记录；不依赖源仍在线，不预留全池业务 ID 或目标 namespace，不启动复制。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForeignIntentSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "仅是当前意图观察；保存后 stage=intent_saved，execution=unavailable。不是 namespace 发布或导入回执。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForeignIntentStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/storage/foreign/execution-intents/status": {
+      "post": {
+        "operationId": "foreignIntentStatus",
+        "description": "仅按完整目标 registration、原 intent ID 和摘要读取真实目标记录，不打开旧源路径。无完整记录的残留操作明确 RecoveryRequired，不当作不存在。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForeignIntentQuery"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "仅是当前意图观察；保存后 stage=intent_saved，execution=unavailable。不是 namespace 发布或导入回执。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForeignIntentStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "身份变化、权限不足、不支持格式、损坏或不完整元数据、超出预算均明确拒绝且不修复源盘。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -18207,6 +18321,138 @@
             "enum": [
               "required",
               "matched_at_observation"
+            ]
+          }
+        }
+      },
+      "ForeignIntentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "plan"
+        ],
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ForeignPlanSelection"
+          }
+        }
+      },
+      "ForeignIntentPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request",
+          "plan",
+          "principal",
+          "intent_digest",
+          "effect",
+          "execution"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/ForeignIntentRequest"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ForeignPlanPreview"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "intent_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "effect": {
+            "type": "string",
+            "enum": [
+              "save_execution_intent"
+            ]
+          },
+          "execution": {
+            "type": "string",
+            "enum": [
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "ForeignIntentSave": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "preview",
+          "confirm_save_intent"
+        ],
+        "properties": {
+          "preview": {
+            "$ref": "#/components/schemas/ForeignIntentPreview"
+          },
+          "confirm_save_intent": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ForeignIntentQuery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "target",
+          "intent_digest"
+        ],
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ForeignDiskIdentity"
+          },
+          "intent_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "ForeignIntentStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "address",
+          "plan",
+          "stage",
+          "histories",
+          "temporarily_unavailable_versions",
+          "execution"
+        ],
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/ForeignIntentQuery"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ForeignPlanSelection"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "intent_saved"
+            ]
+          },
+          "histories": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "temporarily_unavailable_versions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "execution": {
+            "type": "string",
+            "enum": [
+              "unavailable"
             ]
           }
         }

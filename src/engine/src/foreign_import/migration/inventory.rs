@@ -46,7 +46,10 @@ impl Inventory {
         Ok(())
     }
 
-    pub(super) fn capture(root: &DiskRoot, budget: &InspectionBudget) -> Result<Self> {
+    pub(in crate::foreign_import) fn capture(
+        root: &DiskRoot,
+        budget: &InspectionBudget,
+    ) -> Result<Self> {
         let mut inventory = Self {
             directories: BTreeSet::new(),
             files: BTreeMap::new(),
@@ -99,7 +102,7 @@ impl Inventory {
         Ok(inventory)
     }
 
-    pub(super) fn validate(&self, budget: &InspectionBudget) -> Result<()> {
+    pub(in crate::foreign_import) fn validate(&self, budget: &InspectionBudget) -> Result<()> {
         if self.files.len() + self.directories.len() > MAX_ENTRIES {
             return Err(invalid("capsule inventory exceeds entry limit"));
         }

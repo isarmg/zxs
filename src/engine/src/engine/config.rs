@@ -298,6 +298,19 @@ pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<Valid
 }
 
 pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<WriterLocks> {
+    acquire_locks_selected(
+        root,
+        disks,
+        crate::authority_selection::SelectionGuard::legacy(root)?,
+    )
+}
+
+pub(super) fn acquire_locks_selected(
+    root: &Path,
+    disks: &DiskResources,
+    selection: crate::authority_selection::SelectionGuard,
+) -> Result<WriterLocks> {
+    selection.require_legacy()?;
     let system = File::from(
         rustix::fs::open(
             root.join("writer.lock"),
@@ -311,7 +324,8 @@ pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<Writer
         .map_err(std::io::Error::from)?,
     );
     acquire_writer(&system)?;
-    let mut locks = WriterLocks::new(system);
+    selection.require_legacy()?;
+    let mut locks = WriterLocks::new(system, selection);
     for disk in disks.handles() {
         let file = disk.root.lock_file()?;
         acquire_writer(&file)?;

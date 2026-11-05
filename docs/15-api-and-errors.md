@@ -62,6 +62,9 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/admin/storage/foreign/plans/status?operation_id=…` | 只读取当前主体的已保存计划，`validation=required`，不扫描源盘或目标盘 |
 | `POST /api/admin/storage/foreign/plans/revalidate` | 重验原物理来源、全部闭包和空目标映射；匹配仍不可执行迁入 |
 | `POST /api/admin/storage/foreign/plans/execute` | 明确返回 `FORMAT_UNSUPPORTED`；保存计划不能构造外盘执行能力 |
+| `POST /api/admin/storage/foreign/execution-intents/preview` | 选择原复核计划及独立意图 ID，重新检查完整来源/目标；效果仅为保存目标盘意图 |
+| `POST /api/admin/storage/foreign/execution-intents/save` | 原样 preview 加 `confirm_save_intent=true`，保存目标盘局部不可变意图；仅返回 `intent_saved`，不复制、预留或发布 |
+| `POST /api/admin/storage/foreign/execution-intents/status` | 按完整目标 registration、原 ID 和摘要读取目标记录，不探测旧源路径；不完整残留明确要求恢复 |
 | `GET /api/admin/storage/directories?path=…` | 只能列举发现父目录本身，子目录请求拒绝；返回直接空目录及已识别ZXS目录和截断计数，不递归发现 |
 | `POST /api/admin/storage/directories/inspect` | 请求 mount_path/root_path，检查已存在的空私有目录并返回绑定身份的 CandidateSelection |
 | `POST /api/admin/storage/activate` | 首次激活：selections 与 production/development 模式；不提供已初始化池的热增盘 |
@@ -206,6 +209,8 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 显式 `GET /api/operations/{operation}` 保留真实管理员诊断能力：相同的固定结果之外，必填 `current_health` 为 `null` 或 `{state, checked_at}`。`null` 明确表示 NotObserved（操作尚未完成或没有可观察作用域），不表示健康，也不伪造观察时间；对象表示 Checked，`state` 为 `HEALTHY`、`DEGRADED`、`UNAVAILABLE` 或 `UNKNOWN`，`checked_at` 是实际观察的 UTC 时刻。已成功提交后来掉盘时，原发布结果与保护证据不变，只有独立健康观察变化。两条 GET 均保留当前认证、主体绑定、原 operation ID 和错误来源，不通过切换端点绕过准入。
 
 收到超时后只能查询或用**同一个 operation_id 和相同请求**重试。相同 ID 携带不同请求必须返回 `IDEMPOTENCY_KEY_REUSED`，不能覆盖原操作。
+
+外来历史执行意图使用独立的目标盘局部名称空间：地址必须同时保留完整 target registration 与原意图 ID/摘要，不是全池业务 operation 预留或发布回执。错误的查询/确认摘要返回 `PLAN_STALE`；已有不同意图内容不得覆盖。源拔除后仍可读取原目标事实；原样保存重试只同步同一记录，不宣称原 namespace 基线仍空。实际复制与 namespace 发布不可用，详见 [执行意图边界](design/foreign-import-writer-first-slice.md)。
 
 <a id="s15-04"></a>
 

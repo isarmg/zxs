@@ -1,0 +1,308 @@
+use super::*;
+use crate::management::foreign_disk_fixture::{Fixture, bytes, fixture, inspect, source};
+
+fn call(
+    f: &Fixture,
+    action: &'static str,
+    input: impl data_serialization::Serialize,
+) -> Result<Value, ApiError> {
+    // This fixture has no background observer. Refresh only at new-request
+    // boundaries, exactly where the normal service's sample would be available.
+    f.backend.inner.observe_storage_once();
+    f.backend.setup_operation(
+        action,
+        json_codec::to_value(input).unwrap(),
+        None,
+        Some(&f.identity),
+    )
+}
+fn reviewed(f: &Fixture) -> ForeignIntentRequest {
+    let source = inspect(f, source(f)).unwrap();
+    let request = ForeignPlanRequest {
+        operation_id: OperationId::generate().unwrap(),
+        source: source.source,
+        source_review_digest: source.review_digest,
+        target: ForeignPlanTarget {
+            slot_id: "P01".into(),
+            parent: None,
+            history_names: source
+                .histories
+                .iter()
+                .enumerate()
+                .map(|(i, h)| (h.group_id.clone(), format!("origin-{i}")))
+                .collect(),
+        },
+    };
+    let preview: ForeignPlanPreview =
+        json_codec::from_value(call(f, "foreign_plan_preview", request).unwrap()).unwrap();
+    call(
+        f,
+        "foreign_plan_save",
+        ForeignPlanSave {
+            preview: preview.clone(),
+            acknowledge_plan_only: true,
+        },
+    )
+    .unwrap();
+    ForeignIntentRequest {
+        operation_id: OperationId::generate().unwrap(),
+        plan: ForeignPlanSelection {
+            operation_id: preview.request.operation_id,
+            review_digest: preview.review_digest,
+        },
+    }
+}
+fn preview(f: &Fixture) -> ForeignIntentPreview {
+    let request = reviewed(f);
+    json_codec::from_value(call(f, "foreign_intent_preview", request).unwrap()).unwrap()
+}
+fn prepare_input(f: &Fixture) -> PreparedIntent {
+    let request = reviewed(f);
+    f.backend.inner.observe_storage_once();
+    f.backend
+        .prepare_foreign_intent(&f.identity, request)
+        .unwrap()
+}
+fn save(
+    f: &Fixture,
+    preview: &ForeignIntentPreview,
+    confirm_save_intent: bool,
+) -> Result<ForeignIntentStatus, ApiError> {
+    call(
+        f,
+        "foreign_intent_save",
+        ForeignIntentSave {
+            preview: preview.clone(),
+            confirm_save_intent,
+        },
+    )
+    .map(|value| json_codec::from_value(value).unwrap())
+}
+fn snapshot(f: &Fixture, backend: &EngineBackend) -> (BTreeMap<PathBuf, Vec<u8>>, Vec<u8>) {
+    (
+        bytes(&f.known),
+        backend.test_with_engine_locked(|engine| json_codec::to_vec(engine.state()).unwrap()),
+    )
+}
+fn intent_directory(f: &Fixture) -> PathBuf {
+    f.known.join("metadata/foreign-import-intents")
+}
+fn fence(f: &Fixture, backend: &EngineBackend) {
+    backend.test_with_engine_locked(|engine| {
+        let mut target = engine.config().clone();
+        let generated = storage_contract::Config::development([
+            f.known.clone(),
+            f._root.path().join("later-primary"),
+        ])
+        .unwrap();
+        let mut addition = generated.disks.into_iter().nth(1).unwrap();
+        addition.level = 1;
+        addition.upstream_slot_id = None;
+        addition.metadata_member = false;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&addition.root)
+            .unwrap();
+        target.disks.push(addition);
+        engine
+            .begin_membership_handoff(target, "admin", OperationId::generate().unwrap())
+            .unwrap();
+    });
+}
+
+#[test]
+fn only_explicit_intent_bytes_are_saved_and_source_free_replay_survives_reopen() {
+    let f = fixture();
+    let p = preview(&f);
+    let source_before = bytes(&f.source);
+    let backend = f.backend.inner.backend().unwrap();
+    let before = snapshot(&f, &backend);
+    assert!(save(&f, &p, false).is_err());
+    assert_eq!(snapshot(&f, &backend), before);
+    assert!(!intent_directory(&f).exists());
+    let saved = save(&f, &p, true).unwrap();
+    assert_eq!(saved.stage, ForeignIntentStage::IntentSaved);
+    assert_eq!(saved.execution, ForeignExecutionCapability::Unavailable);
+    assert_eq!(saved.histories, 2);
+    assert!(saved.temporarily_unavailable_versions > 0);
+    assert_eq!(bytes(&f.source), source_before);
+    assert_eq!(snapshot(&f, &backend).1, before.1);
+    for (path, original) in before.0 {
+        assert_eq!(bytes(&f.known).get(&path), Some(&original));
+    }
+    assert!(backend.test_with_engine_locked(|engine| {
+        engine
+            .state()
+            .operations
+            .get(&p.request.operation_id)
+            .is_none()
+    }));
+    let retained = bytes(&intent_directory(&f));
+    drop(backend);
+    crate::lock(&f.backend.inner.state).backend = BackendState::Unopened;
+    fs::rename(&f.source, f.source.with_extension("detached")).unwrap();
+    let backend = Arc::new(EngineBackend::new(
+        storage_engine::Engine::open(&f.backend.inner.data_root).unwrap(),
+    ));
+    let auth = crate::lock(&f.backend.inner.auth).clone().unwrap();
+    backend
+        .set_management_auth(crate::lock(&auth).reader())
+        .unwrap();
+    f.backend.inner.set(Some(backend), StorageState::Ready);
+    let observed: ForeignIntentStatus =
+        json_codec::from_value(call(&f, "foreign_intent_status", saved.address.clone()).unwrap())
+            .unwrap();
+    assert_eq!(observed, saved);
+    assert_eq!(save(&f, &p, true).unwrap(), saved);
+    assert_eq!(bytes(&intent_directory(&f)), retained);
+    assert_eq!(
+        call(&f, "foreign_plan_execute", p.request.plan)
+            .unwrap_err()
+            .code,
+        ErrorCode::FormatUnsupported
+    );
+}
+
+#[test]
+fn a_forged_or_incomplete_review_cannot_create_an_intent() {
+    let f = fixture();
+    let p = preview(&f);
+    let backend = f.backend.inner.backend().unwrap();
+    let before = snapshot(&f, &backend);
+    let mut forged = p.clone();
+    forged.plan.target.histories.pop();
+    assert_eq!(
+        save(&f, &forged, true).unwrap_err().code,
+        ErrorCode::PlanStale
+    );
+    let mut forged = p.clone();
+    forged.intent_digest = "f".repeat(64);
+    assert_eq!(
+        save(&f, &forged, true).unwrap_err().code,
+        ErrorCode::PlanStale
+    );
+    let mut forged = p;
+    forged.request.operation_id = forged.request.plan.operation_id;
+    assert!(save(&f, &forged, true).is_err());
+    assert_eq!(snapshot(&f, &backend), before);
+    assert!(!intent_directory(&f).exists());
+}
+
+#[test]
+fn retained_admission_survives_health_expiry_but_never_session_revocation() {
+    let f = fixture();
+    let prepared = prepare_input(&f);
+    crate::lock(&f.backend.inner.state).observed_at =
+        std::time::Instant::now() - std::time::Duration::from_secs(16);
+    assert!(f.backend.inner.backend().is_err());
+    assert_eq!(
+        f.backend
+            .finish_foreign_intent(&f.identity, prepared)
+            .unwrap()
+            .stage,
+        ForeignIntentStage::IntentSaved
+    );
+
+    let f = fixture();
+    let prepared = prepare_input(&f);
+    let backend = Arc::clone(&prepared.backend);
+    let auth = crate::lock(&f.backend.inner.auth).clone().unwrap();
+    crate::lock(&auth).logout(&f.token).unwrap();
+    let before = snapshot(&f, &backend);
+    assert_eq!(
+        f.backend
+            .finish_foreign_intent(&f.identity, prepared)
+            .unwrap_err()
+            .status,
+        http::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(snapshot(&f, &backend), before);
+    assert!(!intent_directory(&f).exists());
+}
+
+#[test]
+fn late_shutdown_and_membership_fence_reject_before_the_first_intent_write() {
+    let f = fixture();
+    let prepared = prepare_input(&f);
+    let backend = Arc::clone(&prepared.backend);
+    f.backend.inner.stop();
+    let before = snapshot(&f, &backend);
+    assert_eq!(
+        f.backend
+            .finish_foreign_intent(&f.identity, prepared)
+            .unwrap_err()
+            .code,
+        ErrorCode::ServiceStopping
+    );
+    assert_eq!(snapshot(&f, &backend), before);
+    assert!(!intent_directory(&f).exists());
+
+    let f = fixture();
+    let prepared = prepare_input(&f);
+    let backend = Arc::clone(&prepared.backend);
+    fence(&f, &backend);
+    let before = snapshot(&f, &backend);
+    assert_eq!(
+        f.backend
+            .finish_foreign_intent(&f.identity, prepared)
+            .unwrap_err()
+            .code,
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(snapshot(&f, &backend), before);
+    assert!(!intent_directory(&f).exists());
+}
+
+#[test]
+fn saved_intent_reconciliation_remains_under_current_auth_stop_and_fence() {
+    for boundary in ["auth", "stop", "fence"] {
+        let f = fixture();
+        let p = preview(&f);
+        let saved = save(&f, &p, true).unwrap();
+        let backend = f.backend.inner.backend().unwrap();
+        match boundary {
+            "auth" => {
+                let auth = crate::lock(&f.backend.inner.auth).clone().unwrap();
+                crate::lock(&auth).logout(&f.token).unwrap();
+            }
+            "stop" => f.backend.inner.stop(),
+            "fence" => fence(&f, &backend),
+            _ => unreachable!(),
+        }
+        fs::rename(&f.source, f.source.with_extension("detached")).unwrap();
+        let before = snapshot(&f, &backend);
+        assert!(
+            backend
+                .reconcile_foreign_intent(
+                    &f.identity,
+                    &saved.address,
+                    &saved.address.intent_digest.parse().unwrap(),
+                    || f.backend.inner.ensure_running()
+                )
+                .is_err()
+        );
+        assert_eq!(snapshot(&f, &backend), before);
+    }
+}
+
+#[test]
+fn lifecycle_selection_rejects_a_second_intent_request_without_target_io() {
+    let f = fixture();
+    let request = reviewed(&f);
+    let before = bytes(&f.known);
+    let _lifecycle = crate::lock(&f.backend.inner.storage_addition);
+    assert_eq!(
+        f.backend
+            .setup_operation(
+                "foreign_intent_preview",
+                json_codec::to_value(request).unwrap(),
+                None,
+                Some(&f.identity)
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::StorageRetryRunning
+    );
+    assert_eq!(bytes(&f.known), before);
+    assert!(!intent_directory(&f).exists());
+}

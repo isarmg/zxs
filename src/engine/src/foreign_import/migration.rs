@@ -18,12 +18,12 @@ const MAX_DEPTH: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct PhysicalBinding {
+pub(super) struct PhysicalBinding {
     device: u64,
     inode: u64,
 }
 impl PhysicalBinding {
-    fn of(root: &DiskRoot) -> Result<Self> {
+    pub(super) fn of(root: &DiskRoot) -> Result<Self> {
         let identity = root.directory_identity(root.path())?;
         Ok(Self {
             device: identity.device,
@@ -41,7 +41,7 @@ struct FileCommitment {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct Inventory {
+pub(super) struct Inventory {
     directories: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, FileCommitment>,
 }
@@ -95,14 +95,22 @@ enum Placement {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct InspectionBudget {
+pub(super) struct InspectionBudget {
     metadata_bytes: usize,
     journal_bytes: usize,
     versions: usize,
     payload_bytes: u64,
 }
 impl InspectionBudget {
-    fn limits(&self) -> Result<ForeignImportLimits> {
+    pub(super) fn from_limits(limits: ForeignImportLimits) -> Self {
+        Self {
+            metadata_bytes: limits.metadata_bytes,
+            journal_bytes: limits.journal_bytes,
+            versions: limits.versions,
+            payload_bytes: limits.payload_bytes,
+        }
+    }
+    pub(super) fn limits(&self) -> Result<ForeignImportLimits> {
         ForeignImportLimits::new(
             self.metadata_bytes,
             self.journal_bytes,

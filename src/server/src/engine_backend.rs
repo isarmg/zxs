@@ -19,6 +19,7 @@ mod directory_selection;
 mod disk_monitor;
 mod error_registry;
 mod file_manager;
+mod foreign_intent;
 pub(crate) mod foreign_plan;
 mod graph;
 mod integrity_scrub;

@@ -59,6 +59,7 @@ case "${1:-}" in
     python3 .github/scripts/check-telemetry-enumeration-io.py
     python3 .github/scripts/check-disk-observation-io.py
     python3 .github/scripts/check-rescue-publication-io.py
+    python3 .github/scripts/check-independent-disk-publication-io.py
     cargo test --locked --offline -p storage-engine --lib \
       history_package::graph::tests::distributed_history_larger_than_real_reader_limit_roundtrips \
       -- --ignored --exact --test-threads=1

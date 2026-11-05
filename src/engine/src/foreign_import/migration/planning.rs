@@ -69,12 +69,7 @@ impl ForeignMigrationPlan {
         if refreshed.digest != source.digest {
             return Err(changed("source changed after migration review"));
         }
-        let budget = InspectionBudget {
-            metadata_bytes: source.limits.metadata_bytes,
-            journal_bytes: source.limits.journal_bytes,
-            versions: source.limits.versions,
-            payload_bytes: source.limits.payload_bytes,
-        };
+        let budget = InspectionBudget::from_limits(source.limits);
         let record = PlanRecord {
             format: FORMAT.into(),
             operation_id,

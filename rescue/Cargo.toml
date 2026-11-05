@@ -27,3 +27,7 @@ tempfile.workspace = true
 [[test]]
 name = "rescue_startup"
 path = "../test/rescue/startup.rs"
+
+[[test]]
+name = "independent_authority"
+path = "../test/rescue/independent_authority.rs"

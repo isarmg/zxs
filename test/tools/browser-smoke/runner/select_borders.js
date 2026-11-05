@@ -28,6 +28,7 @@ const done=arguments[arguments.length-1];
     const panels=[...document.querySelectorAll('.zxs-select-panel:popover-open')];
     const inspect=async (node, expanded)=>{
         const css=getComputedStyle(node), box=node.getBoundingClientRect();
+        const keyboardFocus=!expanded&&node.matches(':focus-visible');
         const sides=['Top','Right','Bottom','Left'];
         const widths=sides.map(side=>parseFloat(css[`border${side}Width`]));
         const expectedFill=rgba(css.getPropertyValue('--zxs-bg-panel').trim());
@@ -72,26 +73,38 @@ const done=arguments[arguments.length-1];
         if(match) {
             try {
                 const raster=await imagePixels(match[1]),{pixels,w,h}=raster;
+                // G4 includes the keyboard focus ring outside the border box.
+                // Its pixels are validated separately by select_focus.js, not
+                // mistaken here for a decorative border inside the control.
+                let inset=0;
+                if(keyboardFocus){
+                    inset=parseFloat(css.borderImageOutset);
+                    if(document.activeElement!==node||property!=='borderImageSource'||node.dataset.zxsContourState!=='paint'||
+                        !Number.isInteger(inset)||inset<5||Math.abs(w-box.width-2*inset)>1||Math.abs(h-box.height-2*inset)>1){
+                        return {valid:false,reason:'keyboard focus raster does not match the actual border box',keyboardFocus,inset,w,h};
+                    }
+                }
+                const left=inset,top=inset,right=w-inset,bottom=h-inset,innerWidth=right-left,innerHeight=bottom-top;
                 const isEdge=(x,y)=>{const i=(y*w+x)*4,actual=[...pixels.slice(i,i+3),255];return pixels[i+3]>=128&&(expanded?sameColor(actual,expectedBorder):!sameColor(actual,expectedFill));};
                 // Search each edge's central strip, clear of curved corners.
                 // An icon, text, or focus ring cannot satisfy all four sides.
                 const horizontal=(start,end)=>{
                     let count=0;
-                    for(let y=start;y<end;y++)for(let x=Math.floor(w*.4);x<Math.ceil(w*.6);x++)if(isEdge(x,y))count++;
+                    for(let y=start;y<end;y++)for(let x=Math.floor(left+innerWidth*.4);x<Math.ceil(left+innerWidth*.6);x++)if(isEdge(x,y))count++;
                     return count;
                 };
                 const vertical=(start,end)=>{
                     let count=0;
-                    for(let x=start;x<end;x++)for(let y=Math.floor(h*.4);y<Math.ceil(h*.6);y++)if(isEdge(x,y))count++;
+                    for(let x=start;x<end;x++)for(let y=Math.floor(top+innerHeight*.4);y<Math.ceil(top+innerHeight*.6);y++)if(isEdge(x,y))count++;
                     return count;
                 };
-                const edgePixels=[horizontal(0,Math.ceil(h*.25)),vertical(Math.floor(w*.75),w),horizontal(Math.floor(h*.75),h),vertical(0,Math.ceil(w*.25))];
+                const edgePixels=[horizontal(top,Math.ceil(top+innerHeight*.25)),vertical(Math.floor(left+innerWidth*.75),right),horizontal(Math.floor(top+innerHeight*.75),bottom),vertical(left,Math.ceil(left+innerWidth*.25))];
                 const center=centerOf(raster),centerAlpha=center[3];
-                const stable=node.isConnected&&(foreground?foreground.isConnected&&livePath.getAttribute('d')===pathData&&sameColor(rgba(getComputedStyle(livePath).fill),expectedBorder)&&getComputedStyle(livePath).fillRule==='evenodd':getComputedStyle(node)[property]===source);
+                const stable=node.isConnected&&(expanded||node.matches(':focus-visible')===keyboardFocus)&&(!keyboardFocus||document.activeElement===node)&&(foreground?foreground.isConnected&&livePath.getAttribute('d')===pathData&&sameColor(rgba(getComputedStyle(livePath).fill),expectedBorder)&&getComputedStyle(livePath).fillRule==='evenodd':getComputedStyle(node)[property]===source);
                 const surface=foreground?await surfaceMatches(node,css,expectedFill):sameColor(center,expectedFill)||(expanded&&centerAlpha===0&&sameColor(rgba(css.backgroundColor),expectedFill));
-                const spans=[Math.ceil(w*.6)-Math.floor(w*.4),Math.ceil(h*.6)-Math.floor(h*.4)];
+                const spans=[Math.ceil(left+innerWidth*.6)-Math.floor(left+innerWidth*.4),Math.ceil(top+innerHeight*.6)-Math.floor(top+innerHeight*.4)];
                 const thickness=edgePixels.map((count,index)=>count/spans[index%2]);
-                paint={valid:stable&&surface&&(expanded?thickness.every(n=>n>=2):edgePixels.every(n=>n===0))&&(!foreground||centerAlpha===0),property,stable,edgePixels,thickness,centerAlpha,surface};
+                paint={valid:stable&&surface&&(expanded?thickness.every(n=>n>=2):edgePixels.every(n=>n===0))&&(!foreground||centerAlpha===0),property,stable,edgePixels,thickness,centerAlpha,surface,inset};
             } finally {
                 if(ownedUrl)URL.revokeObjectURL(ownedUrl);
             }
@@ -99,7 +112,7 @@ const done=arguments[arguments.length-1];
             paint={valid:(expanded?sides.every(side=>sameColor(rgba(css[`border${side}Color`]),expectedBorder)&&css[`border${side}Style`]==='solid'):sides.every(side=>css[`border${side}Style`]==='none'))&&sameColor(rgba(css.backgroundColor),expectedFill),property:expanded?'native-border':'borderless'};
         }
         return {valid:rendered(node)&&Number(css.opacity)===1&&box.width>0&&box.height>=36&&widths.every(w=>w===(expanded?2:0))&&paint.valid,
-            role:node.getAttribute('role'),expanded,opacity:css.opacity,disabled:node.disabled===true,state:node.dataset.zxsContourState,
+            role:node.getAttribute('role'),expanded,keyboardFocus,opacity:css.opacity,disabled:node.disabled===true,state:node.dataset.zxsContourState,
             width:box.width,height:box.height,widths,paint};
     };
     const controls=await Promise.all([...triggers.map(node=>inspect(node,false)),...panels.map(node=>inspect(node,true))]);

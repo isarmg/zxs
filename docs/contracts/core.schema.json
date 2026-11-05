@@ -9184,6 +9184,138 @@
           ]
         }
       }
+    },
+    "ForeignIntentRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "plan"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "plan": {
+          "$ref": "#/$defs/ForeignPlanSelection"
+        }
+      }
+    },
+    "ForeignIntentPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "plan",
+        "principal",
+        "intent_digest",
+        "effect",
+        "execution"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/ForeignIntentRequest"
+        },
+        "plan": {
+          "$ref": "#/$defs/ForeignPlanPreview"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "intent_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "effect": {
+          "type": "string",
+          "enum": [
+            "save_execution_intent"
+          ]
+        },
+        "execution": {
+          "type": "string",
+          "enum": [
+            "unavailable"
+          ]
+        }
+      }
+    },
+    "ForeignIntentSave": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preview",
+        "confirm_save_intent"
+      ],
+      "properties": {
+        "preview": {
+          "$ref": "#/$defs/ForeignIntentPreview"
+        },
+        "confirm_save_intent": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ForeignIntentQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "target",
+        "intent_digest"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "target": {
+          "$ref": "#/$defs/ForeignDiskIdentity"
+        },
+        "intent_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ForeignIntentStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "address",
+        "plan",
+        "stage",
+        "histories",
+        "temporarily_unavailable_versions",
+        "execution"
+      ],
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/ForeignIntentQuery"
+        },
+        "plan": {
+          "$ref": "#/$defs/ForeignPlanSelection"
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "intent_saved"
+          ]
+        },
+        "histories": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "temporarily_unavailable_versions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "execution": {
+          "type": "string",
+          "enum": [
+            "unavailable"
+          ]
+        }
+      }
     }
   }
 }

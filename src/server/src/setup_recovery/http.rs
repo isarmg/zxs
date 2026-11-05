@@ -65,6 +65,18 @@ pub(crate) fn protected_routes() -> Router<AppState> {
             post(foreign_plan_execute),
         )
         .route(
+            "/api/admin/storage/foreign/execution-intents/preview",
+            post(foreign_intent_preview),
+        )
+        .route(
+            "/api/admin/storage/foreign/execution-intents/save",
+            post(foreign_intent_save),
+        )
+        .route(
+            "/api/admin/storage/foreign/execution-intents/status",
+            post(foreign_intent_status),
+        )
+        .route(
             "/api/admin/storage/conversion/preview",
             post(ordinary_conversion_preview),
         )
@@ -290,7 +302,9 @@ async fn protected_mutation(
     crate::http_auth::recovery_admission(&state, &request)?;
     // The ordinary authorize middleware has checked the session and CSRF.
     let limit = match action {
-        "foreign_plan_preview" | "foreign_plan_save" => 2 * crate::JSON_BODY_LIMIT,
+        "foreign_plan_preview" | "foreign_plan_save" | "foreign_intent_save" => {
+            2 * crate::JSON_BODY_LIMIT
+        }
         "activate" => MAX_ACTIVATION_BODY_BYTES,
         "disk_add_preview" => crate::JSON_BODY_LIMIT,
         "disk_exit_commit"
@@ -406,6 +420,24 @@ async fn foreign_plan_execute(
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
     foreign_plan_mutation(state, request, "foreign_plan_execute").await
+}
+async fn foreign_intent_preview(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    foreign_plan_mutation(state, request, "foreign_intent_preview").await
+}
+async fn foreign_intent_save(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    foreign_plan_mutation(state, request, "foreign_intent_save").await
+}
+async fn foreign_intent_status(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    foreign_plan_mutation(state, request, "foreign_intent_status").await
 }
 #[derive(data_serialization::Deserialize)]
 #[serialization(deny_unknown_fields)]

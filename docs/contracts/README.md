@@ -16,6 +16,12 @@
 停止请求要求明确确认保留来源、已接纳目标与暂存数据；服务器只凭核心准确
 停止收据完成终止，不用本地缓存取消未决决议或清理工作区字节。
 
+`ForeignIntent*` 明确区分目标盘局部执行意图与系统复核计划。完整 target registration
+和原 operation ID/摘要共同标识一条意图；`confirm_save_intent` 必填，响应仅为
+`intent_saved` / `execution=unavailable`，不表示复制、全池操作预留或 namespace
+完成。固定向量只验证字段与阶段边界；当前会话、成员围栏、同 FD 耐久性与
+完整来源覆盖由真实管理层和引擎验证，见[执行意图设计](../design/foreign-import-writer-first-slice.md)。
+
 ## 文件与覆盖范围
 
 | 文件 | 当前覆盖 | 尚未证明 |

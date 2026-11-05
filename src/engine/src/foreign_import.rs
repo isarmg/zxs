@@ -4,6 +4,11 @@ use crate::{disk::*, journal::*, *};
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
 
 mod inspect;
+mod intent;
+pub use intent::{
+    ConfirmedForeignImportIntent, ForeignImportIntentInfo, ForeignImportIntentRequest,
+    ForeignImportIntentSource, ForeignImportIntentTarget, PreparedForeignImportIntent,
+};
 mod mapping;
 mod migration;
 mod model;

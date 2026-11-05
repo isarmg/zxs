@@ -45,13 +45,17 @@ fn descriptors(path: &Path) -> usize {
 
 fn fixture() -> (tempfile::TempDir, Vec<Arc<DiskHandle>>, WriterLocks) {
     let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let paths = [temp.path().join("primary"), temp.path().join("backup")];
     for path in &paths {
         fs::create_dir(path).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
     let config = ValidatedConfig::try_from(Config::development(paths).unwrap()).unwrap();
-    let mut locks = WriterLocks::new(locked(&temp.path().join("writer.lock")));
+    let mut locks = WriterLocks::new(
+        locked(&temp.path().join("writer.lock")),
+        crate::authority_selection::SelectionGuard::legacy(temp.path()).unwrap(),
+    );
     let mut handles = Vec::new();
     for disk in &config.disks {
         let handle = Arc::new(DiskHandle::open(&config, disk, false).unwrap());

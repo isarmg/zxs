@@ -1,10 +1,10 @@
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
-struct Fixture {
-    _temp: tempfile::TempDir,
-    engine: Engine,
-    source: PathBuf,
+pub(super) struct Fixture {
+    pub(super) _temp: tempfile::TempDir,
+    pub(super) engine: Engine,
+    pub(super) source: PathBuf,
 }
 fn save(engine: &mut Engine, name: &str, slot: &str, copies: u32) {
     let repository = engine
@@ -34,7 +34,7 @@ fn save(engine: &mut Engine, name: &str, slot: &str, copies: u32) {
         })
         .unwrap();
 }
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
         Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}")))).unwrap();
@@ -52,7 +52,7 @@ fn fixture() -> Fixture {
         source,
     }
 }
-fn inspect(path: &Path) -> Result<ForeignImportPreview> {
+pub(super) fn inspect(path: &Path) -> Result<ForeignImportPreview> {
     ForeignImportPreview::inspect(
         File::open(path).unwrap(),
         path.into(),

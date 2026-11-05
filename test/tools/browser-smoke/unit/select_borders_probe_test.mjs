@@ -34,10 +34,16 @@ function fixture() {
         palette:'#c8c8c8',getPropertyValue(){return this.palette;}};
     for(const side of ['Top','Right','Bottom','Left'])Object.assign(style,{[`border${side}Width`]:'2px',[`border${side}Style`]:'solid',[`border${side}Color`]:'rgb(170, 170, 170)'});
     const node=role=>({style:{...style},isConnected:true,visible:true,dataset:{zxsContourState:'clip'},box:{x:0,y:0,width:100,height:36},
-        checkVisibility(){return this.visible;},getBoundingClientRect(){return this.box;},hover:false,matches(){return this.hover;},closest(){return null;},querySelector(){return null;},anchor:'local',getAttribute(name){return name==='role'?role:this.anchor;}});
+        checkVisibility(){return this.visible;},getBoundingClientRect(){return this.box;},hover:false,focusVisible:false,matches(selector){assert.equal(selector,':focus-visible');return this.focusVisible;},closest(){return null;},querySelector(){return null;},anchor:'local',getAttribute(name){return name==='role'?role:this.anchor;}});
     const trigger=node('combobox'),panel=node('listbox');
     for(const side of ['Top','Right','Bottom','Left'])Object.assign(trigger.style,{[`border${side}Width`]:'0px',[`border${side}Style`]:'none'});
     const f={trigger,panel,pixelColor:170,edgeWidth:2,missingEdge:false,centerColor:200,centerAlpha:255,detached:false,decodeFails:false,foreground:null,revoked:[],created:[]};
+    f.withKeyboardFocus=()=>{
+        f.active=trigger;trigger.focusVisible=true;trigger.dataset.zxsContourState='paint';
+        trigger.style.borderImageSource='url("blob:focused-trigger")';trigger.style.borderImageOutset='7px';
+        f.focusRasterWidth=114;f.focusRasterHeight=50;
+        return f;
+    };
     f.withForeground=()=>{
         f.centerAlpha=0;
         const path={style:{fill:'rgb(170, 170, 170)',fillRule:'evenodd',stroke:'none'},getAttribute(name){assert.equal(name,'d');return 'M0 0h100v36H0Z M2 2v32h96V2Z';}};
@@ -54,6 +60,17 @@ function fixture() {
             return [...value.slice(1).match(/../g).map(value=>parseInt(value,16)),255];
         };
         const raster=source=>{
+            if(source==='blob:focused-trigger'){
+                const w=f.focusRasterWidth,h=f.focusRasterHeight,pixels=new Uint8ClampedArray(w*h*4),inset=7;
+                for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+                    const inside=x>=inset&&x<w-inset&&y>=inset&&y<h-inset;
+                    const innerBorder=inside&&(x<inset+2||x>=w-inset-2||y<inset+2||y>=h-inset-2);
+                    const outside=x<2||x>=w-2||y<2||y>=h-2;
+                    const value=inside?(f.innerTriggerBorder&&innerBorder?170:f.focusFill??200):60;
+                    pixels.set([value,value,value,outside?0:255],(y*w+x)*4);
+                }
+                return pixels;
+            }
             const pixels=new Uint8ClampedArray(20*20*4),surface=source==='blob:surface';
             for(let y=0;y<20;y++)for(let x=0;x<20;x++){
                 const edge=x<f.edgeWidth||x>=20-f.edgeWidth||y<f.edgeWidth||y>=20-f.edgeWidth;
@@ -64,7 +81,7 @@ function fixture() {
             }
             return pixels;
         };
-        const document={querySelectorAll(selector){return selector.includes(':popover-open')?[panel]:[trigger];},
+        const document={get activeElement(){return f.active??null;},querySelectorAll(selector){return selector.includes(':popover-open')?[panel]:[trigger];},
             createElementNS(ns,tag){assert.equal(ns,'http://www.w3.org/2000/svg');return {tag,attrs:{},children:[],setAttribute(name,value){this.attrs[name]=value;},appendChild(child){this.children.push(child);}};},
             createElement(){
                 const canvas={};
@@ -80,8 +97,9 @@ function fixture() {
                 assert.deepEqual(svg.children[0].attrs,{d:f.foreground.path.getAttribute('d'),fill:f.foreground.path.style.fill,'fill-rule':'evenodd',stroke:'none'});
                 return '<svg>actual-path-export</svg>';
             }},arguments:[resolve],document,getComputedStyle:e=>e.style,Image:class {
-            naturalWidth=20;naturalHeight=20;
-            async decode(){if(f.decodeFails)throw new Error('decode failed');if(f.detached){if(f.foreground)f.foreground.isConnected=false;else panel.isConnected=false;}}
+            get naturalWidth(){return this.src==='blob:focused-trigger'?f.focusRasterWidth:20;}
+            get naturalHeight(){return this.src==='blob:focused-trigger'?f.focusRasterHeight:20;}
+            async decode(){if(f.decodeFails)throw new Error('decode failed');if(f.detached){if(f.foreground)f.foreground.isConnected=false;else panel.isConnected=false;}if(f.blurOnDecode&&this.src==='blob:focused-trigger'){trigger.focusVisible=false;f.active=null;}}
         }};
         context.matchMedia=()=>({matches:true});
         runInNewContext(source,context);
@@ -140,4 +158,16 @@ for(const side of ['Top','Right','Bottom','Left'])f.panel.style[`border${side}Co
 f.foreground.path.style.fill='rgb(31, 37, 42)';f.pixelColor=[31,37,42];f.centerColor=[37,44,49];
 assert.equal((await f.run()).valid,true,'dark palette preserves its hue and original background');
 f.foreground.path.style.fill='rgb(170, 170, 170)';assert.equal((await f.run()).valid,false,'dark mode cannot inherit a light-mode border');
-console.log('PASS 53 Select border observer model cases; no browser rendering executed');
+// The focus ring is outside the control's border box. It must not mask a
+// decorative border or changed fill inside that box; select_focus.js separately
+// checks the actual ring/gap colors, shape and pointer/keyboard modality.
+f=fixture().withKeyboardFocus();assert.equal((await f.run()).valid,true,'real outer keyboard focus is not a decorative trigger border');
+f=fixture().withKeyboardFocus();f.innerTriggerBorder=true;assert.equal((await f.run()).valid,false,'keyboard focus cannot hide an internal decorative trigger border');
+f=fixture().withKeyboardFocus();f.focusFill=180;assert.equal((await f.run()).valid,false,'keyboard focus cannot hide a changed trigger fill');
+f=fixture().withKeyboardFocus();f.trigger.focusVisible=false;assert.equal((await f.run()).valid,false,'unfocused controls cannot retain an outer focus ring');
+f=fixture().withKeyboardFocus();f.active=null;assert.equal((await f.run()).valid,false,'focus-visible paint without the active control cannot exempt the outset');
+f=fixture().withKeyboardFocus();f.focusRasterWidth=108;assert.equal((await f.run()).valid,false,'focus raster must match the actual control and its outset');
+f=fixture().withKeyboardFocus();f.trigger.style.borderImageOutset='invalid';assert.equal((await f.run()).valid,false,'unknown focus bounds cannot pass the border check');
+f=fixture().withKeyboardFocus();f.blurOnDecode=true;assert.equal((await f.run()).valid,false,'focus lost during image decode invalidates observation');
+f=fixture().withKeyboardFocus();f.trigger.style.borderImageSource='none';f.trigger.style.backgroundImage='url("blob:focused-trigger")';assert.equal((await f.run()).valid,false,'only the real outset border-image can carry the keyboard ring');
+console.log('PASS 62 Select border observer model cases; no browser rendering executed');
