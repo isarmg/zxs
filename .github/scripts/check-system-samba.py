@@ -226,6 +226,18 @@ def read_default_tree(process, remote, destination, marker, expected):
         raise RuntimeError("default tree did not read the expected selected branch body")
 
 
+def default_share_case_path(ready):
+    """Change the actual disk basename's case without substituting its slot ID."""
+    disk_name = ready["default_disk_name"]
+    parent, separator, within = ready["default_named_path"].partition("/")
+    if not separator or not within or parent != disk_name:
+        raise RuntimeError("default named path differs from the fixture disk basename")
+    alternate = disk_name.swapcase()
+    if alternate == disk_name:
+        raise RuntimeError("fixture disk basename must exercise a distinct case spelling")
+    return f"{alternate}/{within}/report.txt"
+
+
 def run(args):
     args.output.unlink(missing_ok=True)  # A failed rerun must not retain a prior success receipt.
     if os.geteuid() != 0 or os.environ.get("ZXS_ISOLATED_SAMBA_TEST") != "1":
@@ -496,8 +508,9 @@ force user = {smb_user.pw_name}
                 result["checks"].append("read-existing-file")
                 payload = work / "payload.bin"
                 payload.write_bytes(ready["payload"].encode("utf-8"))
+                default_disk_name = ready["default_disk_name"]
                 default_listing = client("ls", share="default")
-                if not re.search(r"^\s*P01\s+D\s", default_listing, re.MULTILINE):
+                if not re.search(rf"^\s*{re.escape(default_disk_name)}\s+D\s", default_listing, re.MULTILINE):
                     raise RuntimeError("default share did not expose the stable primary-disk root")
                 default_original = work / "default-original.bin"
                 client(f'get "{ready["default_named_path"]}/report.txt" "{default_original}"', share="default")
@@ -508,8 +521,8 @@ force user = {smb_user.pw_name}
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, start_new_session=True)
                 children.append(default_session)
-                # Deliberately use a lower-case parent slot on the same live tree.
-                default_remote = ready["default_named_path"].replace("P01/", "p01/", 1) + "/report.txt"
+                # Deliberately change the actual disk basename's case on the same live tree.
+                default_remote = default_share_case_path(ready)
                 read_default_tree(default_session, default_remote, work / "default-before.bin",
                                   work / "default-before-ready", b"old")
                 publish_marker(engine_work, "default-switch")
@@ -522,7 +535,11 @@ force user = {smb_user.pw_name}
                                   work / "default-restored-ready", b"old")
                 result["checks"].extend(["default-share-live-branch-switch", "default-share-canonical-parent-path"])
                 default_received = work / "default-received.bin"
-                client(f'put "{payload}" P01/default-upload.txt; get P01/default-upload.txt "{default_received}"; rename P01/default-upload.txt P01/default-kept.txt', share="default")
+                default_upload = f"{default_disk_name}/default-upload.txt"
+                default_kept = f"{default_disk_name}/default-kept.txt"
+                client(f'put "{payload}" "{default_upload}"; '
+                       f'get "{default_upload}" "{default_received}"; '
+                       f'rename "{default_upload}" "{default_kept}"', share="default")
                 if default_received.read_bytes() != payload.read_bytes():
                     raise RuntimeError("default share download differs from uploaded bytes")
                 result["checks"].extend(["default-share-primary-root", "default-share-existing-named-repository",
@@ -568,7 +585,7 @@ force user = {smb_user.pw_name}
                 publish_marker(engine_work, "denied")
                 wait_file(engine_work / "enabled", fixture)
                 client("del kept.txt")
-                client("del P01/default-kept.txt", share="default")
+                client(f'del "{default_kept}"', share="default")
                 publish_marker(engine_work, "done")
                 wait_file(engine_work / "verified.json", fixture)
                 if fixture.wait(timeout=30) != 0:

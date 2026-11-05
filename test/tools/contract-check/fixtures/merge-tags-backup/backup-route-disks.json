@@ -1,54 +1,59 @@
 {
   "disks": [
     {
-      "available_bytes": "4145922048",
+      "available_bytes": "10208686080",
       "level": 1,
+      "name": "d1",
+      "observation_failure": null,
       "online": true,
       "simulation": true,
       "slot_id": "P01",
       "used_bytes": "25",
-      "writable": true,
-      "observation_failure": null
+      "writable": true
     },
     {
-      "available_bytes": "4145922048",
+      "available_bytes": "10208686080",
       "level": 2,
+      "name": "d2",
+      "observation_failure": null,
       "online": true,
       "simulation": true,
       "slot_id": "B01",
       "used_bytes": "25",
-      "writable": false,
-      "observation_failure": null
+      "writable": false
     },
     {
-      "available_bytes": "4145917952",
+      "available_bytes": "10208686080",
       "level": 3,
+      "name": "d3",
+      "observation_failure": null,
       "online": true,
       "simulation": true,
       "slot_id": "C01",
       "used_bytes": "12",
-      "writable": false,
-      "observation_failure": null
+      "writable": false
     },
     {
-      "available_bytes": "4145889280",
+      "available_bytes": "10208686080",
       "level": 1,
+      "name": "P02",
+      "observation_failure": null,
       "online": true,
       "simulation": true,
       "slot_id": "P02",
       "used_bytes": "14",
-      "writable": true,
-      "observation_failure": null
+      "writable": true
     },
     {
-      "available_bytes": "4145889280",
+      "available_bytes": "10208686080",
       "level": 2,
+      "name": "B02",
+      "observation_failure": null,
       "online": true,
       "simulation": true,
       "slot_id": "B02",
       "used_bytes": "14",
-      "writable": false,
-      "observation_failure": null
+      "writable": false
     }
   ]
 }

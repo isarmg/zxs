@@ -3,6 +3,21 @@ use std::{env, fs, io::Write, path::Path};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+const PRODUCT_MANIFESTS: [&str; 12] = [
+    "rescue/Cargo.toml",
+    "src/auth/Cargo.toml",
+    "src/client/Cargo.toml",
+    "src/contract/Cargo.toml",
+    "src/engine/Cargo.toml",
+    "src/interface/Cargo.toml",
+    "src/naming/Cargo.toml",
+    "src/platform/Cargo.toml",
+    "src/server/Cargo.toml",
+    "src/smb/Cargo.toml",
+    "src/smb-vfs/Cargo.toml",
+    "src/web/Cargo.toml",
+];
+
 fn tag_version(tag: &str) -> Result<semver::Version> {
     let raw = tag.strip_prefix('v').ok_or("tag must start with v")?;
     let version = semver::Version::parse(raw)?;
@@ -26,27 +41,10 @@ fn validate(root: &Path, tag: &str) -> Result<semver::Version> {
     if workspace_version != expected {
         return Err(format!("{tag} differs from workspace version {workspace_version}").into());
     }
-    let mut paths = vec![];
     // Upstream-derived foundation and macro components retain upstream version
-    // identities. Product components follow the root release version.
-    for component in [
-        "auth",
-        "contract",
-        "naming",
-        "platform",
-        "engine",
-        "server",
-        "client",
-        "rescue",
-        "web",
-        "interface",
-        "smb",
-        "smb-vfs",
-    ] {
-        paths.push(root.join("src").join(component).join("Cargo.toml"));
-    }
-    paths.sort();
-    for path in paths {
+    // identities. Product paths are explicit: rescue lives at the workspace root.
+    for relative in PRODUCT_MANIFESTS {
+        let path = root.join(relative);
         let manifest = toml_file(&path)?;
         let value = &manifest["package"]["version"];
         let actual = if value.get("workspace").and_then(toml::Value::as_bool) == Some(true) {

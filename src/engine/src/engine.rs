@@ -1416,7 +1416,15 @@ impl Engine {
                 |_, next, prepared| change(self, next, prepared),
             );
         }
-        if matches!(kind, "directory.changes.commit" | "directory.git.initialize" | "directory.git.stage-child" | "directory.git.stage-owned" | "directory.git.branch-create" | "directory.git.checkout") {
+        if matches!(
+            kind,
+            "directory.changes.commit"
+                | "directory.git.initialize"
+                | "directory.git.stage-child"
+                | "directory.git.stage-owned"
+                | "directory.git.branch-create"
+                | "directory.git.checkout"
+        ) {
             return context.plan_directory_commit_mutation(
                 kind,
                 principal,

@@ -486,13 +486,7 @@ impl<'a> PlanningContext<'a> {
         {
             return Err(super::disk_registry::current::pending_publication());
         }
-        let plan = self.prepare_new_mutation(
-            kind,
-            principal,
-            operation_id,
-            digest,
-            change,
-        )?;
+        let plan = self.prepare_new_mutation(kind, principal, operation_id, digest, change)?;
         let MutationPlan::Prepared {
             next,
             prepared,

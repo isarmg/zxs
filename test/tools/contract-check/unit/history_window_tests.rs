@@ -475,7 +475,7 @@ fn directory_staging_schemas_match_public_wire_types() {
     };
     let body = DirectoryCommitBody {
         expected_tree_id: tree,
-            expected_index_generation: 1,
+        expected_index_generation: 1,
         message: "Commit directory".into(),
         operation_id: storage_contract::OperationId::generate().unwrap(),
     };

@@ -155,6 +155,15 @@ async fn system_samba_real_engine_fixture() {
         .backend
         .repository_snapshot(&identity(&shared), &repository)
         .unwrap();
+    let primary = shared
+        .backend
+        .topology_snapshot(&identity(&shared))
+        .unwrap()
+        .slots
+        .into_iter()
+        .find(|slot| slot.slot_id == named.primary_slot_id)
+        .expect("invariant: named repository primary slot is configured");
+    let default_disk_name = primary.directory_name().unwrap().as_str();
     let (selection_repository, default_main, default_draft) =
         directory_fixture(&shared, &fixture_backend);
     assert_eq!(selection_repository, repository);
@@ -234,7 +243,8 @@ async fn system_samba_real_engine_fixture() {
         "allowed_peer_uid": 0,
         "socket": socket,
         "repository_id": repository,
-        "default_named_path": format!("{}/{}", named.primary_slot_id, named.name),
+        "default_disk_name": default_disk_name,
+        "default_named_path": format!("{default_disk_name}/{}", named.name),
         "branch_id": branch,
         "payload": std::str::from_utf8(PAYLOAD).unwrap(),
     });

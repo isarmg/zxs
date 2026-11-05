@@ -22,7 +22,8 @@ pub struct HistoryManifest {
     pub file_selections: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub directory_branches: BTreeMap<String, DirectoryBranch>,
-    pub directory_git_repositories: BTreeMap<String, storage_contract::directory_git::DirectoryGitRepository>,
+    pub directory_git_repositories:
+        BTreeMap<String, storage_contract::directory_git::DirectoryGitRepository>,
     #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
     pub directory_trees: SharedRecords<DirectoryTree>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -277,7 +278,12 @@ impl HistoryManifest {
                 .filter(|(_, branch)| branch.repository_id == repository_id)
                 .map(|(id, branch)| (id.clone(), branch.clone()))
                 .collect(),
-            directory_git_repositories: state.directory_git_repositories.iter().filter(|(_, git)| git.repository_id == repository_id).map(|(id, git)| (id.clone(), git.clone())).collect(),
+            directory_git_repositories: state
+                .directory_git_repositories
+                .iter()
+                .filter(|(_, git)| git.repository_id == repository_id)
+                .map(|(id, git)| (id.clone(), git.clone()))
+                .collect(),
             directory_trees: state.directory_trees.subset(|_, tree| {
                 state
                     .directory_branches

@@ -94,10 +94,24 @@ class SystemSambaGate(unittest.TestCase):
                        "default-share-put-get-rename", "default-share-live-branch-switch",
                        "default-share-canonical-parent-path", "default-share-live-authority-revoked"):
             self.assertIn(marker, script)
-        self.assertIn('client("del P01/default-kept.txt", share="default")', script)
+        self.assertIn('default_disk_name = ready["default_disk_name"]', script)
+        self.assertIn('re.escape(default_disk_name)', script)
+        self.assertIn('default_upload = f"{default_disk_name}/default-upload.txt"', script)
+        self.assertIn('default_kept = f"{default_disk_name}/default-kept.txt"', script)
+        self.assertIn("client(f'del \"{default_kept}\"', share=\"default\")", script)
         fixture = (ROOT / "test/server/unit/smb_rpc/system_samba_tests.rs").read_text()
         self.assertIn('"default_namespace_verified":true', fixture)
         self.assertRegex(fixture, r'verify_body\(\s*&shared,\s*&default_root\.main_branch_id,\s*"default-kept\.txt",\s*PAYLOAD,?\s*\)')
+
+    def test_default_share_case_path_preserves_the_actual_disk_and_repository(self):
+        for disk, changed in (("p", "P"), ("Primary Disk", "pRIMARY dISK")):
+            ready = {"default_disk_name": disk, "default_named_path": f"{disk}/资料"}
+            self.assertEqual(GATE.default_share_case_path(ready), f"{changed}/资料/report.txt")
+        for path in ("P01/资料", "p", "p/", "other/资料"):
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, "disk basename"):
+                GATE.default_share_case_path({"default_disk_name": "p", "default_named_path": path})
+        with self.assertRaisesRegex(RuntimeError, "distinct case spelling"):
+            GATE.default_share_case_path({"default_disk_name": "磁盘", "default_named_path": "磁盘/资料"})
 
     def test_default_tree_reads_fence_commands_and_require_the_exact_selected_body(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -113,11 +127,11 @@ class SystemSambaGate(unittest.TestCase):
                     marker.touch()
                     self.assertEqual(process.stdin.write.call_count, 2)
             with patch.object(GATE, "wait_file", side_effect=reached):
-                GATE.read_default_tree(process, "p01/资料/report.txt", destination, marker, b"new")
+                GATE.read_default_tree(process, "P/资料/report.txt", destination, marker, b"new")
             self.assertEqual(process.stdin.flush.call_count, 2)
             process.reset_mock()
             with patch.object(GATE, "wait_file", side_effect=reached), self.assertRaisesRegex(RuntimeError, "selected branch body"):
-                GATE.read_default_tree(process, "p01/资料/report.txt", destination, marker, b"old")
+                GATE.read_default_tree(process, "P/资料/report.txt", destination, marker, b"old")
 
     def test_password_api_targets_only_loopback_and_redacts_failure_body(self):
         connection = Mock()

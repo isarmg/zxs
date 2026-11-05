@@ -707,7 +707,26 @@ async fn typed_directory_history_rejects_cross_scope_response_before_returning_i
         std::collections::BTreeMap::new(),
     )
     .unwrap();
-    let page = json_codec::json!({"identity":{"repository_id":repo,"directory_id":directory,"history_tree_id":"history_00000000000000000000000000000000","history_root":"a".repeat(64),"collection":"nodes","limit":64},"current":{"directory_branch_id":null,"tree_id":null},"nodes":[],"branches":[],"page":{"previous_cursor":null,"next_cursor":null}});
+    let current = DirectoryHistoryCurrent {
+        directory_branch_id: None,
+        tree_id: None,
+        committed_tree_id: None,
+        staged: false,
+    };
+    let page = json_codec::json!({
+        "identity": {
+            "repository_id": repo,
+            "directory_id": directory,
+            "history_tree_id": "history_00000000000000000000000000000000",
+            "history_root": "a".repeat(64),
+            "collection": "nodes",
+            "limit": 64,
+        },
+        "current": current,
+        "nodes": [],
+        "branches": [],
+        "page": {"previous_cursor": null, "next_cursor": null},
+    });
     for valid in [true, false] {
         let mut body = page.clone();
         if !valid {
