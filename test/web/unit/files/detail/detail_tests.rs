@@ -281,3 +281,94 @@ fn frozen_selected_branch_outside_the_page_is_visible_without_a_false_head() {
     assert_eq!(options[1].value, "frozen");
     assert!(options[1].disabled);
 }
+
+fn selected_directory_state() -> State {
+    let mut state = selected_state();
+    state.files.selected = Some(entry(json!({
+        "entry_id":"folder-entry", "kind":"directory", "path":"docs/folder",
+        "repository_id":"repository", "repository_path":"docs/folder", "note":"old"
+    })));
+    state
+}
+
+#[test]
+fn both_folder_navigation_controls_require_their_current_selection() {
+    let changes: [fn(&mut State); 9] = [
+        |s| s.session_epoch += 1,
+        |s| s.files.slot = "B01".into(),
+        |s| s.files.directory = "elsewhere".into(),
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"entry_id":"other"}),
+            )
+        },
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"path":"docs/alias"}),
+            )
+        },
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"repository_id":"other"}),
+            )
+        },
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"repository_path":"elsewhere/folder"}),
+            )
+        },
+        |s| update(s.files.selected.as_mut().unwrap(), json!({"backup":true})),
+        |s| s.files.selected = None,
+    ];
+    for change in changes {
+        let mut state = selected_directory_state();
+        let selection = Selection::capture(&state).unwrap();
+        assert_eq!(selection.directory_path(&state), Some("docs/folder"));
+        change(&mut state);
+        assert!(selection.directory_path(&state).is_none());
+    }
+
+    let state = selected_state();
+    assert!(
+        Selection::capture(&state)
+            .unwrap()
+            .directory_path(&state)
+            .is_none()
+    );
+}
+
+#[test]
+fn folder_navigation_rechecks_the_session_without_requiring_write_access() {
+    use crate::ui::SessionTransition;
+    let mut state = selected_directory_state();
+    let selection = Selection::capture(&state).unwrap();
+    state.authenticated = false;
+    assert!(selection.directory_path(&state).is_none());
+    state.authenticated = true;
+    for transition in [
+        SessionTransition::Restoring,
+        SessionTransition::LoggingOut,
+        SessionTransition::LogoutUnconfirmed,
+    ] {
+        state.session_transition = transition;
+        assert!(selection.directory_path(&state).is_none());
+    }
+    state.session_transition = SessionTransition::Idle;
+    update(
+        state.files.selected.as_mut().unwrap(),
+        json!({"note":"refreshed"}),
+    );
+    assert!(!state.files.writable);
+    assert_eq!(selection.directory_path(&state), Some("docs/folder"));
+
+    state.files.selected = Some(entry(json!({
+        "entry_id":"backup-folder", "kind":"directory", "path":"docs/backup", "backup":true
+    })));
+    let backup = Selection::capture(&state).unwrap();
+    assert!(state.files.selected.as_ref().unwrap().read_only());
+    assert_eq!(backup.directory_path(&state), Some("docs/backup"));
+}
