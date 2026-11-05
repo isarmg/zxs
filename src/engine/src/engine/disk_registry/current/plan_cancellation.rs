@@ -1,0 +1,313 @@
+//! Cancellation publishes one non-executable tombstone, never plan execution.
+//! Local Ready files are checked by Engine::plan before the native mutation.
+//! A cold publication may therefore add a Cancelled record with no published
+//! Ready predecessor; it gains no namespace, payload or cleanup authority.
+use super::*;
+use crate::{
+    CommitState, CurrentHealth, Event, OperationId, OperationResult, Plan, PlanState,
+    ProtectionAtPublish,
+};
+use json_codec::{Value, json};
+use storage_contract::{MapChanges, SequenceChanges, TrackedMap, TrackedOperations};
+
+const KIND: &str = "plan.cancel";
+
+fn invalid() -> Error {
+    Error::new(
+        ErrorCode::PublicationInvalid,
+        "plan cancellation differs from its native request or closed metadata write set",
+    )
+}
+
+impl CurrentNamespaces {
+    pub(in crate::engine) fn verify_new_plan_cancellation(
+        &self,
+        previous: &State,
+        next: &State,
+        result: &OperationResult,
+    ) -> Result<()> {
+        let receipt = new_cancellation_receipt(previous, next)?.ok_or_else(invalid)?;
+        if receipt != result {
+            return Err(invalid());
+        }
+        self.verify_plan_cancellation(previous, next, receipt)
+    }
+
+    pub(super) fn verify_plan_cancellations(&self, previous: &State, next: &State) -> Result<()> {
+        match new_cancellation_receipt(previous, next)? {
+            Some(receipt) => self.verify_plan_cancellation(previous, next, receipt),
+            None if plan_changed(&previous.plans, &next.plans) => Err(invalid()),
+            None => Ok(()),
+        }
+    }
+
+    fn verify_plan_cancellation(
+        &self,
+        previous: &State,
+        next: &State,
+        receipt: &OperationResult,
+    ) -> Result<()> {
+        let id = receipt.result["plan_id"].as_str().ok_or_else(invalid)?;
+        let cancelled = next.plans.get(id).ok_or_else(invalid)?;
+        let principal = next
+            .operation_principals
+            .get(&receipt.operation_id)
+            .ok_or_else(invalid)?;
+        verify_cancelled_plan(&previous.plans, id, principal, cancelled)?;
+        let digest = Engine::native_request_digest(KIND, principal, &json!({"plan_id": id}))?;
+        let expected = OperationResult {
+            operation_id: receipt.operation_id,
+            kind: KIND.into(),
+            commit_id: None,
+            history_tree_id: None,
+            branch_id: None,
+            commit_state: CommitState::Published,
+            protection_at_publish: ProtectionAtPublish::NotApplicable,
+            current_health: CurrentHealth::Healthy,
+            request_digest: digest,
+            sequence: next.sequence,
+            result: json!({
+                "plan_id": id,
+                "state": "cancelled",
+                "cancelled_plan_hash": crate::object_hash("plan-cancellation", cancelled)?,
+                "timestamp": decimal_field(&receipt.result, "timestamp")?.to_string(),
+                "membership_epoch": decimal_field(&receipt.result, "membership_epoch")?.to_string(),
+                "version_protection": []
+            }),
+        };
+        if receipt != &expected
+            || next.sequence <= previous.sequence
+            || previous.business_generation.checked_add(1) != Some(next.business_generation)
+            || !one_cancelled_plan(&previous.plans, &next.plans, id, cancelled)
+            || !only_added(
+                &previous.operations,
+                &next.operations,
+                receipt.operation_id,
+                receipt,
+            )
+            || !only_added(
+                &previous.operation_principals,
+                &next.operation_principals,
+                receipt.operation_id,
+                principal,
+            )
+            || !one_cancellation_event(previous, next, receipt)
+            || !unchanged_cancellation_state(previous, next)
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+}
+
+fn verify_cancelled_plan(
+    previous: &TrackedMap<Plan>,
+    id: &str,
+    principal: &str,
+    cancelled: &Plan,
+) -> Result<()> {
+    Engine::require_actor(principal)?;
+    storage_contract::validate_id(id, "plan")?;
+    if cancelled.plan_id != id
+        || cancelled.principal != principal
+        || cancelled.state != PlanState::Cancelled
+        || crate::object_hash_value("plan", &cancelled.input)? != cancelled.digest
+    {
+        return Err(invalid());
+    }
+    if let Some(source) = previous.get(id) {
+        let mut expected = source.clone();
+        expected.state = PlanState::Cancelled;
+        if source.state != PlanState::Ready || &expected != cancelled {
+            return Err(invalid());
+        }
+    }
+    // No predecessor is normal for a local-only preparation. The native entry
+    // already checked its safe file read, identity, input digest, owner and Ready
+    // state. The authenticated publication now retains only its cancellation;
+    // no receipt field is promoted into a Ready plan or execution authority.
+    Ok(())
+}
+
+fn decimal_field(value: &Value, key: &str) -> Result<u64> {
+    let value = value[key].as_str().ok_or_else(invalid)?;
+    Ok(storage_contract::parse_u64_decimal(value)?)
+}
+
+fn new_cancellation_receipt<'a>(
+    previous: &State,
+    next: &'a State,
+) -> Result<Option<&'a OperationResult>> {
+    let mut receipt = None;
+    let mut inspect = |id: &OperationId| -> Result<()> {
+        let before = previous.operations.get(id);
+        let after = next.operations.get(id);
+        if before.is_some_and(|before| before.kind == KIND) {
+            if before != after
+                || previous.operation_principals.get(id) != next.operation_principals.get(id)
+            {
+                return Err(invalid());
+            }
+        } else if let Some(after) = after.filter(|after| after.kind == KIND)
+            && (before.is_some() || after.operation_id != *id || receipt.replace(after).is_some())
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    };
+    match next.operations.changes_since(&previous.operations) {
+        MapChanges::Keys(keys) => {
+            for id in keys.iter() {
+                inspect(id)?;
+            }
+        }
+        MapChanges::All => {
+            for id in previous.operations.keys() {
+                inspect(id)?;
+            }
+            for id in next
+                .operations
+                .keys()
+                .filter(|id| !previous.operations.contains_key(*id))
+            {
+                inspect(id)?;
+            }
+        }
+    }
+    // A principal-only mutation does not dirty the operations map.
+    let owner_changed = |id: &OperationId| {
+        previous
+            .operations
+            .get(id)
+            .is_some_and(|operation| operation.kind == KIND)
+            && previous.operation_principals.get(id) != next.operation_principals.get(id)
+    };
+    let changed = match next
+        .operation_principals
+        .changes_since(&previous.operation_principals)
+    {
+        MapChanges::Keys(keys) => keys.iter().any(owner_changed),
+        MapChanges::All => previous.operations.keys().any(owner_changed),
+    };
+    if changed {
+        return Err(invalid());
+    }
+    Ok(receipt)
+}
+
+// No other currently admitted operation publishes a Plan transition. Checking
+// every changed plan also rejects a forged kind paired with a Ready/Completed
+// record, rather than letting it evade detection by dropping the Cancelled tag.
+fn plan_changed(before: &TrackedMap<Plan>, after: &TrackedMap<Plan>) -> bool {
+    let changed = |id: &String| before.get(id) != after.get(id);
+    match after.changes_since(before) {
+        MapChanges::Keys(keys) => keys.iter().any(changed),
+        MapChanges::All => {
+            before.keys().any(changed)
+                || after
+                    .keys()
+                    .filter(|id| !before.contains_key(*id))
+                    .any(changed)
+        }
+    }
+}
+
+fn one_cancelled_plan(
+    before: &TrackedMap<Plan>,
+    after: &TrackedMap<Plan>,
+    id: &str,
+    cancelled: &Plan,
+) -> bool {
+    let expected_len = if before.contains_key(id) {
+        Some(before.len())
+    } else {
+        before.len().checked_add(1)
+    };
+    if expected_len != Some(after.len()) || after.get(id) != Some(cancelled) {
+        return false;
+    }
+    match after.changes_since(before) {
+        MapChanges::Keys(keys) => keys
+            .iter()
+            .all(|key| key == id || after.get(key) == before.get(key)),
+        MapChanges::All => before
+            .iter()
+            .all(|(key, plan)| key == id || after.get(key) == Some(plan)),
+    }
+}
+
+fn only_added<T: PartialEq>(
+    before: &TrackedOperations<T>,
+    after: &TrackedOperations<T>,
+    id: OperationId,
+    expected: &T,
+) -> bool {
+    if before.contains_key(&id)
+        || before.len().checked_add(1) != Some(after.len())
+        || after.get(&id) != Some(expected)
+    {
+        return false;
+    }
+    match after.changes_since(before) {
+        MapChanges::Keys(keys) => keys
+            .iter()
+            .all(|key| *key == id || after.get(key) == before.get(key)),
+        MapChanges::All => before
+            .iter()
+            .all(|(key, value)| after.get(key) == Some(value)),
+    }
+}
+
+fn one_cancellation_event(previous: &State, next: &State, receipt: &OperationResult) -> bool {
+    if previous.events.len().checked_add(1) != Some(next.events.len()) {
+        return false;
+    }
+    let expected = Event {
+        sequence: next.sequence,
+        operation_id: receipt.operation_id,
+        kind: KIND.into(),
+        object_id: receipt.operation_id.to_string(),
+    };
+    next.events.last() == Some(&expected)
+        && match next.events.changes_since(&previous.events) {
+            SequenceChanges::Append { start } => start == previous.events.len(),
+            SequenceChanges::All => next.events[..previous.events.len()] == previous.events[..],
+        }
+}
+
+// An exhaustive State pattern forces new fields to choose their cancellation
+// semantics. In particular physical file_names/file_locations stay exact, even
+// when a restored State lost mutation tracking; neither is repaired from HEAD.
+macro_rules! unchanged_cancellation_fields {
+    ($($field:ident),* $(,)?) => {
+        fn unchanged_cancellation_state(previous: &State, next: &State) -> bool {
+            let State {
+                sequence: _, business_generation: _, plans: _, operations: _,
+                operation_principals: _, events: _, topology_generation, control_auth,
+                $($field,)*
+            } = next;
+            topology_generation == &previous.topology_generation
+                && control_auth == &previous.control_auth
+                $(&& match $field.changes_since(&previous.$field) {
+                    MapChanges::Keys(keys) => keys.iter().all(|id| {
+                        $field.get(id) == previous.$field.get(id)
+                    }),
+                    MapChanges::All => $field.len() == previous.$field.len()
+                        && $field.iter().all(|(id, value)| previous.$field.get(id) == Some(value)),
+                })*
+        }
+    };
+}
+unchanged_cancellation_fields! {
+    repositories, histories, branches, file_selections, directory_branches, directory_trees,
+    file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes,
+    file_branch_merges, file_branch_aliases, file_node_parents, file_path_notes,
+    directory_tree_selections, file_locations, file_backup_paths, file_backup_policies,
+    directory_selections, directory_selection_generations, file_selection_generations,
+    file_notes, version_notes, file_names, commits, versions, placements, merge_links,
+    history_boundaries, content_states, placement_rules, protection_policies,
+}
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/engine/current_plan_cancellation_tests.rs"]
+mod tests;

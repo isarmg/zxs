@@ -253,6 +253,50 @@ impl<'a> PlanningContext<'a> {
         Ok(plan)
     }
 
+    /// Plan cancellation has a closed, metadata-only proof, not a general kind permit.
+    /// The candidate cannot leave planning until its native receipt and every
+    /// changed State field match the admitted source. Publication and cold replay
+    /// independently recheck the proof before retaining unchanged namespaces.
+    pub(super) fn plan_cancellation_mutation<F>(
+        &self,
+        principal: &str,
+        operation_id: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
+        if self.current_namespaces.is_none()
+            && self
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(super::disk_registry::current::pending_publication());
+        }
+        let plan =
+            self.prepare_new_mutation("plan.cancel", principal, operation_id, digest, change)?;
+        let MutationPlan::Prepared {
+            next,
+            prepared,
+            result,
+        } = &plan
+        else {
+            unreachable!("invariant: new mutation preparation does not replay old receipts");
+        };
+        if !prepared.is_empty() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "plan cancellation cannot prepare payload writes",
+            ));
+        }
+        if let Some(view) = self.current_namespaces {
+            view.verify_new_plan_cancellation(self.state, next, result)?;
+        }
+        Ok(plan)
+    }
+
     fn prepare_new_mutation<F>(
         &self,
         kind: &str,

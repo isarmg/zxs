@@ -468,6 +468,12 @@ impl Engine {
                     Some(original),
                 )?;
             let next = original.state();
+            // Prove the authenticated transition before repairing any of this
+            // candidate's replicas, payloads, names or publication receipts.
+            // advance is pure: install the new view only after completion below.
+            if let Some(view) = &self.current_namespaces {
+                view.advance(&self.state, next)?;
+            }
             if publication.is_none() && mode == RecoveryMode::PreservePending {
                 self.blocked = true;
                 break;
