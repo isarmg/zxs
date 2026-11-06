@@ -25,6 +25,36 @@ fn disk_roots_preserve_rows_while_loading_and_only_confirm_empty_after_load() {
 }
 
 #[test]
+fn disk_read_status_distinguishes_unknown_cached_loading_and_current_snapshots() {
+    for (loading, loaded, cached, expected) in [
+        (false, false, false, DiskRead::Unconfirmed),
+        (false, false, true, DiskRead::UnconfirmedCached),
+        (true, false, false, DiskRead::Reading),
+        (true, false, true, DiskRead::RefreshingCached),
+        (true, true, false, DiskRead::Reading),
+        (true, true, true, DiskRead::RefreshingCached),
+        (false, true, false, DiskRead::Current),
+        (false, true, true, DiskRead::Current),
+    ] {
+        let model = Model {
+            loading_disks: loading,
+            disks_loaded: loaded,
+            disks: if cached {
+                vec![disk("P01", true, true, 7)]
+            } else {
+                vec![]
+            },
+            ..Model::default()
+        };
+        assert_eq!(disk_read_projection(&model), expected);
+        assert_eq!(model.disks.len(), usize::from(cached));
+        if cached {
+            assert!(model.disks[0].online && model.disks[0].writable);
+        }
+    }
+}
+
+#[test]
 fn disk_roots_preserve_order_access_capacity_and_ignore_directory_state() {
     let disks = vec![
         disk("offline", false, false, 0),

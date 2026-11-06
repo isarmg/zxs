@@ -16,9 +16,9 @@ pub(super) fn create(
             "initialize this directory repository before creating branches",
         ));
     }
-    if status.staged || status.needs_restage {
+    if status.staged || status.unstaged || status.needs_restage {
         return Err(conflict(
-            "commit this repository's staged changes before creating a branch",
+            "stage and commit this repository's changes before creating a branch",
         ));
     }
     let git = &state.directory_git_repositories[&status.directory_id];
@@ -250,9 +250,9 @@ pub(super) fn checkout(
             json!({"input":input,"directory_branch_id":selected_id,"branch_id":repo.main_branch_id,"commit_id":main.head_commit_id,"no_change":true}),
         );
     }
-    if status.staged || status.needs_restage {
+    if status.staged || status.unstaged || status.needs_restage {
         return Err(conflict(
-            "commit or review this repository's staged changes before checkout; child working changes may remain",
+            "stage and commit this repository's changes before checkout; child working changes may remain",
         ));
     }
     // A nested independent repository keeps the live ordinary directories that

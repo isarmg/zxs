@@ -59,6 +59,11 @@ path = "../../test/server/integration/http_engine.rs"
 required-features = ["core"]
 
 [[test]]
+name = "phase1_save_tags"
+path = "../../test/server/integration/phase1_save_tags.rs"
+required-features = ["core"]
+
+[[test]]
 name = "login_admission"
 path = "../../test/server/integration/login_admission.rs"
 required-features = ["core"]
@@ -71,4 +76,9 @@ required-features = ["core"]
 [[test]]
 name = "service_startup"
 path = "../../test/server/integration/service_startup.rs"
+required-features = ["core"]
+
+[[test]]
+name = "phase1_smb_rpc"
+path = "../../test/server/integration/phase1_smb_rpc.rs"
 required-features = ["core"]

@@ -9,6 +9,9 @@ use crate::{format, icons::FileIcon, ui::State};
 use web_interface::components::{EmptyState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
+mod disk_read;
+use disk_read::DiskRead;
+
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     inline::provide_context(state);
     super::history_index::provide(state);
@@ -30,6 +33,20 @@ fn disk_roots_projection(model: &super::model::Model) -> DiskRoots {
         DiskRoots::Empty
     } else {
         DiskRoots::Disks(model.disks.clone())
+    }
+}
+
+fn disk_read_projection(model: &super::model::Model) -> DiskRead {
+    match (
+        model.loading_disks,
+        model.disks_loaded,
+        model.disks.is_empty(),
+    ) {
+        (true, _, true) => DiskRead::Reading,
+        (true, _, false) => DiskRead::RefreshingCached,
+        (false, true, _) => DiskRead::Current,
+        (false, false, true) => DiskRead::Unconfirmed,
+        (false, false, false) => DiskRead::UnconfirmedCached,
     }
 }
 
@@ -71,8 +88,19 @@ fn sync_row_viewport(event: web_sys::Event) {
 }
 
 fn disk_roots(state: RwSignal<State>) -> impl IntoView {
+    let read = Memo::new(move |_| state.with(|s| disk_read_projection(&s.files)));
     view! {
         <p class="zxs-row">{t("选择一个硬盘目录查看文件。","Choose a disk directory to browse its files.")}</p>
+        {move || read.get().message().map(|message| view!{
+            <div class="zxs-stack" data-disk-list-read=move ||read.get().marker()>
+                <p class="zxs-row" role="status">{message}</p>
+                <Show when=move ||read.get().can_retry()>
+                    <div class="zxs-row"><button class="zxs-button" data-disk-list-retry=""
+                        disabled=move ||state.with(|s|!s.session_active()||s.files.loading_disks)
+                        on:click=move |_|actions::load_disks(state)>{t("重新读取","Read again")}</button></div>
+                </Show>
+            </div>
+        })}
         {move ||{
             let disks = match state.with(|s| disk_roots_projection(&s.files)) {
                 DiskRoots::Empty => return view!{<EmptyState message=t("没有可访问的硬盘目录。","No disk directories are available.")/>}.into_any(),

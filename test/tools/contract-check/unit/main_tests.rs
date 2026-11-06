@@ -809,6 +809,20 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
     let tags = request_schema("/api/file-manager/files/{file}/tags", "post");
     let body = json!({"targets":[{"branch_id":branch,"source_node_id":version,"expected_node_id":meta}],"add":["审核"],"remove":[],"operation_id":operation});
     assert!(tags.is_valid(&body));
+    // Requests retain exact array encoding for permanent operation digests;
+    // the core deduplicates label values only when computing the result set.
+    for key in ["add", "remove"] {
+        let mut repeated = body.clone();
+        repeated["add"] = json!([]);
+        repeated["remove"] = json!([]);
+        repeated[key] = json!(["审核", "审核"]);
+        assert!(tags.is_valid(&repeated), "duplicate request labels: {key}");
+        repeated[key] = json!(vec!["审核"; 17]);
+        assert!(
+            !tags.is_valid(&repeated),
+            "raw array budget precedes deduplication: {key}"
+        );
+    }
     let mut invalid = body.clone();
     invalid["targets"][0]
         .as_object_mut()

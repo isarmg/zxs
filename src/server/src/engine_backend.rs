@@ -1717,30 +1717,24 @@ impl Backend for EngineBackend {
     ) -> Result<crate::TopologySnapshot, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let mut names = std::collections::BTreeSet::new();
+        let names = crate::backend_storage_metadata::disk_directory_names(&engine.config().disks)?;
         let slots = engine
             .config()
             .disks
             .iter()
-            .map(|disk| {
+            .zip(names)
+            .map(|(disk, name)| {
                 let storage_contract::DiskConfig {
                     slot_id,
                     disk_id,
-                    root,
+                    root: _,
                     level,
                     upstream_slot_id,
                     metadata_member,
                     binding_generation,
                     capacity_bytes: _,
                 } = disk;
-                let name = crate::backend_storage_metadata::disk_directory_name(root)?;
-                if !names.insert(name.key().to_owned()) {
-                    return Err(ApiError::conflict(
-                        storage_contract::ErrorCode::NameConflict,
-                        "disk directory basenames collide under the portable name policy",
-                    ));
-                }
-                Ok(crate::TopologySlot {
+                crate::TopologySlot {
                     name: Some(name),
                     slot_id: slot_id.clone(),
                     disk_id: disk_id.clone(),
@@ -1748,9 +1742,9 @@ impl Backend for EngineBackend {
                     upstream_slot_id: upstream_slot_id.clone(),
                     metadata_member: *metadata_member,
                     binding_generation: *binding_generation,
-                })
+                }
             })
-            .collect::<Result<Vec<_>, ApiError>>()?;
+            .collect();
         Ok(crate::TopologySnapshot {
             generation: engine.state().topology_generation,
             slots,

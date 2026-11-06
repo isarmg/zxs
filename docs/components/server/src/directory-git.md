@@ -6,11 +6,11 @@
 
 ## 接口
 
-- `GET /api/repositories/{repo}/directory-git?path=...` 返回准确目录的初始化状态、最近所属目录仓库、工作树、已提交 HEAD、暂存代数和直接独立子仓库状态。根目录用显式空 `path=`；查询拒绝缺失、重复和未知字段。
+- `GET /api/repositories/{repo}/directory-git?path=...` 返回准确目录的初始化状态、最近所属目录仓库、工作树、已提交 HEAD、暂存代数、`staged`/`unstaged` 和直接独立子仓库状态。增改删计数只描述暂存区相对 HEAD 的变化。根目录用显式空 `path=`；查询拒绝缺失、重复和未知字段。
 - `POST /api/repositories/{repo}/directory-git/initialize` 要求 `path`、准确 `expected_namespace_head` 和 `operation_id`。初始化只作用于此目录，不递归初始化孩子，也不自动创建第一次提交。
 - `POST /api/repositories/{repo}/directory-git/stage` 要求目录、分支、工作树和准确 `expected_index_generation`，暂存自己拥有的工作内容与当前独立子仓库边界。
 - `POST /api/repositories/{repo}/directory-git/children/stage` 暂存一个直接独立子仓库的准确已提交 HEAD；未提交孩子不能暂存。不会替孩子提交。
-- `POST /api/repositories/{repo}/directory-branches/{id}/commits` 只提交此仓库已暂存的内容和子仓库引用。`expected_tree_id` 与必填 `expected_index_generation` 同时匹配才可发布；不会递归提交孩子。
+- `POST /api/repositories/{repo}/directory-branches/{id}/commits` 只提交此仓库已暂存的内容和子仓库引用。`expected_tree_id` 与必填 `expected_index_generation` 同时匹配才可发布；不会递归提交孩子，也不会包含暂存后保存的工作内容。提交后未暂存内容保持可见，且不会自动进入下一次暂存。
 
 所有变更保留原 `operation_id` 查询或准确重放。变更字段严格闭合，64 位整数使用规范十进制字符串；缺失代数、JSON 数值代数、未知字段不被补默认值。所有 nullable 状态字段均必须显式出现。原 `/directory-scopes` 公开路由已移除，不再提供只创建内部组成的替代初始化入口；内部原生组成辅助函数不代表 Git 仓库初始化。原磁盘 `/directory-select` 名称选择入口也已移除；选择只走仓库 `default-branch`，提交稳定分支 ID、准确工作树和命名空间 HEAD，防止同名重建目录被误选。
 

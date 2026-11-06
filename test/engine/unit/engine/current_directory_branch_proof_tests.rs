@@ -84,7 +84,7 @@ fn initialize_git(engine: &mut Engine, repo: &Repository, path: &str) {
         )
         .unwrap();
 }
-fn review_git(
+fn stage_git(
     engine: &mut Engine,
     repo: &Repository,
     path: &str,
@@ -105,9 +105,16 @@ fn review_git(
             "admin",
         )
         .unwrap();
-    let status = engine
+    engine
         .directory_git_status(&repo.repository_id, path)
-        .unwrap();
+        .unwrap()
+}
+fn review_git(
+    engine: &mut Engine,
+    repo: &Repository,
+    path: &str,
+) -> storage_contract::directory_git::DirectoryGitStatus {
+    let status = stage_git(engine, repo, path);
     engine
         .commit_directory_changes(DirectoryCommitRequest {
             repository_id: &repo.repository_id,
@@ -792,10 +799,7 @@ fn disk_exit_explicit_directory_commit_preserves_projection_and_cold_replay() {
     let mut f = Fixture::new();
     f.exit(MembershipExitAction::Deregister);
     save(&mut f.engine, &f.repo, "new-owned", b"current");
-    let status = f
-        .engine
-        .directory_git_status(&f.repo.repository_id, "")
-        .unwrap();
+    let status = stage_git(&mut f.engine, &f.repo, "");
     let namespace = f.engine.list_tree(&f.repo.main_branch_id).unwrap();
     let versions = f.engine.state.versions.clone();
     let target = files(&f.target.root);
@@ -829,10 +833,7 @@ fn disk_exit_directory_commit_replay_proves_closed_write_set_without_tracking() 
     let mut f = Fixture::new();
     f.exit(MembershipExitAction::Deregister);
     save(&mut f.engine, &f.repo, "new-owned", b"current");
-    let status = f
-        .engine
-        .directory_git_status(&f.repo.repository_id, "")
-        .unwrap();
+    let status = stage_git(&mut f.engine, &f.repo, "");
     let previous = Arc::clone(&f.engine.state);
     let view = Arc::clone(f.engine.current_namespaces.as_ref().unwrap());
     let operation = op();

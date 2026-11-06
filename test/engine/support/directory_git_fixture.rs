@@ -105,6 +105,6 @@ pub(super) fn checkpoint_as(
             .directory_git_status(&repository.repository_id, path)
             .unwrap();
     }
-    assert!(!status.staged && !status.needs_restage);
+    assert!(!status.staged && !status.unstaged && !status.needs_restage);
     status
 }

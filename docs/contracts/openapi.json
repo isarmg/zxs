@@ -4882,8 +4882,7 @@
                       "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])",
                       "description": "标签必须trim前后相同，非空，无Unicode控制字符，最多128个UTF-8字节。"
                     },
-                    "maxItems": 16,
-                    "uniqueItems": true
+                    "maxItems": 16
                   },
                   "remove": {
                     "type": "array",
@@ -4895,8 +4894,7 @@
                       "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])",
                       "description": "标签必须trim前后相同，非空，无Unicode控制字符，最多128个UTF-8字节。"
                     },
-                    "maxItems": 16,
-                    "uniqueItems": true
+                    "maxItems": 16
                   }
                 },
                 "required": [
@@ -18030,6 +18028,9 @@
           },
           "legacy_history": {
             "type": "boolean"
+          },
+          "unstaged": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -18048,10 +18049,11 @@
           "modified",
           "deleted",
           "children",
-          "legacy_history"
+          "legacy_history",
+          "unstaged"
         ],
         "additionalProperties": false,
-        "description": "只读准确目录状态；未初始化目录可以显示最近所属祖先，但不因此成为独立仓库。所有nullable字段必须出现。完整响应限1MiB，超限拒绝而不截断孩子列表。"
+        "description": "只读准确目录状态；未初始化目录可以显示最近所属祖先，但不因此成为独立仓库。所有nullable字段必须出现。完整响应限1MiB，超限拒绝而不截断孩子列表。 staged及增改删计数比较暂存区与HEAD，unstaged比较工作区与暂存区；二者可同时为真。"
       },
       "DirectoryGitInitializeBody": {
         "type": "object",

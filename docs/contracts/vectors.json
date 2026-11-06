@@ -4326,7 +4326,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -4400,7 +4401,8 @@
             "needs_restage": false
           }
         ],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -16965,7 +16967,8 @@
         "deleted": "0",
         "children": [],
         "legacy_history": false,
-        "unknown": true
+        "unknown": true,
+        "unstaged": false
       }
     },
     {
@@ -17025,7 +17028,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -17047,7 +17051,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -17069,7 +17074,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -17091,7 +17097,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -17188,7 +17195,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -17211,7 +17219,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -17234,7 +17243,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -17257,7 +17267,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -17279,7 +17290,8 @@
         "modified": "0",
         "deleted": "0",
         "children": [],
-        "legacy_history": false
+        "legacy_history": false,
+        "unstaged": false
       }
     },
     {
@@ -18391,6 +18403,29 @@
           "binding_generation": 1
         },
         "intent_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    },
+    {
+      "name": "directory-git-missing-DirectoryGitStatus-unstaged",
+      "schema": "DirectoryGitStatus",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "path": "",
+        "initialized": false,
+        "owner": null,
+        "directory_branch_id": null,
+        "working_tree_id": null,
+        "head_tree_id": null,
+        "index_generation": "0",
+        "staged": false,
+        "needs_restage": false,
+        "added": "0",
+        "modified": "0",
+        "deleted": "0",
+        "children": [],
+        "legacy_history": false
       }
     }
   ],

@@ -195,11 +195,11 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 目录默认未初始化。`initialize_directory_git` 使用已审阅的主命名空间 HEAD 创建 `DirectoryGitRepository`，并登记初始无提交 HEAD 的分支。`directory_git_repositories` 在 State 快照、元数据投影、历史包分页、导入及恢复中均有显式覆盖；它随既有权威材料写入数据盘根目录，系统盘仅保存对应索引，不建立目录内数据库。当前格式不增加旧格式迁移。
 
-文件保存、改名、移动、文件分支选择等继续即时发布文件版本与工作组合。原不可变 DirectoryTree 仍是恢复及并发工作检查点，不自动显示为用户目录历史。已初始化仓库的自身文件修改为待提交内容，未初始化子目录递归归最近父仓库；初始化独立子仓库则改变所有权边界，使父暂存令牌失效，必须显式重新暂存。`directory_git_status` 区分工作树、Git HEAD、index generation、待确认边界、子仓库 dirty、未暂存引用变化和已暂存引用。
+文件保存、改名、移动、文件分支选择等继续即时发布文件版本与工作组合。原不可变 DirectoryTree 仍是恢复及并发工作检查点，不自动显示为用户目录历史。已初始化仓库的自身文件修改为待提交内容，未初始化子目录递归归最近父仓库；初始化独立子仓库则改变所有权边界，使父暂存令牌失效，必须显式重新暂存。`directory_git_status` 区分工作树、Git HEAD、index generation、自有内容的 staged/unstaged、待确认边界、子仓库 dirty、未暂存引用变化和已暂存引用。
 
-`commit_directory_changes` 同时核对 `expected_tree_id`、`expected_index_generation`、非空说明及永久操作 ID。一次提交仅冻结当前仓库拥有的条目与明确暂存的子仓库提交 ID，只新建一个 `directory_commit`，不推进工作树、不改主命名空间，也不替子仓库提交。该事实通过 `Commit.provenance` 精确绑定新树；树的父边和 commit 父边精确对应前一次用户提交。初次提交可以是独立根，但导入/恢复必须验证反向 marker、身份、分支继承、全部 index/HEAD/child 边及完整无环覆盖，不能靠 kind 字符串放行断开图。
+`commit_directory_changes` 同时核对 `expected_tree_id`、`expected_index_generation`、非空说明及永久操作 ID。一次提交仅冻结 `index_tree_id` 固定的自有条目与明确暂存的子仓库提交 ID，只新建一个 `directory_commit`，不推进工作树、不改主命名空间，也不替子仓库提交。该事实通过 `Commit.provenance` 精确绑定新树；树的父边和 commit 父边精确对应前一次用户提交。初次提交可以是独立根，但导入/恢复必须验证反向 marker、身份、分支继承、全部 index/HEAD/child 边及完整无环覆盖，不能靠 kind 字符串放行断开图。
 
-`stage_directory_git_child` 固定用户审阅的子 HEAD，不自动跟随之后的子提交。`stage_directory_git_owned` 确认当前边界并从已准入当前命名空间更新工作组合；退出磁盘后的隐藏旧条目不能借提交重新进入当前视图。父提交之后子仓库仍可继续修改和提交，父只出现尚未暂存的引用变化。正常路径读取当前工作字节；显式历史快照预览读取对应不可变树。
+`stage_directory_git_child` 固定用户审阅的子 HEAD，不自动跟随之后的子提交。`stage_directory_git_owned` 确认当前边界，并从已准入当前命名空间固定暂存快照；后续保存不改变该快照，提交后也不自动暂存这些后续更改。退出磁盘后的隐藏旧条目不能借提交重新进入当前视图。父提交之后子仓库仍可继续修改和提交，父只出现尚未暂存的引用变化。正常路径读取当前工作字节；显式历史快照预览读取对应不可变树。
 
 分支登记要求本仓库自己干净；checkout 检查自身待提交状态并只替换自己拥有的工作范围，独立子仓库的挂载条目、工作字节、选中分支与 HEAD 原样保留。创建、切换、初始化、暂存、提交在当前登记模式下均由可重放的闭合元数据计划证明，公开 operation kind allowlist 不授予这些操作通用权限。永久回执、发布前持久化和冷恢复沿用原协议，不削减同步阶段。
 

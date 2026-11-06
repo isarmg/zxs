@@ -115,7 +115,7 @@ fn resolve(
             directory_branch_id: Some(git.current_branch_id.clone()),
             tree_id: Some(branch.head_tree_id.clone()),
             committed_tree_id: git.branches[&git.current_branch_id].head_tree_id.clone(),
-            staged: status.staged || status.needs_restage,
+            staged: status.staged || status.unstaged || status.needs_restage,
         }
     } else {
         DirectoryHistoryCurrent {

@@ -251,7 +251,7 @@ fn changes(
     branch: &str,
     boundaries: &BTreeMap<&str, &str>,
     budget: &mut Budget<'_>,
-) -> Result<(u64, u64, u64)> {
+) -> Result<(u64, u64, u64, bool)> {
     let index = &git.branches[branch];
     let tree = working_tree(state, git, branch)?;
     let contents = match view {
@@ -271,7 +271,25 @@ fn changes(
         budget.step()?;
         boundary_ids.insert(id);
     }
-    let after = owned(contents, &boundary_ids, budget)?;
+    let working = owned(contents, &boundary_ids, budget)?;
+    let staged = &state.directory_trees[&index.index_tree_id];
+    let after = owned(
+        Contents {
+            entries: &staged.entries,
+            contexts: &staged.file_contexts,
+            path: &staged.path,
+        },
+        &boundary_ids,
+        budget,
+    )?;
+    let mut unstaged = working.len() != after.len();
+    for (current, indexed) in working.iter().zip(&after) {
+        budget.step()?;
+        if current != indexed {
+            unstaged = true;
+            break;
+        }
+    }
     let before = match &index.head_tree_id {
         Some(id) => {
             let head = &state.directory_trees[id];
@@ -309,13 +327,35 @@ fn changes(
             deleted += 1;
         }
     }
-    Ok((added, modified, deleted))
+    Ok((added, modified, deleted, unstaged))
+}
+
+fn mount_paths<'a>(
+    tree: &'a DirectoryTree,
+    budget: &mut Budget<'_>,
+) -> Result<BTreeMap<&'a str, &'a str>> {
+    let depth = if tree.path.is_empty() {
+        0
+    } else {
+        tree.path.split('/').count()
+    };
+    let mut paths = BTreeMap::new();
+    for entry in &tree.entries {
+        budget.step()?;
+        if entry.kind == NamespaceEntryKind::Directory {
+            budget.text(entry.path())?;
+            paths.insert(entry.entry_id.as_str(), relative(entry.path(), depth));
+        }
+    }
+    Ok(paths)
 }
 struct Summary {
     added: u64,
     modified: u64,
     deleted: u64,
     staged: bool,
+    unstaged: bool,
+    staged_children: BTreeSet<String>,
     needs_restage: bool,
     dirty: bool,
 }
@@ -328,15 +368,31 @@ fn summarize_scope(
     budget: &mut Budget<'_>,
 ) -> Result<Summary> {
     let index = &git.branches[branch];
-    let (added, modified, deleted) = changes(state, view, git, branch, children, budget)?;
+    let (added, modified, deleted, unstaged) = changes(state, view, git, branch, children, budget)?;
     let mut needs_restage = index.index_boundaries.len() != children.len();
     let mut staged = index.head_tree_id.is_none() || added != 0 || modified != 0 || deleted != 0;
+    let indexed_paths = if children.is_empty() {
+        BTreeMap::new()
+    } else {
+        mount_paths(&state.directory_trees[&index.index_tree_id], budget)?
+    };
+    let committed_paths = match &index.head_tree_id {
+        Some(head) if !children.is_empty() => mount_paths(&state.directory_trees[head], budget)?,
+        _ => BTreeMap::new(),
+    };
+    let mut staged_children = BTreeSet::new();
     for (&child, &path) in children {
         budget.step()?;
         budget.text(path)?;
         needs_restage |= index.index_boundaries.get(child).map(String::as_str) != Some(path);
-        staged |= index_child(index, child)
-            != head_child(state, index, child).map(|reference| reference.tree_id.as_str());
+        let pinned = index_child(index, child);
+        let changed = pinned
+            != head_child(state, index, child).map(|reference| reference.tree_id.as_str())
+            || (pinned.is_some() && indexed_paths.get(child) != committed_paths.get(child));
+        if changed {
+            staged_children.insert(budget.copy(child)?);
+            staged = true;
+        }
     }
     if let Some(head) = &index.head_tree_id {
         for child in state.directory_trees[head].directory_refs.keys() {
@@ -349,8 +405,10 @@ fn summarize_scope(
         modified,
         deleted,
         staged,
+        unstaged,
+        staged_children,
         needs_restage,
-        dirty: staged || needs_restage,
+        dirty: staged || unstaged || needs_restage,
     })
 }
 fn summarize(
@@ -431,7 +489,7 @@ impl<'a> BranchStatuses<'a> {
             &retained
         };
         let summary = summarize_scope(self.state, None, git, branch, children, &mut self.budget)?;
-        Ok(summary.staged || summary.needs_restage)
+        Ok(summary.staged || summary.unstaged || summary.needs_restage)
     }
 }
 
@@ -471,6 +529,7 @@ pub(crate) struct ScopeChanges {
     pub(crate) modified: u64,
     pub(crate) deleted: u64,
     pub(crate) staged: bool,
+    pub(crate) unstaged: bool,
     pub(crate) needs_restage: bool,
 }
 
@@ -498,6 +557,7 @@ pub(crate) fn current_changes(
         modified: 0,
         deleted: 0,
         staged: false,
+        unstaged: false,
         needs_restage: false,
     };
     if changes.initialized {
@@ -510,6 +570,7 @@ pub(crate) fn current_changes(
             &mut budget,
         )?;
         changes.staged = summary.staged;
+        changes.unstaged = summary.unstaged;
         changes.needs_restage = summary.needs_restage;
         changes.added = summary.added;
         changes.modified = summary.modified;
@@ -551,6 +612,7 @@ pub(super) fn read(
         head_tree_id: None,
         index_generation: 0,
         staged: false,
+        unstaged: false,
         needs_restage: false,
         added: 0,
         modified: 0,
@@ -575,6 +637,7 @@ pub(super) fn read(
         .transpose()?;
     status.index_generation = index.index_generation;
     status.staged = summary.staged;
+    status.unstaged = summary.unstaged;
     status.needs_restage = summary.needs_restage;
     status.added = summary.added;
     status.modified = summary.modified;
@@ -602,7 +665,7 @@ pub(super) fn read(
                     .transpose()?,
                 dirty: summaries[child].dirty,
                 reference_changed: child_index.head_tree_id != staged_tree_id,
-                staged: staged_tree_id != committed_tree_id,
+                staged: summary.staged_children.contains(child),
                 staged_tree_id,
                 committed_tree_id,
                 needs_restage: summaries[child].needs_restage,

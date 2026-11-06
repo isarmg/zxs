@@ -277,6 +277,18 @@ pub(super) fn commit_directory_fixture(
             "directory fixture must explicitly initialize and stage its own repository".into(),
         );
     }
+    engine.stage_directory_git_owned(
+        repository,
+        &storage_engine::directory_git::DirectoryGitStageOwnedBody {
+            directory_id: status.directory_id,
+            directory_branch_id: status.directory_branch_id.unwrap(),
+            expected_tree_id: status.working_tree_id.unwrap(),
+            expected_index_generation: status.index_generation,
+            operation_id: storage_engine::OperationId::generate()?,
+        },
+        PRINCIPAL,
+    )?;
+    let status = engine.directory_git_status(repository, path)?;
     engine.commit_directory_changes(storage_engine::DirectoryCommitRequest {
         repository_id: repository,
         directory_branch_id: status

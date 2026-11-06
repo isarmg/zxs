@@ -93,7 +93,9 @@ fn commit_reviewed(
         operation_id: operation,
     })
 }
+// Fixture checkpoints explicitly stage first; index-isolation tests use commit_reviewed.
 fn commit(engine: &mut Engine, repo: &Repository, path: &str) -> String {
+    stage_owned(engine, repo, path);
     let s = status(engine, repo, path);
     commit_reviewed(engine, repo, &s, OperationId::generate().unwrap())
         .unwrap()
@@ -470,7 +472,7 @@ fn parent_branch_checkout_preserves_dirty_independent_child_and_its_head() {
         child.directory_branch_id.as_deref(),
         Some(child_branch.as_str())
     );
-    assert!(child.staged);
+    assert!(child.unstaged && !child.staged);
     assert_eq!(
         engine.state.directory_git_repositories[&child.directory_id],
         child_before
@@ -806,6 +808,7 @@ fn reviewed_parent_commit_commutes_with_child_only_working_updates() {
     stage_child(&mut engine, &repo, "", "child");
     commit(&mut engine, &repo, "");
     save(&mut engine, &repo, "own", b"reviewed parent");
+    stage_owned(&mut engine, &repo, "");
     let reviewed = status(&engine, &repo, "");
     save(&mut engine, &repo, "child/file", b"concurrent child");
     assert_ne!(

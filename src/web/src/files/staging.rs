@@ -175,6 +175,7 @@ fn decode(value: json_codec::Value, target: &Target) -> Result<DirectoryGitStatu
         || status.head_tree_id.is_some()
         || status.index_generation != 0
         || status.staged
+        || status.unstaged
         || status.needs_restage
         || status.added != 0
         || status.modified != 0
@@ -318,7 +319,7 @@ fn commit_review(state: &State, model: &Model) -> Option<Review> {
 }
 fn owned_review(state: &State, model: &Model) -> Option<Review> {
     let (target, status) = model.ready(state)?;
-    if !status.initialized || !status.needs_restage {
+    if !status.initialized || (!status.unstaged && !status.needs_restage) {
         return None;
     }
     Some(Review::StageOwned {
@@ -463,7 +464,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <Show when=move ||model.with(|model|model.reading)><p class="zxs-row" role="status">{t("正在读取仓库状态…","Reading repository status…")}</p></Show>
             {move ||model.with(|model|model.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
             {move ||model.with(|model|model.status.clone()).map(|status|view!{
-                <p class="zxs-row" role="status" data-directory-staging="true" data-directory-git-initialized=status.initialized.to_string() data-directory-git-staged=status.staged.to_string() data-directory-git-needs-restage=status.needs_restage.to_string()>{if !status.initialized{t("当前目录尚未初始化独立仓库。","This directory is not an independent repository yet.")}else if status.head_tree_id.is_none(){t("独立仓库已初始化，尚无提交。","The independent repository is initialized and has no commit yet.")}else if status.staged{format!("{} · +{} / ~{} / -{}",t("当前仓库有待提交更改","This repository has changes to commit"),status.added,status.modified,status.deleted)}else{t("当前仓库没有待提交更改。","This repository has no changes to commit.")}}</p>
+                <p class="zxs-row" role="status" data-directory-staging="true" data-directory-git-initialized=status.initialized.to_string() data-directory-git-staged=status.staged.to_string() data-directory-git-unstaged=status.unstaged.to_string() data-directory-git-needs-restage=status.needs_restage.to_string()>{if !status.initialized{t("当前目录尚未初始化独立仓库。","This directory is not an independent repository yet.")}else if status.head_tree_id.is_none(){t("独立仓库已初始化，尚无提交。","The independent repository is initialized and has no commit yet.")}else if status.staged{format!("{} · +{} / ~{} / -{}",t("当前仓库有已暂存更改","This repository has staged changes to commit"),status.added,status.modified,status.deleted)}else if status.unstaged{t("当前仓库有尚未暂存的工作更改。","This repository has working changes that are not staged.")}else{t("当前仓库没有待提交更改。","This repository has no changes to commit.")}}</p>
                 {status.owner.map(|owner|view!{<p class="zxs-row">{format!("{}: {}",t("工作内容所属仓库","Repository owning this work"),path_label(&owner.path))}</p>})}
                 <Show when=move ||status.legacy_history><p class="zxs-row">{t("已有目录历史保留；初始化不会删除或重置已有数据。","Existing directory history is retained. Initialization never deletes or resets existing data.")}</p></Show>
             })}
@@ -473,14 +474,14 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|initialize_review(state,model)));submit(state,review);}>{t("初始化此目录仓库","Initialize this directory repository")}</button>
             </Show>
             <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|status.initialized))>
-                <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|status.needs_restage))>
-                    <p class="zxs-row" role="status">{t("独立子仓库边界已变化，提交前必须重新暂存本仓库。此操作确认当前边界和本仓库工作内容，不会自动跟随子仓库的新提交。","Independent child boundaries changed. Restage this repository before committing. This reviews its current boundaries and owned work without following new child commits automatically.")}</p>
+                <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|status.unstaged||status.needs_restage))>
+                    <p class="zxs-row" role="status">{t("工作内容尚未暂存，或独立子仓库边界有变化。暂存将固定本仓库当前工作内容，不会自动跟随子仓库的新提交；之后保存的更改保留在工作区。","Working contents are unstaged, or independent child boundaries changed. Staging freezes this repository’s current work without following child commits. Later saves remain in the working tree.")}</p>
                     <button type="button" class="zxs-button" data-stage-directory-owned="" disabled=move ||state.with(|state|model.with(|model|owned_review(state,model).is_none()))
-                        on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|owned_review(state,model)));submit(state,review);}>{t("重新暂存本仓库","Restage this repository")}</button>
+                        on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|owned_review(state,model)));submit(state,review);}>{t("暂存本仓库工作内容","Stage this repository’s work")}</button>
                 </Show>
                 <For each=move ||children.get() key=|child|(child.directory_id.clone(),child.path.clone(),child.directory_branch_id.clone(),child.head_tree_id.clone(),child.staged_tree_id.clone(),child.committed_tree_id.clone(),child.dirty,child.reference_changed,child.staged,child.needs_restage)
                     children=move |child|child_view(state,model,child)/>
-                <p class="zxs-row">{t("本次只提交当前仓库的工作内容及已暂存子引用，不提交独立子仓库的工作更改。","This commits only the current repository's work and staged child references, never an independent child's working changes.")}</p>
+                <p class="zxs-row">{t("本次只提交已暂存内容和子仓库引用；未暂存的工作更改保持可见，不会加入本次提交。","This commits only staged contents and child references. Unstaged working changes stay visible and are not included.")}</p>
                 <div class="zxs-file-toolbar zxs-flow">
                     <input class="zxs-input zxs-input--compact" aria-label=t("目录提交说明","Folder commit message") placeholder=t("填写本次提交说明","Describe this commit")
                         prop:value=move ||model.with(|model|model.message.clone()) disabled=move ||!state.with(actions::write_allowed)||model.with(|model|model.reading||model.error.is_some())

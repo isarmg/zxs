@@ -473,12 +473,12 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 
 ### 目录暂存与显式提交接口
 
-`GET /api/repositories/{repo}/directory-branches/{id}/staging` 读取持久化工作树、最近用户提交及新增／修改／删除计数。`POST /api/repositories/{repo}/directory-branches/{id}/commits` 需要 `expected_tree_id`、非空且不超过 128 UTF-8 字节的单行 `message`、永久 `operation_id`；JSON 严格拒绝未知字段。成功返回普通操作回执，重复同一操作返回原结果；树已变返回 `DIRECTORY_BRANCH_CONFLICT`，不能自动改用新基线提交。
+`GET /api/repositories/{repo}/directory-branches/{id}/staging` 读取持久化工作树 ID、最近用户提交及暂存区相对 HEAD 的新增／修改／删除计数；完整工作区与暂存区区分由下述目录 Git 状态接口提供。`POST /api/repositories/{repo}/directory-branches/{id}/commits` 需要 `expected_tree_id`、`expected_index_generation`、非空且不超过 128 UTF-8 字节的单行 `message`、永久 `operation_id`；JSON 严格拒绝未知字段。成功返回普通操作回执，重复同一操作返回原结果；树或暂存代数已变返回 `DIRECTORY_BRANCH_CONFLICT`，不能自动改用新基线提交。
 
-目录提交在同一元数据事务内冻结所选目录及其精确子目录组合，不增加文件版本、不切换默认命名空间；所选目录外的祖先和兄弟仍保持原暂存状态。文件保存即已持久化，未做目录提交不代表正文只在内存。发布结果未知时按原操作 ID 查询，不另换操作号重做。
+目录提交在同一元数据事务内冻结所选目录已暂存的自有内容及其明确固定的子仓库引用，不增加文件版本、不切换默认命名空间；所选目录外的祖先和兄弟仍保持原暂存状态。文件保存即已持久化，未做目录提交不代表正文只在内存。发布结果未知时按原操作 ID 查询，不另换操作号重做。
 
 ## 显式目录仓库边界
 
 目录 Git 初始化、暂存和提交使用独立接口，不把普通文件保存当成目录提交，也不递归提交子仓库。准确目录尚未初始化时，所属祖先可以返回，但列表的 `directory_branches_supported` 仍为 false。旧 `/api/repositories/{repo}/directory-scopes` 公开入口已移除，不自动迁移为 Git 初始化。
 
-状态 GET 必须给 `path`，根为显式空字符串，未知或重复查询字段拒绝。完整响应最多 1 MiB，超限失败而不截断；所有 nullable 字段必须出现。工作树与 index 代数在暂存/提交时同时复核，独立子仓库边界变化要求重新暂存。结果不明保留原操作 ID 查询，不以新 ID 盲重试。请求、状态与严格整数编码见机器契约，授权和实际归属仍由服务器及核心检查，详见[目录 Git HTTP 边界](components/server/src/directory-git.md)。
+状态 GET 必须给 `path`，根为显式空字符串，未知或重复查询字段拒绝。完整响应最多 1 MiB，超限失败而不截断；所有 nullable 字段必须出现。`staged` 与增改删计数对应暂存区相对 HEAD 的变化，必填 `unstaged` 表示工作区尚未暂存的变化，提交不会采用这些后续保存。工作树与 index 代数在暂存/提交时同时复核，独立子仓库边界变化要求重新暂存。结果不明保留原操作 ID 查询，不以新 ID 盲重试。请求、状态与严格整数编码见机器契约，授权和实际归属仍由服务器及核心检查，详见[目录 Git HTTP 边界](components/server/src/directory-git.md)。

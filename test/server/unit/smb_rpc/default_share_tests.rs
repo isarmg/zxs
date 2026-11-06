@@ -2,6 +2,9 @@
 use super::*;
 use std::{os::unix::net::UnixStream, thread::JoinHandle};
 
+#[path = "phase1_new_file_tests.rs"]
+mod phase1_new_file_tests;
+
 fn empty_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
     let temp = tempfile::tempdir().unwrap();
     let mut config = Config::development([temp.path().join("p"), temp.path().join("b")]).unwrap();

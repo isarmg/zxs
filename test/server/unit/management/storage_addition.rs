@@ -1,4 +1,4 @@
-//! Source coverage only: this change did not execute tests or builds.
+//! Storage addition admission, durable receipts, cancellation and replay regressions.
 use super::*;
 use storage_contract::storage_directories::{CandidateSelection, InspectRequest};
 
@@ -167,6 +167,95 @@ fn typed_addition_keeps_host_scope_gate_and_current_session_checks() {
             .next()
             .is_none()
     );
+}
+
+#[test]
+fn addition_rejects_unbrowseable_disk_names_without_persisting_a_plan() {
+    for (name, expected) in [
+        ("ORIGINAL", ErrorCode::NameConflict),
+        ("CON", ErrorCode::InvalidRequest),
+        ("cafe\u{301}", ErrorCode::InvalidRequest),
+    ] {
+        let f = fixture();
+        let configuration = fs::read(f.data.join("config.json")).unwrap();
+        let seal = fs::read(f.discovery.join("original/disk.json")).unwrap();
+        let request = request(selection(&f, name), "N01", true);
+        let operation = request.operation_id;
+        assert_eq!(
+            f.backend
+                .preview_storage_addition(&f.identity, request)
+                .unwrap_err()
+                .code,
+            expected,
+            "{name}"
+        );
+        assert!(
+            !f.data
+                .join("management/storage-additions")
+                .join(format!("{operation}.json"))
+                .try_exists()
+                .unwrap()
+        );
+        assert_eq!(fs::read(f.data.join("config.json")).unwrap(), configuration);
+        assert_eq!(
+            fs::read(f.discovery.join("original/disk.json")).unwrap(),
+            seal
+        );
+        assert!(
+            fs::read_dir(f.discovery.join(name))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        assert_eq!(
+            f.backend.topology_snapshot(&f.identity).unwrap().slots[0]
+                .directory_name()
+                .unwrap()
+                .as_str(),
+            "original"
+        );
+    }
+}
+
+#[test]
+fn addition_rejects_colliding_new_primary_and_backup_roots() {
+    let f = fixture();
+    let first = selection(&f, "Straße");
+    let second = selection(&f, "STRASSE");
+    // Creating the second directory changes the parent observation; both
+    // selections must be captured against the same unchanged parent.
+    let first = crate::storage_directories::inspect_within(
+        f.discovery.to_str().unwrap(),
+        &InspectRequest {
+            mount_path: first.mount_path,
+            root_path: first.root_path,
+        },
+        std::slice::from_ref(&f.data),
+    )
+    .unwrap();
+    let mut request = request(first, "N01", true);
+    request.additions.push(DirectoryAddition {
+        selection: second,
+        slot_id: "N02".into(),
+        level: 2,
+        upstream_slot_id: Some("N01".into()),
+        metadata_member: false,
+    });
+    assert_eq!(
+        f.backend
+            .preview_storage_addition(&f.identity, request)
+            .unwrap_err()
+            .code,
+        ErrorCode::NameConflict
+    );
+    for name in ["Straße", "STRASSE"] {
+        assert!(
+            fs::read_dir(f.discovery.join(name))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
 }
 
 #[test]

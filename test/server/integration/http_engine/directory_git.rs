@@ -289,10 +289,43 @@ async fn directory_git_staging_and_commit_require_exact_string_generation() {
         staged["directory_branch_id"].as_str().unwrap()
     );
     assert_eq!(send(&app, Some(&token), "POST", &commit_route, Some(json!({"expected_tree_id":staged["working_tree_id"],"message":"missing generation","operation_id":new_id("op").unwrap()}))).await.0, StatusCode::BAD_REQUEST);
-    commit(&app, &token, &repo, &staged).await;
+    manager_upload(&app, &token, "docs/a.txt", b"later unstaged content").await;
+    let reviewed = status(&app, &token, &repo, "docs").await;
+    assert_eq!(reviewed["staged"], true);
+    assert_eq!(reviewed["unstaged"], true);
+    commit(&app, &token, &repo, &reviewed).await;
     let committed = status(&app, &token, &repo, "docs").await;
     assert!(committed["head_tree_id"].is_string());
     assert_eq!(committed["staged"], false);
+    assert_eq!(committed["unstaged"], true);
+    let branch = committed["directory_branch_id"].as_str().unwrap();
+    let head = committed["head_tree_id"].as_str().unwrap();
+    let snapshot = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/file-manager/disks/P01/entries?path=docs&directory_branch_id={branch}&expected_tree_id={head}"),
+        None,
+    ).await;
+    assert_eq!(
+        version_bytes(
+            &app,
+            &token,
+            snapshot["entries"][0]["version_id"].as_str().unwrap()
+        )
+        .await,
+        b"one"
+    );
+    let working = listing(&app, &token, "docs").await;
+    assert_eq!(
+        version_bytes(
+            &app,
+            &token,
+            working["entries"][0]["version_id"].as_str().unwrap()
+        )
+        .await,
+        b"later unstaged content"
+    );
     let system = root.path().join("system");
     drop(app);
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));

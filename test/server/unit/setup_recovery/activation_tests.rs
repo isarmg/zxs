@@ -1,6 +1,9 @@
 use super::*;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+#[path = "primary_import_recovery_tests.rs"]
+mod primary_import_recovery;
 struct Fixture {
     _temp: tempfile::TempDir,
     service: SetupRecovery,
@@ -351,6 +354,50 @@ fn nonempty_selected_directory_is_rejected_before_intent_and_preserved() {
         fs::read(f.service.disks["one"].join("important")).unwrap(),
         b"unchanged"
     );
+}
+
+#[test]
+fn unbrowseable_disk_names_are_rejected_before_activation_intent_or_writes() {
+    use storage_contract::ErrorCode;
+    for (names, expected) in [
+        (["CON", "other"], ErrorCode::InvalidRequest),
+        (["a:b", "other"], ErrorCode::InvalidRequest),
+        (["cafe\u{301}", "other"], ErrorCode::InvalidRequest),
+        (["Disk", "disk"], ErrorCode::NameConflict),
+        (["Straße", "STRASSE"], ErrorCode::NameConflict),
+    ] {
+        let mut f = fixture_with_disks(&["one", "two"]);
+        for (id, name) in ["one", "two"].into_iter().zip(names) {
+            let path = f.service.disks.get_mut(id).unwrap();
+            let renamed = path.parent().unwrap().join(name);
+            fs::rename(&*path, &renamed).unwrap();
+            *path = renamed;
+        }
+        initialize(&f.service);
+        let selected = request(&f.service, &["one", "two"]);
+        let error = f
+            .service
+            .activate(
+                &admin(),
+                selected,
+                |_| Ok(()),
+                |_| panic!("invalid namespace installed"),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, expected, "{names:?}");
+        assert_eq!(f.service.status().state, InstallationState::ManagementReady);
+        for name in [
+            ACTIVATION_INTENT,
+            ACTIVATION_READY,
+            ACTIVATION_COMPLETE,
+            "config.json",
+        ] {
+            assert!(!f.service.data_root.join(name).try_exists().unwrap());
+        }
+        for path in f.service.disks.values() {
+            assert!(fs::read_dir(path).unwrap().next().is_none());
+        }
+    }
 }
 
 #[test]

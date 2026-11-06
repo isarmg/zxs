@@ -67,7 +67,7 @@ fn child_browser_fixture_preserves_manual_boundaries_pins_and_uncommitted_work_o
     let ordinary = status(&engine, &repository.repository_id, "ordinary");
     assert!(parent.needs_restage && parent.staged);
     assert_eq!(parent.children.len(), 2);
-    assert!(child.staged && child.head_tree_id.is_some());
+    assert!(child.unstaged && !child.staged && child.head_tree_id.is_some());
     assert!(unborn.staged && unborn.head_tree_id.is_none());
     assert!(!ordinary.initialized);
     assert_eq!(ordinary.owner.unwrap().directory_id, parent.directory_id);
@@ -139,7 +139,22 @@ fn child_browser_fixture_preserves_manual_boundaries_pins_and_uncommitted_work_o
         .unwrap();
     assert_eq!(bytes(&engine, &current_child.version_id), WORKING);
 
-    commit(&mut engine, &child).unwrap();
+    engine
+        .stage_directory_git_owned(
+            &repository.repository_id,
+            &DirectoryGitStageOwnedBody {
+                directory_id: child.directory_id.clone(),
+                directory_branch_id: child.directory_branch_id.clone().unwrap(),
+                expected_tree_id: child.working_tree_id.clone().unwrap(),
+                expected_index_generation: child.index_generation,
+                operation_id: OperationId::generate().unwrap(),
+            },
+            PRINCIPAL,
+        )
+        .unwrap();
+    let staged_child = status(&engine, &repository.repository_id, "child");
+    assert!(staged_child.staged && !staged_child.unstaged);
+    commit(&mut engine, &staged_child).unwrap();
     let new_child = status(&engine, &repository.repository_id, "child");
     assert_ne!(new_child.head_tree_id, child.head_tree_id);
     let unchanged_parent = status(&engine, &repository.repository_id, "");

@@ -6,6 +6,7 @@ use super::{
 };
 
 mod conversion;
+mod primary_browse;
 
 fn prepare_offline(source_pool: &Path, offline: &Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt;
@@ -267,6 +268,7 @@ pub(super) fn setup(
         // Provision only a disposable test-owned child after account creation.
         // The daemon has an immutable discovery parent, not a Web-editable path.
         let storage = fixture.storage_directory()?;
+        primary_browse::observe(browser)?;
         with_cleanup(
             || {
                 browser.script(STORAGE_PROBE)?;
@@ -277,9 +279,16 @@ pub(super) fn setup(
                 storage_active(browser)?;
                 assert_activation_posts(browser, &["/api/admin/storage/activate"])?;
                 assert_single_storage(&fixture, &storage)?;
+                primary_browse::run(browser, &storage)?;
+                assert_single_storage(&fixture, &storage)?;
                 Ok(())
             },
-            || restore_storage_probe(browser),
+            || {
+                let storage = restore_storage_probe(browser);
+                let browsing = primary_browse::restore(browser);
+                storage?;
+                browsing
+            },
         )?;
         conversion::run(browser, &fixture)?;
         browser.click(&browser.button("Files", "文件")?)?;

@@ -17,7 +17,7 @@ fn wire() -> json_codec::Value {
     json!({"repository_id":id("repo",1),"directory_id":id("entry",1),"path":"folder",
         "initialized":true,"owner":{"directory_id":id("entry",1),"path":"folder"},
         "directory_branch_id":id("dbr",1),"working_tree_id":id("dtree",1),"head_tree_id":null,
-        "index_generation":"9007199254740993","staged":true,"needs_restage":false,
+        "index_generation":"9007199254740993","staged":true,"unstaged":false,"needs_restage":false,
         "added":"2","modified":"1","deleted":"0","children":[],"legacy_history":false})
 }
 fn child() -> json_codec::Value {
@@ -331,4 +331,28 @@ fn all_directory_reviews_share_fresh_scope_session_and_write_fences() {
             "child change {change}"
         );
     }
+}
+
+#[test]
+fn unstaged_work_can_be_staged_without_forcing_it_into_an_existing_index_commit() {
+    let mut value = wire();
+    value["unstaged"] = true.into();
+    let (state, mut model) = reviewed(value);
+    assert!(owned_review(&state, &model).is_some());
+    assert!(
+        commit_review(&state, &model).is_some(),
+        "the existing index remains committable"
+    );
+    model.status.as_mut().unwrap().staged = false;
+    assert!(commit_review(&state, &model).is_none());
+    assert!(owned_review(&state, &model).is_some());
+    let mut value = uninitialized();
+    value["unstaged"] = true.into();
+    assert!(decode(value, &target()).is_err());
+    let mut value = wire();
+    value.as_object_mut().unwrap().remove("unstaged");
+    assert!(
+        decode(value, &target()).is_err(),
+        "older responses are not silently upgraded"
+    );
 }

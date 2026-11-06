@@ -24,6 +24,7 @@ fn current(
                 !!document.querySelector('.zxs-file-manager[aria-busy="false"]')&&
                 row.dataset.directoryGitInitialized===String(s.initialized)&&
                 row.dataset.directoryGitStaged===String(s.staged)&&
+                row.dataset.directoryGitUnstaged===String(s.unstaged)&&
                 row.dataset.directoryGitNeedsRestage===String(s.needs_restage)&&
                 JSON.stringify(ids)===JSON.stringify(s.children.map(child=>child.directory_id).sort())};
         "#)?;
@@ -225,10 +226,26 @@ fn advance_child(browser: &Browser, parent: &DirectoryGitStatus) -> Result<()> {
         "//button[contains(@class,'zxs-file-name')][normalize-space(.)='child']",
     )?)?;
     let current_child = current(browser, Some(&parent.repository_id), "child", after)?;
-    if current_child.head_tree_id != child(parent, "child")?.head_tree_id || !current_child.staged {
+    if current_child.head_tree_id != child(parent, "child")?.head_tree_id || !current_child.unstaged
+    {
         return Err("parent publication lost the child's uncommitted working content".into());
     }
-    let new_child = commit(browser, &current_child)?;
+    browser.css("[data-commit-directory][disabled]")?;
+    let after = mutate(
+        browser,
+        "[data-stage-directory-owned]",
+        &format!(
+            "/api/repositories/{}/directory-git/stage",
+            parent.repository_id
+        ),
+        json!({"directory_id":current_child.directory_id,"directory_branch_id":current_child.directory_branch_id,
+            "expected_tree_id":current_child.working_tree_id,"expected_index_generation":current_child.index_generation.to_string()}),
+    )?;
+    let staged_child = current(browser, Some(&parent.repository_id), "child", after)?;
+    if !staged_child.staged || staged_child.unstaged {
+        return Err("explicit child staging did not freeze its working content".into());
+    }
+    let new_child = commit(browser, &staged_child)?;
     let after = read_count(browser)?;
     open_root(browser)?;
     let unchanged = current(browser, Some(&parent.repository_id), "", after)?;
@@ -267,7 +284,7 @@ pub(crate) fn run(browser: &Browser) -> Result<()> {
             let committed = review_boundaries(browser, &parent)?;
             advance_child(browser, &committed)?;
             let exact_writes = browser.script(
-                "return window.__zxsDirectoryGit.writes.length===6&&window.__zxsDirectoryGit.unexpected.length===0",
+                "return window.__zxsDirectoryGit.writes.length===7&&window.__zxsDirectoryGit.unexpected.length===0",
             )?;
             if exact_writes != true {
                 return Err("parent/child flow performed an implicit or duplicate write".into());

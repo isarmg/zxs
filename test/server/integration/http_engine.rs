@@ -3036,7 +3036,8 @@ async fn manager_initialize_git(app: &Router, token: &str, path: &str) -> Value 
 /// checkout. Independent children are not recursively staged or committed.
 async fn manager_checkpoint_git(app: &Router, token: &str, path: &str) {
     let status = manager_initialize_git(app, token, path).await;
-    if status["staged"] == false && status["needs_restage"] == false {
+    if status["staged"] == false && status["unstaged"] == false && status["needs_restage"] == false
+    {
         assert!(status["head_tree_id"].is_string());
         return;
     }

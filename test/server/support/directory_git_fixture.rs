@@ -37,7 +37,7 @@ pub(crate) fn checkpoint(
             .directory_git_status(&repository.repository_id, path)
             .unwrap();
     }
-    if status.staged || status.needs_restage {
+    if status.staged || status.unstaged || status.needs_restage {
         engine
             .stage_directory_git_owned(
                 &repository.repository_id,
@@ -97,6 +97,6 @@ pub(crate) fn checkpoint(
             .directory_git_status(&repository.repository_id, path)
             .unwrap();
     }
-    assert!(!status.staged && !status.needs_restage);
+    assert!(!status.staged && !status.unstaged && !status.needs_restage);
     status
 }

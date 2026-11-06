@@ -78,6 +78,8 @@ pub struct DirectoryGitStatus {
     #[serialization(with = "crate::u64_string")]
     pub index_generation: u64,
     pub staged: bool,
+    /// Owned working contents differ from the explicitly reviewed index.
+    pub unstaged: bool,
     pub needs_restage: bool,
     #[serialization(with = "crate::u64_string")]
     pub added: u64,

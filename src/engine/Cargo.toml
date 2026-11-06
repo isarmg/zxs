@@ -45,6 +45,10 @@ path = "../../test/engine/integration/workspace_namespace_preconditions.rs"
 name = "workspace_upload_retries"
 path = "../../test/engine/integration/workspace_upload_retries.rs"
 
+[[test]]
+name = "phase1_tag_cold_replay"
+path = "../../test/engine/integration/phase1_tag_cold_replay.rs"
+
 [dev-dependencies]
 # Resolver 2 enables hooks for all engine tests, never normal product builds.
 storage-engine = { path = ".", features = ["fault-injection"] }
@@ -55,3 +59,11 @@ sqlite-access = { version = "0.9.0", default-features = false, path = "../founda
 [[test]]
 name = "hash_table_compatibility"
 path = "../../test/engine/integration/hash_table_compatibility.rs"
+
+[[test]]
+name = "directory_git_index"
+path = "../../test/engine/integration/directory_git_index.rs"
+
+[[test]]
+name = "phase1_tag_regressions"
+path = "../../test/engine/integration/phase1_tag_regressions.rs"

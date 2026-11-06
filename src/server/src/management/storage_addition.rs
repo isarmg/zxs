@@ -832,6 +832,7 @@ impl ManagementBackend {
                 capacity_bytes: None,
             });
         }
+        crate::backend_storage_metadata::disk_directory_names(&target.disks)?;
         storage_engine::ValidatedConfig::try_from(target.clone())
             .map_err(crate::engine_backend::error)?;
         let mut preview = AdditionPreview {

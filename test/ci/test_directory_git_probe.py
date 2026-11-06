@@ -19,7 +19,7 @@ class DirectoryGitProbe(unittest.TestCase):
         fixture = (PROBE / 'runner/fixture.rs').read_text()
         self.assertIn('super::directory_git::fixture::seed(&mut engine)?;', fixture)
         children = (PROBE / 'runner/directory_git/children.rs').read_text()
-        self.assertIn('window.__zxsDirectoryGit.writes.length===6', children)
+        self.assertIn('window.__zxsDirectoryGit.writes.length===7', children)
         self.assertIn('window.__zxsDirectoryGit.restore()', children)
         self.assertNotIn('new Response(', children)
 

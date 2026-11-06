@@ -330,9 +330,21 @@ impl Planner<'_> {
         }) {
             return Ok(());
         }
+        let current_directories = owner
+            .iter()
+            .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
+            .map(|entry| entry.entry_id.as_str())
+            .collect::<BTreeSet<_>>();
         let mut sources = Vec::new();
         for (directory, branch) in &self.previous.directory_selections {
             if self.previous.directory_branches[branch].repository_id != repository.repository_id {
+                continue;
+            }
+            // Removed identities retain history, but no longer own a current scope.
+            // The repository root is implicit and has no entry in its namespace.
+            if directory != &repository.repository_id
+                && !current_directories.contains(directory.as_str())
+            {
                 continue;
             }
             let scope = self.view.batch_scope(self.previous, branch)?;

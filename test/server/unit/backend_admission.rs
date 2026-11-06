@@ -1808,3 +1808,9 @@ async fn prepare_unknown_fields_reach_backend_before_its_admission_error() {
         assert_eq!(gate.calls.load(Ordering::SeqCst), 1, "{path}");
     }
 }
+
+#[path = "retained_management_slots.rs"]
+mod retained_management_slots;
+
+#[path = "phase_one_write_admission.rs"]
+mod phase_one_write_admission;

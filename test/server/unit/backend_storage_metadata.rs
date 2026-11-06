@@ -77,3 +77,28 @@ fn disk_directory_names_are_exact_portable_basenames() {
         );
     }
 }
+
+#[test]
+#[cfg(feature = "core")]
+fn disk_directory_names_preserve_order_and_check_backup_roots() {
+    let config = storage_contract::Config::development([
+        std::path::PathBuf::from("/data/资料"),
+        std::path::PathBuf::from("/data/Archive"),
+    ])
+    .unwrap();
+    assert_eq!(config.disks[1].level, 2);
+    let names = disk_directory_names(&config.disks).unwrap();
+    assert_eq!(
+        names.iter().map(|name| name.as_str()).collect::<Vec<_>>(),
+        ["资料", "Archive"]
+    );
+    for (first, second) in [("Disk", "disk"), ("Straße", "STRASSE"), ("资料", "资料")] {
+        let mut disks = config.disks.clone();
+        disks[0].root = std::path::Path::new("/left").join(first);
+        disks[1].root = std::path::Path::new("/right").join(second);
+        assert_eq!(
+            disk_directory_names(&disks).unwrap_err().code,
+            storage_contract::ErrorCode::NameConflict
+        );
+    }
+}

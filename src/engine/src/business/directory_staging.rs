@@ -244,9 +244,9 @@ pub(crate) fn apply_commit(
             json!({"input":input.body(),"directory_branch_id":input.directory_branch_id,"head_tree_id":head,"commit_id":tree.commit_id,"no_change":true,"directory_branch_ids":[]}),
         );
     }
-    let mut tree = frozen_tree(state, working, index, &direct)?;
+    let staged = &state.directory_trees[&index.index_tree_id];
+    let mut tree = frozen_tree(state, staged, index, &direct)?;
     let previous_head = index.head_tree_id.clone();
-    let working_id = working.tree_id.clone();
     let next_generation = index.index_generation.checked_add(1).ok_or_else(|| {
         Error::new(
             ErrorCode::ResourceLimit,
@@ -259,8 +259,8 @@ pub(crate) fn apply_commit(
     };
     let commit_id = ids.next("commit")?;
     let tree_id = ids.next("dtree")?;
-    let mut commit = state.commits[&working.commit_id].clone();
-    let key = name_policy::path_key(&working.path);
+    let mut commit = state.commits[&staged.commit_id].clone();
+    let key = name_policy::path_key(&staged.path);
     commit
         .entries
         .retain(|entry| !key.is_empty() && !namespace::is_descendant(entry.lookup_key(), &key));
@@ -308,7 +308,6 @@ pub(crate) fn apply_commit(
         .get_mut(&input.directory_branch_id)
         .expect("invariant: active Git branch has an index");
     index.head_tree_id = Some(tree_id.clone());
-    index.index_tree_id = working_id;
     index.index_generation = next_generation;
     Ok(
         json!({"input":input.body(),"directory_branch_id":input.directory_branch_id,"head_tree_id":tree_id,"commit_id":commit_id,"no_change":false,"directory_branch_ids":[input.directory_branch_id]}),

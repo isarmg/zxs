@@ -308,6 +308,7 @@ impl SetupRecovery {
         }
         let config =
             Config::independent_roots(request.mode, paths).map_err(ApiError::contract_input)?;
+        crate::backend_storage_metadata::disk_directory_names(&config.disks)?;
         let config = ValidatedConfig::try_from(config)
             .and_then(|config| config.with_workspace_limits(self.retained_workspace_limits))
             .map_err(engine_error)?;

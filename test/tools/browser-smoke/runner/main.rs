@@ -50,6 +50,7 @@ mod metadata;
 mod naming;
 mod note_recovery;
 mod page_layout;
+mod phase1_files;
 mod placement_configuration;
 mod server_launcher;
 mod session_delivery;
@@ -307,7 +308,7 @@ fn exercise(
         password,
     )?;
     browser.click(&browser.button("Sign in", "登录")?)?;
-    let disk = browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?;
+    browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?;
     let disks = browser.command(
         "POST",
         "/elements",
@@ -317,7 +318,8 @@ fn exercise(
         return Err("expected exactly three development disk directories".into());
     }
     println!("PASS login and three real disk directories");
-    browser.click(&disk)?;
+    phase1_files::disk_read(browser)?;
+    browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
     browser.css(".zxs-file-table tbody .zxs-file-icon--folder")?;
     file_row_visual::run(browser, &[0], "folder")?;
     open_fixture_directory(browser)?;
@@ -397,6 +399,7 @@ fn exercise(
         }
         },
     )?;
+    phase1_files::tags(browser)?;
     session_logout::run(browser, password)?;
     browser.click(&browser.button("Files", "文件")?)?;
     let stale_history = session_delivery::begin_paused_history(browser)?;

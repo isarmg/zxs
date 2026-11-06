@@ -28,8 +28,30 @@ impl TopologySlot {
     }
 }
 
+/// Parse the complete namespace before publishing a new membership or exposing
+/// an existing one. Web includes backup roots, so every configured disk counts.
 #[cfg(feature = "core")]
-pub(crate) fn disk_directory_name(
+pub(crate) fn disk_directory_names(
+    disks: &[storage_contract::DiskConfig],
+) -> Result<Vec<name_policy::PortablePath>, crate::ApiError> {
+    let mut keys = std::collections::BTreeSet::new();
+    disks
+        .iter()
+        .map(|disk| {
+            let name = disk_directory_name(&disk.root)?;
+            if !keys.insert(name.key().to_owned()) {
+                return Err(crate::ApiError::conflict(
+                    storage_contract::ErrorCode::NameConflict,
+                    "disk directory basenames collide under the portable name policy",
+                ));
+            }
+            Ok(name)
+        })
+        .collect()
+}
+
+#[cfg(feature = "core")]
+fn disk_directory_name(
     root: &std::path::Path,
 ) -> Result<name_policy::PortablePath, crate::ApiError> {
     let name = root
