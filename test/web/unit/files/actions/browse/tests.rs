@@ -325,6 +325,7 @@ fn a_failed_disk_refresh_invalidates_readiness_without_discarding_cached_rows() 
             vec![crate::files::model::Disk {
                 name: "disk-directory".into(),
                 slot_id: "P01".into(),
+                level: std::num::NonZeroU32::new(1).unwrap(),
                 online: true,
                 writable: true,
                 available_bytes: Some(4096),
@@ -373,11 +374,48 @@ fn disk_snapshot(online: bool, available_bytes: u64) -> Vec<Disk> {
     vec![Disk {
         name: "disk-directory".into(),
         slot_id: "B01".into(),
+        level: std::num::NonZeroU32::new(2).unwrap(),
         online,
         writable: false,
         available_bytes: Some(available_bytes),
         observation_failure: None,
     }]
+}
+
+#[test]
+fn invalid_backup_mode_keeps_cached_levels_and_allows_one_explicit_retry() {
+    let mut state = State {
+        authenticated: true,
+        session_epoch: 9,
+        ..Default::default()
+    };
+    let cached = disk_snapshot(false, 1024);
+    state.files.disks = cached.clone();
+    state.files.disks_loaded = true;
+    let (epoch, generation) = begin_disk_load(&mut state).unwrap();
+    let invalid = crate::files::model::parse_disks(json_codec::json!({"disks":[
+        {"name":"backup","slot_id":"B01","level":2,"online":true,"writable":true,
+         "available_bytes":"0","used_bytes":"0","simulation":true,
+         "observation_failure":null}
+    ]}));
+    let error = complete_disk_load(&mut state, epoch, generation, invalid).unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidDiskList);
+    assert!(error.source.is_some());
+    assert_eq!(state.files.disks, cached);
+    assert!(!state.files.disks_loaded && !state.files.loading_disks);
+    assert!(state.session_active());
+    assert!(!state.files.writable);
+
+    let (epoch, generation) = begin_disk_load(&mut state).unwrap();
+    assert!(begin_disk_load(&mut state).is_none());
+    let fresh = disk_snapshot(true, 4096);
+    complete_disk_load(&mut state, epoch, generation, Ok(fresh.clone())).unwrap();
+    assert_eq!(state.files.disks, fresh);
+    assert!(state.files.disks_loaded && !state.files.loading_disks);
+    assert!(
+        !state.files.writable,
+        "disk rows do not grant directory writes"
+    );
 }
 
 #[test]

@@ -164,15 +164,29 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "anchored directory SVG still joins the actual parent and child",
                 include_str!("directory_tree_edges.js"),
             )?;
-            browser.script(r#"
+            let target = browser.script(r#"
                 const p=window.__zxsDirectoryHistory;
                 const node=p.nodes.nodes.find(node=>node.tree_id!==p.nodes.current.committed_tree_id);
                 if(!node)throw new Error('historical snapshot fixture requires a non-current committed node');
                 p.selectedSnapshot=node.tree_id;
-                const button=document.querySelector('[data-directory-snapshot="'+node.tree_id+'"]');
-                if(!button||button.disabled)throw new Error('explicit historical snapshot is unavailable');
-                button.click();return true;
+                const selector='[data-directory-tree-id="'+CSS.escape(node.tree_id)+'"]';
+                const owner=document.querySelector(selector);
+                const detail=owner?.querySelector(':scope > .zxs-node-disclosure');
+                const button=owner?.querySelector('[data-directory-snapshot="'+CSS.escape(node.tree_id)+'"]');
+                if(!detail||!button||button.disabled)throw new Error('explicit historical snapshot is unavailable');
+                return {selector,open:detail.open};
             "#)?;
+            let selector = target["selector"]
+                .as_str()
+                .ok_or("historical snapshot target lacks its real tree selector")?;
+            // The branch locator may replace the window with closed cards.
+            // Open this exact real snapshot through its native summary first.
+            if target["open"] != true {
+                browser.click(&browser.css(&format!(
+                    "{selector} > .zxs-node-disclosure > .zxs-node-card"
+                ))?)?;
+            }
+            browser.click(&browser.css(&format!("{selector} [data-directory-snapshot]"))?)?;
             check(
                 browser,
                 "explicit historical snapshot loads read-only without checkout authority",

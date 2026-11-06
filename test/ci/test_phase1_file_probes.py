@@ -24,6 +24,17 @@ class PhaseOneFileProbes(unittest.TestCase):
         self.assertIn("assert_metadata_only(browser)?;",
                       (PROBE / "runner/phase1_files.rs").read_text())
 
+    def test_disk_retry_uses_the_current_separate_columns_and_actual_response(self):
+        runner = (PROBE / "runner/phase1_files.rs").read_text()
+        self.assertIn("p.cached=p.rows();", runner)
+        self.assertIn("p.reads[1].body.disks", runner)
+        self.assertIn("p.matches(rows,disks)", runner)
+        self.assertNotIn("row.access", runner)
+        view = (ROOT / "src/web/src/files/view.rs").read_text()
+        self.assertIn("data-disk-level=disk.level.to_string()", view)
+        self.assertIn("<td>{level}</td><td>{access}</td><td>{status}</td>", view)
+        self.assertIn("<td title=observation>{available}</td>", view)
+
 
 if __name__ == "__main__":
     unittest.main()

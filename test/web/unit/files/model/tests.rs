@@ -41,6 +41,7 @@ fn navigation_resets_only_location_owned_state() {
         let disks = vec![Disk {
             name: "disk-directory".into(),
             slot_id: "P01".into(),
+            level: std::num::NonZeroU32::new(1).unwrap(),
             online: true,
             writable: true,
             available_bytes: Some(4096),

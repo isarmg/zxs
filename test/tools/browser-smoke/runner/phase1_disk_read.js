@@ -3,9 +3,58 @@
 if (window.__zxsPhase1DiskRead) throw new Error('Disk-read probe already installed');
 const original = window.fetch;
 const held = [];
+function spaceMatches(actual, value) {
+    if (value === null) return ['Unavailable', '不可用'].includes(actual);
+    const bytes = BigInt(value);
+    if (bytes < 1024n) return actual === `${bytes} B`;
+    // Match format::bytes: one u64 -> f64 conversion, exact power-of-two
+    // divisions, then one decimal rounded to nearest with ties to even.
+    // toFixed alone instead rounds exact half cases away from zero.
+    const roundedBytes = Number(bytes), units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
+    let size = roundedBytes, divisor = 1n, index = 0;
+    while (size >= 1024 && index < units.length) {
+        size /= 1024;
+        divisor *= 1024n;
+        index++;
+    }
+    const scaled = BigInt(roundedBytes) * 10n, remainder = scaled % divisor;
+    let tenths = scaled / divisor;
+    if (remainder * 2n > divisor || (remainder * 2n === divisor && tenths % 2n !== 0n)) tenths++;
+    return actual === `${tenths / 10n}.${tenths % 10n} ${units[index - 1]}`;
+}
 const p = window.__zxsPhase1DiskRead = {
     reads: [], statusHeld: false, holdStatus: true, closed: false,
     failure: 'Browser smoke: phase-one disk response delivery interrupted',
+    rows() {
+        return Array.from(document.querySelectorAll('.zxs-disk-table tbody tr'), row => {
+            const button = row.querySelector('.zxs-disk-entry');
+            return {slot: button.dataset.slot, name: button.textContent.trim(),
+                disabled: button.disabled, online: row.dataset.online,
+                level: Number(row.dataset.diskLevel), levelLabel: row.cells[1].textContent.trim(),
+                mode: row.cells[2].textContent.trim(), observation: row.cells[3].textContent.trim(),
+                space: row.cells[4].textContent.trim()};
+        });
+    },
+    matches(rows, disks) {
+        return rows.length === disks.length && rows.every((row, index) => {
+            const disk = disks[index];
+            const level = disk.level === 1 ? ['Level 1 · Primary', '第 1 级 · 主盘']
+                : [`Level ${disk.level} · Backup`, `层级 ${disk.level} · 备份盘`];
+            const mode = disk.writable ? ['Read/write directory', '读写目录'] : ['Read only', '只读'];
+            const issue = disk.observation_failure?.stage;
+            const observed = issue === 'seal'
+                ? ['Unavailable (identity observation failed)', '不可访问（身份观测失败）']
+                : issue === 'capacity'
+                    ? (disk.online ? ['Online (capacity unavailable)', '在线（容量不可用）']
+                        : ['Unavailable (capacity observation failed)', '不可访问（容量观测失败）'])
+                    : (disk.online ? ['Online', '在线'] : ['Offline', '离线']);
+            return row.slot === disk.slot_id && row.name === disk.name && row.disabled === !disk.online
+                && row.online === String(disk.online) && row.level === disk.level
+                && level.includes(row.levelLabel) && mode.includes(row.mode)
+                && observed.includes(row.observation)
+                && spaceMatches(row.space, disk.available_bytes);
+        });
+    },
     release(index, fail = false) {
         const record = p.reads[index];
         if (!record?.release) throw new Error('disk response is not held');

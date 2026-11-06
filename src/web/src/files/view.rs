@@ -10,6 +10,7 @@ use web_interface::components::{EmptyState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
 mod disk_read;
+mod disk_status;
 use disk_read::DiskRead;
 
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
@@ -92,6 +93,7 @@ fn disk_roots(state: RwSignal<State>) -> impl IntoView {
     let read = Memo::new(move |_| state.with(|s| disk_read_projection(&s.files)));
     view! {
         <p class="zxs-row">{t("选择一个硬盘目录查看文件。","Choose a disk directory to browse its files.")}</p>
+        <p class="zxs-row">{t("备份盘只在 Web 中只读浏览，不出现在 SMB 的磁盘列表。目录模式不代表当前写入授权，实际操作仍由服务端校验。","Backup disks are browsed read-only in Web and do not appear in the SMB disk list. Directory mode is not current write authority; the server checks each operation.")}</p>
         {move || read.get().message().map(|message| view!{
             <div class="zxs-stack" data-disk-list-read=move ||read.get().marker()>
                 <p class="zxs-row" role="status">{message}</p>
@@ -109,22 +111,46 @@ fn disk_roots(state: RwSignal<State>) -> impl IntoView {
             };
             view!{<div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush" aria-label=t("硬盘目录","Disk directories")><div class="zxs-table-scroll" {web_interface::ev::on(web_interface::ev::Custom::new("scroll"), sync_row_viewport)}>
                 <table class="zxs-table zxs-file-table zxs-disk-table">
-                    <thead><tr><th scope="col"><span class="zxs-file-row-decoration" aria-hidden="true"></span>{t("名称","Name")}</th><th scope="col">{t("访问权限","Access")}</th><th scope="col">{t("可用空间","Available space")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
-                    <tbody>{disks.into_iter().map(move |disk|{
-                        let name=disk.name;let id=disk.slot_id;let data_slot=id.clone();let row_slot=id.clone();let name_slot=id.clone();let action_slot=id.clone();
-                        let online=disk.online;let writable=disk.writable;
-                        let available=disk_available_space(disk.available_bytes);
-                        let observation=disk_observation_message(disk.observation_failure);
-                        view!{<tr data-online=online.to_string() on:click=move |_|{if online{actions::open_disk(state,row_slot.clone());}}>
-                            <td><span class="zxs-file-row-decoration" aria-hidden="true"><span class="zxs-file-row-surface" aria-hidden="true"></span></span><button class="zxs-button zxs-file-name zxs-disk-entry" data-slot=data_slot disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,name_slot.clone());}><FileIcon name="folder"/><span>{name}</span></button></td>
-                            <td>{if online{if writable{t("可读写","Read and write")}else{t("只读","Read only")}}else{t("离线","Offline")}}</td>
-                            <td title=observation>{available}</td>
-                            <td><div class="zxs-entry-actions zxs-flow"><button class="zxs-button" disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,action_slot.clone());}>{t("打开","Open")}</button></div></td>
-                        </tr>}
-                    }).collect_view()}</tbody>
+                    <thead><tr><th scope="col"><span class="zxs-file-row-decoration" aria-hidden="true"></span>{t("名称","Name")}</th><th scope="col">{t("层级","Level")}</th><th scope="col">{t("目录模式","Directory mode")}</th><th scope="col">{t("观测状态","Observed status")}</th><th scope="col">{t("可用空间","Available space")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
+                    <tbody>{disks.into_iter().map(move |disk|disk_row(state,disk)).collect_view()}</tbody>
                 </table>
             </div></section></div>}.into_any()
         }}
+    }
+}
+
+fn disk_row(state: RwSignal<State>, disk: super::model::Disk) -> impl IntoView {
+    let level = disk_status::level(disk.level);
+    let access = disk_status::access(disk.writable);
+    let status = disk_status::observation(&disk);
+    let available = disk_available_space(disk.available_bytes);
+    let observation = disk_observation_message(disk.observation_failure);
+    let row_slot = disk.slot_id.clone();
+    let name_slot = disk.slot_id.clone();
+    let action_slot = disk.slot_id.clone();
+    let online = disk.online;
+    view! {
+        <tr data-online=online.to_string() data-disk-level=disk.level.to_string()
+            on:click=move |_| if online { actions::open_disk(state, row_slot.clone()); }>
+            <td>
+                <span class="zxs-file-row-decoration" aria-hidden="true"><span class="zxs-file-row-surface" aria-hidden="true"></span></span>
+                <button class="zxs-button zxs-file-name zxs-disk-entry" data-slot=disk.slot_id disabled=!online
+                    on:click=move |event| {
+                        event.stop_propagation();
+                        actions::open_disk(state, name_slot.clone());
+                    }>
+                    <FileIcon name="folder"/><span>{disk.name}</span>
+                </button>
+            </td>
+            <td>{level}</td><td>{access}</td><td>{status}</td>
+            <td title=observation>{available}</td>
+            <td><div class="zxs-entry-actions zxs-flow">
+                <button class="zxs-button" disabled=!online on:click=move |event| {
+                    event.stop_propagation();
+                    actions::open_disk(state, action_slot.clone());
+                }>{t("打开","Open")}</button>
+            </div></td>
+        </tr>
     }
 }
 fn directory(state: RwSignal<State>) -> impl IntoView {

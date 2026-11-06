@@ -2,73 +2,16 @@ use super::{
     history::{FileBranch, FileHistory},
     page::{DirectoryBranch, Entry},
 };
-use data_serialization::{Deserialize, Deserializer};
 use json_codec::Value;
 use std::{collections::BTreeSet, sync::Arc};
 use web_interface::i18n::t;
 
-/// The file-manager disk contract is distinct from monitor/topology records.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Disk {
-    pub name: String,
-    pub slot_id: String,
-    pub online: bool,
-    pub writable: bool,
-    pub available_bytes: Option<u64>,
-    pub observation_failure: Option<storage_contract::DiskObservationIssue>,
-}
-
-#[derive(Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct DiskList {
-    disks: Vec<DiskRecord>,
-}
-#[derive(Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct DiskRecord {
-    name: String,
-    slot_id: String,
-    #[serialization(rename = "level")]
-    _level: u32,
-    online: bool,
-    writable: bool,
-    #[serialization(with = "storage_contract::optional_u64_string")]
-    available_bytes: Option<u64>,
-    #[serialization(with = "storage_contract::u64_string", rename = "used_bytes")]
-    _used_bytes: u64,
-    #[serialization(rename = "simulation")]
-    _simulation: bool,
-    #[serialization(deserialize_with = "nullable_issue")]
-    observation_failure: Option<storage_contract::DiskObservationIssue>,
-}
-fn nullable_issue<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<storage_contract::DiskObservationIssue>, D::Error> {
-    Option::deserialize(deserializer)
-}
+#[path = "model/disks.rs"]
+mod disks;
+pub(crate) use disks::Disk;
 
 pub(crate) fn parse_disks(value: Value) -> Result<Vec<Disk>, crate::api::Error> {
-    let parsed = DiskList::deserialize(value).and_then(|list| {
-        list.disks
-            .into_iter()
-            .map(|disk| {
-                if disk.slot_id.is_empty() {
-                    return Err(data_serialization::de::Error::custom("empty disk slot id"));
-                }
-                name_policy::validate_name(&disk.name)
-                    .map_err(data_serialization::de::Error::custom)?;
-                Ok(Disk {
-                    name: disk.name,
-                    slot_id: disk.slot_id,
-                    online: disk.online,
-                    writable: disk.writable,
-                    available_bytes: disk.available_bytes,
-                    observation_failure: disk.observation_failure,
-                })
-            })
-            .collect()
-    });
-    parsed.map_err(|source| crate::api::Error {
+    disks::parse(value).map_err(|source| crate::api::Error {
         status: 200,
         code: storage_contract::ErrorCode::InvalidDiskList,
         message: "The disk listing did not match the server contract.".into(),

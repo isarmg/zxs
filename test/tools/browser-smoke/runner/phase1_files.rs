@@ -32,19 +32,15 @@ pub(super) fn disk_read(browser: &Browser) -> Result<()> {
     browser.script(include_str!("phase1_disk_read.js"))?;
     with_cleanup(
         || {
-            browser.script(r#"
+            browser.script(
+                r#"
                 const p=window.__zxsPhase1DiskRead;
-                p.rows=()=>Array.from(document.querySelectorAll('.zxs-disk-table tbody tr'),row=>{
-                    const button=row.querySelector('.zxs-disk-entry');
-                    return {slot:button.dataset.slot,name:button.textContent.trim(),
-                        disabled:button.disabled,online:row.dataset.online,
-                        access:row.cells[1].textContent.trim(),space:row.cells[2].textContent.trim()};
-                });
                 p.cached=p.rows();
                 if(p.cached.length!==3||document.querySelector('[data-disk-list-read]'))
                     throw new Error('disk probe needs the real current three-disk list');
                 return true;
-            "#)?;
+            "#,
+            )?;
             check(
                 browser,
                 "one real health response held before manual disk retry",
@@ -111,12 +107,8 @@ pub(super) fn disk_read(browser: &Browser) -> Result<()> {
                 return p.reads.length===2&&p.reads[1].delivered
                     &&!document.querySelector('[data-disk-list-read],[data-disk-list-retry]')
                     &&!document.querySelector('.zxs-header-refresh').disabled
-                    &&rows.length===disks.length&&rows.every((row,index)=>{
-                        const disk=disks[index];
-                        return row.slot===disk.slot_id&&row.name===disk.name&&row.disabled===!disk.online
-                            &&row.online===String(disk.online)
-                            &&(disk.online?(disk.writable?['Read and write','可读写']:['Read only','只读']):['Offline','离线']).includes(row.access);
-                    })&&document.querySelector('.zxs-error-center')?.textContent.includes(p.failure);
+                    &&p.matches(rows,disks)
+                    &&document.querySelector('.zxs-error-center')?.textContent.includes(p.failure);
             "#,
             )?;
             evidence(

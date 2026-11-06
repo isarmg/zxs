@@ -75,10 +75,54 @@ fn disk_roots_preserve_order_access_capacity_and_ignore_directory_state() {
     assert_eq!(disk_roots_projection(&model), DiskRoots::Disks(disks));
 }
 
+#[test]
+fn disk_roots_keep_all_levels_and_observation_failures_after_refresh_failure() {
+    let disks = super::super::model::parse_disks(json_codec::json!({"disks":[
+        {"name":"third","slot_id":"C01","level":3,"online":false,"writable":false,
+         "available_bytes":null,"used_bytes":"7","simulation":true,
+         "observation_failure":{"stage":"seal","code":"IO_ERROR"}},
+        {"name":"primary","slot_id":"P01","level":1,"online":true,"writable":true,
+         "available_bytes":"0","used_bytes":"7","simulation":true,"observation_failure":null},
+        {"name":"second","slot_id":"B01","level":2,"online":true,"writable":false,
+         "available_bytes":null,"used_bytes":"7","simulation":true,
+         "observation_failure":{"stage":"capacity","code":"IO_ERROR"}}
+    ]}))
+    .unwrap();
+    for loading_disks in [false, true] {
+        let model = Model {
+            disks: disks.clone(),
+            disks_loaded: false,
+            loading_disks,
+            ..Model::default()
+        };
+        assert_eq!(
+            disk_roots_projection(&model),
+            DiskRoots::Disks(disks.clone())
+        );
+        let read = disk_read_projection(&model);
+        assert_eq!(
+            read,
+            if loading_disks {
+                DiskRead::RefreshingCached
+            } else {
+                DiskRead::UnconfirmedCached
+            }
+        );
+        assert!(read.message().is_some());
+        assert_eq!(read.can_retry(), !loading_disks);
+        assert!(
+            !model.writable,
+            "displayed disk mode must not grant directory writes"
+        );
+        assert!(model.slot.is_empty() && model.directory.is_empty());
+    }
+}
+
 fn disk(slot: &str, online: bool, writable: bool, available_bytes: u64) -> Disk {
     Disk {
         name: "disk-directory".into(),
         slot_id: slot.into(),
+        level: std::num::NonZeroU32::new(1).unwrap(),
         online,
         writable,
         available_bytes: Some(available_bytes),

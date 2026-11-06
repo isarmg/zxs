@@ -13,7 +13,7 @@ async function until(condition) {
     for (let i = 0; i < 100; i++) { if (condition()) return; await tick(); }
     assert.fail('observer did not reach its expected gate');
 }
-function fixture(kind, responder = () => ({fixture: 'actual response'})) {
+function fixture(kind, responder = () => ({fixture: 'actual response'}), document) {
     const calls = [], responses = [];
     const original = async (...args) => {
         calls.push(args);
@@ -25,7 +25,7 @@ function fixture(kind, responder = () => ({fixture: 'actual response'})) {
         return response;
     };
     const window = {fetch: original};
-    const context = {window, Request, URL, location: {origin, href: `${origin}/`}};
+    const context = {window, Request, URL, document, location: {origin, href: `${origin}/`}};
     const install = () => runInNewContext(`(function(){${sources[kind]}})()`, context);
     assert.equal(install(), true);
     return {window, calls, responses, original, install,
@@ -100,6 +100,87 @@ test('cleanup before or after a disk response arrives cannot strand the original
     await until(() => g.state.reads[0]?.release);
     g.state.restore();
     assert.equal(await held, g.responses[0]);
+});
+
+const diskRecord = (level, online, issue = null) => ({name: `disk-${level}`, slot_id: `slot-${level}`,
+    level, online, writable: level === 1, available_bytes: issue ? null : '0', observation_failure: issue});
+const diskRow = (disk, levelLabel, mode, observation, space = '0 B') => ({slot: disk.slot_id,
+    name: disk.name, disabled: !disk.online, online: String(disk.online), level: disk.level,
+    levelLabel, mode, observation, space});
+
+test('disk table observer reads all six current columns instead of the old access column', () => {
+    const disk = diskRecord(3, false);
+    const row = diskRow(disk, 'Level 3 · Backup', 'Read only', 'Offline');
+    const document = {querySelectorAll(selector) {
+        assert.equal(selector, '.zxs-disk-table tbody tr');
+        return [{dataset: {online: 'false', diskLevel: '3'}, cells:
+            ['', row.levelLabel, row.mode, row.observation, row.space, 'Open'].map(textContent => ({textContent})),
+            querySelector(selector) {
+                assert.equal(selector, '.zxs-disk-entry');
+                return {dataset: {slot: disk.slot_id}, textContent: disk.name, disabled: true};
+            }}];
+    }};
+    const f = fixture('disk_read', undefined, document);
+    assert.deepEqual(copy(f.state.rows()), [row]);
+    assert.equal(f.state.matches(f.state.rows(), [disk]), true);
+    const old = {...row, access: row.levelLabel, space: row.mode};
+    delete old.mode; delete old.observation; delete old.levelLabel;
+    assert.equal(f.state.matches([old], [disk]), false);
+    f.state.restore();
+});
+
+test('disk proof preserves real order, higher levels, zero and unavailable capacity', () => {
+    const f = fixture('disk_read');
+    const disks = [diskRecord(3, false, {stage: 'seal'}), diskRecord(1, true),
+        diskRecord(2, true, {stage: 'capacity'}), diskRecord(7, false, {stage: 'capacity'})];
+    const rows = [diskRow(disks[0], 'Level 3 · Backup', 'Read only', 'Unavailable (identity observation failed)', 'Unavailable'),
+        diskRow(disks[1], '第 1 级 · 主盘', '读写目录', '在线'),
+        diskRow(disks[2], '层级 2 · 备份盘', '只读', '在线（容量不可用）', '不可用'),
+        diskRow(disks[3], 'Level 7 · Backup', 'Read only', 'Unavailable (capacity observation failed)', 'Unavailable')];
+    assert.equal(f.state.matches(rows, disks), true);
+    assert.equal(f.state.matches([...rows].reverse(), disks), false);
+    assert.equal(f.state.matches(rows.slice(1), disks), false);
+    const wrong = copy(rows); wrong[0].space = '0 B';
+    assert.equal(f.state.matches(wrong, disks), false);
+    const zeroHidden = copy(rows); zeroHidden[1].space = '不可用';
+    assert.equal(f.state.matches(zeroHidden, disks), false);
+    f.state.restore();
+});
+
+test('disk proof rejects collapsed modes, false online state, and missing real level', () => {
+    const f = fixture('disk_read'), disk = diskRecord(9, false);
+    const row = diskRow(disk, 'Level 9 · Backup', 'Read only', 'Offline');
+    for (const mutation of [{level: 1}, {levelLabel: 'Level 1 · Primary'}, {mode: 'Offline'},
+        {mode: 'Read/write directory'}, {observation: 'Online'}, {disabled: false},
+        {online: 'true'}, {name: 'another'}, {slot: 'another'}, {level: undefined}]) {
+        assert.equal(f.state.matches([{...row, ...mutation}], [disk]), false);
+    }
+    const before = copy(row);
+    assert.equal(f.state.matches([row], [disk]), true);
+    assert.deepEqual(row, before);
+    assert.equal(f.calls.length, 0, 'observing rows cannot send any request');
+    f.state.restore();
+});
+
+test('disk proof checks nonzero byte values with native binary units and ties-to-even rounding', () => {
+    const f = fixture('disk_read'), disk = diskRecord(2, true);
+    const row = diskRow(disk, 'Level 2 · Backup', 'Read only', 'Online');
+    for (const [bytes, display] of [
+        ['42', '42 B'], ['1023', '1023 B'], ['1024', '1.0 KiB'],
+        ['1280', '1.2 KiB'], ['1792', '1.8 KiB'], ['4096', '4.0 KiB'],
+        ['1048576', '1.0 MiB'], ['9007199254740993', '8.0 PiB'],
+        ['18446744073709551615', '16.0 EiB'],
+    ]) {
+        disk.available_bytes = bytes;
+        assert.equal(f.state.matches([{...row, space: display}], [disk]), true, bytes);
+    }
+    disk.available_bytes = '4096';
+    for (const space of ['Unavailable', '不可用', '0 B', '1.0 KiB', '4096 B', '']) {
+        assert.equal(f.state.matches([{...row, space}], [disk]), false, space);
+    }
+    disk.available_bytes = '1280';
+    assert.equal(f.state.matches([{...row, space: '1.3 KiB'}], [disk]), false);
+    f.state.restore();
 });
 
 const id = (prefix, number) => `${prefix}_${number.toString(16).padStart(32, '0')}`;

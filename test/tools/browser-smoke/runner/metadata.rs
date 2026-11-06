@@ -403,7 +403,9 @@ pub(super) fn metadata_edit(browser: &Browser) -> Result<()> {
             const history=await response.json();
             const base=history.nodes.find(node=>node.version_id&&node.node_id);
             if(!base)throw new Error('real node required for detail refresh fixture');
-            const tips=Array.from({length:12},(_,index)=>({...base,
+            // Keep the synthetic row wider than the desktop even when all
+            // native disclosures are closed and their summaries are 10ch.
+            const tips=Array.from({length:24},(_,index)=>({...base,
                 node_id:'fmeta_'+(0x1000+index).toString(16).padStart(32,'0'),
                 sequence:String(1000000-index),current:false,kind:'tags',note:'',
                 parents:{state:'complete'}}));
