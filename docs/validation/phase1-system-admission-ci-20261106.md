@@ -39,4 +39,19 @@ sudo 清空环境后先进入 root 侧的 coreutils `timeout --signal=TERM --kil
 
 没有在本机重编 Engine、运行 sudo 或 mount，也没有触发托管 CI。完整 static 未在该稀疏工作树执行，必须由组合候选补齐；上述回归不能称作两项真实内核测试通过。
 
-后续准确组合候选必须在托管 CI 读回新的普通对抗测试、两项挂载父子实际结果、70 项唯一成功清单和当前产物身份。此接线只让必要回归不被 workspace 长测阻挡，本身不修复 exit/readmission 的重复验证成本，不代替完整 workspace、其余 I/O 门禁、Chrome、Samba 或物理设备断电验收。
+上述 70 项基线的记录不包含下节新增 foreign 测试。此接线只让必要回归不被 workspace 长测阻挡，本身不修复 exit/readmission 的重复验证成本，不代替完整 workspace、其余 I/O 门禁、Chrome、Samba 或物理设备断电验收。
+
+## foreign HTTP 准入接线扩展
+
+当前扩展保留上述 70 项准确名字和全部断言，在既有 Server `cargo test --no-run` 中增加 `--test foreign_admission`，不新增 Cargo 调用、库特性图、job 或预算。必须组合独立测试交付 `ca4cfac385beb14dfa702d5f2f5cb08ed3425207` 的四条路径；CI 接线提交本身不含这些测试源码。Cargo 前核对 Server 清单中的准确目标、来源路径和 `required-features = ["core"]`，并记录测试主体与 fixture 的摘要，缺任一源码立即失败。
+
+当前 Cargo JSON 必须产生唯一 `foreign_admission` test artifact，manifest 为 `src/server/Cargo.toml`，source 为 `test/server/integration/foreign_admission.rs`，具备 `default/core` 特性并通过既有可执行路径和 SHA-256 检查。全目标清单必须准确等于以下四项，不接受额外、缺失、重复或相似名字：
+
+- `foreign_preview_requires_cookie_csrf_and_same_origin`
+- `foreign_preview_rechecks_session_after_streamed_request_body`
+- `foreign_preview_rejects_stale_sources_and_unreviewed_write_fields`
+- `saved_and_revalidated_foreign_review_never_grants_import_execution`
+
+仍在任何测试运行前完成全部枚举，共 12 次 list；foreign 目标串行完整运行，要求唯一 `4 passed / 0 failed / 0 ignored / 0 measured / 0 filtered` 摘要。总计 74 项唯一用例、11 个当前产物、3 次 Cargo 调用和 33 次准确过滤执行。原挂载父子 parser、非 ignored 提案测试、workspace 命令、私有持久 TMPDIR 及全部截止预算不变。若最后提案测试失败，只保留此前 73 项，不写成功总数。
+
+本次仅执行相关 Python 编排／拒绝回归、格式及准确源码组合检查；没有 Rust 编译、运行、完整 static 或正式 74 项 CI 结果。旧 foreign 的四项运行和 focused Clippy 只对应 `b0eb510ed66cd652b2722ef9806f874ea803f4a5` 的默认 runtime，不是当前组合候选证明。准确完整组合仍须通过官方 `tools/rust-sources/manage.py refresh` 和 `verify --metadata`，再取得新的正式 Cargo／CI 证据；不得手改来源清单或将稀疏树检查称为全仓验证。

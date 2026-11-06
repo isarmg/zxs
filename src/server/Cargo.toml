@@ -82,3 +82,8 @@ required-features = ["core"]
 name = "phase1_smb_rpc"
 path = "../../test/server/integration/phase1_smb_rpc.rs"
 required-features = ["core"]
+
+[[test]]
+name = "foreign_admission"
+path = "../../test/server/integration/foreign_admission.rs"
+required-features = ["core"]

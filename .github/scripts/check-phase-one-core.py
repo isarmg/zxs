@@ -25,6 +25,9 @@ MOUNT_TESTS = (
 )
 FILE_TARGET = 'phase1_save_tags'
 SMB_TARGET = 'phase1_smb_rpc'
+FOREIGN_TARGET = 'foreign_admission'
+FOREIGN_SOURCE = 'test/server/integration/foreign_admission.rs'
+FOREIGN_FIXTURE = 'test/server/integration/foreign_admission/fixture.rs'
 DIRECTORY_TARGET = 'directory_git_index'
 DIRECTORY_SAFETY_TARGET = 'directory_git_safety'
 STAGED_SOURCE_TARGET = 'directory_git_staged_source'
@@ -119,6 +122,12 @@ COLD_TAG_TESTS = (
     'noop_tag_receipts_remain_permanent_after_another_save_and_two_cold_opens',
 )
 CONTRACT_TESTS = ('tests::file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines',)
+FOREIGN_TESTS = (
+    'foreign_preview_requires_cookie_csrf_and_same_origin',
+    'foreign_preview_rechecks_session_after_streamed_request_body',
+    'foreign_preview_rejects_stale_sources_and_unreviewed_write_fields',
+    'saved_and_revalidated_foreign_review_never_grants_import_execution',
+)
 
 # Manifest and source identity prevent selecting a namesake artifact from another package.
 TARGETS = {
@@ -126,6 +135,7 @@ TARGETS = {
     ENGINE: ('src/engine/Cargo.toml', 'src/engine/src/lib.rs', ['lib'], {'fault-injection'}),
     FILE_TARGET: ('src/server/Cargo.toml', 'test/server/integration/phase1_save_tags.rs', ['test'], {'default', 'core'}),
     SMB_TARGET: ('src/server/Cargo.toml', 'test/server/integration/phase1_smb_rpc.rs', ['test'], {'default', 'core'}),
+    FOREIGN_TARGET: ('src/server/Cargo.toml', FOREIGN_SOURCE, ['test'], {'default', 'core'}),
     DIRECTORY_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/directory_git_index.rs', ['test'], set()),
     DIRECTORY_SAFETY_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/directory_git_safety.rs', ['test'], set()),
     STAGED_SOURCE_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/directory_git_staged_source.rs', ['test'], set()),
@@ -141,6 +151,17 @@ def digest(path):
         for block in iter(lambda: source.read(1024 * 1024), b''):
             result.update(block)
     return result.hexdigest()
+
+
+def foreign_source_identity(root):
+    """Reject an uncombined test delivery before starting any Cargo command."""
+    manifest = root / TARGETS[FOREIGN_TARGET][0]
+    targets = [target for target in tomllib.loads(manifest.read_text()).get('test', [])
+               if target.get('name') == FOREIGN_TARGET]
+    if (len(targets) != 1 or targets[0].get('required-features') != ['core']
+            or (manifest.parent / targets[0].get('path', '')).resolve() != root / FOREIGN_SOURCE):
+        raise ValueError('foreign_admission requires its exact core test target and source')
+    return {source: digest(root / source) for source in (FOREIGN_SOURCE, FOREIGN_FIXTURE)}
 
 
 def test_artifacts(output, root, target_dir, expected):
@@ -232,7 +253,8 @@ def build_commands(target_dir):
               '--target-dir', str(target_dir)]
     return (
         ('build-server', common + ['-p', 'storage-server', '--features', 'core', '--lib',
-                                  '--test', FILE_TARGET, '--test', SMB_TARGET], (SERVER, FILE_TARGET, SMB_TARGET)),
+                                  '--test', FILE_TARGET, '--test', SMB_TARGET, '--test', FOREIGN_TARGET],
+         (SERVER, FILE_TARGET, SMB_TARGET, FOREIGN_TARGET)),
         ('build-engine-integrations', common + ['-p', 'storage-engine', '--lib', '--test', DIRECTORY_TARGET,
                                                '--test', DIRECTORY_SAFETY_TARGET, '--test', STAGED_SOURCE_TARGET,
                                                '--test', TAG_TARGET, '--test', COLD_TAG_TARGET],
@@ -303,6 +325,7 @@ class Gate:
             # This gate extension must be combined with the proposal-proof reuse
             # source. An older tree is missing a required test, never a skip.
             self.summary['readmission_source_sha256'] = digest(self.root / READMISSION_SOURCE)
+            self.summary['foreign_source_sha256'] = foreign_source_identity(self.root)
             self.summary['head'] = self.run('source-head', ['git', 'rev-parse', 'HEAD'], 30).strip()
             artifacts = {}
             for label, command, expected in build_commands(self.target):
@@ -315,7 +338,7 @@ class Gate:
             # Enumerate all required targets before executing any test. No glob,
             # old receipt or successful zero-test run can satisfy this inventory.
             suites = ((SERVER, SERVER_TESTS, False), (FILE_TARGET, FILE_TESTS, True),
-                      (SMB_TARGET, SMB_TESTS, True),
+                      (SMB_TARGET, SMB_TESTS, True), (FOREIGN_TARGET, FOREIGN_TESTS, True),
                       (DIRECTORY_TARGET, DIRECTORY_TESTS, True),
                       (DIRECTORY_SAFETY_TARGET, DIRECTORY_SAFETY_TESTS, True),
                       (STAGED_SOURCE_TARGET, STAGED_SOURCE_TESTS, True), (TAG_TARGET, TAG_TESTS, True),

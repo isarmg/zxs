@@ -57,7 +57,8 @@ class ArtifactTests(unittest.TestCase):
 
     def test_core_and_default_features_are_required_on_current_server_artifacts(self):
         for index, record in enumerate(self.records):
-            if record['target']['name'] not in ('storage_server', 'phase1_save_tags', 'phase1_smb_rpc'):
+            if record['target']['name'] not in ('storage_server', 'phase1_save_tags', 'phase1_smb_rpc',
+                                               'foreign_admission'):
                 continue
             for features in ([], ['core'], ['default'], 'core', [None]):
                 records = copy.deepcopy(self.records)
@@ -71,6 +72,25 @@ class ArtifactTests(unittest.TestCase):
             records = copy.deepcopy(self.records)
             records[index]['features'] = features
             with self.subTest(features=features), self.assertRaises(ValueError):
+                self.select([*records, self.finished])
+
+    def test_foreign_artifact_cannot_be_missing_duplicate_stale_or_from_another_target(self):
+        index = next(i for i, record in enumerate(self.records)
+                     if record['target']['name'] == 'foreign_admission')
+        missing = self.records[:index] + self.records[index + 1:]
+        for records in (missing, [*self.records, self.records[index]]):
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                self.select([*records, self.finished])
+        for field, value in (('manifest_path', '/another/Cargo.toml'),
+                             ('src_path', str(self.root / 'test/server/integration/phase1_save_tags.rs')),
+                             ('kind', ['lib']), ('executable', str(self.root / 'stale-executable'))):
+            records = copy.deepcopy(self.records)
+            record = records[index]
+            if field in ('src_path', 'kind'):
+                record['target'][field] = value
+            else:
+                record[field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
                 self.select([*records, self.finished])
 
     def test_build_completion_requires_boolean_true_not_numeric_or_string_success(self):
@@ -119,7 +139,7 @@ class ArtifactTests(unittest.TestCase):
 
 
 class InventoryTests(unittest.TestCase):
-    def test_reviewed_inventory_preserves_69_cases_and_adds_one_readmission_case(self):
+    def test_reviewed_inventory_preserves_70_cases_and_adds_four_foreign_cases(self):
         self.assertEqual(len(set(GATE['SERVER_TESTS'])), 29)
         self.assertEqual(len(set(GATE['FILE_TESTS'])), 12)
         self.assertEqual(len(set(GATE['DIRECTORY_TESTS'])), 10)
@@ -134,7 +154,17 @@ class InventoryTests(unittest.TestCase):
                          'engine::membership_transition::readmission::core::tests::'
                          'verified_readmission_proposal_preserves_all_decisions_and_rejects_tampering')
         self.assertNotIn(GATE['READMISSION_TEST'], GATE['MOUNT_TESTS'])
-        self.assertEqual(len(GATE['TARGETS']), 10)
+        self.assertEqual(GATE['FOREIGN_TESTS'], (
+            'foreign_preview_requires_cookie_csrf_and_same_origin',
+            'foreign_preview_rechecks_session_after_streamed_request_body',
+            'foreign_preview_rejects_stale_sources_and_unreviewed_write_fields',
+            'saved_and_revalidated_foreign_review_never_grants_import_execution',
+        ))
+        self.assertEqual(GATE['TARGETS']['foreign_admission'], (
+            'src/server/Cargo.toml', 'test/server/integration/foreign_admission.rs',
+            ['test'], {'default', 'core'},
+        ))
+        self.assertEqual(len(GATE['TARGETS']), 11)
         self.assertEqual(sum('::tcp::' in name for name in GATE['SERVER_TESTS']), 2)
         self.assertEqual(sum('phase1_new_file_tests::' in name for name in GATE['SERVER_TESTS']), 3)
         self.assertEqual(sum('phase_one_write_admission::' in name for name in GATE['SERVER_TESTS']), 9)
@@ -175,7 +205,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIn('--lib', server[1])
         self.assertEqual(server[1][server[1].index('--features') + 1], 'core')
         self.assertIn('--lib', directory[1])  # Compile once; run only three exact Engine names.
-        self.assertEqual(server[2], ('storage_server', 'phase1_save_tags', 'phase1_smb_rpc'))
+        self.assertEqual(server[2], ('storage_server', 'phase1_save_tags', 'phase1_smb_rpc',
+                                     'foreign_admission'))
         self.assertEqual(directory[2], ('storage_engine', 'directory_git_index', 'directory_git_safety',
                                        'directory_git_staged_source', 'phase1_tag_regressions',
                                        'phase1_tag_cold_replay'))
@@ -263,6 +294,12 @@ else:
     passed = len([name for name in chosen if name in names])
     ignored = passed if config.get('ignored') == TARGET else 0
     passed -= ignored
+    if TARGET == 'foreign_admission':
+        if config.get('foreign_exit'):
+            sys.exit(config['foreign_exit'])
+        if 'foreign_output' in config:
+            print(config['foreign_output'])
+            sys.exit(0)
     if TARGET == 'storage_engine' and chosen[0] == config['readmission_test']:
         if config.get('readmission_exit'):
             sys.exit(config['readmission_exit'])
@@ -327,6 +364,15 @@ class OrchestrationTests(unittest.TestCase):
         source = self.root / GATE['READMISSION_SOURCE']
         source.parent.mkdir(parents=True)
         source.write_text('fixture readmission source\n')
+        manifest = self.root / 'src/server/Cargo.toml'
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('[[test]]\nname="foreign_admission"\n'
+                            'path="../../test/server/integration/foreign_admission.rs"\n'
+                            'required-features=["core"]\n')
+        for name in (GATE['FOREIGN_SOURCE'], GATE['FOREIGN_FIXTURE']):
+            source = self.root / name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text('fixture foreign source\n')
         tools = self.root / 'tools'
         tools.mkdir()
         for name, source in [('cargo', FAKE_CARGO), ('git', "print('f'*40)\n")]:
@@ -342,6 +388,7 @@ class OrchestrationTests(unittest.TestCase):
             'names': {'storage_server': list(GATE['SERVER_TESTS']) + ['unrelated::test'],
                       'storage_engine': [*GATE['MOUNT_TESTS'], GATE['READMISSION_TEST'], 'unrelated::test'],
                       'phase1_save_tags': GATE['FILE_TESTS'], 'directory_git_index': GATE['DIRECTORY_TESTS'],
+                      'foreign_admission': GATE['FOREIGN_TESTS'],
                       'directory_git_safety': GATE['DIRECTORY_SAFETY_TESTS'],
                       'directory_git_staged_source': GATE['STAGED_SOURCE_TESTS'],
                       'phase1_smb_rpc': GATE['SMB_TESTS'], 'phase1_tag_cold_replay': GATE['COLD_TAG_TESTS'],
@@ -366,20 +413,29 @@ class OrchestrationTests(unittest.TestCase):
     def summary(self):
         return json.loads((self.root / 'target/phase-one-core/summary.json').read_text())
 
-    def test_pipeline_builds_once_and_runs_70_unique_cases_without_whole_engine_suite(self):
+    def test_pipeline_builds_once_and_runs_74_unique_cases_without_whole_engine_suite(self):
         gate = self.run_gate()
         self.assertEqual(gate.summary['status'], 'passed')
-        self.assertEqual(gate.summary['passed_count'], 70)
-        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 70)
+        self.assertEqual(gate.summary['passed_count'], 74)
+        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 74)
+        self.assertEqual(len(gate.summary['artifacts']), 11)
         calls = self.calls()
         self.assertEqual([x['tool'] for x in calls[:3]], ['cargo', 'cargo', 'cargo'])
         self.assertTrue(all(x['cwd'] == str(self.root) for x in calls))
         first_run = next(i for i, x in enumerate(calls) if '--nocapture' in x['args'])
-        self.assertEqual(sum('--list' in x['args'] for x in calls[:first_run]), 11)
+        self.assertEqual(sum('--list' in x['args'] for x in calls[:first_run]), 12)
         self.assertEqual(sum('--exact' in x['args'] for x in calls), 33)
         self.assertEqual(sum(x['tool'] == 'cargo' for x in calls), 3)
         self.assertEqual(gate.summary['mount_source_sha256'], GATE['digest'](self.root / GATE['MOUNT_SOURCE']))
         self.assertEqual(gate.summary['readmission_source_sha256'], GATE['digest'](self.root / GATE['READMISSION_SOURCE']))
+        self.assertEqual(gate.summary['foreign_source_sha256'], {
+            name: GATE['digest'](self.root / name)
+            for name in (GATE['FOREIGN_SOURCE'], GATE['FOREIGN_FIXTURE'])})
+        foreign_calls = [x for x in calls if x['tool'] == 'foreign_admission']
+        self.assertEqual([call['args'] for call in foreign_calls], [
+            ['--list', '--format', 'terse'], ['--nocapture', '--test-threads=1']])
+        self.assertEqual(gate.summary['artifacts']['foreign_admission']['listed_tests'],
+                         list(GATE['FOREIGN_TESTS']))
         mount_calls = [x for x in calls if x['tool'] == 'storage_engine' and '--ignored' in x['args'] and '--exact' in x['args']]
         self.assertEqual(len(mount_calls), 2)
         for call, name in zip(mount_calls, GATE['MOUNT_TESTS']):
@@ -399,6 +455,67 @@ class OrchestrationTests(unittest.TestCase):
             self.run_gate()
         self.assertFalse(self.calls())
         self.assertEqual(self.summary()['status'], 'failed')
+
+    def test_missing_foreign_source_or_fixture_fails_before_cargo(self):
+        for name in (GATE['FOREIGN_SOURCE'], GATE['FOREIGN_FIXTURE']):
+            source = self.root / name
+            contents = source.read_bytes()
+            source.unlink()
+            with self.subTest(source=name), self.assertRaises(FileNotFoundError):
+                self.run_gate()
+            source.write_bytes(contents)
+            self.assertFalse(self.calls())
+            self.assertEqual(self.summary()['status'], 'failed')
+
+    def test_missing_duplicate_or_wrong_foreign_manifest_wiring_fails_before_cargo(self):
+        manifest = self.root / 'src/server/Cargo.toml'
+        original = manifest.read_text()
+        for contents in ('', original + original, original.replace('foreign_admission.rs', 'other.rs'),
+                         original.replace('["core"]', '[]'),
+                         original.replace('["core"]', '["other"]')):
+            manifest.write_text(contents)
+            with self.subTest(contents=contents), self.assertRaises(ValueError):
+                self.run_gate()
+            self.assertFalse(self.calls())
+            self.assertEqual(self.summary()['status'], 'failed')
+
+    def test_missing_extra_duplicate_or_similar_foreign_inventory_fails_before_any_test(self):
+        expected = list(GATE['FOREIGN_TESTS'])
+        for names in ([], expected[:-1], expected + ['unreviewed'], expected + expected[:1],
+                      [expected[0] + '_other', *expected[1:]]):
+            self.config['names']['foreign_admission'] = names
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                self.run_gate()
+            self.assertFalse(any('--nocapture' in call['args'] for call in self.calls()))
+
+    def test_foreign_zero_ignored_filtered_failed_measured_or_duplicate_cannot_complete_gate(self):
+        summary = 'test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'
+        for output in ('', summary + '\n' + summary, summary.replace('4 passed', '0 passed'),
+                       summary.replace('4 passed', '3 passed'), summary.replace('0 ignored', '1 ignored'),
+                       summary.replace('0 failed', '1 failed'), summary.replace('0 measured', '1 measured'),
+                       summary.replace('0 filtered', '1 filtered')):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                self.run_gate(foreign_output=output)
+            self.assertEqual(self.summary()['status'], 'failed')
+            self.assertEqual(len(self.summary()['passed']), 44)
+            self.assertNotIn('passed_count', self.summary())
+
+    def test_foreign_nonzero_exit_does_not_preserve_an_old_success(self):
+        self.run_gate()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_gate(foreign_exit=101)
+        self.assertEqual(self.summary()['status'], 'failed')
+        self.assertEqual(len(self.summary()['passed']), 44)
+        self.assertNotIn('passed_count', self.summary())
+        self.assertEqual(self.summary()['commands'][-1]['returncode'], 101)
+
+    def test_foreign_executable_change_after_listing_is_rejected_before_running_it(self):
+        with self.assertRaises(ValueError):
+            self.run_gate(tamper_list='foreign_admission')
+        self.assertEqual(self.summary()['status'], 'failed')
+        self.assertEqual(len(self.summary()['passed']), 44)
+        self.assertFalse(any(call['tool'] == 'foreign_admission' and '--nocapture' in call['args']
+                             for call in self.calls()))
 
     def test_missing_or_similar_readmission_inventory_fails_before_any_test(self):
         for replacement in ([], [GATE['READMISSION_TEST'] + '_other']):
@@ -423,7 +540,7 @@ class OrchestrationTests(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 self.run_gate(readmission_output=output)
             self.assertEqual(self.summary()['status'], 'failed')
-            self.assertEqual(len(self.summary()['passed']), 69)
+            self.assertEqual(len(self.summary()['passed']), 73)
             self.assertNotIn('passed_count', self.summary())
 
     def test_readmission_nonzero_exit_does_not_preserve_an_old_success(self):
@@ -431,7 +548,7 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_gate(readmission_exit=101)
         self.assertEqual(self.summary()['status'], 'failed')
-        self.assertEqual(len(self.summary()['passed']), 69)
+        self.assertEqual(len(self.summary()['passed']), 73)
         self.assertNotIn('passed_count', self.summary())
         self.assertEqual(self.summary()['commands'][-1]['returncode'], 101)
 
@@ -453,7 +570,7 @@ class OrchestrationTests(unittest.TestCase):
                 self.run_gate(mount_exit=code)
             summary = self.summary()
             self.assertEqual(summary['status'], 'failed')
-            self.assertEqual(len(summary['passed']), 67)
+            self.assertEqual(len(summary['passed']), 71)
             self.assertNotIn('passed_count', summary)
             self.assertEqual(summary['commands'][-1]['returncode'], code)
 
@@ -505,7 +622,7 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_gate(ignored='storage_engine')
         self.assertEqual(self.summary()['status'], 'failed')
-        self.assertEqual(len(self.summary()['passed']), 67)
+        self.assertEqual(len(self.summary()['passed']), 71)
         self.assertNotIn('passed_count', self.summary())
 
     def test_ignored_directory_safety_target_never_completes_the_gate(self):
