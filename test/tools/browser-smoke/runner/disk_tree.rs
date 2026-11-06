@@ -29,6 +29,12 @@ fn geometry(browser: &Browser) -> Result<()> {
             const edges=[...document.querySelectorAll('.zxs-disk-tree-edge')];
             if(!scroll||nodes.length!==3||edges.length!==2)return {ready:false};
             const bySlot=new Map(nodes.map(node=>[node.dataset.slot,node]));
+            const tierLabels=nodes.every(node=>{
+                const level=Number(node.dataset.level);
+                const label=node.querySelector('[data-disk-tier-label]')?.textContent;
+                return (level===1?['主盘 · 第 1 层','Primary · Tier 1']:
+                    [`备份盘 · 第 ${level} 层`,`Backup disk · Tier ${level}`]).includes(label);
+            });
             const expected=[['P01','B01'],['B01','C01']];
             const valid=expected.every(([source,target])=>{
                 const from=bySlot.get(source),to=bySlot.get(target);
@@ -43,7 +49,7 @@ fn geometry(browser: &Browser) -> Result<()> {
                     &&start.y>end.y&&arrow?.getAttribute('d')==='M2 10 L6 2 L10 10 Z'
                     &&getComputedStyle(edge).pointerEvents==='none';
             });
-            return {ready:true,valid,documentWidth:document.documentElement.scrollWidth,
+            return {ready:true,valid:valid&&tierLabels,documentWidth:document.documentElement.scrollWidth,
                 clientWidth:document.documentElement.clientWidth,
                 scrollWidth:scroll.scrollWidth,scrollClient:scroll.clientWidth,
                 nodes:nodes.map(node=>({slot:node.dataset.slot,level:node.dataset.level,rect:node.getBoundingClientRect().toJSON()}))};

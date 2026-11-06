@@ -6,6 +6,7 @@ use crate::api;
 use data_serialization::Deserialize;
 use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use web_interface::i18n::{t, tf};
 
 mod view;
 pub(super) use view::view;
@@ -57,6 +58,20 @@ pub(super) struct Node {
     source: Option<Source>,
     row: usize,
     column: usize,
+}
+
+impl Node {
+    fn tier_label(&self) -> String {
+        if self.level == 1 {
+            t("主盘 · 第 1 层", "Primary · Tier 1")
+        } else {
+            tf(
+                "备份盘 · 第 {0} 层",
+                "Backup disk · Tier {0}",
+                &[&self.level.to_string()],
+            )
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -191,3 +191,61 @@ fn unadmitted_candidates_use_a_separate_bottom_row_without_backup_edges() {
     assert!(source.contains("storage::choose_disk(state,&path.get_value())"));
     assert!(source.contains("aria-controls=\"zxs-disk-wizard\""));
 }
+
+#[test]
+fn tier_labels_keep_registered_levels_instead_of_numbering_backups_from_one() {
+    let tree = read(json!({"disks":[
+        disk("P01",1,None),disk("B01",2,Some("P01")),
+        disk("C01",3,Some("B01")),disk("D01",4,Some("C01")),
+    ]}))
+    .unwrap();
+    for (slot, expected) in [
+        ("P01", "Primary · Tier 1"),
+        ("B01", "Backup disk · Tier 2"),
+        ("C01", "Backup disk · Tier 3"),
+        ("D01", "Backup disk · Tier 4"),
+    ] {
+        assert_eq!(tree.nodes[slot].tier_label(), expected);
+    }
+}
+
+#[test]
+fn sparse_tier_labels_do_not_infer_a_contiguous_layer_or_a_missing_disk() {
+    let tree = read(json!({"disks":[
+        disk("P01",1,None),disk("orphan",u32::MAX,Some("missing")),
+    ]}))
+    .unwrap();
+    assert_eq!(
+        tree.nodes["orphan"].tier_label(),
+        "Backup disk · Tier 4294967295"
+    );
+    assert_eq!(tree.nodes.len(), 2);
+    assert_eq!(tree.levels, 2);
+    assert!(tree.edges.is_empty());
+    assert_eq!(tree.pending_row(), tree.nodes["P01"].row + 2);
+}
+
+#[test]
+fn candidate_row_does_not_shift_or_connect_either_registered_backup_chain() {
+    let tree = read(json!({"disks":[
+        disk("P01",1,None),disk("B01",2,Some("P01")),disk("C01",3,Some("B01")),
+        disk("P02",1,None),disk("B02",2,Some("P02")),
+    ]}))
+    .unwrap();
+    let registered = tree.clone();
+    for candidates in [1, 2, 4] {
+        assert_eq!(tree.columns_with_pending(candidates), 2.max(candidates));
+        assert_eq!(tree.rows_with_pending(true).matches("auto").count(), 4);
+        for node in tree.nodes.values() {
+            assert!(node.row < tree.pending_row());
+        }
+        for ((source, target), edge) in &tree.edges {
+            assert_eq!(tree.nodes[source].row, tree.nodes[target].row + 2);
+            assert!(edge.row < tree.pending_row());
+        }
+        assert_eq!(tree, registered);
+    }
+    assert_eq!(tree.pending_row(), 7);
+    assert_eq!(tree.nodes["P01"].row, 5);
+    assert_eq!(tree.nodes["P02"].row, 5);
+}

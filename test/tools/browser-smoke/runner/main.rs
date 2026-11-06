@@ -24,6 +24,7 @@ mod base64_compatibility_tests;
 mod accessibility;
 mod admin_language;
 mod auth_layout;
+mod backup_browse;
 mod contour_evidence;
 mod contours;
 mod diagnostics;
@@ -321,6 +322,7 @@ fn exercise(
     }
     println!("PASS login and three real disk directories");
     phase1_files::disk_read(browser)?;
+    backup_browse::run(browser)?;
     browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
     browser.css(".zxs-file-table tbody .zxs-file-icon--folder")?;
     file_row_visual::run(browser, &[0], "folder")?;
