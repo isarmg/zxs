@@ -1,8 +1,14 @@
 //! Explicit directory commits have a closed metadata plan, not a general permit.
 //! Publication and cold replay reconstruct the same exact source-bound changes.
 use super::*;
-use crate::business::directory_staging::{CommitInput, apply_commit};
-use crate::{CommitState, CurrentHealth, Event, OperationId, OperationResult, ProtectionAtPublish};
+use crate::business::{
+    directory_git::staged_owned_files,
+    directory_staging::{CommitInput, apply_commit},
+};
+use crate::{
+    CommitState, ContentState, CurrentHealth, DirectoryTree, Event, OperationId, OperationResult,
+    ProtectionAtPublish,
+};
 use json_codec::json;
 use storage_contract::MapChanges;
 
@@ -26,6 +32,29 @@ fn invalid() -> Error {
 }
 
 impl CurrentNamespaces {
+    /// A staged owned snapshot may differ from the live working tree, including
+    /// after a working deletion. Its bodies still need current availability.
+    /// Explicit child commits are historical references and are checked by the
+    /// Git marker closure, not by current child HEAD or body availability.
+    pub(crate) fn require_staged_commit_source(
+        &self,
+        state: &State,
+        staged: &DirectoryTree,
+        boundaries: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        for entry in staged_owned_files(staged, boundaries) {
+            if self.unavailable_versions.contains(&entry.version_id)
+                || state.content_states.get(&entry.version_id) != Some(&ContentState::Available)
+            {
+                return Err(Error::new(
+                    ErrorCode::DirectoryBranchConflict,
+                    "staged directory content is unavailable; stage this repository again before committing",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::engine) fn verify_new_directory_commit(
         &self,
         previous: &State,

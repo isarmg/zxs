@@ -67,3 +67,11 @@ path = "../../test/engine/integration/directory_git_index.rs"
 [[test]]
 name = "phase1_tag_regressions"
 path = "../../test/engine/integration/phase1_tag_regressions.rs"
+
+[[test]]
+name = "directory_git_safety"
+path = "../../test/engine/integration/directory_git_safety.rs"
+
+[[test]]
+name = "directory_git_staged_source"
+path = "../../test/engine/integration/directory_git_staged_source.rs"

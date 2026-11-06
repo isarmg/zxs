@@ -111,10 +111,12 @@ class ArtifactTests(unittest.TestCase):
 
 
 class InventoryTests(unittest.TestCase):
-    def test_reviewed_inventory_has_all_60_exact_required_cases(self):
+    def test_reviewed_inventory_has_all_67_exact_required_cases(self):
         self.assertEqual(len(set(GATE['SERVER_TESTS'])), 29)
         self.assertEqual(len(set(GATE['FILE_TESTS'])), 12)
         self.assertEqual(len(set(GATE['DIRECTORY_TESTS'])), 10)
+        self.assertEqual(len(set(GATE['DIRECTORY_SAFETY_TESTS'])), 5)
+        self.assertEqual(len(set(GATE['STAGED_SOURCE_TESTS'])), 2)
         self.assertEqual(len(set(GATE['TAG_TESTS'])), 3)
         self.assertEqual(len(set(GATE['SMB_TESTS'])), 3)
         self.assertEqual(len(set(GATE['COLD_TAG_TESTS'])), 2)
@@ -160,10 +162,22 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(server[1][server[1].index('--features') + 1], 'core')
         self.assertNotIn('--lib', directory[1])  # Never queue all Engine unit tests.
         self.assertEqual(server[2], ('storage_server', 'phase1_save_tags', 'phase1_smb_rpc'))
-        self.assertEqual(directory[2], ('directory_git_index', 'phase1_tag_regressions', 'phase1_tag_cold_replay'))
+        self.assertEqual(directory[2], ('directory_git_index', 'directory_git_safety',
+                                       'directory_git_staged_source', 'phase1_tag_regressions',
+                                       'phase1_tag_cold_replay'))
         for _, command, expected in (server, directory):
             selected = tuple(command[index + 1] for index, value in enumerate(command) if value == '--test')
             self.assertEqual(selected, tuple(name for name in expected if name != 'storage_server'))
+
+    def test_directory_safety_inventories_reject_missing_or_extra_cases(self):
+        for name in ('DIRECTORY_SAFETY_TESTS', 'STAGED_SOURCE_TESTS'):
+            expected = GATE[name]
+            complete = '\n'.join(test + ': test' for test in expected)
+            self.assertEqual(GATE['listed_tests'](complete, expected, True), list(expected))
+            for output in ('\n'.join(test + ': test' for test in expected[:-1]),
+                           complete + '\nunreviewed_case: test'):
+                with self.subTest(inventory=name, output=output), self.assertRaises(ValueError):
+                    GATE['listed_tests'](output, expected, True)
 
 
 # Separate executable fixtures exercise the real orchestration and JSON/log
@@ -245,6 +259,8 @@ class OrchestrationTests(unittest.TestCase):
                         for name, (manifest, source, kind, features) in GATE['TARGETS'].items()},
             'names': {'storage_server': list(GATE['SERVER_TESTS']) + ['unrelated::test'],
                       'phase1_save_tags': GATE['FILE_TESTS'], 'directory_git_index': GATE['DIRECTORY_TESTS'],
+                      'directory_git_safety': GATE['DIRECTORY_SAFETY_TESTS'],
+                      'directory_git_staged_source': GATE['STAGED_SOURCE_TESTS'],
                       'phase1_smb_rpc': GATE['SMB_TESTS'], 'phase1_tag_cold_replay': GATE['COLD_TAG_TESTS'],
                       'phase1_tag_regressions': GATE['TAG_TESTS'], 'contract-check': GATE['CONTRACT_TESTS']},
         }
@@ -267,16 +283,16 @@ class OrchestrationTests(unittest.TestCase):
     def summary(self):
         return json.loads((self.root / 'target/phase-one-core/summary.json').read_text())
 
-    def test_pipeline_builds_lists_and_runs_60_unique_tests_without_engine_libtest(self):
+    def test_pipeline_builds_lists_and_runs_67_unique_tests_without_engine_libtest(self):
         gate = self.run_gate()
         self.assertEqual(gate.summary['status'], 'passed')
-        self.assertEqual(gate.summary['passed_count'], 60)
-        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 60)
+        self.assertEqual(gate.summary['passed_count'], 67)
+        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 67)
         calls = self.calls()
         self.assertEqual([x['tool'] for x in calls[:3]], ['cargo', 'cargo', 'cargo'])
         self.assertTrue(all(x['cwd'] == str(self.root) for x in calls))
         first_run = next(i for i, x in enumerate(calls) if '--nocapture' in x['args'])
-        self.assertEqual(sum('--list' in x['args'] for x in calls[:first_run]), 7)
+        self.assertEqual(sum('--list' in x['args'] for x in calls[:first_run]), 9)
         self.assertEqual(sum('--exact' in x['args'] for x in calls), 30)
         self.assertEqual(gate.environment['TMPDIR'], str(self.root / 'target/phase-one-core/fixtures'))
 
@@ -306,7 +322,8 @@ class OrchestrationTests(unittest.TestCase):
         self.assertFalse(any('--list' in x['args'] for x in self.calls()))
 
     def test_missing_inventory_prevents_any_test_execution(self):
-        for target in ('phase1_save_tags', 'phase1_smb_rpc', 'phase1_tag_cold_replay'):
+        for target in ('phase1_save_tags', 'phase1_smb_rpc', 'phase1_tag_cold_replay',
+                       'directory_git_safety', 'directory_git_staged_source'):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 self.run_gate(empty_list=target)
         self.assertFalse(any('--nocapture' in x['args'] for x in self.calls()))
@@ -322,6 +339,15 @@ class OrchestrationTests(unittest.TestCase):
             self.run_gate(ignored='storage_server')
         self.assertEqual(self.summary()['status'], 'failed')
         self.assertEqual(self.summary()['passed'], [])
+
+    def test_ignored_directory_safety_target_never_completes_the_gate(self):
+        for target in ('directory_git_safety', 'directory_git_staged_source'):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                self.run_gate(ignored=target)
+            summary = self.summary()
+            self.assertEqual(summary['status'], 'failed')
+            self.assertNotIn('passed_count', summary)
+            self.assertFalse(any(case['target'] == target for case in summary['passed']))
 
     def test_lock_change_is_rejected(self):
         with self.assertRaises(ValueError):

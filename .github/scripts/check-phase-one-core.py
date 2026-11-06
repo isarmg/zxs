@@ -16,6 +16,8 @@ SERVER = 'storage_server'
 FILE_TARGET = 'phase1_save_tags'
 SMB_TARGET = 'phase1_smb_rpc'
 DIRECTORY_TARGET = 'directory_git_index'
+DIRECTORY_SAFETY_TARGET = 'directory_git_safety'
+STAGED_SOURCE_TARGET = 'directory_git_staged_source'
 TAG_TARGET = 'phase1_tag_regressions'
 COLD_TAG_TARGET = 'phase1_tag_cold_replay'
 CONTRACT_TARGET = 'contract-check'
@@ -81,6 +83,17 @@ DIRECTORY_TESTS = (
     'inserting_an_intermediate_repository_drops_only_the_parents_direct_pin',
     'moving_a_staged_file_changes_the_working_location_not_the_reviewed_snapshot',
 )
+DIRECTORY_SAFETY_TESTS = (
+    'unborn_directory_replacement_rejects_fresh_commit_hot_and_cold',
+    'committed_directory_replacement_rejects_fresh_commit_and_preserves_old_receipt',
+    'owned_index_and_head_pin_body_hot_and_cold_until_both_advance',
+    'owned_head_pins_body_hot_and_cold_until_head_advances',
+    'explicitly_staged_child_head_is_a_pin_but_raw_child_work_in_parent_index_is_not',
+)
+STAGED_SOURCE_TESTS = (
+    'disk_exit_rejects_unavailable_staged_owned_version_without_mutation_hot_and_cold',
+    'disk_exit_allows_fixed_child_history_and_replays_after_reopen',
+)
 TAG_TESTS = (
     'fresh_duplicate_input_is_one_tag_but_exact_receipt_still_binds_raw_request',
     'reused_old_path_does_not_retarget_file_tags_or_break_exact_replay',
@@ -103,6 +116,8 @@ TARGETS = {
     FILE_TARGET: ('src/server/Cargo.toml', 'test/server/integration/phase1_save_tags.rs', ['test'], {'default', 'core'}),
     SMB_TARGET: ('src/server/Cargo.toml', 'test/server/integration/phase1_smb_rpc.rs', ['test'], {'default', 'core'}),
     DIRECTORY_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/directory_git_index.rs', ['test'], set()),
+    DIRECTORY_SAFETY_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/directory_git_safety.rs', ['test'], set()),
+    STAGED_SOURCE_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/directory_git_staged_source.rs', ['test'], set()),
     TAG_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/phase1_tag_regressions.rs', ['test'], set()),
     COLD_TAG_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/phase1_tag_cold_replay.rs', ['test'], set()),
     CONTRACT_TARGET: ('tools/contract-check/Cargo.toml', 'tools/contract-check/src/main.rs', ['bin'], set()),
@@ -193,8 +208,9 @@ def build_commands(target_dir):
         ('build-server', common + ['-p', 'storage-server', '--features', 'core', '--lib',
                                   '--test', FILE_TARGET, '--test', SMB_TARGET], (SERVER, FILE_TARGET, SMB_TARGET)),
         ('build-engine-integrations', common + ['-p', 'storage-engine', '--test', DIRECTORY_TARGET,
+                                               '--test', DIRECTORY_SAFETY_TARGET, '--test', STAGED_SOURCE_TARGET,
                                                '--test', TAG_TARGET, '--test', COLD_TAG_TARGET],
-         (DIRECTORY_TARGET, TAG_TARGET, COLD_TAG_TARGET)),
+         (DIRECTORY_TARGET, DIRECTORY_SAFETY_TARGET, STAGED_SOURCE_TARGET, TAG_TARGET, COLD_TAG_TARGET)),
         ('build-contract', common + ['-p', 'contract-check', '--bin', CONTRACT_TARGET], (CONTRACT_TARGET,)),
     )
 
@@ -268,7 +284,9 @@ class Gate:
             # old receipt or successful zero-test run can satisfy this inventory.
             suites = ((SERVER, SERVER_TESTS, False), (FILE_TARGET, FILE_TESTS, True),
                       (SMB_TARGET, SMB_TESTS, True),
-                      (DIRECTORY_TARGET, DIRECTORY_TESTS, True), (TAG_TARGET, TAG_TESTS, True),
+                      (DIRECTORY_TARGET, DIRECTORY_TESTS, True),
+                      (DIRECTORY_SAFETY_TARGET, DIRECTORY_SAFETY_TESTS, True),
+                      (STAGED_SOURCE_TARGET, STAGED_SOURCE_TESTS, True), (TAG_TARGET, TAG_TESTS, True),
                       (COLD_TAG_TARGET, COLD_TAG_TESTS, True),
                       (CONTRACT_TARGET, CONTRACT_TESTS, False))
             for target, expected, whole in suites:

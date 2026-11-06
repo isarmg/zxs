@@ -125,7 +125,10 @@ function publication(p, index) {
     const body = {operation_id: operation, add: index === 0 ? [p.label] : [],
         remove: index === 0 ? [] : [p.label], repository_id: context.repository_id, path: context.path,
         targets: [{branch_id: context.selected_branch_id, expected_node_id: old.node_id, source_node_id: old.node_id}]};
-    const receipt = {operation_id: operation, kind: 'file.tags.update', state: 'completed', error: null,
+    // This is the public operation_wire shape, not the persisted OperationResult.kind.
+    const receipt = {operation_id: operation, operation_kind: 'file.tags.update', state: 'completed', error: null,
+        commit_state: 'PUBLISHED', protection_at_publish: 'NOT_APPLICABLE',
+        request_digest: 'd'.repeat(64), publication_sequence: String(index + 2),
         result: {file_id: before.identity.file_id, content_versions_created: '0', nodes: [{node_id: next.node_id,
             source_node_id: old.node_id, branch_id: context.selected_branch_id, no_change: false, advanced: true, tags: next.tags}]}};
     p.writes.push({path: `/api/file-manager/files/${before.identity.file_id}/tags`, body, status: 200, receipt, delivered: true});
@@ -173,6 +176,45 @@ test('tag proof accepts add then remove, old current flags changing, and fresh i
     assert.deepEqual(copy(removed.next.tags), []);
     assert.equal(f.state.snapshots[1].nodes[0].tags[0], f.state.label);
     f.state.restore();
+});
+
+test('tag proof binds the public operation_kind and rejects internal or unrelated receipt kinds', () => {
+    const valid = tagged();
+    assert.equal(Object.hasOwn(valid.receipt, 'kind'), false);
+    assert.equal(valid.state.verify(0), valid.next.node_id);
+    valid.state.restore();
+    for (const mutate of [
+        receipt => { receipt.kind = receipt.operation_kind; delete receipt.operation_kind; },
+        receipt => { receipt.operation_kind = 'directory.namespace.batch'; },
+    ]) {
+        const f = tagged();
+        mutate(f.receipt);
+        assert.throws(() => f.state.verify(0), /complete receipt/);
+        f.state.restore();
+    }
+});
+
+test('tag failure evidence preserves observed data without gate callbacks or credentials', async () => {
+    const f = fixture('tags', () => page());
+    const request = new Request(`${origin}/api/file-manager/files/${id('file', 1)}/tags`, {
+        method: 'POST', headers: {authorization: 'Bearer test-only-secret'}, body: '{"add":["一期已审核"]}'
+    });
+    const pending = f.window.fetch(request);
+    await until(() => f.state.writes[0]?.release);
+    const snapshot = f.state.snapshot();
+    assert.equal(snapshot.writes.length, 1);
+    assert.equal(snapshot.writes[0].status, 200);
+    assert.equal(snapshot.writes[0].delivered, false);
+    assert.deepEqual(copy(snapshot.writes[0].body), {add: ['一期已审核']});
+    assert.deepEqual(copy(snapshot.writes[0].receipt), page());
+    assert.equal(Object.hasOwn(snapshot.writes[0], 'release'), false);
+    assert.equal(JSON.stringify(snapshot).includes('test-only-secret'), false);
+    assert.doesNotThrow(() => structuredClone(snapshot));
+    f.state.restore();
+    assert.equal(await pending, f.responses[0]);
+    assert.equal(f.window.fetch, f.original);
+    assert.equal(f.window.__zxsPhase1Tags, undefined);
+    assert.equal(snapshot.writes[0].delivered, false, 'saved failure evidence is not changed by cleanup');
 });
 
 test('tag proof rejects wrong receipt, changed file/body/old node, missing edge and extra writes', () => {

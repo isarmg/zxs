@@ -10,6 +10,12 @@ const p = window.__zxsPhase1Tags = {
     reads: [], writes: [], unexpected: [], base: null, snapshots: [], closed: false,
     label: '一期已审核',
     release() { for (const write of p.writes) write.release?.(); },
+    snapshot() {
+        return {scope: 'observed real tag request, receipt and history; no authentication headers',
+            base: p.base, snapshots: p.snapshots, readCount: p.reads.length,
+            lastHistory: p.reads.at(-1)?.body ?? null,
+            writes: p.writes.map(({release, ...write}) => write), unexpected: p.unexpected};
+    },
     restore() {
         p.closed = true;
         window.fetch = original;
@@ -44,7 +50,7 @@ const p = window.__zxsPhase1Tags = {
             || !/^op_[0-9a-f]{32}$/.test(operation_id)
             || write.path !== `/api/file-manager/files/${identity.file_id}/tags`
             || write.status !== 200 || write.receipt?.state !== 'completed'
-            || write.receipt.kind !== 'file.tags.update'
+            || write.receipt.operation_kind !== 'file.tags.update'
             || write.receipt.operation_id !== operation_id || write.receipt.error !== null
             || write.receipt.result?.file_id !== identity.file_id
             || write.receipt.result?.content_versions_created !== '0')

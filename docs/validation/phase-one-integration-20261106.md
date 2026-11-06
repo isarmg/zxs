@@ -48,3 +48,31 @@
 4. 记录完整 workspace、真实 Samba 和发布包的准确状态。定向门禁不等于全仓通过；运行中、失败、环境限制和未执行项必须保留，不能把未验收候选称为完成的发行版。
 
 目录 Git HEAD／index 正文保留和相关清理路径的新审查结果仍需单独复现、提取最小修复并验证，不能从已有暂存隔离通过推断所有清理边界安全。物理掉电、真实满盘和二期恢复能力也不在这些定向通过声明内。
+
+## 公开 e517 的正式 CI 补记
+
+以上待验收描述保留为首次候选冻结时的记录。2026-11-06，公开提交
+[`e517e2c4b26ff1f3daf58b37f2a9bc0b45a49157`](https://github.com/isarmg/zxs/commit/e517e2c4b26ff1f3daf58b37f2a9bc0b45a49157)
+的 [CI run 42177328954](https://github.com/isarmg/zxs/actions/runs/42177328954)
+取得以下分项结果，不能据此宣布全部 CI 或发行验收通过：
+
+- [正式 core job](https://github.com/isarmg/zxs/actions/runs/42177328954/job/127759843571)：
+  七个本次 Cargo 产物、六十项实际测试全部通过，零失败、零忽略；包括此前本地
+  未运行的私有 Server 名称准入用例与公开 SMB bridge 三项。
+- [系统 Samba job](https://github.com/isarmg/zxs/actions/runs/42177328954/job/127759843721)：
+  三十七项 VFS Rust 单测、一个显式执行的真实 Engine 夹具，以及二十六个系统
+  运行检查均通过。二十六个是场景检查，不是二十六项 Rust 测试。运行环境为
+  Debian 13、Samba `2:4.22.11+dfsg-0+deb13u1`、VFS ABI 50，使用真实 smbd 与
+  smbclient 回环验证读写、改名、删除、分支切换和账户撤权；不代表 Windows／
+  macOS 客户端、物理故障或系统 Samba 冷重开的验收。
+- [真实 Chrome job](https://github.com/isarmg/zxs/actions/runs/42177328954/job/127762957421)：
+  新 D01 发现／接纳／空根浏览、磁盘缓存列表的手动重读，以及管理队列期限、
+  退出取消、迟到 401 和一次 429 场景实际通过。磁盘列表场景只在取得真实 200
+  后模拟交付失败，不冒称服务端故障。后段标签夹具误用 `kind` 读取公开回执的
+  `operation_kind` 字段，断言失败并退出 1；完整 Chrome 未通过，后续场景不得
+  推定已运行，修复夹具后仍须重新验收。
+
+后续目录安全修复扩展为九个 Cargo 产物、六十七项 core 门禁。新增七项不在
+e517 的六十项结果内；截至本补记尚未在新候选上执行。即使一级盘测试源码
+未变，Engine 已有修改，后续候选仍须执行准确 core 与默认 Chrome，不能沿用
+e517 的结果代替。未知结果重试等后续修复也不属于本次已通过范围。

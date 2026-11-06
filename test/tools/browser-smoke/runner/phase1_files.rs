@@ -252,8 +252,21 @@ pub(super) fn tags(browser: &Browser) -> Result<()> {
             Ok(())
         },
         || {
-            browser.script("window.__zxsPhase1Tags?.restore();return true")?;
-            Ok(())
+            // Keep the actual request/receipt even if an assertion failed. The
+            // probe records no headers; cleanup still runs if evidence fails.
+            with_cleanup(
+                || {
+                    evidence(
+                        browser,
+                        "tag-observed",
+                        "return window.__zxsPhase1Tags.snapshot()",
+                    )
+                },
+                || {
+                    browser.script("window.__zxsPhase1Tags?.restore();return true")?;
+                    Ok(())
+                },
+            )
         },
     )?;
     println!(

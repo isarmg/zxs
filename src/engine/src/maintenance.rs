@@ -400,6 +400,9 @@ impl Engine {
                 .map(|entry| entry.version_id.as_str())
                 .collect::<BTreeSet<_>>()
         });
+        let git_versions = std::cell::LazyCell::new(|| {
+            crate::business::directory_git::protected_git_versions(&self.state, &selected)
+        });
         for id in versions {
             let v = self.state.versions.get(id).ok_or_else(|| {
                 Error::new(
@@ -446,6 +449,16 @@ impl Engine {
                 return Err(Error::new(
                     storage_contract::ErrorCode::ContentPinned,
                     "an open workspace needs a selected version",
+                ));
+            }
+        }
+        // Preserve every existing rejection before adding the Git snapshot
+        // roots. The lazy projection scans those roots once for the whole batch.
+        for id in versions {
+            if git_versions.contains(id.as_str()) {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ContentPinned,
+                    "version is referenced by a directory Git HEAD or index",
                 ));
             }
         }

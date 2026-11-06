@@ -209,6 +209,12 @@ pub(crate) fn apply_commit(
     let directory = git.directory_id.clone();
     let working = directory_git::working_tree(state, git, &input.directory_branch_id)?;
     let entries = directory_git::current_entries(state, view, &input.repository_id)?;
+    let (live_directory, _) = directory_git::locate(entries, &input.repository_id, &working.path)?;
+    if live_directory != directory {
+        return Err(directory_git::conflict(
+            "the directory path now belongs to a different repository identity",
+        ));
+    }
     let direct = directory_git::boundaries(
         state,
         &input.repository_id,
@@ -245,6 +251,15 @@ pub(crate) fn apply_commit(
         );
     }
     let staged = &state.directory_trees[&index.index_tree_id];
+    if let Some(view) = view {
+        view.require_staged_commit_source(state, staged, &index.index_boundaries)?;
+    } else if directory_git::staged_owned_files(staged, &index.index_boundaries)
+        .any(|entry| state.content_states.get(&entry.version_id) != Some(&ContentState::Available))
+    {
+        return Err(directory_git::conflict(
+            "staged content is unavailable; stage the working contents again",
+        ));
+    }
     let mut tree = frozen_tree(state, staged, index, &direct)?;
     let previous_head = index.head_tree_id.clone();
     let next_generation = index.index_generation.checked_add(1).ok_or_else(|| {

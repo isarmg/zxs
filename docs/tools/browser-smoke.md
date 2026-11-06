@@ -193,6 +193,9 @@ cargo run --locked --offline -p browser-smoke -- \
 未变的正文版本/散列/长度及全部旧节点；旧 current 标记的正常变化不算修改历史。
 不调用正文接口，不宣称 Web 已有正文编辑器，也不把导航重读说成 daemon 冷重开。
 
+收据断言使用 HTTP 的 `operation_kind`，不把持久化内部记录的 `kind` 当作公开字段；
+主机反例明确拒绝错误字段和不同业务类型。标签探针在清理前另存 `tag-observed` JSON/截图，
+即使断言失败也保留真实请求、收据和最后一次历史响应，不记录认证头；保存诊断失败也仍会恢复 fetch。
 成功场景将截图和无凭据的 JSON 写入 `artifacts/browser-smoke/diagnostics/phase1-files/`，
 复用 CI 现有的 always 诊断产物保留，不新增工作流或编译。
 `phase1_files_probe_test.mjs` 的主机正反例同时接入正式静态检查与 runner 单测；
