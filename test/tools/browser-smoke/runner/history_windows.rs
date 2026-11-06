@@ -461,6 +461,8 @@ fn fields_and_cancellation(browser: &Browser) -> Result<()> {
         "const p=window.__zxsHistoryWindows,panel=document.querySelector('.zxs-history-field'),text=panel?.querySelector('pre').textContent||'';return document.querySelectorAll('.zxs-history-field').length===1&&p.lastField.node===p.current&&p.lastField.field==='message'&&['Message · '+p.current,'提交说明 · '+p.current].includes(panel.querySelector('h3').textContent.trim())&&p.lastField.offset>0&&text===p.lastField.text&&!text.includes('first-fragment')&&text.endsWith('last-fragment')&&panel.querySelector('[data-field-complete=false]')!==null&&Array.from(panel.querySelectorAll('button')).some(button=>['Next field fragment','下一片字段'].includes(button.textContent.trim())&&button.disabled)",
     )?;
     click(browser, "Close field", "关闭字段")?;
+    // Card details are collapsed when this history window is mounted.
+    node_cards::open_current(browser)?;
     browser.script("window.__zxsHistoryWindows.holdField=true;return true")?;
     browser.click(&browser.css(&format!(
         "[data-node-id='{current}'] [data-history-field=created_at]"
@@ -480,6 +482,8 @@ fn fields_and_cancellation(browser: &Browser) -> Result<()> {
     )?;
     click(browser, "Locate current node", "定位当前节点")?;
     graph(browser, 1)?;
+    // The refreshed window owns a new disclosure; do not reuse its old state.
+    node_cards::open_current(browser)?;
     browser.script("window.__zxsHistoryWindows.holdField=true;return true")?;
     browser.click(&browser.css(&format!(
         "[data-node-id='{current}'] [data-history-field=created_at]"

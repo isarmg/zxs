@@ -41,6 +41,15 @@ pub(in crate::engine) struct ReadmissionCore {
     target_decision: DecisionReceipt,
 }
 
+/// Pure admission of one immutable proposal, scoped to this verification call.
+/// It does not establish the current identity or durability of any disk root.
+struct VerifiedProposal {
+    hash: String,
+    intent: TransitionIntent,
+    members: BTreeMap<String, ArchivedAbortMember>,
+    registry: VerifiedDiskRegistry,
+}
+
 #[derive(Serialize)]
 #[serialization(rename_all = "kebab-case")]
 enum AcceptanceRole {
@@ -163,13 +172,7 @@ impl Proposal {
         }
         Ok(prepared.bytes().to_vec())
     }
-    fn verify(
-        &self,
-    ) -> Result<(
-        TransitionIntent,
-        BTreeMap<String, ArchivedAbortMember>,
-        VerifiedDiskRegistry,
-    )> {
+    fn verify(&self) -> Result<VerifiedProposal> {
         let (intent, members) = self
             .archive_projection
             .verify(&self.archive, &self.transition_hash)?;
@@ -223,16 +226,28 @@ impl Proposal {
                 ));
             }
         }
-        Ok((intent, members, registry))
+        Ok(VerifiedProposal {
+            hash: self.hash()?,
+            intent,
+            members,
+            registry,
+        })
     }
-    pub(super) fn acceptance(&self, disk_id: &str) -> Result<(MemberIdentity, String)> {
-        let (intent, members, _) = self.verify()?;
-        let request = request(&intent)?;
-        let hash = self.hash()?;
+    pub(super) fn choose(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<DecisionReceipt> {
+        let verified = self.verify()?;
+        let (identity, acceptance) = verified.acceptance(&disk.disk_id)?;
+        let store = DecisionStore::open(root, &identity, &self.transition_hash, true)?;
+        store.readmission_receipt(&verified.hash, &acceptance)
+    }
+}
+
+impl VerifiedProposal {
+    fn acceptance(&self, disk_id: &str) -> Result<(MemberIdentity, String)> {
+        let request = request(&self.intent)?;
         if disk_id == request.target.disk_id {
             let identity = request.directory.clone();
             let acceptance = Acceptance {
-                proposal_hash: &hash,
+                proposal_hash: &self.hash,
                 identity: &identity,
                 role: AcceptanceRole::ReadmittedDirectory,
                 original_seal_hash: object_hash("disk-seal", &request.original_seal)?,
@@ -240,20 +255,21 @@ impl Proposal {
             };
             return Ok((identity.clone(), object_hash(ACCEPTANCE_KIND, &acceptance)?));
         }
-        let member = members.get(disk_id).ok_or_else(|| {
+        let member = self.members.get(disk_id).ok_or_else(|| {
             Error::new(
                 ErrorCode::ConfigConflict,
                 "readmission witness is not an original voter",
             )
         })?;
-        let disk = intent
+        let disk = self
+            .intent
             .origin
             .config()
             .metadata_members()
             .find(|disk| disk.disk_id == disk_id)
             .expect("invariant: archive verified exact original member set");
         let identity = pending::admission::member_identity(
-            intent.origin.config(),
+            self.intent.origin.config(),
             disk,
             FileIdentity {
                 device: member.seal.device,
@@ -261,18 +277,13 @@ impl Proposal {
             },
         );
         let acceptance = Acceptance {
-            proposal_hash: &hash,
+            proposal_hash: &self.hash,
             identity: &identity,
             role: AcceptanceRole::OriginalVoter,
             original_seal_hash: object_hash("disk-seal", &member.seal)?,
             original_fence: Some(&member.fence),
         };
         Ok((identity.clone(), object_hash(ACCEPTANCE_KIND, &acceptance)?))
-    }
-    pub(super) fn choose(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<DecisionReceipt> {
-        let (identity, acceptance) = self.acceptance(&disk.disk_id)?;
-        let store = DecisionStore::open(root, &identity, &self.transition_hash, true)?;
-        store.readmission_receipt(&self.hash()?, &acceptance)
     }
 }
 
@@ -322,10 +333,14 @@ impl ReadmissionCore {
         &self.proposal.parent
     }
     pub(in crate::engine::membership_transition) fn intent(&self) -> Result<TransitionIntent> {
-        let (intent, members, _) = self.proposal.verify()?;
+        Ok(self.verify()?.intent)
+    }
+    fn verify(&self) -> Result<VerifiedProposal> {
+        let verified = self.proposal.verify()?;
+        let intent = &verified.intent;
         // Online writes require all configured roots. Carry all original decisions
         // rather than shrinking the fixed denominator to the witnesses on hand.
-        if self.decisions.len() != members.len()
+        if self.decisions.len() != verified.members.len()
             || self.decisions.len() < intent.origin.config().metadata_quorum()
         {
             return Err(Error::new(
@@ -333,7 +348,6 @@ impl ReadmissionCore {
                 "readmission lacks the unchanged original member decisions",
             ));
         }
-        let proposal = self.proposal.hash()?;
         for disk in intent.origin.config().metadata_members() {
             let decision = self.decisions.get(&disk.disk_id).ok_or_else(|| {
                 Error::new(
@@ -341,29 +355,28 @@ impl ReadmissionCore {
                     "readmission original member decision is missing",
                 )
             })?;
-            let (identity, acceptance) = self.proposal.acceptance(&disk.disk_id)?;
+            let (identity, acceptance) = verified.acceptance(&disk.disk_id)?;
             decision.verify_readmission(
                 &self.proposal.transition_hash,
                 &identity,
-                &proposal,
+                &verified.hash,
                 &acceptance,
             )?;
         }
-        let request = request(&intent)?;
-        let (identity, acceptance) = self.proposal.acceptance(&request.target.disk_id)?;
+        let request = request(intent)?;
+        let (identity, acceptance) = verified.acceptance(&request.target.disk_id)?;
         self.target_decision.verify_readmission(
             &self.proposal.transition_hash,
             &identity,
-            &proposal,
+            &verified.hash,
             &acceptance,
         )?;
-        Ok(intent)
+        Ok(verified)
     }
     pub(in crate::engine::membership_transition) fn verified_registry(
         &self,
     ) -> Result<VerifiedDiskRegistry> {
-        self.intent()?;
-        Ok(self.proposal.verify()?.2)
+        Ok(self.verify()?.registry)
     }
     pub(in crate::engine::membership_transition) fn verify_source(
         &self,
@@ -422,7 +435,7 @@ impl ReadmissionCore {
                 )
             })?
         };
-        let (identity, _) = self.proposal.acceptance(&disk.disk_id)?;
+        let (identity, _) = self.proposal.verify()?.acceptance(&disk.disk_id)?;
         DecisionStore::open(root, &identity, &self.proposal.transition_hash, false)?
             .verify_receipt(expected, synchronize)
     }
@@ -450,3 +463,7 @@ fn add_objects<'a>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/engine/readmission_core_tests.rs"]
+mod tests;

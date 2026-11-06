@@ -13,6 +13,16 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER = 'storage_server'
+ENGINE = 'storage_engine'
+MOUNT_CHILD = 'ZXS_DISK_ADMISSION_MOUNT_NAMESPACE'
+MOUNT_SOURCE = 'test/engine/unit/disk/admission_tests.rs'
+READMISSION_SOURCE = 'test/engine/unit/engine/readmission_core_tests.rs'
+READMISSION_TEST = ('engine::membership_transition::readmission::core::tests::'
+                    'verified_readmission_proposal_preserves_all_decisions_and_rejects_tampering')
+MOUNT_TESTS = (
+    'disk::admission_tests::immutable_existing_bind_leaf_is_rejected_before_read_or_sync',
+    'disk::admission_tests::cold_directory_admission_keeps_held_identity_after_mount_replacement',
+)
 FILE_TARGET = 'phase1_save_tags'
 SMB_TARGET = 'phase1_smb_rpc'
 DIRECTORY_TARGET = 'directory_git_index'
@@ -113,6 +123,7 @@ CONTRACT_TESTS = ('tests::file_merge_tags_and_scope_backups_require_explicit_rev
 # Manifest and source identity prevent selecting a namesake artifact from another package.
 TARGETS = {
     SERVER: ('src/server/Cargo.toml', 'src/server/src/lib.rs', ['lib'], {'default', 'core'}),
+    ENGINE: ('src/engine/Cargo.toml', 'src/engine/src/lib.rs', ['lib'], {'fault-injection'}),
     FILE_TARGET: ('src/server/Cargo.toml', 'test/server/integration/phase1_save_tags.rs', ['test'], {'default', 'core'}),
     SMB_TARGET: ('src/server/Cargo.toml', 'test/server/integration/phase1_smb_rpc.rs', ['test'], {'default', 'core'}),
     DIRECTORY_TARGET: ('src/engine/Cargo.toml', 'test/engine/integration/directory_git_index.rs', ['test'], set()),
@@ -201,16 +212,31 @@ def passed_tests(output, count, whole_target=False):
         raise ValueError(f'ineffective test execution: {summaries[0]}, expected {count}')
 
 
+def passed_mount_test(output, name, inventory):
+    """Require the real named child plus its unprivileged parent to finish once."""
+    if name not in MOUNT_TESTS or name not in inventory or len(inventory) != len(set(inventory)):
+        raise ValueError('unreviewed or missing mount test inventory')
+    lines = [line for line in output.splitlines() if line]
+    summary = (r'test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; '
+               + str(len(inventory) - 1) + r' filtered out; finished in [0-9.]+s')
+    # Outer libtest is terse; the exact child is pretty, single-threaded and
+    # emits no application output. Do not relax ordinary single-summary tests.
+    if (len(lines) != 6 or lines[:3] != ['running 1 test', 'running 1 test', f'test {name} ... ok']
+            or lines[4] != '.' or not re.fullmatch(summary, lines[3])
+            or not re.fullmatch(summary, lines[5])):
+        raise ValueError(f'missing exact child/parent mount completion: {name}')
+
+
 def build_commands(target_dir):
     common = ['cargo', 'test', '--locked', '--offline', '--no-run', '--message-format=json',
               '--target-dir', str(target_dir)]
     return (
         ('build-server', common + ['-p', 'storage-server', '--features', 'core', '--lib',
                                   '--test', FILE_TARGET, '--test', SMB_TARGET], (SERVER, FILE_TARGET, SMB_TARGET)),
-        ('build-engine-integrations', common + ['-p', 'storage-engine', '--test', DIRECTORY_TARGET,
+        ('build-engine-integrations', common + ['-p', 'storage-engine', '--lib', '--test', DIRECTORY_TARGET,
                                                '--test', DIRECTORY_SAFETY_TARGET, '--test', STAGED_SOURCE_TARGET,
                                                '--test', TAG_TARGET, '--test', COLD_TAG_TARGET],
-         (DIRECTORY_TARGET, DIRECTORY_SAFETY_TARGET, STAGED_SOURCE_TARGET, TAG_TARGET, COLD_TAG_TARGET)),
+         (ENGINE, DIRECTORY_TARGET, DIRECTORY_SAFETY_TARGET, STAGED_SOURCE_TARGET, TAG_TARGET, COLD_TAG_TARGET)),
         ('build-contract', common + ['-p', 'contract-check', '--bin', CONTRACT_TARGET], (CONTRACT_TARGET,)),
     )
 
@@ -228,6 +254,8 @@ class Gate:
         self.environment = dict(os.environ, CARGO_INCREMENTAL='0', CARGO_BUILD_JOBS='1',
                                 CARGO_PROFILE_DEV_DEBUG='0', CARGO_PROFILE_TEST_DEBUG='0',
                                 TMPDIR=str(fixtures))
+        # Only the reviewed helper may enter its elevated child branch.
+        self.environment.pop(MOUNT_CHILD, None)
         self.summary = {'status': 'incomplete', 'commands': [], 'artifacts': {}, 'passed': []}
         self.save()
 
@@ -271,6 +299,10 @@ class Gate:
                 raise ValueError('phase-one gate requires the root workspace and its existing lockfile')
             lock_hash = digest(self.root / 'Cargo.lock')
             self.summary['lockfile_sha256'] = lock_hash
+            self.summary['mount_source_sha256'] = digest(self.root / MOUNT_SOURCE)
+            # This gate extension must be combined with the proposal-proof reuse
+            # source. An older tree is missing a required test, never a skip.
+            self.summary['readmission_source_sha256'] = digest(self.root / READMISSION_SOURCE)
             self.summary['head'] = self.run('source-head', ['git', 'rev-parse', 'HEAD'], 30).strip()
             artifacts = {}
             for label, command, expected in build_commands(self.target):
@@ -295,6 +327,17 @@ class Gate:
                 names = listed_tests(output, expected, whole)
                 artifacts[target]['listed_tests'] = names
                 self.save()
+            engine = artifacts[ENGINE]
+            for label, flags in (('listed_tests', []), ('ignored_tests', ['--ignored'])):
+                output = self.run('list-' + ENGINE + '-' + label,
+                                  [engine['path'], '--list', '--format', 'terse', *flags], 60)
+                expected = MOUNT_TESTS if flags else (*MOUNT_TESTS, READMISSION_TEST)
+                engine[label] = listed_tests(output, expected)
+                self.save()
+            if not set(engine['ignored_tests']) <= set(engine['listed_tests']):
+                raise ValueError('ignored Engine inventory differs from its complete inventory')
+            if READMISSION_TEST in engine['ignored_tests']:
+                raise ValueError('readmission proposal regression must not be ignored')
             for target, expected, whole in suites:
                 binary = artifacts[target]['path']
                 if digest(binary) != artifacts[target]['sha256']:
@@ -308,6 +351,21 @@ class Gate:
                     passed_tests(output, len(names), whole)
                     self.summary['passed'].extend({'target': target, 'name': name} for name in names)
                     self.save()
+            if digest(engine['path']) != engine['sha256']:
+                raise ValueError(f'{ENGINE}: executable changed after the current Cargo build')
+            for index, name in enumerate(MOUNT_TESTS):
+                output = self.run(f'run-mount-{index:02}',
+                                  [engine['path'], '--ignored', '--exact', name,
+                                   '--nocapture', '--test-threads=1', '--format', 'terse'], 300)
+                passed_mount_test(output, name, engine['listed_tests'])
+                self.summary['passed'].append({'target': ENGINE, 'name': name})
+                self.save()
+            output = self.run('run-readmission-proposal',
+                              [engine['path'], '--exact', READMISSION_TEST,
+                               '--nocapture', '--test-threads=1'], 300)
+            passed_tests(output, 1)
+            self.summary['passed'].append({'target': ENGINE, 'name': READMISSION_TEST})
+            self.save()
             self.summary['status'] = 'passed'
             self.summary['passed_count'] = len(self.summary['passed'])
         except Exception as error:

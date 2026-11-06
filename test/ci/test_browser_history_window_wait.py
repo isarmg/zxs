@@ -8,6 +8,20 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def assert_date_disclosures(test, source):
+    fields = source.split('fn fields_and_cancellation(', 1)[1]
+    clicks = list(re.finditer(r'\[data-node-id=\'\{current\}\'\] '
+                              r'\[data-history-field=created_at\]', fields))
+    test.assertEqual(len(clicks), 2)
+    previous = 0
+    for click in clicks:
+        prefix = fields[previous:click.start()]
+        test.assertRegex(prefix, r'node_cards::open_current\(browser\)\?;\s+'
+                         r'browser\.script\("window\.__zxsHistoryWindows\.holdField=true;return true"\)\?;\s+'
+                         r'browser\.click\(&browser\.css\(&format!\(\s+"$')
+        previous = click.end()
+
+
 class HistoryWindowWait(unittest.TestCase):
     def test_requested_window_not_previous_self_consistent_window(self):
         source = (ROOT / 'test/tools/browser-smoke/runner/history_windows.rs').read_text()
@@ -86,6 +100,40 @@ console.log(JSON.stringify(results));
             self.assertIn(contract, fields)
         self.assertIn('for _ in 0..4', source)
         self.assertIn(".zxs-node-checkbox').click()", source)
+
+    def test_date_reads_open_the_current_native_card_before_each_held_request(self):
+        source = (ROOT / 'test/tools/browser-smoke/runner/history_windows.rs').read_text()
+        assert_date_disclosures(self, source)
+        fields = source.split('fn fields_and_cancellation(', 1)[1]
+        for contract in (
+            'auxiliary A held',
+            'main refresh aborts old auxiliary A',
+            'new auxiliary B held',
+            'late auxiliary A cannot install or release B',
+            'B remains owned and is aborted by replacement',
+            'late auxiliary B cannot restore a retired fragment',
+        ):
+            self.assertIn(contract, fields)
+
+    def test_either_missing_disclosure_reproduces_the_regression(self):
+        source = (ROOT / 'test/tools/browser-smoke/runner/history_windows.rs').read_text()
+        call = '    node_cards::open_current(browser)?;\n'
+        self.assertEqual(source.count(call), 2)
+        first, middle, last = source.split(call)
+        for mutated in (first + middle + call + last, first + call + middle + last,
+                        first + middle + last):
+            with self.subTest(disclosures=mutated.count(call)):
+                with self.assertRaises(AssertionError):
+                    assert_date_disclosures(self, mutated)
+
+    def test_current_disclosure_uses_real_summary_click_not_hidden_control_click(self):
+        source = (ROOT / 'test/tools/browser-smoke/runner/node_cards.rs').read_text()
+        current = source.split('pub(super) fn open_current(', 1)[1].split('fn check_cards(', 1)[0]
+        self.assertIn("return card.parentElement.open", current)
+        self.assertIn('browser.click(&browser.css(".zxs-node-card[aria-current=true]")?)?;', current)
+        self.assertNotIn('.click()', current)
+        self.assertNotRegex(current, r'\.open\s*=')
+        self.assertNotIn('data-history-field', current)
 
 
 if __name__ == '__main__':

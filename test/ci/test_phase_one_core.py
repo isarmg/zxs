@@ -65,6 +65,14 @@ class ArtifactTests(unittest.TestCase):
                 with self.subTest(index=index, features=features), self.assertRaises(ValueError):
                     self.select([*records, self.finished])
 
+    def test_engine_libtest_requires_its_current_fault_injection_feature(self):
+        index = next(i for i, record in enumerate(self.records) if record['target']['name'] == 'storage_engine')
+        for features in ([], ['default'], 'fault-injection', [None]):
+            records = copy.deepcopy(self.records)
+            records[index]['features'] = features
+            with self.subTest(features=features), self.assertRaises(ValueError):
+                self.select([*records, self.finished])
+
     def test_build_completion_requires_boolean_true_not_numeric_or_string_success(self):
         for success in (False, 1, 'true', None):
             with self.subTest(success=success), self.assertRaises(ValueError):
@@ -111,7 +119,7 @@ class ArtifactTests(unittest.TestCase):
 
 
 class InventoryTests(unittest.TestCase):
-    def test_reviewed_inventory_has_all_67_exact_required_cases(self):
+    def test_reviewed_inventory_preserves_69_cases_and_adds_one_readmission_case(self):
         self.assertEqual(len(set(GATE['SERVER_TESTS'])), 29)
         self.assertEqual(len(set(GATE['FILE_TESTS'])), 12)
         self.assertEqual(len(set(GATE['DIRECTORY_TESTS'])), 10)
@@ -121,6 +129,12 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(len(set(GATE['SMB_TESTS'])), 3)
         self.assertEqual(len(set(GATE['COLD_TAG_TESTS'])), 2)
         self.assertEqual(len(set(GATE['CONTRACT_TESTS'])), 1)
+        self.assertEqual(len(set(GATE['MOUNT_TESTS'])), 2)
+        self.assertEqual(GATE['READMISSION_TEST'],
+                         'engine::membership_transition::readmission::core::tests::'
+                         'verified_readmission_proposal_preserves_all_decisions_and_rejects_tampering')
+        self.assertNotIn(GATE['READMISSION_TEST'], GATE['MOUNT_TESTS'])
+        self.assertEqual(len(GATE['TARGETS']), 10)
         self.assertEqual(sum('::tcp::' in name for name in GATE['SERVER_TESTS']), 2)
         self.assertEqual(sum('phase1_new_file_tests::' in name for name in GATE['SERVER_TESTS']), 3)
         self.assertEqual(sum('phase_one_write_admission::' in name for name in GATE['SERVER_TESTS']), 9)
@@ -160,14 +174,14 @@ class InventoryTests(unittest.TestCase):
                 self.assertNotIn(forbidden, command)
         self.assertIn('--lib', server[1])
         self.assertEqual(server[1][server[1].index('--features') + 1], 'core')
-        self.assertNotIn('--lib', directory[1])  # Never queue all Engine unit tests.
+        self.assertIn('--lib', directory[1])  # Compile once; run only three exact Engine names.
         self.assertEqual(server[2], ('storage_server', 'phase1_save_tags', 'phase1_smb_rpc'))
-        self.assertEqual(directory[2], ('directory_git_index', 'directory_git_safety',
+        self.assertEqual(directory[2], ('storage_engine', 'directory_git_index', 'directory_git_safety',
                                        'directory_git_staged_source', 'phase1_tag_regressions',
                                        'phase1_tag_cold_replay'))
         for _, command, expected in (server, directory):
             selected = tuple(command[index + 1] for index, value in enumerate(command) if value == '--test')
-            self.assertEqual(selected, tuple(name for name in expected if name != 'storage_server'))
+            self.assertEqual(selected, tuple(name for name in expected if name not in ('storage_server', 'storage_engine')))
 
     def test_directory_safety_inventories_reject_missing_or_extra_cases(self):
         for name in ('DIRECTORY_SAFETY_TESTS', 'STAGED_SOURCE_TESTS'):
@@ -180,6 +194,50 @@ class InventoryTests(unittest.TestCase):
                     GATE['listed_tests'](output, expected, True)
 
 
+def mount_output(name, count):
+    summary = (f'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; '
+               f'{count - 1} filtered out; finished in 0.01s\n')
+    return f'\nrunning 1 test\n\nrunning 1 test\ntest {name} ... ok\n\n{summary}\n.\n{summary}\n'
+
+
+class MountCompletionTests(unittest.TestCase):
+    def setUp(self):
+        self.names = [*GATE['MOUNT_TESTS'], 'unrelated::test']
+        self.name = self.names[0]
+        self.output = mount_output(self.name, len(self.names))
+
+    def test_requires_exact_named_child_and_parent_once(self):
+        GATE['passed_mount_test'](self.output, self.name, self.names)
+        with self.assertRaises(ValueError):
+            GATE['passed_tests'](self.output, 1)  # Ordinary checks remain strict.
+
+    def test_missing_duplicate_failed_ignored_or_wrong_child_is_rejected(self):
+        for output in ('', self.output + self.output,
+                       self.output.replace('running 1 test\n', '', 1),
+                       self.output.replace(f'test {self.name} ... ok\n', ''),
+                       self.output.replace(f'test {self.name}', f'test {self.names[1]}'),
+                       self.output.replace(f'test {self.name}', f'test {self.name}_extra'),
+                       self.output.replace(' ... ok', ' ... FAILED'),
+                       self.output.replace('\n.\n', '\n'),
+                       self.output.replace('1 passed', '0 passed'),
+                       self.output.replace('0 ignored', '1 ignored'),
+                       self.output.replace('0 measured', '1 measured'),
+                       self.output.replace('2 filtered', '1 filtered'),
+                       self.output.replace('test result: ok.', 'test result: FAILED.', 1),
+                       self.output + 'unexpected extra result\n'):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                GATE['passed_mount_test'](output, self.name, self.names)
+
+    def test_one_summary_or_wrong_inventory_never_proves_two_layers(self):
+        summary = self.output.splitlines()[6]
+        with self.assertRaises(ValueError):
+            GATE['passed_mount_test'](self.output.replace(summary, '', 1), self.name, self.names)
+        for name, names in ((self.name, self.names[1:]), ('unreviewed', self.names),
+                            (self.name, self.names + [self.name])):
+            with self.subTest(name=name, names=names), self.assertRaises(ValueError):
+                GATE['passed_mount_test'](self.output, name, names)
+
+
 # Separate executable fixtures exercise the real orchestration and JSON/log
 # handoff. They intentionally simulate Cargo/libtest; no Rust test is claimed.
 FAKE_BINARY = r'''
@@ -188,8 +246,11 @@ from pathlib import Path
 config = json.loads(Path(os.environ['PHASE_ONE_FIXTURE']).read_text())
 names = config['names'][TARGET]
 with Path(config['calls']).open('a') as log:
-    log.write(json.dumps({'tool': TARGET, 'args': sys.argv[1:], 'cwd': os.getcwd()}) + '\n')
+    log.write(json.dumps({'tool': TARGET, 'args': sys.argv[1:], 'cwd': os.getcwd(),
+                         'mount_child': os.environ.get('ZXS_DISK_ADMISSION_MOUNT_NAMESPACE')}) + '\n')
 if '--list' in sys.argv:
+    if TARGET == 'storage_engine' and '--ignored' in sys.argv:
+        names = config.get('mount_ignored_names', config['mount_tests'])
     if config.get('empty_list') == TARGET:
         names = []
     for name in names:
@@ -202,6 +263,18 @@ else:
     passed = len([name for name in chosen if name in names])
     ignored = passed if config.get('ignored') == TARGET else 0
     passed -= ignored
+    if TARGET == 'storage_engine' and chosen[0] == config['readmission_test']:
+        if config.get('readmission_exit'):
+            sys.exit(config['readmission_exit'])
+        if 'readmission_output' in config:
+            print(config['readmission_output'])
+            sys.exit(0)
+    if TARGET == 'storage_engine' and '--ignored' in sys.argv:
+        if config.get('mount_exit'):
+            sys.exit(config['mount_exit'])
+        print('running 1 test\n\nrunning 1 test')
+        print(f'test {chosen[0]} ... ok')
+        print(f'test result: ok. {passed} passed; 0 failed; {ignored} ignored; 0 measured; {len(names)-len(chosen)} filtered out; finished in 0.01s\n\n.')
     print(f'test result: ok. {passed} passed; 0 failed; {ignored} ignored; 0 measured; {len(names)-len(chosen)} filtered out; finished in 0.01s')
 '''
 FAKE_CARGO = r'''
@@ -218,7 +291,8 @@ if 'storage-server' in sys.argv:
     selected = (['storage_server'] if '--lib' in sys.argv else [])
     selected += [sys.argv[index+1] for index, value in enumerate(sys.argv) if value == '--test']
 elif 'storage-engine' in sys.argv:
-    selected = [sys.argv[index+1] for index, value in enumerate(sys.argv) if value == '--test']
+    selected = (['storage_engine'] if '--lib' in sys.argv else [])
+    selected += [sys.argv[index+1] for index, value in enumerate(sys.argv) if value == '--test']
 else:
     selected = ['contract-check']
 for name in selected:
@@ -247,6 +321,12 @@ class OrchestrationTests(unittest.TestCase):
         self.root = Path(temporary.name)
         (self.root / 'Cargo.toml').write_text('[workspace]\nmembers=[]\n')
         (self.root / 'Cargo.lock').write_text('fixture lock\n')
+        source = self.root / GATE['MOUNT_SOURCE']
+        source.parent.mkdir(parents=True)
+        source.write_text('fixture mount source\n')
+        source = self.root / GATE['READMISSION_SOURCE']
+        source.parent.mkdir(parents=True)
+        source.write_text('fixture readmission source\n')
         tools = self.root / 'tools'
         tools.mkdir()
         for name, source in [('cargo', FAKE_CARGO), ('git', "print('f'*40)\n")]:
@@ -255,9 +335,12 @@ class OrchestrationTests(unittest.TestCase):
             path.chmod(0o700)
         self.config = {
             'calls': str(self.root / 'calls.jsonl'), 'binary': FAKE_BINARY,
+            'mount_tests': GATE['MOUNT_TESTS'],
+            'readmission_test': GATE['READMISSION_TEST'],
             'targets': {name: [manifest, source, kind, sorted(features)]
                         for name, (manifest, source, kind, features) in GATE['TARGETS'].items()},
             'names': {'storage_server': list(GATE['SERVER_TESTS']) + ['unrelated::test'],
+                      'storage_engine': [*GATE['MOUNT_TESTS'], GATE['READMISSION_TEST'], 'unrelated::test'],
                       'phase1_save_tags': GATE['FILE_TESTS'], 'directory_git_index': GATE['DIRECTORY_TESTS'],
                       'directory_git_safety': GATE['DIRECTORY_SAFETY_TESTS'],
                       'directory_git_staged_source': GATE['STAGED_SOURCE_TESTS'],
@@ -283,18 +366,96 @@ class OrchestrationTests(unittest.TestCase):
     def summary(self):
         return json.loads((self.root / 'target/phase-one-core/summary.json').read_text())
 
-    def test_pipeline_builds_lists_and_runs_67_unique_tests_without_engine_libtest(self):
+    def test_pipeline_builds_once_and_runs_70_unique_cases_without_whole_engine_suite(self):
         gate = self.run_gate()
         self.assertEqual(gate.summary['status'], 'passed')
-        self.assertEqual(gate.summary['passed_count'], 67)
-        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 67)
+        self.assertEqual(gate.summary['passed_count'], 70)
+        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 70)
         calls = self.calls()
         self.assertEqual([x['tool'] for x in calls[:3]], ['cargo', 'cargo', 'cargo'])
         self.assertTrue(all(x['cwd'] == str(self.root) for x in calls))
         first_run = next(i for i, x in enumerate(calls) if '--nocapture' in x['args'])
-        self.assertEqual(sum('--list' in x['args'] for x in calls[:first_run]), 9)
-        self.assertEqual(sum('--exact' in x['args'] for x in calls), 30)
+        self.assertEqual(sum('--list' in x['args'] for x in calls[:first_run]), 11)
+        self.assertEqual(sum('--exact' in x['args'] for x in calls), 33)
+        self.assertEqual(sum(x['tool'] == 'cargo' for x in calls), 3)
+        self.assertEqual(gate.summary['mount_source_sha256'], GATE['digest'](self.root / GATE['MOUNT_SOURCE']))
+        self.assertEqual(gate.summary['readmission_source_sha256'], GATE['digest'](self.root / GATE['READMISSION_SOURCE']))
+        mount_calls = [x for x in calls if x['tool'] == 'storage_engine' and '--ignored' in x['args'] and '--exact' in x['args']]
+        self.assertEqual(len(mount_calls), 2)
+        for call, name in zip(mount_calls, GATE['MOUNT_TESTS']):
+            self.assertEqual(call['args'], ['--ignored', '--exact', name, '--nocapture',
+                                             '--test-threads=1', '--format', 'terse'])
+            self.assertIsNone(call['mount_child'])
+        readmission_calls = [x for x in calls if x['tool'] == 'storage_engine' and GATE['READMISSION_TEST'] in x['args']]
+        self.assertEqual(len(readmission_calls), 1)
+        self.assertEqual(readmission_calls[0]['args'], ['--exact', GATE['READMISSION_TEST'],
+                                                       '--nocapture', '--test-threads=1'])
+        self.assertEqual(gate.summary['commands'][-1]['timeout_seconds'], 300)
         self.assertEqual(gate.environment['TMPDIR'], str(self.root / 'target/phase-one-core/fixtures'))
+
+    def test_old_tree_without_readmission_source_fails_before_cargo(self):
+        (self.root / GATE['READMISSION_SOURCE']).unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.run_gate()
+        self.assertFalse(self.calls())
+        self.assertEqual(self.summary()['status'], 'failed')
+
+    def test_missing_or_similar_readmission_inventory_fails_before_any_test(self):
+        for replacement in ([], [GATE['READMISSION_TEST'] + '_other']):
+            self.config['names']['storage_engine'] = [*GATE['MOUNT_TESTS'], *replacement]
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                self.run_gate()
+        self.assertFalse(any('--nocapture' in x['args'] for x in self.calls()))
+
+    def test_duplicate_or_ignored_readmission_inventory_fails_before_any_test(self):
+        with self.assertRaises(ValueError):
+            self.run_gate(mount_ignored_names=[*GATE['MOUNT_TESTS'], GATE['READMISSION_TEST']])
+        self.config.pop('mount_ignored_names')
+        self.config['names']['storage_engine'].append(GATE['READMISSION_TEST'])
+        with self.assertRaises(ValueError):
+            self.run_gate()
+        self.assertFalse(any('--nocapture' in x['args'] for x in self.calls()))
+
+    def test_readmission_zero_ignored_failed_or_duplicate_summary_cannot_complete_gate(self):
+        summary = 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s'
+        for output in ('', summary + '\n' + summary, summary.replace('1 passed', '0 passed'),
+                       summary.replace('0 ignored', '1 ignored'), summary.replace('0 failed', '1 failed')):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                self.run_gate(readmission_output=output)
+            self.assertEqual(self.summary()['status'], 'failed')
+            self.assertEqual(len(self.summary()['passed']), 69)
+            self.assertNotIn('passed_count', self.summary())
+
+    def test_readmission_nonzero_exit_does_not_preserve_an_old_success(self):
+        self.run_gate()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_gate(readmission_exit=101)
+        self.assertEqual(self.summary()['status'], 'failed')
+        self.assertEqual(len(self.summary()['passed']), 69)
+        self.assertNotIn('passed_count', self.summary())
+        self.assertEqual(self.summary()['commands'][-1]['returncode'], 101)
+
+    def test_inherited_child_marker_is_removed_before_any_invocation(self):
+        self.environment[GATE['MOUNT_CHILD']] = GATE['MOUNT_TESTS'][0]
+        gate = self.run_gate()
+        self.assertNotIn(GATE['MOUNT_CHILD'], gate.environment)
+        self.assertTrue(all(call.get('mount_child') is None for call in self.calls()))
+
+    def test_missing_or_no_longer_ignored_mount_tests_fail_before_any_test_execution(self):
+        for names in ([], list(GATE['MOUNT_TESTS'][:1]), [*GATE['MOUNT_TESTS'], 'unknown::test']):
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                self.run_gate(mount_ignored_names=names)
+        self.assertFalse(any('--nocapture' in x['args'] for x in self.calls()))
+
+    def test_namespace_failure_or_inner_timeout_is_not_a_skipped_success(self):
+        for code in (1, 124, 137):
+            with self.subTest(code=code), self.assertRaises(subprocess.CalledProcessError):
+                self.run_gate(mount_exit=code)
+            summary = self.summary()
+            self.assertEqual(summary['status'], 'failed')
+            self.assertEqual(len(summary['passed']), 67)
+            self.assertNotIn('passed_count', summary)
+            self.assertEqual(summary['commands'][-1]['returncode'], code)
 
     def test_missing_root_lock_fails_before_cargo(self):
         (self.root / 'Cargo.lock').unlink()
@@ -340,6 +501,13 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(self.summary()['status'], 'failed')
         self.assertEqual(self.summary()['passed'], [])
 
+    def test_ignored_mount_result_never_completes_the_gate(self):
+        with self.assertRaises(ValueError):
+            self.run_gate(ignored='storage_engine')
+        self.assertEqual(self.summary()['status'], 'failed')
+        self.assertEqual(len(self.summary()['passed']), 67)
+        self.assertNotIn('passed_count', self.summary())
+
     def test_ignored_directory_safety_target_never_completes_the_gate(self):
         for target in ('directory_git_safety', 'directory_git_staged_source'):
             with self.subTest(target=target), self.assertRaises(ValueError):
@@ -368,6 +536,19 @@ class OrchestrationTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_elevated_child_has_its_own_deadline_and_exact_cleared_environment(self):
+        source = (ROOT / GATE['MOUNT_SOURCE']).read_text()
+        helper = source.split('fn isolated_mount_namespace(', 1)[1].split('\nfn mount(', 1)[0]
+        self.assertIn('Command::new("/usr/bin/sudo")', helper)
+        self.assertIn('.args(["-n", "--", "/usr/bin/env", "-i"])', helper)
+        self.assertLess(helper.index('"/usr/bin/env"'), helper.index('"/usr/bin/timeout"'))
+        self.assertLess(helper.index('"/usr/bin/timeout"'), helper.index('"/usr/bin/unshare"'))
+        for argument in ('"--signal=TERM"', '"--kill-after=5s"', '"240s"', '"--exact"',
+                         '"--ignored"', '"--test-threads=1"', '"--format"', '"pretty"'):
+            self.assertIn(argument, helper)
+        self.assertIn('status.success()', helper)
+        self.assertNotIn('cargo', helper)
+
     def test_dedicated_job_waits_only_for_static_and_preserves_evidence(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         job = workflow.split('  phase-one-core:\n', 1)[1].split('\n  web-production:', 1)[0]

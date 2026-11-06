@@ -102,9 +102,25 @@ fn isolated_mount_namespace(name: &str, exercise: impl FnOnce()) {
     let status = Command::new("/usr/bin/sudo")
         .args(["-n", "--", "/usr/bin/env", "-i"])
         .arg(format!("{CHILD}={name}"))
+        // Bound the elevated process group itself, not only its ordinary parent.
+        // The CI driver's 300-second outer limit leaves time for TERM then KILL.
+        .args([
+            "/usr/bin/timeout",
+            "--signal=TERM",
+            "--kill-after=5s",
+            "240s",
+        ])
         .args(["/usr/bin/unshare", "--mount", "--propagation", "private"])
         .arg(std::env::current_exe().unwrap())
-        .args(["--ignored", "--exact", name, "--nocapture"])
+        .args([
+            "--ignored",
+            "--exact",
+            name,
+            "--nocapture",
+            "--test-threads=1",
+            "--format",
+            "pretty",
+        ])
         .status()
         .unwrap();
     assert!(
