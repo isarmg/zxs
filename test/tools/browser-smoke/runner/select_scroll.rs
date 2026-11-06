@@ -1,5 +1,5 @@
 //! Real reversing wheel input with synchronous scroll and RAF geometry samples.
-//! The monitor has five genuine options; a short viewport creates overflow.
+//! The monitor has five genuine options; a 180px viewport creates overflow.
 use super::*;
 
 const PANEL: &str = ".zxs-monitor-range .zxs-select-panel:popover-open";
@@ -64,9 +64,12 @@ pub(super) fn run(browser: &Browser, theme: &str) -> Result<()> {
     )?;
     with_cleanup(
         || {
+            // Five real 36px rows need 180px before the card border. A 260px
+            // viewport left only 8px of overflow in Chrome, below the probe's
+            // 24px minimum. Constrain the viewport, never the product styles.
             browser.cdp(
                 "Emulation.setDeviceMetricsOverride",
-                json!({"width":980,"height":260,"deviceScaleFactor":1,"mobile":false}),
+                json!({"width":980,"height":180,"deviceScaleFactor":1,"mobile":false}),
             )?;
             browser.click(&browser.button("Status", "状态")?)?;
             let trigger = browser.css(TRIGGER)?;

@@ -91,6 +91,12 @@ await rejectInitial(f => { f.panel.dataset.zxsContourForegroundAnchor = 'viewpor
 await rejectInitial(f => { f.panel.css.overflowY = 'auto'; }, 'outer card cannot own scrolling');
 await rejectInitial(f => { f.scroller.css.overflowY = 'hidden'; }, 'inner scrolling must remain enabled');
 await rejectInitial(f => { f.scroller.scrollHeight = 100; }, 'non-overflowing fixture cannot claim scroll evidence');
+await rejectInitial(f => { f.scroller.scrollHeight = f.scroller.clientHeight + 8; }, 'observed Chrome fixture with only 8px overflow must fail');
+await rejectInitial(f => { f.scroller.scrollHeight = f.scroller.clientHeight + 23; }, 'overflow below the 24px minimum must fail');
+f = fixture(); f.scroller.scrollHeight = f.scroller.clientHeight + 24;
+result = await f.run('start');
+assert.equal(result.valid, true); assert.equal(result.maximum, 24);
+assert.equal((await f.run('cleanup')).valid, true); cases++;
 await rejectInitial(f => { f.missingScroller = true; }, 'missing inner scroller');
 await rejectInitial(f => { f.missingForeground = true; }, 'missing palette-derived border paint');
 await rejectInitial(f => { f.hit = {}; }, 'wheel input must target the actual scroll container');
