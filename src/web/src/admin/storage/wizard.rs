@@ -197,6 +197,7 @@ fn finish(model: &mut super::Model, result: Result<DiscoveredDisks, api::Error>)
 }
 pub(super) fn choose(model: &mut super::Model, path: &str) {
     if model.editable()
+        && !model.wizard.selected(path)
         && model.wizard.discovery.as_ref().is_some_and(|discovery| {
             discovery
                 .candidates
@@ -334,4 +335,4 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
 
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/admin/storage_wizard_tests.rs"]
-mod tests;
+pub(super) mod tests;

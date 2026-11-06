@@ -120,11 +120,6 @@ pub(super) fn save(state: RwSignal<State>) {
         });
     });
 }
-#[derive(Clone, Copy)]
-pub(super) enum Read {
-    Status,
-    Revalidate,
-}
 pub(super) fn load(state: RwSignal<State>, action: Read) {
     let captured = state
         .try_update(|state| {
@@ -132,19 +127,8 @@ pub(super) fn load(state: RwSignal<State>, action: Read) {
                 return None;
             }
             let model = &mut state.admin_console.storage.foreign.plan;
-            if model.reading
-                || model.previewing
-                || model.save == SaveState::Sending
-                || !matches!(model.save, SaveState::Unknown | SaveState::Stored)
-                || (matches!(action, Read::Revalidate) && model.save != SaveState::Stored)
-            {
-                return None;
-            }
-            let expected = model.review.clone()?;
-            model.reading = true;
-            model.generation += 1;
-            model.error = None;
-            Some((state.session_epoch, model.generation, expected))
+            let (generation, expected) = model.read_request(action)?;
+            Some((state.session_epoch, generation, expected))
         })
         .flatten();
     let Some((epoch, generation, expected)) = captured else {
@@ -180,18 +164,15 @@ pub(super) fn load(state: RwSignal<State>, action: Read) {
             return;
         }
         let _ = state.try_update(|state| {
-            if state.session_epoch != epoch
-                || state.admin_console.storage.foreign.plan.generation != generation
-            {
+            if state.session_epoch != epoch {
                 return;
             }
-            let model = &mut state.admin_console.storage.foreign.plan;
-            model.reading = false;
-            match result {
-                Ok(status) => model.accept_saved(status),
-                // NotFound after an uncertain save is not proof of non-creation.
-                Err(error) => model.read_failed(error),
-            }
+            state
+                .admin_console
+                .storage
+                .foreign
+                .plan
+                .finish_read(generation, result);
         });
     });
 }

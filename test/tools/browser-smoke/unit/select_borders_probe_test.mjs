@@ -122,16 +122,47 @@ for(const property of ['backgroundImage','borderImageSource']){
     f=fixture();f.panel.style[property]='url("blob:paint")';f.decodeFails=true;assert.equal((await f.run()).valid,false,'broken image decode');
 }
 f=fixture().withForeground();assert.equal((await f.run()).valid,true,'foreground path with transparent center');assert.deepEqual(f.revoked,['blob:foreground']);
-f=fixture().withForeground();f.foreground.path.style.fill='rgb(60, 60, 60)';assert.equal((await f.run()).valid,false,'wrong foreground fill');assert.equal(f.created.length,0);
-f=fixture().withForeground();f.foreground.path.style.fillRule='nonzero';assert.equal((await f.run()).valid,false,'wrong foreground fill rule');
+f=fixture().withForeground();f.foreground.path.style.fill='rgb(60, 60, 60)';
+{
+    const result=await f.run(),report=result.controls[1];
+    assert.equal(result.valid,false,'wrong foreground fill');assert.equal(f.created.length,0);
+    assert.equal(report.checks.palette,false);assert.equal(report.checks.visible,true);
+    assert.deepEqual([...report.actualBorder],[60,60,60,255]);
+    assert.deepEqual([...report.expectedBorder],[170,170,170,255]);
+}
+f=fixture().withForeground();f.foreground.path.style.fillRule='nonzero';
+{
+    const result=await f.run();assert.equal(result.valid,false,'wrong foreground fill rule');
+    assert.equal(result.controls[1].checks.fillRule,false);
+    assert.equal(result.controls[1].fillRule,'nonzero');
+}
+f=fixture().withForeground();f.foreground.path.style.stroke='rgb(170, 170, 170)';
+{
+    const result=await f.run();assert.equal(result.valid,false,'foreground stroke must fail');
+    assert.equal(result.controls[1].checks.stroke,false);
+    assert.equal(result.controls[1].stroke,'rgb(170, 170, 170)');
+}
 f=fixture().withForeground();f.centerAlpha=255;assert.equal((await f.run()).valid,false,'solid foreground hides menu');assert.deepEqual(f.revoked,['blob:foreground']);
 for(const [axis,value] of [['x',10],['y',10],['width',90],['height',40]]){
-    f=fixture().withForeground();f.foreground.box[axis]=value;assert.equal((await f.run()).valid,false,`misplaced foreground ${axis}`);assert.equal(f.created.length,0);
+    f=fixture().withForeground();f.foreground.box[axis]=value;
+    const result=await f.run(),report=result.controls[1];
+    assert.equal(result.valid,false,`misplaced foreground ${axis}`);assert.equal(f.created.length,0);
+    assert.equal(report.checks[axis],false);assert.equal(report.checks.palette,true);
+    assert.equal(report.panelBounds[axis],f.panel.box[axis]);
+    assert.equal(report.foregroundBounds[axis],value);
 }
 f=fixture().withForeground();f.detached=true;assert.equal((await f.run()).valid,false,'detached foreground');assert.deepEqual(f.revoked,['blob:foreground']);
 f=fixture().withForeground();f.decodeFails=true;assert.equal((await f.run()).valid,false,'foreground decode failure');assert.deepEqual(f.revoked,['blob:foreground']);
 f=fixture().withForeground();f.pixelColor=60;assert.equal((await f.run()).valid,false,'valid fill metadata without actual matching pixels');assert.deepEqual(f.revoked,['blob:foreground']);
-f=fixture().withForeground();f.foreground.visible=false;assert.equal((await f.run()).valid,false,'hidden foreground');assert.equal(f.created.length,0);
+f=fixture().withForeground();f.foreground.visible=false;
+f.foreground.style.visibility='hidden';f.foreground.style.display='block';f.foreground.style.opacity='1';
+{
+    const result=await f.run(),report=result.controls[1];
+    assert.equal(result.valid,false,'hidden foreground');assert.equal(f.created.length,0);
+    assert.equal(report.checks.visible,false);assert.equal(report.checks.palette,true);
+    assert.equal(report.foregroundStyle.visibility,'hidden');
+    assert.equal(report.foregroundStyle.display,'block');assert.equal(report.foregroundStyle.opacity,'1');
+}
 f=fixture();f.trigger.querySelector=()=>({});assert.equal((await f.run()).valid,false,'trigger must not retain foreground border');
 f=fixture();f.trigger.style.borderImageSource='url("blob:trigger")';assert.equal((await f.run()).valid,false,'stale decorative trigger image must fail despite zero computed border');
 f=fixture();f.trigger.style.borderImageSource='url("blob:trigger")';f.pixelColor=200;assert.equal((await f.run()).valid,true,'borderless rounded trigger fill');
@@ -170,4 +201,4 @@ f=fixture().withKeyboardFocus();f.focusRasterWidth=108;assert.equal((await f.run
 f=fixture().withKeyboardFocus();f.trigger.style.borderImageOutset='invalid';assert.equal((await f.run()).valid,false,'unknown focus bounds cannot pass the border check');
 f=fixture().withKeyboardFocus();f.blurOnDecode=true;assert.equal((await f.run()).valid,false,'focus lost during image decode invalidates observation');
 f=fixture().withKeyboardFocus();f.trigger.style.borderImageSource='none';f.trigger.style.backgroundImage='url("blob:focused-trigger")';assert.equal((await f.run()).valid,false,'only the real outset border-image can carry the keyboard ring');
-console.log('PASS 62 Select border observer model cases; no browser rendering executed');
+console.log('PASS 63 Select border observer model cases; no browser rendering executed');

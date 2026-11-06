@@ -60,6 +60,26 @@ fn failure() -> api::Error {
     }
 }
 
+pub(in super::super) fn open_discovered_source(
+    model: &mut super::super::Model,
+    source: DirectorySource,
+) {
+    let path = source.path.clone();
+    let candidate = DiscoveredDisk {
+        name: path.strip_prefix("/mnt/").unwrap().into(),
+        path: path.clone(),
+        state: DiscoveredDiskState::Unsupported {
+            code: storage_contract::ErrorCode::FormatUnsupported,
+            message: "Explicit inspection required".into(),
+            source: Some(source),
+        },
+    };
+    let discovery = read(json!(discovery(vec![candidate, unsupported()]))).unwrap();
+    finish(model, Ok(discovery));
+    choose(model, &path);
+    assert!(model.wizard.selected(&path));
+}
+
 #[test]
 fn discovered_wire_preserves_explicit_capabilities_and_bounded_inventory_flags() {
     let mut source = unsupported();

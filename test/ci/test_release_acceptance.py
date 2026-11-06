@@ -91,6 +91,19 @@ class ReleaseAcceptance(unittest.TestCase):
             self.assertLess(workflow.index('name: unaccepted-native-'), workflow.index('name: Retain Debian 13 single-ELF runtime proof'))
             self.assertNotIn('overwrite:', block)
 
+    def test_main_ci_retains_browser_failure_diagnostics_without_accepting_assets(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        browser = workflow.split('  browser-smoke:\n', 1)[1].split('  smb-sdk:', 1)[0]
+        block = browser.split('      - name: Retain browser failure diagnostics\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('if: always()', block)
+        self.assertIn('name: browser-failure-diagnostics-${{ github.sha }}', block)
+        self.assertIn('path: artifacts/browser-smoke/diagnostics/', block)
+        self.assertIn('if-no-files-found: warn', block)
+        self.assertIn('retention-days: 7', block)
+        self.assertNotIn('continue-on-error', browser)
+        self.assertNotIn('overwrite:', block)
+        self.assertLess(browser.index('release-acceptance.sh'), browser.index('name: Retain browser failure diagnostics'))
+
     def test_release_checklist_matches_debian_single_elf_assets(self):
         checklist = (ROOT / 'docs/validation/release-checklist.md').read_text()
         for required in ('Debian 13 amd64', '单个 `zxs` ELF 内嵌 Web',

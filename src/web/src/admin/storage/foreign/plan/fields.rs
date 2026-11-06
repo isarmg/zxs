@@ -1,5 +1,25 @@
 use super::*;
 use actions::edit;
+use web_interface::view_renderer::html::attribute::custom::custom_attribute;
+
+// The source boundary already verified unique canonical history-group hashes.
+struct HistoryContext {
+    origin: String,
+    history: String,
+    availability: String,
+}
+impl HistoryContext {
+    fn new(group: &str) -> Self {
+        Self {
+            origin: format!("zxs-foreign-plan-{group}-origin"),
+            history: format!("zxs-foreign-plan-{group}-history"),
+            availability: format!("zxs-foreign-plan-{group}-availability"),
+        }
+    }
+    fn references(&self) -> String {
+        format!("{} {} {}", self.origin, self.history, self.availability)
+    }
+}
 
 fn mode_choices(state: RwSignal<State>) -> impl IntoView {
     view! {<div class="zxs-stack">
@@ -62,18 +82,24 @@ fn history_names(state: RwSignal<State>) -> impl IntoView {
         <h3 class="zxs-row">{t("3. 分别命名各份来源历史", "3. Name each source history separately")}</h3>
         <p class="zxs-row">{t("同名仓库或相同槽位不合并。映射按历史组身份保留原来源；暂不可用正文继续保留历史，不视为无效内容。", "Equal repository names or slots do not merge sources. Each mapping retains its history-group identity and original origin. Temporarily unavailable bodies retain their history and are not treated as invalid contents.")}</p>
         <For each=move ||state.with(|s|s.admin_console.storage.foreign.preview.as_ref().map(|p|p.histories.clone()).unwrap_or_default()) key=|history|history.group_id.clone()
-            children=move |history|{let group=StoredValue::new(history.group_id.clone());view!{
+            children=move |history|{
+                let group=StoredValue::new(history.group_id.clone());
+                let context=HistoryContext::new(&history.group_id);
+                let references=context.references();
+                view!{
                 <section class="zxs-stack" data-foreign-plan-group=history.group_id>
                     <h3 class="zxs-row">{history.repository_name}</h3>
-                    <p class="zxs-row">{super::super::origin_label(&history.origin)}</p><p class="zxs-row">{history.history_tree_id}</p>
-                    <p class="zxs-row" data-foreign-retained-missing=history.temporarily_unavailable_versions.len().to_string()>{format!("{}: {} · {}: {}",t("已核验本地正文", "Verified local contents"),history.verified_local_versions,t("正文暂不可用，保留历史", "Contents temporarily unavailable; history retained"),history.temporarily_unavailable_versions.len())}</p>
+                    <p class="zxs-row" id=context.origin>{super::super::origin_label(&history.origin)}</p><p class="zxs-row" id=context.history>{history.history_tree_id}</p>
+                    <p class="zxs-row" id=context.availability data-foreign-retained-missing=history.temporarily_unavailable_versions.len().to_string()>{format!("{}: {} · {}: {}",t("已核验本地正文", "Verified local contents"),history.verified_local_versions,t("正文暂不可用，保留历史", "Contents temporarily unavailable; history retained"),history.temporarily_unavailable_versions.len())}</p>
                     <label class="zxs-form-field"><span>{t("独立目标子目录名", "Distinct destination child name")}</span><input class="zxs-input" type="text" autocomplete="off" data-foreign-plan-name=group.get_value()
+                        {..custom_attribute("aria-describedby",references)}
                         prop:value=move ||state.with(|s|s.admin_console.storage.foreign.plan.draft.names.get(&group.get_value()).cloned().unwrap_or_default())
                         disabled=move ||state.with(|s|!editable(s)) on:input=move |event|edit(state,|draft|{draft.names.insert(group.get_value(),event_target_value(&event));})/></label>
                 </section>
             }}/>
     </section>}
 }
+
 pub(super) fn form(state: RwSignal<State>) -> impl IntoView {
     view! {<Show when=move ||state.with(|s|s.admin_console.storage.foreign.preview.is_some())>
         <section class="zxs-stack" data-foreign-plan-form="">
@@ -95,3 +121,7 @@ pub(super) fn form(state: RwSignal<State>) -> impl IntoView {
         </section>
     </Show>}
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../test/web/unit/admin/storage_foreign_context_tests.rs"]
+mod tests;

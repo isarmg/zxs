@@ -300,6 +300,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Retain browser failure diagnostics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: browser-failure-diagnostics-${{ github.sha }}
+          path: artifacts/browser-smoke/diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Retain real primary placement browser evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

@@ -46,10 +46,18 @@ const done=arguments[arguments.length-1];
             const path=foreground.querySelector('path'), style=getComputedStyle(path);
             livePath=path;pathData=path.getAttribute('d');
             const svgBox=foreground.getBoundingClientRect();
-            if(!rendered(foreground)||!sameColor(rgba(style.fill),expectedBorder)||style.fillRule!=='evenodd'||style.stroke!=='none'||
-                Math.abs(svgBox.width-box.width)>1||Math.abs(svgBox.height-box.height)>1||
-                Math.abs(svgBox.x-box.x)>1||Math.abs(svgBox.y-box.y)>1) {
-                return {valid:false,reason:'missing, misplaced or wrong-palette G4 foreground',fill:style.fill,expectedBorder};
+            const actualBorder=rgba(style.fill);
+            const checks={visible:rendered(foreground),palette:sameColor(actualBorder,expectedBorder),
+                fillRule:style.fillRule==='evenodd',stroke:style.stroke==='none',
+                width:Math.abs(svgBox.width-box.width)<=1,height:Math.abs(svgBox.height-box.height)<=1,
+                x:Math.abs(svgBox.x-box.x)<=1,y:Math.abs(svgBox.y-box.y)<=1};
+            if(!Object.values(checks).every(Boolean)) {
+                const bounds=rect=>({x:rect.x,y:rect.y,width:rect.width,height:rect.height});
+                const svgStyle=getComputedStyle(foreground);
+                return {valid:false,reason:'missing, misplaced or wrong-palette G4 foreground',checks,
+                    fill:style.fill,actualBorder,expectedBorder,fillRule:style.fillRule,stroke:style.stroke,
+                    panelBounds:bounds(box),foregroundBounds:bounds(svgBox),
+                    foregroundStyle:{display:svgStyle.display,visibility:svgStyle.visibility,opacity:svgStyle.opacity}};
             }
             // Rasterize the real foreground path with its real even-odd fill,
             // rather than accepting its color attribute or state marker alone.

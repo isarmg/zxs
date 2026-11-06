@@ -18,10 +18,19 @@ function name(node) {
   if (node.labels?.length) return [...node.labels].map(text).join(' ');
   return node.tagName === 'BUTTON' ? text(node) : '';
 }
+function descriptions(node, scope) {
+  if (!node) return [];
+  return referenced(node, 'aria-describedby').map(id => {
+    const target = document.getElementById(id);
+    return {id, text: text(target), local: !!target && scope.contains(target),
+      missing: target?.dataset.foreignRetainedMissing ?? null};
+  });
+}
 function control(node) {
   if (!node) return null;
   return {tag: node.tagName, name: name(node), disabled: node.disabled === true,
     checked: node.checked === true, tabIndex: node.tabIndex,
+    descriptions: descriptions(node, root),
     brokenReferences: ['aria-labelledby', 'aria-describedby'].flatMap(attribute =>
       referenced(node, attribute).filter(id => !document.getElementById(id)))};
 }
@@ -41,9 +50,10 @@ return {
     id: node.dataset.foreignPlanGroup, text: text(node),
     namedInput: !!name(node.querySelector('input')),
     missing: node.querySelector('[data-foreign-retained-missing]')?.dataset.foreignRetainedMissing,
-    // Report whether context is explicitly linked, without pretending a native
-    // input label alone is a complete screen-reader usability assessment.
+    // Bind each input to its own history, rather than accepting any valid ID.
+    // This is DOM evidence, not a screen-reader usability assessment.
     linkedContext: !!node.querySelector('input')?.getAttribute('aria-describedby'),
+    descriptions: descriptions(node.querySelector('input'), node),
   })),
   review: !!query('[data-foreign-plan-review]'),
   confirm, save: control(query('[data-foreign-plan-save]')),

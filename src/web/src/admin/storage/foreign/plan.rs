@@ -22,6 +22,11 @@ enum SaveState {
     Stored,
     Rejected,
 }
+#[derive(Clone, Copy)]
+enum Read {
+    Status,
+    Revalidate,
+}
 #[derive(Clone, Default)]
 pub(super) struct Model {
     draft: Draft,
@@ -132,6 +137,31 @@ impl Model {
         self.reading = false;
         self.error = None;
         self.stored = Some(status);
+    }
+    fn read_request(&mut self, action: Read) -> Option<(u64, ForeignPlanPreview)> {
+        if self.reading
+            || self.previewing
+            || !matches!(self.save, SaveState::Unknown | SaveState::Stored)
+            || (matches!(action, Read::Revalidate) && self.save != SaveState::Stored)
+        {
+            return None;
+        }
+        let expected = self.review.clone()?;
+        self.reading = true;
+        self.generation += 1;
+        self.error = None;
+        Some((self.generation, expected))
+    }
+    fn finish_read(&mut self, generation: u64, result: Result<ForeignPlanStatus, api::Error>) {
+        if self.generation != generation {
+            return;
+        }
+        self.reading = false;
+        match result {
+            Ok(status) => self.accept_saved(status),
+            // NotFound after an uncertain save is not proof of non-creation.
+            Err(error) => self.read_failed(error),
+        }
     }
     fn read_failed(&mut self, error: api::Error) {
         self.reading = false;

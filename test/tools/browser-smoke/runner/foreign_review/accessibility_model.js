@@ -2,6 +2,10 @@
 // browser mode; host fixtures prove this checker, not browser accessibility.
 return function validateForeignReviewAccessibility(s) {
   const errors = [];
+  function linked(descriptions, id, matches) {
+    const targets = descriptions.filter(target => target.id === id);
+    return targets.length === 1 && targets[0].local && matches(targets[0]);
+  }
   if (s.wizards !== 1) errors.push('one named review wizard must be visible');
   if (!s.name.trim()) errors.push('review wizard has no accessible name');
   for (const control of s.controls) {
@@ -24,6 +28,19 @@ return function validateForeignReviewAccessibility(s) {
           || !group.text.includes(expected.origin) || group.missing !== String(expected.missing)) {
         errors.push('history mapping lost its name, provenance or unavailable-body count');
       }
+      const prefix = `zxs-foreign-plan-${expected.id}`;
+      if (group && (!linked(group.descriptions, `${prefix}-origin`, target => target.text.includes(expected.origin))
+          || !linked(group.descriptions, `${prefix}-history`, target => target.text === expected.history)
+          || !linked(group.descriptions, `${prefix}-availability`, target =>
+            !!target.text.trim() && target.missing === String(expected.missing)))) {
+        errors.push('history input must describe its own origin, history and unavailable-body count');
+      }
+    }
+  }
+  for (const control of [s.confirm, s.save, s.retry, s.status, s.revalidate].filter(Boolean)) {
+    if (!linked(control.descriptions, 'zxs-foreign-plan-operation', target => !!target.text.trim())
+        || !linked(control.descriptions, 'zxs-foreign-plan-scope', target => !!target.text.trim())) {
+      errors.push('review control must describe the original operation and review-only scope');
     }
   }
   if (s.review) {

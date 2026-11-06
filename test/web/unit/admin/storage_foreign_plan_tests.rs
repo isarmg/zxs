@@ -1,6 +1,9 @@
 use super::*;
 use storage_contract::storage_directories::{CandidateSelection, DiskRoleEvidence};
 
+#[path = "storage_foreign_plan/recovery_tests.rs"]
+mod recovery;
+
 fn id(prefix: &str, n: u8) -> String {
     format!("{prefix}_{n:032x}")
 }
@@ -362,6 +365,106 @@ fn equal_input_keeps_review_and_does_not_reauthorize_changes() {
     assert_eq!(model.review, review);
     assert!(model.acknowledged);
 }
+
+fn selected_review() -> super::super::super::Model {
+    let mut storage = super::super::super::Model {
+        snapshot: Some(super::super::super::Snapshot {
+            state: super::super::super::StorageState::Active,
+            _disk_ids: vec![],
+            completion_available: false,
+            allow_development: false,
+            terminal: None,
+        }),
+        ..Default::default()
+    };
+    let source = source();
+    super::super::super::wizard::tests::open_discovered_source(&mut storage, source.source.clone());
+    storage.foreign.preview = Some(source);
+    storage.foreign.plan = reviewed_model();
+    storage
+}
+
+#[test]
+fn repeated_candidate_selection_preserves_reviewed_and_local_drafts() {
+    for mode in [
+        Mode::ReconstructExistingPrimary,
+        Mode::AdmitNewPrimary,
+        Mode::AdmitSecondary,
+    ] {
+        let mut storage = selected_review();
+        storage.foreign.plan.edit(|draft| draft.mode = mode);
+        storage.foreign.plan.acknowledged = mode == Mode::ReconstructExistingPrimary;
+        let before = storage.foreign.clone();
+        for _ in 0..2 {
+            super::super::super::wizard::choose(&mut storage, "/mnt/source");
+        }
+        let actual = &storage.foreign;
+        assert_eq!(actual.generation, before.generation);
+        assert_eq!(actual.preview, before.preview);
+        assert_eq!(actual.plan.generation, before.plan.generation);
+        assert_eq!(actual.plan.draft, before.plan.draft);
+        assert_eq!(actual.plan.review, before.plan.review);
+        assert_eq!(actual.plan.known_primary, before.plan.known_primary);
+        assert_eq!(actual.plan.acknowledged, before.plan.acknowledged);
+        assert_eq!(actual.plan.save, SaveState::Unsubmitted);
+    }
+}
+
+#[test]
+fn selecting_a_different_candidate_invalidates_the_original_source_and_review() {
+    let mut storage = selected_review();
+    storage.foreign.plan.acknowledged = true;
+    let source_generation = storage.foreign.generation;
+    let plan_generation = storage.foreign.plan.generation;
+    super::super::super::wizard::choose(&mut storage, "/mnt/ordinary");
+    assert!(storage.wizard.selected("/mnt/ordinary"));
+    assert!(storage.foreign.generation > source_generation);
+    assert!(storage.foreign.preview.is_none());
+    assert!(storage.foreign.plan.generation > plan_generation);
+    assert_eq!(storage.foreign.plan.draft, Draft::default());
+    assert!(storage.foreign.plan.review.is_none());
+    assert!(storage.foreign.plan.known_primary.is_empty());
+    assert!(!storage.foreign.plan.acknowledged);
+}
+
+#[test]
+fn repeated_candidate_selection_preserves_the_saved_immutable_review() {
+    let mut storage = selected_review();
+    let saved = ForeignPlanStatus {
+        preview: review(),
+        validation: ForeignPlanValidation::MatchedAtObservation,
+    };
+    storage.foreign.plan.accept_saved(saved.clone());
+    super::super::super::wizard::choose(&mut storage, "/mnt/source");
+    assert_eq!(storage.foreign.plan.save, SaveState::Stored);
+    assert_eq!(storage.foreign.plan.review, Some(saved.preview.clone()));
+    assert_eq!(storage.foreign.plan.stored, Some(saved));
+    assert!(!storage.foreign.plan.can_save());
+}
+
+#[test]
+fn candidate_clicks_do_not_replace_a_sending_or_unknown_review_save() {
+    for unknown in [false, true] {
+        let mut storage = selected_review();
+        storage.foreign.plan.acknowledged = true;
+        let original = storage.foreign.plan.save_request().unwrap();
+        if unknown {
+            storage.foreign.plan.save_failed(failure(503));
+        }
+        let before = storage.foreign.clone();
+        for path in ["/mnt/source", "/mnt/ordinary", "/mnt/not-discovered"] {
+            super::super::super::wizard::choose(&mut storage, path);
+        }
+        assert!(storage.wizard.selected("/mnt/source"));
+        assert_eq!(storage.foreign.generation, before.generation);
+        assert_eq!(storage.foreign.preview, before.preview);
+        assert_eq!(storage.foreign.plan.generation, before.plan.generation);
+        assert_eq!(storage.foreign.plan.review, Some(original.preview));
+        assert_eq!(storage.foreign.plan.save, before.plan.save);
+        assert!(storage.foreign.plan.blocks_edit());
+    }
+}
+
 #[test]
 fn saving_requires_explicit_acknowledgment_and_duplicate_clicks_do_not_send_again() {
     let mut model = reviewed_model();
