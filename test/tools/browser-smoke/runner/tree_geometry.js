@@ -12,7 +12,11 @@
     for (const node of nodes) {
         const box = node.getBoundingClientRect(), style = getComputedStyle(node);
         p.check(box.width <= 295 && box.width <= scroll.clientWidth - 35, 'node width and side channels');
-        p.check(parseFloat(style.getPropertyValue('--zxs-contour-extent')) === 18, 'G4 node extent');
+        // The ARTICLE owns layout and connectors; its native SUMMARY paints
+        // the card. G4 extent is registered as non-inherited, so read its host.
+        const card = node.querySelector(':scope > details.zxs-node-disclosure > summary.zxs-node-card.zxs-frame');
+        p.check(card !== null, 'native G4 card summary');
+        p.check(parseFloat(getComputedStyle(card).getPropertyValue('--zxs-contour-extent')) === 18, 'G4 card extent');
         p.check(Math.abs(parseFloat(style.fontSize) - 14.4) < .1, 'unchanged compact font');
     }
     for (const edge of edges) {

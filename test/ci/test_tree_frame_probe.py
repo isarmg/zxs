@@ -100,3 +100,17 @@ class TreeFrameProbe(unittest.TestCase):
         self.assertLess(tree.index('node_cards::open_first(browser)?;'),
                         tree.index('browser.click(&browser.css(".zxs-version-node .zxs-version-note-action")?)?;'))
         self.assertIn('browser.keys(&editor, "\\u{e00c}")?;', tree)
+
+    def test_g4_extent_is_checked_on_the_non_inherited_native_card_host(self):
+        geometry = (ROOT / 'src/web/public/styles/components/geometry.css').read_text()
+        registration = re.search(r'@property --zxs-contour-extent\s*\{([^}]+)\}', geometry).group(1)
+        self.assertIn('inherits: false', registration)
+        self.assertIn('initial-value: 0px', registration)
+        frame = re.search(r'\.zxs-app-shell \.zxs-frame\s*\{([^}]+)\}', geometry).group(1)
+        self.assertIn('--zxs-contour-extent: var(--zxs-contour-panel)', frame)
+        source = (PROBE / 'runner/tree_geometry.js').read_text()
+        self.assertIn(':scope > details.zxs-node-disclosure > summary.zxs-node-card.zxs-frame', source)
+        self.assertIn("getComputedStyle(card).getPropertyValue('--zxs-contour-extent')", source)
+        self.assertNotIn("style.getPropertyValue('--zxs-contour-extent')", source)
+        self.assertIn('node.getBoundingClientRect(), style = getComputedStyle(node)', source)
+        self.assertIn("Math.abs(parseFloat(style.fontSize) - 14.4) < .1", source)

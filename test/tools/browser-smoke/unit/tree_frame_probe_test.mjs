@@ -176,3 +176,61 @@ assert.equal(context.MutationObserver, Observer);
 assert.equal(Element.prototype.getBoundingClientRect, originalRect);
 assert.equal(Element.prototype.querySelectorAll, originalQuery);
 console.log('PASS tree frame geometry/query isolation, native-record capture, resize registration, burst, flush, cancellation and restoration (mock host only)');
+
+// Execute the same complete geometry assertion with separate layout and paint
+// owners. These are host models, not browser geometry or G4 rendering proof.
+const geometry = readFileSync(new URL('../runner/tree_geometry.js', import.meta.url), 'utf8');
+function geometryHost({width=86.34375, wrapperExtent='0px', cardExtent='18px', card=true,
+    fontSize='14.4px', pageWidth=390, parentOffset=0, strokeWidth='1.5px', edge=true}={}) {
+    const members = [
+        {id:'child',left:40,top:0,width,height:72},
+        {id:'parent',left:40,top:200,width:86.34375,height:72},
+    ].map(box => {
+        const summary = {style:{getPropertyValue:()=>cardExtent}};
+        return {dataset:{versionId:box.id},style:{fontSize,getPropertyValue:()=>wrapperExtent},
+            querySelector(selector) {
+                assert.equal(selector,':scope > details.zxs-node-disclosure > summary.zxs-node-card.zxs-frame');
+                return card ? summary : null;
+            },
+            getBoundingClientRect:()=>({...box,right:box.left+box.width,bottom:box.top+box.height})};
+    });
+    const [child,parent] = members.map(member=>member.getBoundingClientRect());
+    const start = {x:(parent.left+parent.right)/2+parentOffset,y:parent.top};
+    const end = {x:(child.left+child.right)/2,y:child.bottom+3};
+    const length = Math.hypot(end.x-start.x,end.y-start.y);
+    const path = {dataset:{parentVersion:'parent',childVersion:'child'},
+        style:{strokeWidth,strokeLinecap:'round',strokeLinejoin:'round'},
+        getTotalLength:()=>length,
+        getPointAtLength:d=>({x:start.x+(end.x-start.x)*d/length,y:start.y+(end.y-start.y)*d/length}),
+        getAttribute:name=>name==='marker-end'?'url(#zxs-version-arrow)':null};
+    const canvas = {parentElement:{clientWidth:350},getBoundingClientRect:()=>({left:0,top:0}),
+        querySelectorAll:selector=>selector==='.zxs-version-node'?members:edge?[path]:[]};
+    const probe = {settle:async()=>{},current:()=>canvas,
+        assertInitialDiscovery(value) { assert.equal(value,canvas); },
+        check(condition,message) { assert(condition,message); }};
+    return {window:{__zxsTreeFrames:probe},innerWidth:390,
+        document:{documentElement:{scrollWidth:pageWidth},fonts:{status:'loaded'}},
+        getComputedStyle:element=>element.style};
+}
+const collapsed = await runInNewContext(geometry,geometryHost());
+assert.equal(collapsed.nodes,2);
+assert.equal(collapsed.edges,1);
+await runInNewContext(geometry,geometryHost({width:294}));
+for(const [options,message] of [
+    [{wrapperExtent:'18px',card:false},/native G4 card summary/],
+    [{wrapperExtent:'18px',cardExtent:'0px'},/G4 card extent/],
+    [{cardExtent:'17px'},/G4 card extent/],
+    [{cardExtent:''},/G4 card extent/],
+    [{width:296},/node width and side channels/],
+    [{fontSize:'15px'},/unchanged compact font/],
+    [{pageWidth:392},/tree must not overflow page/],
+    [{parentOffset:5},/parent connector endpoint/],
+    [{strokeWidth:'2px'},/connector stroke/],
+    [{edge:false},/real seeded nodes and connectors/],
+]) await assert.rejects(runInNewContext(geometry,geometryHost(options)),message);
+const oldHost = geometry.replace("getComputedStyle(card).getPropertyValue('--zxs-contour-extent')",
+    "style.getPropertyValue('--zxs-contour-extent')");
+assert.notEqual(oldHost,geometry);
+await assert.rejects(runInNewContext(oldHost,geometryHost()),/G4 card extent/);
+await runInNewContext(oldHost,geometryHost({wrapperExtent:'18px',cardExtent:'0px'}));
+console.log('PASS complete tree geometry host cases: ARTICLE layout, native SUMMARY G4 extent, old-host/missing-card/wrong-extent rejection and retained size/font/edge checks (mock host only)');
