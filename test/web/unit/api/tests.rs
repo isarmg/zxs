@@ -1,4 +1,68 @@
 use super::*;
+
+#[test]
+fn old_401_keeps_new_credentials_and_their_queued_management_read() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll, Waker},
+    };
+    clear_session();
+    let old = CREDENTIALS.with(|saved| saved.borrow().generation);
+    CREDENTIALS.with(|saved| {
+        saved
+            .borrow_mut()
+            .replace(Some("new-token".into()), Some("new-csrf".into()))
+    });
+    let mut current = MANAGEMENT_READS.with(read_queue::Queue::acquire).unwrap();
+    revoke_response_credentials(old);
+    assert!(matches!(
+        Pin::new(&mut current).poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Ok(_))
+    ));
+    CREDENTIALS.with(|saved| assert_eq!(saved.borrow().token.as_deref(), Some("new-token")));
+    clear_session();
+}
+
+#[test]
+fn current_401_and_logout_clear_queued_reads_without_a_network_attempt() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll, Waker},
+    };
+    for logout in [false, true] {
+        clear_session();
+        let mut queued = MANAGEMENT_READS.with(read_queue::Queue::acquire).unwrap();
+        if logout {
+            invalidate_session_work();
+        } else {
+            let generation = CREDENTIALS.with(|saved| saved.borrow().generation);
+            revoke_response_credentials(generation);
+        }
+        assert!(matches!(
+            Pin::new(&mut queued).poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(read_queue::AdmissionError::Invalidated))
+        ));
+    }
+    clear_session();
+}
+
+#[test]
+fn local_queue_full_is_distinct_from_the_unchanged_remote_429() {
+    let local = read_admission_error(read_queue::AdmissionError::Full);
+    assert_eq!(local.status, 0);
+    assert_eq!(local.code, storage_contract::ErrorCode::ResourceLimit);
+    let remote = response::decode(429, br#"{"error":{"code":"RESOURCE_LIMIT_EXCEEDED","message":"capacity reached","retryable":true,"request_id":"original-response"}}"#).unwrap_err();
+    assert_eq!(remote.status, 429);
+    assert_eq!(
+        remote.code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
+    assert_eq!(remote.message, "capacity reached");
+    assert_eq!(remote.request_id.as_deref(), Some("original-response"));
+    assert!(remote.retryable);
+}
 #[test]
 fn segment_encoding_is_native_safe_and_matches_uri_component_semantics() {
     assert_eq!(segment("AZaz09-_.!~*'()"), "AZaz09-_.!~*'()");

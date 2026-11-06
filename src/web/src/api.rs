@@ -8,6 +8,7 @@ use web_interface::i18n::t;
 use web_sys::{RequestCredentials, RequestInit, RequestMode, RequestRedirect, Response};
 
 mod browser;
+mod read_queue;
 mod response;
 pub(crate) use browser::ReadCancellation;
 use browser::{AbortOnDrop, js_error};
@@ -48,6 +49,7 @@ impl Credentials {
     }
 }
 thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credentials::default()); }
+thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::default(); }
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
@@ -171,12 +173,21 @@ pub fn session_changed() -> Error {
 
 pub fn clear_session() {
     CREDENTIALS.with(|saved| saved.borrow_mut().replace(None, None));
+    MANAGEMENT_READS.with(read_queue::Queue::invalidate);
 }
 
 // Stop later stages of in-flight operations before logout reaches the server.
 // Keep the credential until revocation is confirmed so failed logout can retry.
 pub(crate) fn invalidate_session_work() {
     CREDENTIALS.with(|saved| saved.borrow_mut().generation += 1);
+    MANAGEMENT_READS.with(read_queue::Queue::invalidate);
+}
+
+fn revoke_response_credentials(generation: u64) {
+    let revoked = CREDENTIALS.with(|saved| saved.borrow_mut().revoke(generation));
+    if revoked {
+        MANAGEMENT_READS.with(read_queue::Queue::invalidate);
+    }
 }
 
 pub fn operation_id() -> Result<String, Error> {
@@ -217,6 +228,7 @@ struct Fetched {
     revoke_on_unauthorized: bool,
     _timeout: gloo_timers::callback::Timeout,
     abort: AbortOnDrop,
+    _management_read: Option<read_queue::Permit>,
 }
 
 async fn fetch(method: &str, path: &str, body: Option<Value>) -> Result<Fetched, Error> {
@@ -272,6 +284,18 @@ async fn fetch_authorized(
     })?;
     let timeout = cancellation.clone();
     let timer = gloo_timers::callback::Timeout::new(120_000, move || timeout.timeout());
+    let management_read = if read_queue::managed(method, path) {
+        let admission = MANAGEMENT_READS
+            .with(read_queue::Queue::acquire)
+            .map_err(read_admission_error)?;
+        let permit = cancellation.wait_for_admission(admission).await?;
+        if !CREDENTIALS.with(|saved| saved.borrow().generation == credential_generation) {
+            return Err(session_changed());
+        }
+        Some(permit)
+    } else {
+        None
+    };
     let window = web_sys::window().ok_or_else(|| {
         error(
             storage_contract::ErrorCode::NoWindow,
@@ -287,6 +311,7 @@ async fn fetch_authorized(
         revoke_on_unauthorized: !public_setup,
         _timeout: timer,
         abort,
+        _management_read: management_read,
     })
 }
 
@@ -343,7 +368,7 @@ async fn read_body_inner(
 async fn decode(fetched: Fetched) -> Result<Value, Error> {
     let status = fetched.response.status();
     if status == 401 && fetched.revoke_on_unauthorized {
-        CREDENTIALS.with(|saved| saved.borrow_mut().revoke(fetched.credential_generation));
+        revoke_response_credentials(fetched.credential_generation);
     }
     if let Some(length) = fetched
         .response
@@ -514,7 +539,21 @@ fn accept_login(generation: u64, result: Value) -> Result<Authenticated, Error> 
     if !accepted {
         return Err(session_changed());
     }
+    MANAGEMENT_READS.with(read_queue::Queue::invalidate);
     Ok(session.authenticated)
+}
+
+fn read_admission_error(failure: read_queue::AdmissionError) -> Error {
+    match failure {
+        read_queue::AdmissionError::Invalidated => session_changed(),
+        read_queue::AdmissionError::Full => error(
+            storage_contract::ErrorCode::ResourceLimit,
+            t(
+                "管理读取等待队列已满，请稍后重试。",
+                "The management read queue is full. Try again later.",
+            ),
+        ),
+    }
 }
 
 pub(crate) async fn restore() -> Result<Authenticated, Error> {

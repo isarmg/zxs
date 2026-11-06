@@ -45,6 +45,7 @@ mod history_windows;
 mod integrity_scrub;
 mod lifecycle;
 mod management;
+mod management_queue_lifecycle;
 mod metadata;
 mod naming;
 mod note_recovery;
@@ -374,6 +375,7 @@ fn exercise(
     disk_tree::run(browser)?;
     metadata::disk_notes(browser)?;
     disk_health::run(browser)?;
+    management_queue_lifecycle::run(browser, password)?;
     single_account::run(browser, password)?;
     // Language reload intentionally resets file navigation and selection. Restore
     // the seeded directory AND selected file required by the logout write/metadata fences.

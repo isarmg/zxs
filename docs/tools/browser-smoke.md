@@ -61,6 +61,12 @@ Select 快滚压力检查使用状态页真实的五个范围选项，将测试�
 
 ## 会话隔离与退出重试
 
+管理刷新另通过 `admin_read_queue.js` 观察真实 GET，暂缓原始磁盘列表正文流，核对持有正文期间没有后续管理 fetch、峰值为 1，释放后全部八种刷新路由完成。状态码、headers 和正文原样转发，不为真实 429 增加白名单。
+
+`management_queue_lifecycle` 先真实退出并重新登录，以免语言重载后的 cookie 恢复或前次刷新影响请求归属。夹具透明观察原生 Request 的构造；生产构造 Request 到注册 120 秒 timer 之间没有 await，据此把 timer 绑定到准确 URL、方法和原 AbortSignal。仅触发明确已构造、尚未 fetch 的 readmission GET 的回调，要求它被中止而活跃发现请求不变。此项执行真实超时回调，不等待 120 秒，也不声称计时精度。随后在旧响应 headers 交给 Rust 前暂缓读取，真实退出使旧等待项失效，新登录的管理读取先排队再释放旧 401。新 Bearer 必须非空、不同于旧登录并在后续请求中保留；只在内存比较布尔结果，不保存凭据，成功 cookie 不能掩盖 Bearer 被清空。
+
+最后只对一次发现请求构造原生 429，保留真实服务使用的 `RESOURCE_LIMIT_EXCEEDED`、详情、请求标识和 retryable 字段；页面必须保留错误且只尝试一次，显式刷新才发第二次真实读取并成功。所有 fetch、Request、timer 包装在失败或结束时恢复。host 观测器单测由正式 `browser-smoke` 的 `admin_language_tests` 执行 Node 脚本，覆盖字节与 headers、重叠正向控制、body 失败／取消、清理、准确 timer 归属和旧请求／缺失 Bearer 负例。host 测试、Rust metadata 和源码接线不代替当前候选的真实 Chrome 运行，实际结果见[管理读取排队验证](../validation/management-read-queue-20261106.md)。
+
 暂缓真实文件历史的原始成功 Response：有效会话继续后必须显示两版本树；注销完成后才释放的旧响应不得恢复私有文件详情。原始响应正文、状态码和头不变，不注入应用状态。另一个夹具仅中断首次退出传输，验证等待及失败阶段新建目录和文件备注控件禁止新操作、没有业务写请求；显式重试必须真正注销，重新登录恢复元数据写入准入。成功或失败均释放响应及恢复 fetch。
 
 ## 浏览器响应式视口截图

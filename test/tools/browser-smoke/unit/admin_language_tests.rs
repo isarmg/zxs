@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn management_admission_probes_preserve_bytes_errors_and_cleanup() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test/tools/browser-smoke/unit/admin_read_queue_test.mjs");
+    let result = Command::new("node")
+        .arg(path)
+        .output()
+        .expect("Node is required by repository validation");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
 fn administration_browser_expectations_cover_both_languages_without_mixed_labels() {
     assert_eq!(ACTIONS.len(), 9);
     assert_eq!(QUERIES.len(), 13);

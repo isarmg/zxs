@@ -1,6 +1,11 @@
 //! Parse browser exceptions once, retaining the original JavaScript value.
 use super::{Error, ErrorSource, error};
-use std::cell::Cell;
+use std::{
+    cell::{Cell, RefCell},
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll, Waker},
+};
 use wasm_bindgen::{JsCast, JsValue};
 use web_interface::i18n::t;
 
@@ -84,6 +89,7 @@ enum AbortCause {
 struct Cancellation {
     controller: web_sys::AbortController,
     cause: Cell<Option<AbortCause>>,
+    queue_waker: RefCell<Option<Waker>>,
 }
 
 /// Shared only by a read owner and its request. The first abort owns the cause.
@@ -98,6 +104,7 @@ impl ReadCancellation {
                     Cancellation {
                         controller,
                         cause: Cell::new(None),
+                        queue_waker: RefCell::new(None),
                     },
                 )))
             })
@@ -116,11 +123,22 @@ impl ReadCancellation {
         if !self.signal().aborted() {
             self.0.cause.set(Some(cause));
             self.0.controller.abort();
+            let waker = self.0.queue_waker.borrow_mut().take();
+            if let Some(waker) = waker {
+                waker.wake();
+            }
         }
     }
 
     pub(super) fn signal(&self) -> web_sys::AbortSignal {
         self.0.controller.signal()
+    }
+
+    pub(super) fn wait_for_admission(&self, admission: super::read_queue::Admission) -> QueuedRead {
+        QueuedRead {
+            cancellation: self.clone(),
+            admission,
+        }
     }
 
     pub(super) fn request_error(&self, value: JsValue) -> Error {
@@ -136,6 +154,34 @@ impl ReadCancellation {
             _ => FailureKind::Request,
         };
         BrowserFailure::parse(value, kind).into_error()
+    }
+}
+
+/// Poll the real abort signal while still queued, before fetch exists to reject.
+pub(super) struct QueuedRead {
+    cancellation: ReadCancellation,
+    admission: super::read_queue::Admission,
+}
+
+impl Future for QueuedRead {
+    type Output = Result<super::read_queue::Permit, Error>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let signal = this.cancellation.signal();
+        if signal.aborted() {
+            return Poll::Ready(Err(this.cancellation.request_error(signal.reason())));
+        }
+        *this.cancellation.0.queue_waker.borrow_mut() = Some(context.waker().clone());
+        Pin::new(&mut this.admission)
+            .poll(context)
+            .map_err(super::read_admission_error)
+    }
+}
+
+impl Drop for QueuedRead {
+    fn drop(&mut self) {
+        self.cancellation.0.queue_waker.borrow_mut().take();
     }
 }
 

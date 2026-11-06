@@ -75,25 +75,13 @@ fn select_action(browser: &Browser, en: &str, zh: &str) -> Result<()> {
     ))?;
     browser.click(&button)
 }
-// Hold only delivery of the real list Response to observe the pending UI.
+// Hold the real list body to observe pending UI and the production read queue.
 fn refresh_disks_from_header(browser: &Browser) -> Result<()> {
     browser.css(".zxs-header-refresh:not([disabled])")?;
     if browser.script("return [...document.querySelectorAll('.zxs-disk-management button')].some(e=>['Refresh disk list','刷新硬盘列表'].includes(e.textContent.trim()))")? != false {
         return Err("duplicate disk-list refresh entry remains in administration".into());
     }
-    browser.script(r#"
-        const original=window.fetch;
-        let release; const gate=new Promise(resolve=>release=resolve);
-        window.__zxsAdminRefresh={count:0,held:false,release,restore:()=>{release();window.fetch=original;delete window.__zxsAdminRefresh;}};
-        window.fetch=async function(...args){
-            const result=await Reflect.apply(original,this,args),request=args[0];
-            const url=new URL(request instanceof Request?request.url:request,location.href);
-            if(url.origin===location.origin&&url.pathname==='/api/admin/disks'){
-                window.__zxsAdminRefresh.count++;window.__zxsAdminRefresh.held=true;await gate;
-            }
-            return result;
-        };return true;
-    "#)?;
+    browser.script(include_str!("admin_read_queue.js"))?;
     with_cleanup(
         || {
             browser.cdp(
@@ -105,6 +93,21 @@ fn refresh_disks_from_header(browser: &Browser) -> Result<()> {
                 "real admin refresh held without visible loading copy",
                 || {
                     if browser.script("return window.__zxsAdminRefresh.held&&window.__zxsAdminRefresh.count===1&&document.querySelector('.zxs-header-refresh').disabled&&document.querySelector('.zxs-header-refresh').getAttribute('aria-busy')==='true'&&getComputedStyle(document.querySelector('.zxs-refresh-icon')).animationName==='zxs-refresh-spin'&&document.querySelector('.zxs-disk-management').getAttribute('aria-busy')==='true'&&!document.querySelector('.zxs-disk-management .zxs-loading')")? == true { Ok(()) } else { Err("header refresh state or loading-copy suppression is incorrect".into()) }
+                },
+            )?;
+            wait_for(
+                "management reads wait until the held response body finishes",
+                || {
+                    let evidence = browser.script("const p=window.__zxsAdminRefresh;return {ready:p.framesPassed,peak:p.peak,started:p.paths.length,atHold:p.atHold,failures:p.failures}")?;
+                    if evidence["ready"] == true
+                        && evidence["peak"] == 1
+                        && evidence["started"] == evidence["atHold"]
+                        && evidence["failures"] == json!([])
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!("management body admission evidence: {evidence}").into())
+                    }
                 },
             )?;
             browser.cdp(
@@ -126,6 +129,27 @@ fn refresh_disks_from_header(browser: &Browser) -> Result<()> {
             if browser.script("return document.querySelector('.zxs-header-refresh').getAttribute('aria-busy')==='false'&&getComputedStyle(document.querySelector('.zxs-refresh-icon')).animationName==='none'")? != true {
                 return Err("refresh ring did not stop after the list and detail reads settled".into());
             }
+            wait_for(
+                "all management refresh reads drain without 429 or overlap",
+                || {
+                    let evidence = browser.script(r#"
+                    const p=window.__zxsAdminRefresh;
+                    const required=['/api/admin/storage/status','/api/admin/storage/discovered-disks',
+                        '/api/admin/disks','/api/admin/disks/registrations','/api/admin/disks/addition',
+                        '/api/admin/storage/conversion/status','/api/admin/disks/exit','/api/admin/disks/readmission'];
+                    return {active:p.active,peak:p.peak,missing:required.filter(path=>!p.paths.includes(path)),failures:p.failures};
+                "#)?;
+                    if evidence["active"] == 0
+                        && evidence["peak"] == 1
+                        && evidence["missing"] == json!([])
+                        && evidence["failures"] == json!([])
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!("management refresh did not drain: {evidence}").into())
+                    }
+                },
+            )?;
             Ok(())
         },
         || {
