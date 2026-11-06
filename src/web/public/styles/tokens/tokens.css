@@ -22,4 +22,12 @@
   --zxs-bg-panel: #ffffff;
   --zxs-text-primary: var(--zxs-gray-900);
   --zxs-text-danger: var(--zxs-red-600);
+  --zxs-history-content: #0f766e;
+  --zxs-history-rename: #1d4ed8;
+  --zxs-history-move: #b45309;
+  --zxs-history-path: #52525b;
+  --zxs-history-tags: #7e22ce;
+  --zxs-history-merge: #be185d;
+  --zxs-history-snapshot: #166534;
+  --zxs-history-delete: #b91c1c;
 }

@@ -117,6 +117,8 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 &&!Array.from(document.querySelectorAll('button')).some(button=>['Create folder branch','创建目录分支'].includes(button.textContent.trim()))&&p.writes===0;
         "#,
             )?;
+            node_cards::run(browser)?;
+            node_cards::open_first(browser)?;
             check(
                 browser,
                 "directory SVG draws exactly the real parent edges at the measured nodes",

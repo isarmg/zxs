@@ -12,7 +12,7 @@ fn check(browser: &Browser, label: &str, expression: &str) -> Result<()> {
     })
 }
 
-fn evidence(browser: &Browser, name: &str, expression: &str) -> Result<()> {
+pub(super) fn evidence(browser: &Browser, name: &str, expression: &str) -> Result<()> {
     let directory = Path::new("artifacts/browser-smoke/diagnostics/phase1-files");
     fs::create_dir_all(directory)?;
     fs::write(
@@ -143,7 +143,8 @@ pub(super) fn disk_read(browser: &Browser) -> Result<()> {
     Ok(())
 }
 
-fn edit_current_tags(browser: &Browser) -> Result<()> {
+pub(super) fn edit_current_tags(browser: &Browser) -> Result<()> {
+    node_cards::open_current(browser)?;
     browser.click(&browser.element("xpath", "//article[contains(@class,'zxs-version-node')][.//span[contains(@class,'zxs-version-current')]]//button[normalize-space(.)='Edit tags' or normalize-space(.)='编辑标签']")?)?;
     browser.css(".zxs-tag-review input:not([disabled])")?;
     Ok(())

@@ -1,6 +1,6 @@
 // Observe the actual file/folder history title rows. This does not change DOM,
 // styles, focus, pointer state, data or the ancestry layout.
-const rows = [...document.querySelectorAll('.zxs-version-date')];
+const rows = [...document.querySelectorAll('.zxs-node-disclosure[open] .zxs-version-date')];
 if (rows.length === 0) return false;
 const close = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= .5;
 for (const row of rows) {

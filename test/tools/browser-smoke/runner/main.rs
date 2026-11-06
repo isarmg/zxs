@@ -48,6 +48,7 @@ mod management;
 mod management_queue_lifecycle;
 mod metadata;
 mod naming;
+mod node_cards;
 mod note_recovery;
 mod page_layout;
 mod phase1_files;
@@ -59,6 +60,7 @@ mod file_viewports;
 mod session_logout;
 mod single_account;
 mod stylesheets;
+mod tag_unknown;
 mod tree_frames;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -400,6 +402,7 @@ fn exercise(
         },
     )?;
     phase1_files::tags(browser)?;
+    tag_unknown::run(browser)?;
     session_logout::run(browser, password)?;
     browser.click(&browser.button("Files", "文件")?)?;
     let stale_history = session_delivery::begin_paused_history(browser)?;

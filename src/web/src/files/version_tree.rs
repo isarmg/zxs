@@ -6,6 +6,7 @@ use super::{
     history_index::HistoryIndex,
     inline, merge,
     model::Model,
+    node_card,
 };
 use crate::ui::State;
 use std::{
@@ -806,10 +807,19 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
         version.with(|node| node.as_ref().map(parent_boundary).unwrap_or_default())
     });
     let (note, edit) = inline::version_note(state, note_target, id.get_value(), disabled);
+    let card_title = Signal::derive(move || {
+        version.with(|node| node.as_ref().map(node_card::file_title).unwrap_or_default())
+    });
+    let card_actions = Signal::derive(move || {
+        version.with(|node| node.as_ref().map(node_card::file_actions).unwrap_or(&[]))
+    });
     view! {
-        <article class="zxs-content-panel zxs-version-node zxs-frame zxs-stack zxs-stack--flush" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|node.as_ref().and_then(FileNode::version_id).map(str::to_owned).unwrap_or_default()) data-node-kind=move ||version.with(|node|node.as_ref().map(|node|kind_name(node.kind())).unwrap_or_default())
+        <article class="zxs-version-node" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|node.as_ref().and_then(FileNode::version_id).map(str::to_owned).unwrap_or_default()) data-node-kind=move ||version.with(|node|node.as_ref().map(|node|kind_name(node.kind())).unwrap_or_default())
             data-parent-set=move ||boundary.with(|boundary|if boundary.more.is_some(){"more"}else{"complete"})
             aria-label=move ||if current.get(){if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前版本","Current version")}}else{t("历史版本","Historical version")}>
+            <details class="zxs-node-disclosure">
+            {node_card::summary(card_title,card_actions,current)}
+            <div class="zxs-content-panel zxs-node-detail zxs-frame zxs-stack zxs-stack--flush">
             <div class="zxs-version-date zxs-row zxs-row--center" title=id.get_value()>
                 <Show when=move ||can_modify.get()><input class="zxs-node-checkbox" type="checkbox" aria-label=t("选择此节点","Select this node") disabled=move ||disabled.get()||state.with(|s|s.files.tag_edit.is_some()) prop:checked=move ||state.with(|s|s.files.checked_nodes.contains(&id.get_value())) on:change=move |event|super::tags::toggle(state,id.get_value(),event_target_checked(&event))/></Show>
                 <span>{t("日期未加载","Date not loaded")}</span>
@@ -847,6 +857,8 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
                     <button class="zxs-button" data-parent-state="more" disabled=move ||navigation_disabled.get() on:click=move |_|if let Some(cursor)=boundary.with_untracked(|boundary|boundary.more.clone()){actions::open_history_parents(state,id.get_value(),Some(cursor));}>{t("继续读取父关系","More parents")}</button>
                 </Show>
             </div>
+            </div>
+            </details>
         </article>
     }
 }

@@ -22,6 +22,28 @@ struct ResolvedReview {
     max_entries: usize,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct TagOwner {
+    instance: u64,
+    file: String,
+    repository: String,
+    path: String,
+}
+impl TagOwner {
+    pub(crate) fn current(&self, files: &super::model::Model) -> bool {
+        files
+            .tag_edit
+            .as_ref()
+            .is_some_and(|draft| draft.owned_by(self))
+            && files.selected.as_ref().is_some_and(|entry| {
+                entry.file_id() == self.file
+                    && entry.context().is_some_and(|(repository, path)| {
+                        repository == self.repository && path == self.path
+                    })
+            })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Draft {
     instance: u64,
@@ -38,8 +60,30 @@ pub(crate) struct Draft {
     target_page: usize,
     delta_page: usize,
     resolved: Option<ResolvedReview>,
+    needs_review: bool,
 }
 impl Draft {
+    pub(crate) fn owner(&self) -> TagOwner {
+        TagOwner {
+            instance: self.instance,
+            file: self.file.clone(),
+            repository: self.repository.clone(),
+            path: self.path.clone(),
+        }
+    }
+    pub(crate) fn owned_by(&self, owner: &TagOwner) -> bool {
+        self.instance == owner.instance
+            && self.file == owner.file
+            && self.repository == owner.repository
+            && self.path == owner.path
+    }
+    pub(crate) fn requires_review(&self) -> bool {
+        self.needs_review
+    }
+    pub(crate) fn require_review(&mut self) {
+        self.resolved = None;
+        self.needs_review = true;
+    }
     pub(crate) fn instance(&self) -> u64 {
         self.instance
     }
@@ -124,6 +168,7 @@ impl Draft {
         self.root = resolved.root;
         self.branches = resolved.branches;
         self.max_entries = resolved.max_entries;
+        self.needs_review = false;
         Ok(())
     }
 }
@@ -296,6 +341,7 @@ pub(crate) fn start(state: RwSignal<State>) {
             target_page: 0,
             delta_page: 0,
             resolved: None,
+            needs_review: false,
         })
     });
     if let Some(mut draft) = draft {
@@ -413,7 +459,9 @@ fn assign_branch(state: RwSignal<State>, instance: u64, source: String, id: Stri
         if draft.instance != instance {
             return Ok(());
         }
-        if s.files.file_history.root() != Some(draft.root()) || !s.files.file_history.ready() {
+        if !s.files.file_history.ready()
+            || s.files.file_history.root() != Some(draft.root()) && !draft.requires_review()
+        {
             return Err(review_required());
         }
         if !draft.targets.contains_key(&source) {
@@ -426,7 +474,11 @@ fn assign_branch(state: RwSignal<State>, instance: u64, source: String, id: Stri
             .iter()
             .find(|branch| branch.id() == id)
             .and_then(SelectedBranch::capture)
-            .or_else(|| draft.branches.get(&id).cloned())
+            .or_else(|| {
+                (!draft.requires_review())
+                    .then(|| draft.branches.get(&id).cloned())
+                    .flatten()
+            })
             .ok_or_else(missing_branch)?;
         let mut candidate = draft.clone();
         candidate.targets.insert(source, Some(id.clone()));
@@ -488,6 +540,9 @@ fn accept_review(state: RwSignal<State>, instance: u64) {
     }
 }
 fn request(draft: &Draft, selected: &Selection) -> Result<Value, String> {
+    if draft.requires_review() {
+        return Err(review_required());
+    }
     if !draft.input.trim().is_empty() {
         return Err(t(
             "请先点击“添加标签”加入输入框中的标签，或清空输入框后再保存。",

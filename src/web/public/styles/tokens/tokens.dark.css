@@ -4,6 +4,14 @@
   --zxs-text-primary: #fafafa;
   --zxs-text-danger: #f87171;
   --zxs-text-link: #60a5fa;
+  --zxs-history-content: #5eead4;
+  --zxs-history-rename: #93c5fd;
+  --zxs-history-move: #fdba74;
+  --zxs-history-path: #a1a1aa;
+  --zxs-history-tags: #d8b4fe;
+  --zxs-history-merge: #f9a8d4;
+  --zxs-history-snapshot: #86efac;
+  --zxs-history-delete: #fca5a5;
 }
 
 /* Native documents follow the system preference unless the application has selected a theme. */
@@ -14,5 +22,13 @@
     --zxs-text-primary: #fafafa;
     --zxs-text-danger: #f87171;
     --zxs-text-link: #60a5fa;
+    --zxs-history-content: #5eead4;
+    --zxs-history-rename: #93c5fd;
+    --zxs-history-move: #fdba74;
+    --zxs-history-path: #a1a1aa;
+    --zxs-history-tags: #d8b4fe;
+    --zxs-history-merge: #f9a8d4;
+    --zxs-history-snapshot: #86efac;
+    --zxs-history-delete: #fca5a5;
   }
 }

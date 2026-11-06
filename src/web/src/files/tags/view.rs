@@ -85,13 +85,17 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     let review_needed = Signal::derive(move || {
         state.with(|s| {
             s.files.tag_edit.as_ref().is_some_and(|draft| {
-                !s.files.file_history.ready() || s.files.file_history.root() != Some(draft.root())
+                draft.requires_review()
+                    || !s.files.file_history.ready()
+                    || s.files.file_history.root() != Some(draft.root())
             })
         })
     });
     let disabled = Signal::derive(move || {
         state.with(|s| !actions::history_write_allowed(s)) || review_needed.get()
     });
+    let branch_disabled =
+        Signal::derive(move || state.with(|s| !actions::history_write_allowed(s)));
     let navigation_disabled =
         Signal::derive(move || state.with(|s| !actions::history_navigation_ready(s)));
     let inherited_options = Memo::new(move |_| {
@@ -182,7 +186,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                             }
                             options
                         }));
-                        view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{source.get_value()}</span><Select label=t("关联分支","Associated branch") options=options value=selected disabled=disabled on_change=Callback::new(move |value:String|assign_branch(state,instance,source.get_value(),value))/></div>}
+                        view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{source.get_value()}</span><Select label=t("关联分支","Associated branch") options=options value=selected disabled=branch_disabled on_change=Callback::new(move |value:String|assign_branch(state,instance,source.get_value(),value))/></div>}
                     }).collect_view()}
                 </div>
                 <div class="zxs-file-toolbar zxs-flow">

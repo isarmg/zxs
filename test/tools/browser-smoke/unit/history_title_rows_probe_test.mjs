@@ -18,7 +18,7 @@ function fixture({file = false, zoom = 1, wrapped = false} = {}) {
     row.querySelector = selector => {assert.equal(selector, ':scope > span'); return label;};
     const model = {row, label, rows: [row]};
     model.run = () => observe({querySelectorAll: selector => {
-        assert.equal(selector, '.zxs-version-date'); return model.rows;
+        assert.equal(selector, '.zxs-node-disclosure[open] .zxs-version-date'); return model.rows;
     }}, node => node.style);
     return model;
 }

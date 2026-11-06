@@ -64,7 +64,33 @@
 .zxs-version-tree-scroll { container-type: inline-size; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
 .zxs-version-tree-canvas { position: relative; display: flex; flex-direction: column; align-items: center; gap: var(--zxs-block-gap); box-sizing: border-box; width: max-content; min-width: 100%; padding: 0 var(--zxs-block-gap); }
 .zxs-version-tree-level { position: relative; z-index: 1; display: flex; justify-content: center; align-items: flex-start; gap: var(--zxs-block-gap); box-sizing: border-box; width: max-content; min-width: calc(100% - var(--zxs-compact-row-height)); }
-.zxs-version-node { flex: 0 0 min(21rem,max(1px,calc(100cqw - var(--zxs-compact-row-height)))); width: min(21rem,max(1px,calc(100cqw - var(--zxs-compact-row-height)))); }
+.zxs-version-node { --zxs-history-card-width: 10ch; flex: 0 0 auto; width: var(--zxs-history-card-width); font-size: var(--zxs-compact-font-size); }
+.zxs-version-node:has(> .zxs-node-disclosure[open]) { width: min(21rem,max(1px,calc(100cqw - var(--zxs-compact-row-height)))); }
+.zxs-app-shell .zxs-node-card { display: grid; grid-template-rows: repeat(2,var(--zxs-compact-row-height)); width: var(--zxs-history-card-width); margin-inline: auto; list-style: none; cursor: pointer; }
+.zxs-node-card::marker { content: ""; }
+.zxs-node-card-title { display: block; align-self: center; min-width: 0; padding-inline: .5ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zxs-node-card-actions { display: flex; align-items: center; justify-content: center; gap: .5ch; }
+.zxs-node-action { display: inline-flex; width: 1.2em; height: 1.2em; }
+.zxs-node-action > svg { width: 100%; height: 100%; stroke-linecap: round; stroke-linejoin: round; }
+.zxs-node-action[data-history-action=content] { color: var(--zxs-history-content); }
+.zxs-node-action[data-history-action=rename] { color: var(--zxs-history-rename); }
+.zxs-node-action[data-history-action=move] { color: var(--zxs-history-move); }
+.zxs-node-action[data-history-action=path-change] { color: var(--zxs-history-path); }
+.zxs-node-action[data-history-action=tags] { color: var(--zxs-history-tags); }
+.zxs-node-action[data-history-action=merge] { color: var(--zxs-history-merge); }
+.zxs-node-action[data-history-action=snapshot] { color: var(--zxs-history-snapshot); }
+/* The deletion glyph is designed, but current history wire has no deletion
+ * node. No renderer assigns this action without such an admitted fact. */
+.zxs-node-action[data-history-action=delete] { color: var(--zxs-history-delete); }
+/* G4 supports outer shadows. Paint mode keeps their inner-corner arcs outside
+ * the original contour; clip mode would cut those arcs out of the ring. */
+.zxs-node-card[aria-current=true] { --zxs-contour-mode: paint; box-shadow: 0 0 0 2px var(--zxs-text-link); }
+.zxs-node-card:focus-visible { outline: 3px solid var(--zxs-action-primary); outline-offset: 3px; }
+.zxs-app-shell .zxs-node-detail { margin-block-start: var(--zxs-block-gap); }
+@media (forced-colors: active) {
+  .zxs-node-action[data-history-action] { color: CanvasText; }
+  .zxs-node-card[aria-current=true] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 .zxs-version-date { display: flex; align-items: center; gap: .5em; color: var(--zxs-block-muted); }
 .zxs-version-current { flex: 0 0 auto; white-space: nowrap; }
 .zxs-version-date time { font: inherit; overflow-wrap: anywhere; }

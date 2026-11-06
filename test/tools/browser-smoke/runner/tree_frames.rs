@@ -33,6 +33,8 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
 }
 
 fn exercise(browser: &Browser) -> Result<()> {
+    node_cards::run(browser)?;
+    node_cards::open_first(browser)?;
     browser.cdp(
         "Emulation.setDeviceMetricsOverride",
         json!({"width":390,"height":844,"deviceScaleFactor":1,"mobile":false}),

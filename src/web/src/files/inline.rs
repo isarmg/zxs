@@ -627,8 +627,8 @@ pub(super) fn control(
     }
 }
 
-/// A version keeps its note on the second logical row and its explicit edit
-/// action on the third. Only the note text is replaced by an underline input.
+/// Expanded node details keep the full note and an explicit edit action.
+/// Only that note text is replaced by an underline input, not the card title.
 pub(super) fn version_note(
     state: RwSignal<State>,
     target: Target,

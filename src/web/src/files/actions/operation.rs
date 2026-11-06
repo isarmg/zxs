@@ -12,17 +12,37 @@ use web_interface::tasks::spawn_local;
 /// Only a complete current receipt can settle its matching operation. Malformed
 /// success responses retain the original ID, draft and write fence for polling.
 pub(crate) fn record_receipt(state: RwSignal<State>, id: &str, value: Value) -> SaveStatus {
-    let operation = FileOperation::from_receipt(id, &value);
-    let status = operation.status();
+    let operation =
+        if state.with_untracked(|s| crate::files::review::receipt_kind_matches(s, id, &value)) {
+            FileOperation::from_receipt(id, &value)
+        } else {
+            FileOperation::unknown(id)
+        };
     record_operation(state, operation);
-    status
+    state.with_untracked(|s| {
+        s.files
+            .operations
+            .iter()
+            .find(|operation| operation.id() == id)
+            .expect("invariant: recording retains the observed operation")
+            .status()
+    })
 }
 
 pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation) {
     let id = operation.id().to_owned();
     let status = operation.status();
     let mut reload_scope = false;
+    let mut recorded = false;
     state.update(|s| {
+        if s.files
+            .operations
+            .iter()
+            .any(|previous| previous.id() == id && previous.status() != SaveStatus::Unknown)
+        {
+            return;
+        }
+        recorded = true;
         s.files.operations.retain(|operation| operation.id() != id);
         s.files.operations.insert(0, operation);
         s.files.operations.truncate(100);
@@ -39,7 +59,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
             }
         }
     });
-    if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
+    if recorded && matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         reload_entries(state);
     }
     if reload_scope {
@@ -56,6 +76,7 @@ fn poll_work(state: &State) -> Option<(u64, Vec<String>)> {
         .operations
         .iter()
         .filter(|operation| operation.status() == SaveStatus::Unknown)
+        .filter(|operation| !crate::files::review::tag_attempt_in_flight(state, operation.id()))
         .filter_map(|operation| {
             let id = operation.id();
             (!state
@@ -89,6 +110,21 @@ pub(crate) fn poll(state: RwSignal<State>) {
 
 fn complete_poll(state: RwSignal<State>, epoch: u64, id: &str, result: Result<Value, api::Error>) {
     if !current_session(state, epoch) {
+        return;
+    }
+    let pending = state.with_untracked(|s| {
+        s.files
+            .operations
+            .iter()
+            .any(|operation| operation.id() == id && operation.status() == SaveStatus::Unknown)
+    });
+    if !pending {
+        if let Err(error) = result
+            && error.status == 401
+        {
+            fail_in(state, epoch, ErrorContext::Operation(id.to_owned()), error);
+        }
+        state.update(|s| s.files.polling_operations.retain(|item| item != id));
         return;
     }
     match result {

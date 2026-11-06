@@ -458,3 +458,115 @@ fn default_publication_unknown_preserves_preview_until_its_own_terminal_receipt(
         });
     }
 }
+
+#[test]
+fn late_unknown_receipt_cannot_reopen_a_terminal_operation() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            record_receipt(state, "original", published()),
+            SaveStatus::Published
+        );
+        record_operation(state, FileOperation::unknown("original"));
+        state.with_untracked(|s| {
+            assert_eq!(s.files.operations[0].status(), SaveStatus::Published);
+            assert!(!super::super::pending(s));
+        });
+    });
+}
+
+#[test]
+fn late_poll_cannot_restore_unknown_or_clear_a_new_attempt_after_publication() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            record_receipt(state, "original", published()),
+            SaveStatus::Published
+        );
+        state.update(|s| {
+            s.files.mutation_pending = true;
+            s.files.polling_operations.push("original".into());
+            s.files.publications.insert(
+                crate::files::review::Kind::Tags,
+                crate::files::review::Publication {
+                    operation_id: Some("successor".into()),
+                    error: String::new(),
+                },
+            );
+        });
+        complete_poll(state, 0, "original", Ok(Value::Null));
+        assert_eq!(
+            record_receipt(state, "original", Value::Null),
+            SaveStatus::Published
+        );
+        state.with_untracked(|s| {
+            assert_eq!(s.files.operations[0].status(), SaveStatus::Published);
+            assert!(s.files.mutation_pending);
+            assert_eq!(
+                s.files.publications[&crate::files::review::Kind::Tags]
+                    .operation_id
+                    .as_deref(),
+                Some("successor")
+            );
+            assert!(s.files.polling_operations.is_empty());
+        });
+    });
+}
+
+#[test]
+fn an_in_flight_exact_tag_retry_does_not_schedule_an_outcome_get() {
+    Owner::new().with(|| {
+        let state = crate::files::review::tests::in_flight_tags();
+        assert_eq!(state.with_untracked(poll_work), Some((0, Vec::new())));
+        poll(state);
+        state.with_untracked(|s| {
+            assert!(s.files.polling_operations.is_empty());
+            assert!(s.files.mutation_pending);
+            assert!(crate::files::review::tag_attempt_in_flight(
+                s,
+                "original-tags"
+            ));
+        });
+    });
+}
+#[test]
+fn revoked_retry_cannot_receive_a_late_success_through_poll_admission() {
+    Owner::new().with(|| {
+        let state = crate::files::review::tests::unauthorized_retry();
+        assert!(!state.with_untracked(|s| s.authenticated));
+        complete_poll(
+            state,
+            0,
+            "original-tags",
+            Ok(crate::files::review::tests::outcome("original-tags")),
+        );
+        state.with_untracked(|s| {
+            assert!(super::super::pending(s));
+            assert!(crate::files::review::has_tag_replay(s));
+            assert!(!crate::files::review::can_retry_tags(s));
+        });
+    });
+}
+#[test]
+fn polling_another_business_kind_does_not_settle_a_pending_tag_submission() {
+    Owner::new().with(|| {
+        let state = crate::files::review::tests::uncertain_tags();
+        let mut wrong = crate::files::review::tests::outcome("original-tags");
+        wrong["operation_kind"] = "directory.namespace.batch".into();
+        complete_poll(state, 0, "original-tags", Ok(wrong));
+        assert!(state.with_untracked(super::super::pending));
+        complete_poll(
+            state,
+            0,
+            "original-tags",
+            Ok(crate::files::review::tests::outcome("original-tags")),
+        );
+        assert!(!state.with_untracked(super::super::pending));
+    });
+}

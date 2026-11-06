@@ -10,6 +10,7 @@ mod inline;
 mod merge;
 mod model;
 mod naming;
+mod node_card;
 mod page;
 mod placement;
 mod review;

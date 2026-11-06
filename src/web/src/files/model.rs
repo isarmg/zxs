@@ -132,6 +132,7 @@ pub(crate) struct Model {
     pub tag_edit: Option<super::tags::Draft>,
     pub checked_nodes: super::tags::Selection,
     pub publications: super::review::Publications,
+    pub tag_submission: Option<super::review::TagSubmission>,
     pub operations: Vec<FileOperation>,
     pub polling_operations: Vec<String>,
     pub mutation_pending: bool,

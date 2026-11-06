@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::node_card::{self, Action};
 use std::collections::BTreeMap;
 use storage_contract::history_window::HistoryEndpoint;
 use web_interface::i18n::t;
@@ -106,7 +107,12 @@ pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
                 let id=StoredValue::new(id);
                 let node=Memo::new(move |_|nodes.with(|nodes|id.with_value(|id|nodes.get(id).cloned())));
                 let current=Signal::derive(move ||model.with(|model|model.nodes.as_ref().and_then(|page|page.current.committed_tree_id.as_deref())==Some(id.get_value().as_str())));
-                view!{<article class="zxs-content-panel zxs-version-node zxs-directory-tree-node zxs-frame zxs-stack zxs-stack--flush" data-version-id=id.get_value() data-directory-tree-id=id.get_value() aria-label=t("目录历史节点","Folder history node")>
+                let card_title=Signal::derive(move ||node.with(|node|node.as_ref().map(|node|node_card::title(&node.message,node.sequence)).unwrap_or_default()));
+                let card_actions=Signal::derive(|| &[Action::Snapshot][..]);
+                view!{<article class="zxs-version-node zxs-directory-tree-node" data-version-id=id.get_value() data-directory-tree-id=id.get_value() aria-label=t("目录历史节点","Folder history node")>
+                    <details class="zxs-node-disclosure">
+                    {node_card::summary(card_title,card_actions,current)}
+                    <div class="zxs-content-panel zxs-node-detail zxs-frame zxs-stack zxs-stack--flush">
                     <div class="zxs-version-date zxs-row zxs-row--center"><span>{move ||node.with(|node|node.as_ref().map(|node|format!("{} #{}",t("目录快照","Folder snapshot"),node.sequence)).unwrap_or_default())}</span><Show when=move ||current.get()><span class="zxs-version-current">{t("默认","Default")}</span></Show></div>
                     <p class="zxs-row">{move ||node.with(|node|node.as_ref().map(|node|node.message.clone()).unwrap_or_default())}</p>
                     <p class="zxs-row">{move ||node.with(|node|node.as_ref().map(|node|if node.path.is_empty(){t("仓库根目录","Repository root")}else{node.path.clone()}).unwrap_or_default())}</p>
@@ -121,6 +127,8 @@ pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
                         }>{t("浏览此快照","Browse this snapshot")}</button>
                     <Show when=move ||node.with(|node|node.as_ref().is_some_and(|node|node.parent_endpoint==Some(HistoryEndpoint::OutsideWindow)))><button class="zxs-button" data-directory-parent="outside_window" disabled=move ||disabled.get() on:click=move |_|if let Some(parent)=node.with_untracked(|node|node.as_ref().and_then(|node|node.parent_tree_id.clone())){load(state,model,target,Read::Nodes{cursor:None,anchor:Some(parent)});}>{t("查看前一个目录节点","Show previous folder node")}</button></Show>
                     <Show when=move ||node.with(|node|node.as_ref().is_some_and(|node|node.parent_tree_id.is_none()))><span class="zxs-row">{t("无父关系","No parent relationships")}</span></Show>
+                    </div>
+                    </details>
                 </article>}
             })}
             <section class="zxs-stack zxs-directory-history-branches"><p class="zxs-row" role="heading" {web_interface::attr::custom::custom_attribute("aria-level", "4")}>{t("目录分支","Folder branches")}</p>

@@ -53,6 +53,7 @@ pub(crate) fn draft_with_pending_input(input: &str) -> Draft {
         target_page: 0,
         delta_page: 0,
         resolved: None,
+        needs_review: false,
     }
 }
 
@@ -361,6 +362,125 @@ fn starting_tag_edits_uses_new_instances_and_targets_only_the_previous_tag_revie
             assert_eq!(before.branch_ids, after.branch_ids);
             assert_ne!(before, after);
             assert!(s.files.history_aux.current_review(other, generation));
+        });
+    });
+}
+
+pub(crate) fn submission_fixture() -> (Draft, Selection, Value) {
+    let mut draft = draft_with_pending_input("");
+    let mut selected = selected_with_tags();
+    draft.targets.insert("off-page".into(), Some("main".into()));
+    selected
+        .insert(
+            "root-one",
+            SelectedNode {
+                id: "off-page".into(),
+                version: "off-page-body".into(),
+                tags: BTreeSet::new(),
+            },
+        )
+        .unwrap();
+    let body = request(&draft, &selected).unwrap();
+    (draft, selected, body)
+}
+
+#[test]
+fn conflict_requires_complete_explicit_review_even_when_the_root_is_unchanged() {
+    let (mut draft, mut selected, _) = submission_fixture();
+    let old_body = request(&draft, &selected).unwrap();
+    let nodes = selected.values().cloned().collect::<Vec<_>>();
+    draft
+        .resolve_review(
+            "root-one".into(),
+            &nodes,
+            &[branch("main", "prior-review")],
+            5001,
+        )
+        .unwrap();
+    draft.require_review();
+    assert!(draft.resolved.is_none());
+    assert!(draft.requires_review());
+    assert!(request(&draft, &selected).is_err());
+    assert!(draft.accept_review("root-one", &mut selected).is_err());
+    assert!(
+        draft
+            .resolve_review(
+                "root-one".into(),
+                &[],
+                &[branch("main", "changed-head")],
+                5001
+            )
+            .is_err()
+    );
+    assert!(draft.requires_review());
+    draft
+        .resolve_review(
+            "root-one".into(),
+            &nodes,
+            &[branch("main", "changed-head")],
+            5001,
+        )
+        .unwrap();
+    assert!(draft.requires_review());
+    assert!(
+        request(&draft, &selected).is_err(),
+        "reading alone does not authorize the changed base"
+    );
+    draft.accept_review("root-one", &mut selected).unwrap();
+    assert!(!draft.requires_review());
+    let reviewed = request(&draft, &selected).unwrap();
+    assert_eq!(reviewed["add"], old_body["add"]);
+    assert_eq!(reviewed["remove"], old_body["remove"]);
+    assert_eq!(reviewed["targets"].as_array().unwrap().len(), 2);
+    for target in reviewed["targets"].as_array().unwrap() {
+        assert_eq!(target["expected_node_id"], "changed-head");
+    }
+}
+
+#[test]
+fn a_conflicted_draft_can_choose_a_fresh_writable_branch_without_unlocking_save() {
+    Owner::new().with(|| {
+        let mut value = State {
+            authenticated: true,
+            ..Default::default()
+        };
+        value.management.storage = crate::management::Storage::Ready;
+        value.files.writable = true;
+        value.files.selected = Some(crate::files::test_entries::entry(json!({})));
+        let mut draft = draft_with_pending_input("");
+        draft.require_review();
+        value.files.tag_edit = Some(draft);
+        value.files.checked_nodes = selected_with_tags();
+        value.files.file_history = crate::files::history::tests::history(json!({
+            "branches":[{"branch_id":"replacement","node_id":"fresh-head"}]
+        }));
+        let state = RwSignal::new(value);
+        assert!(state.with_untracked(actions::history_write_allowed));
+        assign_branch(state, 1, "old-node".into(), "replacement".into());
+        state.update(|s| {
+            let nodes = s.files.checked_nodes.values().cloned().collect::<Vec<_>>();
+            let root = s.files.file_history.root().unwrap().to_owned();
+            let draft = s.files.tag_edit.as_mut().unwrap();
+            assert_eq!(draft.targets["old-node"].as_deref(), Some("replacement"));
+            assert!(draft.requires_review());
+            assert!(request(draft, &s.files.checked_nodes).is_err());
+            draft
+                .resolve_review(
+                    root.clone(),
+                    &nodes,
+                    &[branch("replacement", "fresh-head")],
+                    5001,
+                )
+                .unwrap();
+            assert!(request(draft, &s.files.checked_nodes).is_err());
+            draft
+                .accept_review(&root, &mut s.files.checked_nodes)
+                .unwrap();
+            let body = request(draft, &s.files.checked_nodes).unwrap();
+            assert_eq!(body["targets"][0]["branch_id"], "replacement");
+            assert_eq!(body["targets"][0]["expected_node_id"], "fresh-head");
+            assert_eq!(body["add"], json!(["reviewed"]));
+            assert_eq!(body["remove"], json!(["old"]));
         });
     });
 }
