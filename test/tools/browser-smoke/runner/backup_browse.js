@@ -2,7 +2,17 @@
 // the server, never an invented backup prefix or a synthetic successful page.
 if (window.__zxsBackupBrowse) throw new Error('Backup browse probe already installed');
 const original = window.fetch;
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// Rust JSON Values can reorder object keys on the roundtrip through WebDriver.
+// Compare the complete JSON structure, retaining array order and scalar types.
+function same(a, b) {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    const array = Array.isArray(a);
+    if (array !== Array.isArray(b) || (array && a.length !== b.length)) return false;
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length
+        && keys.every(key => Object.hasOwn(b, key) && same(a[key], b[key]));
+}
 const text = element => element?.textContent.trim();
 const slots = ['P01', 'B01', 'C01'];
 const modes = writable => writable ? ['Read/write directory', '读写目录'] : ['Read only', '只读'];

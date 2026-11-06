@@ -7,6 +7,13 @@ import {runInNewContext} from 'node:vm';
 const source = readFileSync(new URL('../runner/backup_browse.js', import.meta.url), 'utf8');
 const origin = 'http://127.0.0.1:2345';
 const copy = value => JSON.parse(JSON.stringify(value));
+// Model the runner's JSON Value roundtrip for these ASCII-key wire fixtures.
+// Object keys are sorted; array positions and scalar types are unchanged.
+function rustJsonRoundtrip(value) {
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(rustJsonRoundtrip);
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, rustJsonRoundtrip(value[key])]));
+}
 const disks = ['P01', 'B01', 'C01'].map((slot_id, index) => ({
     slot_id, name: `real-${slot_id}`, level: index + 1, online: true, writable: index === 0
 }));
@@ -15,8 +22,10 @@ const text = value => ({textContent: value});
 const button = (label, disabled = false) => ({...text(label), disabled,
     getAttribute: name => name === 'aria-label' ? null : undefined});
 // Complete current-owned-file shape from ListingEntryResponse and
-// ContentDispositionResponse. Values remain host fixtures, not captured I/O.
-const base = {entry_id: 'entry-one', name: 'browser-smoke.txt', kind: 'file', size: '34',
+// ContentDispositionResponse, in the observed wire field order. Values remain
+// host fixtures, not captured I/O or real user identities.
+const base = {entry_id: 'entry-one', name: 'browser-smoke.txt',
+    path: 'browser-fixtures/browser-smoke.txt', kind: 'file', size: '34',
     file_id: 'file-one', version_id: 'version-two', materialized: true, inherited: false,
     own_version_id: 'version-two', source_version_id: null,
     content_state: 'AVAILABLE', visible_content_state: 'AVAILABLE',
@@ -352,7 +361,7 @@ test('bounded observation refuses a 65th matching request before sending', async
     f.p.restore();
 });
 
-test('completion requires B01 and C01, actual UI pages/details, four fresh returns and primary recheck', async () => {
+test('completion survives Rust-sorted file keys and still requires both backups, fresh returns and primary recheck', async () => {
     let response;
     const f = fixture(() => response);
     const primary = file('browser-fixtures/browser-smoke.txt');
@@ -374,6 +383,9 @@ test('completion requires B01 and C01, actual UI pages/details, four fresh retur
     for (const slot of ['B01', 'C01']) {
         await visitRoot(slot);
         const selected = file('browser-fixtures/browser-smoke.txt', true);
+        const returned = copy(rustJsonRoundtrip(selected));
+        assert.deepEqual(returned, selected);
+        assert.notDeepEqual(Object.keys(returned), Object.keys(selected));
         response = page(slot, 'browser-fixtures', [selected]);
         const after = await load(f, response); f.p.step(slot, response.path, after);
         f.render.mode = 'detail'; f.render.details = {slot, file: selected};
@@ -381,7 +393,7 @@ test('completion requires B01 and C01, actual UI pages/details, four fresh retur
         await f.window.fetch(`${origin}/api/file-manager/files/${selected.file_id}/history`);
         response = historyBody(selected, 'branches');
         await f.window.fetch(`${origin}/api/file-manager/files/${selected.file_id}/history/branches`);
-        f.p.recordDetail(slot, selected, historyAfter); await root();
+        f.p.recordDetail(slot, returned, historyAfter); await root();
         assert.throws(() => f.p.finish(), /both real levels and restore/);
     }
     await primaryRead(); assert.equal(f.p.finish(), true);
@@ -389,6 +401,88 @@ test('completion requires B01 and C01, actual UI pages/details, four fresh retur
     assert.equal(f.p.finish(), true);
     assert.equal(f.p.snapshot().blocked.length, 0);
     assert.ok(f.p.snapshot().requests.every(row => row.raw && row.complete));
+    f.p.restore();
+});
+
+// Isolate the same() helper without exposing it in the installed browser probe.
+// The existing full navigation case above also exercises it through real hooks.
+test('JSON equality ignores nested object key order but preserves keys, scalar types and array order', () => {
+    assert.match(source, /return true;\s*$/);
+    const same = runInNewContext(`(function(){${source.replace(/return true;\s*$/, 'return same;')}})()`,
+        {window: {fetch() { throw new Error('comparison must not fetch'); }}});
+    const value = {identity: {node: 'node-two', file: 'file-one'},
+        history: [{parents: ['node-one', 'node-two'], selected: true}, null, '34']};
+    assert.equal(same(value, rustJsonRoundtrip(value)), true);
+    assert.equal(same(rustJsonRoundtrip(value), value), true);
+    const reversedKeys = Object.fromEntries(Object.entries(value).reverse());
+    assert.equal(same(value, reversedKeys), true);
+    for (const [left, right] of [
+        [{x: '34'}, {x: 34}], [{x: true}, {x: 1}], [{x: null}, {x: false}],
+        [{x: null}, {}], [{x: null}, {x: null, extra: null}],
+        [{left: null}, {right: null}], [[1, 2], [2, 1]], [[1], [1, null]],
+        [[1, 2], {'0': 1, '1': 2}], [null, {}],
+        [value, {...value, history: [null, value.history[0], '34']}],
+        [value, {...value, history: [{parents: ['node-two', 'node-one'], selected: true}, null, '34']}],
+        [value, {...value, identity: {...value.identity, node: 'another-node'}}]
+    ]) {
+        assert.equal(same(left, right), false, JSON.stringify([left, right]));
+        assert.equal(same(right, left), false, JSON.stringify([right, left]));
+    }
+});
+
+async function backupReturnFixture() {
+    let response;
+    const f = fixture(() => response);
+    f.p.next(page('P01', 'browser-fixtures', [file('browser-fixtures/browser-smoke.txt')]));
+    const selected = file('P01/browser-fixtures/browser-smoke.txt', true);
+    for (const [path, entry] of [['', directory('P01', true)],
+        ['P01', directory('P01/browser-fixtures', true)], ['P01/browser-fixtures', selected]]) {
+        response = page('B01', path, [entry]);
+        const after = await load(f, response); f.p.step('B01', path, after);
+    }
+    f.render.mode = 'detail'; f.render.details = {slot: 'B01', file: selected};
+    const historyAfter = f.p.mark();
+    response = historyBody(selected);
+    await f.window.fetch(`${origin}/api/file-manager/files/${selected.file_id}/history`);
+    response = historyBody(selected, 'branches');
+    await f.window.fetch(`${origin}/api/file-manager/files/${selected.file_id}/history/branches`);
+    f.p.recordDetail('B01', copy(rustJsonRoundtrip(selected)), historyAfter);
+    f.render.mode = 'root'; response = {disks}; const after = f.p.mark();
+    await f.window.fetch(`${origin}/api/file-manager/disks`);
+    return {f, after, selected, historyAfter};
+}
+
+test('backup return compares every file field after JSON roundtrip without accepting omissions or permission changes', async () => {
+    const {f, after, selected} = await backupReturnFixture();
+    const original = f.p.details[0].file;
+    const cases = [];
+    for (const key of Object.keys(selected)) {
+        const changed = copy(rustJsonRoundtrip(selected));
+        changed[key] = typeof changed[key] === 'string' ? `${changed[key]}-different`
+            : typeof changed[key] === 'boolean' ? !changed[key] : 'not-null';
+        const missing = copy(rustJsonRoundtrip(selected)); delete missing[key];
+        cases.push([`changed ${key}`, changed], [`missing ${key}`, missing]);
+    }
+    cases.push(['extra field', {...original, extra: null}], ['numeric size', {...original, size: 34}],
+        ['numeric permission', {...original, read_only: 1}], ['string permission', {...original, read_only: 'true'}]);
+    for (const [name, candidate] of cases) {
+        f.p.details[0].file = candidate;
+        assert.throws(() => f.p.recordRoot(after), /exact selected file detail/, name);
+        assert.equal(f.p.returns.length, 0);
+    }
+    f.p.details[0].file = original;
+    assert.equal(f.p.recordRoot(after), true);
+    f.p.restore();
+});
+
+test('order-independent file comparison does not weaken backup slot or history timing', async () => {
+    const {f, after, historyAfter} = await backupReturnFixture();
+    const detail = f.p.details[0];
+    for (const change of [{slot: 'C01'}, {historyAfter: historyAfter - 1}, {historyAfter: after + 1}]) {
+        f.p.details[0] = {...detail, ...change};
+        assert.throws(() => f.p.recordRoot(after), /exact selected file detail/);
+        assert.equal(f.p.returns.length, 0);
+    }
     f.p.restore();
 });
 
