@@ -36,9 +36,21 @@ const done=arguments[arguments.length-1];
         // current panel palette, preserving its hue in both light and dark mode.
         const expectedBorder=expectedFill.map((value,index)=>index===3?value:Math.round(value*.85));
         let paint;
-        const foreground=node.querySelector(':scope > svg[data-zxs-contour-decoration="foreground"]');
+        let foreground=node.querySelector(':scope > svg[data-zxs-contour-decoration="foreground"]');
         let source, property, ownedUrl, livePath, pathData;
         if(!expanded && foreground) return {valid:false,reason:'collapsed trigger retains a foreground border'};
+        // Unsupported decoration restores native paint but keeps a hidden SVG
+        // for a later successful frame. Inspect that fallback's real border,
+        // while still rejecting hidden foregrounds in completed G4 paint.
+        if(expanded && node.dataset.zxsContourState==='fallback') {
+            if(foreground && (getComputedStyle(foreground).display!=='none'||rendered(foreground))) {
+                return {valid:false,reason:'native fallback retains a visible foreground border'};
+            }
+            if(css.borderImageSource!=='none'||css.backgroundImage!=='none') {
+                return {valid:false,reason:'native fallback retains controller image paint'};
+            }
+            foreground=null;
+        }
         if(foreground) {
             if(node.getAttribute('data-zxs-contour-foreground-anchor')!=='local'||getComputedStyle(foreground).position!=='absolute') {
                 return {valid:false,reason:'menu border must be locally anchored, not a fixed scroll overlay'};
@@ -55,6 +67,7 @@ const done=arguments[arguments.length-1];
                 const bounds=rect=>({x:rect.x,y:rect.y,width:rect.width,height:rect.height});
                 const svgStyle=getComputedStyle(foreground);
                 return {valid:false,reason:'missing, misplaced or wrong-palette G4 foreground',checks,
+                    state:node.dataset.zxsContourState,contourReason:node.dataset.zxsContourReason,
                     fill:style.fill,actualBorder,expectedBorder,fillRule:style.fillRule,stroke:style.stroke,
                     panelBounds:bounds(box),foregroundBounds:bounds(svgBox),
                     foregroundStyle:{display:svgStyle.display,visibility:svgStyle.visibility,opacity:svgStyle.opacity}};

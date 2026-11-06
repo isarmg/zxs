@@ -47,10 +47,17 @@ function fixture() {
     f.withForeground=()=>{
         f.centerAlpha=0;
         const path={style:{fill:'rgb(170, 170, 170)',fillRule:'evenodd',stroke:'none'},getAttribute(name){assert.equal(name,'d');return 'M0 0h100v36H0Z M2 2v32h96V2Z';}};
-        f.foreground={isConnected:true,visible:true,box:{...panel.box},path,style:{position:'absolute'},
+        f.foreground={isConnected:true,visible:true,box:{...panel.box},path,style:{position:'absolute',display:'block'},
             checkVisibility(){return this.visible;},getBoundingClientRect(){return this.box;},querySelector(){return path;},
             getAttribute(name){assert.equal(name,'viewBox');return '0 0 100 36';}};
         panel.querySelector=()=>f.foreground;
+        return f;
+    };
+    f.withNativeFallback=()=>{
+        f.withForeground();
+        panel.dataset.zxsContourState='fallback';
+        panel.dataset.zxsContourReason='inset-or-unsupported-shadow';
+        f.foreground.visible=false;f.foreground.style.display='none';
         return f;
     };
     f.run=()=>new Promise(resolve=>{
@@ -201,4 +208,32 @@ f=fixture().withKeyboardFocus();f.focusRasterWidth=108;assert.equal((await f.run
 f=fixture().withKeyboardFocus();f.trigger.style.borderImageOutset='invalid';assert.equal((await f.run()).valid,false,'unknown focus bounds cannot pass the border check');
 f=fixture().withKeyboardFocus();f.blurOnDecode=true;assert.equal((await f.run()).valid,false,'focus lost during image decode invalidates observation');
 f=fixture().withKeyboardFocus();f.trigger.style.borderImageSource='none';f.trigger.style.backgroundImage='url("blob:focused-trigger")';assert.equal((await f.run()).valid,false,'only the real outset border-image can carry the keyboard ring');
-console.log('PASS 63 Select border observer model cases; no browser rendering executed');
+// Unsupported inset-shadow injection restores the real native border and
+// retains a deliberately hidden SVG for later G4 repaint. It is not the paint
+// owner while fallback is active; all native border and fill checks still apply.
+f=fixture().withNativeFallback();
+{
+    const result=await f.run();
+    assert.equal(result.valid,true,'native fallback ignores its deliberately hidden retained SVG');
+    assert.equal(result.controls[1].paint.property,'native-border');
+    assert.equal(f.created.length,0,'fallback must inspect native paint rather than export the hidden path');
+}
+f=fixture().withNativeFallback();f.foreground.visible=true;f.foreground.style.display='block';
+assert.equal((await f.run()).valid,false,'fallback cannot retain a visible foreground overlay');
+f=fixture().withNativeFallback();f.panel.dataset.zxsContourState='clip';
+assert.equal((await f.run()).valid,false,'completed G4 paint cannot hide its required foreground');
+f=fixture().withNativeFallback();f.panel.style.borderTopWidth='1px';
+assert.equal((await f.run()).valid,false,'fallback still requires the doubled 2px width');
+f=fixture().withNativeFallback();f.panel.style.borderLeftColor='rgb(60, 60, 60)';
+assert.equal((await f.run()).valid,false,'fallback still requires the palette-derived border on every side');
+f=fixture().withNativeFallback();f.panel.style.backgroundColor='#b4b4b4';
+assert.equal((await f.run()).valid,false,'fallback cannot change the panel fill');
+f=fixture().withNativeFallback();f.panel.style.borderImageSource='url("blob:paint")';
+assert.equal((await f.run()).valid,false,'native fallback cannot retain controller border-image paint');
+f=fixture();f.panel.dataset.zxsContourState='fallback';
+assert.equal((await f.run()).valid,true,'native fallback without an allocated SVG remains valid');
+f=fixture().withNativeFallback();
+f.panel.dataset.zxsContourState='clip';delete f.panel.dataset.zxsContourReason;
+f.foreground.visible=true;f.foreground.style.display='block';
+assert.equal((await f.run()).valid,true,'restored G4 paint must validate its visible real path again');
+console.log('PASS 72 Select border observer model cases; no browser rendering executed');
