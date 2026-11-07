@@ -298,3 +298,6 @@ async fn recursive_http_writes_each_tier_reads_its_tree_and_retries_after_cold_o
             .any(|row| row["file_id"] == entry.file_id)
     );
 }
+
+#[path = "recursive_empty_backup_http.rs"]
+mod empty_directories;

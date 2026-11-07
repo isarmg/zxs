@@ -4,7 +4,7 @@ use super::pagination::{Page, PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
 use storage_contract::State;
-use storage_engine::{Entry, FileVersion};
+use storage_engine::{Entry, FileVersion, PublishedBackupDirectory};
 
 fn available_on(state: &BackupListingMetadata, slot: &str, version: &str) -> bool {
     state
@@ -35,6 +35,7 @@ fn directory_identity(slot: &str, key: &str) -> String {
 enum Node<'a> {
     Directory {
         display: String,
+        published: Option<&'a PublishedBackupDirectory>,
     },
     File {
         repository: &'a Repository,
@@ -46,7 +47,7 @@ enum Node<'a> {
 impl Node<'_> {
     fn display(&self) -> &str {
         match self {
-            Self::Directory { display } | Self::File { display, .. } => display,
+            Self::Directory { display, .. } | Self::File { display, .. } => display,
         }
     }
     fn directory(&self) -> bool {
@@ -54,7 +55,9 @@ impl Node<'_> {
     }
     fn identity(&self, slot: &str, key: &str) -> String {
         match self {
-            Self::Directory { .. } => directory_identity(slot, key),
+            Self::Directory { published, .. } => published
+                .map(|row| row.directory_id().to_owned())
+                .unwrap_or_else(|| directory_identity(slot, key)),
             Self::File {
                 current, version, ..
             } => current
@@ -62,10 +65,11 @@ impl Node<'_> {
                 .unwrap_or_else(|| version.file_id.clone()),
         }
     }
-    fn candidate(&self) -> Candidate {
+    fn candidate(&self, slot: &str) -> Candidate {
         match self {
-            Self::Directory { display } => Candidate::Directory {
+            Self::Directory { display, .. } => Candidate::Directory {
                 display: display.clone(),
+                identity: self.identity(slot, &name_policy::path_key(display)),
             },
             Self::File {
                 repository,
@@ -85,6 +89,7 @@ impl Node<'_> {
 enum Candidate {
     Directory {
         display: String,
+        identity: String,
     },
     File {
         repository_id: String,
@@ -96,7 +101,7 @@ enum Candidate {
 impl Candidate {
     fn display(&self) -> &str {
         match self {
-            Self::Directory { display } | Self::File { display, .. } => display,
+            Self::Directory { display, .. } | Self::File { display, .. } => display,
         }
     }
 }
@@ -106,9 +111,20 @@ fn retain_node<'a>(
     maximum: usize,
 ) -> Result<(), ApiError> {
     let key = name_policy::path_key(value.display());
-    if let Some(existing) = nodes.get(&key) {
-        match (existing, &value) {
-            (Node::Directory { .. }, Node::Directory { .. }) => return Ok(()),
+    if let Some(existing) = nodes.get_mut(&key) {
+        match (&mut *existing, &value) {
+            (Node::Directory { published: old, .. }, Node::Directory { published: new, .. }) => {
+                if let (Some(a), Some(b)) = (*old, *new)
+                    && (a.repository_id(), a.history_tree_id(), a.directory_id())
+                        != (b.repository_id(), b.history_tree_id(), b.directory_id())
+                {
+                    return Err(conflict());
+                }
+                if old.is_none() && new.is_some() {
+                    *existing = value;
+                }
+                return Ok(());
+            }
             (
                 Node::File {
                     repository: a,
@@ -144,6 +160,7 @@ fn parents(
             nodes,
             Node::Directory {
                 display: path[..index].into(),
+                published: None,
             },
             maximum,
         )?;
@@ -182,11 +199,7 @@ fn project(
         .next()
         .expect("invariant: split has at least one element");
     let mut entry = match node {
-        Candidate::Directory { .. } => directory(
-            name,
-            display,
-            &directory_identity(&scope.slot_id, &name_policy::path_key(display)),
-        ),
+        Candidate::Directory { identity, .. } => directory(name, display, identity),
         Candidate::File {
             repository_id,
             current,
@@ -305,6 +318,7 @@ struct ListingScope {
     path: String,
     maximum: usize,
     namespaces: BTreeMap<String, NamespaceCapture>,
+    directories: Vec<PublishedBackupDirectory>,
 }
 
 pub(in crate::engine_backend) struct BackupListingRead {
@@ -371,6 +385,7 @@ impl BackupListingRead {
                 path: path.into(),
                 maximum: engine.config().max_entries,
                 namespaces,
+                directories: engine.published_backup_directories(slot).map_err(error)?,
             },
             request,
         })
@@ -419,8 +434,12 @@ impl BackupListingRead {
         }
         let page = page.finish()?;
         let page = Page {
-            values: page.values.into_iter().map(Node::candidate).collect(),
-            selected: page.selected.map(Node::candidate),
+            values: page
+                .values
+                .into_iter()
+                .map(|node| node.candidate(&scope.slot_id))
+                .collect(),
+            selected: page.selected.map(|node| node.candidate(&scope.slot_id)),
             total: page.total,
             snapshot: page.snapshot,
             previous: page.previous,
@@ -532,6 +551,25 @@ impl ListingScope {
         let latest = self.latest();
         let canonical = self.canonical(&latest);
         let mut nodes = BTreeMap::new();
+        for row in &self.directories {
+            if !self
+                .namespaces
+                .get(row.history_tree_id())
+                .is_some_and(|scope| scope.repository_id == row.repository_id())
+            {
+                continue;
+            }
+            let path = row.path().as_str();
+            parents(&mut nodes, path, self.maximum)?;
+            retain_node(
+                &mut nodes,
+                Node::Directory {
+                    display: path.to_owned(),
+                    published: Some(row),
+                },
+                self.maximum,
+            )?;
+        }
         for (file, (repo, newest)) in latest {
             let current = canonical.get(file).copied();
             let version = current

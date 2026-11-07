@@ -1,4 +1,4 @@
-//! Explicit re-protection of the selected current files with captured disk names.
+//! Explicit recursive protection of current files or an independently empty scope.
 mod capture;
 mod view;
 use crate::{
@@ -244,12 +244,6 @@ fn request(draft: &Draft) -> Result<Value, String> {
         ));
     };
     let configuration = &response.configuration;
-    if configuration.file_count == 0 {
-        return Err(t(
-            "此范围没有文件；空目录独立备份尚未提供。",
-            "This scope has no files. Standalone empty-directory backups are not yet supported.",
-        ));
-    }
     if configuration.target_copies == 0
         || configuration.target_copies as usize > configuration.capacity()
     {

@@ -194,7 +194,7 @@ fn malformed_capture_never_becomes_a_writable_baseline() {
     }
 }
 #[test]
-fn pending_failed_empty_and_over_capacity_cannot_save_but_count_can_be_reduced() {
+fn pending_failed_and_over_capacity_cannot_save_but_empty_scope_can() {
     let mut draft = draft();
     assert!(request(&draft).is_err());
     draft.load = Load::Failed;
@@ -212,7 +212,10 @@ fn pending_failed_empty_and_over_capacity_cannot_save_but_count_can_be_reduced()
         unreachable!()
     };
     r.configuration.file_count = 0;
-    assert!(request(&draft).is_err());
+    let body = request(&draft).unwrap();
+    assert_eq!(body["path"], "docs");
+    assert_eq!(body["expected_scope_id"], "scope");
+    assert_eq!(body["capture"], response()["capture"]);
     let mut value = response();
     value["configuration"]["max_copies"] = json!(1);
     draft.load = Load::Ready(Box::new(read_response(value, &draft).unwrap()));

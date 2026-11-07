@@ -343,17 +343,19 @@ impl Engine {
     /// # Errors
     /// Fails while current registry admission is unavailable, or if stored
     /// directory evidence uses an unsupported format or exceeds the read budget.
+    /// An admitted initial pool has no native directory publications and returns
+    /// no rows; an awaiting current publication remains an error.
     pub fn published_backup_directories(
         &self,
         slot: &str,
     ) -> Result<Vec<PublishedBackupDirectory>> {
-        self.admitted_current_namespaces()?.ok_or_else(|| {
-            Error::new(
-                ErrorCode::OperationUnsupported,
-                "directory backup reads require current registry admission",
-            )
-        })?;
+        let current = self.admitted_current_namespaces()?;
         let disk = self.disk(slot)?;
+        // Native recursive publication requires CurrentNamespaces. Initial is
+        // a distinct admitted state, not a fallback for pending/corrupt current.
+        if current.is_none() {
+            return Ok(Vec::new());
+        }
         let mut entries = Vec::new();
         for receipt in self.state().operations.values() {
             let Some((namespace, policy)) = current_namespace(self.state(), receipt)? else {
