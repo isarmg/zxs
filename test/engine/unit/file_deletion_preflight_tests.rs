@@ -518,7 +518,10 @@ fn real_engine_preflight_preserves_prepared_other_file_write_and_reopens() {
     let cancel = HistoryWindowCancellation::new();
     let initial = engine.file_deletion_preflight(target, &cancel).unwrap();
     assert_eq!(initial.branches().len(), 1);
-    assert_eq!(initial.parent_node_ids(), [original.version_id.clone()]);
+    assert_eq!(
+        initial.parent_node_ids(),
+        std::slice::from_ref(&original.version_id)
+    );
     drop(initial);
     engine
         .create_file_branch(
@@ -538,7 +541,10 @@ fn real_engine_preflight_preserves_prepared_other_file_write_and_reopens() {
     let before = engine.state().clone();
     let read = engine.file_deletion_preflight(target, &cancel).unwrap();
     assert_eq!(read.branches().len(), 2);
-    assert_eq!(read.parent_node_ids(), [original.version_id.clone()]);
+    assert_eq!(
+        read.parent_node_ids(),
+        std::slice::from_ref(&original.version_id)
+    );
     assert_eq!(read.occurrences().len(), 1);
     assert_eq!(engine.state(), &before);
     drop(read);
