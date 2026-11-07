@@ -26,6 +26,8 @@ mod directory_git;
 mod directory_history;
 #[path = "http_engine/disk_registration.rs"]
 mod disk_registration;
+#[path = "http_engine/file_separation.rs"]
+mod file_separation;
 #[path = "http_engine/file_metadata_operations.rs"]
 mod file_metadata_operations;
 #[path = "http_engine/history_alias_operations.rs"]

@@ -20,6 +20,7 @@ pub(crate) enum Kind {
     Copy,
     Delete,
     Rename,
+    Separate,
 }
 impl Kind {
     fn contract_kind(self) -> storage_contract::DirectoryBatchKind {
@@ -28,6 +29,7 @@ impl Kind {
             Self::Copy => storage_contract::DirectoryBatchKind::Copy,
             Self::Delete => storage_contract::DirectoryBatchKind::Delete,
             Self::Rename => storage_contract::DirectoryBatchKind::Rename,
+            Self::Separate => storage_contract::DirectoryBatchKind::Separate,
         }
     }
     fn label(self) -> String {
@@ -36,10 +38,11 @@ impl Kind {
             Self::Copy => t("复制", "Copy"),
             Self::Delete => t("删除", "Delete"),
             Self::Rename => t("重命名", "Rename"),
+            Self::Separate => t("分离为独立文件", "Separate file"),
         }
     }
     fn has_destination(self) -> bool {
-        matches!(self, Self::Move | Self::Copy)
+        matches!(self, Self::Move | Self::Copy | Self::Separate)
     }
 }
 #[derive(Clone, Default)]
@@ -125,6 +128,24 @@ pub(crate) fn available(model: &Model) -> bool {
         && !model.loading
         && !model.repository_id.is_empty()
         && (!model.checked_entries.is_empty() || model.selected.is_some())
+}
+
+fn separable_entry(entry: &Entry) -> bool {
+    entry.kind() == storage_contract::NamespaceEntryKind::File && !entry.read_only()
+}
+
+pub(crate) fn separation_available(model: &Model) -> bool {
+    if !available(model) {
+        return false;
+    }
+    let mut checked = model
+        .entries
+        .iter()
+        .filter(|entry| model.checked_entries.contains(&entry_key(entry)));
+    match checked.next() {
+        Some(entry) => checked.next().is_none() && separable_entry(entry),
+        None => model.selected.as_ref().is_some_and(separable_entry),
+    }
 }
 
 mod actions;

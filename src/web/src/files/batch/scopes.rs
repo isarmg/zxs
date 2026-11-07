@@ -14,6 +14,18 @@ impl ScopeBranch {
     pub(super) fn entries(&self) -> &[SelectedFact] {
         &self.entries
     }
+    /// Retain the user's exact occurrence. Unlike Move, Separate must never
+    /// remap a unique entry identity to a different path in another branch.
+    /// The mutation still proves this identity/path against the frozen main.
+    pub(super) fn retain_selection(&mut self, entry: &Entry) {
+        let path = name_policy::LookupPath::parse(selected_path(entry))
+            .expect("invariant: a parsed file entry has a valid repository path");
+        self.entries = vec![SelectedFact {
+            entry_id: entry.entry_id().to_owned(),
+            path: path.clone(),
+            selected_path: path,
+        }];
+    }
 }
 impl From<DirectoryBranch> for ScopeBranch {
     fn from(summary: DirectoryBranch) -> Self {

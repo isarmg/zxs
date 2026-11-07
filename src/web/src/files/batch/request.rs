@@ -86,6 +86,18 @@ pub(super) fn request(draft: &Draft) -> Result<Value, Error> {
     if draft.entries.is_empty() {
         return Err(error_missing().into());
     }
+    if draft.kind == Kind::Separate
+        && (draft.entries.len() != 1
+            || !separable_entry(&draft.entries[0])
+            || draft.selected_sources.len() != 1
+            || draft.mappings.len() != 1)
+    {
+        return Err(t(
+            "分离时请选择一个保留原件、一个源 main 分支和一个已有目标位置。",
+            "Separate one retained original from one existing destination, with one source main branch.",
+        )
+        .into());
+    }
     let mut items = vec![];
     let mut unique = BTreeSet::new();
     if draft.kind.has_destination() {
@@ -130,7 +142,14 @@ pub(super) fn request(draft: &Draft) -> Result<Value, Error> {
                     .get(&entry_key(chosen))
                     .ok_or_else(error_missing)?;
                 validate_name(&entry_key(chosen), name)?;
-                let destination = join_path(target.summary().path(), name);
+                let destination = join_path(
+                    if draft.kind == Kind::Separate {
+                        draft.target_path.trim_matches('/')
+                    } else {
+                        target.summary().path()
+                    },
+                    name,
+                );
                 let key = (
                     mapping.source.clone(),
                     id,

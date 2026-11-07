@@ -102,7 +102,24 @@ pub(super) fn capture(
 ) -> Result<DirectoryScopesSnapshot, ApiError> {
     let repo = repository(engine, request.repository_id)?;
     let state = engine.state();
-    let scopes = matching(engine, repo, request.filter.key())?;
+    let scopes = match request.filter {
+        crate::DirectoryBranchFilter::OwningMain(path) => {
+            let status = engine
+                .directory_git_status(
+                    request.repository_id,
+                    path.as_ref().map_or("", name_policy::LookupPath::as_str),
+                )
+                .map_err(error)?;
+            match status.owner {
+                None => Vec::new(),
+                Some(owner) => {
+                    let git = &state.directory_git_repositories[&owner.directory_id];
+                    vec![&state.directory_branches[&git.main_branch_id]]
+                }
+            }
+        }
+        _ => matching(engine, repo, request.filter.key())?,
+    };
     let current = |branch: &storage_contract::DirectoryBranch| {
         state.directory_selections.get(&branch.directory_id) == Some(&branch.directory_branch_id)
     };

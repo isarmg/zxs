@@ -25,6 +25,9 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
         if entries.is_empty() || snapshot.files.repository_id.is_empty() {
             return Ok(None);
         }
+        if kind == Kind::Separate && (entries.len() != 1 || !separable_entry(&entries[0])) {
+            return Ok(None);
+        }
         let sources = source_branches(&snapshot.files);
         let selected_sources = sources
             .iter()
@@ -92,7 +95,7 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
 pub(super) fn open_draft(state: RwSignal<State>, mut draft: Draft) {
     // Empty scopes in the identity-aware listing remain authoritative. A path
     // query must never resurrect branches belonging to a replaced directory.
-    draft.source_resolved = draft.sources.is_empty();
+    draft.source_resolved = draft.sources.is_empty() && draft.kind != Kind::Separate;
     draft.loading = false;
     state.update(|s| {
         s.files.batch = Some(draft);
@@ -149,17 +152,27 @@ pub(super) fn load_sources(state: RwSignal<State>) {
     spawn_local(async move {
         let result = match start_scope_read(state, epoch, &draft.id, draft.generation) {
             Ok(Some(cancellation)) => {
-                api::cancellable_request(
-                    "POST",
-                    &selected_scope_endpoint(&draft.repository),
-                    Some(selected_scope_body(
-                        &draft,
-                        &draft.sources,
-                        &draft.repository_path,
-                    )),
-                    cancellation,
-                )
-                .await
+                if draft.kind == Kind::Separate {
+                    api::cancellable_request(
+                        "GET",
+                        &owning_main_endpoint(&draft.repository, &draft.repository_path),
+                        None,
+                        cancellation,
+                    )
+                    .await
+                } else {
+                    api::cancellable_request(
+                        "POST",
+                        &selected_scope_endpoint(&draft.repository),
+                        Some(selected_scope_body(
+                            &draft,
+                            &draft.sources,
+                            &draft.repository_path,
+                        )),
+                        cancellation,
+                    )
+                    .await
+                }
             }
             Ok(None) => return,
             Err(error) => Err(error),
@@ -196,10 +209,30 @@ pub(super) fn complete_source_scopes(
         draft.loading = false;
         draft.scope_read = None;
     });
-    match result.and_then(|value| Scopes::parse(value, Projection::Selected)) {
+    let separation = state.with_untracked(|s| {
+        s.files
+            .batch
+            .as_ref()
+            .is_some_and(|draft| draft.kind == Kind::Separate)
+    });
+    match result.and_then(|value| {
+        Scopes::parse(
+            value,
+            if separation {
+                Projection::Summary
+            } else {
+                Projection::Selected
+            },
+        )
+    }) {
         Ok(scopes) => update(state, |draft| {
-            let sources = scopes.branches;
-            if scopes.repository != draft.repository || !same_source_heads(&draft.sources, &sources)
+            let mut sources = scopes.branches;
+            if scopes.repository != draft.repository
+                || if separation {
+                    sources.len() > 1
+                } else {
+                    !same_source_heads(&draft.sources, &sources)
+                }
             {
                 draft.error = t(
                     "源目录分支已改变，请取消并刷新后重试。",
@@ -207,9 +240,23 @@ pub(super) fn complete_source_scopes(
                 );
                 return;
             }
+            if separation {
+                for source in &mut sources {
+                    source.retain_selection(&draft.entries[0]);
+                }
+                draft.selected_sources.clear();
+                draft.mappings.clear();
+            }
             draft.sources = sources;
             draft.source_resolved = true;
-            draft.error.clear();
+            draft.error = if separation && draft.sources.is_empty() {
+                t(
+                    "原件所在目录没有已初始化的所属仓库，无法分离。",
+                    "The original has no initialized owning repository; separation is unavailable.",
+                )
+            } else {
+                String::new()
+            };
         }),
         Err(error) => {
             update(state, |draft| draft.error = error.to_string());
@@ -241,6 +288,10 @@ pub(super) fn update(state: RwSignal<State>, f: impl FnOnce(&mut Draft)) {
 pub(super) fn toggle_source(state: RwSignal<State>, id: String, checked: bool) {
     update(state, |draft| {
         if checked {
+            if draft.kind == Kind::Separate {
+                draft.selected_sources.clear();
+                draft.mappings.clear();
+            }
             draft.selected_sources.insert(id.clone());
             if draft.kind.has_destination() {
                 draft.mappings.push(Mapping {
@@ -261,6 +312,9 @@ fn scope_endpoint(repository: &str, path: &str) -> String {
         api::segment(repository),
         api::segment(path)
     )
+}
+fn owning_main_endpoint(repository: &str, path: &str) -> String {
+    format!("{}&owner_main=true", scope_endpoint(repository, path))
 }
 fn current_target(state: RwSignal<State>, id: &str, generation: u64) -> bool {
     state.with_untracked(|s| {
@@ -292,7 +346,14 @@ pub(super) fn complete_target_scopes(
                     draft.error = t("目标目录范围无效。", "Invalid destination folder scope.");
                 } else {
                     let targets = scopes.branches;
-                    if targets.is_empty() {
+                    if draft.kind == Kind::Separate && targets.len() != 1 {
+                        draft.targets.clear();
+                        draft.loading = false;
+                        draft.error = t(
+                            "目标目录没有唯一的所属 main 工作分支。",
+                            "The destination has no unique owning main workspace.",
+                        );
+                    } else if targets.is_empty() {
                         needs_directory = true;
                     } else {
                         draft.targets = targets;
@@ -359,7 +420,16 @@ pub(super) fn load_target(state: RwSignal<State>) {
             mapping.target.clear();
         }
     });
-    let scoped_endpoint = scope_endpoint(&repository, &target);
+    let scoped_endpoint = if state.with_untracked(|s| {
+        s.files
+            .batch
+            .as_ref()
+            .is_some_and(|draft| draft.kind == Kind::Separate)
+    }) {
+        owning_main_endpoint(&repository, &target)
+    } else {
+        scope_endpoint(&repository, &target)
+    };
     let entries_endpoint = destination_endpoint(&slot, &disk_prefix, target_path.as_ref());
     spawn_local(async move {
         let cancellation = match start_scope_read(state, epoch, &id, generation) {

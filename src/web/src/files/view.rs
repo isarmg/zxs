@@ -223,6 +223,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             {inline::control(state,t("新建文件夹","New folder"),Some("create"),inline::Target::CreateDirectory,mutation_disabled)}
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Move,None)>{t("移动","Move")}</button>
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Copy,None)>{t("复制","Copy")}</button>
+            <button class="zxs-button" disabled=move ||batch_disabled.get()||state.with(|s|!batch::separation_available(&s.files)) on:click=move |_|batch::start(state,batch::Kind::Separate,None)>{t("分离为独立文件","Separate file")}</button>
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Rename,None)><FileIcon name="rename"/>{t("重命名","Rename")}</button>
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Delete,None)><FileIcon name="delete"/>{t("删除","Delete")}</button>
             {branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::CurrentDirectory,create_branch_disabled)}

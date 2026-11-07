@@ -1328,3 +1328,204 @@ fn batch_repository_initialization_uses_new_git_contract_and_reviewed_namespace(
     assert!(view.contains("Initialize independent source repository"));
     assert!(!view.contains("Register source folder branch records"));
 }
+
+fn separation_draft() -> Draft {
+    let mut draft = draft(Kind::Separate);
+    draft.entries.truncate(1);
+    draft.selected_sources = BTreeSet::from(["m".into()]);
+    draft.mappings.truncate(1);
+    draft
+}
+
+#[test]
+fn separation_keeps_explicit_roles_and_both_frozen_trees() {
+    let body = request(&separation_draft()).unwrap();
+    let typed: storage_contract::DirectoryNamespaceBatch =
+        json_codec::from_value(body.clone()).unwrap();
+    assert_eq!(typed.kind, storage_contract::DirectoryBatchKind::Separate);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["items"][0]["source"],
+        json!({
+            "directory_branch_id":"m", "expected_tree_id":"tree-m",
+            "entry_id":"f", "path":"a/old.txt"
+        })
+    );
+    assert_eq!(
+        body["items"][0]["target"],
+        json!({
+            "directory_branch_id":"l", "expected_tree_id":"tree-l", "path":"b/new.txt"
+        })
+    );
+}
+
+#[test]
+fn separation_rejects_multiple_originals_sources_and_destinations() {
+    assert!(request(&draft(Kind::Separate)).is_err());
+    let mut review = separation_draft();
+    review.entries.push(listed(file("g", "a/data.txt", "G1")));
+    assert!(request(&review).is_err());
+    let mut review = separation_draft();
+    review.selected_sources.insert("n".into());
+    assert!(request(&review).is_err());
+    let mut review = separation_draft();
+    review.mappings.push(review.mappings[0].clone());
+    assert!(request(&review).is_err());
+    let mut review = separation_draft();
+    review.mappings[0].target.clear();
+    assert!(request(&review).is_err());
+    let mut review = separation_draft();
+    review.names.clear();
+    assert!(request(&review).is_err());
+}
+
+#[test]
+fn separation_requires_one_writable_file_not_a_directory_or_preview() {
+    let original = listed(file("f", "a/old.txt", "F1"));
+    let mut model = crate::files::model::Model {
+        writable: true,
+        loaded: true,
+        repository_id: "repo".into(),
+        selected: Some(original.clone()),
+        entries: vec![original.clone()].into(),
+        ..Default::default()
+    };
+    assert!(separation_available(&model));
+    let second = listed(file("g", "a/data.txt", "G1"));
+    model.entries = vec![original.clone(), second.clone()].into();
+    model.checked_entries = BTreeSet::from([entry_key(&original), entry_key(&second)]);
+    assert!(!separation_available(&model));
+    for entry in [
+        listed(json!({"entry_id":"dir","path":"a","name":"a","kind":"directory"})),
+        listed(
+            json!({"entry_id":"f","file_id":"f","path":"a/old.txt","name":"old.txt","kind":"file","version_id":"F1","read_only":true}),
+        ),
+        test_entries::preview_entry(json!({"path":"a/old.txt"})),
+    ] {
+        let mut review = separation_draft();
+        review.entries = vec![entry.clone()];
+        assert!(request(&review).is_err());
+        model.checked_entries.clear();
+        model.selected = Some(entry);
+        assert!(!separation_available(&model));
+    }
+}
+
+#[test]
+fn separation_switching_original_branch_clears_the_old_destination() {
+    Owner::new().with(|| {
+        let mut snapshot = State::default();
+        snapshot.files.batch = Some(separation_draft());
+        let state = RwSignal::new(snapshot);
+        super::super::actions::toggle_source(state, "n".into(), true);
+        state.with_untracked(|s| {
+            let review = s.files.batch.as_ref().unwrap();
+            assert_eq!(review.selected_sources, BTreeSet::from(["n".into()]));
+            assert_eq!(review.mappings.len(), 1);
+            assert_eq!(review.mappings[0].source, "n");
+            assert!(review.mappings[0].target.is_empty());
+            assert!(request(review).is_err());
+        });
+        // A repeated selection cannot append a second mapping or revive the old target.
+        super::super::actions::toggle_source(state, "n".into(), true);
+        assert_eq!(
+            state.with_untracked(|s| s.files.batch.as_ref().unwrap().mappings.len()),
+            1
+        );
+        super::super::actions::toggle_source(state, "n".into(), false);
+        assert!(state.with_untracked(|s| request(s.files.batch.as_ref().unwrap()).is_err()));
+    });
+}
+
+#[test]
+fn separation_review_rejects_stale_source_reads_and_stays_cancelled() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 8,
+            ..Default::default()
+        });
+        let mut captured = separation_draft();
+        captured.sources.truncate(1);
+        let facts = captured.sources.iter().map(scope_wire).collect::<Vec<_>>();
+        for source in &mut captured.sources {
+            *source = source.summary().clone().into();
+        }
+        super::super::actions::open_draft(state, captured);
+        let value = summary_response(json!({"repository_id":"repo","directory_branches":facts}));
+        for (epoch, id, generation) in [(7, "draft", 1), (8, "replaced", 1), (8, "draft", 0)] {
+            super::super::actions::complete_source_scopes(
+                state,
+                epoch,
+                id,
+                generation,
+                Ok(value.clone()),
+            );
+            assert!(state.with_untracked(|s| request(s.files.batch.as_ref().unwrap()).is_err()));
+        }
+        super::super::actions::complete_source_scopes(state, 8, "draft", 1, Ok(value.clone()));
+        state.with_untracked(|s| {
+            let review = s.files.batch.as_ref().unwrap();
+            assert!(review.source_resolved);
+            assert!(review.selected_sources.is_empty());
+            assert_eq!(review.sources[0].entries()[0].path(), "a/old.txt");
+            assert!(request(review).is_err());
+        });
+        state.update(|s| s.files.batch = None);
+        super::super::actions::complete_source_scopes(state, 8, "draft", 1, Ok(value));
+        assert!(state.with_untracked(|s| s.files.batch.is_none()));
+    });
+}
+
+#[test]
+fn separation_in_plain_subfolders_uses_owner_main_but_keeps_both_user_paths() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State { authenticated: true, session_epoch: 8, ..Default::default() });
+        let mut captured = separation_draft();
+        captured.sources.clear();
+        let summary = summary_response(json!({"repository_id":"repo","directory_branches":[branch("root-main", "", vec![])]}));
+        super::super::actions::open_draft(state, captured);
+        assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
+        super::super::actions::complete_source_scopes(state, 8, "draft", 1, Ok(summary.clone()));
+        super::super::actions::toggle_source(state, "root-main".into(), true);
+        assert!(!super::super::actions::complete_target_scopes(state, 8, "draft", 1, Ok(summary)));
+        state.update(|s| s.files.batch.as_mut().unwrap().mappings[0].target = "root-main".into());
+        let body = state.with_untracked(|s| request(s.files.batch.as_ref().unwrap()).unwrap());
+        assert_eq!(body["items"][0]["source"], json!({
+            "directory_branch_id":"root-main", "expected_tree_id":"tree-root-main", "entry_id":"f", "path":"a/old.txt"
+        }));
+        assert_eq!(body["items"][0]["target"], json!({
+            "directory_branch_id":"root-main", "expected_tree_id":"tree-root-main", "path":"b/new.txt"
+        }));
+    });
+}
+
+#[test]
+fn separation_without_an_owner_blocks_instead_of_offering_registration() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 8,
+            ..Default::default()
+        });
+        let mut captured = separation_draft();
+        captured.sources.clear();
+        super::super::actions::open_draft(state, captured);
+        let empty = json!({"repository_id":"repo","directory_branches":[]});
+        super::super::actions::complete_source_scopes(state, 8, "draft", 1, Ok(empty.clone()));
+        assert!(!super::super::actions::complete_target_scopes(
+            state,
+            8,
+            "draft",
+            1,
+            Ok(empty)
+        ));
+        state.with_untracked(|s| {
+            let review = s.files.batch.as_ref().unwrap();
+            assert!(review.sources.is_empty());
+            assert!(!review.error.is_empty());
+            assert!(review.registration.is_none());
+            assert!(request(review).is_err());
+        });
+    });
+}

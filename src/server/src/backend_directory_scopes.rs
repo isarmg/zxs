@@ -7,6 +7,8 @@ pub enum DirectoryBranchFilter {
     All,
     Root,
     Directory(name_policy::LookupPath),
+    /// Resolve the nearest initialized owner, then its stable main workspace.
+    OwningMain(Option<name_policy::LookupPath>),
 }
 impl DirectoryBranchFilter {
     #[cfg(any(feature = "core", test))]
@@ -15,6 +17,7 @@ impl DirectoryBranchFilter {
             Self::All => None,
             Self::Root => Some(""),
             Self::Directory(path) => Some(path.key()),
+            Self::OwningMain(path) => Some(path.as_ref().map_or("", name_policy::LookupPath::key)),
         }
     }
 }

@@ -13,7 +13,7 @@ fn parse(
 ) -> Result<(DirectoryBranchFilter, DirectoryBranchProjection), ApiError> {
     if let Some(key) = query
         .keys()
-        .find(|key| !["path", "summary"].contains(&key.as_str()))
+        .find(|key| !["path", "summary", "owner_main"].contains(&key.as_str()))
     {
         return Err(ApiError::invalid(format!("unknown field {key}")));
     }
@@ -22,7 +22,26 @@ fn parse(
         Some("true") => DirectoryBranchProjection::Summary,
         Some(_) => return Err(ApiError::invalid("summary must be true when supplied")),
     };
-    let filter = match query.remove("path") {
+    let owning_main = match query.remove("owner_main").as_deref() {
+        None => false,
+        Some("true") if matches!(projection, DirectoryBranchProjection::Summary) => true,
+        Some(_) => {
+            return Err(ApiError::invalid(
+                "owner_main requires true and summary=true",
+            ));
+        }
+    };
+    let path = query.remove("path");
+    if owning_main {
+        let path = path.ok_or_else(|| ApiError::invalid("owner_main requires an explicit path"))?;
+        let path = if path.is_empty() {
+            None
+        } else {
+            Some(name_policy::LookupPath::parse(&path).map_err(ApiError::invalid_source)?)
+        };
+        return Ok((DirectoryBranchFilter::OwningMain(path), projection));
+    }
+    let filter = match path {
         None => DirectoryBranchFilter::All,
         Some(path) if path.is_empty() => DirectoryBranchFilter::Root,
         Some(path) => DirectoryBranchFilter::Directory(
