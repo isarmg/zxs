@@ -38,8 +38,8 @@ fn required_upstream<'de, D: data_serialization::Deserializer<'de>>(
 }
 
 /// Explicitly re-protect the current selected files using full source paths.
-/// Empty-directory materialization and automatic later rename propagation are
-/// separate capabilities; this operation does not claim to implement them.
+/// Empty selected directory scopes are published on metadata-member targets.
+/// Automatic later rename propagation remains a separate capability.
 #[derive(Clone, Copy, Debug)]
 pub struct RecursiveBackupConfigurationRequest<'a> {
     pub repository_id: &'a str,
@@ -126,7 +126,7 @@ impl Engine {
     ///
     /// # Errors
     /// Rejects stale captures, stopped/rebound routes, ambiguous source names,
-    /// unsupported empty scopes and the ordinary policy/copy/namespace errors.
+    /// unsupported data-only directory targets and the ordinary policy/copy/namespace errors.
     pub fn configure_recursive_backups(
         &mut self,
         request: RecursiveBackupConfigurationRequest<'_>,

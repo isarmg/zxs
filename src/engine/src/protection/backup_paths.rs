@@ -6,7 +6,9 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) mod directory_namespaces;
 mod recursive;
+pub use directory_namespaces::PublishedBackupDirectory;
 pub use recursive::{RecursiveBackupCapture, RecursiveBackupConfigurationRequest};
 
 /// Backup placement for a path, fenced by the current policy generation.
@@ -890,12 +892,6 @@ impl CurrentNamespaces {
             ));
         }
         retain_inherited_files(state, entries, repository, &mut scope, previous);
-        if recursive.is_some() && scope.files.is_empty() {
-            return Err(Error::new(
-                ErrorCode::OperationUnsupported,
-                "recursive backup does not yet publish an empty directory namespace",
-            ));
-        }
         let mut prefixes = BTreeMap::new();
         for (slot, prefix) in request.backup_prefixes {
             let disk = self.backup_configuration_disk(slot)?;
@@ -1067,7 +1063,11 @@ impl CurrentNamespaces {
                 policies.insert(id.clone(), None);
             }
         }
-        let result = json!({
+        let directory_namespace = recursive
+            .filter(|_| scope.kind == NamespaceEntryKind::Directory && scope.files.is_empty())
+            .map(|_| directory_namespaces::capture(self, state, repo, &scope, &policy, &prefixes))
+            .transpose()?;
+        let mut result = json!({
             "history_tree_id": repo.history_tree_id,
             "policy": policy,
             "scope": {"id":scope.id,"kind":scope.kind,"path":scope.path},
@@ -1083,6 +1083,9 @@ impl CurrentNamespaces {
             "generated_policy_ids":generated,
             "namespace_backup":self.backup_configuration_source(state, repository, &scope.id)?
         });
+        if let Some(namespace) = directory_namespace {
+            result["directory_namespace"] = namespace;
+        }
         Ok(CurrentBackupConfigurationPlan {
             policies,
             bindings,

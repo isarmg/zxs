@@ -195,6 +195,7 @@ impl Engine {
                     .context(ErrorCode::PreparationStale, message)
                     .retryable()
             })?;
+        crate::protection::preflight_backup_directories(&self.planning_context(), &result)?;
         // Preparation consumed payload capacity, but concurrent staged uploads
         // may have consumed the metadata reserve without changing State.
         for disk in &self.config.disks {
@@ -564,6 +565,17 @@ impl Engine {
         // Only a decided candidate may rename a published file container.
         // A crash leaves the operation indeterminate and recovery replays it.
         names.apply()?;
+        let directory_result = next.operations.get(&c.operation_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::PublicationInvalid,
+                "decided operation result is absent",
+            )
+        })?;
+        crate::protection::materialize_backup_directories(
+            &self.config,
+            &self.disk_resources,
+            directory_result,
+        )?;
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_container_names")?;
         let mut payload_receipts = Vec::new();
@@ -1077,6 +1089,7 @@ impl crate::engine::PlanningContext<'_> {
             Some((&snapshot, &history_basis)),
         )?;
         crate::container_storage::validate_new_projection_paths(&projection)?;
+        crate::protection::preflight_backup_directories(self, &result)?;
         let preparation = PayloadPreparation::new(
             self.config,
             self.disk_resources,

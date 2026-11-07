@@ -3,9 +3,13 @@ use crate::*;
 use json_codec::json;
 mod backup_paths;
 mod placement_configuration;
+pub(crate) use backup_paths::directory_namespaces::{
+    materialize as materialize_backup_directories, preflight as preflight_backup_directories,
+    repair_current as repair_current_backup_directories,
+};
 pub use backup_paths::{
-    BackupConfigurationRequest, RecursiveBackupCapture, RecursiveBackupConfigurationRequest,
-    ScopedBackupConfigurationRequest,
+    BackupConfigurationRequest, PublishedBackupDirectory, RecursiveBackupCapture,
+    RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };
 pub(crate) use backup_paths::{apply_backup_paths, prune_retained_policies};
 pub use placement_configuration::PlacementConfigurationRequest;

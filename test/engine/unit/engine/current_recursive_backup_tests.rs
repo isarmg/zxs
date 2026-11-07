@@ -253,7 +253,7 @@ fn recursive_receipt_and_path_updates_are_strictly_replayed_live_and_cold() {
 }
 
 #[test]
-fn empty_recursive_scope_does_not_claim_a_published_directory_namespace() {
+fn empty_recursive_scope_publishes_a_directory_namespace_without_fake_file_versions() {
     let mut fixture = ready();
     fixture
         .engine
@@ -265,14 +265,20 @@ fn empty_recursive_scope_does_not_claim_a_published_directory_namespace() {
         )
         .unwrap();
     let capture = fixture.engine.recursive_backup_capture().unwrap();
-    let before = canonical_json(fixture.engine.state()).unwrap();
+    let versions = fixture.engine.state().versions.clone();
+    let result = configure(&mut fixture, "empty", 3, 0, &capture, op()).unwrap();
+    assert_eq!(result.commit_state, CommitState::Published);
     assert_eq!(
-        configure(&mut fixture, "empty", 3, 0, &capture, op())
-            .unwrap_err()
-            .code(),
-        ErrorCode::OperationUnsupported
+        result.protection_at_publish,
+        ProtectionAtPublish::NotApplicable
     );
-    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    assert_eq!(fixture.engine.state().versions, versions);
+    let directories = fixture.engine.published_backup_directories("C01").unwrap();
+    assert_eq!(directories.len(), 1);
+    assert_eq!(
+        directories[0].path().as_str(),
+        "disk-1/disk-0/live backup/empty"
+    );
 }
 
 #[test]
@@ -289,4 +295,51 @@ fn recursive_backup_does_not_reactivate_a_stopped_direct_source() {
     );
     assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
     assert_eq!(files(&fixture.config.disks[1].root), stopped);
+}
+
+#[test]
+fn recursive_directory_rows_are_part_of_exact_live_and_cold_replay() {
+    let mut fixture = ready();
+    fixture
+        .engine
+        .file_namespace(
+            &fixture.repository.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "empty", None).unwrap(),
+            "admin",
+            op(),
+        )
+        .unwrap();
+    let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
+    let previous = Arc::clone(&fixture.engine.state);
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    let result = configure(&mut fixture, "empty", 3, 0, &capture, op()).unwrap();
+    view.advance(&previous, fixture.engine.state()).unwrap();
+    for field in ["path", "entry_id"] {
+        let mut forged = fixture.engine.state().clone();
+        forged
+            .operations
+            .get_mut(&result.operation_id)
+            .unwrap()
+            .result["directory_namespace"]["replicas"]["C01"]["directories"][0][field] =
+            json!("forged");
+        rejected(&view, &previous, &forged, field);
+    }
+    let mut missing = fixture.engine.state().clone();
+    missing
+        .operations
+        .get_mut(&result.operation_id)
+        .unwrap()
+        .result
+        .as_object_mut()
+        .unwrap()
+        .remove("directory_namespace");
+    rejected(&view, &previous, &missing, "missing directory evidence");
+    let mut rebound = fixture.engine.state().clone();
+    rebound
+        .operations
+        .get_mut(&result.operation_id)
+        .unwrap()
+        .result["directory_namespace"]["replicas"]["C01"]["identity"]["binding_generation"] =
+        json!("99");
+    rejected(&view, &previous, &rebound, "directory target identity");
 }

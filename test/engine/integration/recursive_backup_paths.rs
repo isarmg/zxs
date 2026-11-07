@@ -296,7 +296,7 @@ fn recursive_file_configuration_rejects_changed_capture_before_any_disk_write() 
 }
 
 #[test]
-fn recursive_empty_or_stopped_source_does_not_claim_publication() {
+fn recursive_empty_scope_publishes_but_stopped_sources_still_refuse_writes() {
     let mut fixture = Fixture::new(false);
     fixture.save("docs/report", b"source");
     fixture
@@ -309,15 +309,22 @@ fn recursive_empty_or_stopped_source_does_not_claim_publication() {
         )
         .unwrap();
     let capture = fixture.engine.recursive_backup_capture().unwrap();
-    let before = json_codec::to_vec(fixture.engine.state()).unwrap();
+    let versions = fixture.engine.state().versions.clone();
+    let receipt = fixture
+        .configure("empty", &capture, 0, operation())
+        .unwrap();
+    assert_eq!(receipt.commit_state, CommitState::Published);
     assert_eq!(
-        fixture
-            .configure("empty", &capture, 0, operation())
-            .unwrap_err()
-            .code(),
-        ErrorCode::OperationUnsupported
+        receipt.protection_at_publish,
+        ProtectionAtPublish::NotApplicable
     );
-    assert_eq!(json_codec::to_vec(fixture.engine.state()).unwrap(), before);
+    assert_eq!(fixture.engine.state().versions, versions);
+    assert_eq!(
+        fixture.engine.published_backup_directories("C01").unwrap()[0]
+            .path()
+            .as_str(),
+        "disk-1/disk-0/Repository/empty"
+    );
     fixture.exit(1, MembershipExitAction::PlannedOffline);
     let capture = fixture.engine.recursive_backup_capture().unwrap();
     let stopped = files(&fixture.config.disks[1].root);
@@ -557,3 +564,6 @@ fn recursive_backup_preserves_soft_deletion_through_cold_replay() {
     );
     fixture.assert_body_paths(&entry, "ancestor/docs/report", b"retained while hidden");
 }
+
+#[path = "recursive_backup_empty_directories.rs"]
+mod empty_directories;

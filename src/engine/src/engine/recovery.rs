@@ -643,6 +643,16 @@ impl Engine {
         } else if self.journals.values().any(JournalWriter::needs_recovery) {
             self.blocked = true;
         }
+        // These are real disk writes, not the read-only receipt projection.
+        // An admitted published prefix does not grant repair authority while
+        // membership is fenced, a voter is missing, or a tail remains blocked.
+        if can_repair && !self.blocked {
+            crate::protection::repair_current_backup_directories(
+                &self.config,
+                &self.disk_resources,
+                &self.state,
+            )?;
+        }
         self.restore_namespace_workspace_baselines()?;
         if fenced {
             return Ok(());
