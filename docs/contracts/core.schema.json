@@ -9650,6 +9650,201 @@
       ],
       "additionalProperties": true,
       "description": "State与HistoryManifest的必需当前删除表；缺失不补默认值，不迁移旧格式。"
+    },
+    "RecursiveBackupCapture": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "原始请求的来源捕获，不是写能力。新操作与当前登记、精确身份、拓扑、State代数与根目录盘名重新比较；重试保留原捕获。",
+      "properties": {
+        "format": {
+          "const": "recursive-backup-source-paths"
+        },
+        "source_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "source_business_generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "registry": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "root_hash": {
+              "$ref": "#/$defs/Hash"
+            },
+            "view_generation": {
+              "$ref": "#/$defs/UInt64"
+            }
+          },
+          "required": [
+            "root_hash",
+            "view_generation"
+          ]
+        },
+        "disks": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "identity": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pool_id": {
+                    "$ref": "#/$defs/PoolId"
+                  },
+                  "disk_id": {
+                    "$ref": "#/$defs/DiskId"
+                  },
+                  "slot_id": {
+                    "$ref": "#/$defs/SlotId"
+                  },
+                  "binding_generation": {
+                    "$ref": "#/$defs/UInt64"
+                  }
+                },
+                "required": [
+                  "pool_id",
+                  "disk_id",
+                  "slot_id",
+                  "binding_generation"
+                ]
+              },
+              "level": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "upstream_slot_id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SlotId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "identity",
+              "level",
+              "upstream_slot_id",
+              "name"
+            ]
+          }
+        }
+      },
+      "required": [
+        "format",
+        "source_sequence",
+        "source_business_generation",
+        "registry",
+        "disks"
+      ]
+    },
+    "RecursiveBackupConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "configuration": {
+          "type": "object",
+          "properties": {
+            "generation": {
+              "$ref": "#/$defs/UInt64"
+            },
+            "target_copies": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "backup_prefixes": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "每个被选备份slot的独立逻辑前缀，相对所选scope根；空字符串表示目标盘根。不接受绝对路径/..，不由磁盘物理根生成。"
+            },
+            "route_slot_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "当前默认主盘按target_copies请求的完整路由；不足原份数时为空，使用available_route_slot_ids、backup_routes和max_copies审阅并调整，不截短冒充满足。"
+            },
+            "scope": {
+              "type": "object"
+            },
+            "inherited": {
+              "type": "boolean"
+            },
+            "file_count": {
+              "$ref": "#/$defs/UInt64"
+            },
+            "backup_paths": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "文件scope为backup slot到完整逻辑路径的映射，目录scope为空对象。"
+            },
+            "effective_generation": {
+              "$ref": "#/$defs/UInt64"
+            },
+            "available_route_slot_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "max_copies": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "所选默认主盘、覆盖文件后续写入主盘、仍继承此目录策略的后代放置前缀及可用历史版本主盘的完整链长度最小值；available_route_slot_ids只描述默认来源链，不能替代完整backup_routes。"
+            },
+            "backup_routes": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/SlotId"
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "description": "所选默认主盘、实际覆盖文件后续写入主盘、范围内仍继承此目录策略的后代放置前缀（含空目录或尚无文件的路径），以及可用历史版本主盘涉及的去重完整链，包含各primary本身；独立子备份规则不纳入父目录，用于同时验证后续写入与历史回填的备份前缀。"
+            },
+            "backup_slot_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SlotId"
+              },
+              "uniqueItems": true,
+              "description": "所有backup_routes中备份slot的去重并集。选择n份时对各链前n项取备份并集，逐slot要求用户prefix。"
+            }
+          },
+          "required": [
+            "generation",
+            "target_copies",
+            "backup_prefixes",
+            "route_slot_ids",
+            "scope",
+            "inherited",
+            "file_count"
+          ],
+          "additionalProperties": true
+        },
+        "capture": {
+          "$ref": "#/$defs/RecursiveBackupCapture"
+        }
+      },
+      "required": [
+        "configuration",
+        "capture"
+      ]
     }
   }
 }
