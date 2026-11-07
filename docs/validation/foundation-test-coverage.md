@@ -1,8 +1,10 @@
-# 活动基础组件测试覆盖闭环
+# 活动基础组件完整配方测试覆盖闭环
 
 [测试布局](../architecture/test-layout.md) · [外置测试来源](../EXTERNAL_TEST_SOURCES.md) · [Rust 来源管理](../tools/rust-sources.md)
 
 本文先给出调用链、分类规则与验收设计，再记录实际执行结果。范围限于 `test/foundation/`、既有测试清单与执行入口；不修改任务 2 的升级／修复适配器，也不改动由固定证明或维护收据约束的 owner。
+
+当前处于[开发期短 CI](../ci/development-short-ci.md)。本文的调用链、分类与生成映射描述保存的完整配方；长分片当前暂停，不能把声明门禁或下文历史结果当作本次开发 CI 的执行覆盖。JSON 的 `scope.execution_evidence` 固定为 `false`，生成 Markdown 同样单独标示范围。
 
 ## 约束
 
@@ -15,7 +17,7 @@
 ## 调用链
 
 ```
-CI foundation 作业
+保存的完整 CI 配方中的 foundation 作业（当前长分片暂停）
  └─ .github/scripts/check-foundation.sh foundation-async
      └─ python3 .github/scripts/check-foundation-behaviour.py
          ├─ 根工作区单元测试：cargo test --lib -p <包>
@@ -42,20 +44,20 @@ check-foundation-behaviour.py     本任务套件表（机器读取，不复制�
 test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-test-coverage-map.md
 ```
 
-可达性检查从 `ci.yml` 的真实 `run` 步骤、selector 矩阵输出及 `check.sh` 所选分支出发，再解析 foundation 分片命令；按完整仓库相对路径和 shard 核对登记及自动生成的 behaviour 入口。`browser-smoke` 的 CSR 生产入口通过实际 `needs: web-production` 关联。登记的 `scripts` 是这些命令入口，不是入口内部导入的 helper；伴随宏也登记具体 runner 和 shard。
+完整配方的声明接线检查由 `retained_recipe_scripts()` 从 `.github/ci/full-workflows/ci.yml` 保存的 `run` 步骤、完整 selector 定义及 `check.sh` 所选分支出发，再解析 foundation 分片命令；按完整仓库相对路径和 shard 核对登记及自动生成的 behaviour 入口。`browser-smoke` 的 CSR 生产入口通过实际 `needs: web-production` 关联。登记的 `scripts` 是这些命令入口，不是入口内部导入的 helper；伴随宏也登记具体 runner 和 shard。
 
-解析器只接受当前工作流的 block-mapping 结构及所涉及 shell 分支的直线命令，保留续行、引号和已审阅构建变量赋值；未支持的控制流、管道或可选步骤明确失败，须先扩展解析与负例，不能靠注释、孤立脚本或同 basename 补齐登记。它只证明静态接线；selector 仍可复用先前证据，“已执行”分类不是当前提交每个分片都重新执行、更不是全部 API 通过的证明。实际通过仍需绑定提交的运行记录与测试清单。
+解析器只接受保存配方的 block-mapping 结构及所涉及 shell 分支的直线命令，保留续行、引号和已审阅构建变量赋值；未支持的控制流、管道或可选步骤明确失败，须先扩展解析与负例，不能靠注释、孤立脚本或同 basename 补齐登记。它只证明保存配方的静态接线。原完整 selector 的历史复用算法仍保留，但当前活动入口使用固定七套开发矩阵，不调用该算法；`executed` 分类表示完整配方含执行门禁，不证明当前路由活动或测试通过。实际通过仍需绑定提交的运行记录与测试清单，暂停项明确为未执行。
 
 ## 分类
 
 | 类别 | 判定 |
 | --- | --- |
-| 已执行 | 至少一个门禁运行针对该包的测试：U＝保留上游材料，P＝项目新作契约或夹具，F＝由已执行套件展开的伴随过程宏 |
-| 需要但未执行 | 生产 profile 闭包可达，且没有门禁执行针对该包的测试 |
+| 完整配方含执行门禁（`executed`） | 保存的完整配方至少声明一个针对该包的测试入口：U＝保留上游材料，P＝项目新作契约或夹具，F＝由已执行套件展开的伴随过程宏 |
+| 完整配方缺执行门禁（`needed-not-executed`） | 生产 profile 闭包可达，且保存配方没有针对该包的测试入口 |
 | 仅参考 | 只在验证 profile 或验证成员中可达，没有门禁执行 |
 | 已退役 | 来源清单的 `retired`／`superseded` 记录；不得残留 `test/foundation` 根 |
 
-数量全部由生成器从当前仓库计算，不沿用历史报告中的目录计数。“需要但未执行”另按风险分层：并发／平台类且在生产中以运行时角色出现为高，其他运行时为中，仅编译期为低。
+数量全部由生成器从当前仓库计算，不沿用历史报告中的目录计数。完整配方缺执行门禁的分类另按风险分层：并发／平台类且在生产中以运行时角色出现为高，其他运行时为中，仅编译期为低。
 
 ## 优先行为与执行方式
 
@@ -120,7 +122,7 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 
 ### 映射与分类
 
-`foundation_coverage.py --write` 在集成提交生成[覆盖映射](foundation-test-coverage-map.md)，当前活动、执行、风险分层与退役数量以该生成表为准，不在本文维护第二份总数。每个包的消费者与特性来自各 profile 入口的 `cargo tree`，门禁来自已审阅登记 `tools/rust-sources/foundation-test-gates.json` 与本门禁套件表。登记中引用的脚本必须存在且被 CI 入口调用；`check-rust-syntax-migration.py` 未被任何入口调用，因此未计入。“已执行”只表示有针对该包的测试入口，不表示全部 API、目标或密码学性质已验证。
+`foundation_coverage.py --write` 在集成提交生成[覆盖映射](foundation-test-coverage-map.md)，活动包、完整配方门禁声明、风险分层与退役数量以该生成表为准，不在本文维护第二份总数。每个包的消费者与特性来自各 profile 入口的 `cargo tree`，门禁来自已审阅登记 `tools/rust-sources/foundation-test-gates.json` 与本门禁套件表。登记中引用的脚本必须存在且被保存的完整配方声明调用；`check-rust-syntax-migration.py` 未被任何入口调用，因此未计入。`executed` 只表示保存的完整配方中有针对该包的测试入口，不表示当前开发 CI 已执行，也不表示全部 API、目标或密码学性质已验证。
 
 TLS 的项目消费者回归另由默认工作区成员 `storage-client` 的 `tls_trust_regression` 执行，登记为 P：`rustls-webpki`、`webpki-roots`、`rustls-pki-types`、`rustls`、`hyper-rustls` 和 `tokio-rustls`。该目标的八项测试核对全部八份公告 SPKI 在叶、中间及信任锚位置的拒绝、移除根、正常链与坏签名，并通过真实本地 HTTPS 握手检查客户端的信任和发送边界；见[TLS 回归范围](../security/TLS_TEST_FIXTURES.md)。它们未执行这些组件的保留上游套件，不能以 P 替代 U；旧报告只描述当时范围。
 

@@ -1,0 +1,366 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  static:
+    name: Static workflow and tooling regressions (no Rust)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      suites: ${{ steps.suites.outputs.suites }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Missing older push bases safely select the full matrix.
+          fetch-depth: 2
+      - name: Check workflows, source governance and script regressions
+        run: bash .github/scripts/check.sh static
+      - name: Select evidenced CI suites
+        id: suites
+        run: python3 .github/scripts/select-ci-suites.py
+
+  tests:
+    name: Tests (${{ matrix.suite }})
+    needs: static
+    runs-on: ubuntu-24.04
+    # Cold crypto runs include ten packaged/local-generated ring cases, including
+    # both release slow-test matrices; the measured run exceeded 30 minutes.
+    # Match the release verification budget without relaxing other shards.
+    # The full workspace reached only 907 of 1964 engine tests in 30 minutes,
+    # before server tests and real I/O gates. Retain the full workload and allow
+    # its long fault/recovery cases to finish instead of accepting partial runs.
+    timeout-minutes: ${{ matrix.suite == 'workspace' && 120 || matrix.suite == 'foundation-crypto' && 60 || 30 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.static.outputs.suites) }}
+    env:
+      ZXS_REQUIRE_BROWSER: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+      - name: Install WASM standard library for cross-target checks
+        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
+        run: rustup target add wasm32-unknown-unknown
+      - name: Install Valgrind SDK and loader debug symbols
+        if: matrix.suite == 'foundation-crypto'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y valgrind libc6-dbg clang libclang-dev
+      - name: Install system SQLite SDK for unbundled validation
+        if: matrix.suite == 'foundation-data'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
+      - name: Enable sandboxed Chrome for browser future runtime checks
+        if: matrix.suite == 'foundation-language'
+        run: bash .github/scripts/prepare-browser-contract.sh
+      - name: Install isolated disk observation tracing tool
+        if: matrix.suite == 'workspace'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y strace
+      - name: Cache verified security scanner
+        if: matrix.suite == 'security'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target/security-tools/bin/cargo-audit
+            target/security-tools/verified-build.json
+          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
+      - name: Run locked test suite
+        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
+      - name: Retain PKI Valgrind positive and negative evidence
+        if: always() && matrix.suite == 'foundation-crypto'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pki-valgrind-evidence
+          path: target/pki-valgrind/logs/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify isolated system SQLite consumer
+        if: matrix.suite == 'foundation-data'
+        run: python3 .github/scripts/check-sqlite-system.py
+      - name: Retain exact foundation behaviour test evidence
+        if: always() && matrix.suite == 'foundation-async'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: foundation-behaviour-evidence
+          path: |
+            target/foundation-behaviour/logs/
+            target/foundation-behaviour/summary.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  web-production:
+    name: Production WASM build
+    # Compile in parallel with preflight. Browser acceptance still requires
+    # static checks, this build and the same-commit Samba SDK job to succeed.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain and WASM target
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - name: Cache locally compiled Rust build helpers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/rust-build-tools
+          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
+          restore-keys: |
+            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build production Web distribution
+        run: bash .github/scripts/check.sh web-production
+      - name: Retain production assets for checks in this run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-dist
+          path: build/web/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retain browser template contract fixture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: csr-template-fixture
+          path: target/csr-template-check/output/
+          if-no-files-found: error
+          retention-days: 7
+
+  browser-smoke:
+    name: "Standalone ELF: Debian 13 server + host Chrome"
+    needs: [static, web-production, smb-sdk]
+    runs-on: ubuntu-24.04
+    # Compile one release-profile graph for both product and browser harness.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Fetch production Web assets from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist
+          path: build/web
+      - name: Fetch browser template contract fixture from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: csr-template-fixture
+          path: target/csr-template-check/output
+      - name: Fetch matching Debian 13 VFS from this exact workflow commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: debian13-vfs-${{ github.sha }}
+          path: target/smb-debian13/product
+      - name: Verify runner Chrome and ChromeDriver
+        run: |
+          chrome="$(command -v google-chrome)"
+          driver="$(command -v chromedriver)"
+          "$chrome" --version
+          "$driver" --version
+          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
+          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
+          test "$chrome_major" = "$driver_major"
+          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
+          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
+      - name: Install CJK fonts for the Chinese screenshot
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
+      - name: Build and exercise extracted release packages
+        env:
+          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
+          ZXS_SMOKE_FOREIGN_REVIEW: '1'
+          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
+          ZXS_LOGIN_PREVIEWS: artifacts/login-previews
+        run: |
+          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          bash .github/scripts/debian13-run.sh --native python3 .github/scripts/release-native.py
+          cargo test --locked --offline --release -p browser-smoke
+          bash .github/scripts/release-package.sh
+          bash .github/scripts/check-debian13-release.sh
+          bash .github/scripts/release-acceptance.sh
+          python3 .github/scripts/check-csr-browser.py
+          bash .github/scripts/release-assemble.sh
+      - name: Record unaccepted native diagnostic inventory
+        if: always()
+        run: |
+          printf 'Unaccepted diagnostic bytes for source %s; not a validated release.\n' '${{ github.sha }}'
+          for path in \
+            target/native/x86_64-unknown-linux-gnu/release/zxs \
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue \
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt \
+            target/smb-debian13/product/zxs.so \
+            target/smb-debian13/product/VFS-BUILD.json \
+            build/web \
+            target/debian13-native/release/browser-smoke \
+            target/native/release/browser-smoke; do
+            if [[ -e "$path" ]]; then
+              printf 'PRESENT %s\n' "$path"
+            else
+              printf 'MISSING %s\n' "$path"
+            fi
+          done
+      - name: Retain unaccepted native diagnostic bytes (not final assets)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unaccepted-native-${{ github.sha }}
+          path: |
+            target/native/x86_64-unknown-linux-gnu/release/zxs
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt
+            target/smb-debian13/product/zxs.so
+            target/smb-debian13/product/VFS-BUILD.json
+            build/web
+            target/debian13-native/release/browser-smoke
+            target/native/release/browser-smoke
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Retain Debian 13 single-ELF runtime proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debian13-single-binary
+          path: artifacts/debian13-single-binary*
+          if-no-files-found: warn
+      - name: Retain verified installation candidate (not a published release)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installation-candidate-linux-web
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain template browser result and exact input identity
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: csr-template-browser
+          path: target/csr-template-check/output/*json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain real Web file manager screenshot
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-screenshot
+          path: artifacts/web-file-manager.png
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retain responsive Web viewport previews
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: viewport-previews
+          path: artifacts/viewport-previews/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain real anonymous mobile and desktop screenshots
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: login-previews
+          path: artifacts/login-previews/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain browser failure diagnostics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: browser-failure-diagnostics-${{ github.sha }}
+          path: artifacts/browser-smoke/diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain real primary placement browser evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: primary-placement-browser-${{ github.sha }}
+          path: artifacts/browser-smoke/placement/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain foreign review browser evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: foreign-review-browser-${{ github.sha }}
+          path: artifacts/browser-smoke/foreign-review/
+          if-no-files-found: warn
+          retention-days: 7
+
+  smb-sdk:
+    needs: static
+    uses: ./.github/workflows/smb-sdk.yml
+
+  phase-one-core:
+    name: Phase-one core admission and persistence
+    # Run independently of the long Engine workspace shard and browser jobs.
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+      - name: Build and run exact current core tests
+        run: python3 .github/scripts/check-phase-one-core.py
+      - name: Retain phase-one core build and test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: phase-one-core-${{ github.sha }}
+          path: |
+            target/phase-one-core/logs/
+            target/phase-one-core/summary.json
+          if-no-files-found: error
+          retention-days: 7

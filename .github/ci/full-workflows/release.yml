@@ -1,0 +1,244 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: # Build-only rehearsal. Never creates or publishes a Release.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  static:
+    name: Static workflow and tooling regressions (no Rust)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check workflows, source governance and script regressions
+        run: bash .github/scripts/check.sh static
+
+  version:
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - run: rustup show active-toolchain
+      - run: cargo test --locked --offline -p release-tools
+      - id: version
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: cargo run --locked --offline -p release-tools -- "$TAG"
+
+  verify:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
+    env:
+      ZXS_REQUIRE_BROWSER: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - name: Install Valgrind SDK and loader debug symbols
+        if: matrix.suite == 'foundation-crypto'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y valgrind libc6-dbg clang libclang-dev
+      - name: Install system SQLite SDK for unbundled validation
+        if: matrix.suite == 'foundation-data'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
+      - name: Enable sandboxed Chrome for browser future runtime checks
+        if: matrix.suite == 'foundation-language'
+        run: bash .github/scripts/prepare-browser-contract.sh
+      - name: Cache verified security scanner
+        if: matrix.suite == 'security'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target/security-tools/bin/cargo-audit
+            target/security-tools/verified-build.json
+          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
+      - name: Run portable test suite and contract checks
+        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
+      - name: Retain PKI Valgrind positive and negative evidence
+        if: always() && matrix.suite == 'foundation-crypto'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pki-valgrind-evidence
+          path: target/pki-valgrind/logs/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify isolated system SQLite consumer
+        if: matrix.suite == 'foundation-data'
+        run: python3 .github/scripts/check-sqlite-system.py
+
+  linux-web:
+    needs: [version, smb-sdk]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - run: bash .github/scripts/check.sh web-production
+      - name: Check browser harness and generated template
+        run: |
+          export CHROME_BIN="$(command -v google-chrome)"
+          export CHROMEDRIVER="$(command -v chromedriver)"
+          cargo test --locked --offline --release -p browser-smoke
+          python3 .github/scripts/check-csr-browser.py
+      - name: Fetch matching Debian 13 VFS from this exact workflow commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: debian13-vfs-${{ github.sha }}
+          path: target/smb-debian13/product
+      - name: Build Linux service and local maintenance entrypoint
+        run: |
+          bash .github/scripts/debian13-run.sh --native python3 .github/scripts/release-native.py
+          bash .github/scripts/release-package.sh
+          bash .github/scripts/check-debian13-release.sh
+      - name: Accept Debian 13 standalone ELF with host sandboxed Chrome
+        run: |
+          export CHROME_BIN="$(command -v google-chrome)"
+          export CHROMEDRIVER="$(command -v chromedriver)"
+          bash .github/scripts/release-acceptance.sh
+      - name: Record unaccepted native diagnostic inventory
+        if: always()
+        run: |
+          printf 'Unaccepted diagnostic bytes for source %s; not a validated release.\n' '${{ github.sha }}'
+          for path in \
+            target/native/x86_64-unknown-linux-gnu/release/zxs \
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue \
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt \
+            target/smb-debian13/product/zxs.so \
+            target/smb-debian13/product/VFS-BUILD.json \
+            build/web \
+            target/debian13-native/release/browser-smoke \
+            target/native/release/browser-smoke; do
+            if [[ -e "$path" ]]; then
+              printf 'PRESENT %s\n' "$path"
+            else
+              printf 'MISSING %s\n' "$path"
+            fi
+          done
+      - name: Retain unaccepted native diagnostic bytes (not final assets)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unaccepted-native-${{ github.sha }}
+          path: |
+            target/native/x86_64-unknown-linux-gnu/release/zxs
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt
+            target/smb-debian13/product/zxs.so
+            target/smb-debian13/product/VFS-BUILD.json
+            build/web
+            target/debian13-native/release/browser-smoke
+            target/native/release/browser-smoke
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Retain Debian 13 single-ELF runtime proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debian13-single-binary
+          path: artifacts/debian13-single-binary*
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux-web
+          path: release-assets/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-web-dist
+          path: build/web/
+          if-no-files-found: error
+
+  smb-sdk:
+    needs: static
+    uses: ./.github/workflows/smb-sdk.yml
+
+  assemble:
+    needs: [version, verify, linux-web, smb-sdk]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-linux-web
+          path: release-assets
+      - name: Verify complete asset set and create checksums
+        run: bash .github/scripts/release-assemble.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-complete
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [version, assemble]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      RELEASE_PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-complete
+          path: release-assets
+      - name: Upload all assets to a draft, then publish once
+        run: bash .github/scripts/release-publish.sh

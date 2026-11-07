@@ -1,4 +1,5 @@
-"""Invariants of the generated foundation coverage map (no Cargo needed)."""
+"""Retained full-recipe map invariants, not active development coverage (no Cargo)."""
+import copy
 import importlib.util
 import json
 import os
@@ -52,11 +53,27 @@ class FoundationCoverageConsumerTests(unittest.TestCase):
 
 
 class FoundationCoverageReachabilityTests(unittest.TestCase):
+    def test_retained_routes_are_not_current_development_execution(self):
+        spec = importlib.util.spec_from_file_location(
+            'development_ci_coverage', ROOT / '.github/scripts/development-ci.py')
+        policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(policy)
+        current = policy.receipt()
+        declared = COVERAGE.retained_recipe_scripts()
+        for shard in ('workspace', 'foundation-crypto', 'foundation-data',
+                      'foundation-language', 'foundation-async'):
+            self.assertIn(shard, declared)
+            self.assertIn(shard, current['paused_suites'])
+            self.assertNotIn(shard, current['suites'])
+        self.assertIn('browser-smoke', declared)
+        self.assertIn('browser-smoke', current['paused_jobs']['ci.yml'])
+        self.assertEqual(current['reused'], [])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='foundation-wiring-')
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        for relative in ('.github/workflows/ci.yml', '.github/scripts/check.sh',
+        for relative in ('.github/ci/full-workflows/ci.yml', '.github/scripts/check.sh',
                          '.github/scripts/check-foundation.sh', '.github/scripts/select-ci-suites.py'):
             destination = self.root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -73,11 +90,11 @@ class FoundationCoverageReachabilityTests(unittest.TestCase):
 
     def validate(self):
         with patch.object(COVERAGE, 'ROOT', self.root):
-            COVERAGE.validate_gate(self.gate, COVERAGE.invoked_scripts())
+            COVERAGE.validate_gate(self.gate, COVERAGE.retained_recipe_scripts())
 
-    def test_all_222_packages_and_generated_behaviour_have_real_routes(self):
+    def test_all_222_packages_and_generated_behaviour_have_retained_recipe_routes(self):
         self.assertEqual(len(MAP['packages']), 222)
-        reachable = COVERAGE.invoked_scripts()
+        reachable = COVERAGE.retained_recipe_scripts()
         registry = json.loads((ROOT / 'tools/rust-sources/foundation-test-gates.json').read_text())
         for gate in registry['entries']:
             COVERAGE.validate_gate(gate, reachable)
@@ -112,7 +129,7 @@ class FoundationCoverageReachabilityTests(unittest.TestCase):
             self.validate()
 
     def test_command_removed_from_workflow_cannot_be_replaced_by_comment(self):
-        self.edit('.github/workflows/ci.yml',
+        self.edit('.github/ci/full-workflows/ci.yml',
                   '        run: bash .github/scripts/check.sh "${{ matrix.suite }}"',
                   '        # run: bash .github/scripts/check.sh "${{ matrix.suite }}"')
         with self.assertRaises(AssertionError):
@@ -125,14 +142,14 @@ class FoundationCoverageReachabilityTests(unittest.TestCase):
             self.validate()
 
     def test_optional_workflow_step_is_not_accepted(self):
-        self.edit('.github/workflows/ci.yml', '      - name: Run locked test suite',
+        self.edit('.github/ci/full-workflows/ci.yml', '      - name: Run locked test suite',
                   '      - name: Run locked test suite\n        if: false')
         with self.assertRaises(AssertionError):
             self.validate()
 
     def test_selector_id_on_another_step_is_not_an_output_route(self):
-        self.edit('.github/workflows/ci.yml', '        id: suites', '        id: not-suites')
-        self.edit('.github/workflows/ci.yml', '      - name: Run locked test suite',
+        self.edit('.github/ci/full-workflows/ci.yml', '        id: suites', '        id: not-suites')
+        self.edit('.github/ci/full-workflows/ci.yml', '      - name: Run locked test suite',
                   '      - name: Run locked test suite\n        id: suites')
         with self.assertRaisesRegex(AssertionError, 'selector output'):
             self.validate()
@@ -145,7 +162,7 @@ class FoundationCoverageReachabilityTests(unittest.TestCase):
             self.validate()
 
     def test_browser_producer_dependency_is_required(self):
-        self.edit('.github/workflows/ci.yml',
+        self.edit('.github/ci/full-workflows/ci.yml',
                   '    needs: [static, web-production, smb-sdk]', '    needs: [static, smb-sdk]')
         with self.assertRaises(AssertionError):
             self.validate()
@@ -165,6 +182,40 @@ class FoundationCoverageReachabilityTests(unittest.TestCase):
 
 
 class FoundationCoverageMapTests(unittest.TestCase):
+    def test_generated_json_and_markdown_are_self_contained_recipe_declarations(self):
+        expected = {
+            'kind': 'retained-full-recipe',
+            'workflow': '.github/ci/full-workflows/ci.yml',
+            'execution_evidence': False,
+            'current_policy': '.github/scripts/development-ci.py',
+        }
+        self.assertEqual(MAP['scope'], expected)
+        self.assertEqual(COVERAGE.SCOPE, expected)
+        self.assertEqual(json.loads(COVERAGE.json_text(MAP)), MAP)
+        markdown = COVERAGE.markdown(MAP)
+        self.assertEqual(markdown, (ROOT / 'docs/validation/foundation-test-coverage-map.md').read_text())
+        for text in ('保存的完整 CI 配方', '不是当前开发 CI 的执行覆盖或通过证明',
+                     '.github/ci/full-workflows/ci.yml', '开发期短 CI'):
+            self.assertIn(text, markdown)
+        self.assertNotIn('| 已执行 |', markdown)
+        self.assertNotIn('## 已执行', markdown)
+        self.assertIn('完整配方含执行门禁', markdown)
+        documentation = (ROOT / 'docs/validation/foundation-test-coverage.md').read_text()
+        self.assertIn('retained_recipe_scripts()', documentation)
+        self.assertIn('scope.execution_evidence', documentation)
+        self.assertNotIn('可达性检查从 `ci.yml`', documentation)
+
+    def test_generated_rendering_rejects_missing_or_execution_claiming_scope(self):
+        for mode in ('missing', 'claim'):
+            changed = copy.deepcopy(MAP)
+            if mode == 'missing':
+                del changed['scope']
+            else:
+                changed['scope']['execution_evidence'] = True
+            for render in (COVERAGE.markdown, COVERAGE.json_text):
+                with self.subTest(mode=mode, render=render.__name__), self.assertRaises((AssertionError, KeyError)):
+                    render(changed)
+
     def test_tls_security_consumer_is_executed_without_claiming_upstream_suites(self):
         root = tomllib.loads((ROOT / "Cargo.toml").read_text())
         self.assertIn("src/client", root["workspace"]["default-members"])

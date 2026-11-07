@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Map every active foundation package to its consumers, targets, features and test execution.
+"""Map active foundation packages to consumers and retained full-recipe test declarations.
 
 Inputs, all read from the repository:
 
@@ -30,6 +30,12 @@ import subprocess
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
+SCOPE = {
+    'kind': 'retained-full-recipe',
+    'workflow': '.github/ci/full-workflows/ci.yml',
+    'execution_evidence': False,
+    'current_policy': '.github/scripts/development-ci.py',
+}
 CATALOG = ROOT / 'compliance/rust-sources.json'
 WORKSPACES = ROOT / 'tools/rust-sources/workspaces.json'
 GATES = ROOT / 'tools/rust-sources/foundation-test-gates.json'
@@ -265,14 +271,15 @@ def shell_arm(source, shard):
     return '\n'.join(arms[shard])
 
 
-def invoked_scripts():
-    """Return exact entrypoint paths reachable per shard in ci.yml.
+def retained_recipe_scripts():
+    """Return exact entrypoint paths declared by the retained full CI recipe.
 
-    This proves static wiring, not test success or complete API coverage. Suite
-    selection can reuse prior evidence; it does not guarantee a shard runs on
-    every commit. The selector remains the authority for its matrix inventory.
+    This proves preserved recipe wiring, NOT current development coverage or
+    test success. The full recipe is not a scheduled workflow. Development CI
+    deliberately pauses long shards; development-ci.py reports its own matrix.
+    The generated inventory remains a full-recipe design map, not a run receipt.
     """
-    jobs = workflow_jobs((ROOT / '.github/workflows/ci.yml').read_text())
+    jobs = workflow_jobs((ROOT / '.github/ci/full-workflows/ci.yml').read_text())
     selector = ast.parse((ROOT / '.github/scripts/select-ci-suites.py').read_text())
     constants = {}
     for node in selector.body:
@@ -351,7 +358,7 @@ def generate():
 
     registry = json.loads(GATES.read_text())
     assert registry['schema'] == 1
-    ci = invoked_scripts()
+    ci = retained_recipe_scripts()
     gates = defaultdict(list)
     for entry in registry['entries']:
         assert entry['package'] in by_name, f'gate entry for an inactive package: {entry["package"]}'
@@ -410,11 +417,13 @@ def generate():
             stem = re.sub(r'-\d+(?:\.\d+)*(?:[-+].*)?$', '', leaf)
             assert stem not in present_roots or stem in names.values(), f'retired {key} keeps a test root'
             retired.append({'record': key, 'kind': kind})
-    return {'schema': 1, 'generator': 'tools/rust-sources/foundation_coverage.py --write',
+    return {'schema': 1, 'scope': dict(SCOPE),
+            'generator': 'tools/rust-sources/foundation_coverage.py --write',
             'packages': packages, 'retired': retired}
 
 
 def markdown(data):
+    assert data['scope'] == SCOPE, 'coverage map must identify its retained-recipe scope'
     counts = defaultdict(int)
     risks = defaultdict(int)
     for package in data['packages']:
@@ -422,21 +431,26 @@ def markdown(data):
         if package['risk']:
             risks[package['risk']] += 1
     lines = [
-        '# 基础组件测试覆盖映射', '',
+        '# 基础组件完整配方测试声明映射', '',
         '由 `python3 tools/rust-sources/foundation_coverage.py --write` 生成，`--check` 核对；不要手工编辑。'
         '设计与分类规则见[测试覆盖闭环](foundation-test-coverage.md)。', '',
+        '**范围：保存的完整 CI 配方，不是当前开发 CI 的执行覆盖或通过证明。** '
+        '工作流来源为 `.github/ci/full-workflows/ci.yml`；该目录不由 Actions 执行。'
+        '长套件在[开发期短 CI](../ci/development-short-ci.md)中暂停。'
+        '下列统计只描述完整配方中登记的门禁，`executed` 是保留的声明分类，不是本次执行回执。', '',
         '| 类别 | 数量 |', '| --- | ---: |',
-        f'| 已执行 | {counts["executed"]} |',
-        f'| 需要但未执行（高／中／低风险 {risks["high"]}／{risks["medium"]}／{risks["low"]}） | {counts["needed-not-executed"]} |',
+        f'| 完整配方含执行门禁 | {counts["executed"]} |',
+        f'| 完整配方缺执行门禁（高／中／低风险 {risks["high"]}／{risks["medium"]}／{risks["low"]}） | {counts["needed-not-executed"]} |',
         f'| 仅参考 | {counts["reference-only"]} |',
         f'| 活动合计 | {len(data["packages"])} |',
         f'| 已退役／被取代记录（无残留测试根） | {sum(r["kind"] == "retired" for r in data["retired"])}／'
         f'{sum(r["kind"] == "superseded" for r in data["retired"])} |', '',
-        '执行种类：U 保留上游测试，P 项目新作测试或夹具，F 由已执行套件展开的伴随宏；I 仅编译或链接，不计为执行。'
+        '声明种类：U 保留上游测试，P 项目新作测试或夹具，F 由完整配方套件展开的伴随宏；I 仅编译或链接，不计为执行门禁。'
         '消费者列出经 normal／build 边到达该包的一方入口及其 profile；特性取该消费者单独解析的结果。'
         '测试属性数为静态计数，不代表执行。', '',
     ]
-    titles = {'needed-not-executed': '需要但未执行', 'executed': '已执行', 'reference-only': '仅参考'}
+    titles = {'needed-not-executed': '完整配方缺执行门禁',
+              'executed': '完整配方含执行门禁', 'reference-only': '仅参考'}
     for classification in ('needed-not-executed', 'executed', 'reference-only'):
         rows = [package for package in data['packages'] if package['classification'] == classification]
         order = {'high': 0, 'medium': 1, 'low': 2, None: 3}
@@ -464,11 +478,13 @@ def markdown(data):
 
 def json_text(data):
     """One compact line per package or record so regenerated diffs stay per package."""
+    assert data['scope'] == SCOPE, 'coverage map must identify its retained-recipe scope'
     def compact(value):
         return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
     rows = ',\n'.join(compact(package) for package in data['packages'])
     retired = ',\n'.join(compact(record) for record in data['retired'])
-    return (f'{{"generator":{compact(data["generator"])},"schema":{data["schema"]},\n'
+    return (f'{{"generator":{compact(data["generator"])},"schema":{data["schema"]},'
+            f'"scope":{compact(data["scope"])},\n'
             f'"packages":[\n{rows}\n],\n"retired":[\n{retired}\n]}}\n')
 
 
@@ -488,7 +504,7 @@ def main():
     for path, text in outputs.items():
         assert path.is_file() and path.read_text() == text, \
             f'{path.relative_to(ROOT)} differs from a fresh generation; run --write in the final integration'
-    print(f'Foundation coverage map matches: {len(data["packages"])} active packages.')
+    print(f'Foundation retained-recipe map matches (not current execution coverage): {len(data["packages"])} active packages.')
 
 
 if __name__ == '__main__':

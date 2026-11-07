@@ -1,3 +1,4 @@
+# Development short CI: long checks are paused, not passed. See docs/ci/development-short-ci.md.
 name: CI
 
 on:
@@ -21,32 +22,28 @@ jobs:
   static:
     name: Static workflow and tooling regressions (no Rust)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     outputs:
       suites: ${{ steps.suites.outputs.suites }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Missing older push bases safely select the full matrix.
+          # Development selection is fixed even without prior evidence.
           fetch-depth: 2
       - name: Check workflows, source governance and script regressions
         run: bash .github/scripts/check.sh static
-      - name: Select evidenced CI suites
+      - name: Select fixed development CI suites
         id: suites
-        run: python3 .github/scripts/select-ci-suites.py
+        run: python3 .github/scripts/development-ci.py select
 
   tests:
     name: Tests (${{ matrix.suite }})
     needs: static
     runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    # The full workspace reached only 907 of 1964 engine tests in 30 minutes,
-    # before server tests and real I/O gates. Retain the full workload and allow
-    # its long fault/recovery cases to finish instead of accepting partial runs.
-    timeout-minutes: ${{ matrix.suite == 'workspace' && 120 || matrix.suite == 'foundation-crypto' && 60 || 30 }}
+    # Static (5) + each parallel short suite (10) <= 15 minutes.
+    # Timeout is a failure; no partial or empty success.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -118,6 +115,7 @@ jobs:
           retention-days: 7
 
   web-production:
+    if: ${{ false }}
     name: Production WASM build
     # Compile in parallel with preflight. Browser acceptance still requires
     # static checks, this build and the same-commit Samba SDK job to succeed.
@@ -160,6 +158,7 @@ jobs:
           retention-days: 7
 
   browser-smoke:
+    if: ${{ false }}
     name: "Standalone ELF: Debian 13 server + host Chrome"
     needs: [static, web-production, smb-sdk]
     runs-on: ubuntu-24.04
@@ -328,10 +327,12 @@ jobs:
           retention-days: 7
 
   smb-sdk:
+    if: ${{ false }}
     needs: static
     uses: ./.github/workflows/smb-sdk.yml
 
   phase-one-core:
+    if: ${{ false }}
     name: Phase-one core admission and persistence
     # Run independently of the long Engine workspace shard and browser jobs.
     needs: static

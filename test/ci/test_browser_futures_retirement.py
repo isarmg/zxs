@@ -58,13 +58,13 @@ class BrowserFuturesRetirement(unittest.TestCase):
             self.assertNotIn('WASM_BINDGEN_USE_JS_SYS', path.read_text())
             self.assertNotIn('use_js_sys_futures', path.read_text())
 
-    def test_ci_and_release_require_browser_execution_without_disabling_security(self):
+    def test_retained_recipes_require_browser_execution_without_disabling_security(self):
         for filename, job, next_job in (
             ('ci.yml', 'tests', 'web-production'),
             ('release.yml', 'verify', 'linux-web'),
         ):
             with self.subTest(workflow=filename):
-                workflow = (ROOT / '.github/workflows' / filename).read_text()
+                workflow = (ROOT / '.github/ci/full-workflows' / filename).read_text()
                 job_source = workflow.split(f'  {job}:\n', 1)[1].split(f'  {next_job}:\n', 1)[0]
                 self.assertIn("    env:\n      ZXS_REQUIRE_BROWSER: '1'", job_source)
                 self.assertIn("if: matrix.suite == 'foundation-language'\n"

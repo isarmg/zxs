@@ -247,6 +247,7 @@ class SuiteCoverageTests(unittest.TestCase):
 
     def test_static_gate_requires_no_rust_or_metadata_resolution(self):
         calls = self.suite("static")
+        self.assertEqual(calls.count({"tool": "python3", "args": [".github/scripts/development-ci.py", "check"]}), 1)
         self.assertEqual(calls.count({"tool": "python3", "args": [".github/scripts/check-architecture.py"]}), 1)
         self.assertTrue(all(call["tool"] in ("python3", "node") for call in calls))
         self.assertIn(
@@ -309,7 +310,8 @@ class SuiteCoverageTests(unittest.TestCase):
                 self.suite(suite),
             )
 
-    def test_workflows_schedule_source_shard_once_after_preflight(self):
+    def test_retained_recipes_schedule_source_shard_once_after_preflight(self):
+        # Preserved restoration recipe only; current development execution is tested separately.
         # Deliberately target the fixed release matrix and explicit CI selector contract;
         # no PyYAML, compiler, network or runner is needed for this regression.
         root = Path(__file__).resolve().parents[2]
@@ -318,7 +320,7 @@ class SuiteCoverageTests(unittest.TestCase):
             ("release.yml", "verify", "version"),
         ):
             with self.subTest(workflow=filename):
-                workflow = (root / ".github/workflows" / filename).read_text()
+                workflow = (root / ".github/ci/full-workflows" / filename).read_text()
                 parts = re.split(r"^  ([A-Za-z0-9_-]+):\s*$",
                                  workflow.split("\njobs:\n", 1)[1], flags=re.MULTILINE)
                 jobs = dict(zip(parts[1::2], parts[2::2]))
@@ -351,9 +353,9 @@ class SuiteCoverageTests(unittest.TestCase):
                     self.assertIn("    needs: [version, verify, linux-web, smb-sdk]\n", jobs["assemble"])
                     self.assertIn("    needs: [version, assemble]\n", jobs["publish"])
 
-    def test_long_running_budgets_retain_full_workspace_and_ring_matrix(self):
+    def test_retained_recipe_budgets_preserve_full_workspace_and_ring_matrix(self):
         root = Path(__file__).resolve().parents[2]
-        workflow = (root / ".github/workflows/ci.yml").read_text()
+        workflow = (root / ".github/ci/full-workflows/ci.yml").read_text()
         body = workflow.split("\n  tests:\n", 1)[1].split("\n  web-production:\n", 1)[0]
         self.assertIn(
             "    timeout-minutes: ${{ matrix.suite == 'workspace' && 120 || matrix.suite == 'foundation-crypto' && 60 || 30 }}\n",

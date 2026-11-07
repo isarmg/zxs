@@ -410,14 +410,14 @@ class Selector(unittest.TestCase):
         self.assert_full(result)
         self.assertIn("Cargo.toml", result["changed_paths"])
 
-    def test_workflow_keeps_all_other_jobs_and_no_new_permissions(self):
-        source = (ROOT / ".github/workflows/ci.yml").read_text()
+    def test_retained_workflow_keeps_all_other_jobs_and_no_new_permissions(self):
+        source = (ROOT / ".github/ci/full-workflows/ci.yml").read_text()
         self.assertIn("suite: ${{ fromJSON(needs.static.outputs.suites) }}", source)
         self.assertIn("fetch-depth: 2", source)
         self.assertIn("permissions:\n  contents: read\n", source)
         self.assertNotIn("actions: read", source)
         self.assertIn("python3 .github/scripts/select-ci-suites.py", source)
-        release = (ROOT / ".github/workflows/release.yml").read_text()
+        release = (ROOT / ".github/ci/full-workflows/release.yml").read_text()
         self.assertIn("suite: [" + ", ".join(selection.ALL) + "]", release)
         for job in ("web-production:", "browser-smoke:", "smb-sdk:"):
             self.assertIn(job, source)

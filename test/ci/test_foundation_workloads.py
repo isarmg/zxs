@@ -1,4 +1,4 @@
-"""CI/release must fan out the complete foundation inventory exactly once."""
+"""Retained full recipes must fan out every foundation shard exactly once."""
 import json
 import importlib.util
 from pathlib import Path
@@ -26,11 +26,11 @@ class FoundationWorkloads(unittest.TestCase):
     def test_ci_and_release_matrices_cover_every_suite_once(self):
         for workflow, name in [('ci.yml', 'tests'), ('release.yml', 'verify')]:
             with self.subTest(workflow=workflow):
-                body = job((ROOT / '.github/workflows' / workflow).read_text(), name)
+                body = job((ROOT / '.github/ci/full-workflows' / workflow).read_text(), name)
                 if workflow == 'ci.yml':
                     self.assertIn('suite: ${{ fromJSON(needs.static.outputs.suites) }}', body)
                     self.assertIn('needs: static', body)
-                    source = (ROOT / '.github/workflows' / workflow).read_text()
+                    source = (ROOT / '.github/ci/full-workflows' / workflow).read_text()
                     static = job(source, 'static')
                     self.assertIn('suites: ${{ steps.suites.outputs.suites }}', static)
                     self.assertIn('id: suites\n        run: python3 .github/scripts/select-ci-suites.py', static)
@@ -56,7 +56,7 @@ class FoundationWorkloads(unittest.TestCase):
     def test_system_sqlite_sdk_and_probe_run_only_in_data_cells(self):
         for workflow, name in [('ci.yml', 'tests'), ('release.yml', 'verify')]:
             with self.subTest(workflow=workflow):
-                body = job((ROOT / '.github/workflows' / workflow).read_text(), name)
+                body = job((ROOT / '.github/ci/full-workflows' / workflow).read_text(), name)
                 setup = re.search(r'- name: Install system SQLite SDK[^\n]*\n\s+if: ([^\n]+)\n\s+run: \|\n([^\n]+)\n([^\n]+)', body)
                 probe = re.search(r'- name: Verify isolated system SQLite consumer\n\s+if: ([^\n]+)\n\s+run: ([^\n]+)', body)
                 self.assertIsNotNone(setup)
@@ -73,7 +73,7 @@ class FoundationWorkloads(unittest.TestCase):
         gate = {'tool': 'python3', 'args': ['.github/scripts/check-valgrind-pki.py']}
         self.assertEqual(inventory['foundation-crypto'].count(gate), 1)
         for workflow, name in [('ci.yml', 'tests'), ('release.yml', 'verify')]:
-            body = job((ROOT / '.github/workflows' / workflow).read_text(), name)
+            body = job((ROOT / '.github/ci/full-workflows' / workflow).read_text(), name)
             setup = body.split('- name: Install Valgrind SDK and loader debug symbols\n', 1)[1].split('- name:', 1)[0]
             self.assertIn("if: matrix.suite == 'foundation-crypto'", setup)
             self.assertIn('valgrind libc6-dbg clang libclang-dev', setup)
@@ -84,7 +84,7 @@ class FoundationWorkloads(unittest.TestCase):
             self.assertIn('if-no-files-found: error', evidence)
 
     def test_release_still_waits_for_all_verification_cells(self):
-        source = (ROOT / '.github/workflows/release.yml').read_text()
+        source = (ROOT / '.github/ci/full-workflows/release.yml').read_text()
         self.assertRegex(job(source, 'assemble'), r'needs: \[[^\]]*\bverify\b[^\]]*\]')
         self.assertIn('needs: version', job(source, 'verify'))
         self.assertIn("tags: ['v*']", source)

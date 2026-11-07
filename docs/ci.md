@@ -1,5 +1,7 @@
 # 持续集成
 
+当前处于[开发期短 CI](ci/development-short-ci.md)：活动路径为 5 分钟静态预检加 10 分钟七套并行矩阵。长套件、真实 Chrome、SDK、生产 WASM、一期 core 和 Release 长验证固定暂停，直到所有任务完成后另行明确恢复。下文完整入口与产物说明是保留的检查配方，不表示暂停项当前执行或通过。
+
 [GitHub Actions 工作流](../.github/workflows/ci.yml) 在 push、pull request 及手动触发时检查项目。使用 `rust-toolchain.toml` 指定工具链与唯一根 Cargo.lock，不部署或发布。产品用户入口仅为 Web 与 SMB；没有桌面或移动 App 构建任务。
 
 所有自有 Rust 组件和基础实现由一个根 workspace 管理，命令按包和编译目标选择。统一入口为 [check.sh](../.github/scripts/check.sh)：
@@ -33,9 +35,9 @@ CI 的 `browser-smoke` 步骤显式设置 `ZXS_SMOKE_FOREIGN_REVIEW=1`：原完�
 bash .github/scripts/check.sh static
 ```
 
-CI 与 Release 都先运行独立的 `static` job；它通过后才安装或使用 Rust。
+当前 CI 与 Release 都保留独立的 `static` job；CI 通过后仅启动七套短矩阵，Release 的后续步骤暂停。保存的完整工作流配方在恢复后仍须遵守原前置与产物验收依赖。
 
-完整来源工具回归只在后续矩阵的 `rust-sources` 分片运行一次，不再阻塞静态预检；它与其余 Rust 测试、生产构建并行，Release 仍须等待所有验证分片通过后才组装和发布。`static` 通过不代表完整来源工具回归通过。需要单独在本地运行全部来源工具测试（无需 Rust）时，执行 `python3 -m unittest discover -s test/tools/rust-sources -p 'test_*.py'`；完整来源门禁仍使用下列 `check.sh rust-sources` 命令。
+完整配方的来源工具回归只在后续矩阵的 `rust-sources` 分片运行一次，不阻塞静态预检；恢复后它与其余 Rust 测试、生产构建并行，Release 仍须等待所有验证分片通过后才组装和发布。当前该分片及发布流程暂停。`static` 通过不代表完整来源工具回归通过。需要单独在本地运行全部来源工具测试（无需 Rust）时，执行 `python3 -m unittest discover -s test/tools/rust-sources -p 'test_*.py'`；完整来源门禁仍使用下列 `check.sh rust-sources` 命令。
 
 工作流上下文检查是针对本仓库 block-mapping 写法的定向回归，不是完整 YAML / GitHub Actions 语义验证器。它检查顶层及 job 的 `env`，拒绝尚未可用的 `runner`、`steps` 等上下文及 `hashFiles`；合法的 step env 和 action 输入仍可使用 runner 上下文。
 

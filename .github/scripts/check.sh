@@ -7,6 +7,7 @@ case "${1:-}" in
   static)
     # Fast preflight only; full source-tool regressions run in rust-sources.
     # No Rust toolchain, registry, package installer or live browser required.
+    python3 .github/scripts/development-ci.py check
     python3 .github/scripts/check-workflows.py
     python3 .github/scripts/check-architecture.py
     python3 tools/rust-sources/manage.py verify

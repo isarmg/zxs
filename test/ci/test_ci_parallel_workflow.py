@@ -1,4 +1,4 @@
-"""Keep parallel CI scheduling separate from accepting its generated assets."""
+"""Check the retained full recipe, not currently paused development execution."""
 from pathlib import Path
 import re
 import unittest
@@ -43,7 +43,7 @@ def dependency_errors(source):
 
 class ParallelCiWorkflow(unittest.TestCase):
     def setUp(self):
-        self.source = (ROOT / '.github/workflows/ci.yml').read_text()
+        self.source = (ROOT / '.github/ci/full-workflows/ci.yml').read_text()
 
     def test_wasm_starts_early_but_acceptance_keeps_all_dependencies(self):
         self.assertEqual(dependency_errors(self.source), [])
