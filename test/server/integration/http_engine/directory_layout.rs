@@ -2,6 +2,9 @@ use super::*;
 use std::{collections::BTreeMap, fs, io::Read, os::unix::fs::MetadataExt, path::PathBuf};
 use storage_contract::directory_git::DirectoryLayoutResult;
 
+#[path = "directory_layout/lifecycle.rs"]
+mod lifecycle;
+
 async fn list(app: &Router, token: &str) -> Value {
     success(
         app,
