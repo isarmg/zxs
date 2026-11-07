@@ -125,6 +125,32 @@ pub struct DirectoryGitStageOwnedBody {
     pub operation_id: crate::OperationId,
 }
 
+/// Explicit current-state repair. The outer namespace head is a location guard,
+/// not a frozen preview of every independent child's stable main.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectoryLayoutReconcileBody {
+    pub expected_namespace_head: String,
+}
+
+/// Structural placement observed at execution, not a content-verification or
+/// durable business-operation receipt. Unavailable members remain explicit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectoryLayoutResult {
+    pub repository_id: String,
+    #[serialization(with = "crate::u64_string")]
+    pub state_sequence: u64,
+    #[serialization(with = "crate::u64_string")]
+    pub directories: u64,
+    #[serialization(with = "crate::u64_string")]
+    pub containers: u64,
+    #[serialization(with = "crate::u64_string")]
+    pub unavailable_containers: u64,
+    #[serialization(with = "crate::u64_string")]
+    pub unavailable_histories: u64,
+}
+
 fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: data_serialization::Deserializer<'de>,

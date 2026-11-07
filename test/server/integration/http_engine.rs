@@ -24,6 +24,8 @@ mod daily_management;
 mod directory_git;
 #[path = "http_engine/directory_history.rs"]
 mod directory_history;
+#[path = "http_engine/directory_layout.rs"]
+mod directory_layout;
 #[path = "http_engine/disk_registration.rs"]
 mod disk_registration;
 #[path = "http_engine/file_metadata_operations.rs"]

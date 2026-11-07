@@ -49,6 +49,7 @@ mod history_window_http;
 mod history_window_query;
 mod http_directory_git;
 mod http_directory_history;
+mod http_directory_layout;
 mod http_directory_staging;
 mod http_file_history_source;
 pub use backend_file_history::{
@@ -779,6 +780,14 @@ pub trait Backend: Send + Sync {
         _path: &str,
         _cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::directory_git::DirectoryGitStatus, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn reconcile_directory_layout(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _request: storage_contract::directory_git::DirectoryLayoutReconcileBody,
+    ) -> Result<storage_contract::directory_git::DirectoryLayoutResult, ApiError> {
         Err(ApiError::unsupported())
     }
     fn initialize_directory_git(
@@ -1521,6 +1530,15 @@ impl Backend for AuthorizedBackend {
         self.backend
             .directory_git_status(&self.current(identity)?, repository, path, cancellation)
     }
+    fn reconcile_directory_layout(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: storage_contract::directory_git::DirectoryLayoutReconcileBody,
+    ) -> Result<storage_contract::directory_git::DirectoryLayoutResult, ApiError> {
+        self.backend
+            .reconcile_directory_layout(&self.current(identity)?, repository, request)
+    }
     fn initialize_directory_git(
         &self,
         identity: &Identity,
@@ -2184,6 +2202,10 @@ fn router_shared(
         .route(
             "/api/repositories/{repo}/directory-git",
             get(http_directory_git::read),
+        )
+        .route(
+            "/api/repositories/{repo}/directory-layout/reconcile",
+            post(http_directory_layout::reconcile),
         )
         .route(
             "/api/repositories/{repo}/directory-git/initialize",

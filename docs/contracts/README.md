@@ -170,3 +170,9 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 ## 独立盘来源图只读预览
 
 `POST /api/admin/storage/independent/preview` 接收 `IndependentDiskPreviewRequest`，只接受已观察的发现目录身份；输出 `IndependentDiskPreview`。`IndependentSourceTopology` 明确保留完整来源身份、incarnation、root checkpoint、所有节点准确 publication 引用和来源→消费关系。`binding_generation`、`sequence` 是规范 u64 十进制字符串。显示解码另外检查可达性、端点绑定、逐层关系和节点/pin唯一性；schema 本身不证明磁盘证据或在线状态。最多4096节点/关系、10000节点pin引用及1MiB完整响应，超限整份拒绝。该接口不读取正文，也没有登记或迁入命令；边界与后续项见[产品只读预览](../design/independent-source-product-preview.md)。
+
+## 显式实体布局整理
+
+`POST /api/repositories/{repo}/directory-layout/reconcile` 接受严格 `DirectoryLayoutReconcileBody`，必须带规范 `expected_namespace_head`。锁内重新确认当前管理员与外层 main HEAD 后，调用真实 Engine 实体执行器。作用域是整个外层仓库所有已初始化目录，采用执行时各独立 stable main 最新保存状态（包含未提交内容）；外层 HEAD 检查不承诺冻结整个目录森林预览。
+
+返回 `DirectoryLayoutResult` 的必需计数与状态序号均为规范 u64 十进制字符串，不返回无限列表或伪造业务 `operation_id`。数量只描述结构性实体布局，不验证正文；不可用项非零必须显示部分可用。显式启用后，已有保存/冷恢复链维护布局。请求断开不撤销已准入任务，容量与 writer 锁由后台执行持有至终态；未知结果不能宣称未执行，需刷新存储/目录、先处理恢复要求后再显式检查，不自动重试。

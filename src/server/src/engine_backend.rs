@@ -1581,6 +1581,44 @@ impl Backend for EngineBackend {
         result
     }
 
+    fn reconcile_directory_layout(
+        &self,
+        identity: &Identity,
+        repository_id: &str,
+        request: storage_contract::directory_git::DirectoryLayoutReconcileBody,
+    ) -> Result<storage_contract::directory_git::DirectoryLayoutResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let repository = repository(&engine, repository_id)?;
+        let main = engine
+            .state()
+            .branches
+            .get(&repository.main_branch_id)
+            .expect("invariant: admitted repository has its main branch");
+        if main.head_commit_id != request.expected_namespace_head {
+            return Err(ApiError::new(
+                ::http::StatusCode::CONFLICT,
+                storage_contract::ErrorCode::HeadConflict,
+                "repository namespace changed; refresh before reconciling layout",
+            ));
+        }
+        // Keep authentication, the location guard and every physical step in
+        // one writer-lock interval. Independent mains are read at execution.
+        let receipt = engine
+            .reconcile_directory_layout(repository_id)
+            .map_err(error)?;
+        Ok(storage_contract::directory_git::DirectoryLayoutResult {
+            repository_id: repository_id.to_owned(),
+            state_sequence: receipt.state_sequence,
+            directories: receipt.directories as u64,
+            containers: receipt.containers as u64,
+            unavailable_containers: receipt.unavailable_containers.len() as u64,
+            unavailable_histories: receipt.unavailable_histories.len() as u64,
+        })
+    }
     fn initialize_directory_git(
         &self,
         identity: &Identity,

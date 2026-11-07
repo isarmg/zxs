@@ -77,6 +77,8 @@ pub enum ErrorSource {
     FileHistory(#[source] crate::files::FileHistoryError),
     #[error("invalid directory repository status: {0}")]
     DirectoryGit(#[source] json_codec::Error),
+    #[error("invalid directory layout result: {0}")]
+    DirectoryLayout(#[source] json_codec::Error),
     #[error("invalid directory history: {0}")]
     DirectoryHistory(#[source] crate::files::DirectoryHistoryError),
     #[error("invalid directory page: {0}")]

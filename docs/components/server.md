@@ -445,3 +445,5 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 历史节点合并使用 `POST /api/file-manager/files/{file}/merge-history`（客户端 `merge_file_history`）。输入为 `{branch_id,source_node_id,expected_node_id}`，可选择同一分支的不同历史节点，包括只读合并别名；`chosen_node_id` 选择同文件结果，`name` 明确新结果分支名，`confirmed:true` 明确提交。一次 mutation 派生并合并新分支，全部原分支、较新 head 和当前路径引用保持不变；不自动切换默认分支、不复制正文。辅助分支以 operation ID 和输入序号稳定命名，冲突原子拒绝。客户端便捷方法不发送位置条件；需要路径约束时通过 `request` 成对发送 repository_id/path。重试保持全部输入与 operation_id，详见[历史节点合并](../15-api-and-errors.md#历史节点合并)。
 
 目录详情树使用 `GET /api/repositories/{repo}/directories/{directory}/history` 与 `/history/branches`。两路只读、禁止自动初始化 scope，使用共享 DTO 校验、取消 token、response 持有 admission permit、查询前后当前权限和 root 重查。默认 64、最大 128 行，1 MiB JSON 上限。目录身份为 entry_id（根为 repo ID），不是显示路径；只读备份也能查看。详见[目录只读历史窗口](../15-api-and-errors.md#目录只读历史窗口)。
+
+目录实体布局提供显式 `POST /api/repositories/{repo}/directory-layout/reconcile`，按执行时整个外层仓库的稳定 main 森林调用 Engine。严格 DTO、锁内当前管理员再准入及外层 HEAD 检查，沿用 HttpBackendJob 保留容量与任务所有权；计数不是正文验证或新业务提交。完整范围与未知结果规则见[实体布局契约](../contracts/README.md#显式实体布局整理)。

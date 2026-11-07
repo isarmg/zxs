@@ -1,4 +1,5 @@
 //! Explicit independent directory repositories and reviewed child references.
+mod layout;
 use super::actions;
 use crate::{
     api,
@@ -492,6 +493,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 </div>
                 <p class="zxs-row" role="status">{move ||model.with(|model|format!("{} / {} UTF-8 bytes",model.message.len(),storage_contract::MAX_NOTE_BYTES))}</p>
             </Show>
+            {layout::view(state, model)}
         </section>
     </Show>}
 }

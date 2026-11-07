@@ -1368,6 +1368,16 @@ impl Backend for ManagementBackend {
             .backend()?
             .directory_git_status(identity, repository, path, cancellation)
     }
+    fn reconcile_directory_layout(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: storage_contract::directory_git::DirectoryLayoutReconcileBody,
+    ) -> Result<storage_contract::directory_git::DirectoryLayoutResult, ApiError> {
+        self.inner
+            .backend()?
+            .reconcile_directory_layout(identity, repository, request)
+    }
     fn initialize_directory_git(
         &self,
         identity: &Identity,

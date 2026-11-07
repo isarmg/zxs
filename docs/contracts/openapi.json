@@ -9353,6 +9353,54 @@
           }
         }
       }
+    },
+    "/api/repositories/{repo}/directory-layout/reconcile": {
+      "post": {
+        "operationId": "reconcileDirectoryLayout",
+        "description": "显式整理整个外层仓库全部已初始化目录的实体布局。外层namespace HEAD仅作位置防陈旧检查，不冻结各独立main；按执行时最新已保存状态（含未提交工作）派生，保持稳定身份和历史，不自动初始化。任务持有写锁和容量直到结束，断连不撤销。结果未知先刷新存储和目录并处理恢复要求，再显式请求；不提供operation_id或后台任务轮询。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryLayoutReconcileBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "实际结构性结果；不证明正文完整，state_sequence不是新增提交。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryLayoutResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "严格字段、当前认证、陈旧HEAD、未初始化、磁盘或恢复要求拒绝；错误不证明从未执行。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -19212,6 +19260,51 @@
           "configuration",
           "capture"
         ]
+      },
+      "DirectoryLayoutReconcileBody": {
+        "type": "object",
+        "properties": {
+          "expected_namespace_head": {
+            "$ref": "#/components/schemas/CommitId"
+          }
+        },
+        "required": [
+          "expected_namespace_head"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryLayoutResult": {
+        "type": "object",
+        "description": "执行时状态的结构性布局数量，不是正文验证或新业务提交；不可用项非零时仅可用部分完成。",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "state_sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "directories": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "containers": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "unavailable_containers": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "unavailable_histories": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "repository_id",
+          "state_sequence",
+          "directories",
+          "containers",
+          "unavailable_containers",
+          "unavailable_histories"
+        ],
+        "additionalProperties": false
       }
     }
   }
