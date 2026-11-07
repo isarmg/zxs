@@ -9,6 +9,8 @@ pub use published::{
 
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error("{}: {}", self.code(), self.message())]
+    DirectoryLayout(#[source] Box<crate::DirectoryLayoutError>),
     #[error(transparent)]
     DiskObservation(crate::DiskObservationFailure),
     #[error(transparent)]
@@ -93,7 +95,8 @@ impl Error {
                 retryable: true,
                 source,
             },
-            source @ (Self::DiskObservation(_)
+            source @ (Self::DirectoryLayout(_)
+            | Self::DiskObservation(_)
             | Self::Checkpoint(_)
             | Self::Clock(_)
             | Self::ClockRange(_)
@@ -120,7 +123,8 @@ impl Error {
             Self::Contract(source) => source.is_retryable(),
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
-            Self::DiskObservation(_)
+            Self::DirectoryLayout(_)
+            | Self::DiskObservation(_)
             | Self::PublishedWorkspaceReconciliation(_)
             | Self::PublishedRecoveryReconciliation(_)
             | Self::Checkpoint(_)
@@ -141,6 +145,32 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::DirectoryLayout(error) => match error.as_ref() {
+                crate::DirectoryLayoutError::ResourceLimit => ErrorCode::ResourceLimit,
+                crate::DirectoryLayoutError::ExtraDirectoryCollision { .. } => {
+                    ErrorCode::NameCollision
+                }
+                crate::DirectoryLayoutError::RepositoryMissing { .. }
+                | crate::DirectoryLayoutError::RootNotInitialized { .. }
+                | crate::DirectoryLayoutError::RepositoryOwnerMissing { .. }
+                | crate::DirectoryLayoutError::SnapshotScopeUnproven { .. }
+                | crate::DirectoryLayoutError::SnapshotStructureUnproven { .. }
+                | crate::DirectoryLayoutError::ExtraDirectoryName(_)
+                | crate::DirectoryLayoutError::MainStructureConflict { .. }
+                | crate::DirectoryLayoutError::MultipleRepositoryMounts { .. }
+                | crate::DirectoryLayoutError::RepositoryCycle { .. }
+                | crate::DirectoryLayoutError::UnplacedRepository { .. }
+                | crate::DirectoryLayoutError::MultipleMainOccurrences { .. }
+                | crate::DirectoryLayoutError::CurrentNamespaceUnproven { .. }
+                | crate::DirectoryLayoutError::CurrentMainUnmanagedConflict { .. }
+                | crate::DirectoryLayoutError::FileOwnerMissing { .. }
+                | crate::DirectoryLayoutError::FileOwnerAmbiguous { .. }
+                | crate::DirectoryLayoutError::FileOwnerCrossesRoot { .. }
+                | crate::DirectoryLayoutError::UnwrittenFileIdentity { .. }
+                | crate::DirectoryLayoutError::PhysicalPath { .. } => {
+                    ErrorCode::ContainerLayoutInvalid
+                }
+            },
             Self::DiskObservation(error) => error.source.code(),
             Self::PublishedWorkspaceReconciliation(_)
             | Self::PublishedRecoveryReconciliation(_) => ErrorCode::RecoveryRequired,
@@ -162,6 +192,7 @@ impl Error {
     }
     pub fn message(&self) -> Cow<'_, str> {
         match self {
+            Self::DirectoryLayout(error) => error.to_string().into(),
             Self::DiskObservation(_) => "disk observation unavailable".into(),
             Self::PublishedWorkspaceReconciliation(error) => error.message().into(),
             Self::PublishedRecoveryReconciliation(error) => error.message().into(),
@@ -213,7 +244,8 @@ impl Error {
             Self::PublishedRecoveryReconciliation(error) => Some(error.result()),
             Self::Context { source, .. } => source.published_result(),
             Self::Cleanup { operation, .. } => operation.published_result(),
-            Self::DiskObservation(_)
+            Self::DirectoryLayout(_)
+            | Self::DiskObservation(_)
             | Self::Clock(_)
             | Self::ClockRange(_)
             | Self::Checkpoint(_)
@@ -230,6 +262,11 @@ impl Error {
             | Self::IntegerRange(_)
             | Self::PathEncoding(_) => None,
         }
+    }
+}
+impl From<crate::DirectoryLayoutError> for Error {
+    fn from(source: crate::DirectoryLayoutError) -> Self {
+        Self::DirectoryLayout(Box::new(source))
     }
 }
 impl From<std::io::Error> for Error {

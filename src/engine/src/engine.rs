@@ -61,6 +61,7 @@ pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
 mod directory_history;
+mod directory_layout;
 #[path = "engine/history_window/selection.rs"]
 mod history_selection;
 pub use directory_history::DirectoryHistoryRead;

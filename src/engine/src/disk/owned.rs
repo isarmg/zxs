@@ -511,6 +511,16 @@ impl DiskRoot {
         self.operation()?.private_dir(path)
     }
 
+    /// Create exactly one new private directory. An existing empty name is not
+    /// adopted. The new directory and its parent are synchronized while the
+    /// admitting operation still owns both descriptors.
+    pub(crate) fn create_private_directory_synced(
+        &self,
+        path: &Path,
+    ) -> Result<platform_io::fs_safety::linux::FileIdentity> {
+        self.operation()?.create_private_directory_synced(path)
+    }
+
     pub(crate) fn write_atomic(&self, path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
         self.operation()?.write_atomic(path, bytes, replace)
     }
@@ -560,6 +570,17 @@ impl DiskRoot {
     pub(crate) fn remove_empty_directory_synced(&self, path: &Path) -> Result<()> {
         self.operation()?
             .remove_synced(path, rustix::fs::AtFlags::REMOVEDIR)
+    }
+
+    /// Remove only this writer's unreferenced empty preparation. Admission,
+    /// inode verification, the held parent and the sync tail share one lease.
+    pub(crate) fn remove_owned_empty_directory_synced(
+        &self,
+        path: &Path,
+        expected: platform_io::fs_safety::linux::FileIdentity,
+    ) -> Result<()> {
+        self.operation()?
+            .remove_owned_empty_directory_synced(path, expected)
     }
 
     pub(crate) fn available(&self) -> Result<u64> {
@@ -821,6 +842,43 @@ impl RootOperation<'_> {
         self.private_relative_dir(Some(&self.root.relative(path)?))
     }
 
+    fn create_private_directory_synced(
+        &self,
+        path: &Path,
+    ) -> Result<platform_io::fs_safety::linux::FileIdentity> {
+        let (parent, name) = self.private_parent(path)?;
+        self.check_running()?;
+        rustix::fs::mkdirat(
+            &parent,
+            name.as_os_str(),
+            rustix::fs::Mode::from_raw_mode(0o700),
+        )
+        .map_err(std::io::Error::from)?;
+        // The mkdir is already visible. Finish its durability tail under this
+        // same lease even if quiesce/cancellation begins now; no descriptor is
+        // returned or allowed to escape the operation.
+        let directory = File::from(
+            rustix::fs::openat2(
+                &parent,
+                name.as_os_str(),
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::CLOEXEC
+                    | rustix::fs::OFlags::NOFOLLOW,
+                rustix::fs::Mode::empty(),
+                rustix::fs::ResolveFlags::BENEATH
+                    | rustix::fs::ResolveFlags::NO_SYMLINKS
+                    | rustix::fs::ResolveFlags::NO_XDEV,
+            )
+            .map_err(std::io::Error::from)?,
+        );
+        let identity = platform_io::fs_safety::linux::FileIdentity::from_fd(&directory)?;
+        directory.sync_all()?;
+        parent.sync_all()?;
+        self.check_running()?;
+        Ok(identity)
+    }
+
     fn private_relative_dir(&self, path: Option<&RelativePath>) -> Result<()> {
         let Some(path) = path else {
             return Ok(());
@@ -921,6 +979,39 @@ impl RootOperation<'_> {
         let (parent, name) = self.private_parent(path)?;
         self.check_running()?;
         rustix::fs::unlinkat(&parent, name.as_os_str(), flags).map_err(std::io::Error::from)?;
+        parent.sync_all()?;
+        self.check_running()
+    }
+
+    fn remove_owned_empty_directory_synced(
+        &self,
+        path: &Path,
+        expected: platform_io::fs_safety::linux::FileIdentity,
+    ) -> Result<()> {
+        let (parent, name) = self.private_parent(path)?;
+        let directory = rustix::fs::openat2(
+            &parent,
+            name.as_os_str(),
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::empty(),
+            rustix::fs::ResolveFlags::BENEATH
+                | rustix::fs::ResolveFlags::NO_SYMLINKS
+                | rustix::fs::ResolveFlags::NO_XDEV,
+        )
+        .map_err(std::io::Error::from)?;
+        if platform_io::fs_safety::linux::FileIdentity::from_fd(&directory)? != expected {
+            return Err(Error::new(
+                ErrorCode::ContainerLayoutInvalid,
+                "private layout preparation identity changed before cleanup",
+            ));
+        }
+        self.check_running()?;
+        // REMOVEDIR refuses nonempty directories. Never remove an unknown child.
+        rustix::fs::unlinkat(&parent, name.as_os_str(), rustix::fs::AtFlags::REMOVEDIR)
+            .map_err(std::io::Error::from)?;
         parent.sync_all()?;
         self.check_running()
     }

@@ -1,6 +1,11 @@
 //! Ordinary version files in one renameable directory per stable file identity.
 use crate::{disk::*, *};
 mod changes;
+mod layout_batch;
+mod layout_goals;
+mod layout_locator;
+mod shared_layout;
+pub use shared_layout::DirectoryLayoutReceipt;
 mod projection;
 use crate::state_projection::{ProjectionTransition, StateProjection};
 use changes::changed_files;
@@ -310,21 +315,40 @@ fn container(history: &Path, file_id: &str) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     let root = DiskRoot::open(history)?;
-    container_at(&root, root.path(), file_id, &mut |_| Ok(()))
+    container_at(&root, root.path(), None, file_id, &mut |_| Ok(()))
 }
 
 fn container_at(
     disk: &DiskRoot,
     history: &Path,
+    history_id: Option<&str>,
     file_id: &str,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<Option<PathBuf>> {
+    let locator = history
+        .join(".zxs-layout/files")
+        .join(format!("{file_id}.json"));
+    if path_exists_at(disk, history, &locator)? {
+        let history_id = history_id.ok_or_else(|| {
+            invalid("a shared container lookup requires its admitted history identity")
+        })?;
+        let anchor = layout_locator::HistoryAnchor::new(disk, history, history_id)?;
+        let intent = layout_locator::load_file(&anchor, file_id, observe)?;
+        let selected = layout_locator::locate_file(&anchor, &intent, observe)?;
+        reject_unsupported_container(disk, &selected)?;
+        if !directory_exists_at(disk, &selected.join("versions"))? {
+            return Err(invalid("located file container has no version directory"));
+        }
+        return Ok(Some(selected));
+    }
     let root = history.join("file-containers");
     if !directory_exists_at(disk, &root)? {
+        reject_unindexed_shared_file(disk, history, file_id, observe)?;
         return Ok(None);
     }
     let root = root.join(file_id);
     if !directory_exists_at(disk, &root)? {
+        reject_unindexed_shared_file(disk, history, file_id, observe)?;
         return Ok(None);
     }
     let mut selected = None;
@@ -365,7 +389,70 @@ fn container_at(
             ));
         }
     }
+    if selected.is_none() {
+        // Losing a locator must not make installation create a second entity.
+        // A complete bounded namespace absence check is needed only when the
+        // ordinary stable anchor also has no container; it never rebuilds or
+        // adopts an unindexed shared object.
+        reject_unindexed_shared_file(disk, history, file_id, observe)?;
+    }
     Ok(selected)
+}
+
+fn reject_unindexed_shared_file(
+    disk: &DiskRoot,
+    history: &Path,
+    file_id: &str,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<()> {
+    let namespace = history.join("directory-repositories");
+    if !path_exists_at(disk, history, &namespace)? {
+        return Ok(());
+    }
+    let mut remaining = vec![(namespace, 0usize)];
+    let mut visited = 0usize;
+    while let Some((directory, depth)) = remaining.pop() {
+        observe(0)?;
+        if depth > 64 || visited == 1_000_000 {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "shared container absence inventory exceeded its budget",
+            ));
+        }
+        visited += 1;
+        disk.directory_identity(&directory)?;
+        let marker = directory.join(OWNER_MARKER);
+        if let Some(metadata) = disk.optional_metadata(&marker)? {
+            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1 {
+                return Err(invalid(
+                    "shared file owner marker is not one ordinary single-link file",
+                ));
+            }
+            let owner: String = decode_strict(&disk.read_bytes_observed(&marker, 256, observe)?)?;
+            validate_id(&owner, "file")?;
+            if owner == file_id {
+                return Err(invalid(
+                    "shared file exists but its required locator is missing",
+                ));
+            }
+            continue;
+        }
+        for entry in disk.entries(&directory)? {
+            observe(0)?;
+            let entry = entry?;
+            let path = directory.join(entry.as_path());
+            let metadata = disk
+                .optional_metadata(&path)?
+                .ok_or_else(|| invalid("shared namespace changed during its absence inventory"))?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(invalid(
+                    "unindexed shared namespace contains an unknown entry",
+                ));
+            }
+            remaining.push((path, depth + 1));
+        }
+    }
+    Ok(())
 }
 
 fn file_exists_at(root: &DiskRoot, path: &Path) -> Result<bool> {
@@ -432,7 +519,13 @@ fn content_path_inner(
     if !path_directory_exists_at(root, root.path(), history)? {
         return Ok(expected_content_path(history, version));
     }
-    let container = container_at(root, history, &version.file_id, observe)?;
+    let container = container_at(
+        root,
+        history,
+        Some(&version.history_tree_id),
+        &version.file_id,
+        observe,
+    )?;
     let target = match container {
         Some(named) => {
             let versions = named.join("versions");
@@ -555,7 +648,13 @@ pub(crate) fn install_version_content_at(
     root.directory_identity(history)?;
     let stable = history.join("file-containers").join(&version.file_id);
     root.private_dir(&stable)?;
-    let named = match container_at(root, history, &version.file_id, &mut |_| Ok(()))? {
+    let named = match container_at(
+        root,
+        history,
+        Some(&version.history_tree_id),
+        &version.file_id,
+        &mut |_| Ok(()),
+    )? {
         Some(named) => named,
         None => {
             let named = stable.join(&version.creation_name);
@@ -873,6 +972,7 @@ fn collect_empty_directories(
 /// or caches. Signed version evidence remains separate from this inspection cache.
 pub(crate) struct PreparedNames {
     cache: Option<PreparedNameCache>,
+    layouts: shared_layout::PreparedLayouts,
 }
 struct PreparedNameCache {
     items: Vec<PreparedName>,
@@ -883,6 +983,7 @@ struct PreparedNameCache {
 struct PreparedName {
     disk: Arc<DiskHandle>,
     history: PathBuf,
+    history_id: String,
     file: String,
     location: Option<String>,
     name: String,
@@ -891,27 +992,47 @@ struct PreparedName {
 }
 impl PreparedNames {
     pub(crate) fn apply(self) -> Result<()> {
+        self.apply_with_receipt().map(|_| ())
+    }
+    pub(crate) fn apply_with_receipt(self) -> Result<DirectoryLayoutReceipt> {
+        let receipt = self.layouts.apply()?;
         let Some(mut cache) = self.cache else {
-            return Ok(());
+            return Ok(receipt);
         };
         for item in cache.items {
             let root = &item.disk.root;
             if !path_directory_exists_at(root, root.path(), &item.history)? {
                 continue;
             }
-            let Some(current) = container_at(root, &item.history, &item.file, &mut |_| Ok(()))?
+            let Some(current) = container_at(
+                root,
+                &item.history,
+                Some(&item.history_id),
+                &item.file,
+                &mut |_| Ok(()),
+            )?
             else {
                 continue;
             };
             let stable = item.history.join("file-containers").join(&item.file);
-            let named = synchronize_location(
-                root,
-                current,
-                &stable,
-                &item.file,
-                item.location.as_deref(),
-                &item.name,
-            )?;
+            let locator = item
+                .history
+                .join(".zxs-layout/files")
+                .join(format!("{}.json", item.file));
+            let named = if path_exists_at(root, &item.history, &locator)? {
+                // The bulk executor already placed this whole closure. Applying
+                // the legacy per-file projection would undo its shared address.
+                current
+            } else {
+                synchronize_location(
+                    root,
+                    current,
+                    &stable,
+                    &item.file,
+                    item.location.as_deref(),
+                    &item.name,
+                )?
+            };
             // Seal even a rename made visible by an earlier interrupted attempt.
             root.sync_dir(&stable)?;
             cache.file.seek(std::io::SeekFrom::Start(item.offset))?;
@@ -920,7 +1041,7 @@ impl PreparedNames {
             root.write_atomic(&named.join("container.json"), &bytes, true)?;
             root.sync_dir(&named)?;
         }
-        Ok(())
+        Ok(receipt)
     }
 }
 
@@ -945,7 +1066,16 @@ pub(crate) fn repair_historical_names(
     next: &State,
 ) -> Result<()> {
     let projection = ProjectionTransition::new(previous, next, None)?;
-    prepare_names_inner(config, resources, &projection, MAX_METADATA, true)?.apply()
+    prepare_names_inner(
+        config,
+        resources,
+        &projection,
+        MAX_METADATA,
+        true,
+        true,
+        shared_layout::PreparedLayouts::default(),
+    )?
+    .apply()
 }
 
 pub(crate) fn prepare_names(
@@ -954,7 +1084,39 @@ pub(crate) fn prepare_names(
     projection: &ProjectionTransition<'_>,
     maximum: usize,
 ) -> Result<PreparedNames> {
-    prepare_names_inner(config, resources, projection, maximum, false)
+    let layouts = shared_layout::prepare(
+        config,
+        resources,
+        projection.previous().state(),
+        projection.next().state(),
+        None,
+        false,
+    )?;
+    prepare_names_inner(
+        config, resources, projection, maximum, false, false, layouts,
+    )
+}
+
+/// Reconcile only the final published State; historical prefixes must never
+/// retarget a shared container that a later publication has already moved.
+pub(crate) fn prepare_layout_repair(
+    config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
+    state: &State,
+    explicit: Option<&BTreeSet<String>>,
+) -> Result<PreparedNames> {
+    let layouts = shared_layout::prepare(config, resources, state, state, explicit, true)?;
+    let empty = State::default();
+    let projection = ProjectionTransition::new(&empty, state, None)?;
+    prepare_names_inner(
+        config,
+        resources,
+        &projection,
+        MAX_METADATA,
+        true,
+        false,
+        layouts,
+    )
 }
 
 fn projection_locations(
@@ -1031,12 +1193,16 @@ fn prepare_names_inner(
     projection: &ProjectionTransition<'_>,
     maximum: usize,
     historical: bool,
+    skip_shared: bool,
+    layouts: shared_layout::PreparedLayouts,
 ) -> Result<PreparedNames> {
     let previous = projection.previous();
     let view = projection.next();
     let next = view.state();
     let mut cache: Option<PreparedNameCache> = None;
-    for file in changed_files(previous.state(), next) {
+    let mut files = changed_files(previous.state(), next);
+    files.extend(layouts.files().cloned());
+    for file in files {
         let locations = projection_locations(previous, view, &file);
         let mut description = None;
         let mut encoded_histories = BTreeMap::new();
@@ -1064,7 +1230,14 @@ fn prepare_names_inner(
                 None => resources.get(disk)?,
             };
             let history = disk.root.join("histories").join(&history_id);
-            let (physical_location, physical_name) = projection_path(next, &file, &slot);
+            let projected = layouts.projection(&slot, &history_id, &file);
+            let (legacy_location, legacy_name) = projection_path(next, &file, &slot);
+            let physical_location = projected
+                .map(|projection| &projection.location)
+                .or(legacy_location);
+            let physical_name = projected
+                .map(|projection| projection.name.as_str())
+                .or(legacy_name);
             // Other new-candidate callers retain the same admission boundary.
             // Published decisions use existing layout checks, not new-name rules.
             if !historical {
@@ -1074,7 +1247,17 @@ fn prepare_names_inner(
             if !path_directory_exists_at(&held.root, held.root.path(), &history)? {
                 continue;
             }
-            let Some(current) = container_at(&held.root, &history, &file, &mut |_| Ok(()))? else {
+            let locator = history
+                .join(".zxs-layout/files")
+                .join(format!("{file}.json"));
+            if skip_shared && path_exists_at(&held.root, &history, &locator)? {
+                continue;
+            }
+            let Some(current) =
+                container_at(&held.root, &history, Some(&history_id), &file, &mut |_| {
+                    Ok(())
+                })?
+            else {
                 continue;
             };
             let current_name = current
@@ -1097,26 +1280,33 @@ fn prepare_names_inner(
             let descriptor = encoded_histories
                 .entry(history_id.clone())
                 .or_insert_with(|| description.encode_history(&history_id, next, nodes));
-            let bytes = encode_metadata(
-                &json!({
-                    "cache_only": true,
-                    "file_id": file,
-                    "history_tree_id": history_id,
-                    "name": name,
-                    "location": physical_location,
-                    "primary_location": next.file_locations.get(&file),
-                    "backup_policy_id": next.file_backup_policies.get(&file),
-                    "metadata_nodes": descriptor.metadata,
-                    "branch_merges": descriptor.merges,
-                    "branch_aliases": description.aliases,
-                    "note": next.file_notes.get(&file).map(String::as_str).unwrap_or(""),
-                    "path_contexts": description.contexts,
-                    "path_nodes": descriptor.paths,
-                    "versions": descriptor.versions,
-                    "inherited_branches": descriptor.inherited,
-                }),
-                maximum,
-            )?;
+            let mut descriptor_value = json!({
+                "cache_only": true,
+                "file_id": file,
+                "history_tree_id": history_id,
+                "name": name,
+                "location": physical_location,
+                "primary_location": next.file_locations.get(&file),
+                "layout_root_directory_id": projected.map(|value| &value.root_directory_id),
+                "layout_owner_directory_id": projected.map(|value| &value.owner_directory_id),
+                "backup_policy_id": next.file_backup_policies.get(&file),
+                "metadata_nodes": descriptor.metadata,
+                "branch_merges": descriptor.merges,
+                "branch_aliases": description.aliases,
+                "note": next.file_notes.get(&file).map(String::as_str).unwrap_or(""),
+                "path_contexts": description.contexts,
+                "path_nodes": descriptor.paths,
+                "versions": descriptor.versions,
+                "inherited_branches": descriptor.inherited,
+            });
+            if projected.is_none() {
+                let object = descriptor_value
+                    .as_object_mut()
+                    .expect("invariant: container descriptor is an object");
+                object.remove("layout_root_directory_id");
+                object.remove("layout_owner_directory_id");
+            }
+            let bytes = encode_metadata(&descriptor_value, maximum)?;
             let staged = match &mut cache {
                 Some(staged) => staged,
                 empty @ None => empty.insert(PreparedNameCache {
@@ -1129,6 +1319,7 @@ fn prepare_names_inner(
             staged.items.push(PreparedName {
                 disk: Arc::clone(held),
                 history,
+                history_id: history_id.clone(),
                 file: file.clone(),
                 location: physical_location.cloned(),
                 name: name.to_owned(),
@@ -1141,7 +1332,7 @@ fn prepare_names_inner(
     if let Some(staged) = &cache {
         staged.file.sync_data()?;
     }
-    Ok(PreparedNames { cache })
+    Ok(PreparedNames { cache, layouts })
 }
 
 #[cfg(test)]

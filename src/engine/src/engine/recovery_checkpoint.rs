@@ -17,6 +17,8 @@ use std::{
     path::{Component, Path},
 };
 
+const DIRECTORY_LAYOUT_MARKER: &str = "metadata/directory-layout.json";
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct Checkpoint {
@@ -73,6 +75,22 @@ impl<'a> CheckpointScope<'a> {
                 .any(|disk| engine.config.excludes_io_disk(&disk.disk_id))
         {
             return Ok(None);
+        }
+        // This runs before the recovered State is loaded. Shared directory
+        // layouts are outside this checkpoint's per-file path coverage. Only
+        // already admitted roots may prove marker absence; missing resources,
+        // inspection failures and every present marker disable the optional
+        // cache. Marker bytes, including damaged bytes, never grant I/O or
+        // permission to use a checkpoint. The authoritative replay still runs.
+        for disk in engine.config.io_disks() {
+            let Some(held) = engine.disk_resources.available(disk) else {
+                return Ok(None);
+            };
+            let marker = held.root.path().join(DIRECTORY_LAYOUT_MARKER);
+            match held.root.optional_metadata(&marker) {
+                Ok(None) => {}
+                Ok(Some(_)) | Err(_) => return Ok(None),
+            }
         }
         let members = engine.members();
         let authority = match engine.config.generation_hash() {
@@ -708,7 +726,10 @@ pub(super) fn save(
     engine: &Engine,
     scanned_journals: &BTreeMap<String, Vec<(Record, String)>>,
 ) -> Result<()> {
-    if engine.blocked || engine.snapshot.is_none() {
+    if engine.blocked
+        || engine.snapshot.is_none()
+        || !engine.state.directory_git_repositories.is_empty()
+    {
         return Ok(());
     }
     let Some(scope) = CheckpointScope::admit(engine)? else {

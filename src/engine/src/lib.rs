@@ -13,6 +13,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 mod authority_selection;
 mod business;
 mod container_storage;
+pub use container_storage::DirectoryLayoutReceipt;
+mod directory_layout;
+pub use directory_layout::LayoutError as DirectoryLayoutError;
 mod degraded_recovery;
 mod directory_conversion;
 pub use directory_conversion::{

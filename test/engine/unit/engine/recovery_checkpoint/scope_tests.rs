@@ -374,3 +374,255 @@ fn checkpoint_scope_exit_never_skips_d3_or_reopens_the_stopped_directory() {
         assert!(held.root.directory(&target.root).is_err());
     }
 }
+
+fn poison_optional_checkpoints(engine: &Engine) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    engine
+        .members()
+        .iter()
+        .map(|disk| {
+            let checkpoint = path(disk);
+            let bytes = b"optional checkpoint must not be parsed".to_vec();
+            engine
+                .disk_resources
+                .get(disk)
+                .unwrap()
+                .root
+                .write_atomic(&checkpoint, &bytes, true)
+                .unwrap();
+            (checkpoint, bytes)
+        })
+        .collect()
+}
+
+fn assert_optional_checkpoint_skipped(
+    engine: &Engine,
+    checkpoints: &[(std::path::PathBuf, Vec<u8>)],
+) {
+    assert!(CheckpointScope::admit(engine).unwrap().is_none());
+    assert!(
+        load(engine, &BTreeMap::new(), &Records::new())
+            .unwrap()
+            .is_none()
+    );
+    save(engine, &BTreeMap::new()).unwrap();
+    for (checkpoint, bytes) in checkpoints {
+        assert_eq!(&fs::read(checkpoint).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn directory_layout_marker_disables_checkpoint_before_recovered_state_is_loaded() {
+    let (_temp, root, config) = setup();
+    let mut engine = reopen(&root).0;
+    assert!(
+        load(&engine, &prefixes(&engine), &Records::new())
+            .unwrap()
+            .is_some()
+    );
+    let checkpoints = poison_optional_checkpoints(&engine);
+    let disk = &config.disks[2];
+    let held = engine.disk_resources.get(disk).unwrap();
+    let marker = held.root.path().join(DIRECTORY_LAYOUT_MARKER);
+    held.root
+        .write_json(&marker, &"directory-main-workspaces", false)
+        .unwrap();
+    let old_journals = journals(&engine);
+    engine.state = Arc::new(State::default());
+    assert!(engine.state.directory_git_repositories.is_empty());
+    assert_optional_checkpoint_skipped(&engine, &checkpoints);
+    assert_eq!(journals(&engine), old_journals);
+    assert_eq!(fs::read(marker).unwrap(), b"\"directory-main-workspaces\"");
+}
+
+#[test]
+fn directory_layout_marker_on_a_payload_only_io_disk_also_disables_checkpoint() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("system");
+    let mut config = Config::development([
+        temporary.path().join("a"),
+        temporary.path().join("b"),
+        temporary.path().join("c"),
+    ])
+    .unwrap();
+    config.disks[2].metadata_member = false;
+    let mut engine = Engine::initialize(&root, config.clone()).unwrap();
+    engine
+        .create_repository(
+            &RepositoryName::parse("payload-only-layout-marker").unwrap(),
+            "P01",
+            3,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let scope = CheckpointScope::admit(&engine).unwrap().unwrap();
+    assert_eq!(scope.context.metadata_disk_ids.len(), 2);
+    assert_eq!(scope.context.io_disk_ids.len(), 3);
+    drop(scope);
+    let checkpoints = poison_optional_checkpoints(&engine);
+    let disk = &config.disks[2];
+    engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .write_json(
+            &disk.root.join(DIRECTORY_LAYOUT_MARKER),
+            &"directory-main-workspaces",
+            false,
+        )
+        .unwrap();
+    assert_optional_checkpoint_skipped(&engine, &checkpoints);
+}
+
+#[test]
+fn damaged_or_unsafe_layout_markers_cannot_admit_an_optional_checkpoint() {
+    use std::os::unix::fs::symlink;
+
+    for kind in [
+        "invalid-json",
+        "wrong-string",
+        "directory",
+        "symlink",
+        "hardlink",
+    ] {
+        let (temporary, root, config) = setup();
+        let engine = reopen(&root).0;
+        let checkpoints = poison_optional_checkpoints(&engine);
+        let held = engine.disk_resources.get(&config.disks[0]).unwrap();
+        let marker = held.root.path().join(DIRECTORY_LAYOUT_MARKER);
+        let external = temporary.path().join("untrusted-layout-marker");
+        match kind {
+            "invalid-json" => held.root.write_atomic(&marker, b"{", false).unwrap(),
+            "wrong-string" => held
+                .root
+                .write_json(&marker, &"another-layout", false)
+                .unwrap(),
+            "directory" => held.root.private_dir(&marker).unwrap(),
+            "symlink" => {
+                fs::write(&external, b"external bytes").unwrap();
+                symlink(&external, &marker).unwrap();
+            }
+            "hardlink" => {
+                fs::write(&external, b"external bytes").unwrap();
+                fs::hard_link(&external, &marker).unwrap();
+            }
+            _ => unreachable!("invariant: every marker fixture kind is enumerated"),
+        }
+        assert_optional_checkpoint_skipped(&engine, &checkpoints);
+        if matches!(kind, "symlink" | "hardlink") {
+            assert_eq!(fs::read(external).unwrap(), b"external bytes");
+        }
+    }
+}
+
+#[test]
+fn unavailable_or_closed_admitted_roots_disable_checkpoint_without_reopening() {
+    for close in [false, true] {
+        let (_temporary, root, config) = setup();
+        let mut engine = reopen(&root).0;
+        assert!(CheckpointScope::admit(&engine).unwrap().is_some());
+        let checkpoints = poison_optional_checkpoints(&engine);
+        let disk = &config.disks[2];
+        if close {
+            let held = Arc::clone(engine.disk_resources.get(disk).unwrap());
+            drop(held.root.io_binding().unwrap().begin_quiesce().unwrap());
+            held.root.io_binding().unwrap().closed_proof().unwrap();
+            assert!(engine.disk_resources.available(disk).is_some());
+        } else {
+            engine.disk_resources = Arc::new(
+                engine
+                    .disk_resources
+                    .excluding(&BTreeSet::from([disk.disk_id.clone()])),
+            );
+            assert!(engine.disk_resources.available(disk).is_none());
+        }
+        assert_optional_checkpoint_skipped(&engine, &checkpoints);
+    }
+}
+
+#[test]
+fn checkpoint_save_refuses_directory_git_state_without_a_disk_marker() {
+    let (_temporary, root, _config) = setup();
+    let mut engine = reopen(&root).0;
+    let checkpoints = poison_optional_checkpoints(&engine);
+    let repository = engine.state.repositories.values().next().unwrap().clone();
+    let head = engine.state.branches[&repository.main_branch_id]
+        .head_commit_id
+        .clone();
+    // Construct initialization's real pure State result without publishing its
+    // disk marker, so this independently exercises the save-side State gate.
+    let mut next = (*engine.state).clone();
+    crate::business::directory_git::apply_command(
+        &mut next,
+        None,
+        "directory.git.initialize",
+        &json_codec::json!({
+            "repository_id": repository.repository_id,
+            "path": "",
+            "expected_namespace_head": head,
+        }),
+        "admin",
+        OperationId::generate().unwrap(),
+    )
+    .unwrap();
+    engine.state = Arc::new(next);
+    assert!(!engine.state.directory_git_repositories.is_empty());
+    assert!(CheckpointScope::admit(&engine).unwrap().is_some());
+    for disk in engine.config.io_disks() {
+        let held = engine.disk_resources.get(disk).unwrap();
+        assert!(
+            held.root
+                .optional_metadata(&held.root.path().join(DIRECTORY_LAYOUT_MARKER),)
+                .unwrap()
+                .is_none()
+        );
+    }
+    save(&engine, &BTreeMap::new()).unwrap();
+    for (checkpoint, bytes) in checkpoints {
+        assert_eq!(fs::read(checkpoint).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn layout_marker_inspection_uses_only_the_original_held_root() {
+    let (_temporary, root, config) = setup();
+    let engine = reopen(&root).0;
+    let disk = &config.disks[0];
+    let held = engine.disk_resources.get(disk).unwrap();
+    let moved = disk.root.with_extension("layout-held");
+    fs::rename(&disk.root, &moved).unwrap();
+    private_dir(&disk.root).unwrap();
+    write_json(
+        &disk.root.join(DIRECTORY_LAYOUT_MARKER),
+        &"directory-main-workspaces",
+        false,
+    )
+    .unwrap();
+    assert!(CheckpointScope::admit(&engine).unwrap().is_some());
+    let checkpoint = moved.join("metadata/replay-checkpoint.json");
+    let before = fs::read(&checkpoint).unwrap();
+    held.root
+        .write_json(
+            &held.root.path().join(DIRECTORY_LAYOUT_MARKER),
+            &"directory-main-workspaces",
+            false,
+        )
+        .unwrap();
+    assert!(CheckpointScope::admit(&engine).unwrap().is_none());
+    assert!(
+        load(&engine, &BTreeMap::new(), &Records::new())
+            .unwrap()
+            .is_none()
+    );
+    save(&engine, &BTreeMap::new()).unwrap();
+    assert_eq!(fs::read(checkpoint).unwrap(), before);
+    assert_eq!(
+        fs::read(moved.join(DIRECTORY_LAYOUT_MARKER)).unwrap(),
+        b"\"directory-main-workspaces\"",
+    );
+    assert_eq!(
+        fs::read(disk.root.join(DIRECTORY_LAYOUT_MARKER)).unwrap(),
+        b"\"directory-main-workspaces\"",
+    );
+}

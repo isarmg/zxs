@@ -657,6 +657,17 @@ impl Engine {
         if fenced {
             return Ok(());
         }
+        if mode == RecoveryMode::CompletePending && !self.blocked {
+            // Names are derived from the final admitted State once. Replaying
+            // intermediate publications must not undo later shared placements.
+            crate::container_storage::prepare_layout_repair(
+                &self.config,
+                &self.disk_resources,
+                &self.state,
+                None,
+            )?
+            .apply()?;
+        }
         self.cleanup_purged()?;
         // Optional acceleration only. Failure to create a checkpoint must never
         // fail or roll back an otherwise verified recovery. Existing checkpoints
