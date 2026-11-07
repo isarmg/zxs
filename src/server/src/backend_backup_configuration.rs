@@ -17,6 +17,42 @@ pub struct ConfigureBackups {
     pub expected_scope_id: String,
     pub operation_id: storage_contract::OperationId,
 }
+
+#[cfg(feature = "core")]
+#[derive(Clone, Debug)]
+pub struct RecursiveBackupConfiguration {
+    pub configuration: storage_contract::BackupConfigurationSnapshot,
+    pub capture: storage_engine::RecursiveBackupCapture,
+}
+
+#[cfg(feature = "core")]
+#[derive(Clone, Debug)]
+pub struct ConfigureRecursiveBackups {
+    pub repository_id: String,
+    pub path: String,
+    pub target_copies: u32,
+    pub expected_generation: u64,
+    pub expected_scope_id: String,
+    pub capture: storage_engine::RecursiveBackupCapture,
+    pub operation_id: storage_contract::OperationId,
+}
+
+#[cfg(feature = "core")]
+#[derive(Serialize)]
+pub(crate) struct RecursiveBackupConfigurationResponse {
+    configuration: BackupConfigurationResponse,
+    capture: storage_engine::RecursiveBackupCapture,
+}
+
+#[cfg(feature = "core")]
+impl From<RecursiveBackupConfiguration> for RecursiveBackupConfigurationResponse {
+    fn from(value: RecursiveBackupConfiguration) -> Self {
+        Self {
+            configuration: value.configuration.into(),
+            capture: value.capture,
+        }
+    }
+}
 #[derive(Serialize)]
 pub(crate) struct BackupScopeResponse {
     id: String,

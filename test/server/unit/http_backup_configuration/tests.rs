@@ -1,6 +1,43 @@
 use super::*;
 use json_codec::json;
 
+#[cfg(feature = "core")]
+fn recursive_request() -> Value {
+    json!({
+        "repository_id": "repo", "path": "docs", "target_copies": 3,
+        "expected_generation": "0", "expected_scope_id": "scope",
+        "operation_id": "op_00000000000000000000000000000000",
+        "capture": {
+            "format": "recursive-backup-source-paths",
+            "source_sequence": "7", "source_business_generation": "6",
+            "registry": {"root_hash": "11".repeat(32), "view_generation": "1"},
+            "disks": {}
+        }
+    })
+}
+
+#[cfg(feature = "core")]
+#[test]
+fn recursive_http_request_requires_an_exact_capture_and_has_no_freeform_prefixes() {
+    let parsed = parse_recursive(recursive_request()).unwrap();
+    assert_eq!(parsed.path, "docs");
+    assert_eq!(parsed.target_copies, 3);
+    for field in ["path", "expected_scope_id", "capture"] {
+        let mut body = recursive_request();
+        body.as_object_mut().unwrap().remove(field);
+        assert!(parse_recursive(body).is_err(), "{field}");
+    }
+    let mut body = recursive_request();
+    body["backup_prefixes"] = json!({"B01": "caller-chosen"});
+    assert!(parse_recursive(body).is_err());
+    let mut body = recursive_request();
+    body["capture"]["unexpected"] = true.into();
+    assert!(parse_recursive(body).is_err());
+    let mut body = recursive_request();
+    body["capture"]["source_sequence"] = 7.into();
+    assert!(parse_recursive(body).is_err());
+}
+
 fn request() -> Value {
     json!({"repository_id":"repo","target_copies":2,"backup_prefixes":{"B01":"backup"},"expected_generation":"0","expected_scope_id":"scope","operation_id":"op_00000000000000000000000000000000"})
 }

@@ -87,3 +87,8 @@ required-features = ["core"]
 name = "independent_preview"
 path = "../../test/server/integration/independent_preview.rs"
 required-features = ["core"]
+
+[[test]]
+name = "recursive_backup_http"
+path = "../../test/server/integration/recursive_backup_http.rs"
+required-features = ["core"]

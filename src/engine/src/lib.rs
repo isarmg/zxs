@@ -108,7 +108,8 @@ pub use engine::{
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{
     BackupConfigurationRequest, PlacementConfigurationRequest, PlacementRuleUpdate,
-    ProtectionPolicyUpdate, ScopedBackupConfigurationRequest,
+    ProtectionPolicyUpdate, RecursiveBackupCapture, RecursiveBackupConfigurationRequest,
+    ScopedBackupConfigurationRequest,
 };
 pub use storage_contract::*;
 pub use wire::{commit_request_digest, manifest_hash as workspace_manifest_hash};

@@ -1414,8 +1414,9 @@ impl Engine {
                 |_, next, prepared| change(self, next, prepared),
             );
         }
-        if kind == "backup.configure" {
+        if matches!(kind, "backup.configure" | "backup.configure-recursive") {
             return context.plan_backup_configuration_mutation(
+                kind,
                 principal,
                 operation_id,
                 digest,

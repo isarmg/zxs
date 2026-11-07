@@ -1196,6 +1196,56 @@ impl Backend for EngineBackend {
                 _ => error(failure),
             })
     }
+    fn recursive_backup_configuration(
+        &self,
+        identity: &Identity,
+        request: crate::ReadBackupConfiguration,
+    ) -> Result<crate::RecursiveBackupConfiguration, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        let configuration = engine
+            .backup_configuration(&request.repository_id, &request.path)
+            .map_err(error)?;
+        let capture = engine.recursive_backup_capture().map_err(error)?;
+        Ok(crate::RecursiveBackupConfiguration {
+            configuration,
+            capture,
+        })
+    }
+    fn configure_recursive_backups(
+        &self,
+        identity: &Identity,
+        request: crate::ConfigureRecursiveBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        engine
+            .configure_recursive_backups(storage_engine::RecursiveBackupConfigurationRequest {
+                repository_id: &request.repository_id,
+                path: &request.path,
+                expected_scope_id: &request.expected_scope_id,
+                target_copies: request.target_copies,
+                expected_generation: request.expected_generation,
+                capture: &request.capture,
+                principal: &current.principal,
+                operation_id: request.operation_id,
+            })
+            .map_err(|failure| match failure.code() {
+                storage_contract::ErrorCode::RouteIncomplete
+                | storage_contract::ErrorCode::ScopeChanged => {
+                    ApiError::conflict(failure.code(), &failure.message()).with_source(failure)
+                }
+                _ => error(failure),
+            })
+    }
     fn namespace_batch(
         &self,
         identity: &Identity,

@@ -9162,6 +9162,197 @@
           }
         }
       }
+    },
+    "/api/repositories/{repo}/recursive-backup-configuration": {
+      "get": {
+        "operationId": "getRecursiveBackupConfiguration",
+        "description": "只读取得同一Engine状态下的有效scope策略与逐跳来源捕获。需要已接纳的当前登记，未知query字段拒绝。此显式入口只覆盖文件容器，不发布空目录实体。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "有效策略与精确代数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecursiveBackupConfiguration"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；不确定结果使用原 operation_id 查询或重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "configureRecursiveBackups",
+        "description": "通过原生完整复制事务，把当前scope所含文件及可用历史版本写入逐跳路径。每级加直接来源盘basename；命名仓库包含仓库名，保留完整祖先路径。拒绝过期capture、停用来源和全空scope；后续改名需显式重新配置。永久重试必须复用原capture和operation_id。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "target_copies": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "expected_generation": {
+                    "$ref": "#/components/schemas/UInt64"
+                  },
+                  "operation_id": {
+                    "$ref": "#/components/schemas/OperationId"
+                  },
+                  "expected_scope_id": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/RepositoryId"
+                      },
+                      {
+                        "$ref": "#/components/schemas/EntryId"
+                      },
+                      {
+                        "$ref": "#/components/schemas/FileId"
+                      }
+                    ]
+                  },
+                  "capture": {
+                    "$ref": "#/components/schemas/RecursiveBackupCapture"
+                  }
+                },
+                "required": [
+                  "path",
+                  "target_copies",
+                  "expected_generation",
+                  "operation_id",
+                  "expected_scope_id",
+                  "capture"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "operation_id": {
+                      "$ref": "#/components/schemas/OperationId"
+                    },
+                    "operation_kind": {
+                      "type": "string"
+                    },
+                    "request_digest": {
+                      "$ref": "#/components/schemas/Hash"
+                    },
+                    "state": {
+                      "enum": [
+                        "completed",
+                        "in_doubt"
+                      ]
+                    },
+                    "commit_state": {
+                      "type": "string"
+                    },
+                    "protection_at_publish": {
+                      "type": "string"
+                    },
+                    "publication_sequence": {
+                      "$ref": "#/components/schemas/UInt64"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "operation_id",
+                    "operation_kind",
+                    "request_digest",
+                    "state",
+                    "commit_state",
+                    "result",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；不确定结果使用原 operation_id 查询或重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "捕获来源或策略代数发生变化，或原operation_id用于不同请求。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -18826,6 +19017,201 @@
         ],
         "additionalProperties": true,
         "description": "State与HistoryManifest的必需当前删除表；缺失不补默认值，不迁移旧格式。"
+      },
+      "RecursiveBackupCapture": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "原始请求的来源捕获，不是写能力。新操作与当前登记、精确身份、拓扑、State代数与根目录盘名重新比较；重试保留原捕获。",
+        "properties": {
+          "format": {
+            "const": "recursive-backup-source-paths"
+          },
+          "source_sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "source_business_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "registry": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "root_hash": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "view_generation": {
+                "$ref": "#/components/schemas/UInt64"
+              }
+            },
+            "required": [
+              "root_hash",
+              "view_generation"
+            ]
+          },
+          "disks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "identity": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "pool_id": {
+                      "$ref": "#/components/schemas/PoolId"
+                    },
+                    "disk_id": {
+                      "$ref": "#/components/schemas/DiskId"
+                    },
+                    "slot_id": {
+                      "$ref": "#/components/schemas/SlotId"
+                    },
+                    "binding_generation": {
+                      "$ref": "#/components/schemas/UInt64"
+                    }
+                  },
+                  "required": [
+                    "pool_id",
+                    "disk_id",
+                    "slot_id",
+                    "binding_generation"
+                  ]
+                },
+                "level": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "upstream_slot_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SlotId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "identity",
+                "level",
+                "upstream_slot_id",
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "format",
+          "source_sequence",
+          "source_business_generation",
+          "registry",
+          "disks"
+        ]
+      },
+      "RecursiveBackupConfiguration": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "configuration": {
+            "type": "object",
+            "properties": {
+              "generation": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "target_copies": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "backup_prefixes": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "每个被选备份slot的独立逻辑前缀，相对所选scope根；空字符串表示目标盘根。不接受绝对路径/..，不由磁盘物理根生成。"
+              },
+              "route_slot_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "当前默认主盘按target_copies请求的完整路由；不足原份数时为空，使用available_route_slot_ids、backup_routes和max_copies审阅并调整，不截短冒充满足。"
+              },
+              "scope": {
+                "type": "object"
+              },
+              "inherited": {
+                "type": "boolean"
+              },
+              "file_count": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "backup_paths": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "文件scope为backup slot到完整逻辑路径的映射，目录scope为空对象。"
+              },
+              "effective_generation": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "available_route_slot_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_copies": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "所选默认主盘、覆盖文件后续写入主盘、仍继承此目录策略的后代放置前缀及可用历史版本主盘的完整链长度最小值；available_route_slot_ids只描述默认来源链，不能替代完整backup_routes。"
+              },
+              "backup_routes": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SlotId"
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "description": "所选默认主盘、实际覆盖文件后续写入主盘、范围内仍继承此目录策略的后代放置前缀（含空目录或尚无文件的路径），以及可用历史版本主盘涉及的去重完整链，包含各primary本身；独立子备份规则不纳入父目录，用于同时验证后续写入与历史回填的备份前缀。"
+              },
+              "backup_slot_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SlotId"
+                },
+                "uniqueItems": true,
+                "description": "所有backup_routes中备份slot的去重并集。选择n份时对各链前n项取备份并集，逐slot要求用户prefix。"
+              }
+            },
+            "required": [
+              "generation",
+              "target_copies",
+              "backup_prefixes",
+              "route_slot_ids",
+              "scope",
+              "inherited",
+              "file_count"
+            ],
+            "additionalProperties": true
+          },
+          "capture": {
+            "$ref": "#/components/schemas/RecursiveBackupCapture"
+          }
+        },
+        "required": [
+          "configuration",
+          "capture"
+        ]
       }
     }
   }

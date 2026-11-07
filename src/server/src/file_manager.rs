@@ -1,7 +1,7 @@
 //! Path-oriented file manager routes over controlled disk namespaces.
 use crate::*;
 pub(crate) fn routes() -> Router<AppState> {
-    Router::new()
+    let routes = Router::new()
         .route("/api/file-manager/disks", get(disks))
         .route(
             "/api/file-manager/disks/{slot}/entries",
@@ -103,7 +103,19 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/api/file-manager/versions/{version}/metadata",
             post(http_note::version),
+        );
+    #[cfg(feature = "core")]
+    {
+        routes.route(
+            "/api/repositories/{repository}/recursive-backup-configuration",
+            get(http_backup_configuration::read_recursive)
+                .put(http_backup_configuration::configure_recursive),
         )
+    }
+    #[cfg(not(feature = "core"))]
+    {
+        routes
+    }
 }
 async fn disks(
     State(state): State<AppState>,

@@ -9,6 +9,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "current_recursive_backup_tests.rs"]
+mod recursive;
+
 fn op() -> OperationId {
     OperationId::generate().unwrap()
 }

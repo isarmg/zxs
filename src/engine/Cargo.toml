@@ -79,3 +79,7 @@ path = "../../test/engine/integration/directory_git_staged_source.rs"
 [[test]]
 name = "file_soft_deletion"
 path = "../../test/engine/integration/file_soft_deletion.rs"
+
+[[test]]
+name = "recursive_backup_paths"
+path = "../../test/engine/integration/recursive_backup_paths.rs"

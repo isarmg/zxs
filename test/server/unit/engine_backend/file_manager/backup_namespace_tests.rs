@@ -92,19 +92,88 @@ fn listing(
     path: &str,
     options: &[(&str, &str)],
 ) -> Result<Value, ApiError> {
+    listing_on(engine, "B01", path, options)
+}
+
+fn listing_on(
+    engine: &AdmissionEngine,
+    slot: &str,
+    path: &str,
+    options: &[(&str, &str)],
+) -> Result<Value, ApiError> {
     let mut query = BTreeMap::from([("path".into(), path.into())]);
     query.extend(
         options
             .iter()
             .map(|(key, value)| ((*key).into(), (*value).into())),
     );
-    let request = PageRequest::parse(engine, crate::ReadListing::parse("B01".into(), query)?)?;
-    let selected = BackupListingRead::capture(engine, "B01", path, request)?.select()?;
+    let request = PageRequest::parse(engine, crate::ReadListing::parse(slot.into(), query)?)?;
+    let selected = BackupListingRead::capture(engine, slot, path, request)?.select()?;
     let projected = selected.project(engine)?;
     json_codec::to_value(crate::backend_listing::ListingResponse::from(
         selected.finish(projected),
     ))
     .map_err(ApiError::invalid_source)
+}
+
+#[test]
+fn recursive_native_paths_feed_the_existing_backup_reader_at_each_tier() {
+    let root = crate::tests::private_tempdir();
+    let mut config =
+        Config::development((0..4).map(|index| root.path().join(format!("disk-{index}")))).unwrap();
+    config.disks[3].level = 1;
+    config.disks[3].upstream_slot_id = None;
+    config.disks[3].metadata_member = false;
+    let mut engine = AdmissionEngine::new(
+        Engine::initialize(&root.path().join("system"), config.clone()).unwrap(),
+    );
+    let repo = repository(&mut engine, "Files");
+    let entry = save(&mut engine, &repo, "docs/report", b"recursive reader body");
+    engine
+        .begin_disk_exit(
+            &config.disks[3].disk_id,
+            storage_engine::MembershipExitAction::Deregister,
+            "owner",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let archive = engine.build_managed_membership_control_archive().unwrap();
+    engine
+        .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+        .unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    engine.activate_pending_disk_exit().unwrap();
+    let capture = engine.recursive_backup_capture().unwrap();
+    let scope = engine
+        .backup_configuration(&repo.repository_id, "docs")
+        .unwrap();
+    engine
+        .configure_recursive_backups(storage_engine::RecursiveBackupConfigurationRequest {
+            repository_id: &repo.repository_id,
+            path: "docs",
+            expected_scope_id: &scope.scope.id,
+            target_copies: 3,
+            expected_generation: 0,
+            capture: &capture,
+            principal: "owner",
+            operation_id: OperationId::generate().unwrap(),
+        })
+        .unwrap();
+    for (slot, parent) in [
+        ("B01", "disk-0/Files/docs"),
+        ("C01", "disk-1/disk-0/Files/docs"),
+    ] {
+        let result = listing_on(&engine, slot, parent, &[]).unwrap();
+        let row = result["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["file_id"] == entry.file_id)
+            .unwrap();
+        assert_eq!(row["path"], format!("{parent}/report"));
+        assert_eq!(row["version_id"], entry.version_id);
+        read_only(&result);
+    }
 }
 
 fn read_only(snapshot: &Value) {

@@ -1,0 +1,292 @@
+//! Actual native publication, physical file-container and cold-replay tests.
+use super::*;
+
+fn configure(
+    fixture: &mut Fixture,
+    path: &str,
+    copies: u32,
+    generation: u64,
+    capture: &RecursiveBackupCapture,
+    operation_id: OperationId,
+) -> Result<OperationResult> {
+    let scope = fixture
+        .engine
+        .backup_configuration(&fixture.repository.repository_id, path)?
+        .scope;
+    fixture
+        .engine
+        .configure_recursive_backups(RecursiveBackupConfigurationRequest {
+            repository_id: &fixture.repository.repository_id,
+            path,
+            expected_scope_id: &scope.id,
+            target_copies: copies,
+            expected_generation: generation,
+            capture,
+            principal: "admin",
+            operation_id,
+        })
+}
+
+fn ready() -> Fixture {
+    let mut fixture = Fixture::new();
+    fixture.exit(3, MembershipExitAction::Deregister);
+    fixture
+}
+
+#[test]
+fn recursive_backup_writes_actual_three_level_paths_and_cold_reopens() {
+    let mut fixture = ready();
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    let result = configure(&mut fixture, "docs", 3, 0, &capture, op()).unwrap();
+    assert_eq!(result.kind, "backup.configure-recursive");
+    assert_eq!(result.commit_state, CommitState::Published);
+    assert_eq!(result.protection_at_publish, ProtectionAtPublish::TargetMet);
+    let expected = BTreeMap::from([
+        (
+            "B01".to_owned(),
+            "disk-0/live backup/docs/report".to_owned(),
+        ),
+        (
+            "C01".to_owned(),
+            "disk-1/disk-0/live backup/docs/report".to_owned(),
+        ),
+    ]);
+    assert_eq!(
+        fixture.engine.state().file_backup_paths[&fixture.first.file_id],
+        expected
+    );
+    for (entry, bytes) in [
+        (&fixture.first, b"first retained body".as_slice()),
+        (&fixture.latest, b"latest retained body".as_slice()),
+    ] {
+        let version = &fixture.engine.state().versions[&entry.version_id];
+        for disk in fixture.config.disks.iter().take(3).skip(1) {
+            let directory =
+                crate::disk::version_dir(disk, &version.history_tree_id, &version.version_id);
+            let actual = crate::container_storage::content_path(&directory, version).unwrap();
+            let target = disk
+                .root
+                .join("histories")
+                .join(&version.history_tree_id)
+                .join("file-containers")
+                .join(&version.file_id)
+                .join("namespace")
+                .join(&expected[&disk.slot_id])
+                .join("versions")
+                .join(&version.storage_name);
+            assert_eq!(actual, target);
+            assert_eq!(fs::read(&actual).unwrap(), bytes);
+        }
+    }
+    let repository_id = fixture.repository.repository_id.clone();
+    let scope_id = result.result["scope"]["id"].as_str().unwrap().to_owned();
+    let system = fixture.temp.path().join("system");
+    drop(fixture.engine);
+    let mut reopened = Engine::open(&system).unwrap();
+    assert_eq!(reopened.operation(result.operation_id).unwrap(), result);
+    assert_eq!(
+        reopened.state().file_backup_paths[&fixture.first.file_id],
+        expected
+    );
+    let retry = reopened
+        .configure_recursive_backups(RecursiveBackupConfigurationRequest {
+            repository_id: &repository_id,
+            path: "docs",
+            expected_scope_id: &scope_id,
+            target_copies: 3,
+            expected_generation: 0,
+            capture: &capture,
+            principal: "admin",
+            operation_id: result.operation_id,
+        })
+        .unwrap();
+    assert_eq!(retry, result);
+}
+
+#[test]
+fn recursive_file_scope_keeps_all_primary_ancestors() {
+    let mut fixture = ready();
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    configure(&mut fixture, "docs/report", 3, 0, &capture, op()).unwrap();
+    let paths = &fixture.engine.state().file_backup_paths[&fixture.first.file_id];
+    assert_eq!(paths["B01"], "disk-0/live backup/docs/report");
+    assert_eq!(paths["C01"], "disk-1/disk-0/live backup/docs/report");
+    assert!(!paths["C01"].starts_with("disk-2/"));
+}
+
+#[test]
+fn recursive_retry_reuses_capture_and_rejects_changed_idempotent_input() {
+    let mut fixture = ready();
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    let result = configure(&mut fixture, "docs", 2, 0, &capture, op()).unwrap();
+    let fresh = fixture.engine.recursive_backup_capture().unwrap();
+    assert_ne!(capture, fresh);
+    assert_eq!(
+        configure(&mut fixture, "docs", 2, 0, &capture, result.operation_id).unwrap(),
+        result
+    );
+    assert_eq!(
+        configure(&mut fixture, "docs", 2, 0, &fresh, result.operation_id)
+            .unwrap_err()
+            .code(),
+        ErrorCode::IdempotencyKeyReused
+    );
+    assert_eq!(
+        configure(&mut fixture, "docs", 2, 1, &capture, op())
+            .unwrap_err()
+            .code(),
+        ErrorCode::ScopeChanged
+    );
+}
+
+#[test]
+fn stale_or_forged_recursive_capture_is_rejected_before_publication_io() {
+    let mut fixture = ready();
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    let original = json_codec::to_value(&capture).unwrap();
+    let before_state = canonical_json(fixture.engine.state()).unwrap();
+    let before_files = fixture
+        .config
+        .disks
+        .iter()
+        .map(|disk| files(&disk.root))
+        .collect::<Vec<_>>();
+    let changes: [fn(&mut json_codec::Value); 6] = [
+        |value| value["source_sequence"] = json!("0"),
+        |value| value["disks"]["P01"]["name"] = json!("renamed-primary"),
+        |value| value["disks"]["B01"]["name"] = json!("renamed-backup"),
+        |value| value["disks"]["P01"]["identity"]["binding_generation"] = json!("99"),
+        |value| value["disks"]["C01"]["upstream_slot_id"] = json!("P01"),
+        |value| {
+            value["disks"].as_object_mut().unwrap().remove("B01");
+        },
+    ];
+    for change in changes {
+        let mut value = original.clone();
+        change(&mut value);
+        let forged = json_codec::from_value(value).unwrap();
+        assert_eq!(
+            configure(&mut fixture, "docs", 3, 0, &forged, op())
+                .unwrap_err()
+                .code(),
+            ErrorCode::ScopeChanged
+        );
+    }
+    assert_eq!(
+        canonical_json(fixture.engine.state()).unwrap(),
+        before_state
+    );
+    for (disk, expected) in fixture.config.disks.iter().zip(before_files) {
+        assert_eq!(files(&disk.root), expected);
+    }
+}
+
+#[test]
+fn recursive_receipt_and_path_updates_are_strictly_replayed_live_and_cold() {
+    let mut fixture = ready();
+    let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
+    let previous = Arc::clone(&fixture.engine.state);
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    let result = configure(&mut fixture, "docs", 3, 0, &capture, op()).unwrap();
+    view.advance(&previous, fixture.engine.state()).unwrap();
+    for field in ["name", "upstream_slot_id"] {
+        let mut forged = fixture.engine.state().clone();
+        forged
+            .operations
+            .get_mut(&result.operation_id)
+            .unwrap()
+            .result["backup_request"]["capture"]["disks"]["B01"][field] = json!("forged");
+        rejected(&view, &previous, &forged, field);
+    }
+    let mut flattened = fixture.engine.state().clone();
+    flattened
+        .file_backup_paths
+        .get_mut(&fixture.first.file_id)
+        .unwrap()
+        .insert("C01".into(), "disk-0/live backup/docs/report".into());
+    rejected(
+        &view,
+        &previous,
+        &flattened,
+        "higher tier cannot flatten its direct source",
+    );
+    let mut changed_kind = fixture.engine.state().clone();
+    changed_kind
+        .operations
+        .get_mut(&result.operation_id)
+        .unwrap()
+        .kind = "backup.configure".into();
+    rejected(
+        &view,
+        &previous,
+        &changed_kind,
+        "recursive request is not a prefix request",
+    );
+
+    let mut injected_deletion = fixture.engine.state().clone();
+    injected_deletion.file_deletions.insert(
+        fixture.first.file_id.clone(),
+        FileDeletionNode {
+            node_id: "fdel_00000000000000000000000000000000".into(),
+            repository_id: fixture.repository.repository_id.clone(),
+            history_tree_id: fixture.repository.history_tree_id.clone(),
+            file_id: fixture.first.file_id.clone(),
+            path: name_policy::PortablePath::parse("docs/report").unwrap(),
+            branch_heads: BTreeMap::new(),
+            parent_node_ids: Vec::new(),
+            operation_id: result.operation_id,
+            author: "admin".into(),
+            sequence: injected_deletion.sequence,
+            created_at: 0,
+        },
+    );
+    assert!(!super::super::unchanged_state(
+        &previous,
+        &injected_deletion
+    ));
+    rejected(
+        &view,
+        &previous,
+        &injected_deletion,
+        "recursive backup cannot write the deletion table",
+    );
+}
+
+#[test]
+fn empty_recursive_scope_does_not_claim_a_published_directory_namespace() {
+    let mut fixture = ready();
+    fixture
+        .engine
+        .file_namespace(
+            &fixture.repository.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "empty", None).unwrap(),
+            "admin",
+            op(),
+        )
+        .unwrap();
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    assert_eq!(
+        configure(&mut fixture, "empty", 3, 0, &capture, op())
+            .unwrap_err()
+            .code(),
+        ErrorCode::OperationUnsupported
+    );
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+}
+
+#[test]
+fn recursive_backup_does_not_reactivate_a_stopped_direct_source() {
+    let mut fixture = ready();
+    let stopped = fixture.exit(1, MembershipExitAction::PlannedOffline);
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    assert_eq!(
+        configure(&mut fixture, "docs", 3, 0, &capture, op())
+            .unwrap_err()
+            .code(),
+        ErrorCode::PlacementInvalid
+    );
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    assert_eq!(files(&fixture.config.disks[1].root), stopped);
+}

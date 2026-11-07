@@ -5,13 +5,19 @@ use crate::engine::{Prepared, ReadSource};
 use crate::journal::Candidate;
 use crate::{
     CommitState, CurrentHealth, Event, FileVersion, HistoricalDiskDefinition, OperationId,
-    OperationResult, Placement, ProtectionAtPublish, ScopedBackupConfigurationRequest,
+    OperationResult, Placement, ProtectionAtPublish, RecursiveBackupCapture,
+    RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };
 use data_serialization::Deserialize;
 use json_codec::{Value, json};
 use storage_contract::{MapChanges, SequenceChanges, TrackedMap, TrackedOperations};
 
 const KIND: &str = "backup.configure";
+const RECURSIVE_KIND: &str = "backup.configure-recursive";
+
+fn native_backup_kind(kind: &str) -> bool {
+    matches!(kind, KIND | RECURSIVE_KIND)
+}
 
 fn invalid() -> Error {
     Error::new(
@@ -32,9 +38,21 @@ struct BackupInput {
     expected_generation: u64,
 }
 
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct RecursiveBackupInput {
+    repository_id: String,
+    path: String,
+    expected_scope_id: String,
+    target_copies: u32,
+    #[serialization(with = "storage_contract::u64_string")]
+    expected_generation: u64,
+    capture: RecursiveBackupCapture,
+}
+
 impl CurrentNamespaces {
     pub(in crate::engine) fn is_backup_configuration(receipt: &OperationResult) -> bool {
-        receipt.kind == KIND
+        native_backup_kind(&receipt.kind)
             || receipt.result.get("namespace_backup").is_some()
             || receipt.result.get("backup_request").is_some()
     }
@@ -175,6 +193,27 @@ impl CurrentNamespaces {
             ));
         }
         Ok(disk)
+    }
+
+    pub(crate) fn verify_recursive_backup_capture(
+        &self,
+        state: &State,
+        capture: &RecursiveBackupCapture,
+    ) -> Result<()> {
+        capture.validate_predecessor(
+            state,
+            &self.registry,
+            self.registry_state
+                .registered_definitions()
+                .filter(|(_, mode, _)| *mode == super::super::RegistrationMode::Enabled)
+                .map(|(disk, _, _)| {
+                    (
+                        disk.identity.clone(),
+                        disk.level,
+                        disk.upstream_slot_id.clone(),
+                    )
+                }),
+        )
     }
 
     pub(crate) fn backup_configuration_route(
@@ -331,7 +370,6 @@ impl CurrentNamespaces {
         next: &State,
         receipt: &OperationResult,
     ) -> Result<()> {
-        let input: BackupInput = json_codec::from_value(receipt.result["backup_request"].clone())?;
         let generated: Vec<String> =
             json_codec::from_value(receipt.result["generated_policy_ids"].clone())?;
         let principal = next
@@ -340,25 +378,55 @@ impl CurrentNamespaces {
             .ok_or_else(invalid)?;
         Engine::require_actor(principal)?;
         let mut ids = generated.iter();
-        let plan = self.plan_backup_configuration(
-            previous,
-            ScopedBackupConfigurationRequest {
-                repository_id: &input.repository_id,
-                path: &input.path,
-                expected_scope_id: input.expected_scope_id.as_deref(),
-                target_copies: input.target_copies,
-                backup_prefixes: &input.backup_prefixes,
-                expected_generation: input.expected_generation,
-                principal,
-                operation_id: receipt.operation_id,
-            },
-            || ids.next().cloned().ok_or_else(invalid),
-        )?;
+        let (repository_id, plan) = match receipt.kind.as_str() {
+            KIND => {
+                let input: BackupInput =
+                    json_codec::from_value(receipt.result["backup_request"].clone())?;
+                let plan = self.plan_backup_configuration(
+                    previous,
+                    ScopedBackupConfigurationRequest {
+                        repository_id: &input.repository_id,
+                        path: &input.path,
+                        expected_scope_id: input.expected_scope_id.as_deref(),
+                        target_copies: input.target_copies,
+                        backup_prefixes: &input.backup_prefixes,
+                        expected_generation: input.expected_generation,
+                        principal,
+                        operation_id: receipt.operation_id,
+                    },
+                    || ids.next().cloned().ok_or_else(invalid),
+                )?;
+                (input.repository_id, plan)
+            }
+            RECURSIVE_KIND => {
+                let input: RecursiveBackupInput =
+                    json_codec::from_value(receipt.result["backup_request"].clone())?;
+                let plan = self.plan_recursive_backup_configuration(
+                    previous,
+                    RecursiveBackupConfigurationRequest {
+                        repository_id: &input.repository_id,
+                        path: &input.path,
+                        expected_scope_id: &input.expected_scope_id,
+                        target_copies: input.target_copies,
+                        expected_generation: input.expected_generation,
+                        capture: &input.capture,
+                        principal,
+                        operation_id: receipt.operation_id,
+                    },
+                    || ids.next().cloned().ok_or_else(invalid),
+                )?;
+                (input.repository_id, plan)
+            }
+            _ => return Err(invalid()),
+        };
         if ids.next().is_some() {
             return Err(invalid());
         }
-        let digest =
-            Engine::native_request_digest(KIND, principal, &plan.result["backup_request"])?;
+        let digest = Engine::native_request_digest(
+            &receipt.kind,
+            principal,
+            &plan.result["backup_request"],
+        )?;
         let mut result = plan.result;
         for key in ["configured_at", "timestamp", "membership_epoch"] {
             let decimal = receipt.result[key].as_str().ok_or_else(invalid)?;
@@ -390,10 +458,10 @@ impl CurrentNamespaces {
         result["version_protection"] = json!(protection);
         let expected = OperationResult {
             operation_id: receipt.operation_id,
-            kind: KIND.into(),
+            kind: receipt.kind.clone(),
             commit_id: None,
             history_tree_id: Some(
-                previous.repositories[&input.repository_id]
+                previous.repositories[&repository_id]
                     .history_tree_id
                     .clone(),
             ),
@@ -477,7 +545,7 @@ fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Opera
         } else if let Some(after) =
             after.filter(|operation| CurrentNamespaces::is_backup_configuration(operation))
             && (before.is_some()
-                || after.kind != KIND
+                || !native_backup_kind(&after.kind)
                 || after.operation_id != id
                 || receipt.replace(after).is_some())
         {
@@ -492,9 +560,9 @@ fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Opera
         let before = previous.events.get(index);
         let after = next.events.get(index);
         if before != after
-            && (before.is_some_and(|event| event.kind == KIND)
+            && (before.is_some_and(|event| native_backup_kind(&event.kind))
                 || after.is_some_and(|event| {
-                    event.kind == KIND
+                    native_backup_kind(&event.kind)
                         && (before.is_some()
                             || Some(event.operation_id)
                                 != receipt.map(|receipt| receipt.operation_id))
@@ -513,7 +581,9 @@ fn verify_payloads<'a>(
     result: &OperationResult,
     copies: impl ExactSizeIterator<Item = (&'a FileVersion, &'a Placement)>,
 ) -> Result<()> {
-    if result.kind != KIND || next.operations.get(&result.operation_id) != Some(result) {
+    if !native_backup_kind(&result.kind)
+        || next.operations.get(&result.operation_id) != Some(result)
+    {
         return Err(invalid());
     }
     let expected = result.result["version_protection"]
@@ -622,7 +692,7 @@ fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool 
     let expected = Event {
         sequence: next.sequence,
         operation_id: receipt.operation_id,
-        kind: KIND.into(),
+        kind: receipt.kind.clone(),
         object_id: receipt
             .history_tree_id
             .clone()

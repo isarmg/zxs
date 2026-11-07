@@ -345,6 +345,7 @@ impl<'a> PlanningContext<'a> {
     /// not a general permission for a named operation or an arbitrary copy.
     pub(super) fn plan_backup_configuration_mutation<F>(
         &self,
+        kind: &str,
         principal: &str,
         operation_id: OperationId,
         digest: String,
@@ -361,8 +362,7 @@ impl<'a> PlanningContext<'a> {
         {
             return Err(super::disk_registry::current::pending_publication());
         }
-        let plan =
-            self.prepare_new_mutation("backup.configure", principal, operation_id, digest, change)?;
+        let plan = self.prepare_new_mutation(kind, principal, operation_id, digest, change)?;
         let MutationPlan::Prepared {
             next,
             prepared,

@@ -37,6 +37,47 @@ struct Fields {
     #[serialization(deserialize_with = "nonempty")]
     operation_id: String,
 }
+
+#[cfg(feature = "core")]
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct RecursiveFields {
+    #[serialization(deserialize_with = "nonempty")]
+    repository_id: String,
+    path: String,
+    target_copies: u32,
+    #[serialization(with = "storage_contract::u64_string")]
+    expected_generation: u64,
+    #[serialization(deserialize_with = "nonempty")]
+    expected_scope_id: String,
+    capture: storage_engine::RecursiveBackupCapture,
+    operation_id: storage_contract::OperationId,
+}
+
+#[cfg(feature = "core")]
+fn parse_recursive(body: Value) -> Result<crate::ConfigureRecursiveBackups, ApiError> {
+    let RecursiveFields {
+        repository_id,
+        path,
+        target_copies,
+        expected_generation,
+        expected_scope_id,
+        capture,
+        operation_id,
+    } = json_codec::from_value(body).map_err(ApiError::invalid_source)?;
+    if !path.is_empty() {
+        name_policy::validate_path(&path).map_err(ApiError::invalid_source)?;
+    }
+    Ok(crate::ConfigureRecursiveBackups {
+        repository_id,
+        path,
+        target_copies,
+        expected_generation,
+        expected_scope_id,
+        capture,
+        operation_id,
+    })
+}
 fn parse(body: Value) -> Result<crate::ConfigureBackups, ApiError> {
     let Fields {
         repository_id,
@@ -116,6 +157,65 @@ pub(crate) async fn configure(
         .run(move |backend| {
             backend
                 .configure_backups(&identity, parse(body)?)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
+        })
+        .await
+        .map(Json)
+}
+
+#[cfg(feature = "core")]
+pub(crate) async fn read_recursive(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(repository_id): ApiPath<String>,
+    ApiQuery(mut query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<crate::backend_backup_configuration::RecursiveBackupConfigurationResponse>, ApiError>
+{
+    let request = crate::ReadBackupConfiguration {
+        repository_id,
+        path: query.remove("path").unwrap_or_default(),
+    };
+    if !query.is_empty() {
+        return Err(ApiError::invalid("unknown recursive backup query field"));
+    }
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .recursive_backup_configuration(&identity, request)
+                .map(
+                    crate::backend_backup_configuration::RecursiveBackupConfigurationResponse::from,
+                )
+        })
+        .await
+        .map(Json)
+}
+
+#[cfg(feature = "core")]
+pub(crate) async fn configure_recursive(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(repository): ApiPath<String>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let body = crate::with_id(
+        crate::json_body(request).await?,
+        "repository_id",
+        repository,
+    )?;
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .configure_recursive_backups(&identity, parse_recursive(body)?)
                 .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await

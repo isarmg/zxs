@@ -6,6 +6,9 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+mod recursive;
+pub use recursive::{RecursiveBackupCapture, RecursiveBackupConfigurationRequest};
+
 /// Backup placement for a path, fenced by the current policy generation.
 #[derive(Clone, Copy, Debug)]
 pub struct BackupConfigurationRequest<'a> {
@@ -683,18 +686,7 @@ impl Engine {
                         request,
                         || Ok(new_id("policy")?),
                     )?;
-                    for version in &plan.versions {
-                        let source = engine.valid_backup_replica(&version.version_id)?;
-                        pending.push(Prepared {
-                            version: version.clone(),
-                            placement: plan.placements[&version.version_id].clone(),
-                            source,
-                        });
-                    }
-                    plan.apply(state);
-                    let mut result = plan.result;
-                    result["configured_at"] = json!(now()?.to_string());
-                    return Ok(result);
+                    return apply_current_plan(engine, state, pending, plan);
                 }
                 let repo = state.repositories.get(repository).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "backup repository missing"))?;
@@ -797,6 +789,26 @@ pub(crate) struct CurrentBackupConfigurationPlan {
     pub(crate) result: json_codec::Value,
 }
 
+fn apply_current_plan(
+    engine: &Engine,
+    state: &mut State,
+    pending: &mut Vec<Prepared>,
+    plan: CurrentBackupConfigurationPlan,
+) -> Result<json_codec::Value> {
+    for version in &plan.versions {
+        let source = engine.valid_backup_replica(&version.version_id)?;
+        pending.push(Prepared {
+            version: version.clone(),
+            placement: plan.placements[&version.version_id].clone(),
+            source,
+        });
+    }
+    plan.apply(state);
+    let mut result = plan.result;
+    result["configured_at"] = json!(now()?.to_string());
+    Ok(result)
+}
+
 impl CurrentBackupConfigurationPlan {
     fn apply(&self, state: &mut State) {
         for (id, policy) in &self.policies {
@@ -843,6 +855,16 @@ impl CurrentNamespaces {
         &self,
         state: &State,
         request: ScopedBackupConfigurationRequest<'_>,
+        fresh_policy: impl FnMut() -> Result<String>,
+    ) -> Result<CurrentBackupConfigurationPlan> {
+        self.plan_backup_configuration_with_paths(state, request, None, fresh_policy)
+    }
+
+    fn plan_backup_configuration_with_paths(
+        &self,
+        state: &State,
+        request: ScopedBackupConfigurationRequest<'_>,
+        recursive: Option<&RecursiveBackupCapture>,
         mut fresh_policy: impl FnMut() -> Result<String>,
     ) -> Result<CurrentBackupConfigurationPlan> {
         let repository = request.repository_id;
@@ -868,6 +890,12 @@ impl CurrentNamespaces {
             ));
         }
         retain_inherited_files(state, entries, repository, &mut scope, previous);
+        if recursive.is_some() && scope.files.is_empty() {
+            return Err(Error::new(
+                ErrorCode::OperationUnsupported,
+                "recursive backup does not yet publish an empty directory namespace",
+            ));
+        }
         let mut prefixes = BTreeMap::new();
         for (slot, prefix) in request.backup_prefixes {
             let disk = self.backup_configuration_disk(slot)?;
@@ -941,11 +969,11 @@ impl CurrentNamespaces {
             );
         }
         for primary in primaries {
-            for slot in self
-                .backup_configuration_route(primary, request.target_copies)?
-                .into_iter()
-                .skip(1)
-            {
+            let route = self.backup_configuration_route(primary, request.target_copies)?;
+            if let Some(capture) = recursive {
+                capture.extend_prefixes(repo, &scope, &route, &mut prefixes)?;
+            }
+            for slot in route.into_iter().skip(1) {
                 if !prefixes.contains_key(&slot) {
                     return Err(Error::new(
                         ErrorCode::BackupPrefixRequired,

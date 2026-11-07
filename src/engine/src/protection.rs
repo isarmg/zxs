@@ -3,7 +3,10 @@ use crate::*;
 use json_codec::json;
 mod backup_paths;
 mod placement_configuration;
-pub use backup_paths::{BackupConfigurationRequest, ScopedBackupConfigurationRequest};
+pub use backup_paths::{
+    BackupConfigurationRequest, RecursiveBackupCapture, RecursiveBackupConfigurationRequest,
+    ScopedBackupConfigurationRequest,
+};
 pub(crate) use backup_paths::{apply_backup_paths, prune_retained_policies};
 pub use placement_configuration::PlacementConfigurationRequest;
 

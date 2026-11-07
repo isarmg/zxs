@@ -61,6 +61,8 @@ pub use backend_placement_configuration::{ConfigurePlacement, ReadPlacementConfi
 mod backend_backup_configuration;
 mod http_backup_configuration;
 pub use backend_backup_configuration::{ConfigureBackups, ReadBackupConfiguration};
+#[cfg(feature = "core")]
+pub use backend_backup_configuration::{ConfigureRecursiveBackups, RecursiveBackupConfiguration};
 mod backend_archive;
 mod backend_create_file_branch;
 mod backend_directory_scope;
@@ -651,6 +653,22 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: ConfigureBackups,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    #[cfg(feature = "core")]
+    fn recursive_backup_configuration(
+        &self,
+        _identity: &Identity,
+        _request: ReadBackupConfiguration,
+    ) -> Result<RecursiveBackupConfiguration, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    #[cfg(feature = "core")]
+    fn configure_recursive_backups(
+        &self,
+        _identity: &Identity,
+        _request: ConfigureRecursiveBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn plan(&self, identity: &Identity, plan: &str) -> Result<storage_contract::Plan, ApiError>;
     /// The outer error belongs to the HTTP keys phase, after current admission.
     /// A successful envelope may still carry an operation error for the later
@@ -1323,6 +1341,24 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.backend
             .configure_backups(&self.current(identity)?, request)
+    }
+    #[cfg(feature = "core")]
+    fn recursive_backup_configuration(
+        &self,
+        identity: &Identity,
+        request: ReadBackupConfiguration,
+    ) -> Result<RecursiveBackupConfiguration, ApiError> {
+        self.backend
+            .recursive_backup_configuration(&self.current(identity)?, request)
+    }
+    #[cfg(feature = "core")]
+    fn configure_recursive_backups(
+        &self,
+        identity: &Identity,
+        request: ConfigureRecursiveBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .configure_recursive_backups(&self.current(identity)?, request)
     }
     fn plan(&self, identity: &Identity, plan: &str) -> Result<storage_contract::Plan, ApiError> {
         self.backend.plan(&self.current(identity)?, plan)

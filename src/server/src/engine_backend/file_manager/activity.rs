@@ -480,12 +480,12 @@ fn directory_operation_events<'a>(
 }
 
 fn backup_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
-    for operation in engine
-        .state()
-        .operations
-        .values()
-        .filter(|op| op.kind == "backup.configure")
-    {
+    for operation in engine.state().operations.values().filter(|op| {
+        matches!(
+            op.kind.as_str(),
+            "backup.configure" | "backup.configure-recursive"
+        )
+    }) {
         if !history_sequence_may_fit(events, operation.sequence) {
             continue;
         }
