@@ -281,6 +281,7 @@ fn verify_state_shape(previous: &State, next: &State, operation: OperationId) ->
         file_contexts,
         file_path_nodes,
         file_metadata_nodes,
+        file_deletions,
         file_branch_merges,
         file_branch_aliases,
         file_node_parents,

@@ -11725,6 +11725,9 @@
               },
               "directory_git_repositories": {
                 "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_deletions": {
+                "$ref": "#/components/schemas/MetadataReference"
               }
             },
             "required": [
@@ -11758,7 +11761,8 @@
               "content_states",
               "placement_rules",
               "protection_policies",
-              "directory_git_repositories"
+              "directory_git_repositories",
+              "file_deletions"
             ],
             "additionalProperties": false
           }
@@ -11770,7 +11774,7 @@
           "maps"
         ],
         "additionalProperties": false,
-        "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定31个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。"
+        "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定32个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。 当前删除生命周期要求file_deletions独立映射根。"
       },
       "CapacityMeasure": {
         "type": "object",
@@ -12160,6 +12164,9 @@
               },
               "directory_git_repositories": {
                 "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_deletions": {
+                "$ref": "#/components/schemas/MetadataReference"
               }
             },
             "required": [
@@ -12198,7 +12205,8 @@
               "file_names",
               "directory_selection_generations",
               "file_selection_generations",
-              "directory_git_repositories"
+              "directory_git_repositories",
+              "file_deletions"
             ],
             "additionalProperties": false
           },
@@ -12219,7 +12227,7 @@
           "control_auth"
         ],
         "additionalProperties": false,
-        "description": "snapshot域固定36个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。"
+        "description": "snapshot域固定37个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。 当前删除生命周期要求file_deletions独立映射根。"
       },
       "InclusionProof": {
         "type": "object",
@@ -18725,6 +18733,99 @@
             "$ref": "#/components/schemas/IndependentSourceTopology"
           }
         }
+      },
+      "FileDeletionNodeId": {
+        "type": "string",
+        "pattern": "^fdel_[0-9a-f]{32}$"
+      },
+      "FileDeletionNode": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "$ref": "#/components/schemas/FileDeletionNodeId"
+          },
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "branch_heads": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {
+              "$ref": "#/components/schemas/BranchId"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          "parent_node_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "author": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "node_id",
+          "repository_id",
+          "history_tree_id",
+          "file_id",
+          "path",
+          "branch_heads",
+          "parent_node_ids",
+          "operation_id",
+          "author",
+          "sequence",
+          "created_at"
+        ],
+        "additionalProperties": false,
+        "description": "当前稳定文件的无正文软删除节点，精确连接所有保留分支各自HEAD。branch_heads与父边闭包由Engine验证；禁止伪造version_id。删除该记录即撤销，旧操作回执仍保留。"
+      },
+      "FileDeletions": {
+        "type": "object",
+        "propertyNames": {
+          "$ref": "#/components/schemas/FileId"
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/FileDeletionNode"
+        }
+      },
+      "FileDeletionStateFields": {
+        "type": "object",
+        "properties": {
+          "file_deletions": {
+            "$ref": "#/components/schemas/FileDeletions"
+          }
+        },
+        "required": [
+          "file_deletions"
+        ],
+        "additionalProperties": true,
+        "description": "State与HistoryManifest的必需当前删除表；缺失不补默认值，不迁移旧格式。"
       }
     }
   }

@@ -9,7 +9,7 @@ macro_rules! projected_fields {
     ($consumer:ident) => {
         $consumer! {
             branches, file_selections, directory_branches, directory_trees,
-            file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes,
+            file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes, file_deletions,
             file_branch_merges, file_branch_aliases, file_node_parents, file_path_notes,
             directory_tree_selections, file_locations, file_backup_paths,
             file_backup_policies, directory_selections, directory_selection_generations,
@@ -248,6 +248,7 @@ fn every_owner_move_propagates_old_and_new_dependent_rows() {
     moved!(histories, "h1", repository_id, "r2");
     moved!(file_path_nodes, "node", history_tree_id, "h3");
     moved!(file_metadata_nodes, "node", history_tree_id, "h3");
+    moved!(file_deletions, "shared-file", history_tree_id, "h3");
     moved!(file_branch_merges, "merge", history_tree_id, "h3");
     moved!(merge_links, "link", history_tree_id, "h3");
     moved!(history_boundaries, "boundary", history_tree_id, "h3");

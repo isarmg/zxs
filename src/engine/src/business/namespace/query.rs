@@ -12,6 +12,7 @@ use super::*;
 #[derive(Clone, Copy)]
 pub struct NamespaceTree<'a> {
     entries: &'a [Entry],
+    deletions: Option<&'a storage_contract::TrackedMap<crate::FileDeletionNode>>,
 }
 
 impl<'a> NamespaceTree<'a> {
@@ -20,12 +21,28 @@ impl<'a> NamespaceTree<'a> {
     // validator. No arbitrary Commit, mutable State or entry slice is accepted
     // by the public or crate-wide API, and queries never repeat that validation.
     fn from_published_entries(entries: &'a [Entry]) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            deletions: None,
+        }
     }
 
     /// Borrow the canonical order, without allocating or copying entries.
     pub fn entries(self) -> &'a [Entry] {
         self.entries
+    }
+
+    /// Enumerate the current visible namespace without copying retained rows.
+    /// Historical and workspace views have no lifecycle filter.
+    pub fn visible_entries(self) -> impl Iterator<Item = &'a Entry> {
+        self.entries.iter().filter(move |entry| self.visible(entry))
+    }
+
+    fn visible(self, entry: &Entry) -> bool {
+        entry.kind != NamespaceEntryKind::File
+            || self
+                .deletions
+                .is_none_or(|deletions| !deletions.contains_key(&entry.file_id))
     }
 
     /// Resolve an equivalent spelling, including case-folded and NFD queries.
@@ -46,12 +63,16 @@ impl<'a> NamespaceTree<'a> {
             })
             .ok()
             .map(|index| &self.entries[index])
+            .filter(|entry| self.visible(entry))
     }
 }
 
 impl crate::NamespaceSnapshot {
     pub fn tree(&self) -> NamespaceTree<'_> {
-        NamespaceTree::from_published_entries(self.entries())
+        NamespaceTree {
+            entries: self.entries(),
+            deletions: Some(self.file_deletions()),
+        }
     }
 }
 
@@ -64,8 +85,10 @@ impl Engine {
     /// Borrow the current published namespace with the same admission and
     /// errors as `list_tree_ref`, but with logarithmic normalized-key lookup.
     pub fn namespace_tree(&self, branch_id: &str) -> Result<NamespaceTree<'_>> {
-        self.list_tree_ref(branch_id)
-            .map(NamespaceTree::from_published_entries)
+        self.list_tree_ref(branch_id).map(|entries| NamespaceTree {
+            entries,
+            deletions: Some(&self.state().file_deletions),
+        })
     }
 
     /// Borrow a selected published namespace. Foreign commits and migrated
@@ -99,7 +122,10 @@ impl MetadataView {
             Some(view) => view.branch_entries(branch_id, &commit.commit_id)?,
             None => &commit.entries,
         };
-        Ok(NamespaceTree::from_published_entries(entries))
+        Ok(NamespaceTree {
+            entries,
+            deletions: Some(&state.file_deletions),
+        })
     }
 }
 

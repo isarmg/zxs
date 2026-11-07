@@ -123,6 +123,7 @@ history_coverage! {
     file_contexts => file_contexts,
     file_path_nodes => file_path_nodes,
     file_metadata_nodes => file_metadata_nodes,
+    file_deletions => file_deletions,
     file_branch_merges => file_branch_merges,
     file_branch_aliases => file_branch_aliases,
     file_node_parents => file_node_parents,
@@ -147,6 +148,7 @@ history_coverage! {
 }
 
 fn validate(state: &State) -> Result<()> {
+    crate::file_deletion::publication::admit_current(state)?;
     // Event polling seeks by sequence while preserving ordinal array order.
     // Writers append increasing publication slots; recovery must establish the
     // same premise for decoded bytes, including equal-sequence event groups.

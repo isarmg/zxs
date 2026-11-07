@@ -389,6 +389,27 @@ pub struct FileMetadataNode {
     pub created_at: u64,
 }
 
+/// Current soft deletion of one stable file. The node has no payload and joins
+/// every retained branch's own HEAD. Removing this record restores visibility;
+/// ordinary immutable content and historical publication receipts are retained.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serialization(deny_unknown_fields)]
+pub struct FileDeletionNode {
+    pub node_id: String,
+    pub repository_id: String,
+    pub history_tree_id: String,
+    pub file_id: String,
+    pub path: name_policy::PortablePath,
+    pub branch_heads: BTreeMap<String, String>,
+    pub parent_node_ids: Vec<String>,
+    pub operation_id: crate::OperationId,
+    pub author: String,
+    #[serialization(with = "crate::u64_string")]
+    pub sequence: u64,
+    #[serialization(with = "crate::u64_string")]
+    pub created_at: u64,
+}
+
 /// Merge provenance is separate from immutable content/path parent proofs.
 /// Reusing an existing head records every input even when an ancestry edge
 /// must be omitted to keep the displayed history acyclic.
@@ -1109,6 +1130,7 @@ pub struct State {
     pub file_path_nodes: crate::TrackedMap<FilePathNode>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_metadata_nodes: crate::TrackedMap<FileMetadataNode>,
+    pub file_deletions: crate::TrackedMap<FileDeletionNode>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_branch_merges: crate::TrackedMap<FileBranchMerge>,
     /// Consumed names remain readable; writes must use the surviving branch.
@@ -1187,6 +1209,7 @@ impl State {
             file_contexts,
             file_path_nodes,
             file_metadata_nodes,
+            file_deletions,
             file_branch_merges,
             file_branch_aliases,
             file_node_parents,
@@ -1225,6 +1248,7 @@ impl State {
         file_contexts.begin_tracking();
         file_path_nodes.begin_tracking();
         file_metadata_nodes.begin_tracking();
+        file_deletions.begin_tracking();
         file_branch_merges.begin_tracking();
         file_branch_aliases.begin_tracking();
         file_node_parents.begin_tracking();

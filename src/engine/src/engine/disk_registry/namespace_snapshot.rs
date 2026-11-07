@@ -57,12 +57,16 @@ impl DirectoryNamespaceView {
 /// One current namespace captured without retaining unrelated State/history.
 #[derive(Clone)]
 pub struct NamespaceSnapshot {
+    file_deletions: storage_contract::TrackedMap<crate::FileDeletionNode>,
     branch: String,
     head: String,
     entries: NamespaceEntries,
     registry: Option<Weak<VerifiedDiskRegistry>>,
 }
 impl NamespaceSnapshot {
+    pub(crate) fn file_deletions(&self) -> &storage_contract::TrackedMap<crate::FileDeletionNode> {
+        &self.file_deletions
+    }
     pub fn entries(&self) -> &[Entry] {
         self.entries.entries()
     }
@@ -79,6 +83,7 @@ impl NamespaceSnapshot {
     }
     pub fn witness(&self) -> NamespaceSnapshotWitness {
         NamespaceSnapshotWitness {
+            file_deletions: self.file_deletions.clone(),
             branch: self.branch.clone(),
             head: self.head.clone(),
             entries: match &self.entries {
@@ -100,9 +105,11 @@ enum NamespaceWitnessEntries {
     Projected(Weak<Vec<Entry>>),
 }
 /// This witness owns no entries, immutable commit, registry graph or State.
-/// It checks a current scan's identity only, never user authorization.
+/// It shares only the deletion table so metadata-only visibility changes also
+/// invalidate a detached scan. This is never user authorization.
 #[derive(Clone)]
 pub struct NamespaceSnapshotWitness {
+    file_deletions: storage_contract::TrackedMap<crate::FileDeletionNode>,
     branch: String,
     head: String,
     entries: NamespaceWitnessEntries,
@@ -164,6 +171,7 @@ impl Engine {
             ),
         };
         Ok(NamespaceSnapshot {
+            file_deletions: self.state.file_deletions.clone(),
             branch: branch_id.into(),
             head: branch.head_commit_id.clone(),
             entries,
@@ -178,7 +186,14 @@ impl Engine {
         let Some(branch) = self.state.branches.get(&witness.branch) else {
             return false;
         };
-        if branch.state == BranchState::Migrated || branch.head_commit_id != witness.head {
+        if branch.state == BranchState::Migrated
+            || branch.head_commit_id != witness.head
+            || !self
+                .state
+                .file_deletions
+                .changes_since(&witness.file_deletions)
+                .is_empty()
+        {
             return false;
         }
         match (

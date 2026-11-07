@@ -18,7 +18,7 @@ impl TreeSnapshot {
         .map_err(error)?;
         #[cfg(test)]
         tests::record_tree_projection(tree.entries().len());
-        let entries = tree.entries().to_vec();
+        let entries = tree.visible_entries().cloned().collect();
         let scope = match request.commit {
             Some(_) => PendingScope::Historical,
             None => PendingScope::Current(tree),
@@ -285,7 +285,11 @@ impl DirectoryPageProjection {
             let Some(rest) = entry.lookup_key().strip_prefix(&prefix) else {
                 break;
             };
-            if rest.is_empty() || rest.contains('/') {
+            if rest.is_empty()
+                || rest.contains('/')
+                || (entry.kind == storage_contract::NamespaceEntryKind::File
+                    && state.file_deletions.contains_key(&entry.file_id))
+            {
                 continue;
             }
             let mtime = match entry.kind {

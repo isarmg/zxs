@@ -544,6 +544,7 @@ impl<'a> PlanningContext<'a> {
         let timestamp = crate::business::now()?;
         let mut prepared = Vec::new();
         let mut result = change(self, &mut next, &mut prepared)?;
+        crate::file_deletion::freeze::verify(self.state, &next)?;
         crate::container_storage::capture_changed_names(self.state, &mut next);
         result["timestamp"] = json_codec::json!(timestamp.to_string());
         if let Some(branch_id) = result
@@ -605,6 +606,11 @@ impl<'a> PlanningContext<'a> {
                 .or_else(|| op.history_tree_id.clone())
                 .unwrap_or_else(|| operation_id.to_string()),
         });
+        crate::file_deletion::publication::verify(
+            self.state,
+            &next,
+            self.current_namespaces.map(AsRef::as_ref),
+        )?;
         Ok(MutationPlan::Prepared {
             next: Box::new(next),
             prepared,

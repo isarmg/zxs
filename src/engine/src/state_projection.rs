@@ -21,6 +21,7 @@ macro_rules! projection_maps {
         file_contexts => FileContexts, context, "file_contexts";
         file_path_nodes => FilePathNodes, history, "file_path_nodes";
         file_metadata_nodes => FileMetadataNodes, history, "file_metadata_nodes";
+        file_deletions => FileDeletions, history, "file_deletions";
         file_branch_merges => FileBranchMerges, history, "file_branch_merges";
         file_branch_aliases => FileBranchAliases, alias, "file_branch_aliases";
         file_node_parents => FileNodeParents, version, "file_node_parents";

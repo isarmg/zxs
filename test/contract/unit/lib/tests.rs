@@ -180,7 +180,7 @@ fn persisted_workspace_requires_explicit_purpose_without_changing_current_bytes(
 fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
     for generation in [0, u64::MAX] {
         let bytes = format!(
-            r#"{{"branches":{{}},"business_generation":"{generation}","commits":{{}},"content_states":{{}},"control_auth":null,"directory_git_repositories":{{}},"events":[],"histories":{{}},"history_boundaries":{{}},"merge_links":{{}},"operation_principals":{{}},"operations":{{}},"placement_rules":{{}},"placements":{{}},"plans":{{}},"protection_policies":{{}},"repositories":{{}},"sequence":"0","topology_generation":"0","versions":{{}}}}"#
+            r#"{{"branches":{{}},"business_generation":"{generation}","commits":{{}},"content_states":{{}},"control_auth":null,"directory_git_repositories":{{}},"events":[],"file_deletions":{{}},"histories":{{}},"history_boundaries":{{}},"merge_links":{{}},"operation_principals":{{}},"operations":{{}},"placement_rules":{{}},"placements":{{}},"plans":{{}},"protection_policies":{{}},"repositories":{{}},"sequence":"0","topology_generation":"0","versions":{{}}}}"#
         );
         let state = State {
             business_generation: generation,
@@ -191,6 +191,7 @@ fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
         for field in [
             "business_generation",
             "directory_git_repositories",
+            "file_deletions",
             "history_boundaries",
             "placement_rules",
             "protection_policies",

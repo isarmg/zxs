@@ -31,6 +31,10 @@ pub use engine::{
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };
+pub mod file_deletion;
+pub use file_deletion::{
+    DeleteFileRequest, FileDeletionNodeKind, FileDeletionTarget, UndoFileDeletionRequest,
+};
 mod file_stamp;
 mod foreign_import;
 pub use foreign_import::{

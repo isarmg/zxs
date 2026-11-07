@@ -369,7 +369,7 @@ macro_rules! unchanged_binding_fields {
 }
 unchanged_binding_fields! {
     branches, file_selections, directory_branches, directory_git_repositories, directory_trees,
-    file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes,
+    file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes, file_deletions,
     file_branch_merges, file_branch_aliases, file_node_parents, file_path_notes,
     directory_tree_selections, file_locations, file_backup_paths, file_backup_policies,
     directory_selections, directory_selection_generations, file_selection_generations,

@@ -629,6 +629,21 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
                 .creation_name
                 .push_str(" changed");
         },
+        file_deletions => {
+            state.file_deletions.insert(file.clone(), crate::FileDeletionNode {
+                node_id: "fdel_00000000000000000000000000000000".into(),
+                repository_id: fixture.repository.repository_id.clone(),
+                history_tree_id: history.clone(),
+                file_id: file.clone(),
+                path: name_policy::PortablePath::parse("unexpected").unwrap(),
+                branch_heads: BTreeMap::new(),
+                parent_node_ids: vec![],
+                operation_id: result.operation_id,
+                author: "admin".into(),
+                sequence: state.sequence,
+                created_at: 0,
+            });
+        },
         directory_git_repositories => {
             state.directory_git_repositories.insert("unexpected".into(), storage_contract::directory_git::DirectoryGitRepository {
                 repository_id: "unexpected".into(),

@@ -10,6 +10,7 @@ struct ListingMetadata {
     #[cfg(test)]
     sequence: u64,
     repositories: storage_contract::TrackedMap<Repository>,
+    file_deletions: storage_contract::TrackedMap<storage_contract::FileDeletionNode>,
     namespaces: BTreeMap<String, storage_engine::NamespaceSnapshot>,
     directory_branches: storage_contract::TrackedMap<storage_contract::DirectoryBranch>,
     directory_namespaces: storage_engine::DirectoryNamespaceView,
@@ -38,6 +39,7 @@ impl ListingMetadata {
             #[cfg(test)]
             sequence: state.sequence,
             repositories: state.repositories.clone(),
+            file_deletions: state.file_deletions.clone(),
             namespaces,
             directory_branches: state.directory_branches.clone(),
             directory_namespaces: engine.directory_namespace_view().map_err(error)?,
@@ -277,6 +279,11 @@ impl PrimaryListing {
                     preview.branch().entries.as_slice()
                 });
             for (index, entry) in entries.iter().enumerate() {
+                if entry.kind == storage_contract::NamespaceEntryKind::File
+                    && state.file_deletions.contains_key(&entry.file_id)
+                {
+                    continue;
+                }
                 let Some(relative) = entry.lookup_key().strip_prefix(&prefix) else {
                     continue;
                 };

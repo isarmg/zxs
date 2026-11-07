@@ -102,6 +102,11 @@ pub(super) fn dependency_fixture() -> State {
             "author":"author","sequence":"1","created_at":"1"
         })),
     );
+    state.file_deletions.insert("shared-file".into(), record(json!({
+        "node_id":"deletion","repository_id":"r1","history_tree_id":"h1","file_id":"shared-file","path":"file",
+        "branch_heads":{"b1":"v1"},"parent_node_ids":["v1"],
+        "operation_id":"op_00000000000000000000000000000000","author":"author","sequence":"1","created_at":"1"
+    })));
     state.file_branch_merges.insert("merge".into(), record(json!({
         "merge_id":"merge","history_tree_id":"h1","file_id":"shared-file","input_branch_ids":[],
         "input_node_ids":[],"chosen_node_id":"node","result_node_id":"node","surviving_branch_id":"b1",
@@ -199,6 +204,7 @@ fn every_manifest_map_deletion_uses_its_independently_specified_membership() {
     removed!(versions, "v1", &["h1"]);
     removed!(file_path_nodes, "node", &["h1"]);
     removed!(file_metadata_nodes, "node", &["h2"]);
+    removed!(file_deletions, "shared-file", &["h1"]);
     removed!(file_branch_merges, "merge", &["h1"]);
     removed!(merge_links, "link", &["h1"]);
     removed!(history_boundaries, "boundary", &["h1"]);
@@ -248,6 +254,7 @@ fn migration_retargeting_and_simultaneous_deletion_keep_old_and_new_owners() {
     history_move!(versions, "v1", "h1");
     history_move!(file_path_nodes, "node", "h1");
     history_move!(file_metadata_nodes, "node", "h2");
+    history_move!(file_deletions, "shared-file", "h1");
     history_move!(file_branch_merges, "merge", "h1");
     history_move!(merge_links, "link", "h1");
     history_move!(history_boundaries, "boundary", "h1");

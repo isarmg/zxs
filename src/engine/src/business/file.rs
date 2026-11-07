@@ -607,6 +607,9 @@ pub(crate) fn create_file_branch_change(
         name,
         name_key,
     } = source;
+    if state.file_deletions.contains_key(file_id) {
+        return Err(crate::file_deletion::lifecycle::frozen());
+    }
     let source = state
         .versions
         .get(source_version)

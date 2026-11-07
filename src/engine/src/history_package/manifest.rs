@@ -34,6 +34,7 @@ pub struct HistoryManifest {
     pub file_path_nodes: BTreeMap<String, FilePathNode>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_metadata_nodes: BTreeMap<String, FileMetadataNode>,
+    pub file_deletions: BTreeMap<String, storage_contract::FileDeletionNode>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_branch_merges: BTreeMap<String, FileBranchMerge>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -186,6 +187,12 @@ impl HistoryManifest {
                 .iter()
                 .filter(|(_, node)| node.history_tree_id == history_id)
                 .map(|(id, node)| (id.clone(), node.clone()))
+                .collect(),
+            file_deletions: state
+                .file_deletions
+                .iter()
+                .filter(|(_, node)| node.history_tree_id == history_id)
+                .map(|(file, node)| (file.clone(), node.clone()))
                 .collect(),
             file_branch_merges: state
                 .file_branch_merges
@@ -626,6 +633,7 @@ impl HistoryManifest {
             }
             graph.insert(id, node.parent_node_ids.clone());
         }
+        self.validate_file_deletions()?;
         for (id, node) in &self.file_metadata_nodes {
             validate_id(id, "fmeta")?;
 

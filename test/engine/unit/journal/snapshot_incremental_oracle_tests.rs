@@ -20,6 +20,7 @@ const REQUIRED_FIELDS: &[&str] = &[
     "protection_policies",
     "operation_principals",
     "directory_git_repositories",
+    "file_deletions",
 ];
 const OPTIONAL_FIELDS: &[&str] = &[
     "file_selections",
@@ -62,6 +63,7 @@ macro_rules! every_tracked_field {
         $apply!(protection_policies);
         $apply!(operation_principals);
         $apply!(directory_git_repositories);
+        $apply!(file_deletions);
         $apply!(file_selections);
         $apply!(directory_branches);
         $apply!(directory_trees);
@@ -159,6 +161,13 @@ fn populated_state() -> State {
         "parent_node_ids": ["parent"], "branch_id": "branch", "kind": "tags", "tags": ["标签", "\u{10000}"],
         "operation_id": "op_00000000000000000000000000000000", "author": "作者", "sequence": "9007199254740992", "created_at": "18446744073709551615"
     }});
+    value["file_deletions"] = json_codec::json!({"file": {
+        "node_id": "fdel_00000000000000000000000000000000", "repository_id": "repository",
+        "history_tree_id": "history", "file_id": "file", "path": "目录/文件",
+        "branch_heads": {"branch": "node"}, "parent_node_ids": ["node"],
+        "operation_id": "op_00000000000000000000000000000000", "author": "作者",
+        "sequence": "9007199254740992", "created_at": "18446744073709551615"
+    }});
     value["file_branch_merges"] = json_codec::json!({"branch-merge": {
         "merge_id": "branch-merge", "history_tree_id": "history", "file_id": "file",
         "input_branch_ids": ["source", "target"], "input_node_ids": ["first", "second"],
@@ -174,7 +183,7 @@ fn populated_state() -> State {
     state.control_auth =
         Some(json_codec::json!({"\u{10000}": {"roles": ["读者"]}, "\u{e000}": true}));
     let encoded = json_codec::to_value(&state).unwrap();
-    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 36);
+    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 37);
     for field in REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS) {
         assert!(!encoded[*field].as_object().unwrap().is_empty(), "{field}");
     }

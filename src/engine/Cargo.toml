@@ -75,3 +75,7 @@ path = "../../test/engine/integration/directory_git_safety.rs"
 [[test]]
 name = "directory_git_staged_source"
 path = "../../test/engine/integration/directory_git_staged_source.rs"
+
+[[test]]
+name = "file_soft_deletion"
+path = "../../test/engine/integration/file_soft_deletion.rs"

@@ -212,6 +212,8 @@ impl CurrentNamespaces {
             || kind == "workspace.commit"
             || kind == "workspace.namespace.admit"
             || kind == "directory.import.stop"
+            || kind == "file.delete"
+            || kind == "file.delete.undo"
             || kind == "file.namespace"
             || kind == "file.metadata"
             || kind == "file.path.metadata"
@@ -500,6 +502,8 @@ impl CurrentNamespaces {
     /// Derived only before a real publication. Ordinary publication installs the
     /// result atomically with its State; failure leaves the previous view intact.
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
+        crate::file_deletion::publication::verify(previous, next, Some(self))?;
+        crate::file_deletion::freeze::verify(previous, next)?;
         self.verify_path_notes(previous, next)?;
         self.verify_smb_bindings(previous, next)?;
         self.verify_plan_cancellations(previous, next)?;

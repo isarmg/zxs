@@ -15,6 +15,7 @@ mod graph;
 #[path = "../../../test/engine/unit/history_package/delta/tests.rs"]
 mod projection_delta_tests;
 pub(crate) use graph::{EncodedHistory, decode_history_root};
+mod file_deletions;
 mod manifest;
 mod state_read;
 pub use manifest::HistoryManifest;
@@ -1026,6 +1027,7 @@ impl Engine {
                 || manifest.file_contexts.keys().any(|id| state.file_contexts.contains_key(id))
                 || manifest.file_path_nodes.keys().any(|id| state.file_path_nodes.contains_key(id))
                 || manifest.file_metadata_nodes.keys().any(|id| state.file_metadata_nodes.contains_key(id))
+                || manifest.file_deletions.keys().any(|id| state.file_deletions.contains_key(id))
                 || manifest.file_branch_merges.keys().any(|id| state.file_branch_merges.contains_key(id))
                 || manifest.file_branch_aliases.keys().any(|id| state.file_branch_aliases.contains_key(id))
                 || manifest.file_backup_paths.keys().any(|id| state.file_backup_paths.contains_key(id))
@@ -1067,6 +1069,7 @@ impl Engine {
             state.file_contexts.extend(manifest.file_contexts.clone());
             state.file_path_nodes.extend(manifest.file_path_nodes.clone());
             state.file_metadata_nodes.extend(manifest.file_metadata_nodes.clone());
+            state.file_deletions.extend(manifest.file_deletions.clone());
             state.file_branch_merges.extend(manifest.file_branch_merges.clone());
             state.file_branch_aliases.extend(manifest.file_branch_aliases.clone());
             state.file_node_parents.extend(manifest.file_node_parents.clone());

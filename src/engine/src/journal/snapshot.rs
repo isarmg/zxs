@@ -11,7 +11,7 @@ macro_rules! state_map_fields {
             history_boundaries,content_states,operations,plans,placement_rules,
             protection_policies,operation_principals,file_selections,directory_branches,
             directory_git_repositories,
-            directory_trees,file_write_origins,file_contexts,file_path_nodes,file_metadata_nodes,
+            directory_trees,file_write_origins,file_contexts,file_path_nodes,file_metadata_nodes,file_deletions,
             file_branch_merges,file_branch_aliases,file_node_parents,file_path_notes,
             directory_tree_selections,file_locations,file_backup_paths,file_backup_policies,
             directory_selections,file_notes,version_notes,file_names,

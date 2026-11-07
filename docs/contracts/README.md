@@ -29,7 +29,7 @@
 | [core.schema.json](core.schema.json) | UINT64 精确上界、实体 ID、Branch / Commit 待写入映射、泛型 Entry 及文件分支投影、唯一管理员认证请求/响应、版本描述、内容提交请求、操作结果、完整上传状态、内容保存 PUBLICATION 字段、当前有界快照、分页历史根、共享索引/引用/叶页及路径证明形状 | 完整命名规则、父边和来源闭合、授权、实际 I/O、Tree/日志完整格式及所有管理操作 |
 | [openapi.json](openapi.json) | 登录/当前会话/注销/改密、保存、结果查询、版本/校验/内容/上传状态、文件管理（含零正文分支创建、冻结父版本与自有版本分开的继承投影、目录分页与精确选择、目录批量分支准备查询和128字节单行备注）及管理员系统状态、真实功耗和监测历史 | bootstrap 与凭据恢复、工作区创建/上传写接口、事件及其余尚未建模的管理接口 |
 | [config-constraints.schema.json](config-constraints.schema.json) | 第 21 章关键常量、分支冻结引用/首写物化、当前 JSON/CLI 资源额度及明确标注的分页/告警设计目标投影 | 当前进程 JSON Config、完整部署配置、目录身份、拓扑和启动状态验证 |
-| [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照36映射与历史根31映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
+| [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照37映射与历史根32映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
 | [contract-check](../tools/contract-check.md) | Rust 实现的 schema/OpenAPI 有效性、两者定义一致性、固定向量、配置投影、文档本地链接和 JSON/TOML 语法校验 | 模型检查、平台测试、网络端点行为和性能 |
 
 新增 `StorageReadmission*` 与 `StorageRegistration*` 定义覆盖登记查询、纯元数据预览、明确提交、原操作查询及继续入口。UINT64 仍为十进制字符串，nullable 状态字段必须显式出现；未知字段、客户端替换路径/actor、Detached 登记模式与无回执 completed 均拒绝。固定向量是合成字段样例，不能证明来源权威、实际固定 quorum、真实目录身份或新的 I/O epoch；这些仍由服务器和核心执行。终态 authority 的 wire 形状不代表任意终态目录可恢复，须由已认证的可恢复角色与对应核心入口共同准入。
@@ -90,7 +90,7 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 
 `FileMetadataNode` 保存不可变标签/合并子节点，`FileBranchMerge` 独立保存全部合并来源和安全图边。文件合并请求要求明确确认、结果归属及每个参与head，标签批量请求固定源节点与branch head，scope备份配置同时固定稳定身份和自身代数。标签的16项/128字节限制、无控制字符和全部预检由共享Rust验证及业务事务执行；schema检查不代替真实发布。目录分支合并待用户确认，暂不实现，能力为false。
 
-`Snapshot`、`PagedHistoryRoot`、`MetadataIndex`、`MetadataReference` 和 `MetadataLeaf` 描述本次有界根实验源码的存储形状。两个根都必须携带 `format: "radix-map-roots"`，这是布局语义标识，不是项目发行版本号；分别要求准确36个 State 映射和31个历史映射，空映射也有引用。快照的三个代数使用 UInt64 十进制字符串，events 是独立映射根，control_auth 引用独立 `state-control-auth` 对象；该对象仍按原 `Option<Value>` 编码（包括 null）。历史根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。`Candidate.history_roots` 绑定 history ID→manifest hash 的映射根，替代旧 `history_manifest_hashes`；当前 Candidate 自身没有 format 字段。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影。这组存储组件在 OpenAPI 中保持镜像，HTTP 操作结果与诊断投影另按上文契约描述。
+`Snapshot`、`PagedHistoryRoot`、`MetadataIndex`、`MetadataReference` 和 `MetadataLeaf` 描述本次有界根实验源码的存储形状。两个根都必须携带 `format: "radix-map-roots"`，这是布局语义标识，不是项目发行版本号；分别要求准确37个 State 映射和32个历史映射，空映射也有引用。快照的三个代数使用 UInt64 十进制字符串，events 是独立映射根，control_auth 引用独立 `state-control-auth` 对象；该对象仍按原 `Option<Value>` 编码（包括 null）。历史根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。`Candidate.history_roots` 绑定 history ID→manifest hash 的映射根，替代旧 `history_manifest_hashes`；当前 Candidate 自身没有 format 字段。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影。这组存储组件在 OpenAPI 中保持镜像，HTTP 操作结果与诊断投影另按上文契约描述。
 
 字段向量使用合成摘要，只检查 schema，不能证明引用对象存在或摘要正确。已有历史根正反向量均使用有效 marker，另行覆盖 markerless 根、旧 `history-index` 引用和旧 flat Snapshot 的拒绝，避免负例只因缺 marker 通过。原固定 canonical bytes/BLAKE3 向量保持不变，不由被测编码器生成期望。
 
@@ -157,11 +157,15 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 
 ## 显式目录仓库
 
-`DirectoryGitRepository` 保存各目录仓库独立的 HEAD、index 与明确孩子引用。必需 `main_branch_id` 固定初始化时的目录分支身份，布局基准读取该分支最新已保存工作组合（包括未提交内容），不随 current 或显示名称改变；缺失字段拒绝，不隐式补齐。Snapshot 与 PagedHistoryRoot 的必需映射各增加 `directory_git_repositories`，总数分别为36与31；缺失此映射的根拒绝，不补空表迁移旧格式。原证明仍绑定完整根，这些 schema 不能证明跨源完整历史或引用闭包。
+`DirectoryGitRepository` 保存各目录仓库独立的 HEAD、index 与明确孩子引用。必需 `main_branch_id` 固定初始化时的目录分支身份，布局基准读取该分支最新已保存工作组合（包括未提交内容），不随 current 或显示名称改变；缺失字段拒绝，不隐式补齐。Snapshot 与 PagedHistoryRoot 的必需映射各增加 `directory_git_repositories`，结合文件删除生命周期表后，总数分别为37与32；缺失此映射的根拒绝，不补空表迁移旧格式。原证明仍绑定完整根，这些 schema 不能证明跨源完整历史或引用闭包。
 
 `DirectoryGitStatus` 和孩子状态的 nullable 字段必须显式出现，`unstaged` 为必填布尔值且不补旧响应默认值；目录初始化不创建提交，读取不初始化。暂存及提交请求必须携带规范十进制字符串 index 代数，未知字段、数值或遗漏代数拒绝。固定正反向量由 schema 及 Rust DTO 回归共同验证。HTTP 公开四个目录 Git 接口，旧 `/directory-scopes` 和按名 `/directory-select` 入口移除，目录选择改用稳定分支 ID 及双 HEAD CAS；父提交只采用固定暂存快照和明确暂存的孩子 HEAD，不递归提交，也不自动加入暂存后保存的工作内容。状态 GET 的完整编码上限为1MiB，超过失败而不截断。
 
 `DirectoryNamespaceBatch.kind = separate` 每次只接受一对位置，必须有 target。source 明确保留旧身份及历史，已存在的 target 从其自身准确保存版本建立新身份，首版本不复制历史。两个稳定 main 的同一身份、自有路径、基线及正文可用性由核心事务验证，schema 不猜测原件归属。操作沿用目录批发布及永久幂等入口；这是显式身份分离，不表示新的实体布局已经落盘。
+
+## 文件软删除生命周期候选
+
+`FileDeletionNode` 是独立无正文记录，保存所有保留文件分支自身 HEAD 及去重父边；不能添加 `version_id` 伪装正文节点。State 和 HistoryManifest 必需 `file_deletions` 表，Snapshot/PagedHistoryRoot 分别增至37/32个必需映射根。缺表拒绝，不兼容或迁移旧池。四条新 schema 向量覆盖合法无正文节点、空删除表、伪造正文字段和缺表拒绝；具体产品接线边界见[生命周期说明](../design/file-soft-deletion.md)。
 
 ## 独立盘来源图只读预览
 
