@@ -553,7 +553,11 @@ impl<'a> PlanningContext<'a> {
                     "recursive namespace publication needs current registry admission",
                 )
             })?;
-            result["recursive_follow"] = view.apply_recursive_follow(self.state, &mut next)?;
+            let (files, directories) = view.apply_recursive_follow(self.state, &mut next, kind)?;
+            result["recursive_follow"] = files;
+            if let Some(directories) = directories {
+                result["recursive_directory_follow"] = directories;
+            }
         }
         result["timestamp"] = json_codec::json!(timestamp.to_string());
         if let Some(branch_id) = result

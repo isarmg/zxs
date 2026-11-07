@@ -576,3 +576,6 @@ mod empty_directories;
 
 #[path = "recursive_backup_follow.rs"]
 mod follow;
+
+#[path = "recursive_backup_empty_follow.rs"]
+mod empty_follow;

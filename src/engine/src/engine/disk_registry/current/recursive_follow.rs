@@ -1,6 +1,10 @@
 //! A new native rename/move carries a mandatory, exact recursive path plan.
 //! The index is derived only from verified publications, never from receipt labels.
 use super::*;
+use crate::protection::{
+    BATCH_FOLLOW_KIND, DirectoryFollowChange, DirectoryFollowPlan, DirectoryNamespace,
+    FILE_FOLLOW_KIND, follows_directories,
+};
 use crate::{OperationId, OperationResult, ProtectionPolicy, RecursiveBackupCapture};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
@@ -11,7 +15,10 @@ pub(crate) const BATCH_KIND: &str = "directory.namespace.batch.recursive";
 const FORMAT: &str = "recursive-namespace-follow";
 
 pub(crate) fn is_kind(kind: &str) -> bool {
-    matches!(kind, FILE_KIND | BATCH_KIND)
+    matches!(
+        kind,
+        FILE_KIND | BATCH_KIND | FILE_FOLLOW_KIND | BATCH_FOLLOW_KIND
+    )
 }
 
 fn invalid() -> Error {
@@ -25,6 +32,7 @@ fn invalid() -> Error {
 pub(in crate::engine::disk_registry) struct PolicyIndex {
     policies: BTreeMap<String, Arc<BoundPolicy>>,
     scopes: BTreeMap<String, BTreeSet<String>>,
+    directories: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Clone)]
@@ -33,6 +41,7 @@ struct BoundPolicy {
     authority: OperationId,
     capture: RecursiveBackupCapture,
     roots: BTreeMap<String, String>,
+    directory_namespace: Option<DirectoryNamespace>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -63,6 +72,7 @@ struct FollowPlan {
 pub(super) struct VerifiedFollow<'a> {
     receipt: &'a OperationResult,
     plan: FollowPlan,
+    directories: Option<DirectoryFollowPlan>,
 }
 
 fn changed_keys<T>(before: &TrackedMap<T>, after: &TrackedMap<T>) -> BTreeSet<String> {
@@ -81,6 +91,7 @@ fn joined(root: &str, suffix: &str) -> Result<String> {
     Ok(name_policy::PortablePath::parse(&path)?.as_str().to_owned())
 }
 
+mod directories;
 mod request;
 
 fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool {
@@ -105,6 +116,18 @@ fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool 
 impl PolicyIndex {
     fn remove(&mut self, id: &str) {
         if let Some(bound) = self.policies.remove(id) {
+            if let Some(namespace) = &bound.directory_namespace {
+                for entry in namespace.entry_ids().collect::<BTreeSet<_>>() {
+                    let ids = self
+                        .directories
+                        .get_mut(entry)
+                        .expect("invariant: indexed directory exists");
+                    ids.remove(id);
+                    if ids.is_empty() {
+                        self.directories.remove(entry);
+                    }
+                }
+            }
             let scope = bound
                 .policy
                 .scope_file_id
@@ -125,6 +148,14 @@ impl PolicyIndex {
     fn insert(&mut self, bound: BoundPolicy) {
         let id = bound.policy.policy_id.clone();
         self.remove(&id);
+        if let Some(namespace) = &bound.directory_namespace {
+            for entry in namespace.entry_ids() {
+                self.directories
+                    .entry(entry.clone())
+                    .or_default()
+                    .insert(id.clone());
+            }
+        }
         let scope = bound
             .policy
             .scope_file_id
@@ -152,7 +183,12 @@ impl CurrentNamespaces {
                 && previous
                     .file_backup_policies
                     .get(&file)
-                    .is_some_and(|policy| self.recursive_policies.policies.contains_key(policy))
+                    .is_some_and(|policy| {
+                        self.recursive_policies
+                            .policies
+                            .get(policy)
+                            .is_some_and(|bound| bound.directory_namespace.is_none())
+                    })
             {
                 return Err(invalid());
             }
@@ -185,13 +221,19 @@ impl CurrentNamespaces {
                 let mut bound = self.recursive_policies.policies[id].as_ref().clone();
                 bound.policy = change.policy.clone();
                 bound.authority = follow.receipt.operation_id;
+                if let Some(change) = follow
+                    .directories
+                    .as_ref()
+                    .and_then(|plan| plan.policies.get(id))
+                {
+                    bound.directory_namespace = Some(change.namespace.clone());
+                }
                 Arc::make_mut(&mut index).insert(bound);
             }
         }
-        // Empty-directory snapshots are immutable publications, not live
-        // scope followers. A subsequent explicit file configuration can opt in.
+        // Both protocols derive authority only after complete backup admission.
+        // Old namespace kinds still ignore empty snapshot bindings.
         if let Some(receipt) = backup.filter(|receipt| receipt.kind == "backup.configure-recursive")
-            && receipt.result["file_count"].as_str() != Some("0")
         {
             let policy: ProtectionPolicy =
                 json_codec::from_value(receipt.result["policy"].clone())?;
@@ -207,6 +249,7 @@ impl CurrentNamespaces {
                 authority: receipt.operation_id,
                 capture,
                 roots,
+                directory_namespace: crate::protection::captured_directory_namespace(receipt)?,
             });
         }
         Ok(index)
@@ -216,10 +259,14 @@ impl CurrentNamespaces {
         &'a self,
         previous: &State,
         id: &str,
+        include_directories: bool,
     ) -> Result<Option<&'a BoundPolicy>> {
         let Some(bound) = self.recursive_policies.policies.get(id) else {
             return Ok(None);
         };
+        if bound.directory_namespace.is_some() && !include_directories {
+            return Ok(None);
+        }
         if previous.protection_policies.get(id) != Some(&bound.policy) || !bound.policy.inheritable
         {
             return Err(invalid());
@@ -227,7 +274,11 @@ impl CurrentNamespaces {
         Ok(Some(bound))
     }
 
-    fn moved_scopes(&self, previous: &State, next: &State) -> Result<BTreeMap<String, String>> {
+    fn moved_scopes(
+        &self,
+        previous: &State,
+        next: &State,
+    ) -> Result<BTreeMap<String, (String, String)>> {
         let mut moved = BTreeMap::new();
         for id in changed_keys(&previous.branches, &next.branches) {
             let (Some(before), Some(after)) = (previous.branches.get(&id), next.branches.get(&id))
@@ -260,14 +311,21 @@ impl CurrentNamespaces {
                 .collect();
             for entry in self.branch_entries(&id, &before.head_commit_id)? {
                 if entry.kind != NamespaceEntryKind::Directory
-                    || !self.recursive_policies.scopes.contains_key(&entry.entry_id)
+                    || !(self.recursive_policies.scopes.contains_key(&entry.entry_id)
+                        || self
+                            .recursive_policies
+                            .directories
+                            .contains_key(&entry.entry_id))
                 {
                     continue;
                 }
                 if let Some(path) = paths.get(entry.entry_id.as_str())
                     && *path != entry.path()
                 {
-                    moved.insert(entry.entry_id.clone(), (*path).to_owned());
+                    moved.insert(
+                        entry.entry_id.clone(),
+                        (entry.path().to_owned(), (*path).to_owned()),
+                    );
                 }
             }
         }
@@ -278,28 +336,39 @@ impl CurrentNamespaces {
             ) && before != after
                 && self.recursive_policies.scopes.contains_key(&file)
             {
-                moved.insert(file.to_owned(), after.clone());
+                moved.insert(file.to_owned(), (before.clone(), after.clone()));
             }
         }
         Ok(moved)
     }
 
-    fn recursive_follow_plan(&self, previous: &State, next: &State) -> Result<FollowPlan> {
+    fn recursive_follow_plan(
+        &self,
+        previous: &State,
+        next: &State,
+        include_directories: bool,
+    ) -> Result<(FollowPlan, Option<DirectoryFollowPlan>)> {
         let mut plan = FollowPlan {
             format: FORMAT.into(),
             policies: BTreeMap::new(),
             paths: BTreeMap::new(),
         };
-        for (scope, path) in self.moved_scopes(previous, next)? {
-            for id in &self.recursive_policies.scopes[&scope] {
-                let bound = self
-                    .active_recursive_policy(previous, id)?
-                    .expect("invariant: scope indexes a recursive policy");
+        let moves = self.moved_scopes(previous, next)?;
+        for (scope, (_, path)) in &moves {
+            let Some(policies) = self.recursive_policies.scopes.get(scope) else {
+                continue;
+            };
+            for id in policies {
+                let Some(bound) =
+                    self.active_recursive_policy(previous, id, include_directories)?
+                else {
+                    continue;
+                };
                 bound
                     .capture
                     .verify_follow_routes(self, bound.roots.keys())?;
                 let mut policy = bound.policy.clone();
-                if policy.path_prefix == path {
+                if policy.path_prefix == *path {
                     continue;
                 }
                 policy.path_prefix = path.clone();
@@ -344,7 +413,8 @@ impl CurrentNamespaces {
             let Some(id) = previous.file_backup_policies.get(&file) else {
                 continue;
             };
-            let Some(bound) = self.active_recursive_policy(previous, id)? else {
+            let Some(bound) = self.active_recursive_policy(previous, id, include_directories)?
+            else {
                 continue;
             };
             bound
@@ -378,15 +448,22 @@ impl CurrentNamespaces {
                 },
             );
         }
-        Ok(plan)
+        let directories = if include_directories {
+            Some(self.directory_follow_plan(previous, &moves, &mut plan)?)
+        } else {
+            None
+        };
+        Ok((plan, directories))
     }
 
     pub(crate) fn apply_recursive_follow(
         &self,
         previous: &State,
         next: &mut State,
-    ) -> Result<Value> {
-        let plan = self.recursive_follow_plan(previous, next)?;
+        kind: &str,
+    ) -> Result<(Value, Option<Value>)> {
+        let (plan, directories) =
+            self.recursive_follow_plan(previous, next, follows_directories(kind))?;
         for (id, change) in &plan.policies {
             next.protection_policies
                 .insert(id.clone(), change.policy.clone());
@@ -395,7 +472,7 @@ impl CurrentNamespaces {
             next.file_backup_paths
                 .insert(id.clone(), change.backup_paths.clone());
         }
-        Ok(json!(plan))
+        Ok((json!(plan), directories.map(|plan| json!(plan))))
     }
 
     pub(super) fn verify_recursive_follow<'a>(
@@ -431,7 +508,9 @@ impl CurrentNamespaces {
                     return Err(invalid());
                 }
             } else if let Some(after) = after.filter(|receipt| {
-                is_kind(&receipt.kind) || receipt.result.get("recursive_follow").is_some()
+                is_kind(&receipt.kind)
+                    || receipt.result.get("recursive_follow").is_some()
+                    || receipt.result.get("recursive_directory_follow").is_some()
             }) && (before.is_some()
                 || !is_kind(&after.kind)
                 || after.operation_id != id
@@ -464,7 +543,16 @@ impl CurrentNamespaces {
         };
         self.verify_follow_request(previous, next, receipt)?;
         let plan: FollowPlan = json_codec::from_value(receipt.result["recursive_follow"].clone())?;
-        let expected = self.recursive_follow_plan(previous, next)?;
+        let (expected, expected_directories) =
+            self.recursive_follow_plan(previous, next, follows_directories(&receipt.kind))?;
+        let directories = if follows_directories(&receipt.kind) {
+            Some(DirectoryFollowPlan::from_receipt(receipt)?)
+        } else {
+            if receipt.result.get("recursive_directory_follow").is_some() {
+                return Err(invalid());
+            }
+            None
+        };
         let policies = expected
             .policies
             .iter()
@@ -481,6 +569,7 @@ impl CurrentNamespaces {
             .ok_or_else(invalid)?;
         Engine::require_actor(principal)?;
         if plan != expected
+            || directories != expected_directories
             || receipt.commit_state != crate::CommitState::Published
             || receipt.protection_at_publish != crate::ProtectionAtPublish::NotApplicable
             || receipt.current_health != crate::CurrentHealth::Healthy
@@ -533,7 +622,11 @@ impl CurrentNamespaces {
         {
             return Err(invalid());
         }
-        Ok(Some(VerifiedFollow { receipt, plan }))
+        Ok(Some(VerifiedFollow {
+            receipt,
+            plan,
+            directories,
+        }))
     }
 }
 
@@ -552,6 +645,11 @@ impl Engine {
             "directory.namespace.batch" => BATCH_KIND,
             _ => unreachable!("invariant: only namespace rename callers select this semantics"),
         };
+        let with_directories = match legacy {
+            "file.namespace" => FILE_FOLLOW_KIND,
+            "directory.namespace.batch" => BATCH_FOLLOW_KIND,
+            _ => unreachable!("invariant: only namespace rename callers select this semantics"),
+        };
         if let Some(receipt) = self.state.operations.get(&operation) {
             if receipt.kind == legacy {
                 return legacy;
@@ -559,6 +657,17 @@ impl Engine {
             if receipt.kind == current {
                 return current;
             }
+            if receipt.kind == with_directories {
+                return with_directories;
+            }
+        }
+        if follows
+            && self
+                .current_namespaces
+                .as_ref()
+                .is_some_and(|view| !view.recursive_policies.directories.is_empty())
+        {
+            return with_directories;
         }
         if follows
             && self

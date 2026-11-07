@@ -9,6 +9,13 @@ use name_policy::PortablePath;
 use std::path::PathBuf;
 
 const FORMAT: &str = "recursive-backup-directory-namespace";
+const FOLLOW_FORMAT: &str = "recursive-directory-namespace-follow";
+pub(crate) const FILE_FOLLOW_KIND: &str = "file.namespace.recursive-directories";
+pub(crate) const BATCH_FOLLOW_KIND: &str = "directory.namespace.batch.recursive-directories";
+
+pub(crate) fn follows_directories(kind: &str) -> bool {
+    matches!(kind, FILE_FOLLOW_KIND | BATCH_FOLLOW_KIND)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -26,13 +33,90 @@ struct Replica {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct DirectoryNamespace {
+pub(crate) struct DirectoryNamespace {
     format: String,
     replicas: BTreeMap<String, Replica>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct DirectoryFollowChange {
+    pub(crate) source_operation_id: OperationId,
+    pub(crate) policy: ProtectionPolicy,
+    pub(crate) namespace: DirectoryNamespace,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct DirectoryFollowPlan {
+    format: String,
+    pub(crate) policies: BTreeMap<String, DirectoryFollowChange>,
+}
+
+impl DirectoryFollowPlan {
+    pub(crate) fn new() -> Self {
+        Self {
+            format: FOLLOW_FORMAT.into(),
+            policies: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn from_receipt(receipt: &OperationResult) -> Result<Self> {
+        let plan: Self =
+            json_codec::from_value(receipt.result["recursive_directory_follow"].clone())?;
+        if plan.format != FOLLOW_FORMAT {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "unsupported directory follow format",
+            ));
+        }
+        Ok(plan)
+    }
+}
+
+impl DirectoryNamespace {
+    pub(crate) fn entry_ids(&self) -> impl Iterator<Item = &String> {
+        self.replicas
+            .values()
+            .flat_map(|replica| replica.directories.iter().map(|row| &row.entry_id))
+    }
+
+    /// Stable IDs and original roots bind each changed path to its old snapshot.
+    /// Unselected/new directories are not silently captured by a rename.
+    pub(crate) fn follow(
+        &self,
+        moves: &BTreeMap<String, (String, String)>,
+        roots: &BTreeMap<String, String>,
+    ) -> Result<Self> {
+        let mut next = self.clone();
+        for (slot, replica) in &mut next.replicas {
+            let root = roots.get(slot).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "directory follow target lacks its captured root",
+                )
+            })?;
+            for row in &mut replica.directories {
+                if let Some((before, after)) = moves.get(&row.entry_id) {
+                    if row.path.as_str() != format!("{root}/{before}") {
+                        return Err(Error::new(
+                            ErrorCode::ScopeChanged,
+                            "directory backup no longer matches its primary path; configure it again",
+                        ));
+                    }
+                    row.path = PortablePath::parse(&format!("{root}/{after}"))?;
+                }
+            }
+            replica
+                .directories
+                .sort_by(|a, b| a.path.key().cmp(b.path.key()));
+        }
+        Ok(next)
+    }
+}
+
 /// A directory in a successfully published, still-current policy snapshot.
-/// Later namespace edits do not silently rewrite this frozen path.
+/// Native follow publications supersede the current snapshot without editing old receipts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublishedBackupDirectory {
     repository_id: String,
@@ -147,7 +231,9 @@ fn empty_namespace_receipt(receipt: &OperationResult) -> bool {
         && receipt.result["file_count"] == "0"
 }
 
-fn receipt_namespace(receipt: &OperationResult) -> Result<Option<DirectoryNamespace>> {
+pub(crate) fn captured_directory_namespace(
+    receipt: &OperationResult,
+) -> Result<Option<DirectoryNamespace>> {
     if !empty_namespace_receipt(receipt) {
         return Ok(None);
     }
@@ -165,6 +251,61 @@ fn receipt_namespace(receipt: &OperationResult) -> Result<Option<DirectoryNamesp
         ));
     }
     Ok(Some(value))
+}
+
+fn receipt_namespaces(
+    receipt: &OperationResult,
+) -> Result<Vec<(ProtectionPolicy, DirectoryNamespace)>> {
+    if let Some(namespace) = captured_directory_namespace(receipt)? {
+        return Ok(vec![(
+            json_codec::from_value(receipt.result["policy"].clone())?,
+            namespace,
+        )]);
+    }
+    if follows_directories(&receipt.kind) {
+        return Ok(DirectoryFollowPlan::from_receipt(receipt)?
+            .policies
+            .into_values()
+            .map(|change| (change.policy, change.namespace))
+            .collect());
+    }
+    Ok(Vec::new())
+}
+
+fn combined(namespaces: Vec<(ProtectionPolicy, DirectoryNamespace)>) -> Result<DirectoryNamespace> {
+    let mut result = DirectoryNamespace {
+        format: FORMAT.into(),
+        replicas: BTreeMap::new(),
+    };
+    for (_, namespace) in namespaces {
+        for (slot, replica) in namespace.replicas {
+            if let Some(existing) = result.replicas.get_mut(&slot) {
+                if existing.identity != replica.identity {
+                    return Err(Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "directory publications disagree on target identity",
+                    ));
+                }
+                existing.directories.extend(replica.directories);
+            } else {
+                result.replicas.insert(slot, replica);
+            }
+        }
+    }
+    for replica in result.replicas.values_mut() {
+        replica.directories.sort_by(|a, b| {
+            a.entry_id
+                .cmp(&b.entry_id)
+                .then_with(|| a.path.key().cmp(b.path.key()))
+        });
+        replica
+            .directories
+            .dedup_by(|a, b| a.entry_id == b.entry_id && a.path.key() == b.path.key());
+        replica
+            .directories
+            .sort_by(|a, b| a.path.key().cmp(b.path.key()));
+    }
+    Ok(result)
 }
 
 fn target<'a>(
@@ -215,9 +356,7 @@ fn base_path(disk: &DiskConfig, receipt: &OperationResult) -> Result<PathBuf> {
 /// candidate metadata members, so ordinary held seals and full publication
 /// barriers also cover a request with no file payloads.
 pub(crate) fn preflight(context: &PlanningContext<'_>, receipt: &OperationResult) -> Result<()> {
-    let Some(namespace) = receipt_namespace(receipt)? else {
-        return Ok(());
-    };
+    let namespace = combined(receipt_namespaces(receipt)?)?;
     if namespace.replicas.is_empty() {
         return Ok(());
     }
@@ -273,9 +412,16 @@ pub(crate) fn materialize(
     resources: &DiskResources,
     receipt: &OperationResult,
 ) -> Result<()> {
-    let Some(namespace) = receipt_namespace(receipt)? else {
-        return Ok(());
-    };
+    let namespace = combined(receipt_namespaces(receipt)?)?;
+    materialize_namespace(config, resources, receipt, namespace)
+}
+
+fn materialize_namespace(
+    config: &ValidatedConfig,
+    resources: &DiskResources,
+    receipt: &OperationResult,
+    namespace: DirectoryNamespace,
+) -> Result<()> {
     if namespace.replicas.is_empty() {
         return Ok(());
     }
@@ -307,18 +453,14 @@ pub(crate) fn materialize(
     Ok(())
 }
 
-fn current_namespace(
+fn current_namespaces(
     state: &State,
     receipt: &OperationResult,
-) -> Result<Option<(DirectoryNamespace, ProtectionPolicy)>> {
-    if !empty_namespace_receipt(receipt) {
-        return Ok(None);
-    }
-    let policy: ProtectionPolicy = json_codec::from_value(receipt.result["policy"].clone())?;
-    if state.protection_policies.get(&policy.policy_id) != Some(&policy) {
-        return Ok(None);
-    }
-    Ok(receipt_namespace(receipt)?.map(|namespace| (namespace, policy)))
+) -> Result<Vec<(ProtectionPolicy, DirectoryNamespace)>> {
+    Ok(receipt_namespaces(receipt)?
+        .into_iter()
+        .filter(|(policy, _)| state.protection_policies.get(&policy.policy_id) == Some(policy))
+        .collect())
 }
 
 /// Only the fully replayed published prefix repairs current projection caches.
@@ -329,15 +471,14 @@ pub(crate) fn repair_current(
     state: &State,
 ) -> Result<()> {
     for receipt in state.operations.values() {
-        if current_namespace(state, receipt)?.is_some() {
-            materialize(config, resources, receipt)?;
-        }
+        let namespace = combined(current_namespaces(state, receipt)?)?;
+        materialize_namespace(config, resources, receipt, namespace)?;
     }
     Ok(())
 }
 
 impl Engine {
-    /// Read frozen directories from permanent published receipts, including
+    /// Read current directories from permanent published receipts, including
     /// directories with no file versions. Callers must apply their own UI scope.
     ///
     /// # Errors
@@ -356,42 +497,69 @@ impl Engine {
         if current.is_none() {
             return Ok(Vec::new());
         }
-        let mut entries = Vec::new();
+        let mut entries = BTreeMap::new();
         for receipt in self.state().operations.values() {
-            let Some((namespace, policy)) = current_namespace(self.state(), receipt)? else {
-                continue;
-            };
-            let Some(replica) = namespace.replicas.get(&disk.slot_id) else {
-                continue;
-            };
-            if replica.identity.pool_id != self.config().pool_id
-                || replica.identity.disk_id != disk.disk_id
-                || replica.identity.binding_generation != disk.binding_generation
-            {
-                continue;
-            }
-            let history_tree_id = receipt.history_tree_id.as_ref().ok_or_else(|| {
-                Error::new(
-                    ErrorCode::PublicationInvalid,
-                    "published directory history is missing",
-                )
-            })?;
-            for row in &replica.directories {
-                if entries.len() >= self.config().max_entries {
-                    return Err(Error::new(
-                        ErrorCode::ResourceLimit,
-                        "published directory read exceeds its entry budget",
-                    ));
+            for (policy, namespace) in current_namespaces(self.state(), receipt)? {
+                let Some(replica) = namespace.replicas.get(&disk.slot_id) else {
+                    continue;
+                };
+                if replica.identity.pool_id != self.config().pool_id
+                    || replica.identity.disk_id != disk.disk_id
+                    || replica.identity.binding_generation != disk.binding_generation
+                {
+                    continue;
                 }
-                entries.push(PublishedBackupDirectory {
-                    repository_id: policy.repository_id.clone(),
-                    history_tree_id: history_tree_id.clone(),
-                    directory_id: row.entry_id.clone(),
-                    path: row.path.clone(),
-                    operation_id: receipt.operation_id,
-                });
+                let history_tree_id = receipt.history_tree_id.as_ref().ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "published directory history is missing",
+                    )
+                })?;
+                for row in &replica.directories {
+                    let key = (
+                        policy.repository_id.clone(),
+                        history_tree_id.clone(),
+                        row.entry_id.clone(),
+                        row.path.key().to_owned(),
+                    );
+                    if let Some((sequence, _)) = entries.get(&key) {
+                        if *sequence >= receipt.sequence {
+                            continue;
+                        }
+                    } else if entries.len() >= self.config().max_entries {
+                        return Err(Error::new(
+                            ErrorCode::ResourceLimit,
+                            "published directory read exceeds its distinct-entry budget",
+                        ));
+                    }
+                    // This is a logical listing, not a proof inventory. Keep the
+                    // newest representative; every source receipt stays permanent.
+                    entries.insert(
+                        key,
+                        (
+                            receipt.sequence,
+                            PublishedBackupDirectory {
+                                repository_id: policy.repository_id.clone(),
+                                history_tree_id: history_tree_id.clone(),
+                                directory_id: row.entry_id.clone(),
+                                path: row.path.clone(),
+                                operation_id: receipt.operation_id,
+                            },
+                        ),
+                    );
+                }
             }
         }
+        let mut entries: Vec<_> = entries.into_values().map(|(_, entry)| entry).collect();
+        entries.sort_by(|a, b| {
+            a.path.key().cmp(b.path.key()).then_with(|| {
+                (&a.repository_id, &a.history_tree_id, &a.directory_id).cmp(&(
+                    &b.repository_id,
+                    &b.history_tree_id,
+                    &b.directory_id,
+                ))
+            })
+        });
         Ok(entries)
     }
 }

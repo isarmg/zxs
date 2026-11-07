@@ -434,3 +434,138 @@ fn recursive_directory_rows_are_part_of_exact_live_and_cold_replay() {
         json!("99");
     rejected(&view, &previous, &rebound, "directory target identity");
 }
+
+#[test]
+fn empty_follow_replay_authenticates_exact_snapshot_and_preserves_legacy_semantics() {
+    let mut fixture = ready();
+    for path in ["empty", "empty/child"] {
+        fixture
+            .engine
+            .file_namespace(
+                &fixture.repository.repository_id,
+                NamespaceOperation::parse(NamespaceOperationKind::Mkdir, path, None).unwrap(),
+                "admin",
+                op(),
+            )
+            .unwrap();
+    }
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    let configured = configure(&mut fixture, "empty", 3, 0, &capture, op()).unwrap();
+    let previous = Arc::clone(&fixture.engine.state);
+    let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
+    let receipt = fixture
+        .engine
+        .file_namespace(
+            &fixture.repository.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "empty", Some("renamed"))
+                .unwrap(),
+            "admin",
+            op(),
+        )
+        .unwrap();
+    let next = fixture.engine.state.as_ref();
+    view.advance(&previous, next).unwrap();
+    let policy = configured.result["policy"]["policy_id"].as_str().unwrap();
+    for attack in [
+        "missing",
+        "source",
+        "identity",
+        "path",
+        "omitted_row",
+        "extra_row",
+        "binding",
+        "old_kind",
+    ] {
+        let mut invalid = next.clone();
+        let result = invalid.operations.get_mut(&receipt.operation_id).unwrap();
+        match attack {
+            "missing" => {
+                result
+                    .result
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("recursive_directory_follow");
+            }
+            "source" => {
+                result.result["recursive_directory_follow"]["policies"][policy]["source_operation_id"] =
+                    json!(op())
+            }
+            "identity" => {
+                result.result["recursive_directory_follow"]["policies"][policy]["namespace"]["replicas"]
+                    ["B01"]["directories"][0]["entry_id"] = json!(new_id("entry").unwrap())
+            }
+            "path" => {
+                result.result["recursive_directory_follow"]["policies"][policy]["namespace"]["replicas"]
+                    ["B01"]["directories"][0]["path"] = json!("wrong/root")
+            }
+            "omitted_row" => {
+                result.result["recursive_directory_follow"]["policies"][policy]["namespace"]["replicas"]["B01"]["directories"].as_array_mut().unwrap().pop();
+            }
+            "extra_row" => {
+                let rows = result.result["recursive_directory_follow"]["policies"][policy]["namespace"]["replicas"]["B01"]["directories"].as_array_mut().unwrap();
+                rows.push(rows[0].clone());
+            }
+            "binding" => {
+                result.result["recursive_directory_follow"]["policies"][policy]["namespace"]["replicas"]
+                    ["B01"]["identity"]["binding_generation"] = json!("999")
+            }
+            "old_kind" => {
+                result.kind = "file.namespace.recursive".into();
+                result.request_digest = Engine::native_request_digest(
+                    &result.kind,
+                    "admin",
+                    &result.result["namespace_request"],
+                )
+                .unwrap();
+                invalid.events.last_mut().unwrap().kind = "file.namespace.recursive".into();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            view.advance(&previous, &invalid).is_err(),
+            "attack {attack}"
+        );
+    }
+    // The previously published file-follow protocol also ignores empty snapshots.
+    let mut old_recursive = next.clone();
+    old_recursive.protection_policies = previous.protection_policies.clone();
+    old_recursive.file_backup_paths = previous.file_backup_paths.clone();
+    let result = old_recursive
+        .operations
+        .get_mut(&receipt.operation_id)
+        .unwrap();
+    result.kind = "file.namespace.recursive".into();
+    result.request_digest =
+        Engine::native_request_digest(&result.kind, "admin", &result.result["namespace_request"])
+            .unwrap();
+    result.result["recursive_follow"] =
+        json!({"format": "recursive-namespace-follow", "policies": {}, "paths": {}});
+    result
+        .result
+        .as_object_mut()
+        .unwrap()
+        .remove("recursive_directory_follow");
+    old_recursive.events.last_mut().unwrap().kind = "file.namespace.recursive".into();
+    view.advance(&previous, &old_recursive).unwrap();
+
+    // Old native receipts are not reinterpreted as new directory writes. Their
+    // unchanged snapshot remains current; a forged new marker is never accepted.
+    let mut legacy = next.clone();
+    legacy.protection_policies = previous.protection_policies.clone();
+    legacy.file_backup_paths = previous.file_backup_paths.clone();
+    let result = legacy.operations.get_mut(&receipt.operation_id).unwrap();
+    result.kind = "file.namespace".into();
+    result.request_digest =
+        Engine::native_request_digest(&result.kind, "admin", &result.result["namespace_request"])
+            .unwrap();
+    for field in [
+        "recursive_follow",
+        "recursive_directory_follow",
+        "namespace_request",
+    ] {
+        result.result.as_object_mut().unwrap().remove(field);
+    }
+    legacy.events.last_mut().unwrap().kind = "file.namespace".into();
+    view.advance(&previous, &legacy).unwrap();
+    assert_eq!(legacy.operations[&configured.operation_id], configured);
+}

@@ -4,6 +4,8 @@
 
 状态：有限实现设计；本文不构成编译、运行、性能或发布验收结论。
 
+本文正文记录先前 `file.namespace.recursive` / `directory.namespace.batch.recursive` 的 file-only 语义；其中非空范围限制仍约束这些永久旧 kind。当前新目录跟随能力见文末独立协议，不把新要求追溯施加到旧收据。
+
 ## 背景与边界
 
 已显式保存且包含文件的递归备份配置需要随主逻辑路径 rename 或 move 更新多级备份路径。普通自定义前缀不能仅因文字形似盘名而被解释为递归配置；永久操作收据也不能被事后补写。空目录发布是另一种冻结目录快照，不是活目录镜像。
@@ -52,3 +54,7 @@
 - [`test/engine/unit/engine/current_recursive_backup_tests.rs`](../../test/engine/unit/engine/current_recursive_backup_tests.rs)：原生发布与篡改请求、计划及额外路径的拒绝场景。
 
 测试源码存在不表示已经执行通过。实际验证结论必须绑定最终源码与运行证据，不能由本文推断。
+
+## 空目录后续语义
+
+已捕获空目录现在由独立 `file.namespace.recursive-directories` / `directory.namespace.batch.recursive-directories` native kind 跟随，并保持本文既有 kind 的原语义。详见[空目录发布 ADR](empty-directory-backup-publication.md)。旧快照/收据不改写，新增目录和捕获盘名前缀仍须显式重新保存。

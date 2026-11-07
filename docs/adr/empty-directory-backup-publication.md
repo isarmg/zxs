@@ -1,6 +1,6 @@
 # ADR：递归备份的空 scope 目录发布
 
-状态：有限实现，发行格式未冻结。只实现以前明确拒绝的“选定文件集合为空”的目录 scope；有文件的递归配置、文件正文及其收据表示保持原逻辑。Web 配置和备份列表消费同一冻结目录快照；移动和改名自动跟随不属于本片。
+状态：有限实现，发行格式未冻结。只实现以前明确拒绝的“选定文件集合为空”的目录 scope；有文件的递归配置、文件正文及其收据表示保持原逻辑。Web 配置和备份列表消费同一已发布目录快照；后续 native rename/move 以新收据发布精确跟随结果，不改写旧收据。
 
 ## 持久权威与决定点
 
@@ -14,11 +14,11 @@
 
 只有完整发布前缀严格重放完成且当前恢复代固定配置的全部元数据成员在线、成员切换未冻结、恢复尾部未阻塞时，恢复流程才依据“仍与现行策略完全相等”的永久收据重建当前目录投影。缺成员或冻结的只读冷开不创建派生目录，也不写 record.json；读到已发布收据本身不授予磁盘修复权限。恢复写权限后，正常冷开仍重建缺少的派生目录；不以缓存目录/record.json 或同名字节建立发布权威。它不逐个重放所有过期历史物理目录，不重开已停止盘，不把旧身份材料投到换绑的新盘；冲突 record.json 保留并明确报错，不能覆盖冲突材料。
 
-Engine::published_backup_directories(slot) 提供目录 ID、仓库/历史域、冻结路径和操作 ID。返回值描述已发布且仍是现行策略的目录快照，不证明盘当前健康，也不自动采样新目录或传播后续移动/改名。Server 在持锁捕获阶段消费此 API，锁外与文件节点共同进行全局冲突验证，之后才分页。真实目录保留其仓库/历史域/目录 ID，合成祖先仍按槽与规范化路径标识；合成祖先可与真实目录合并，不同真实目录占同路径以及文件/目录冲突必须拒绝。回锁时继续验证 listing snapshot、仓库和 namespace witness。响应保持 backup/read_only，不伪造主盘 location、文件正文或版本；HTTP GET 不修复物理投影。
+Engine::published_backup_directories(slot) 提供目录 ID、仓库/历史域、冻结路径和操作 ID。返回值描述已发布且仍是现行策略的目录快照，不证明盘当前健康，也不自动采样新增目录。已捕获目录的移动/改名由下述独立 native 语义发布。Server 在持锁捕获阶段消费此 API，锁外与文件节点共同进行全局冲突验证，之后才分页。真实目录保留其仓库/历史域/目录 ID，合成祖先仍按槽与规范化路径标识；合成祖先可与真实目录合并，不同真实目录占同路径以及文件/目录冲突必须拒绝。回锁时继续验证 listing snapshot、仓库和 namespace witness。响应保持 backup/read_only，不伪造主盘 location、文件正文或版本；HTTP GET 不修复物理投影。
 
 已准入的初始池不可能发布 Native 目录，因此目录读取返回空行，原文件备份树仍可读。这是明确 Initial 状态，不是不支持错误的回退；AwaitingPublication 等准入错误仍传播，槽仍验证。当前登记的永久证据读取和物化规则不变。
 
-Web 移除 file_count 为零的硬拒绝，沿现有 scope、capture、会话和永久操作回执流程提交；文案明确只支持独立空 scope、元数据成员目标及不自动传播改名。目录浏览使用同一备份树列表接口。实际浏览器和 WASM 交互验收仍单列。
+Web 移除 file_count 为零的硬拒绝，沿现有 scope、capture、会话和永久操作回执流程提交；文案明确只支持独立空 scope、元数据成员目标，已捕获身份的改名/移动会跟随；新增目录与盘名前缀仍需重新保存。目录浏览使用同一备份树列表接口。实际浏览器和 WASM 交互验收仍单列。
 
 每个已配置份数逐级走既有准确来源路由；当前 scope 的独立子策略保留，目录条目经现有继承判定筛选。本片不声称解决全部历史视图混合份数、后续策略变化的自动目录传播、外来盘导入或数据盘专用目标的本盘证明。
 
@@ -35,3 +35,17 @@ Web 移除 file_count 为零的硬拒绝，沿现有 scope、capture、会话和
 [HTTP 定向测试](../../test/server/integration/recursive_empty_backup_http.rs)定义双跳空目录身份、热读不修复、冷开与原请求重试、策略替代后的旧游标拒绝、分页前真实目录/文件冲突，以及初始池文件读取。Web 的[递归配置测试](../../test/web/unit/files/backup/recursive_tests.rs)覆盖空 scope 仍携原始来源捕获和范围身份。
 
 物理掉电、真实 fsync EIO、浏览器/WASM 和生产硬件测试另列，临时目录 I/O 回归不能代替它们。
+
+## 后续 rename / move 的独立 native 语义
+
+`file.namespace.recursive-directories` 和 `directory.namespace.batch.recursive-directories` 仅用于新的 rename/move。旧 `file.namespace`、`directory.namespace.batch` 及先前 file-only recursive kind 保留原验证和永久重试语义，不迁移或修改旧收据。新 kind 同时要求精确 `recursive_follow` 与 `recursive_directory_follow`，不能借旧 kind 携带新目录写入能力。
+
+派生索引只从已完整验证的空范围配置建立：绑定策略、原来源捕获、原操作 ID、每级完整根及捕获的稳定目录 Entry ID。移动只更新这些 ID 的前后逻辑路径，不按新名字重采样，不把后来创建的空目录混入原快照。每级仍以直接上游盘名为前缀；盘名与仓库名来自原捕获。受影响策略 generation 递增，原快照退出当前读取，新收据保留每个策略的来源 operation、精确 namespace 和新策略。独立子策略分别更新；同请求限定同仓库/历史域，按目标合并物理计划，整份新收据在该 operation/target 下只写一次 record。新范围后来出现的文件，在新 kind 中也沿同绑定根更新已有文件备份路径；现有文件正文和软删除冻结协议不变。
+
+新写预检仍检查现行启用身份、准确路由、元数据成员角色、空间与条目预算；全成员 Prepare/Finalize 后才物化新 operation 投影。旧 receipt/cache 保留，不自行物理 rename 旧缓存。热发布与冷重放共用原请求、真实 namespace 变化和精确目录/策略计划验证；reader 与最终冷修复逐策略选取现行 generation，读取不授予修复权。缺成员、fenced、blocked 等恢复门禁不变。新缓存失败保留 InDoubt；冷恢复从已决定证据完成，不以目录缓存作为权威。
+
+同 ID 自定义策略覆盖会撤销派生跟随资格。被删除但没有本次稳定 ID path move 的历史捕获行保持原快照语义；本片不把删除、全量重新选择、盘名修改、数据盘专用目录目标或目录垃圾回收混入 rename/move。
+
+新增热路径按已变化 owner 分支的 Entry 集合发现捕获 ID，索引反查受影响策略；首次 Arc 写复制仍为 O(P + D)，不声称纯 changed-key 常数开销。读取/冷修复仍扫描永久 operations。目录行完整新快照的 canonical metadata、条目及物化预算保持原上限。新增公开/私有定向定义位于 `recursive_backup_empty_follow.rs` 和 `current_recursive_backup_tests.rs`，实际运行结果另列，定义不代表通过。
+
+逻辑读取与同目标物理预检按 `(repository, history, directory_id, normalized_path)`（目标内投影省略共同的仓库/历史）合并重复行后计条目预算。不同身份的同路径不合并，仍交既有冲突检查；隐式祖先仍由 Server 的逻辑节点预算覆盖。`PublishedBackupDirectory::operation_id` 是相同逻辑行的最新 sequence 发布代表，不是唯一来源证明，所有被合并的永久 receipt 保留不动。完整 receipt canonical bytes 仍受 metadata 大小上限，不删除资源保护。

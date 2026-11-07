@@ -4,6 +4,8 @@ use json_codec::json;
 mod backup_paths;
 mod placement_configuration;
 pub(crate) use backup_paths::directory_namespaces::{
+    BATCH_FOLLOW_KIND, DirectoryFollowChange, DirectoryFollowPlan, DirectoryNamespace,
+    FILE_FOLLOW_KIND, captured_directory_namespace, follows_directories,
     materialize as materialize_backup_directories, preflight as preflight_backup_directories,
     repair_current as repair_current_backup_directories,
 };
