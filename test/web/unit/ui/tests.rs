@@ -1,6 +1,50 @@
 use super::*;
-
 use crate::files::FileOperation;
+
+#[test]
+fn management_notices_survive_page_changes_only_when_attention_is_needed() {
+    let mut state = State {
+        authenticated: true,
+        ..Default::default()
+    };
+    for page in [
+        Page::Files,
+        Page::Details,
+        Page::Status,
+        Page::History,
+        Page::Account,
+    ] {
+        state.page = page;
+        for storage in [
+            management::Storage::Ready,
+            management::Storage::Unconfigured,
+        ] {
+            state.management.storage = storage;
+            assert!(!management_notice_visible(&state), "{page:?} {storage:?}");
+        }
+        for storage in [
+            management::Storage::Unknown,
+            management::Storage::ReadOnly,
+            management::Storage::Unavailable,
+            management::Storage::RecoveryRequired,
+            management::Storage::TerminalManagement,
+        ] {
+            state.management.storage = storage;
+            assert!(management_notice_visible(&state), "{page:?} {storage:?}");
+        }
+        state.management.storage = management::Storage::Unconfigured;
+        state.management.retry_unknown = true;
+        assert!(management_notice_visible(&state));
+        state.management.retry_unknown = false;
+    }
+    state.page = Page::Admin;
+    state.management.storage = management::Storage::Unavailable;
+    assert!(
+        !management_notice_visible(&state),
+        "Administration owns its recovery section"
+    );
+}
+
 #[test]
 fn session_transitions_reject_duplicate_and_overlapping_submissions() {
     let mut state = State::default();

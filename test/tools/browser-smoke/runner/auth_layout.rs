@@ -229,7 +229,7 @@ fn check(browser: &Browser, origin: &str, output: Option<&Path>, setup: SetupSta
                 browser.keys(&username, "\u{e004}")?;
                 let selector =
                     json_codec::to_string(&format!("{} {}", setup.form(), setup.password()))?;
-                if browser.script(&format!("const e=document.activeElement,s=getComputedStyle(e);return e===document.querySelector({selector})&&e.matches(':focus-visible')&&parseFloat(s.borderBottomWidth)===0&&s.borderBottomStyle==='none'&&parseFloat(s.outlineWidth)>=2&&s.outlineStyle==='solid'&&parseFloat(s.outlineOffset)===-2"))? != true {
+                if browser.script(&format!("const e=document.activeElement,s=getComputedStyle(e);return e===document.querySelector({selector})&&e.matches(':focus-visible')&&parseFloat(s.borderBottomWidth)===0&&s.borderBottomStyle==='none'&&parseFloat(s.outlineWidth)===0&&parseFloat(s.borderInlineStartWidth)===2&&s.borderInlineStartStyle==='solid'&&!['transparent','rgba(0, 0, 0, 0)'].includes(s.borderInlineStartColor)"))? != true {
                     return Err(format!("anonymous {width}x{height} keyboard focus is invisible").into());
                 }
                 accessibility::input_surfaces(browser)?;

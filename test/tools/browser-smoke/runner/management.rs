@@ -6,6 +6,7 @@ use super::{
 };
 
 mod conversion;
+mod notices;
 mod primary_browse;
 
 fn prepare_offline(source_pool: &Path, offline: &Path) -> Result<()> {
@@ -262,6 +263,7 @@ pub(super) fn setup(
         fixture.no_storage()?;
         cleared_secrets(browser, password)?;
         sign_in(browser, "fresh-admin", password)?;
+        notices::unconfigured(browser)?;
         browser.click(&browser.button("Status", "状态")?)?;
         browser.css(".zxs-monitor-page [data-metric='cpu']")?;
         browser.css(".zxs-monitor-page [data-metric='memory']")?;

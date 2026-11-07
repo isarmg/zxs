@@ -83,6 +83,23 @@ pub(crate) struct Model {
     pub retry_unknown: bool,
     generation: u64,
 }
+impl Model {
+    pub(crate) fn needs_attention(&self) -> bool {
+        !matches!(self.storage, Storage::Ready | Storage::Unconfigured)
+            || self.auth_recovery
+            || self.failure.is_some()
+            || self.retrying
+            || self.recovering
+            || self.retry_unknown
+    }
+
+    fn retry_visible(&self) -> bool {
+        (self.retryable && self.storage != Storage::Unconfigured)
+            || self.retrying
+            || self.recovering
+            || self.retry_unknown
+    }
+}
 fn accept(model: &mut Model, value: &Value) {
     model.storage = Storage::parse(&value["storage"]);
     model.auth_recovery = value["authentication"] == "recovery_required";
@@ -219,10 +236,10 @@ fn retry(state: RwSignal<State>) {
 pub(crate) fn summary(state: RwSignal<State>) -> impl IntoView {
     view! {
         <section class="zxs-content-panel zxs-stack" aria-label=t("存储与认证状态","Storage and authentication status")>
-            <Show when=move ||state.with(|s|s.management.storage!=Storage::Unconfigured)><p class="zxs-row" role="status">{move ||state.with(|s|s.management.storage.label())}</p></Show>
+            <p class="zxs-row" role="status">{move ||state.with(|s|s.management.storage.label())}</p>
             <Show when=move ||state.with(|s|s.management.auth_recovery)><p class="zxs-row">{t("认证状态需要本地恢复。不会因数据盘故障创建新管理员或清空凭据。","Authentication requires local recovery. A disk failure never creates a new administrator or clears credentials.")}</p></Show>
             <div class="zxs-flow"><button class="zxs-button" disabled=move ||state.with(|s|s.management.loading||s.management.retrying||s.logout_pending()) on:click=move |_|load(state)>{t("检查管理状态","Check management status")}</button>
-            <Show when=move ||state.with(|s|s.session_active())><button class="zxs-button" disabled=move ||state.with(|s|s.management.loading||s.management.retrying||s.management.recovering||!s.management.retryable||s.management.retry_unknown) on:click=move |_|retry(state)>{t("重试打开数据存储","Retry opening data storage")}</button></Show></div>
+            <Show when=move ||state.with(|s|s.session_active()&&s.management.retry_visible())><button class="zxs-button" disabled=move ||state.with(|s|s.management.loading||s.management.retrying||s.management.recovering||!s.management.retryable||s.management.retry_unknown) on:click=move |_|retry(state)>{t("重试打开数据存储","Retry opening data storage")}</button></Show></div>
             <Show when=move ||state.with(|s|s.management.retry_unknown)><p class="zxs-row" role="alert">{t("重试结果尚未确认。请先检查管理状态，不要重复提交。","The retry outcome is unconfirmed. Check management status before submitting again.")}</p></Show>
             {move ||state.with(|s|s.management.failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
         </section>

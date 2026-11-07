@@ -1,6 +1,86 @@
 use super::*;
 
 #[test]
+fn unconfigured_storage_is_setup_not_a_global_recovery_notice() {
+    let mut model = Model::default();
+    accept(
+        &mut model,
+        &json!({"authentication":"ready", "storage":{
+            "state":"unconfigured", "retryable":true, "recovering":false
+        }}),
+    );
+    assert!(!model.needs_attention());
+    assert!(!model.retry_visible());
+    assert!(!model.storage.readable());
+    assert!(!model.storage.writable());
+}
+
+#[test]
+fn storage_notices_and_retry_controls_follow_observed_states() {
+    for (storage, retryable, notice, retry) in [
+        (Storage::Ready, false, false, false),
+        (Storage::Unconfigured, true, false, false),
+        (Storage::Unknown, false, true, false),
+        (Storage::ReadOnly, true, true, true),
+        (Storage::Unavailable, true, true, true),
+        (Storage::RecoveryRequired, true, true, true),
+        (Storage::TerminalManagement, false, true, false),
+    ] {
+        let model = Model {
+            storage,
+            retryable,
+            ..Default::default()
+        };
+        assert_eq!(model.needs_attention(), notice, "{storage:?}");
+        assert_eq!(model.retry_visible(), retry, "{storage:?}");
+    }
+}
+
+#[test]
+fn quiet_storage_never_hides_failures_or_unsettled_recovery() {
+    for storage in [Storage::Ready, Storage::Unconfigured] {
+        for model in [
+            Model {
+                storage,
+                auth_recovery: true,
+                ..Default::default()
+            },
+            Model {
+                storage,
+                failure: Some(Feedback {
+                    message: "status request failed".into(),
+                    request_id: Some("failed-status".into()),
+                }),
+                ..Default::default()
+            },
+        ] {
+            assert!(model.needs_attention());
+            assert!(!model.retry_visible());
+        }
+        for model in [
+            Model {
+                storage,
+                retrying: true,
+                ..Default::default()
+            },
+            Model {
+                storage,
+                recovering: true,
+                ..Default::default()
+            },
+            Model {
+                storage,
+                retry_unknown: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(model.needs_attention());
+            assert!(model.retry_visible());
+        }
+    }
+}
+
+#[test]
 fn only_explicit_ready_status_admits_writes() {
     for (wire, expected) in [
         ("ready", Storage::Ready),

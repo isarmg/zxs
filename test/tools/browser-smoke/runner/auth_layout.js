@@ -122,8 +122,10 @@ const noSurface=e=>{
 };
 const unlinedInput=e=>{
     const css=getComputedStyle(e),focused=e.matches(':focus-visible');
-    const focus=focused?parseFloat(css.outlineWidth)>=2&&css.outlineStyle==='solid'&&!transparent(css.outlineColor)&&parseFloat(css.outlineOffset)===-2:noOutline(css);
-    return sides.every(side=>parseFloat(css[`border${side}Width`])===0)
+    const marker=css.direction==='rtl'?'Right':'Left';
+    const focus=noOutline(css)&&css[`border${marker}Style`]==='solid'
+        &&(focused?!transparent(css[`border${marker}Color`]):transparent(css[`border${marker}Color`]));
+    return sides.every(side=>parseFloat(css[`border${side}Width`])===(side===marker?2:0))
         &&css.borderBottomStyle==='none'
         &&css.backgroundImage==='none'&&css.borderImageSource==='none'&&transparent(css.backgroundColor)
         &&css.boxShadow==='none'&&focus&&parseFloat(css.getPropertyValue('--zxs-contour-extent'))===0

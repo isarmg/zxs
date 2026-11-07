@@ -52,6 +52,15 @@ const done=arguments[arguments.length-1];
             foreground=null;
         }
         if(foreground) {
+            const scroller=node.querySelector(':scope > .zxs-select-options');
+            const optionsBox=scroller?.getBoundingClientRect();
+            // Border paint owns this same box. A second 2px content inset puts
+            // independently rounded option corners outside the border's inner edge.
+            if(!optionsBox||!['x','y','width','height'].every(key=>Math.abs(optionsBox[key]-box[key])<=.5)) {
+                return {valid:false,reason:'option viewport must share the foreground border box',
+                    panelBounds:{x:box.x,y:box.y,width:box.width,height:box.height},
+                    optionsBounds:optionsBox?{x:optionsBox.x,y:optionsBox.y,width:optionsBox.width,height:optionsBox.height}:null};
+            }
             if(node.getAttribute('data-zxs-contour-foreground-anchor')!=='local'||getComputedStyle(foreground).position!=='absolute') {
                 return {valid:false,reason:'menu border must be locally anchored, not a fixed scroll overlay'};
             }

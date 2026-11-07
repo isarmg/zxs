@@ -50,7 +50,8 @@ function fixture() {
         f.foreground={isConnected:true,visible:true,box:{...panel.box},path,style:{position:'absolute',display:'block'},
             checkVisibility(){return this.visible;},getBoundingClientRect(){return this.box;},querySelector(){return path;},
             getAttribute(name){assert.equal(name,'viewBox');return '0 0 100 36';}};
-        panel.querySelector=()=>f.foreground;
+        f.scroller={box:{...panel.box},getBoundingClientRect(){return this.box;}};
+        panel.querySelector=selector=>selector===':scope > .zxs-select-options'?f.scroller:f.foreground;
         return f;
     };
     f.withNativeFallback=()=>{
@@ -129,6 +130,11 @@ for(const property of ['backgroundImage','borderImageSource']){
     f=fixture();f.panel.style[property]='url("blob:paint")';f.decodeFails=true;assert.equal((await f.run()).valid,false,'broken image decode');
 }
 f=fixture().withForeground();assert.equal((await f.run()).valid,true,'foreground path with transparent center');assert.deepEqual(f.revoked,['blob:foreground']);
+for(const axis of ['x','y','width','height']){
+    f=fixture().withForeground();f.scroller.box[axis]+=2;
+    const report=await f.run();assert.equal(report.valid,false,'Reintroduced content inset must fail on '+axis);
+    assert.match(report.controls[1].reason,/option viewport/);
+}
 f=fixture().withForeground();f.foreground.path.style.fill='rgb(60, 60, 60)';
 {
     const result=await f.run(),report=result.controls[1];
@@ -236,4 +242,4 @@ f=fixture().withNativeFallback();
 f.panel.dataset.zxsContourState='clip';delete f.panel.dataset.zxsContourReason;
 f.foreground.visible=true;f.foreground.style.display='block';
 assert.equal((await f.run()).valid,true,'restored G4 paint must validate its visible real path again');
-console.log('PASS 72 Select border observer model cases; no browser rendering executed');
+console.log('PASS 76 Select border observer model cases; no browser rendering executed');

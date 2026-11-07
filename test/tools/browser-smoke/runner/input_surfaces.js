@@ -48,6 +48,9 @@ const controls = visible.map((node, index) => {
         state: node.getAttribute('data-zxs-contour-state'),
         decorations: node.querySelectorAll('[data-zxs-contour-decoration]').length,
     };
+    const markerSide = css.direction === 'rtl' ? 'right' : 'left';
+    const marker = borders[markerSide];
+    const markerVisible = marker.width === 2 && marker.style === 'solid' && alpha(marker.color) > 0;
     const opacity = Number(css.opacity);
     const frameCss = search ? getComputedStyle(searchFrame) : null;
     const frameRect = search ? searchFrame.getBoundingClientRect() : null;
@@ -71,12 +74,12 @@ const controls = visible.map((node, index) => {
     } : null;
     const checks = {
         connected: node.isConnected,
-        noRectangle: ['top', 'right', 'bottom', 'left'].every(side => borders[side].width === 0),
+        noRectangle: ['top', 'right', 'bottom', 'left'].every(side => borders[side].width === (!search && side === markerSide ? 2 : 0)),
         bottomStyle: borders.bottom.style === 'none',
         bottomWidth: borders.bottom.width === 0,
         sharedRowHeight: node.tagName === 'TEXTAREA' ? rect.height >= parseFloat(css.getPropertyValue('--zxs-compact-row-height')) : rect.height === parseFloat(css.getPropertyValue('--zxs-compact-row-height')),
         searchSurface: !search || Object.values(searchSurface).every(Boolean),
-        focusIndicator: focusVisible && !search ? outlineVisible && outline.style === 'solid' && outline.width >= 2 && outline.offset === -2 : !outlineVisible,
+        focusIndicator: !outlineVisible && (search || (marker.style === 'solid' && (focusVisible ? markerVisible : alpha(marker.color) === 0))),
         noImages: css.backgroundImage === 'none' && css.borderImageSource === 'none',
         noShadow: css.boxShadow === 'none',
         transparentBackground: alpha(css.backgroundColor) === 0,
@@ -93,7 +96,7 @@ const controls = visible.map((node, index) => {
         tag: node.tagName, type: node.type, name: node.getAttribute('name'), label: node.getAttribute('aria-label'),
         disabled, effectiveDisabled, focusVisible, forced, anonymous, search, storageDirectory, searchSurface, opacity,
         rect: {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height},
-        borders, outline, outlineVisible, contour,
+        borders, outline, outlineVisible, markerSide, markerVisible, contour,
         backgroundColor: css.backgroundColor, backgroundImage: css.backgroundImage,
         borderImageSource: css.borderImageSource, boxShadow: css.boxShadow,
     };

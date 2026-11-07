@@ -44,6 +44,7 @@ function fixture(empty=false) {
     for(const [input,label,key] of [[username,usernameLabel,'username'],[password,passwordLabel,'password']]){
         input.box.height=36;input.box.bottom=input.box.y+36;input.id=`zxs-${empty?'setup':'login'}-${key}`;input.required=true;input.labels=[label];label.htmlFor=input.id;label.control=input;
         input.className='zxs-input';
+        Object.assign(input.style,{direction:'ltr',borderLeftWidth:'2px',borderLeftStyle:'solid',borderLeftColor:'transparent'});
     }
     if(empty){username.attributes['data-setup-user']='';password.attributes['data-setup-password']='';}
     const information=node('',244);information.className='zxs-auth-information';information.box=box(244,36);
@@ -121,7 +122,9 @@ for(const change of [
 assert.equal((await f.run()).valid,true,'Restoring the anonymous override fixes only the leaked surface');
 f=fixture(true);f.status.textContent='请设置账户名和密码';f.submit.textContent='设置账户';assert.equal((await f.run()).valid,true,'Chinese setup hint and action');
 f=fixture(true);for(const input of [f.username,f.password])input.required=false;assert.equal((await f.run()).valid,true,'Setup admission belongs to the disabled submit, not browser required attributes');
-f=fixture();f.username.focused=true;Object.assign(f.username.style,{outlineWidth:'2px',outlineStyle:'solid',outlineOffset:'-2px'});assert.equal((await f.run()).valid,true,'Focused inset ring preserves the shared row without an underline');
+f=fixture();f.username.focused=true;f.username.style.borderLeftColor='rgb(0, 0, 0)';assert.equal((await f.run()).valid,true,'Focused leading marker preserves the shared row without a rectangle or underline');
+f=fixture();f.username.focused=true;Object.assign(f.username.style,{direction:'rtl',borderLeftWidth:'0px',borderRightWidth:'2px',borderRightStyle:'solid',borderRightColor:'rgb(0, 0, 0)'});assert.equal((await f.run()).valid,true,'RTL focus follows the logical start edge');
+f=fixture();f.username.focused=true;Object.assign(f.username.style,{outlineWidth:'2px',outlineStyle:'solid',outlineOffset:'-2px',borderLeftColor:'rgb(0, 0, 0)'});assert.equal((await f.run()).valid,false,'The screenshot regression rectangle is rejected even beside a visible marker');
 // Preferred desktop 3:2 geometry never hides taller feedback; small viewports can grow naturally.
 for(const [width,height] of [[320,568],[390,844],[980,760],[1440,900]]) {
     f=fixture(true);f.innerWidth=width;f.innerHeight=height;f.root.clientWidth=width;f.root.scrollWidth=width;
@@ -502,7 +505,7 @@ if(!process.argv.includes('--models-only')) {
     assert.match(authCss,/--zxs-contour-extent: 48px/);
     assert.doesNotMatch(authCss,/dashed/);
     assert.match(authCss,/\.authentication-shell \.authentication-card input\.zxs-input \{[^}]*border: 0;[^}]*background: transparent;[^}]*outline: 0;/);
-    assert.match(authCss,/input\.zxs-input:focus-visible \{ outline: 2px solid var\(--zxs-focus,Highlight\); outline-offset: -2px;/);
+    assert.match(authCss,/input\.zxs-input:focus-visible \{ border-inline-start-color: var\(--zxs-focus,Highlight\);/);
     assert.doesNotMatch(authCss,/--zxs-contour-(?:panel|control|notification|dialog):/);
     assert.match(geometryCss,/--zxs-contour-control: calc\(var\(--zxs-compact-row-height\) \/ 2\)/);
     assert.match(geometryCss,/--zxs-contour-panel: var\(--zxs-contour-control\)/);

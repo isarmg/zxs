@@ -12,10 +12,10 @@
 .authentication-card .zxs-auth-input-row { display: grid; min-width: 0; }
 .authentication-card :is(.zxs-auth-label, .zxs-auth-input-row) { --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 .authentication-card .zxs-auth-label { display: flex; align-items: center; gap: 1ch; }
-.authentication-shell .authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border: 0; border-radius: 0; background: transparent; outline: 0; }
-.authentication-shell .authentication-card input.zxs-input:focus-visible { outline: 2px solid var(--zxs-focus,Highlight); outline-offset: -2px; }
+.authentication-shell .authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border: 0; border-inline-start: 2px solid transparent; border-radius: 0; background: transparent; outline: 0; }
+.authentication-shell .authentication-card input.zxs-input:focus-visible { border-inline-start-color: var(--zxs-focus,Highlight); }
 /* The outer card is the only decorative box. Inputs stay unlined;
- * keyboard focus uses the shared inset outline without changing geometry. The shell
+ * keyboard focus uses the shared leading-edge marker without changing geometry. The shell
  * scope outranks the appearance root plus .zxs-error, even when loaded earlier. */
 .authentication-shell .authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) { border: 0; background: transparent; box-shadow: none; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 .authentication-card .zxs-auth-information { display: grid; align-items: center; overflow-wrap: anywhere; }

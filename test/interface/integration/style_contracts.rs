@@ -72,11 +72,11 @@ fn anonymous_forms_reuse_six_shared_height_rows_and_original_card_corner() {
     assert!(css.contains(".authentication-shell .authentication-card input.zxs-input {"));
     assert!(
         css.contains(
-            "padding: 0; border: 0; border-radius: 0; background: transparent; outline: 0;"
+            "padding: 0; border: 0; border-inline-start: 2px solid transparent; border-radius: 0; background: transparent; outline: 0;"
         )
     );
     assert!(css.contains(
-        "input.zxs-input:focus-visible { outline: 2px solid var(--zxs-focus,Highlight); outline-offset: -2px; }"
+        "input.zxs-input:focus-visible { border-inline-start-color: var(--zxs-focus,Highlight); }"
     ));
     assert!(!css.contains("dashed"));
     let login = include_str!("../../../src/interface/src/components/login.rs");
@@ -327,14 +327,17 @@ fn shared_form_groups_align_fields_without_individual_input_boxes() {
     assert!(!css.contains("dashed"));
     assert!(
         css.contains(
-            ":root :is(input,textarea).zxs-input:focus-visible { outline: 2px solid var(--zxs-focus,Highlight); outline-offset: -2px; }"
+            ":root :is(input,textarea).zxs-input:focus-visible { border-inline-start-color: var(--zxs-focus,Highlight); }"
         )
     );
     assert!(css.contains(
         "background: transparent; outline: 0; --zxs-contour-extent: 0px; --zxs-contour-mode: none;"
     ));
     assert!(css.contains("@media (forced-colors: active)"));
-    assert!(css.contains(":focus-visible:not(.zxs-file-search > input) { outline: 2px solid Highlight; outline-offset: -2px; }"));
+    assert!(css.contains(
+        ":focus-visible:not(.zxs-file-search > input) { border-inline-start-color: Highlight; }"
+    ));
+    assert!(css.contains("border-inline-start: 2px solid transparent;"));
     let geometry = include_str!("../../../src/web/public/styles/components/geometry.css");
     assert!(!geometry.contains(".zxs-input--underline"));
     assert!(!css.contains(".zxs-form-field + .zxs-form-field"));
@@ -547,6 +550,12 @@ fn select_ring_and_fill_stay_with_the_card_while_only_options_scroll() {
     let scroller = style_rule(css, ".zxs-select-options");
     assert!(scroller.contains("position: relative; min-height: 0; overflow: auto;"));
     assert!(scroller.contains("overscroll-behavior: contain;"));
+    let shared_box = style_rule(
+        css,
+        ".zxs-select-panel[data-zxs-contour-state=clip] > .zxs-select-options",
+    );
+    assert!(shared_box.contains("margin: calc(0px - var(--zxs-select-border-width));"));
+    assert!(shared_box.contains("--zxs-row-border: 0px;"));
     let component = include_str!("../../../src/interface/src/components/select.rs");
     assert!(component.contains("data-zxs-contour-foreground-anchor=\"local\""));
     assert!(component.contains("<div class=\"zxs-select-options\" node_ref=scroller>"));

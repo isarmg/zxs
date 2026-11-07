@@ -43,6 +43,14 @@
   position: relative; min-height: 0; overflow: auto;
   overscroll-behavior: contain;
 }
+/* The foreground paints the border above the options. Once that paint is ready,
+ * share its border box instead of starting a second rounded shape 2px inside it.
+ * Keep native fallback content inside its ordinary border. Text retains the
+ * original inset because the row no longer subtracts that reclaimed border. */
+.zxs-select-panel[data-zxs-contour-state=clip] > .zxs-select-options {
+  margin: calc(0px - var(--zxs-select-border-width));
+  --zxs-row-border: 0px;
+}
 /* Hide only unfinished paint, not a completed square fallback. Unsupported
  * decoration must never make an otherwise usable menu invisible. */
 .zxs-select-panel:popover-open:not([data-zxs-contour-state=clip]):not([data-zxs-contour-state=fallback]) { visibility: hidden; }

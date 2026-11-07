@@ -302,6 +302,10 @@ fn header_refresh_disabled(state: &State) -> bool {
     }
 }
 
+fn management_notice_visible(state: &State) -> bool {
+    state.page != Page::Admin && state.management.needs_attention()
+}
+
 fn workspace(state: RwSignal<State>) -> impl IntoView {
     let page = Memo::new(move |_| state.with(|s| s.page));
     view! {
@@ -316,7 +320,7 @@ fn workspace(state: RwSignal<State>) -> impl IntoView {
                 <button class="zxs-button zxs-header-refresh" type="button" aria-busy=move ||state.with(header_refreshing).to_string() aria-label=t("刷新","Refresh") title=t("刷新","Refresh") disabled=move ||state.with(header_refresh_disabled) on:click=move |_|match state.with_untracked(|s|s.page){Page::Files|Page::Details=>if state.with_untracked(|s|s.files.slot.is_empty()){files::load_disks(state)}else{files::load_entries(state)},Page::Status=>monitor::load(state),Page::History=>history::load(state),Page::Admin=>admin::load_disks(state),_=>{}}><FileIcon name="refresh"/></button>
             </Show>
         </div></HeaderActions>
-        <Show when=move ||state.with(|s|s.page!=Page::Admin&&!s.management.storage.writable())>{management::summary(state)}</Show>
+        <Show when=move ||state.with(management_notice_visible)>{management::summary(state)}</Show>
         {move ||match page.get() { Page::Admin=>admin::view(state).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
     }
 }
