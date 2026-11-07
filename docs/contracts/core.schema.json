@@ -9845,6 +9845,51 @@
         "configuration",
         "capture"
       ]
+    },
+    "DirectoryLayoutReconcileBody": {
+      "type": "object",
+      "properties": {
+        "expected_namespace_head": {
+          "$ref": "#/$defs/CommitId"
+        }
+      },
+      "required": [
+        "expected_namespace_head"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryLayoutResult": {
+      "type": "object",
+      "description": "执行时状态的结构性布局数量，不是正文验证或新业务提交；不可用项非零时仅可用部分完成。",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "state_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "directories": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "containers": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "unavailable_containers": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "unavailable_histories": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "repository_id",
+        "state_sequence",
+        "directories",
+        "containers",
+        "unavailable_containers",
+        "unavailable_histories"
+      ],
+      "additionalProperties": false
     }
   }
 }
