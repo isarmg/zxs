@@ -24,6 +24,7 @@ mod discovery;
 mod disk_notes;
 mod foreign_plan;
 mod foreign_preview;
+mod independent_preview;
 mod ordinary_conversion;
 mod terminal_backend;
 mod terminal_readmission;
@@ -1646,6 +1647,7 @@ impl Backend for ManagementBackend {
                 | "discovered_disks"
                 | "inspect_storage_directory"
                 | "foreign_disk_preview"
+                | "independent_disk_preview"
                 | "foreign_plan_preview"
                 | "foreign_plan_save"
                 | "foreign_plan_revalidate"
@@ -1699,6 +1701,7 @@ impl Backend for ManagementBackend {
                     | "discovered_disks"
                     | "inspect_storage_directory"
                     | "foreign_disk_preview"
+                    | "independent_disk_preview"
                     | "foreign_plan_preview"
                     | "foreign_plan_save"
                     | "foreign_plan_revalidate"
@@ -1847,6 +1850,15 @@ impl Backend for ManagementBackend {
                 input,
                 identity.as_ref().ok_or_else(ApiError::unauthorized)?,
             );
+        }
+        if action == "independent_disk_preview" {
+            let request = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            let result = self.independent_disk_preview(
+                identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                request,
+            )?;
+            return Ok(json_codec::to_value(result)
+                .expect("invariant: independent disk preview serializes"));
         }
         if action == "foreign_disk_preview" {
             let request = json_codec::from_value(input).map_err(ApiError::invalid_source)?;

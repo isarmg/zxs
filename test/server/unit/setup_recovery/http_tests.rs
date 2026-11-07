@@ -1528,6 +1528,7 @@ async fn existing_pool_addition_routes_keep_session_origin_and_csrf_boundaries()
     let token = proxy_admin_token(&app).await;
     for (method, path) in [
         ("POST", "/api/admin/storage/foreign/preview"),
+        ("POST", "/api/admin/storage/independent/preview"),
         ("POST", "/api/admin/storage/foreign/plans/preview"),
         ("POST", "/api/admin/storage/foreign/plans/save"),
         ("POST", "/api/admin/storage/foreign/plans/revalidate"),
@@ -1578,6 +1579,16 @@ async fn existing_pool_addition_routes_keep_session_origin_and_csrf_boundaries()
             "/api/admin/storage/foreign/preview?execute=true",
             "{}".to_owned(),
             StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/api/admin/storage/independent/preview?execute=true",
+            "{}".to_owned(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/api/admin/storage/independent/preview",
+            " ".repeat(MAX_DIRECTORY_BODY_BYTES + 1),
+            StatusCode::PAYLOAD_TOO_LARGE,
         ),
         (
             "/api/admin/storage/foreign/preview",

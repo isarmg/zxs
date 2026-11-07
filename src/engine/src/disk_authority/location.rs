@@ -30,7 +30,7 @@ impl Location {
     pub(super) fn open(path: &Path) -> Result<Self> {
         Self::from_root(OpenAt2Root::open(path, MountPolicy::SameMount)?)
     }
-    fn from_root(root: OpenAt2Root) -> Result<Self> {
+    pub(super) fn from_root(root: OpenAt2Root) -> Result<Self> {
         let identity = root.identity();
         let mut current = root.directory().try_clone()?;
         let mut ancestors = Vec::new();
@@ -104,6 +104,17 @@ impl Location {
         )?;
         directory.verify_identity()?;
         Ok(directory)
+    }
+    /// Open an existing child relative to the same held root; never create it.
+    pub(super) fn private_child(
+        &self,
+        name: &platform_io::fs_safety::EntryName,
+        path: &Path,
+    ) -> Result<platform_io::fs_safety::PrivateDirectory> {
+        Ok(platform_io::fs_safety::PrivateDirectory::from_directory(
+            self._root.open_directory(&name.as_relative())?,
+            path.join(name.as_path()),
+        )?)
     }
     pub(super) fn identity(&self) -> FileIdentity {
         self.identity

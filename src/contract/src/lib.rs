@@ -18,6 +18,8 @@ pub mod storage_directories;
 pub mod storage_foreign;
 pub mod storage_foreign_intent;
 pub mod storage_foreign_plan;
+pub mod storage_independent_source;
+pub mod storage_independent_topology;
 pub mod storage_lifecycle;
 pub mod storage_readmission;
 pub use content_hash::{ContentHash, ParseContentHashError};

@@ -22,9 +22,16 @@ pub(crate) enum ApiErrorSource {
     Contract(#[from] storage_contract::Error),
     #[error("{0}")]
     ContentHash(#[from] storage_contract::ParseContentHashError),
+    #[error("{0}")]
+    IndependentObservation(
+        #[from] storage_contract::storage_independent_source::InvalidObservation,
+    ),
     #[cfg(feature = "core")]
     #[error("{0}")]
     Engine(#[from] storage_engine::Error),
+    #[cfg(feature = "core")]
+    #[error("{0}")]
+    IndependentSource(#[from] storage_engine::disk_authority::Error),
     #[cfg(feature = "core")]
     #[error("{0}")]
     DeregistrationPlan(#[from] storage_engine::DeregistrationPlanError),

@@ -9342,6 +9342,213 @@
           ]
         }
       }
+    },
+    "IndependentToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9_-]+(?![\\s\\S])"
+    },
+    "IndependentDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "IndependentOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pool_id",
+        "disk_id",
+        "slot_id",
+        "binding_generation"
+      ],
+      "properties": {
+        "pool_id": {
+          "$ref": "#/$defs/IndependentToken"
+        },
+        "disk_id": {
+          "$ref": "#/$defs/IndependentToken"
+        },
+        "slot_id": {
+          "$ref": "#/$defs/IndependentToken"
+        },
+        "binding_generation": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/UInt64"
+            },
+            {
+              "not": {
+                "const": "0"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "IndependentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "incarnation",
+        "role"
+      ],
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/IndependentOrigin"
+        },
+        "incarnation": {
+          "$ref": "#/$defs/IndependentDigest"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "secondary",
+            "tertiary"
+          ]
+        }
+      }
+    },
+    "IndependentCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "publication",
+        "sequence"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/IndependentIdentity"
+        },
+        "publication": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IndependentDigest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        }
+      }
+    },
+    "IndependentTopologyNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "pins"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/IndependentIdentity"
+        },
+        "pins": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/IndependentDigest"
+          }
+        }
+      }
+    },
+    "IndependentTopologyPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "publication"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/IndependentIdentity"
+        },
+        "publication": {
+          "$ref": "#/$defs/IndependentDigest"
+        }
+      }
+    },
+    "IndependentTopologyRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "consumer"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/IndependentTopologyPoint"
+        },
+        "consumer": {
+          "$ref": "#/$defs/IndependentTopologyPoint"
+        }
+      }
+    },
+    "IndependentSourceTopology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "root",
+        "nodes",
+        "relations"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "independent_source_topology"
+        },
+        "root": {
+          "$ref": "#/$defs/IndependentCheckpoint"
+        },
+        "nodes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/IndependentTopologyNode"
+          }
+        },
+        "relations": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/IndependentTopologyRelation"
+          }
+        }
+      }
+    },
+    "IndependentDiskPreviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/StorageDirectorySource"
+        }
+      }
+    },
+    "IndependentDiskPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "topology"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/StorageDirectorySource"
+        },
+        "topology": {
+          "$ref": "#/$defs/IndependentSourceTopology"
+        }
+      }
     }
   }
 }

@@ -93,6 +93,19 @@ pub struct Disk {
     binding: LocalBinding,
     known_checkpoint: Option<Digest>,
 }
+
+/// One fresh metadata observation and the held directory that produced it.
+/// Only Disk constructs this pair; callers cannot splice in another location.
+pub(super) struct CapturedSourceCandidate {
+    location: location::Location,
+    observation: SourceCandidateObservation,
+}
+impl CapturedSourceCandidate {
+    pub(super) fn into_parts(self) -> (location::Location, SourceCandidateObservation) {
+        (self.location, self.observation)
+    }
+}
+
 impl Disk {
     /// Initialize only an empty new-format directory, or resume this exact
     /// physical initialization. The completion record is distinct from identity.
@@ -206,6 +219,47 @@ impl Disk {
             known_checkpoint: None,
         })
     }
+    /// Construct read resources from the caller's admitted descriptor. The
+    /// diagnostic path is checked, never used to substitute a new root/child.
+    /// Metadata evidence still comes only from source_topology/observation.
+    pub(super) fn from_held_directory(root: PrivateDirectory) -> Result<Self> {
+        use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
+        root.verify_identity()?;
+        let path = root.path().to_owned();
+        let selected = location::Location::from_root(OpenAt2Root::from_private_directory(
+            root,
+            MountPolicy::SameMount,
+        )?)?;
+        let root = selected.private_directory(&path)?;
+        let header: Header =
+            codec::decode(&root.read_bounded(&name("identity.json")?, MAX_BYTES)?)?;
+        let initialized: Digest =
+            codec::decode(&root.read_bounded(&name("initialized.json")?, MAX_BYTES)?)?;
+        if initialized != codec::address("initialized", &codec::encode(&header)?) {
+            return Err(Error::Invalid(
+                "initialization is incomplete or differs from the identity",
+            ));
+        }
+        header.identity.validate()?;
+        let physical = selected.identity();
+        let disk = Self {
+            objects: selected.private_child(&name("objects")?, &path)?,
+            bodies: selected.private_child(&name("bodies")?, &path)?,
+            operations: selected.private_child(&name("operations")?, &path)?,
+            publications: selected.private_child(&name("publications")?, &path)?,
+            identity: header.identity,
+            root,
+            binding: LocalBinding {
+                path,
+                device: physical.device,
+                inode: physical.inode,
+                mount_root: selected.mount_root(),
+            },
+            known_checkpoint: None,
+        };
+        disk.check_identity()?;
+        Ok(disk)
+    }
     pub(super) fn pinned(mut self, checkpoint: Option<Digest>) -> Result<Self> {
         self.known_checkpoint = checkpoint;
         self.check_metadata(None)?;
@@ -257,6 +311,44 @@ impl Disk {
             previously_observed,
         )
         .map(drop)
+    }
+    pub(super) fn source_topology(&self) -> Result<SourceTopology> {
+        let verified = self.verify_using(
+            &SelectedContent {
+                disk: self,
+                copy: None,
+            },
+            None,
+        )?;
+        let topology = topology::project(&verified, self.binding.clone())?;
+        self.check_identity()?;
+        Ok(topology)
+    }
+    pub(super) fn observe_source_node(
+        &self,
+        node: &SourceNode,
+    ) -> Result<SourceCandidateObservation> {
+        let verified = self.verify_using(
+            &SelectedContent {
+                disk: self,
+                copy: None,
+            },
+            None,
+        )?;
+        let observation = topology::observe_candidate(node, &verified, self.binding.clone())?;
+        self.check_identity()?;
+        Ok(observation)
+    }
+    pub(super) fn capture_source_candidate(
+        &self,
+        node: &SourceNode,
+    ) -> Result<CapturedSourceCandidate> {
+        let location = self.location()?;
+        let observation = self.observe_source_node(node)?;
+        Ok(CapturedSourceCandidate {
+            location,
+            observation,
+        })
     }
     pub(super) fn read_content(&self, copy: Digest) -> Result<Vec<u8>> {
         let mut verified = self.verify_using(

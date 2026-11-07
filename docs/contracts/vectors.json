@@ -5242,6 +5242,129 @@
           }
         ]
       }
+    },
+    {
+      "name": "independent-preview-request",
+      "schema": "IndependentDiskPreviewRequest",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/independent",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "independent-preview-exact-graph",
+      "schema": "IndependentDiskPreview",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/independent",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "topology": {
+          "protocol": "independent_source_topology",
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "nodes": [
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "primary",
+                  "slot_id": "primary",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "primary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000001"
+              ]
+            },
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "backup",
+                  "slot_id": "backup",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "secondary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000002"
+              ]
+            }
+          ],
+          "relations": [
+            {
+              "source": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "primary",
+                    "slot_id": "primary",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "primary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              "consumer": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "backup",
+                    "slot_id": "backup",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "secondary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000002"
+              }
+            }
+          ]
+        }
+      }
     }
   ],
   "negative": [
@@ -18533,6 +18656,232 @@
             "target": null
           }
         ]
+      }
+    },
+    {
+      "name": "independent-preview-rejects-execute",
+      "schema": "IndependentDiskPreviewRequest",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/independent",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "execute": true
+      }
+    },
+    {
+      "name": "independent-preview-rejects-online",
+      "schema": "IndependentDiskPreview",
+      "layer": "schema",
+      "value": {
+        "source": {
+          "path": "/mnt/independent",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "topology": {
+          "protocol": "independent_source_topology",
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "nodes": [
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "primary",
+                  "slot_id": "primary",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "primary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000001"
+              ]
+            },
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "backup",
+                  "slot_id": "backup",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "secondary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000002"
+              ]
+            }
+          ],
+          "relations": [
+            {
+              "source": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "primary",
+                    "slot_id": "primary",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "primary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              "consumer": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "backup",
+                    "slot_id": "backup",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "secondary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000002"
+              }
+            }
+          ]
+        },
+        "online": true
+      }
+    },
+    {
+      "name": "independent-preview-rejects-unbound-publication",
+      "schema": "IndependentDiskPreview",
+      "layer": "semantic",
+      "value": {
+        "source": {
+          "path": "/mnt/independent",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "topology": {
+          "protocol": "independent_source_topology",
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "nodes": [
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "primary",
+                  "slot_id": "primary",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "primary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000001"
+              ]
+            },
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "backup",
+                  "slot_id": "backup",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "secondary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000002"
+              ]
+            }
+          ],
+          "relations": [
+            {
+              "source": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "primary",
+                    "slot_id": "primary",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "primary"
+                },
+                "publication": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+              },
+              "consumer": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "backup",
+                    "slot_id": "backup",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "secondary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000002"
+              }
+            }
+          ]
+        }
       }
     }
   ],

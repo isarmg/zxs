@@ -19,7 +19,7 @@ pub struct DiskSelection {
 }
 
 pub struct IndependentDisk {
-    disk: Disk,
+    pub(super) disk: Disk,
 }
 
 /// A complete local file write. Ordinary writes always provide their body.
@@ -106,6 +106,18 @@ impl IndependentDisk {
             sequence: verified.sequence,
             copies: verified.rows,
         })
+    }
+    /// Capture the selected publication's source graph after complete metadata
+    /// verification. Bodies are not read and no content availability is implied.
+    /// This historical observation neither registers a disk nor grants access.
+    pub fn source_topology(&self) -> Result<SourceTopology> {
+        self.disk.source_topology()
+    }
+    /// Inspect this disk as one candidate for the exact captured source node.
+    /// Metadata errors fail the observation. A pin match proves neither unique
+    /// physical presence, body availability, membership, nor permission to act.
+    pub fn observe_source_node(&self, node: &SourceNode) -> Result<SourceCandidateObservation> {
+        self.disk.observe_source_node(node)
     }
     /// Read the full body only after its published metadata and bytes verify.
     /// The cache is not consulted; absent content remains temporarily unavailable.
@@ -285,6 +297,39 @@ impl IndependentDisk {
             },
         )
     }
+}
+
+/// Inspect only these explicitly selected candidates. This is not a discovery
+/// enumerator: zero or one match remains incomplete, never unique or absent.
+/// Any failed capture, changed alias or unproved physical relation rejects the
+/// whole batch. No partial successful batch or storage capability is returned.
+pub fn observe_source_candidates(
+    node: &SourceNode,
+    candidates: &[&IndependentDisk],
+) -> std::result::Result<SourceCandidateBatch, SourceCandidateBatchError> {
+    let mut batch = candidate_set::CandidateBatchBuilder::new(node, candidates.len())?;
+    for (index, candidate) in candidates.iter().enumerate() {
+        let capture = candidate
+            .disk
+            .capture_source_candidate(node)
+            .map_err(|source| SourceCandidateBatchError::Candidate {
+                index,
+                stage: SourceCandidateBatchStage::Capture,
+                source,
+            })?;
+        batch.push(index, capture)?;
+    }
+    for (index, candidate) in candidates.iter().enumerate() {
+        candidate
+            .disk
+            .location()
+            .map_err(|source| SourceCandidateBatchError::Candidate {
+                index,
+                stage: SourceCandidateBatchStage::RecheckDirectory,
+                source,
+            })?;
+    }
+    Ok(batch.finish())
 }
 
 fn primary_heads(before: &VerifiedDisk) -> Result<Vec<Digest>> {

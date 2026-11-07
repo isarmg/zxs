@@ -6,7 +6,9 @@
 
 本分支提供显式选择的 `independent-disk-journal` 格式。真实调用链是 `zxs-rescue authority` → `storage_engine::disk_authority::IndependentDisk` → 本盘持久意图、不可变文件和发布决定。它不是旧池旁的 sidecar，也不借旧池 quorum 决定本盘成功。调用方必须停止所有相关写者，工具只提供本机排它锁，不提供跨主机围栏、在线用户会话或管理面授权。
 
-尚未切换的消费者包括当前 `Engine` 的 State、目录命名空间、文件分支/目录 Git、自动备份、在线恢复、HTTP/SMB 和原系统 SQLite。这个切片不能作为已完成生产逐盘架构、外来盘迁入向导或当前池接纳的声明。新格式不读取 managed-directory、membership-generation 或独立协议实验格式，不补 incarnation，不迁移或重置已有目录。
+尚未切换的消费者包括当前 `Engine` 的 State、目录命名空间、文件分支/目录 Git、自动备份、在线恢复、HTTP/SMB 写入和原系统 SQLite。这个切片不能作为已完成生产逐盘架构、外来盘迁入向导或当前池接纳的声明。新格式不读取 managed-directory、membership-generation 或独立协议实验格式，不补 incarnation，不迁移或重置已有目录。
+
+独立盘来源图已新增管理面只读调用链，见[产品只读预览](independent-source-product-preview.md)。这不会切换上述在线写入消费者，候选仍不可直接登记。
 
 ## 权威和证明
 

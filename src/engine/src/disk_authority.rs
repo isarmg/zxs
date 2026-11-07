@@ -2,13 +2,18 @@
 //! read the managed-directory format or participate in the current pool quorum.
 //! The offline rescue consumer is separate from Engine's online namespace.
 mod cache;
+mod candidate_session;
+mod candidate_set;
 mod codec;
 mod fault;
 mod journal;
 mod location;
 mod model;
 mod projection;
+mod source_reader;
+mod source_wire;
 mod storage;
+mod topology;
 mod verify;
 
 #[cfg(test)]
@@ -16,8 +21,17 @@ mod verify;
 mod authority_selection_tests;
 
 pub use cache::CachedCopy;
+pub use candidate_session::{
+    SourceCandidateDelivery, SourceCandidateRequest, SourceCandidateResponse,
+    SourceCandidateSession, SourceCandidateView,
+};
+pub use candidate_set::{
+    SourceCandidateBatch, SourceCandidateBatchError, SourceCandidateBatchStage,
+    SourceCandidateBatchStatus,
+};
 pub use journal::{
     DiskReport, DiskSelection, FileWrite, IndependentDisk, OperationStatus, ReviewedPublication,
+    observe_source_candidates,
 };
 use model::{
     Authority, Body, Bundle, Commit, Format, MAX_BYTES, MAX_OBJECTS, MAX_PUBLICATIONS, Manifest,
@@ -25,7 +39,15 @@ use model::{
 };
 pub use model::{Digest, DiskPublicationReceipt, Identity, Origin, Role, Token};
 pub use projection::rebuild_projection;
+pub use source_reader::IndependentSourceReader;
+pub use source_wire::{
+    SourceObservationEncodingError, encode_source_observation, source_topology_display,
+};
 use storage::{Disk, OperationEvidence, PublicationRequest};
+pub use topology::{
+    SourceCandidateObservation, SourceCandidateStatus, SourceNode, SourcePoint, SourceRelation,
+    SourceTopology, TopologyBinding,
+};
 use verify::VerifiedDisk;
 pub use verify::{Availability, CopyRow};
 
@@ -77,3 +99,19 @@ mod journal_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/disk_authority/protocol.rs"]
 mod protocol_tests;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/disk_authority/source_candidate_batch.rs"]
+mod source_candidate_batch_tests;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/disk_authority/source_candidate_session.rs"]
+mod source_candidate_session_tests;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/disk_authority/source_candidate.rs"]
+mod source_candidate_tests;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/disk_authority/topology.rs"]
+mod topology_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/disk_authority/source_reader.rs"]
+mod source_reader_tests;

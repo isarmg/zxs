@@ -2,6 +2,7 @@
 //! action exists here; missing content remains visible history.
 use super::*;
 
+mod independent;
 mod plan;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{
@@ -17,12 +18,14 @@ pub(super) struct Model {
     preview: Option<ForeignDiskPreview>,
     error: Option<api::Error>,
     plan: plan::Model,
+    independent: independent::Model,
 }
 impl Model {
     pub(super) fn blocks_edit(&self) -> bool {
         self.plan.blocks_edit()
     }
     pub(super) fn invalidate(&mut self) {
+        self.independent.invalidate();
         if let Some(cancellation) = self.cancellation.take() {
             cancellation.abort();
         }
@@ -240,7 +243,9 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             {move ||state.with(|state|state.admin_console.storage.foreign.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
             {move ||state.with(|state|state.admin_console.storage.foreign.preview.clone()).map(review)}
         </section>
-    </Show>}
+    </Show>
+    {independent::view(state)}
+    }
 }
 
 pub(super) fn planning(state: RwSignal<State>) -> impl IntoView {

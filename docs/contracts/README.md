@@ -162,3 +162,7 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 `DirectoryGitStatus` 和孩子状态的 nullable 字段必须显式出现，`unstaged` 为必填布尔值且不补旧响应默认值；目录初始化不创建提交，读取不初始化。暂存及提交请求必须携带规范十进制字符串 index 代数，未知字段、数值或遗漏代数拒绝。固定正反向量由 schema 及 Rust DTO 回归共同验证。HTTP 公开四个目录 Git 接口，旧 `/directory-scopes` 和按名 `/directory-select` 入口移除，目录选择改用稳定分支 ID 及双 HEAD CAS；父提交只采用固定暂存快照和明确暂存的孩子 HEAD，不递归提交，也不自动加入暂存后保存的工作内容。状态 GET 的完整编码上限为1MiB，超过失败而不截断。
 
 `DirectoryNamespaceBatch.kind = separate` 每次只接受一对位置，必须有 target。source 明确保留旧身份及历史，已存在的 target 从其自身准确保存版本建立新身份，首版本不复制历史。两个稳定 main 的同一身份、自有路径、基线及正文可用性由核心事务验证，schema 不猜测原件归属。操作沿用目录批发布及永久幂等入口；这是显式身份分离，不表示新的实体布局已经落盘。
+
+## 独立盘来源图只读预览
+
+`POST /api/admin/storage/independent/preview` 接收 `IndependentDiskPreviewRequest`，只接受已观察的发现目录身份；输出 `IndependentDiskPreview`。`IndependentSourceTopology` 明确保留完整来源身份、incarnation、root checkpoint、所有节点准确 publication 引用和来源→消费关系。`binding_generation`、`sequence` 是规范 u64 十进制字符串。显示解码另外检查可达性、端点绑定、逐层关系和节点/pin唯一性；schema 本身不证明磁盘证据或在线状态。最多4096节点/关系、10000节点pin引用及1MiB完整响应，超限整份拒绝。该接口不读取正文，也没有登记或迁入命令；边界与后续项见[产品只读预览](../design/independent-source-product-preview.md)。

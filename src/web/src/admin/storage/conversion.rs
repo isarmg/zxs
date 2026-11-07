@@ -323,6 +323,7 @@ fn preview(state: RwSignal<State>) {
                     return None;
                 }
             };
+            storage.foreign.invalidate();
             let model = &mut storage.conversion;
             model.sending = true;
             model.error = None;
@@ -465,6 +466,7 @@ fn submit(state: RwSignal<State>, action: Submit) {
             }
             let storage = &mut s.admin_console.storage;
             let (preview, path, body) = prepare_submit(storage, action)?;
+            storage.foreign.invalidate();
             Some((
                 s.session_epoch,
                 storage.conversion.generation,

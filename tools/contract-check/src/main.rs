@@ -206,6 +206,14 @@ fn semantics(name: &str, value: &Value) -> Result {
             let _: storage_contract::storage_directories::DiscoveredDisks =
                 json_codec::from_value(value.clone())?;
         }
+        "IndependentDiskPreviewRequest" => {
+            let _: storage_contract::storage_independent_topology::IndependentDiskPreviewRequest =
+                json_codec::from_value(value.clone())?;
+        }
+        "IndependentDiskPreview" => {
+            let _: storage_contract::storage_independent_topology::IndependentDiskPreview =
+                json_codec::from_value(value.clone())?;
+        }
         "ForeignDiskPreviewRequest" => {
             let _: storage_contract::storage_foreign::ForeignDiskPreviewRequest =
                 json_codec::from_value(value.clone())?;

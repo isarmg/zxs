@@ -45,6 +45,10 @@ pub(crate) fn protected_routes() -> Router<AppState> {
             post(foreign_disk_preview),
         )
         .route(
+            "/api/admin/storage/independent/preview",
+            post(independent_disk_preview),
+        )
+        .route(
             "/api/admin/storage/foreign/plans/preview",
             post(foreign_plan_preview),
         )
@@ -311,6 +315,7 @@ async fn protected_mutation(
         | "disk_readmit_commit"
         | "ordinary_conversion_preview"
         | "foreign_disk_preview"
+        | "independent_disk_preview"
         | "ordinary_conversion_commit" => MAX_DIRECTORY_BODY_BYTES,
         _ => super::MAX_SETUP_BODY_BYTES,
     };
@@ -384,6 +389,17 @@ async fn foreign_disk_preview(
         ));
     }
     protected_mutation(state, request, "foreign_disk_preview").await
+}
+async fn independent_disk_preview(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    if request.uri().query().is_some() {
+        return Err(ApiError::invalid(
+            "independent disk preview accepts no query parameters",
+        ));
+    }
+    protected_mutation(state, request, "independent_disk_preview").await
 }
 async fn foreign_plan_mutation(
     state: AppState,
