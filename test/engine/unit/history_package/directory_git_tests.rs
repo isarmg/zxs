@@ -73,6 +73,7 @@ fn fixture() -> Fixture {
                 repository_id: repository.repository_id.clone(),
                 directory_id: branch.directory_id.clone(),
                 initialized_sequence: 1,
+                main_branch_id: branch.directory_branch_id.clone(),
                 current_branch_id: branch.directory_branch_id.clone(),
                 branches: BTreeMap::from([(
                     branch.directory_branch_id.clone(),
@@ -210,7 +211,7 @@ fn directory_git_history_preserves_exact_heads_indexes_and_child_snapshots() {
 #[test]
 fn directory_git_history_rejects_identity_scope_and_missing_index_edges() {
     let f = fixture();
-    for attack in 0..10 {
+    for attack in 0..12 {
         let mut manifest = f.manifest.clone();
         match attack {
             0 => {
@@ -266,6 +267,20 @@ fn directory_git_history_rejects_identity_scope_and_missing_index_edges() {
             9 => {
                 index(&mut manifest, &f.root, &f.root_branch).head_tree_id =
                     Some(f.child_tree.clone());
+            }
+            10 => {
+                manifest
+                    .directory_git_repositories
+                    .get_mut(&f.root)
+                    .unwrap()
+                    .main_branch_id = new_id("dbr").unwrap();
+            }
+            11 => {
+                manifest
+                    .directory_git_repositories
+                    .get_mut(&f.root)
+                    .unwrap()
+                    .main_branch_id = f.child_branch.clone();
             }
             _ => unreachable!(),
         }

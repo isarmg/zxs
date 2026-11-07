@@ -620,6 +620,7 @@ fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
             match operation.result.get("action").and_then(Value::as_str) {
                 Some("move") => "directory.namespace.move",
                 Some("copy") => "directory.namespace.copy",
+                Some("separate") => "directory.namespace.separate",
                 Some("delete") => "directory.namespace.delete",
                 Some("rename") => "directory.namespace.rename",
                 _ => "directory.tree.write",

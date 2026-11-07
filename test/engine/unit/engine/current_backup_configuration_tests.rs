@@ -634,6 +634,7 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
                 repository_id: "unexpected".into(),
                 directory_id: "unexpected".into(),
                 initialized_sequence: state.sequence,
+                main_branch_id: "unexpected".into(),
                 current_branch_id: "unexpected".into(),
                 branches: BTreeMap::new(),
             });

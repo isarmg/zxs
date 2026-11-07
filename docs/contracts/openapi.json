@@ -10893,7 +10893,8 @@
               "move",
               "copy",
               "delete",
-              "rename"
+              "rename",
+              "separate"
             ]
           },
           "items": {
@@ -10905,7 +10906,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "一批显式分支映射；实际发布再统一校验树依据、条目身份、路径归属、目标碰撞与业务可写状态。",
+        "description": "一批显式分支映射；separate 只接受一对已存在的稳定 main 自有文件位置：source 保留原身份历史，target 以自身准确已保存正文建立新身份，不复制历史。实际发布统一校验树依据、身份、归属、碰撞及可写状态。",
         "required": [
           "kind",
           "items"
@@ -10945,6 +10946,22 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "separate"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "items": {
+                  "maxItems": 1
                 }
               }
             }
@@ -17836,6 +17853,10 @@
           "initialized_sequence": {
             "$ref": "#/components/schemas/UInt64"
           },
+          "main_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId",
+            "description": "稳定 main 目录分支身份；布局基准包含其最新已保存未提交工作，不随当前选择或分支名称变化。"
+          },
           "current_branch_id": {
             "$ref": "#/components/schemas/DirectoryBranchId"
           },
@@ -17853,6 +17874,7 @@
           "repository_id",
           "directory_id",
           "initialized_sequence",
+          "main_branch_id",
           "current_branch_id",
           "branches"
         ],

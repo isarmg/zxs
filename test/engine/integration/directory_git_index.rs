@@ -1,4 +1,6 @@
 //! Public-engine regressions for explicit index snapshots and live working files.
+#[path = "directory_git_index/file_separation.rs"]
+mod file_separation;
 use std::io::Read;
 use storage_engine::{
     CommitRequest, Config, DirectoryCommitRequest, Engine, ErrorCode, OperationId, OperationResult,
@@ -175,6 +177,15 @@ fn explicit_commit_freezes_staged_contents_and_preserves_later_work_across_resta
     save(&mut engine, &repo, "not-staged", b"new working file");
     let ready = status(&engine, &repo, "");
     assert!(ready.staged && ready.unstaged);
+    let main_working = engine
+        .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        Some(&main_working.head_tree_id),
+        ready.working_tree_id.as_ref()
+    );
+    assert_ne!(main_working.head_tree_id, staged_tree);
     assert_eq!((ready.added, ready.modified, ready.deleted), (0, 1, 0));
     assert_eq!(ready.index_generation, reviewed.index_generation);
     let operation = OperationId::generate().unwrap();
@@ -183,6 +194,13 @@ fn explicit_commit_freezes_staged_contents_and_preserves_later_work_across_resta
     assert_eq!(engine.state().directory_trees[head].entries, staged_entries);
     assert_eq!(bytes(&engine, &repo, "file"), b"later working content");
     assert_eq!(bytes(&engine, &repo, "not-staged"), b"new working file");
+    assert_eq!(
+        engine
+            .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+            .unwrap()
+            .entries,
+        main_working.entries
+    );
     let after = status(&engine, &repo, "");
     assert!(!after.staged && after.unstaged);
     assert_eq!((after.added, after.modified, after.deleted), (0, 0, 0));
@@ -195,6 +213,13 @@ fn explicit_commit_freezes_staged_contents_and_preserves_later_work_across_resta
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
     assert_eq!(status(&engine, &repo, ""), after);
+    assert_eq!(
+        engine
+            .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+            .unwrap()
+            .entries,
+        main_working.entries
+    );
     assert_eq!(
         commit_reviewed(&mut engine, &repo, &ready, operation).unwrap(),
         result
@@ -656,4 +681,260 @@ fn moving_a_staged_file_changes_the_working_location_not_the_reviewed_snapshot()
             .any(|entry| entry.path() == "to/file" && entry.file_id == file.file_id)
     );
     assert!(!status(&engine, &repo, "").unstaged);
+}
+
+#[test]
+fn main_workspace_includes_saved_uncommitted_files_before_any_user_commit() {
+    let (temp, mut engine, repo) = fixture();
+    save(&mut engine, &repo, "a/report.txt", b"first file");
+    assert_eq!(
+        engine
+            .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+            .unwrap_err()
+            .code(),
+        ErrorCode::DirectoryScopeRequired
+    );
+    initialize(&mut engine, &repo, "");
+    assert_eq!(
+        engine
+            .directory_git_main_workspace("other-repository", &repo.repository_id)
+            .unwrap_err()
+            .code(),
+        ErrorCode::DirectoryScopeRequired
+    );
+    let original = engine
+        .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+        .unwrap()
+        .clone();
+    save(&mut engine, &repo, "a/report.txt", b"latest saved main");
+    save(
+        &mut engine,
+        &repo,
+        "b/report.txt",
+        b"different file, same name",
+    );
+    let before = engine.state().clone();
+    let main = engine
+        .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+        .unwrap()
+        .clone();
+    assert_eq!(engine.state(), &before);
+    assert_eq!(main.directory_branch_id, original.directory_branch_id);
+    assert_ne!(main.head_tree_id, original.head_tree_id);
+    let git = &engine.state().directory_git_repositories[&repo.repository_id];
+    assert_eq!(git.main_branch_id, git.current_branch_id);
+    assert!(git.branches[&git.main_branch_id].head_tree_id.is_none());
+    assert_eq!(
+        git.branches[&git.main_branch_id].index_tree_id,
+        original.head_tree_id
+    );
+    let first = main
+        .entries
+        .iter()
+        .find(|entry| entry.path() == "a/report.txt")
+        .unwrap();
+    let second = main
+        .entries
+        .iter()
+        .find(|entry| entry.path() == "b/report.txt")
+        .unwrap();
+    assert_ne!(first.file_id, second.file_id);
+    assert_eq!(
+        version_bytes(&engine, &first.version_id),
+        b"latest saved main"
+    );
+    assert_eq!(
+        version_bytes(&engine, &second.version_id),
+        b"different file, same name"
+    );
+    drop(engine);
+    let engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(
+        engine
+            .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+            .unwrap(),
+        &main
+    );
+    assert!(status(&engine, &repo, "").head_tree_id.is_none());
+    assert_eq!(bytes(&engine, &repo, "a/report.txt"), b"latest saved main");
+    assert_eq!(
+        bytes(&engine, &repo, "b/report.txt"),
+        b"different file, same name"
+    );
+}
+
+#[test]
+fn main_workspace_identity_ignores_checkout_names_and_other_branch_paths() {
+    let (temp, mut engine, repo) = fixture();
+    save(&mut engine, &repo, "a/report.txt", b"main body");
+    initialize(&mut engine, &repo, "");
+    commit(&mut engine, &repo, "");
+    let main_id = engine.state().directory_git_repositories[&repo.repository_id]
+        .main_branch_id
+        .clone();
+    engine
+        .rename_directory_branch(
+            &repo.repository_id,
+            &main_id,
+            &storage_contract::BranchName::parse("primary").unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let topic = engine
+        .create_directory_branches(
+            &repo.repository_id,
+            None,
+            &storage_contract::BranchName::parse("main").unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap()
+        .result["directory_branch_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let main = engine
+        .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+        .unwrap()
+        .clone();
+    let original = main
+        .entries
+        .iter()
+        .find(|entry| entry.path() == "a/report.txt")
+        .unwrap();
+    engine
+        .select_default_directory_branch(
+            &repo.repository_id,
+            &topic,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            storage_contract::NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "a/report.txt",
+                Some("a/topic-report.txt"),
+            )
+            .unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    save(
+        &mut engine,
+        &repo,
+        "a/topic-report.txt",
+        b"topic saved, uncommitted",
+    );
+    save(&mut engine, &repo, "b/report.txt", b"topic only");
+    let current = engine.list_tree(&repo.main_branch_id).unwrap();
+    let moved = current
+        .iter()
+        .find(|entry| entry.path() == "a/topic-report.txt")
+        .unwrap();
+    assert_eq!(moved.file_id, original.file_id);
+    assert_eq!(
+        engine
+            .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+            .unwrap(),
+        &main
+    );
+    assert_eq!(version_bytes(&engine, &original.version_id), b"main body");
+    assert_eq!(
+        bytes(&engine, &repo, "a/topic-report.txt"),
+        b"topic saved, uncommitted"
+    );
+    let git = &engine.state().directory_git_repositories[&repo.repository_id];
+    assert_eq!(git.main_branch_id, main_id);
+    assert_eq!(git.current_branch_id, topic);
+    assert_ne!(git.main_branch_id, git.current_branch_id);
+    assert_eq!(engine.state().directory_branches[&topic].name, "main");
+    assert_eq!(
+        engine
+            .select_default_directory_branch(
+                &repo.repository_id,
+                &main_id,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::DirectoryBranchConflict
+    );
+    drop(engine);
+    let engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(
+        engine
+            .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+            .unwrap(),
+        &main
+    );
+    assert_eq!(
+        engine.state().directory_git_repositories[&repo.repository_id].current_branch_id,
+        topic
+    );
+    assert_eq!(
+        bytes(&engine, &repo, "a/topic-report.txt"),
+        b"topic saved, uncommitted"
+    );
+    assert_eq!(bytes(&engine, &repo, "b/report.txt"), b"topic only");
+}
+
+#[test]
+fn each_child_repository_keeps_its_own_latest_main_workspace() {
+    let (_temp, mut engine, repo) = fixture();
+    save(&mut engine, &repo, "own", b"parent");
+    save(&mut engine, &repo, "child/file", b"child base");
+    initialize(&mut engine, &repo, "child");
+    let child_head = commit(&mut engine, &repo, "child");
+    initialize(&mut engine, &repo, "");
+    stage_child(&mut engine, &repo, "", "child");
+    let parent_head = commit(&mut engine, &repo, "");
+    let child_id = status(&engine, &repo, "child").directory_id;
+    let parent_main = engine.state().directory_git_repositories[&repo.repository_id]
+        .main_branch_id
+        .clone();
+    let child_main = engine.state().directory_git_repositories[&child_id]
+        .main_branch_id
+        .clone();
+    assert_ne!(parent_main, child_main);
+    save(
+        &mut engine,
+        &repo,
+        "child/file",
+        b"child saved, not committed",
+    );
+    let child = engine
+        .directory_git_main_workspace(&repo.repository_id, &child_id)
+        .unwrap();
+    let file = child
+        .entries
+        .iter()
+        .find(|entry| entry.path() == "child/file")
+        .unwrap();
+    assert_eq!(child.directory_branch_id, child_main);
+    assert_eq!(
+        version_bytes(&engine, &file.version_id),
+        b"child saved, not committed"
+    );
+    assert_eq!(
+        engine.state().directory_trees[&parent_head].directory_refs[&child_id].tree_id,
+        child_head
+    );
+    assert_eq!(
+        status(&engine, &repo, "child").head_tree_id.as_deref(),
+        Some(child_head.as_str())
+    );
+    assert!(status(&engine, &repo, "child").unstaged);
+    assert_eq!(
+        engine
+            .directory_git_main_workspace(&repo.repository_id, &repo.repository_id)
+            .unwrap()
+            .directory_branch_id,
+        parent_main
+    );
 }

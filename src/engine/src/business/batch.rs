@@ -44,6 +44,80 @@ struct CopiedFile {
     size: u64,
 }
 
+/// The request explicitly chooses the retained and secondary occurrences. A
+/// path or current physical location never chooses which file keeps history.
+pub(crate) fn separated_file_source<'a>(
+    state: &State,
+    retained_scope: &DirectoryBranch,
+    retained: &Entry,
+    secondary_scope: &'a DirectoryBranch,
+    secondary_path: &name_policy::PortablePath,
+) -> Result<&'a Entry> {
+    for branch in [retained_scope, secondary_scope] {
+        let git = state
+            .directory_git_repositories
+            .get(&branch.directory_id)
+            .filter(|git| {
+                git.repository_id == branch.repository_id
+                    && git.main_branch_id == branch.directory_branch_id
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::DirectoryBranchConflict,
+                    "file separation requires each directory repository's stable main",
+                )
+            })?;
+        if git.repository_id != retained_scope.repository_id {
+            return Err(Error::new(
+                ErrorCode::DirectoryBranchScope,
+                "file separation cannot cross top-level repository history",
+            ));
+        }
+    }
+    directory_git::require_owned_path(state, retained_scope, retained.path())?;
+    directory_git::require_owned_path(state, secondary_scope, secondary_path.as_str())?;
+    let secondary = namespace::find_unordered_key(&secondary_scope.entries, secondary_path.key())
+        .ok_or_else(|| {
+        Error::new(ErrorCode::EntryNotFound, "secondary main file is missing")
+    })?;
+    if retained.kind != NamespaceEntryKind::File
+        || secondary.kind != NamespaceEntryKind::File
+        || retained.file_id != secondary.file_id
+        || secondary.path() != secondary_path.as_str()
+        || (retained_scope.directory_id == secondary_scope.directory_id
+            && retained.lookup_key() == secondary.lookup_key())
+    {
+        return Err(Error::new(
+            ErrorCode::BatchMappingConflict,
+            "file separation requires two distinct main occurrences of the same file identity",
+        ));
+    }
+    Ok(secondary)
+}
+
+fn require_completed_file_saves(engine: &Engine, state: &State, history: &str) -> Result<()> {
+    // Open and sealed workspaces are resident; only completed/empty-aborted
+    // records may be cold. Do not silently copy an older committed body while
+    // a workspace can still contain the secondary occurrence's newer save.
+    for workspace in engine.workspaces.values().filter(|workspace| {
+        matches!(
+            workspace.state,
+            WorkspaceState::Open | WorkspaceState::Sealed
+        )
+    }) {
+        let branch = state.branches.get(&workspace.branch_id).ok_or_else(|| {
+            Error::new(ErrorCode::StateInvalid, "open workspace branch is missing")
+        })?;
+        if branch.history_tree_id == history {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "complete or cancel this repository's write workspaces before separating file identities",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn contains_key(scope: &str, path: &str) -> bool {
     scope.is_empty() || namespace::is_descendant(path, scope)
 }
@@ -349,6 +423,15 @@ fn apply(
             "batch requires a bounded nonempty item list",
         ));
     }
+    if request.kind == DirectoryBatchKind::Separate {
+        if request.items.len() != 1 {
+            return Err(Error::new(
+                ErrorCode::InvalidRequest,
+                "file separation requires one explicit retained/secondary pair",
+            ));
+        }
+        require_completed_file_saves(engine, state, &repo.history_tree_id)?;
+    }
     // Capture the current owner from this mutation's immutable engine input.
     // Each directory source is separately admitted before constructing drafts.
     let current = engine.namespace_snapshot(&repo.main_branch_id)?;
@@ -378,9 +461,10 @@ fn apply(
             ));
         }
         let requires_target = match request.kind {
-            DirectoryBatchKind::Move | DirectoryBatchKind::Copy | DirectoryBatchKind::Rename => {
-                true
-            }
+            DirectoryBatchKind::Move
+            | DirectoryBatchKind::Copy
+            | DirectoryBatchKind::Rename
+            | DirectoryBatchKind::Separate => true,
             DirectoryBatchKind::Delete => false,
         };
         if requires_target != item.target.is_some() {
@@ -511,7 +595,7 @@ fn apply(
                 );
                 touched.insert(source_scope.directory_branch_id.clone());
             }
-            DirectoryBatchKind::Copy => {}
+            DirectoryBatchKind::Copy | DirectoryBatchKind::Separate => {}
         }
         let Some((target, target_path)) = target_path else {
             continue;
@@ -541,6 +625,16 @@ fn apply(
                 storage_contract::ErrorCode::InvalidMove,
                 "cannot move/copy directory inside itself",
             ));
+        }
+        if request.kind == DirectoryBatchKind::Separate {
+            let secondary =
+                separated_file_source(state, source_scope, &source, target_original, target_path)?;
+            remove(
+                drafts
+                    .get_mut(&target.directory_branch_id)
+                    .expect("invariant: the target branch was captured"),
+                secondary,
+            );
         }
         touched.insert(target.directory_branch_id.clone());
         planned.push((item, source, target, target_path));
@@ -580,15 +674,23 @@ fn apply(
                 "destination parent missing in selected subtree",
             ));
         }
+        let (content_scope, content_source) = if request.kind == DirectoryBatchKind::Separate {
+            (
+                target_scope,
+                separated_file_source(state, source_scope, source, target_scope, target_path)?,
+            )
+        } else {
+            (source_scope, source)
+        };
         entries.extend(
-            source_scope
+            content_scope
                 .entries
                 .iter()
                 .filter(|entry| {
-                    entry.lookup_key() == source.lookup_key()
-                        || namespace::is_descendant(entry.lookup_key(), source.lookup_key())
+                    entry.lookup_key() == content_source.lookup_key()
+                        || namespace::is_descendant(entry.lookup_key(), content_source.lookup_key())
                 })
-                .map(|entry| relocate(entry, source.path(), target_path))
+                .map(|entry| relocate(entry, content_source.path(), target_path))
                 .collect::<Result<Vec<_>>>()?,
         );
     }
@@ -607,7 +709,9 @@ fn apply(
             let (_, destination) = target_path.as_ref()?;
             match request.kind {
                 DirectoryBatchKind::Rename | DirectoryBatchKind::Move => {}
-                DirectoryBatchKind::Copy | DirectoryBatchKind::Delete => return None,
+                DirectoryBatchKind::Copy
+                | DirectoryBatchKind::Delete
+                | DirectoryBatchKind::Separate => return None,
             }
             if !source.is_active(state) {
                 return None;
@@ -661,7 +765,23 @@ fn apply(
     let mut directory_copies = BTreeMap::<(String, String, String), String>::new();
     let mut copy_receipts = Vec::new();
     for (item, source, target, target_path) in planned {
-        let source_scope = originals[&item.source.directory_branch_id].branch();
+        let retained_scope = originals[&item.source.directory_branch_id].branch();
+        let (source_scope, source) = if request.kind == DirectoryBatchKind::Separate {
+            let secondary_scope = originals[&target.directory_branch_id].branch();
+            (
+                secondary_scope,
+                separated_file_source(
+                    state,
+                    retained_scope,
+                    &source,
+                    secondary_scope,
+                    target_path,
+                )?
+                .clone(),
+            )
+        } else {
+            (retained_scope, source)
+        };
         let target_draft = drafts
             .get_mut(&target.directory_branch_id)
             .expect("checked");
@@ -693,7 +813,10 @@ fn apply(
             } else {
                 target_draft.directory_id.clone()
             };
-            if request.kind == DirectoryBatchKind::Copy {
+            if matches!(
+                request.kind,
+                DirectoryBatchKind::Copy | DirectoryBatchKind::Separate
+            ) {
                 if moved.kind == NamespaceEntryKind::Directory {
                     let key = (
                         member.entry_id.clone(),

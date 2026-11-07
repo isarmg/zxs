@@ -31,6 +31,9 @@ pub struct DirectoryGitRepository {
     pub directory_id: String,
     #[serialization(with = "crate::u64_string")]
     pub initialized_sequence: u64,
+    /// Stable directory branch whose saved workspace defines the main layout.
+    /// Renaming or checking out another branch does not change this identity.
+    pub main_branch_id: String,
     pub current_branch_id: String,
     pub branches: BTreeMap<String, DirectoryGitBranch>,
 }

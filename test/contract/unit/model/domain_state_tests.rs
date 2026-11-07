@@ -17,7 +17,7 @@ macro_rules! roundtrip {
 
 #[test]
 fn domain_states_preserve_wire_strings_without_accepting_other_shapes() {
-    roundtrip!(DirectoryBatchKind, Move, Copy, Delete, Rename);
+    roundtrip!(DirectoryBatchKind, Move, Copy, Delete, Rename, Separate);
     roundtrip!(BranchKind, File, Full);
     roundtrip!(FileMetadataKind, Tags, Merge);
     roundtrip!(HistoryState, Active, Archived);
@@ -68,7 +68,7 @@ fn configuration_mode_requires_exact_strings() {
 
 #[test]
 fn directory_batch_kind_preserves_request_bytes_and_digest_input() {
-    for token in ["move", "copy", "delete", "rename"] {
+    for token in ["move", "copy", "delete", "rename", "separate"] {
         let source = r#"{"directory_branch_id":"branch","expected_tree_id":"tree","path":"file.txt","entry_id":"entry"}"#;
         let target = if token == "delete" {
             "null"

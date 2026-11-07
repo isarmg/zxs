@@ -25,6 +25,7 @@ mod namespace;
 mod repository;
 mod workspace;
 pub(crate) use ancestry::descendant_commits;
+pub(crate) use batch::separated_file_source;
 pub(crate) use directory::context_key_from_key;
 pub use file_nodes::{FileNodeProjectionRequest, FileNodeSummary};
 pub use file_requests::{

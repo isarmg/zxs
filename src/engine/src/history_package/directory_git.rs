@@ -73,6 +73,7 @@ impl HistoryManifest {
                 || git.repository_id != self.repository.repository_id
                 || git.initialized_sequence == 0
                 || git.branches.is_empty()
+                || !git.branches.contains_key(&git.main_branch_id)
                 || !git.branches.contains_key(&git.current_branch_id)
                 || (directory != &self.repository.repository_id
                     && !paths.contains_key(directory.as_str()))

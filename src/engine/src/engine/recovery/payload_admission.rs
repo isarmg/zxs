@@ -122,12 +122,25 @@ fn verify_payload_scopes(
     }
     let workspace = result.kind == "workspace.commit";
     let copied = result.kind == "directory.namespace.batch"
-        && result.result["action"] == json_codec::json!(DirectoryBatchKind::Copy);
+        && (result.result["action"] == json_codec::json!(DirectoryBatchKind::Copy)
+            || result.result["action"] == json_codec::json!(DirectoryBatchKind::Separate));
     if !workspace && !copied {
         return Err(invalid());
     }
     let copy_plan = if copied {
         let plan = verify_copied_payload_request(source, previous, candidate, result, principal)?;
+        if let Some(retained) = &plan.retained {
+            if previous.directory_git_repositories != next.directory_git_repositories {
+                return Err(invalid_copy());
+            }
+            let branch = next
+                .directory_branches
+                .get(&retained.directory_branch_id)
+                .ok_or_else(invalid_copy)?;
+            let entries =
+                advanced.directory_entries(&retained.directory_branch_id, &branch.head_tree_id)?;
+            verify_retained_file(branch, entries, retained)?;
+        }
         verify_copy_targets(source, advanced, next, candidate, &plan)?;
         Some(plan)
     } else {
@@ -267,10 +280,14 @@ fn verify_copied_payload_request(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let request = DirectoryNamespaceBatch {
-        kind: DirectoryBatchKind::Copy,
-        items,
+    let kind = if result.result["action"] == json_codec::json!(DirectoryBatchKind::Copy) {
+        DirectoryBatchKind::Copy
+    } else if result.result["action"] == json_codec::json!(DirectoryBatchKind::Separate) {
+        DirectoryBatchKind::Separate
+    } else {
+        return Err(invalid());
     };
+    let request = DirectoryNamespaceBatch { kind, items };
     let history = result.history_tree_id.as_ref().ok_or_else(invalid)?;
     let repository = &previous
         .histories
@@ -278,6 +295,7 @@ fn verify_copied_payload_request(
         .ok_or_else(invalid)?
         .repository_id;
     if request.items.is_empty()
+        || (kind == DirectoryBatchKind::Separate && request.items.len() != 1)
         || result.result["count"].as_str() != Some(request.items.len().to_string().as_str())
         || Engine::native_request_digest(
             "directory.namespace.batch",
@@ -287,7 +305,7 @@ fn verify_copied_payload_request(
     {
         return Err(invalid());
     }
-    let targets = copy_target_projections(view, previous, repository, &request)?;
+    let (targets, retained) = copy_target_projections(view, previous, repository, &request)?;
     let sources = targets
         .values()
         .flat_map(|target| target.copies.values())
@@ -339,7 +357,11 @@ fn verify_copied_payload_request(
             },
         );
     }
-    Ok(CopyPayloadPlan { payloads, targets })
+    Ok(CopyPayloadPlan {
+        payloads,
+        targets,
+        retained,
+    })
 }
 
 struct CopiedPayload {
@@ -358,12 +380,38 @@ struct CopyTarget {
 struct CopyPayloadPlan {
     payloads: BTreeMap<String, CopiedPayload>,
     targets: BTreeMap<String, CopyTarget>,
+    retained: Option<RetainedFile>,
+}
+
+struct RetainedFile {
+    directory_branch_id: String,
+    entry: Entry,
+    context: FileContext,
+}
+
+fn verify_retained_file(
+    branch: &DirectoryBranch,
+    entries: &[Entry],
+    retained: &RetainedFile,
+) -> Result<()> {
+    // A child replacement may advance the ancestor's cached subtree. Preserve
+    // the exact owned original occurrence/context, not the whole ancestor tree.
+    if branch.directory_branch_id != retained.directory_branch_id
+        || entries
+            .iter()
+            .find(|entry| entry.lookup_key() == retained.entry.lookup_key())
+            != Some(&retained.entry)
+        || branch.file_contexts.get(retained.entry.lookup_key()) != Some(&retained.context)
+    {
+        return Err(invalid_copy());
+    }
+    Ok(())
 }
 
 fn invalid_copy() -> Error {
     Error::new(
         ErrorCode::PublicationInvalid,
-        "copied payload differs from its exact empty destination and fresh identity projection",
+        "copied payload differs from its exact destination and fresh identity projection",
     )
 }
 
@@ -384,7 +432,7 @@ fn copy_target_projections(
     previous: &State,
     repository: &str,
     request: &DirectoryNamespaceBatch,
-) -> Result<BTreeMap<String, CopyTarget>> {
+) -> Result<(BTreeMap<String, CopyTarget>, Option<RetainedFile>)> {
     let mut scopes = BTreeMap::new();
     for item in &request.items {
         let target = item.target.as_ref().ok_or_else(invalid_copy)?;
@@ -408,6 +456,7 @@ fn copy_target_projections(
         }
     }
     let mut targets = BTreeMap::<String, CopyTarget>::new();
+    let mut retained = None;
     let mut ranges = BTreeMap::<String, Vec<String>>::new();
     let mut mappings = BTreeSet::new();
     let mut target_scopes = BTreeSet::<String>::new();
@@ -477,6 +526,30 @@ fn copy_target_projections(
         let projection = targets
             .get_mut(&target.directory_branch_id)
             .expect("invariant: target projection exists");
+        let (content_scope, content_source) = if request.kind == DirectoryBatchKind::Separate {
+            let secondary = crate::business::separated_file_source(
+                previous,
+                source,
+                original,
+                destination,
+                &target_path,
+            )?;
+            if projection.original.remove(target_path.key()).as_ref() != Some(secondary) {
+                return Err(invalid_copy());
+            }
+            retained = Some(RetainedFile {
+                directory_branch_id: source.directory_branch_id.clone(),
+                entry: original.clone(),
+                context: source
+                    .file_contexts
+                    .get(original.lookup_key())
+                    .cloned()
+                    .ok_or_else(invalid_copy)?,
+            });
+            (destination, secondary)
+        } else {
+            (source, original)
+        };
         if projection.original.contains_key(target_path.key())
             || projection.copies.contains_key(target_path.key())
         {
@@ -492,10 +565,10 @@ fn copy_target_projections(
         {
             return Err(invalid_copy());
         }
-        let depth = original.path().split('/').count();
-        for entry in source.entries.iter().filter(|entry| {
-            entry.lookup_key() == original.lookup_key()
-                || descendant(entry.lookup_key(), original.lookup_key())
+        let depth = content_source.path().split('/').count();
+        for entry in content_scope.entries.iter().filter(|entry| {
+            entry.lookup_key() == content_source.lookup_key()
+                || descendant(entry.lookup_key(), content_source.lookup_key())
         }) {
             let path = if entry.path().split('/').count() == depth {
                 target_path.clone()
@@ -512,7 +585,7 @@ fn copy_target_projections(
             }
         }
     }
-    Ok(targets)
+    Ok((targets, retained))
 }
 
 fn verify_copy_targets(
@@ -596,3 +669,7 @@ fn verify_copy_targets(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/recovery/file_separation_tests.rs"]
+mod file_separation_tests;

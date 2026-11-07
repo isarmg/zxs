@@ -358,6 +358,29 @@ impl Engine {
         )
     }
 
+    /// Read the designated main branch's latest saved working composition.
+    /// Includes saved, uncommitted edits, even before the first user commit.
+    /// This does not follow the current checkout, branch name, index or Git HEAD.
+    ///
+    /// This is retained metadata, not a physical placement plan or a promise of
+    /// body availability. Nested repository snapshots remain in the composition;
+    /// a layout consumer must treat their stable identities as ownership borders
+    /// and use each child's own main workspace instead of expanding the parent.
+    /// No state, selection, receipt, container or working bytes are changed.
+    pub fn directory_git_main_workspace(
+        &self,
+        repository: &str,
+        directory: &str,
+    ) -> Result<&DirectoryBranch> {
+        let git = self
+            .state
+            .directory_git_repositories
+            .get(directory)
+            .filter(|git| git.repository_id == repository)
+            .ok_or_else(|| required("directory repository is not initialized in this scope"))?;
+        Ok(&self.state.directory_branches[&git.main_branch_id])
+    }
+
     pub fn directory_git_status(&self, repository: &str, path: &str) -> Result<DirectoryGitStatus> {
         status::read(
             &self.state,
@@ -497,6 +520,7 @@ pub(crate) fn apply_command(
                     repository_id: repository.into(),
                     directory_id: directory.clone(),
                     initialized_sequence: state.sequence,
+                    main_branch_id: branch.clone(),
                     current_branch_id: branch.clone(),
                     branches: BTreeMap::from([(branch.clone(), index)]),
                 },

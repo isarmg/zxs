@@ -4261,6 +4261,7 @@
         "repository_id": "repo_00000000000000000000000000000001",
         "directory_id": "repo_00000000000000000000000000000001",
         "initialized_sequence": "1",
+        "main_branch_id": "dbr_00000000000000000000000000000001",
         "current_branch_id": "dbr_00000000000000000000000000000001",
         "branches": {
           "dbr_00000000000000000000000000000001": {
@@ -5217,6 +5218,29 @@
         "histories": 1,
         "temporarily_unavailable_versions": 1,
         "execution": "unavailable"
+      }
+    },
+    {
+      "name": "directory-main-file-separation",
+      "schema": "DirectoryNamespaceBatch",
+      "layer": "schema",
+      "value": {
+        "kind": "separate",
+        "items": [
+          {
+            "source": {
+              "directory_branch_id": "dbr_00000000000000000000000000000001",
+              "expected_tree_id": "dtree_00000000000000000000000000000001",
+              "path": "left/report.txt",
+              "entry_id": "entry_00000000000000000000000000000001"
+            },
+            "target": {
+              "directory_branch_id": "dbr_00000000000000000000000000000002",
+              "expected_tree_id": "dtree_00000000000000000000000000000002",
+              "path": "right/report.txt"
+            }
+          }
+        ]
       }
     }
   ],
@@ -16898,6 +16922,7 @@
         "repository_id": "repo_00000000000000000000000000000001",
         "directory_id": "repo_00000000000000000000000000000001",
         "initialized_sequence": "1",
+        "main_branch_id": "dbr_00000000000000000000000000000001",
         "current_branch_id": "dbr_00000000000000000000000000000001",
         "branches": {
           "dbr_00000000000000000000000000000001": {
@@ -18426,6 +18451,88 @@
         "deleted": "0",
         "children": [],
         "legacy_history": false
+      }
+    },
+    {
+      "name": "directory-git-repository-missing-main-identity",
+      "schema": "DirectoryGitRepository",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "directory_id": "repo_00000000000000000000000000000001",
+        "initialized_sequence": "1",
+        "current_branch_id": "dbr_00000000000000000000000000000001",
+        "branches": {
+          "dbr_00000000000000000000000000000001": {
+            "head_tree_id": null,
+            "index_tree_id": "dtree_00000000000000000000000000000001",
+            "index_generation": "1",
+            "index_boundaries": {
+              "entry_00000000000000000000000000000001": "docs/child"
+            },
+            "index_children": {
+              "entry_00000000000000000000000000000001": {
+                "directory_branch_id": "dbr_00000000000000000000000000000001",
+                "tree_id": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "directory-main-file-separation-rejects-two-pairs",
+      "schema": "DirectoryNamespaceBatch",
+      "layer": "schema",
+      "value": {
+        "kind": "separate",
+        "items": [
+          {
+            "source": {
+              "directory_branch_id": "dbr_00000000000000000000000000000001",
+              "expected_tree_id": "dtree_00000000000000000000000000000001",
+              "path": "left/report.txt",
+              "entry_id": "entry_00000000000000000000000000000001"
+            },
+            "target": {
+              "directory_branch_id": "dbr_00000000000000000000000000000002",
+              "expected_tree_id": "dtree_00000000000000000000000000000002",
+              "path": "right/report.txt"
+            }
+          },
+          {
+            "source": {
+              "directory_branch_id": "dbr_00000000000000000000000000000001",
+              "expected_tree_id": "dtree_00000000000000000000000000000001",
+              "path": "left/report.txt",
+              "entry_id": "entry_00000000000000000000000000000001"
+            },
+            "target": {
+              "directory_branch_id": "dbr_00000000000000000000000000000002",
+              "expected_tree_id": "dtree_00000000000000000000000000000002",
+              "path": "right/report.txt"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "directory-main-file-separation-requires-secondary",
+      "schema": "DirectoryNamespaceBatch",
+      "layer": "schema",
+      "value": {
+        "kind": "separate",
+        "items": [
+          {
+            "source": {
+              "directory_branch_id": "dbr_00000000000000000000000000000001",
+              "expected_tree_id": "dtree_00000000000000000000000000000001",
+              "path": "left/report.txt",
+              "entry_id": "entry_00000000000000000000000000000001"
+            },
+            "target": null
+          }
+        ]
       }
     }
   ],

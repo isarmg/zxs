@@ -49,5 +49,5 @@ fn directory_git_fixed_vectors_match_strict_rust_wire_types() {
         }
     }
     assert_eq!(positive, 10);
-    assert_eq!(negative, 39);
+    assert_eq!(negative, 40);
 }

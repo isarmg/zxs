@@ -866,6 +866,7 @@ fn disk_exit_directory_commit_replay_proves_closed_write_set_without_tracking() 
         "event",
         "git_head",
         "git_index",
+        "git_main",
     ] {
         let mut changed = next.clone();
         match corruption {
@@ -944,6 +945,13 @@ fn disk_exit_directory_commit_replay_proves_closed_write_set_without_tracking() 
                     .get_mut(status.directory_branch_id.as_ref().unwrap())
                     .unwrap()
                     .index_generation += 1
+            }
+            "git_main" => {
+                changed
+                    .directory_git_repositories
+                    .get_mut(&f.repo.repository_id)
+                    .unwrap()
+                    .main_branch_id = f.root_branch.clone();
             }
             _ => unreachable!(),
         }
