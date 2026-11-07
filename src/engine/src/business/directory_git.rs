@@ -134,7 +134,7 @@ pub(super) fn working_tree<'a>(
         .get(id)
         .ok_or_else(|| Error::new(ErrorCode::StateInvalid, "Git index tree missing"))
 }
-pub(super) fn require_owned_path(
+pub(crate) fn require_owned_path(
     state: &State,
     branch: &DirectoryBranch,
     path: &str,

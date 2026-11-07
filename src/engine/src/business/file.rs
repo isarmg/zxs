@@ -802,7 +802,13 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        self.mutate("file.namespace",principal,operation,json!({"repository_id":repository,"change":change}),|engine,state,_|{
+        let kind = self.namespace_mutation_kind(
+            "file.namespace",
+            operation,
+            matches!(change, NamespaceOperation::Rename { .. }),
+        );
+        let request = json!({"repository_id":repository,"change":change});
+        self.mutate(kind,principal,operation,request.clone(),|engine,state,_|{
             let repo=engine.state.repositories.get(repository).ok_or_else(||Error::new(storage_contract::ErrorCode::RepositoryNotFound,"directory namespace missing"))?;
 
             let branch=state.branches.get(&repo.main_branch_id).cloned().ok_or_else(||Error::new(storage_contract::ErrorCode::BranchNotFound,"directory branch missing"))?;
@@ -829,7 +835,9 @@ impl Engine {
             changed_paths.extend(renamed_directories);
             if let Some(destination)=&change.destination() {changed_paths.push(destination.as_str().to_owned());}
             let directories=super::directory::record_projected_directory_edits(state,repository,&changed_paths,None,engine.current_namespaces.as_deref())?;
-            Ok(json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"path":change.path(),"action":change.kind(),"directory_branch_ids":directories,"file_node_ids":file_paths::operation_nodes(state,operation)}))
+            let mut result = json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"path":change.path(),"action":change.kind(),"directory_branch_ids":directories,"file_node_ids":file_paths::operation_nodes(state,operation)});
+            if crate::engine::CurrentNamespaces::recursive_namespace_kind(kind) { result["namespace_request"] = request; }
+            Ok(result)
         })
     }
     pub fn create_file_branch(

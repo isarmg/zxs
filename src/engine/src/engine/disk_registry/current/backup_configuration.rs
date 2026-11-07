@@ -352,15 +352,22 @@ impl CurrentNamespaces {
         }))
     }
 
-    pub(super) fn verify_backup_configurations(
+    pub(super) fn verify_backup_configurations<'a>(
         &self,
         previous: &State,
-        next: &State,
-    ) -> Result<()> {
+        next: &'a State,
+        follow: Option<&super::recursive_follow::VerifiedFollow<'_>>,
+    ) -> Result<Option<&'a OperationResult>> {
         match new_receipt(previous, next)? {
-            Some(receipt) => self.verify_backup_configuration(previous, next, receipt),
-            None if scoped_policy_changed(previous, next) => Err(invalid()),
-            None => Ok(()),
+            Some(receipt) => {
+                if follow.is_some() {
+                    return Err(invalid());
+                }
+                self.verify_backup_configuration(previous, next, receipt)?;
+                Ok(Some(receipt))
+            }
+            None if follow.is_none() && scoped_policy_changed(previous, next) => Err(invalid()),
+            None => Ok(None),
         }
     }
 
@@ -643,7 +650,7 @@ fn exact_updates<T: PartialEq>(
     }
     unchanged_except(before, after, |id| updates.contains_key(id))
 }
-fn exact_upserts<T: PartialEq>(
+pub(super) fn exact_upserts<T: PartialEq>(
     before: &TrackedMap<T>,
     after: &TrackedMap<T>,
     updates: &BTreeMap<String, T>,
@@ -667,7 +674,7 @@ fn unchanged_except<T: PartialEq>(
         MapChanges::All => before.keys().chain(after.keys()).all(equal),
     }
 }
-fn only_added<T: PartialEq>(
+pub(super) fn only_added<T: PartialEq>(
     before: &TrackedOperations<T>,
     after: &TrackedOperations<T>,
     key: OperationId,

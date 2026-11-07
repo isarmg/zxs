@@ -546,6 +546,15 @@ impl<'a> PlanningContext<'a> {
         let mut result = change(self, &mut next, &mut prepared)?;
         crate::file_deletion::freeze::verify(self.state, &next)?;
         crate::container_storage::capture_changed_names(self.state, &mut next);
+        if super::CurrentNamespaces::recursive_namespace_kind(kind) {
+            let view = self.current_namespaces.ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "recursive namespace publication needs current registry admission",
+                )
+            })?;
+            result["recursive_follow"] = view.apply_recursive_follow(self.state, &mut next)?;
+        }
         result["timestamp"] = json_codec::json!(timestamp.to_string());
         if let Some(branch_id) = result
             .get("branch_id")

@@ -22,6 +22,7 @@
 | [0014：SYSTEM 持有目录与 SQLite 文件系统边界](0014-system-directory-ownership.md) | 候选设计；SYSTEM 全流程和 SQLite held-directory 接线尚未完成 | 第 08、10、20 章及显式恢复边界 |
 | [0015：显式独立盘日志与可重建系统投影](0015-independent-disk-journal.md) | 离线新格式切片，在线消费者与发行格式尚未切换 | 第 08、10、18、20 章及显式逐盘权威边界 |
 | [0016：目标盘局部的外来历史执行意图](0016-foreign-import-intents.md) | 首个有限实现；复制与 namespace 发布未接入 | 第 10、15 章及完整来源/目标意图契约 |
-| [递归备份空 scope 目录发布](empty-directory-backup-publication.md) | 有限实现；仅元数据成员目标，Web 空目录入口未启用 | 第 08、09、10 章及递归备份、冷恢复边界 |
+| [递归备份空 scope 目录发布](empty-directory-backup-publication.md) | 有限实现；仅元数据成员目标，Server/Web 提供显式入口 | 第 08、09、10 章及递归备份、冷恢复边界 |
+| [显式递归备份的命名空间路径跟随](recursive-namespace-follow.md) | 有限实现设计；实际验证另行绑定源码与证据 | 递归备份、原生请求闭合、永久重试及冷恢复边界 |
 
 决策文档只保留当前背景、选择、代价、替代方案与关联规则，不追加实施进度或构建日志。

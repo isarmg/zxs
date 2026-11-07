@@ -616,7 +616,10 @@ fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
         } else {
             format!("{}/{}", repo.name, tree.path)
         };
-        let action = if operation.kind == "directory.namespace.batch" {
+        let action = if matches!(
+            operation.kind.as_str(),
+            "directory.namespace.batch" | "directory.namespace.batch.recursive"
+        ) {
             match operation.result.get("action").and_then(Value::as_str) {
                 Some("move") => "directory.namespace.move",
                 Some("copy") => "directory.namespace.copy",

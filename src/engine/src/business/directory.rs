@@ -661,7 +661,7 @@ pub(crate) fn set_namespace_location(
     state.file_locations.insert(file.file_id.clone(), path);
 }
 
-fn namespace_location(
+pub(crate) fn namespace_location(
     old: String,
     file: &Entry,
     source: &str,

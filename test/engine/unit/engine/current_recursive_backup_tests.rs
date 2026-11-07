@@ -1,6 +1,97 @@
 //! Actual native publication, physical file-container and cold-replay tests.
 use super::*;
 
+#[test]
+fn recursive_follow_replay_binds_request_and_rejects_omission_or_extra_paths() {
+    let mut fixture = ready();
+    let unrelated = save(
+        &mut fixture.engine,
+        &fixture.repository,
+        "other/untouched",
+        b"not selected",
+    );
+    let capture = fixture.engine.recursive_backup_capture().unwrap();
+    configure(&mut fixture, "docs", 3, 0, &capture, op()).unwrap();
+    let previous = Arc::clone(&fixture.engine.state);
+    let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
+    let change =
+        NamespaceOperation::parse(NamespaceOperationKind::Rename, "docs", Some("renamed")).unwrap();
+    let receipt = fixture
+        .engine
+        .file_namespace(&fixture.repository.repository_id, change, "admin", op())
+        .unwrap();
+    let next = fixture.engine.state.as_ref();
+    view.advance(&previous, next).unwrap();
+
+    let mut omitted = next.clone();
+    omitted
+        .operations
+        .get_mut(&receipt.operation_id)
+        .unwrap()
+        .result
+        .as_object_mut()
+        .unwrap()
+        .remove("recursive_follow");
+    assert!(view.advance(&previous, &omitted).is_err());
+
+    // Recreate the old native envelope consistently, leaving only the illicit
+    // new backup paths. Resetting policies isolates the path-downgrade gate.
+    let mut downgraded = next.clone();
+    downgraded.protection_policies = previous.protection_policies.clone();
+    let result = downgraded
+        .operations
+        .get_mut(&receipt.operation_id)
+        .unwrap();
+    let request = result.result["namespace_request"].clone();
+    result.kind = "file.namespace".into();
+    result.request_digest = Engine::native_request_digest(&result.kind, "admin", &request).unwrap();
+    let body = result.result.as_object_mut().unwrap();
+    body.remove("recursive_follow");
+    body.remove("namespace_request");
+    downgraded.events.last_mut().unwrap().kind = "file.namespace".into();
+    assert!(
+        view.advance(&previous, &downgraded).is_err(),
+        "a complete old envelope cannot smuggle new recursive path writes"
+    );
+
+    let mut old_semantics = downgraded.clone();
+    old_semantics.file_backup_paths = previous.file_backup_paths.clone();
+    view.advance(&previous, &old_semantics).unwrap();
+
+    let mut redirected = next.clone();
+    let result = redirected
+        .operations
+        .get_mut(&receipt.operation_id)
+        .unwrap();
+    result.result["namespace_request"] = json!({
+        "repository_id": fixture.repository.repository_id,
+        "change": NamespaceOperation::parse(NamespaceOperationKind::Rename, "other", Some("different")).unwrap(),
+    });
+    result.request_digest =
+        Engine::native_request_digest(&result.kind, "admin", &result.result["namespace_request"])
+            .unwrap();
+    assert!(
+        view.advance(&previous, &redirected).is_err(),
+        "a self-consistent request hash cannot authorize a different rename"
+    );
+
+    let mut extra = next.clone();
+    extra.file_backup_paths.insert(
+        unrelated.file_id,
+        BTreeMap::from([("B01".into(), "smuggled/path".into())]),
+    );
+    assert!(view.advance(&previous, &extra).is_err());
+
+    let mut wrong_source = next.clone();
+    wrong_source
+        .operations
+        .get_mut(&receipt.operation_id)
+        .unwrap()
+        .result["recursive_follow"]["paths"][&fixture.first.file_id]["source_operation_id"] =
+        json!(op());
+    assert!(view.advance(&previous, &wrong_source).is_err());
+}
+
 fn configure(
     fixture: &mut Fixture,
     path: &str,

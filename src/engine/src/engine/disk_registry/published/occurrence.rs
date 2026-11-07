@@ -553,6 +553,12 @@ impl FrozenDetachSource<'_> {
                         .collect(),
                 ),
                 unavailable_versions: Arc::new(unavailable_versions),
+                // Initial registry activation precedes native recursive configuration.
+                // Registry cold recovery replays the entire admitted chain, not a checkpoint.
+                recursive_policies: self
+                    .prior
+                    .map(|prior| Arc::clone(&prior.recursive_policies))
+                    .unwrap_or_default(),
             },
         })
     }

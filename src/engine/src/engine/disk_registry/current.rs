@@ -22,6 +22,7 @@ mod merge_links;
 mod new_scope;
 mod path_notes;
 mod plan_cancellation;
+mod recursive_follow;
 mod relocation;
 mod smb_bindings;
 mod workspace;
@@ -93,6 +94,7 @@ pub(crate) struct CurrentNamespaces {
     pub(in crate::engine::disk_registry) known_entries: Arc<BTreeSet<String>>,
     pub(in crate::engine::disk_registry) known_files: Arc<BTreeSet<String>>,
     pub(in crate::engine::disk_registry) unavailable_versions: Arc<BTreeSet<String>>,
+    pub(in crate::engine::disk_registry) recursive_policies: Arc<recursive_follow::PolicyIndex>,
 }
 
 pub(in crate::engine) struct PreparedCurrentNamespaces {
@@ -215,6 +217,7 @@ impl CurrentNamespaces {
             || kind == "file.delete"
             || kind == "file.delete.undo"
             || kind == "file.namespace"
+            || recursive_follow::is_kind(kind)
             || kind == "file.metadata"
             || kind == "file.path.metadata"
             || kind == "version.metadata"
@@ -508,11 +511,17 @@ impl CurrentNamespaces {
         self.verify_smb_bindings(previous, next)?;
         self.verify_plan_cancellations(previous, next)?;
         self.verify_branch_archives(previous, next)?;
-        self.verify_backup_configurations(previous, next)?;
+        let follow = self.verify_recursive_follow(previous, next)?;
+        let backup = self.verify_backup_configurations(previous, next, follow.as_ref())?;
+        if backup.is_none() && follow.is_none() {
+            self.require_recursive_paths_unchanged(previous, next)?;
+        }
         self.verify_merge_links(previous, next)?;
         self.verify_file_tag_publications(previous, next)?;
         self.verify_directory_commits(previous, next)?;
         let mut view = self.clone();
+        view.recursive_policies =
+            self.advance_recursive_index(previous, next, backup, follow.as_ref())?;
         let branch_changes = next.branches.changes_since(&previous.branches);
         let directory_changes = next
             .directory_branches

@@ -169,6 +169,69 @@ pub(crate) fn request_json(request: RecursiveBackupConfigurationRequest<'_>) -> 
 }
 
 impl RecursiveBackupCapture {
+    /// Capture roots omit the configured scope, so later primary path changes
+    /// can reuse the same immediate-upstream names without resampling mounts.
+    pub(crate) fn follow_roots<'a>(
+        &self,
+        repository: &Repository,
+        targets: impl Iterator<Item = &'a String>,
+    ) -> Result<BTreeMap<String, String>> {
+        let mut roots = BTreeMap::new();
+        for target in targets {
+            let mut names = Vec::new();
+            let mut disk = self.disks.get(target).ok_or_else(changed)?;
+            while disk.level > 1 {
+                let source = disk.upstream_slot_id.as_ref().ok_or_else(changed)?;
+                let parent = self.disks.get(source).ok_or_else(changed)?;
+                if parent.level.checked_add(1) != Some(disk.level) {
+                    return Err(changed());
+                }
+                names.push(parent.name.as_str());
+                disk = parent;
+            }
+            if names.is_empty() {
+                return Err(changed());
+            }
+            if !repository.file_manager_root {
+                names.push(&repository.name);
+            }
+            let root = PortablePath::parse(&names.join("/"))?;
+            roots.insert(target.clone(), root.as_str().to_owned());
+        }
+        Ok(roots)
+    }
+
+    /// The original capture remains request evidence, never a present write
+    /// grant. Only the exact still-enabled identities and direct routes can move.
+    pub(crate) fn verify_follow_routes<'a>(
+        &self,
+        current: &CurrentNamespaces,
+        targets: impl Iterator<Item = &'a String>,
+    ) -> Result<()> {
+        let mut checked = BTreeSet::new();
+        for target in targets {
+            let mut slot = target;
+            loop {
+                if !checked.insert(slot) {
+                    break;
+                }
+                let captured = self.disks.get(slot).ok_or_else(changed)?;
+                let live = current.backup_configuration_disk(slot)?;
+                if live.identity != captured.identity
+                    || live.level != captured.level
+                    || live.upstream_slot_id != captured.upstream_slot_id
+                {
+                    return Err(changed());
+                }
+                match &captured.upstream_slot_id {
+                    Some(parent) => slot = parent,
+                    None => break,
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate_predecessor(
         &self,
         state: &State,

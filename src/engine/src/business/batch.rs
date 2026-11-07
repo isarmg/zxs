@@ -260,7 +260,11 @@ fn remove(branch: &mut DirectoryBranch, source: &Entry) {
         }
     }
 }
-fn relocate(entry: &Entry, source: &str, target: &name_policy::PortablePath) -> Result<Entry> {
+pub(crate) fn relocate(
+    entry: &Entry,
+    source: &str,
+    target: &name_policy::PortablePath,
+) -> Result<Entry> {
     let depth = source.split('/').count();
     let path = if entry.path().split('/').count() == depth {
         target.clone()
@@ -1224,15 +1228,28 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        self.mutate(
+        let kind = self.namespace_mutation_kind(
             "directory.namespace.batch",
+            operation,
+            matches!(
+                request.kind,
+                DirectoryBatchKind::Move | DirectoryBatchKind::Rename
+            ),
+        );
+        let input = json!({"repository_id":repository,"request":request});
+        self.mutate(
+            kind,
             principal,
             operation,
-            json!({"repository_id":repository,"request":request}),
+            input.clone(),
             |engine, state, pending| {
-                apply(
+                let mut result = apply(
                     engine, state, pending, repository, request, principal, operation,
-                )
+                )?;
+                if crate::engine::CurrentNamespaces::recursive_namespace_kind(kind) {
+                    result["namespace_request"] = input;
+                }
+                Ok(result)
             },
         )
     }

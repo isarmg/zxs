@@ -21,15 +21,23 @@ struct Fixture {
 
 impl Fixture {
     fn new(disk_root: bool) -> Self {
+        let mut fixture = Self::initial(disk_root, 4);
+        fixture.exit(3, MembershipExitAction::Deregister);
+        fixture
+    }
+
+    fn initial(disk_root: bool, count: usize) -> Self {
         let temp = tempfile::Builder::new()
             .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .tempdir()
             .unwrap();
         let mut config =
-            Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
-        config.disks[3].level = 1;
-        config.disks[3].upstream_slot_id = None;
-        config.disks[3].metadata_member = false;
+            Config::development((0..count).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        for disk in config.disks.iter_mut().skip(3) {
+            disk.level = 1;
+            disk.upstream_slot_id = None;
+            disk.metadata_member = false;
+        }
         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
         let repository = if disk_root {
             engine
@@ -46,14 +54,12 @@ impl Fixture {
                 )
                 .unwrap()
         };
-        let mut fixture = Self {
+        Self {
             temp,
             config,
             engine,
             repository,
-        };
-        fixture.exit(3, MembershipExitAction::Deregister);
-        fixture
+        }
     }
 
     fn exit(&mut self, index: usize, action: MembershipExitAction) {
@@ -567,3 +573,6 @@ fn recursive_backup_preserves_soft_deletion_through_cold_replay() {
 
 #[path = "recursive_backup_empty_directories.rs"]
 mod empty_directories;
+
+#[path = "recursive_backup_follow.rs"]
+mod follow;
