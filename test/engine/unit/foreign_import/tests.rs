@@ -546,3 +546,60 @@ fn unsupported_empty_origin_never_becomes_a_partial_success() {
     assert_eq!(fs::read(f.source.join("disk.json")).unwrap(), before);
     assert_eq!(f.engine.state().histories.len(), 3);
 }
+
+#[test]
+fn missing_body_cannot_mask_corrupt_or_absent_checksum_proof() {
+    let f = fixture();
+    let original_seal = fs::read(f.source.join("disk.json")).unwrap();
+    let version = f
+        .engine
+        .state()
+        .versions
+        .values()
+        .find(|version| version.creation_primary_slot_id == "P01")
+        .unwrap();
+    let disk = f
+        .engine
+        .config()
+        .disks
+        .iter()
+        .find(|disk| disk.root == f.source)
+        .unwrap();
+    let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
+    let body = crate::container_storage::content_path(&directory, version).unwrap();
+    let checksum = directory.join("checksums.bin");
+    let original_checksum = fs::read(&checksum).unwrap();
+    fs::remove_file(&body).unwrap();
+    let unavailable = inspect(&f.source).unwrap();
+    assert!(unavailable.histories().iter().all(|history| {
+        history
+            .availability()
+            .values()
+            .all(|state| *state == ForeignVersionAvailability::TemporarilyUnavailable)
+    }));
+
+    let mut corrupt_checksum = original_checksum.clone();
+    corrupt_checksum[0] ^= 1;
+    fs::set_permissions(&checksum, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&checksum, &corrupt_checksum).unwrap();
+    let error = match inspect(&f.source) {
+        Ok(_) => panic!("missing body must not authorize a corrupt checksum proof"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), ErrorCode::ChecksumMismatch);
+    assert_eq!(fs::read(&checksum).unwrap(), corrupt_checksum);
+    assert!(ForeignMigrationPlan::primary(&unavailable, OperationId::generate().unwrap()).is_err());
+
+    fs::remove_file(&checksum).unwrap();
+    assert!(inspect(&f.source).is_err());
+    assert!(ForeignMigrationPlan::primary(&unavailable, OperationId::generate().unwrap()).is_err());
+    assert!(!body.exists());
+    assert!(!checksum.exists());
+    assert_eq!(fs::read(f.source.join("disk.json")).unwrap(), original_seal);
+
+    fs::write(&checksum, &original_checksum).unwrap();
+    let restored_proof = inspect(&f.source).unwrap();
+    assert_eq!(restored_proof.digest(), unavailable.digest());
+    assert_eq!(fs::read(&checksum).unwrap(), original_checksum);
+    assert!(!body.exists());
+}

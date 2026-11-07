@@ -579,6 +579,9 @@ fn availability_at(
         &mut |n| evidence.budget.observe(n),
         None,
     )?;
+    let checksums = read_checksum_manifest_at(evidence.root, &directory, version, &mut |count| {
+        evidence.budget.observe(count)
+    })?;
     let path =
         crate::container_storage::content_path_at(evidence.root, &directory, version, &mut |n| {
             evidence.budget.observe(n)
@@ -591,9 +594,6 @@ fn availability_at(
             ErrorCode::ResourceLimit,
             "foreign body verification budget exceeded",
         )
-    })?;
-    let checksums = read_checksum_manifest_at(evidence.root, &directory, version, &mut |count| {
-        evidence.budget.observe(count)
     })?;
     let file = evidence.root.open_read_regular(&path)?;
     verify_open_payload_observed(file, checksums, version, &mut |_| Ok(()))?;
