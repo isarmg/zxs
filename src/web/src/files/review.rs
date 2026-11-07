@@ -57,7 +57,10 @@ pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {
             SaveStatus::Published | SaveStatus::Degraded => {
                 match kind {
                     Kind::Merge => model.merge = None,
-                    Kind::Backup => model.backup = None,
+                    Kind::Backup => {
+                        model.backup = None;
+                        model.recursive_backup = None;
+                    }
                     Kind::Placement => model.placement = None,
                     Kind::Tags => {
                         let owns_draft = model.tag_submission.as_ref().is_none_or(|submission| {

@@ -115,6 +115,7 @@ fn action_label(action: &str) -> String {
         "file.branches.merge" => t("合并文件分支", "Merged file branches"),
         "file.tags.update" => t("更新节点标签", "Updated node tags"),
         "backup.configure" => t("更新备份策略", "Updated backup configuration"),
+        "backup.configure-recursive" => t("更新逐级备份", "Updated recursive backups"),
         "directory.scope.initialize" => t("登记目录范围", "Registered folder scope"),
         "directory.namespace.move" => t("批量移动", "Moved selected branches"),
         "directory.namespace.copy" => t("批量复制", "Copied to selected branches"),

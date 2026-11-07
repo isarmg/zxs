@@ -228,7 +228,8 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Delete,None)><FileIcon name="delete"/>{t("删除","Delete")}</button>
             {branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::CurrentDirectory,create_branch_disabled)}
             <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||!actions::write_allowed(s)) on:click=move |_|super::placement::start_current(state)>{t("主盘规则","Primary placement")}</button>
-            <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::start_current(state)>{t("备份设置","Backup settings")}</button>
+            <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::recursive::start_current(state)>{t("逐级备份","Recursive backups")}</button>
+            <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::start_current(state)>{t("自定义备份前缀","Custom backup prefixes")}</button>
             <label class="zxs-file-search zxs-form-grid">
                 <input class="zxs-input zxs-input--compact" type="search"
                     aria-label=t("搜索当前文件夹","Search this folder")

@@ -1,4 +1,5 @@
-//! Per-scope protection and independent logical prefixes on backup disks.
+//! Per-scope custom prefixes and explicit recursive disk-name protection.
+pub(crate) mod recursive;
 use super::{actions, model::file_context, review};
 use crate::{
     api,
@@ -55,7 +56,10 @@ fn read_routes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Vec<Str
 }
 
 fn read_configuration(value: Value) -> Result<Configuration, api::Error> {
-    Configuration::deserialize(value).map_err(|source| api::Error {
+    Configuration::deserialize(value).map_err(configuration_error)
+}
+fn configuration_error(source: json_codec::Error) -> api::Error {
+    api::Error {
         code: storage_contract::ErrorCode::InvalidResponse,
         message: t(
             "备份配置响应无效，请关闭后重新读取。",
@@ -67,7 +71,7 @@ fn read_configuration(value: Value) -> Result<Configuration, api::Error> {
         source: Some(std::sync::Arc::new(api::ErrorSource::BackupConfiguration(
             source,
         ))),
-    })
+    }
 }
 pub(crate) fn start_entry(state: RwSignal<State>, entry: super::page::Entry) {
     let Some((repository, path)) = file_context(&entry) else {
@@ -96,6 +100,7 @@ fn start(state: RwSignal<State>, repository: String, path: String) {
     let epoch = state.with_untracked(|s| s.session_epoch);
     review::reset(state, review::Kind::Backup);
     state.update(|s| {
+        s.files.recursive_backup = None;
         s.files.backup = Some(Draft {
             id: id.clone(),
             repository: repository.clone(),
@@ -308,7 +313,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 .unwrap_or_default()
         })
     });
-    view! {<Show when=move ||open.get()><section class="zxs-frame zxs-stack zxs-backup-review" aria-label=t("备份保护设置","Backup protection settings")>
+    let custom = view! {<Show when=move ||open.get()><section class="zxs-frame zxs-stack zxs-backup-review" aria-label=t("备份保护设置","Backup protection settings")>
         <div class="zxs-file-toolbar zxs-flow"><h3 class="zxs-row">{t("备份保护设置","Backup protection settings")}</h3><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|{state.update(|s|s.files.backup=None);review::reset(state,review::Kind::Backup);}>{t("关闭","Close")}</button></div>
         <p class="zxs-row">{move ||state.with(|s|s.files.backup.as_ref().map(|draft|if draft.path.is_empty(){"/".into()}else{draft.path.clone()}).unwrap_or_default())}</p>
         <Show when=move ||state.with(|s|s.files.backup.as_ref().is_some_and(|draft|draft.loading))><LoadingState/></Show>
@@ -322,7 +327,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             <button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|submit(state)>{t("保存备份设置","Save backup settings")}</button>
         </Show>
         <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|review::error_text(s,review::Kind::Backup))}</p>
-    </section></Show>}
+    </section></Show>};
+    (custom, recursive::view(state))
 }
 #[cfg(test)]
 #[path = "../../../../test/web/unit/files/backup/tests.rs"]
