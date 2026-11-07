@@ -50,4 +50,4 @@ Web 移除 file_count 为零的硬拒绝，沿现有 scope、capture、会话和
 
 逻辑读取与同目标物理预检按 `(repository, history, directory_id, normalized_path)`（目标内投影省略共同的仓库/历史）合并重复行后计条目预算。不同身份的同路径不合并，仍交既有冲突检查；隐式祖先仍由 Server 的逻辑节点预算覆盖。`PublishedBackupDirectory::operation_id` 是相同逻辑行的最新 sequence 发布代表，不是唯一来源证明，所有被合并的永久 receipt 保留不动。完整 receipt canonical bytes 仍受 metadata 大小上限，不删除资源保护。
 
-后续按实际保留路由的 rename/move 使用 `*.recursive-routes` 新 kind，并完整继承本文目录快照验证。前述 `*.recursive-directories` 仍是旧收据的固定语义，不被追溯改变；详细区别见[路径跟随 ADR](recursive-namespace-follow.md#按实际保留路由发布的新语义)。
+后续按实际保留路由的 rename/move 使用 `*.recursive-routes` 新 kind，并完整继承本文目录快照验证。前述 `*.recursive-directories` 仍是旧收据的固定语义，不被追溯改变；详细区别见[路径跟随 ADR](recursive-namespace-follow.md#retained-route-follow)。

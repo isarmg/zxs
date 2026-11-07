@@ -60,6 +60,8 @@
 已捕获空目录现在由独立 `file.namespace.recursive-directories` / `directory.namespace.batch.recursive-directories` native kind 跟随，并保持本文既有 kind 的原语义。详见[空目录发布 ADR](empty-directory-backup-publication.md)。旧快照/收据不改写，新增目录和捕获盘名前缀仍须显式重新保存。
 
 
+<a id="retained-route-follow"></a>
+
 ## 按实际保留路由发布的新语义
 
 新的 Current 递归改名/移动使用 `file.namespace.recursive-routes` 或 `directory.namespace.batch.recursive-routes`；旧 operation ID 永久重试仍先选择其原 kind，旧 file-only 与 directory-follow 四种 kind 的验证不变。新 kind 同时保留精确 `recursive_follow` 与 `recursive_directory_follow`，不借省略目录计划换取能力。
