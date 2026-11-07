@@ -2,8 +2,8 @@
 //! The index is derived only from verified publications, never from receipt labels.
 use super::*;
 use crate::protection::{
-    BATCH_FOLLOW_KIND, DirectoryFollowChange, DirectoryFollowPlan, DirectoryNamespace,
-    FILE_FOLLOW_KIND, follows_directories,
+    BATCH_FOLLOW_KIND, BATCH_ROUTE_KIND, DirectoryFollowChange, DirectoryFollowPlan,
+    DirectoryNamespace, FILE_FOLLOW_KIND, FILE_ROUTE_KIND, follows_directories, follows_routes,
 };
 use crate::{OperationId, OperationResult, ProtectionPolicy, RecursiveBackupCapture};
 use data_serialization::{Deserialize, Serialize};
@@ -17,7 +17,12 @@ const FORMAT: &str = "recursive-namespace-follow";
 pub(crate) fn is_kind(kind: &str) -> bool {
     matches!(
         kind,
-        FILE_KIND | BATCH_KIND | FILE_FOLLOW_KIND | BATCH_FOLLOW_KIND
+        FILE_KIND
+            | BATCH_KIND
+            | FILE_FOLLOW_KIND
+            | BATCH_FOLLOW_KIND
+            | FILE_ROUTE_KIND
+            | BATCH_ROUTE_KIND
     )
 }
 
@@ -93,6 +98,7 @@ fn joined(root: &str, suffix: &str) -> Result<String> {
 
 mod directories;
 mod request;
+mod routes;
 
 fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool {
     let expected = crate::Event {
@@ -346,8 +352,33 @@ impl CurrentNamespaces {
         &self,
         previous: &State,
         next: &State,
-        include_directories: bool,
+        kind: &str,
     ) -> Result<(FollowPlan, Option<DirectoryFollowPlan>)> {
+        let include_directories = follows_directories(kind);
+        let routed = follows_routes(kind);
+        let changed_files = changed_keys(&previous.file_locations, &next.file_locations);
+        let routes = if routed {
+            let mut followed_files = BTreeSet::new();
+            for file in &changed_files {
+                let (Some(before), Some(after)) = (
+                    previous.file_locations.get(file),
+                    next.file_locations.get(file),
+                ) else {
+                    continue;
+                };
+                if before == after {
+                    continue;
+                }
+                if let Some(id) = previous.file_backup_policies.get(file)
+                    && self.active_recursive_policy(previous, id, true)?.is_some()
+                {
+                    followed_files.insert(file.clone());
+                }
+            }
+            routes::collect(previous, &followed_files)?
+        } else {
+            BTreeMap::new()
+        };
         let mut plan = FollowPlan {
             format: FORMAT.into(),
             policies: BTreeMap::new(),
@@ -364,9 +395,11 @@ impl CurrentNamespaces {
                 else {
                     continue;
                 };
-                bound
-                    .capture
-                    .verify_follow_routes(self, bound.roots.keys())?;
+                if !routed {
+                    bound
+                        .capture
+                        .verify_follow_routes(self, bound.roots.keys())?;
+                }
                 let mut policy = bound.policy.clone();
                 if policy.path_prefix == *path {
                     continue;
@@ -400,7 +433,7 @@ impl CurrentNamespaces {
                 );
             }
         }
-        for file in changed_keys(&previous.file_locations, &next.file_locations) {
+        for file in changed_files {
             let (Some(before), Some(after)) = (
                 previous.file_locations.get(&file),
                 next.file_locations.get(&file),
@@ -417,9 +450,16 @@ impl CurrentNamespaces {
             else {
                 continue;
             };
-            bound
-                .capture
-                .verify_follow_routes(self, bound.roots.keys())?;
+            let route = if routed {
+                let route = routes.get(&file).ok_or_else(invalid)?;
+                route.verify(self, bound)?;
+                Some(route)
+            } else {
+                bound
+                    .capture
+                    .verify_follow_routes(self, bound.roots.keys())?;
+                None
+            };
             if bound.roots.is_empty() {
                 continue;
             }
@@ -429,6 +469,12 @@ impl CurrentNamespaces {
                 .ok_or_else(invalid)?
                 .clone();
             for (slot, root) in &bound.roots {
+                if let Some(route) = route
+                    && !paths.contains_key(slot)
+                    && !route.backups.contains(slot)
+                {
+                    continue;
+                }
                 if paths.get(slot) != Some(&joined(root, before)?) {
                     return Err(Error::new(
                         ErrorCode::ScopeChanged,
@@ -462,8 +508,7 @@ impl CurrentNamespaces {
         next: &mut State,
         kind: &str,
     ) -> Result<(Value, Option<Value>)> {
-        let (plan, directories) =
-            self.recursive_follow_plan(previous, next, follows_directories(kind))?;
+        let (plan, directories) = self.recursive_follow_plan(previous, next, kind)?;
         for (id, change) in &plan.policies {
             next.protection_policies
                 .insert(id.clone(), change.policy.clone());
@@ -544,7 +589,7 @@ impl CurrentNamespaces {
         self.verify_follow_request(previous, next, receipt)?;
         let plan: FollowPlan = json_codec::from_value(receipt.result["recursive_follow"].clone())?;
         let (expected, expected_directories) =
-            self.recursive_follow_plan(previous, next, follows_directories(&receipt.kind))?;
+            self.recursive_follow_plan(previous, next, &receipt.kind)?;
         let directories = if follows_directories(&receipt.kind) {
             Some(DirectoryFollowPlan::from_receipt(receipt)?)
         } else {
@@ -650,6 +695,11 @@ impl Engine {
             "directory.namespace.batch" => BATCH_FOLLOW_KIND,
             _ => unreachable!("invariant: only namespace rename callers select this semantics"),
         };
+        let routed = match legacy {
+            "file.namespace" => FILE_ROUTE_KIND,
+            "directory.namespace.batch" => BATCH_ROUTE_KIND,
+            _ => unreachable!("invariant: namespace caller"),
+        };
         if let Some(receipt) = self.state.operations.get(&operation) {
             if receipt.kind == legacy {
                 return legacy;
@@ -660,14 +710,9 @@ impl Engine {
             if receipt.kind == with_directories {
                 return with_directories;
             }
-        }
-        if follows
-            && self
-                .current_namespaces
-                .as_ref()
-                .is_some_and(|view| !view.recursive_policies.directories.is_empty())
-        {
-            return with_directories;
+            if receipt.kind == routed {
+                return routed;
+            }
         }
         if follows
             && self
@@ -675,7 +720,7 @@ impl Engine {
                 .as_ref()
                 .is_some_and(|view| !view.recursive_policies.policies.is_empty())
         {
-            current
+            routed
         } else {
             legacy
         }

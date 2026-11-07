@@ -621,6 +621,7 @@ fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
             "directory.namespace.batch"
                 | "directory.namespace.batch.recursive"
                 | "directory.namespace.batch.recursive-directories"
+                | "directory.namespace.batch.recursive-routes"
         ) {
             match operation.result.get("action").and_then(Value::as_str) {
                 Some("move") => "directory.namespace.move",

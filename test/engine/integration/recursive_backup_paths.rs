@@ -1,4 +1,6 @@
 //! Public native writer tests. Temporary media is not physical power-loss QA.
+#[path = "recursive_backup_chain_follow.rs"]
+mod chain_follow;
 use json_codec::json;
 use std::{collections::BTreeMap, fs, path::Path};
 use storage_engine::{

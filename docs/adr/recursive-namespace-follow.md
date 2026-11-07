@@ -58,3 +58,14 @@
 ## 空目录后续语义
 
 已捕获空目录现在由独立 `file.namespace.recursive-directories` / `directory.namespace.batch.recursive-directories` native kind 跟随，并保持本文既有 kind 的原语义。详见[空目录发布 ADR](empty-directory-backup-publication.md)。旧快照/收据不改写，新增目录和捕获盘名前缀仍须显式重新保存。
+
+
+## 按实际保留路由发布的新语义
+
+新的 Current 递归改名/移动使用 `file.namespace.recursive-routes` 或 `directory.namespace.batch.recursive-routes`；旧 operation ID 永久重试仍先选择其原 kind，旧 file-only 与 directory-follow 四种 kind 的验证不变。新 kind 同时保留精确 `recursive_follow` 与 `recursive_directory_follow`，不借省略目录计划换取能力。
+
+一个策略可以描述多条独立来源链。已有文件显式配置可能持有策略全部逻辑路径键，后来继承的文件只持有其实际链的键。新计划只改已有且属于原绑定 roots 的键，不凭空补其它链、不删除额外键、不重新采样名字；实际必需备份键仍必须存在且等于原 capture root 与旧规范路径。
+
+物理准入与逻辑策略键分开：一次扫描 previous 的全部版本，为本次移动文件汇总所有 placement 路由和绑定代，拒绝缺 placement、缺 binding 或同槽代数冲突；不只看 HEAD，也不按 Available 或 Current 可见性过滤历史。所有必要路由保持原捕获身份、直接上游及现行可写状态。真实历史副本所在盘停止仍阻断，不能把它称为无关盘；只有其它文件/未使用策略链不扩大本文件的检查范围。scope 前缀变更本身不是向全部策略根写盘；捕获目录快照仍验证其全部实际 replica 目标。元数据成员、冻结、闭合 State、Finalize 和恢复门禁不变。
+
+新路由汇总只扫描一次版本集合，BTree 查询和插入仍带对数成本：上界 O(V log(F+1) + R log(S+1))，V 为当前 State 版本数，F 为实际跟随文件数，R 为这些文件保留路由总长，S 为每文件不同槽数；不声称 changed-key 常数成本。返回的路径计划、全部版本和 placement 不变条件由冷热同一验证器证明，不以派生缓存作为权威。

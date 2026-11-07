@@ -232,6 +232,29 @@ impl RecursiveBackupCapture {
         Ok(())
     }
 
+    /// A file's retained placements, not all roots of its enclosing policy,
+    /// supply new routed-follow I/O obligations. Bindings remain exact.
+    pub(crate) fn verify_follow_bindings(
+        &self,
+        current: &CurrentNamespaces,
+        bindings: &BTreeMap<String, u64>,
+    ) -> Result<()> {
+        self.verify_follow_routes(current, bindings.keys())?;
+        for (slot, generation) in bindings {
+            if self
+                .disks
+                .get(slot)
+                .ok_or_else(changed)?
+                .identity
+                .binding_generation
+                != *generation
+            {
+                return Err(changed());
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate_predecessor(
         &self,
         state: &State,

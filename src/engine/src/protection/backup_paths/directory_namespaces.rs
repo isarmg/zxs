@@ -13,8 +13,18 @@ const FOLLOW_FORMAT: &str = "recursive-directory-namespace-follow";
 pub(crate) const FILE_FOLLOW_KIND: &str = "file.namespace.recursive-directories";
 pub(crate) const BATCH_FOLLOW_KIND: &str = "directory.namespace.batch.recursive-directories";
 
+pub(crate) const FILE_ROUTE_KIND: &str = "file.namespace.recursive-routes";
+pub(crate) const BATCH_ROUTE_KIND: &str = "directory.namespace.batch.recursive-routes";
+
+pub(crate) fn follows_routes(kind: &str) -> bool {
+    matches!(kind, FILE_ROUTE_KIND | BATCH_ROUTE_KIND)
+}
+
 pub(crate) fn follows_directories(kind: &str) -> bool {
-    matches!(kind, FILE_FOLLOW_KIND | BATCH_FOLLOW_KIND)
+    matches!(
+        kind,
+        FILE_FOLLOW_KIND | BATCH_FOLLOW_KIND | FILE_ROUTE_KIND | BATCH_ROUTE_KIND
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

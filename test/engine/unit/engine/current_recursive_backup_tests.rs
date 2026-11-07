@@ -47,6 +47,7 @@ fn recursive_follow_replay_binds_request_and_rejects_omission_or_extra_paths() {
     result.request_digest = Engine::native_request_digest(&result.kind, "admin", &request).unwrap();
     let body = result.result.as_object_mut().unwrap();
     body.remove("recursive_follow");
+    body.remove("recursive_directory_follow");
     body.remove("namespace_request");
     downgraded.events.last_mut().unwrap().kind = "file.namespace".into();
     assert!(
@@ -568,4 +569,143 @@ fn empty_follow_replay_authenticates_exact_snapshot_and_preserves_legacy_semanti
     legacy.events.last_mut().unwrap().kind = "file.namespace".into();
     view.advance(&previous, &legacy).unwrap();
     assert_eq!(legacy.operations[&configured.operation_id], configured);
+}
+
+#[test]
+fn routed_follow_replay_rejects_missing_required_paths_extra_paths_and_old_kind() {
+    let temp = tempfile::Builder::new()
+        .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let mut config =
+        Config::development((0..7).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
+    for (index, level, upstream) in [
+        (3, 1, None),
+        (4, 2, Some("D04")),
+        (5, 3, Some("D05")),
+        (6, 1, None),
+    ] {
+        config.disks[index].level = level;
+        config.disks[index].upstream_slot_id = upstream.map(str::to_owned);
+        config.disks[index].metadata_member = false;
+    }
+    let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
+    let repository = engine
+        .create_repository(
+            &RepositoryName::parse("routes").unwrap(),
+            "P01",
+            1,
+            "admin",
+            op(),
+        )
+        .unwrap();
+    engine
+        .begin_disk_exit(
+            &config.disks[6].disk_id,
+            MembershipExitAction::Deregister,
+            "admin",
+            op(),
+        )
+        .unwrap();
+    let archive = engine.build_managed_membership_control_archive().unwrap();
+    engine
+        .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+        .unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    engine.activate_pending_disk_exit().unwrap();
+    engine
+        .update_placement_rule(PlacementRuleUpdate {
+            rule_id: &new_id("rule").unwrap(),
+            repository_id: &repository.repository_id,
+            path_prefix: "root/second",
+            primary_slot_id: "D04",
+            expected_generation: 0,
+            principal: "admin",
+            operation_id: op(),
+        })
+        .unwrap();
+    save(&mut engine, &repository, "root/seed", b"seed");
+    let capture = engine.recursive_backup_capture().unwrap();
+    let scope = engine
+        .backup_configuration(&repository.repository_id, "root")
+        .unwrap()
+        .scope;
+    let configured = engine
+        .configure_recursive_backups(RecursiveBackupConfigurationRequest {
+            repository_id: &repository.repository_id,
+            path: "root",
+            expected_scope_id: &scope.id,
+            target_copies: 3,
+            expected_generation: 0,
+            capture: &capture,
+            principal: "admin",
+            operation_id: op(),
+        })
+        .unwrap();
+    let file = save(&mut engine, &repository, "root/inherited", b"new");
+    let previous = Arc::clone(&engine.state);
+    let view = Arc::clone(engine.current_namespaces.as_ref().unwrap());
+    let change = NamespaceOperation::parse(
+        NamespaceOperationKind::Rename,
+        "root/inherited",
+        Some("root/moved"),
+    )
+    .unwrap();
+    let receipt = engine
+        .file_namespace(&repository.repository_id, change, "admin", op())
+        .unwrap();
+    assert_eq!(receipt.kind, "file.namespace.recursive-routes");
+    let next = engine.state.as_ref();
+    view.advance(&previous, next).unwrap();
+    for attack in ["missing", "extra", "source", "old_kind"] {
+        let mut invalid = next.clone();
+        let result = invalid.operations.get_mut(&receipt.operation_id).unwrap();
+        match attack {
+            "missing" => {
+                invalid
+                    .file_backup_paths
+                    .get_mut(&file.file_id)
+                    .unwrap()
+                    .remove("B01");
+                result.result["recursive_follow"]["paths"][&file.file_id]["backup_paths"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("B01");
+            }
+            "extra" => {
+                invalid
+                    .file_backup_paths
+                    .get_mut(&file.file_id)
+                    .unwrap()
+                    .insert("D05".into(), "disk-3/routes/root/moved".into());
+                result.result["recursive_follow"]["paths"][&file.file_id]["backup_paths"]["D05"] =
+                    json!("disk-3/routes/root/moved");
+            }
+            "source" => {
+                result.result["recursive_follow"]["paths"][&file.file_id]["source_operation_id"] =
+                    json!(op())
+            }
+            "old_kind" => {
+                result.kind = "file.namespace.recursive".into();
+                result
+                    .result
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("recursive_directory_follow");
+                result.request_digest = Engine::native_request_digest(
+                    &result.kind,
+                    "admin",
+                    &result.result["namespace_request"],
+                )
+                .unwrap();
+                invalid.events.last_mut().unwrap().kind = result.kind.clone();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            view.advance(&previous, &invalid).is_err(),
+            "attack {attack}"
+        );
+    }
+    assert_eq!(next.operations[&configured.operation_id], configured);
 }

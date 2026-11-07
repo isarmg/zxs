@@ -41,12 +41,12 @@ impl CurrentNamespaces {
     ) -> Result<()> {
         let input = receipt.result["namespace_request"].clone();
         let (repository, moves, allow_parents) = match receipt.kind.as_str() {
-            FILE_KIND | FILE_FOLLOW_KIND => {
+            FILE_KIND | FILE_FOLLOW_KIND | FILE_ROUTE_KIND => {
                 let request: FileRequest = json_codec::from_value(input)?;
                 let moves = self.file_request_moves(previous, &request)?;
                 (request.repository_id, moves, true)
             }
-            BATCH_KIND | BATCH_FOLLOW_KIND => {
+            BATCH_KIND | BATCH_FOLLOW_KIND | BATCH_ROUTE_KIND => {
                 let request: BatchRequest = json_codec::from_value(input)?;
                 let moves = self.batch_request_moves(previous, &request)?;
                 (request.repository_id, moves, false)
@@ -85,7 +85,10 @@ impl CurrentNamespaces {
             {
                 return Err(invalid());
             }
-        } else if matches!(receipt.kind.as_str(), FILE_KIND | FILE_FOLLOW_KIND) {
+        } else if matches!(
+            receipt.kind.as_str(),
+            FILE_KIND | FILE_FOLLOW_KIND | FILE_ROUTE_KIND
+        ) {
             return Err(invalid());
         }
         let projected = project_entries(before, &moves)?;

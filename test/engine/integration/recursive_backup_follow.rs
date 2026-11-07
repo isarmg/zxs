@@ -88,7 +88,7 @@ fn recursive_follow_moves_scope_and_future_children_through_cold_replay() {
         operation(),
     )
     .unwrap();
-    assert_eq!(renamed.kind, "file.namespace.recursive");
+    assert_eq!(renamed.kind, "file.namespace.recursive-routes");
     fixture.assert_body_paths(&first, "ancestor/renamed/report", b"retained first");
     fixture.assert_body_paths(&last, "ancestor/renamed/report", b"retained last");
     let policy = fixture
@@ -314,7 +314,7 @@ fn batch_move_with_layout(activate: bool) {
         .engine
         .directory_namespace_batch(&fixture.repository.repository_id, &request, "admin", id)
         .unwrap();
-    assert_eq!(result.kind, "directory.namespace.batch.recursive");
+    assert_eq!(result.kind, "directory.namespace.batch.recursive-routes");
     fixture.assert_body_paths(&file, "moved/report", b"batch owner body");
     let system = fixture.temp.path().join("system");
     drop(fixture.engine);

@@ -53,7 +53,7 @@ fn empty_follow_updates_captured_rows_and_later_files_without_rewriting_receipts
     mkdir(&mut fixture, "empty/new-not-captured");
     let file = fixture.save("empty/child/report", b"after empty configuration");
     let renamed = rename(&mut fixture, "empty", "renamed", operation()).unwrap();
-    assert_eq!(renamed.kind, "file.namespace.recursive-directories");
+    assert_eq!(renamed.kind, "file.namespace.recursive-routes");
     assert_eq!(
         names(&fixture, "C01"),
         [
@@ -258,10 +258,7 @@ fn empty_follow_actual_batch_move_after_shared_layout_activation() {
         .engine
         .directory_namespace_batch(&fixture.repository.repository_id, &request, "admin", id)
         .unwrap();
-    assert_eq!(
-        receipt.kind,
-        "directory.namespace.batch.recursive-directories"
-    );
+    assert_eq!(receipt.kind, "directory.namespace.batch.recursive-routes");
     assert_eq!(names(&fixture, "C01"), ["disk-1/disk-0/destination/empty"]);
     let system = fixture.temp.path().join("system");
     drop(fixture.engine);
