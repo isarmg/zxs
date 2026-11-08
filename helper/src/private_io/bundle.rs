@@ -61,6 +61,16 @@ impl BundleDestination {
     pub(crate) fn identity(&self) -> FileIdentity {
         self.parent.identity()
     }
+    /// A partial record is evidence, not permission to invent a new baseline.
+    pub(crate) fn operation_started(&self, name: &str) -> Result<bool> {
+        self.recheck()?;
+        let target = self.open_bundle(&EntryName::new(name)?)?;
+        let pending = self.open_bundle(&EntryName::new(format!("{name}.pending"))?)?;
+        if target.is_some() && pending.is_some() {
+            return Err("both operation names exist; preserve the conflicting records".into());
+        }
+        Ok(target.is_some() || pending.is_some())
+    }
     pub(crate) fn recheck(&self) -> Result<()> {
         let current = OpenAt2Root::open(&self.path, MountPolicy::AllowNestedMounts)?;
         if current.identity() != self.identity() {

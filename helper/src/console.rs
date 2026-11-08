@@ -101,3 +101,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../test/helper/unit/console/runtime_tests.rs"]
 mod runtime_tests;
+
+#[cfg(test)]
+#[path = "../../test/helper/unit/console/program_repair_tests.rs"]
+mod program_repair_tests;

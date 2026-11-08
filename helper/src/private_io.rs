@@ -4,12 +4,14 @@
 mod bundle;
 mod configuration_files;
 mod host_root;
+mod program_repair;
 use crate::Result;
 pub(crate) use bundle::{BundleDestination, BundlePublication};
 pub(crate) use configuration_files::{
     ConfigurationFiles, ParentSnapshot, SAMBA_PATH, SYSTEMD_PATH,
 };
 pub(crate) use host_root::HostRoot;
+pub(crate) use program_repair::ProgramSnapshot;
 use platform_io::fs_safety::{
     AtomicCommitError, EntryName,
     linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},
@@ -375,7 +377,7 @@ impl ProgramDestination {
             || metadata.mode() & 0o555 != 0o555
             || metadata.len() != expected.len() as u64
         {
-            return Err("existing program does not have the exact safe owner, executable mode and expected size; replacement/repair is not implemented".into());
+            return Err("existing program does not have the exact safe owner, executable mode and expected size; ordinary installation does not repair it; use explicit same-payload repair only with the original installation baseline".into());
         }
         let identity = SingleLinkRequirement::check(&file)?;
         let mut bytes = Vec::new();
@@ -383,7 +385,7 @@ impl ProgramDestination {
             .take(expected.len() as u64 + 1)
             .read_to_end(&mut bytes)?;
         if bytes != expected {
-            return Err("existing program differs from the embedded payload; it was not overwritten, and repair is not implemented".into());
+            return Err("existing program differs from the embedded payload; ordinary installation did not overwrite it; explicit same-payload repair requires the original installation baseline".into());
         }
         let named = statat(
             self.target.directory.directory(),

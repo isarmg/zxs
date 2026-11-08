@@ -32,6 +32,18 @@
       <pre id="install-plan" hidden></pre>
       <button id="install-commit" type="button" hidden>确认仅安装此程序</button>
       <pre id="install-receipt" hidden></pre>
+      <p class="muted">首装前先准备上方的 /zxs 主机根。准确安装会保存不可变的版本/载荷基线；不覆盖不同基线，也不把安装结果当作系统就绪。</p>
+      <h3>保留数据与配置，只修复原版本程序</h3>
+      <p>仅恢复原安装基线绑定的同一份内置 ZXS，不能升级、降级或猜测未知版本。缺少基线时拒绝修复。已有安全普通文件的原字节将独立备份，并保留原 inode；不读取运行数据、配置或密码，不启动任何程序。</p>
+      <form id="program-repair-form">
+        <button id="program-repair-preview" type="button">预览同载荷程序修复</button>
+        <label>原修复摘要（断线后用于恢复）<input id="program-repair-digest" maxlength="64" autocomplete="off" spellcheck="false"></label>
+        <button id="program-repair-recover" type="button">读取原请求与当前状态</button>
+        <pre id="program-repair-plan" hidden></pre>
+        <label class="ack"><input id="program-repair-external-stopped" type="checkbox"> 已停止旧版 ZXS、Samba 和外部程序/主机管理写者。此声明不是系统级互斥证明。</label>
+        <button id="program-repair-commit" type="submit" hidden>备份并恢复准确原载荷</button>
+      </form>
+      <pre id="program-repair-receipt" hidden></pre>
     </section>
     <section class="card">
       <h2>首次初始化前：服务私有目录</h2>
