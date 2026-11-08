@@ -217,50 +217,7 @@ impl Inner {
         let Some(terminal) = self.terminal(identity)? else {
             return Ok(None);
         };
-        let operation = intent.status.operation_id;
-        if terminal.original_configuration().pool_id != intent.status.preview.target.pool_id {
-            return Err(ApiError::conflict(
-                ErrorCode::RecoveryRequired,
-                "terminal receipt belongs to another pool",
-            ));
-        }
-        if terminal.status().operation_id == operation {
-            let archive = terminal.control_archive();
-            let binding = storage_addition::ArchiveBinding {
-                archive_path: archive.archive_path,
-                root_hash: archive.root_hash,
-                transition_hash: archive.transition_hash,
-            };
-            if intent
-                .archive
-                .as_ref()
-                .is_some_and(|saved| saved != &binding)
-            {
-                return Err(ApiError::conflict(
-                    ErrorCode::RecoveryRequired,
-                    "terminal receipt differs from the saved control archive",
-                ));
-            }
-            intent.archive = Some(binding);
-        }
-        let Some(result) = terminal.operation(operation) else {
-            return Ok(None);
-        };
-        if terminal
-            .state()
-            .operation_principals
-            .get(&operation)
-            .map(String::as_str)
-            != Some(identity.principal.as_str())
-        {
-            return Err(ApiError::forbidden());
-        }
-        crate::engine_backend::storage_lifecycle::exact_result(
-            result.clone(),
-            intent,
-            intent.archive.as_ref(),
-        )
-        .map(Some)
+        terminal_exit_result(&terminal, identity, intent)
     }
 
     pub(super) fn run_terminal_exit(
@@ -432,4 +389,57 @@ impl ManagementBackend {
             note,
         }))
     }
+}
+
+/// Shared exact receipt admission for a held authenticated terminal authority.
+/// The caller revalidates its current primary identity, never the archived auth.
+pub(super) fn terminal_exit_result(
+    terminal: &TerminalManagement,
+    identity: &Identity,
+    intent: &mut storage_lifecycle::StoredExit,
+) -> Result<Option<OperationResult>, ApiError> {
+    let operation = intent.status.operation_id;
+    if terminal.original_configuration().pool_id != intent.status.preview.target.pool_id {
+        return Err(ApiError::conflict(
+            ErrorCode::RecoveryRequired,
+            "terminal receipt belongs to another pool",
+        ));
+    }
+    if terminal.status().operation_id == operation {
+        let archive = terminal.control_archive();
+        let binding = storage_addition::ArchiveBinding {
+            archive_path: archive.archive_path,
+            root_hash: archive.root_hash,
+            transition_hash: archive.transition_hash,
+        };
+        if intent
+            .archive
+            .as_ref()
+            .is_some_and(|saved| saved != &binding)
+        {
+            return Err(ApiError::conflict(
+                ErrorCode::RecoveryRequired,
+                "terminal receipt differs from the saved control archive",
+            ));
+        }
+        intent.archive = Some(binding);
+    }
+    let Some(result) = terminal.operation(operation) else {
+        return Ok(None);
+    };
+    if terminal
+        .state()
+        .operation_principals
+        .get(&operation)
+        .map(String::as_str)
+        != Some(identity.principal.as_str())
+    {
+        return Err(ApiError::forbidden());
+    }
+    crate::engine_backend::storage_lifecycle::exact_result(
+        result.clone(),
+        intent,
+        intent.archive.as_ref(),
+    )
+    .map(Some)
 }

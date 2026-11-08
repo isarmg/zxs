@@ -183,8 +183,8 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "first_storage_initialization":"confirmed_empty_existing_roots_only", "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset","active_empty_directory_addition","nonterminal_disk_deregistration"],
-        "not_implemented":["complete_first_run_setup","general_disk_add","final_voter_terminal_deregistration","foreign_admission","device_formatting_and_mounting","full_system_rebuild","other_samba_backends_and_account_creation","program_repair","systemd_smb_activation"]
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset","active_empty_directory_addition","nonterminal_disk_deregistration","final_voter_terminal_deregistration"],
+        "not_implemented":["complete_first_run_setup","general_disk_add","new_deregistration_after_terminal_authority","foreign_admission","device_formatting_and_mounting","full_system_rebuild","other_samba_backends_and_account_creation","program_repair","systemd_smb_activation"]
     }))
 }
 

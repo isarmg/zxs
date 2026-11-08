@@ -432,20 +432,7 @@ impl ManagementBackend {
             }
         };
         if let Some(terminal) = self.inner.terminal(identity)? {
-            return Ok(RegistrationSnapshot::TerminalManagement {
-                registrations: terminal
-                    .registered_disks()
-                    .map(|disk| {
-                        let mut entry =
-                            crate::engine_backend::storage_readmission::registration_entry(disk);
-                        entry.readmission = terminal
-                            .readmission_metadata_member(&entry.disk_id)
-                            .map_err(crate::engine_backend::error)?
-                            .map(|_| ReadmissionRole::MetadataMember);
-                        Ok(entry)
-                    })
-                    .collect::<Result<Vec<_>, ApiError>>()?,
-            });
+            return terminal_registration_snapshot(&terminal);
         }
         let backend = crate::lock(&self.inner.state)
             .backend
@@ -597,4 +584,23 @@ pub(super) fn require_no_pending_readmission(root: &Path) -> Result<(), ApiError
         }
     }
     Ok(())
+}
+
+pub(super) fn terminal_registration_snapshot(
+    terminal: &storage_engine::TerminalManagement,
+) -> Result<RegistrationSnapshot, ApiError> {
+    Ok(RegistrationSnapshot::TerminalManagement {
+        registrations: terminal
+            .registered_disks()
+            .map(|disk| {
+                let mut entry =
+                    crate::engine_backend::storage_readmission::registration_entry(disk);
+                entry.readmission = terminal
+                    .readmission_metadata_member(&entry.disk_id)
+                    .map_err(crate::engine_backend::error)?
+                    .map(|_| ReadmissionRole::MetadataMember);
+                Ok(entry)
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?,
+    })
 }

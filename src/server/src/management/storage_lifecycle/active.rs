@@ -22,13 +22,7 @@ impl<'a> ActiveExit<'a> {
         let system = backend.addition_root(identity)?;
         management.verify_identity().map_err(storage_error)?;
         // The same file also serializes native Add owners in this management root.
-        let owner = AdvisoryLock::acquire(
-            &management,
-            &EntryName::new("storage-addition-owner.lock")
-                .expect("invariant: fixed lifecycle lock")
-                .as_relative(),
-        )
-        .map_err(storage_error)?;
+        let owner = acquire_owner(&management)?;
         Ok(Self {
             backend,
             identity,
@@ -60,9 +54,7 @@ impl<'a> ActiveExit<'a> {
         self.backend.storage_registration_snapshot(self.identity)
     }
     fn settled(&self) -> Result<(), ApiError> {
-        super::super::storage_addition::require_no_pending_addition(self.management.path())?;
-        super::super::storage_readmission::require_no_pending_readmission(self.management.path())?;
-        require_settled_exit(self.management.path())
+        require_settled(self.management.path())
     }
     /// Preview exact original registration and published boundary. The final
     /// voter is identified as TerminalManagement; this owner's commit rejects it.
@@ -79,46 +71,11 @@ impl<'a> ActiveExit<'a> {
             .management
             .create_child(&EntryName::new(DIRECTORY).expect("invariant: fixed exit directory"))
             .map_err(storage_error)?;
-        let operation = request.preview.request.operation_id;
-        let (record, admitted) = if let Some(record) = read_record(&directory, operation)? {
-            self.actor(&record)?;
-            if record.status.preview != request.preview {
-                return Err(ApiError::conflict(
-                    ErrorCode::IdempotencyKeyReused,
-                    "operation_id already binds another exit request or preview",
-                ));
-            }
-            (record, true)
-        } else {
-            self.settled()?;
-            let (preview, original) = self
-                .backend
-                .preview_storage_exit(self.identity, request.preview.request.clone())?;
-            if preview != request.preview {
-                return Err(ApiError::conflict(
-                    ErrorCode::GenerationMismatch,
-                    "deregistration source changed; preserve the original plan and inspect its state",
-                ));
-            }
-            admitted_kind(&preview)?;
-            (
-                StoredExit {
-                    format: Format::Exit,
-                    principal: self.identity.principal.clone(),
-                    original,
-                    archive: None,
-                    status: ExitStatus {
-                        operation_id: operation,
-                        state: ExitState::Running,
-                        phase: ExitPhase::Prepared,
-                        preview,
-                        failure: None,
-                        result: None,
-                    },
-                },
-                false,
-            )
-        };
+        let (record, admitted) =
+            prepare_record(&directory, &self.identity.principal, request, |request| {
+                self.settled()?;
+                self.backend.preview_storage_exit(self.identity, request)
+            })?;
         self.run_admitted(record, admitted)
     }
     pub fn resume(&self, operation: OperationId) -> Result<ExitStatus, ApiError> {
@@ -187,7 +144,7 @@ impl<'a> ActiveExit<'a> {
         Ok(record.status)
     }
 }
-fn deregister(action: ExitAction) -> Result<(), ApiError> {
+pub(super) fn deregister(action: ExitAction) -> Result<(), ApiError> {
     if action != ExitAction::Deregister {
         return Err(ApiError::invalid(
             "new planned-offline actions are unavailable; deregistration is a distinct explicit action",

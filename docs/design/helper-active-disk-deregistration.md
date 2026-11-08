@@ -1,3 +1,5 @@
+> 后继范围：本页记录非终态首片。最后元数据成员的注销/冷恢复现已有[终态后继源码](helper-terminal-disk-deregistration.md)，但终态内再注销剩余登记和外来整链接纳仍缺。两片均未编译/测试/审查/CI。
+
 # 辅助工具：保留盘字节的非终态注销
 
 [辅助工具](../components/helper.md) · [磁盘职责](helper-disk-management.md) · [任务清单](../../TASKS.md)
@@ -25,7 +27,7 @@
 
 共用执行器也继续供原终态/历史计划使用；新 helper 不提供 PlannedOffline，也不把原历史动作改成 Deregister。以后终态退出下查询旧活动退出回执，仍走原终态权威路径，不能强行要求重新打开活动 Engine。
 
-helper 专用计划、页面、HTTP、固定布局、降权 IPC 与操作所有权在 `helper/`。`managed_pool.rs` 为 Add/注销共用现有 production 池 owner，持有当前主 AuthStore、Engine、目录上下文及 host lease，不创建账号、初始根或后台服务。HTTP 管理 session 规则未放宽；本机协议使用现有主凭据的唯一管理员身份，不伪造 session 或网络操作者身份。
+helper 专用计划、页面、HTTP、固定布局、降权 IPC 与操作所有权在 `helper/`。`managed_pool.rs` 在本首片为 Add/注销共用现有 production 池 owner，持有当前主 AuthStore、Engine、目录上下文及 host lease，不创建账号、初始根或后台服务。HTTP 管理 session 规则未放宽；本机协议使用现有主凭据的唯一管理员身份，不伪造 session 或网络操作者身份。
 
 ## 不再触碰退役盘与生命周期
 

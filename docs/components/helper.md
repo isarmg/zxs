@@ -194,3 +194,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 非最终元数据成员的注销
 
 本片新增独立 Web 的真实登记读取、准确 Deregister 预览/确认和原操作查询/续作，服务与 helper 共用原生持久阶段、D3 与永久回执。不擦盘、不卸载，也不保证剩余池保有全部访问，要求明确承认当前视图影响。成功后不为查结果重新探测退役盘。最后一个元数据成员、外来完整链接纳及完整就绪仍缺；原安全出口保留。源码未编译/测试/审查/CI，无真实系统操作，见[准确边界](../design/helper-active-disk-deregistration.md)。
+
+## 最后元数据成员的终态注销
+
+独立 Web 的既有注销入口增加最后元数据成员路径，必须单独确认结束活动存储。服务 UID worker 在打开 Engine 前选择受保护的 terminal authority，以独占原生 owner 完成实际 I/O 关闭和原终态发布；冷态按同一原计划核对永久回执，不重新探测退役根，不制造零成员可写池。终态内剩余登记仍可展示，但新的后继注销、metadata resume 和外来完整链接纳未完成。源码未编译/测试/审查/CI，无实际系统操作，见[完整边界](../design/helper-terminal-disk-deregistration.md)。

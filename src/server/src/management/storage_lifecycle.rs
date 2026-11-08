@@ -1,11 +1,13 @@
 //! Durable exit intent is coordination state, never D3 publication authority.
 mod active;
+mod exclusive;
 use super::storage_addition::{
     ArchiveBinding, configuration_digest, digest, latest_name, name, read, storage_error, write,
 };
 use super::*;
 pub use active::ActiveExit;
 use data_serialization::{Deserialize, Serialize};
+pub use exclusive::ExclusiveExit;
 use platform_io::fs_safety::{EntryName, PrivateDirectory};
 use storage_contract::{
     Config, ErrorCode, OperationId, OperationResult, storage_addition::AdditionFailure,
@@ -129,6 +131,67 @@ fn finish(record: &mut StoredExit, result: OperationResult) {
     record.status.state = ExitState::Completed;
     record.status.result = Some(result);
     record.status.failure = None;
+}
+
+fn acquire_owner(
+    management: &PrivateDirectory,
+) -> Result<platform_io::fs_safety::AdvisoryLock, ApiError> {
+    management.verify_identity().map_err(storage_error)?;
+    platform_io::fs_safety::AdvisoryLock::acquire(
+        management,
+        &EntryName::new("storage-addition-owner.lock")
+            .expect("invariant: fixed lifecycle owner")
+            .as_relative(),
+    )
+    .map_err(storage_error)
+}
+fn require_settled(root: &Path) -> Result<(), ApiError> {
+    super::storage_addition::require_no_pending_addition(root)?;
+    super::storage_readmission::require_no_pending_readmission(root)?;
+    require_settled_exit(root)
+}
+/// The caller holds the lifecycle owner. This only constructs a new record;
+/// the source-checked Engine callback must persist it before changing authority.
+fn prepare_record(
+    directory: &PrivateDirectory,
+    principal: &str,
+    request: ExitCommit,
+    prepare: impl FnOnce(ExitRequest) -> Result<(ExitPreview, Config), ApiError>,
+) -> Result<(StoredExit, bool), ApiError> {
+    let operation = request.preview.request.operation_id;
+    if let Some(record) = read_record(directory, operation)? {
+        if record.principal != principal || record.status.preview != request.preview {
+            return Err(ApiError::conflict(
+                ErrorCode::IdempotencyKeyReused,
+                "operation_id already binds another exit request, preview or actor",
+            ));
+        }
+        return Ok((record, true));
+    }
+    let (preview, original) = prepare(request.preview.request.clone())?;
+    if preview != request.preview {
+        return Err(ApiError::conflict(
+            ErrorCode::GenerationMismatch,
+            "exit source changed; preserve the original plan and inspect its state",
+        ));
+    }
+    Ok((
+        StoredExit {
+            format: Format::Exit,
+            principal: principal.to_owned(),
+            original,
+            archive: None,
+            status: ExitStatus {
+                operation_id: operation,
+                state: ExitState::Running,
+                phase: ExitPhase::Prepared,
+                preview,
+                failure: None,
+                result: None,
+            },
+        },
+        false,
+    ))
 }
 
 impl ManagementBackend {

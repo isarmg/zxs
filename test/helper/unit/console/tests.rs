@@ -485,3 +485,40 @@ async fn helper_deregistration_input_has_no_planned_offline_or_force_lane() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn capabilities_distinguish_final_voter_from_new_terminal_registry_mutation() {
+    let response = http::router(state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .header("host", "127.0.0.1:9040")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: Value =
+        json_codec::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    assert!(
+        value["implemented"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("final_voter_terminal_deregistration"))
+    );
+    for capability in [
+        "new_deregistration_after_terminal_authority",
+        "foreign_admission",
+        "complete_first_run_setup",
+    ] {
+        assert!(
+            value["not_implemented"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(capability))
+        );
+    }
+    assert_eq!(value["authentication"], "none");
+    assert_eq!(value["source_writes_available"], false);
+}

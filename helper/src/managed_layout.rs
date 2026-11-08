@@ -129,6 +129,9 @@ impl Layout {
         )?;
         entries(&self.management, &["auth.lock", "management-auth.json"])
     }
+    pub fn state(&self) -> Result<PrivateDirectory> {
+        private(&self.state, STATE)
+    }
     pub fn management(&self) -> Result<PrivateDirectory> {
         private(&self.management, MANAGEMENT)
     }

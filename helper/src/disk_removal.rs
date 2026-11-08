@@ -45,6 +45,7 @@ pub(crate) struct Commit {
     plan: Plan,
     confirmation: String,
     acknowledge_current_view_loss: bool,
+    acknowledge_terminal_management: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 enum Format {
@@ -65,6 +66,7 @@ pub(crate) struct Preview {
     request_digest: String,
     original_status: Option<ExitStatus>,
     deregisters_current_member: bool,
+    will_enter_terminal_management: bool,
     physical_bytes_erased: bool,
     remaining_content_preservation_verified: bool,
     complete_installation_ready: bool,
@@ -164,9 +166,12 @@ fn supported(preview: &ExitPreview) -> Result<()> {
     if preview.request.action != ExitAction::Deregister {
         return Err("planned-offline is not an available helper action".into());
     }
-    if preview.authority != ExitAuthority::ActiveMembership || preview.target_metadata_members == 0
+    if (preview.authority == ExitAuthority::TerminalManagement)
+        != (preview.target_metadata_members == 0)
     {
-        return Err("removing the final metadata voter requires a terminal drain owner that is not yet migrated to the helper; no exit was started".into());
+        return Err(
+            "exit authority differs from its declared remaining metadata membership".into(),
+        );
     }
     layout::names(std::slice::from_ref(&preview.target.root_path))?;
     Ok(())
@@ -194,6 +199,7 @@ fn preview_result(plan: Plan, original_status: Option<ExitStatus>) -> Result<Pre
     supported(&plan.exit)?;
     Ok(Preview {
         request_digest: plan_digest(&plan)?,
+        will_enter_terminal_management: plan.exit.authority == ExitAuthority::TerminalManagement,
         plan,
         original_status,
         deregisters_current_member: true,
@@ -256,12 +262,24 @@ pub(crate) fn recover_preview(input: Original) -> Result<Preview> {
     Root::open(input.service_user)?.check(&plan)?;
     preview_result(plan, status)
 }
-pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
-    if input.confirmation != "deregister-member-preserve-bytes"
+fn confirm(input: &Commit) -> Result<()> {
+    supported(&input.plan.exit)?;
+    let terminal = input.plan.exit.authority == ExitAuthority::TerminalManagement;
+    let expected = if terminal {
+        "deregister-final-voter-stop-storage"
+    } else {
+        "deregister-member-preserve-bytes"
+    };
+    if input.confirmation != expected
         || !input.acknowledge_current_view_loss
+        || (terminal && !input.acknowledge_terminal_management)
     {
-        return Err("explicit deregister-member-preserve-bytes confirmation and acknowledgment of current-view/content-access loss are required before system access".into());
+        return Err("exact deregistration confirmation, current-view loss acknowledgment and, for the final voter, separate acknowledgment of terminal management with no active storage are required before system access".into());
     }
+    Ok(())
+}
+pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
+    confirm(&input)?;
     stopped(input.input.external_writers_stopped)?;
     supported(&input.plan.exit)?;
     request_digest(&input.input.request_digest)?;
@@ -298,6 +316,7 @@ fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
     Ok(
         json_codec::json!({"format":"zxs-helper-active-deregistration-result",
         "request_digest":input.input.request_digest,"operation":status,
+        "requested_terminal_management":input.plan.exit.authority == ExitAuthority::TerminalManagement,
         "physical_bytes_erased":false,"remaining_content_preservation_verified":false,
         "service_started":false,"complete_installation_ready":false}),
     )

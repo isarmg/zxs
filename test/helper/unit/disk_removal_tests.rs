@@ -26,6 +26,7 @@ fn view_loss_acknowledgment_is_mandatory_before_any_system_access() {
         plan: p,
         confirmation: "deregister-member-preserve-bytes".into(),
         acknowledge_current_view_loss: false,
+        acknowledge_terminal_management: false,
     };
     assert!(
         commit(input)
@@ -36,7 +37,7 @@ fn view_loss_acknowledgment_is_mandatory_before_any_system_access() {
     assert!(stopped(false).is_err());
 }
 #[test]
-fn no_planned_offline_or_final_voter_substitution() {
+fn terminal_authority_is_explicit_and_new_planned_offline_stays_rejected() {
     let mut p = plan();
     assert!(supported(&p.exit).is_ok());
     p.exit.request.action = ExitAction::PlannedOffline;
@@ -49,12 +50,11 @@ fn no_planned_offline_or_final_voter_substitution() {
     p.exit.request.action = ExitAction::Deregister;
     p.exit.target_metadata_members = 0;
     p.exit.authority = ExitAuthority::TerminalManagement;
-    assert!(
-        supported(&p.exit)
-            .unwrap_err()
-            .to_string()
-            .contains("final metadata voter")
-    );
+    assert!(supported(&p.exit).is_ok());
+    let output = json_codec::to_value(preview_result(p.clone(), None).unwrap()).unwrap();
+    assert_eq!(output["will_enter_terminal_management"], true);
+    p.exit.target_metadata_members = 1;
+    assert!(supported(&p.exit).is_err());
 }
 #[test]
 fn native_worker_payload_cannot_supply_alternate_pool_or_root_account() {
@@ -80,4 +80,30 @@ fn preview_neither_erases_media_nor_guarantees_remaining_content() {
     let mut changed = p;
     changed.exit.target.binding_generation += 1;
     assert_ne!(first, plan_digest(&changed).unwrap());
+}
+
+#[test]
+fn final_voter_requires_its_exact_confirmation_and_separate_ack_before_io() {
+    let mut p = plan();
+    p.exit.target_metadata_members = 0;
+    p.exit.authority = ExitAuthority::TerminalManagement;
+    let mut input = Commit {
+        input: Original {
+            service_user: "zxs".into(),
+            request_digest: plan_digest(&p).unwrap(),
+            external_writers_stopped: true,
+        },
+        plan: p,
+        confirmation: "deregister-member-preserve-bytes".into(),
+        acknowledge_current_view_loss: true,
+        acknowledge_terminal_management: true,
+    };
+    assert!(confirm(&input).is_err());
+    input.confirmation = "deregister-final-voter-stop-storage".into();
+    input.acknowledge_terminal_management = false;
+    assert!(confirm(&input).is_err());
+    input.acknowledge_terminal_management = true;
+    assert!(confirm(&input).is_ok());
+    input.acknowledge_current_view_loss = false;
+    assert!(confirm(&input).is_err());
 }

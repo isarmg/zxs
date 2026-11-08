@@ -464,3 +464,7 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 ## 共享非终态 Deregister 控制 API
 
 `management::storage_lifecycle::ActiveExit` 在当前服务与 helper 之间共享原生注销控制阶段。过期预览只在 Engine 回调准入后才保存原生意图；Completed 必须有 D3 和永久回执。终态/历史恢复仍走原 owner，不将最后元数据成员交给普通活动退出，也不删除 PlannedOffline 历史格式。源码未编译/测试/审查/CI，见[helper 注销边界](../design/helper-active-disk-deregistration.md)。
+
+## 独占原生注销与终态回执
+
+`management::storage_lifecycle::ExclusiveExit` 持有唯一 EngineBackend 或已验证 TerminalManagement，不暴露业务 handle。沿共享的原生记录构造、阶段持久化、`complete_terminal_exit` 与精确 terminal receipt 规则接通最后 voter；普通服务的 Arc 排空路径与终态回执校验仍在使用同一底层能力。选择 terminal 在 Engine::open 前，损坏或 metadata-resume 未决不回落空初始化。主 AuthReader 必须持续存活且匹配当前身份，不以归档凭据/session 伪造授权。helper 专用 host lease、账户/固定路径、IPC、确认及页面仍位于 helper；此片未编译/测试/审查/CI。见[终态注销](../design/helper-terminal-disk-deregistration.md)。

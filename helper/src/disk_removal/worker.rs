@@ -1,17 +1,20 @@
-//! Native active-Deregister worker. In particular, status and completion never
-//! enumerate or re-open the retired disk merely to see whether it still exists.
+//! Native Deregister worker, including the last metadata voter. Status and
+//! completion never re-open a retired disk merely to see whether it exists.
 use super::*;
-use crate::managed_pool::ManagedPool;
+use platform_io::service_lease::ServiceLease;
 use storage_contract::{
     storage_lifecycle::{ExitCommit, ExitRequest},
     storage_readmission::{RegistrationEntry, RegistrationSnapshot},
 };
-use storage_server::management::storage_lifecycle::ActiveExit;
+use storage_engine::Mode;
+use storage_server::management::storage_lifecycle::ExclusiveExit;
+use storage_server::{auth::AuthStore, startup_admission::PreparedService};
 
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Inventory {
     pool_id: String,
+    authority: ExitAuthority,
     registrations: Vec<Registration>,
     separate_target_availability_probe_performed: bool,
     existing_engine_recovery_may_run: bool,
@@ -24,21 +27,73 @@ struct Registration {
     level: u32,
     upstream_slot_id: Option<String>,
 }
-fn original(target: &ManagedPool, plan: &Plan) -> Result<()> {
+struct Target {
+    control: ExclusiveExit,
+    auth: AuthStore,
+    prepared: PreparedService,
+    layout: Layout,
+    lease: ServiceLease,
+}
+impl Target {
+    fn open(context: &layout::Context) -> Result<Self> {
+        let lease = ServiceLease::host()?;
+        let layout = Layout::open(context.account.name.as_str().into())?;
+        if layout.context(lease.identity()) != *context {
+            return Err(
+                "deregistration worker rejected changed host/account/layout identity".into(),
+            );
+        }
+        let prepared =
+            PreparedService::open(Path::new(layout::STATE), Path::new(layout::MANAGEMENT))?;
+        let auth = AuthStore::open_system_management_directory(layout.management()?)?;
+        let control = ExclusiveExit::open(
+            layout.state()?,
+            layout.management()?,
+            auth.reader(),
+            auth.sole_identity()?,
+        )?;
+        if control.current_configuration()?.mode != Mode::Production {
+            return Err("helper deregistration requires an existing production pool".into());
+        }
+        let target = Self {
+            control,
+            auth,
+            prepared,
+            layout,
+            lease,
+        };
+        target.recheck()?;
+        Ok(target)
+    }
+    fn recheck(&self) -> Result<()> {
+        self.lease.recheck()?;
+        self.layout.recheck()?;
+        self.prepared.recheck()?;
+        Ok(())
+    }
+}
+fn original(target: &Target, plan: &Plan) -> Result<()> {
     target.recheck()?;
     supported(&plan.exit)?;
-    if target.context() != plan.context || target.auth().credential_revision()? != plan.credential {
+    if target.layout.context(target.lease.identity()) != plan.context
+        || target.auth.credential_revision()? != plan.credential
+    {
         return Err("original deregistration no longer matches current roots/account or primary credentials; no new authority was invented".into());
     }
     Ok(())
 }
-fn inventory(control: &ActiveExit<'_>) -> Result<Inventory> {
+fn inventory(control: &ExclusiveExit) -> Result<Inventory> {
     let config = control.current_configuration()?;
-    let RegistrationSnapshot::ActiveMembership { registrations } = control.registrations()? else {
-        return Err(
-            "no admitted active registration authority is available; this is not an empty pool"
-                .into(),
-        );
+    let (authority, registrations) = match control.registrations()? {
+        RegistrationSnapshot::ActiveMembership { registrations } => {
+            (ExitAuthority::ActiveMembership, registrations)
+        }
+        RegistrationSnapshot::TerminalManagement { registrations } => {
+            (ExitAuthority::TerminalManagement, registrations)
+        }
+        RegistrationSnapshot::Unadmitted => {
+            return Err("no admitted registration authority; this is not an empty pool".into());
+        }
     };
     let mut entries = Vec::with_capacity(registrations.len());
     for registration in registrations {
@@ -62,18 +117,17 @@ fn inventory(control: &ActiveExit<'_>) -> Result<Inventory> {
     }
     Ok(Inventory {
         pool_id: config.pool_id,
+        authority,
         registrations: entries,
         separate_target_availability_probe_performed: false,
         existing_engine_recovery_may_run: true,
     })
 }
 pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
-    let target = ManagedPool::open(&request.context)?;
-    let identity = target.auth().sole_identity()?;
-    let control = ActiveExit::open(target.backend(), &identity, target.layout().management()?)?;
+    let mut target = Target::open(&request.context)?;
     match request.action {
         Action::Inventory => {
-            let inventory = inventory(&control)?;
+            let inventory = inventory(&target.control)?;
             target.recheck()?;
             Ok(Output::Inventory { inventory })
         }
@@ -82,7 +136,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             slot_id,
             expected_disk_id,
         } => {
-            let exit = control.preview(ExitRequest {
+            let exit = target.control.preview(ExitRequest {
                 operation_id,
                 slot_id,
                 expected_disk_id,
@@ -94,14 +148,14 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
                 plan: Plan {
                     format: Format::Deregistration,
                     context: request.context,
-                    credential: target.auth().credential_revision()?,
+                    credential: target.auth.credential_revision()?,
                     exit,
                 },
             })
         }
         Action::Original { plan } => {
             original(&target, &plan)?;
-            let status = match control.status(plan.exit.request.operation_id) {
+            let status = match target.control.status(plan.exit.request.operation_id) {
                 Ok(status) => {
                     if status.preview != plan.exit {
                         return Err(
@@ -112,7 +166,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
                     Some(status)
                 }
                 Err(error) if error.code == storage_contract::ErrorCode::OperationNotFound => {
-                    if control.preview(plan.exit.request.clone())? != plan.exit {
+                    if target.control.preview(plan.exit.request.clone())? != plan.exit {
                         return Err("unstarted deregistration no longer has its exact original published source boundary".into());
                     }
                     None
@@ -124,7 +178,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
         }
         Action::Commit { plan } => {
             original(&target, &plan)?;
-            let status = control.commit(ExitCommit { preview: plan.exit })?;
+            let status = target.control.commit(ExitCommit { preview: plan.exit })?;
             target.recheck()?;
             Ok(Output::Status { status })
         }
