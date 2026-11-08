@@ -629,3 +629,79 @@ pub(super) fn read_existing(
             .sequence,
     })
 }
+
+impl Recorded {
+    fn verify_log_image(&self, bytes: &[u8]) -> Result<()> {
+        crate::journal::verify_terminal_chain_log_bytes(
+            bytes,
+            [
+                &self.publication.finalize.accepts[0],
+                &self.publication.finalize_receipts[0],
+                &self.seal.receipts[0],
+            ],
+        )
+    }
+}
+impl PublishedProof {
+    pub(super) fn verify_log_image(&self, bytes: &[u8]) -> Result<()> {
+        self.recorded.verify_log_image(bytes)
+    }
+    pub(super) fn install_generation_objects(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+    ) -> Result<()> {
+        for object in self.recorded.objects()? {
+            object.store_at_root(root, disk)?;
+        }
+        self.require_generation_layout(root, disk)?;
+        self.recorded
+            .verify_objects(&root.private_child(&disk.root.join("metadata"))?)
+    }
+    pub(super) fn require_generation_layout(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+    ) -> Result<()> {
+        for object in self.recorded.objects()? {
+            crate::journal::existing_object_paths_at(root, disk, object.kind(), &object.hash)?;
+        }
+        Ok(())
+    }
+    pub(super) fn read_generation(
+        &self,
+        metadata: &DiskRoot,
+        bytes: &[u8],
+        prepared: &Prepared,
+    ) -> Result<Self> {
+        self.recorded.verify(prepared)?;
+        self.recorded.verify_log_image(bytes)?;
+        self.recorded.verify_objects(metadata)?;
+        let state = prepared.read_at(metadata)?;
+        Ok(Self {
+            candidate: self.candidate.clone(),
+            recorded: self.recorded.clone(),
+            state,
+            frozen_sequence: self.frozen_sequence,
+        })
+    }
+}
+pub(super) fn verify_source_log_image(
+    management: &TerminalManagement,
+    prepared: &Prepared,
+    bytes: &[u8],
+) -> Result<()> {
+    let recorded: Recorded = load(
+        management.system_root(),
+        &operation(management).join(RECEIPT_FILE),
+    )?
+    .ok_or_else(|| {
+        Error::new(
+            ErrorCode::RecoveryRequired,
+            "generation log selection lost original source Publication",
+        )
+    })?;
+    recorded.verify(prepared)?;
+    recorded.verify_objects(&source_root(management)?)?;
+    recorded.verify_log_image(bytes)
+}

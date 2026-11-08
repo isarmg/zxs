@@ -41,7 +41,7 @@ pub use pending::terminal_resume::{
 pub(crate) use terminal_chain::FirstSlotOwner;
 pub use terminal_chain::{
     TerminalChainActivationPlanReport, TerminalChainFirstPublication,
-    TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
+    TerminalChainGenerationLogReport, TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
     TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
     TerminalChainReadmissionPhase, TerminalChainReadmissionStatus,
 };

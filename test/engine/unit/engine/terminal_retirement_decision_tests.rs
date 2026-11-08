@@ -2589,3 +2589,298 @@ fn chain_io_decision_requires_original_plan_and_actor_and_rejects_mixed_vote_kin
     );
     assert_eq!(fs::read(&vote).unwrap(), wrong);
 }
+
+fn optional_chain_marker(path: &std::path::Path) -> Option<Vec<u8>> {
+    match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("cannot observe exact chain marker: {error}"),
+    }
+}
+
+fn decided_chain_generation_fixture() -> (
+    Fixture,
+    OperationId,
+    crate::TerminalChainReadmissionProposal,
+    crate::TerminalChainReadmissionStatus,
+) {
+    let (mut fixture, operation, proposal, _) = planned_chain_io_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .decide_chain_io_admission(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    (fixture, operation, proposal, status)
+}
+fn chain_generation_path(
+    fixture: &Fixture,
+    status: &crate::TerminalChainReadmissionStatus,
+) -> PathBuf {
+    fixture.config.disks[0]
+        .root
+        .join("metadata/membership-generations")
+        .join(&status.activation.as_ref().unwrap().core_hash)
+}
+
+#[test]
+fn chain_generation_installs_actual_log_and_ordinary_objects_but_no_active_writer() {
+    let (mut fixture, operation, proposal, before) = decided_chain_generation_fixture();
+    let root = fixture.config.disks[0].root.clone();
+    let source_log = chain_first_target(&fixture, &before).join("first-publication/journal.bin");
+    let bytes = fs::read(&source_log).unwrap();
+    let seal = fs::read(root.join("disk.json")).unwrap();
+    let marker = optional_chain_marker(&root.join("metadata/pool-membership/generation.json"));
+    let locator = locator_bytes(&fixture.system());
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .prepare_chain_generation_log(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::GenerationLogPreserved
+    );
+    let report = status.generation_log.as_ref().unwrap();
+    assert!(report.target_reverified_this_call && report.installed_current_reverified_this_call);
+    assert!(!report.locator_installed && !report.stop_consumed && !report.active_writer_admitted);
+    assert_eq!(report.io_epoch, before.io_decision.unwrap().io_epoch);
+    assert_eq!(
+        fs::read(chain_generation_path(&fixture, &status).join("journal.bin")).unwrap(),
+        bytes
+    );
+    assert_eq!(fs::read(&source_log).unwrap(), bytes);
+    let candidate = crate::journal::object_path(
+        &fixture.config.disks[0],
+        "candidate",
+        &status.activation.as_ref().unwrap().candidate_hash,
+    );
+    let isolated_candidate = chain_first_object(
+        &chain_first_target(&fixture, &status),
+        "candidate",
+        &status.activation.as_ref().unwrap().candidate_hash,
+    );
+    assert_eq!(
+        fs::read(candidate).unwrap(),
+        fs::read(isolated_candidate).unwrap()
+    );
+    assert_eq!(fs::read(root.join("disk.json")).unwrap(), seal);
+    assert_eq!(
+        optional_chain_marker(&root.join("metadata/pool-membership/generation.json")),
+        marker
+    );
+    assert_eq!(locator_bytes(&fixture.system()), locator);
+    assert!(fixture.terminal.operation(operation).is_none());
+    assert!(fixture.terminal.writer_locks().is_err());
+}
+
+#[test]
+fn chain_generation_cold_source_status_does_not_probe_and_exact_repeat_keeps_log() {
+    let (mut fixture, operation, proposal, _) = decided_chain_generation_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .prepare_chain_generation_log(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let path = chain_generation_path(&fixture, &status).join("journal.bin");
+    let bytes = fs::read(&path).unwrap();
+    let root = fixture.config.disks[0].root.clone();
+    let disk_id = fixture.config.disks[0].disk_id.clone();
+    let system = fixture.system();
+    let locator = locator_bytes(&system);
+    drop(fixture.terminal);
+    fs::rename(&root, root.with_extension("generation-held")).unwrap();
+    fs::write(&root, b"source status must not probe").unwrap();
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    let status = cold.chain_readmission_status().unwrap().unwrap();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::GenerationLogPreserved
+    );
+    assert!(!status.generation_log.unwrap().target_reverified_this_call);
+    fs::remove_file(&root).unwrap();
+    fs::rename(root.with_extension("generation-held"), &root).unwrap();
+    let repeated = cold
+        .prepare_chain_generation_log(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id,
+                directory: fs::File::open(&root).unwrap(),
+            },
+        )
+        .unwrap();
+    assert!(
+        repeated
+            .generation_log
+            .unwrap()
+            .installed_current_reverified_this_call
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(locator_bytes(&system), locator);
+    drop(cold);
+    assert!(Engine::open(&system).is_err());
+}
+
+#[test]
+fn chain_generation_target_complete_source_incomplete_cold_retry_preserves_native_bytes() {
+    let (mut fixture, operation, proposal, _) = decided_chain_generation_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .prepare_chain_generation_log(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let target = chain_generation_path(&fixture, &status);
+    let bytes = fs::read(target.join("journal.bin")).unwrap();
+    let receipt = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join("chain-generation-log.json");
+    let expected = fs::read(&receipt).unwrap();
+    fs::remove_file(&receipt).unwrap();
+    let root = fixture.config.disks[0].root.clone();
+    let disk_id = fixture.config.disks[0].disk_id.clone();
+    let system = fixture.system();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    assert_eq!(
+        cold.chain_readmission_status().unwrap().unwrap().phase,
+        crate::TerminalChainReadmissionPhase::GenerationLogPending
+    );
+    assert!(!receipt.exists());
+    cold.prepare_chain_generation_log(
+        "admin",
+        operation,
+        &proposal.preparation().proposal_digest,
+        crate::PendingMemberDirectory {
+            disk_id,
+            directory: fs::File::open(&root).unwrap(),
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read(receipt).unwrap(), expected);
+    assert_eq!(fs::read(target.join("journal.bin")).unwrap(), bytes);
+}
+
+#[test]
+fn chain_generation_completed_missing_log_object_or_marker_is_not_rebuilt() {
+    for missing in ["log", "candidate", "completion"] {
+        let (mut fixture, operation, proposal, _) = decided_chain_generation_fixture();
+        let directory = retained_chain_directory(&fixture);
+        let status = fixture
+            .terminal
+            .prepare_chain_generation_log(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .unwrap();
+        let generation = chain_generation_path(&fixture, &status);
+        let path = match missing {
+            "log" => generation.join("journal.bin"),
+            "completion" => generation.join("chain-log-complete.json"),
+            "candidate" => crate::journal::object_path(
+                &fixture.config.disks[0],
+                "candidate",
+                &status.activation.as_ref().unwrap().candidate_hash,
+            ),
+            _ => unreachable!(),
+        };
+        fs::remove_file(&path).unwrap();
+        let locator = locator_bytes(&fixture.system());
+        let directory = retained_chain_directory(&fixture);
+        assert!(
+            fixture
+                .terminal
+                .prepare_chain_generation_log(
+                    "admin",
+                    operation,
+                    &proposal.preparation().proposal_digest,
+                    directory,
+                )
+                .is_err()
+        );
+        assert!(!path.exists());
+        assert_eq!(locator_bytes(&fixture.system()), locator);
+    }
+}
+
+#[test]
+fn chain_generation_requires_real_io_decision_and_never_adopts_an_unselected_directory() {
+    let (mut fixture, operation, proposal, before) = planned_chain_io_fixture();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_generation_log(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(!chain_generation_path(&fixture, &before).exists());
+    assert!(
+        !fixture
+            .terminal
+            .store
+            .operation()
+            .path()
+            .join("chain-generation-log-selected.json")
+            .exists()
+    );
+    drop(fixture);
+    let (mut fixture, operation, proposal, before) = decided_chain_generation_fixture();
+    let generation = chain_generation_path(&fixture, &before);
+    fs::create_dir_all(&generation).unwrap();
+    fs::write(generation.join("unowned"), b"not an original installation").unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_generation_log(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(generation.join("unowned")).unwrap(),
+        b"not an original installation"
+    );
+    assert!(
+        !fixture
+            .terminal
+            .store
+            .operation()
+            .path()
+            .join("chain-generation-log-selected.json")
+            .exists()
+    );
+}

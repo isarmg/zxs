@@ -730,6 +730,7 @@ async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown(
         "/api/disks/terminal-chain-current",
         "/api/disks/terminal-chain-activation-plan",
         "/api/disks/terminal-chain-io-decide",
+        "/api/disks/terminal-chain-generation-log",
     ] {
         let mut request = post(path, json!({}));
         request
@@ -952,6 +953,33 @@ fn chain_io_decision_input_rejects_caller_supplied_vote_epoch_or_active_writer()
             &value,
         ) {
             Ok(_) => panic!("injected field was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unknown field"));
+        assert!(error.to_string().contains(field));
+    }
+}
+
+#[test]
+fn chain_generation_input_rejects_uploaded_log_or_active_authority_overrides() {
+    for field in [
+        "journal",
+        "native_objects",
+        "generation",
+        "target_root",
+        "bootstrap",
+        "force",
+        "consume_stop",
+        "writer",
+    ] {
+        let value = format!(
+            r#"{{"{field}":true,"service_user":"zxs","external_writers_stopped":true,"plan":{{}},"confirmation":"prepare-chain-generation-log-without-active-writer","acknowledge_generation_log_without_active_writer":true}}"#
+        );
+        let error = match json_codec::from_str::<
+            crate::disk_removal::chain_target::GenerationLogInput,
+        >(&value)
+        {
+            Ok(_) => panic!("injected authority field was accepted"),
             Err(error) => error,
         };
         assert!(error.to_string().contains("unknown field"));

@@ -266,6 +266,31 @@ impl Prepared {
         }
         Ok(())
     }
+    pub(super) fn require_generation_layout(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+    ) -> Result<()> {
+        for object in self.files.values() {
+            crate::journal::existing_object_paths_at(root, disk, &object.kind, &object.hash)?;
+        }
+        Ok(())
+    }
+    pub(super) fn install_generation_objects(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+    ) -> Result<()> {
+        for object in self.files.values() {
+            crate::journal::existing_object_paths_at(root, disk, &object.kind, &object.hash)?;
+            root.write_atomic(
+                &crate::journal::object_path(disk, &object.kind, &object.hash),
+                &object.bytes,
+                false,
+            )?;
+        }
+        self.verify_at(&root.private_child(&disk.root.join("metadata"))?)
+    }
     pub(super) fn install(&self, root: &DiskRoot) -> Result<()> {
         for (path, object) in &self.files {
             let path = root.path().join(path);

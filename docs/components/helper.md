@@ -257,3 +257,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 终态链原目标真实 epoch 决定
 
 `POST /api/disks/terminal-chain-io-decide` 在原精确计划后，重新核验实际 Publication/冻结 Current 与原物理根，在原盘作出独立 `TerminalChainIoAdmission` 原生不可覆盖决定，双端保留原计划及决定并提供同原请求显式续作。它不是只存草稿，但仍**不消费 Stop、不更新 locator、不启用活动 writer 或完成 readmission/H03**。必须单独确认不可撤销及失败可能已决定；来源查询不冒充目标 fresh。详见[真实 epoch 决定](../design/terminal-chain-io-decision.md)。未审查/编译/测试/CI，未操作实际系统。
+
+### 终态链 generation 日志和安装后冻结 Current
+
+`POST /api/disks/terminal-chain-generation-log` 在原目标真实 epoch choice 后，独立保存实际三帧到准确 generation 地址，安装普通不可变对象并从这些实际字节重读冻结 Current。原操作支持目标完成/SYSTEM 未完成的显式续作，完成后缺件不自动补造。**未更换活动代际指针、数据库或 seal，未消费 Stop/启 writer/完成 readmission/H03**。见[安装路径与恢复边界](../design/terminal-chain-generation-log.md)。未审查/编译/测试/CI、无实际系统操作。

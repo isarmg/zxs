@@ -253,3 +253,57 @@ impl TerminalChainPublishedCurrent<'_> {
         self.recheck()
     }
 }
+
+impl TerminalChainPublishedCurrent<'_> {
+    pub(super) fn prepared_generation_inputs(&self) -> Result<first::Prepared> {
+        self.recheck_publication()?;
+        let certificate = activation::certificate(self.management, &self.selection)?;
+        first::Prepared::new(
+            &self.selection,
+            &certificate,
+            self.management.verified_authority(),
+        )
+    }
+    pub(super) fn original_log_image(&self) -> Result<Vec<u8>> {
+        self.recheck_publication()?;
+        let path = pending::member_directory(
+            self.selection.proposal.target_disk(),
+            &self.selection.hash()?,
+        )
+        .join(activation::TARGET_DIRECTORY)
+        .join("first-publication/journal.bin");
+        let bytes = self.held.root.read_bytes(&path, 16 * 1024)?;
+        self.proof.verify_log_image(&bytes)?;
+        self.recheck()?;
+        Ok(bytes)
+    }
+    pub(super) fn install_generation_publication(&self) -> Result<()> {
+        self.recheck_publication()?;
+        self.proof
+            .install_generation_objects(&self.held.root, self.selection.proposal.target_disk())
+    }
+    pub(super) fn generation_current(
+        &self,
+        metadata: &DiskRoot,
+        bytes: &[u8],
+        prepared: &first::Prepared,
+    ) -> Result<CurrentNamespaces> {
+        self.recheck_publication()?;
+        prepared
+            .require_generation_layout(&self.held.root, self.selection.proposal.target_disk())?;
+        self.proof
+            .require_generation_layout(&self.held.root, self.selection.proposal.target_disk())?;
+        let proof = self.proof.read_generation(metadata, bytes, prepared)?;
+        let checkpoint = self
+            .selection
+            .proposal
+            .activation_source(self.management.verified_authority())?;
+        let namespaces = self
+            .selection
+            .proposal
+            .namespaces(&checkpoint)?
+            .admit_terminal_chain(checkpoint.state(), &proof)?;
+        self.recheck()?;
+        Ok(namespaces)
+    }
+}

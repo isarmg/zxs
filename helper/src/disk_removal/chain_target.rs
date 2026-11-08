@@ -49,6 +49,15 @@ pub(crate) struct IoDecisionInput {
 }
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
+pub(crate) struct GenerationLogInput {
+    service_user: String,
+    external_writers_stopped: bool,
+    plan: Plan,
+    confirmation: String,
+    acknowledge_generation_log_without_active_writer: bool,
+}
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct CurrentInput {
     service_user: String,
     external_writers_stopped: bool,
@@ -79,6 +88,7 @@ enum Action {
     InspectPublished { plan: Plan },
     PrepareActivation { plan: Plan },
     DecideIo { plan: Plan },
+    PrepareGenerationLog { plan: Plan },
 }
 impl crate::service_worker::Request for Request {
     type Output = Status;
@@ -92,6 +102,24 @@ impl crate::service_worker::Request for Request {
         let mut published_current = None;
         let native = match self.action {
             Action::Status => target.control.terminal_chain_readmission_status()?,
+            Action::PrepareGenerationLog { plan } => {
+                if plan.context != self.context
+                    || plan.credential != target.credential_revision()?
+                {
+                    return Err(
+                        "chain generation log host or primary credential revision changed".into(),
+                    );
+                }
+                let preparation = plan.preparation;
+                Some(target.control.prepare_terminal_chain_generation_log(
+                    storage_contract::storage_readmission::ReadmissionRequest {
+                        operation_id: preparation.operation_id,
+                        slot_id: preparation.target.slot_id,
+                        expected_disk_id: preparation.target.disk_id,
+                    },
+                    &preparation.proposal_digest,
+                )?)
+            }
             Action::DecideIo { plan } => {
                 if plan.context != self.context
                     || plan.credential != target.credential_revision()?
@@ -234,7 +262,8 @@ fn run(input: InventoryInput, action: Action) -> Result<Status> {
     | Action::PublishFirst { plan }
     | Action::InspectPublished { plan }
     | Action::PrepareActivation { plan }
-    | Action::DecideIo { plan } = &action
+    | Action::DecideIo { plan }
+    | Action::PrepareGenerationLog { plan } = &action
         && plan.context != context
     {
         return Err("chain target no longer matches its original host/account/layout".into());
@@ -339,5 +368,20 @@ pub(crate) fn decide_io(input: IoDecisionInput) -> Result<Status> {
             external_writers_stopped: input.external_writers_stopped,
         },
         Action::DecideIo { plan: input.plan },
+    )
+}
+
+pub(crate) fn prepare_generation_log(input: GenerationLogInput) -> Result<Status> {
+    if input.confirmation != "prepare-chain-generation-log-without-active-writer"
+        || !input.acknowledge_generation_log_without_active_writer
+    {
+        return Err("explicitly acknowledge immutable generation log and native object installation, original-request recovery only, no active selector, Stop consumption, writer or completed readmission".into());
+    }
+    run(
+        InventoryInput {
+            service_user: input.service_user,
+            external_writers_stopped: input.external_writers_stopped,
+        },
+        Action::PrepareGenerationLog { plan: input.plan },
     )
 }

@@ -135,7 +135,7 @@ pub use membership_transition::{
 };
 pub use membership_transition::{
     TerminalChainActivationPlanReport, TerminalChainFirstPublication,
-    TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
+    TerminalChainGenerationLogReport, TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
     TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
     TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalMetadataResume,
     TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,

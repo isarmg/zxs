@@ -214,3 +214,30 @@ fn validate_prefix(scan: &Scan, owner: &FirstSlotOwner<'_>) -> Result<()> {
     }
     Ok(())
 }
+
+/// Read-only exact native image verification for a generation-directory copy.
+/// It exposes no JournalWriter and accepts neither an extra slot nor torn tail.
+pub(crate) fn verify_terminal_chain_log_bytes(bytes: &[u8], expected: [&Receipt; 3]) -> Result<()> {
+    if bytes.len() > MAX_SLOT_BYTES {
+        return Err(Error::new(
+            ErrorCode::ResourceLimit,
+            "terminal-chain first log exceeds its bound",
+        ));
+    }
+    let scan = scan_frames(bytes)?;
+    if scan.torn_tail || scan.records.len() != expected.len() {
+        return Err(Error::new(
+            ErrorCode::LogCorrupt,
+            "generation log is not the complete original three-frame image",
+        ));
+    }
+    for ((record, hash), receipt) in scan.records.iter().zip(expected) {
+        if record != &receipt.record || hash != &receipt.frame_hash {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "generation log differs from the original actual Publication receipts",
+            ));
+        }
+    }
+    Ok(())
+}

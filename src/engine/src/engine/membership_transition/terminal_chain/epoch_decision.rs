@@ -97,7 +97,7 @@ fn acceptance(plan: &SelectedPlan, hash: &str) -> Result<String> {
     )?)
 }
 pub(super) fn owns_initial_entry(name: &str) -> bool {
-    matches!(name, REQUEST | COMPLETE)
+    matches!(name, REQUEST | COMPLETE) || super::generation_log::owns_initial_entry(name)
 }
 pub(super) fn started(management: &TerminalManagement) -> Result<bool> {
     for name in [REQUEST, COMPLETE] {
@@ -109,7 +109,7 @@ pub(super) fn started(management: &TerminalManagement) -> Result<bool> {
             return Ok(true);
         }
     }
-    Ok(false)
+    super::generation_log::started(management)
 }
 pub(super) fn require_absent(management: &TerminalManagement) -> Result<()> {
     if started(management)? {
@@ -365,4 +365,36 @@ impl TerminalManagement {
         status.io_decision = Some(report);
         Ok(status)
     }
+}
+
+/// A new consumer must reread the actual completed target slot, not accept the
+/// serializable SYSTEM report as a permission. This function never fills holes.
+pub(super) fn verify_existing<'m>(
+    management: &'m TerminalManagement,
+    reader: &TerminalChainPublishedCurrent<'m>,
+) -> Result<TerminalChainIoDecisionReport> {
+    let owner = Owner::open(management, reader)?;
+    owner.recheck()?;
+    let presence = owner.observe_files()?;
+    if !presence.request
+        || !presence.source_complete
+        || !presence.target_plan
+        || !presence.target_complete
+    {
+        return Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "complete the original two-root I/O decision before generation installation",
+        ));
+    }
+    let held = reader.held_target();
+    let store = DecisionStore::open(&held.root, &held.identity, owner.plan.epoch(), false)?;
+    let complete = owner.read_target(&store)?;
+    let source: Complete = decode_strict(
+        &management
+            .system_root()
+            .read_bytes(&operation(management).join(COMPLETE), MAX_METADATA)?,
+    )?;
+    source.exact(&complete)?;
+    owner.recheck()?;
+    Ok(complete.report(true))
 }

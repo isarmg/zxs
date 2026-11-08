@@ -49,3 +49,5 @@ SYSTEM 查询仍只读自己的已保存完整原链。完成状态为 `io-decis
 ## 后续闭包
 
 这个真实决定为后续原计划执行提供不可改写目标证据，不是最终执行本身。仍需专属原生 generation/cold selector、目标日志的活动归属、所有必要数据库与 serving 资源、准确新 epoch/Stop 事件和活动 Current/writer 的共同安装及中断恢复。不能提前消费 Stop 再让系统没有可恢复 writer。H03 外来多级完整链接纳仍须独立完整低级链和最终权威证据，不能拿本原保留盘的决定替代。
+
+后续[原生 generation 日志](terminal-chain-generation-log.md)已从这个实际决定接入原日志及普通对象地址的保留式安装和冻结 Current 读回，但仍不执行活动 selector/Stop/writer 切换。
