@@ -3,6 +3,7 @@ use std::process::Command;
 fn helper_exposes_only_implemented_offline_operations() {
     let binary = env!("CARGO_BIN_EXE_zxs-helper");
     for name in [
+        "serve",
         "restore-system",
         "recovery-preview",
         "recovery-commit",
@@ -24,7 +25,6 @@ fn helper_exposes_only_implemented_offline_operations() {
     for name in [
         "init",
         "init-auth",
-        "serve",
         "account",
         "create-repo",
         "export-history",
@@ -63,6 +63,7 @@ fn helper_identity_is_consistent_without_creating_runtime_state() {
     assert!(help.contains("Offline auxiliary tool"));
     assert!(help.contains("Usage: zxs-helper"));
     assert!(help.contains("not yet implemented"));
+    assert!(help.contains("unauthenticated read-only Web console"));
     assert!(!help.contains("zxs-rescue"));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }

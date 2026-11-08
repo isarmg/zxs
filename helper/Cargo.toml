@@ -19,8 +19,10 @@ data-serialization.workspace = true
 json-codec.workspace = true
 storage-engine.workspace = true
 tokio.workspace = true
+http-routing = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"], path = "../src/foundation/networking/http-routing" }
 
 [dev-dependencies]
+service-stack = { version = "0.5", features = ["util"], path = "../src/foundation/networking/service-stack" }
 storage-server.workspace = true
 tempfile.workspace = true
 

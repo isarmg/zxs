@@ -6,7 +6,7 @@ fn authority_check_requires_an_explicit_selection_and_accepts_no_write_confirmat
         Args::try_parse_from(["zxs-helper", "authority", "check", "/selection.json"]).unwrap();
     let Command::Authority {
         command: authority::Command::Check { selection },
-    } = args.command
+    } = args.command.unwrap()
     else {
         panic!("wrong command")
     };
@@ -28,7 +28,7 @@ fn authority_check_requires_an_explicit_selection_and_accepts_no_write_confirmat
 fn workspace_inventory_is_an_explicit_read_only_command() {
     let args =
         Args::try_parse_from(["zxs-helper", "--root", "/pool", "workspace-inventory"]).unwrap();
-    assert!(matches!(&args.command, Command::WorkspaceInventory));
+    assert!(matches!(&args.command, Some(Command::WorkspaceInventory)));
     assert_eq!(args.root, PathBuf::from("/pool"));
     assert_eq!(args.workspace_limits().unwrap(), None);
 }
@@ -37,7 +37,7 @@ fn workspace_inventory_is_an_explicit_read_only_command() {
 fn restore_system_accepts_one_original_member_but_requires_a_path() {
     let args =
         Args::try_parse_from(["zxs-helper", "restore-system", "--disks", "/disk/only"]).unwrap();
-    let Command::RestoreSystem { disks } = args.command else {
+    let Command::RestoreSystem { disks } = args.command.unwrap() else {
         panic!("wrong command")
     };
     assert_eq!(disks, [PathBuf::from("/disk/only")]);
@@ -64,7 +64,7 @@ fn package_restore_defaults_to_one_copy_and_accepts_explicit_backup_policy() {
         let args = Args::try_parse_from(argv).unwrap();
         let Command::Package {
             command: PackageCommand::Restore { copies, .. },
-        } = args.command
+        } = args.command.unwrap()
         else {
             panic!("wrong command")
         };
@@ -200,7 +200,7 @@ fn operation_identifiers_are_parsed_at_the_command_line_boundary() {
             "review",
         ])
         .unwrap();
-        let Command::RecoveryPreview { operation, .. } = args.command else {
+        let Command::RecoveryPreview { operation, .. } = args.command.unwrap() else {
             panic!("wrong command")
         };
         assert_eq!(operation.to_string(), value);
@@ -217,7 +217,7 @@ fn operation_identifiers_are_parsed_at_the_command_line_boundary() {
         .unwrap();
         let Command::Package {
             command: PackageCommand::Restore { operation_id, .. },
-        } = args.command
+        } = args.command.unwrap()
         else {
             panic!("wrong command")
         };
@@ -275,4 +275,17 @@ fn diagnostic_chain_keeps_nested_sources_and_escapes_terminal_controls() {
     );
     assert!(!diagnostic.contains('\n'));
     assert!(!diagnostic.contains('\x1b'));
+}
+
+#[test]
+fn no_command_selects_the_manual_console_and_serve_parses_an_explicit_listener() {
+    assert!(
+        Args::try_parse_from(["zxs-helper"])
+            .unwrap()
+            .command
+            .is_none()
+    );
+    let args = Args::try_parse_from(["zxs-helper", "serve", "--listen", "0.0.0.0:9041"]).unwrap();
+    assert!(matches!(args.command, Some(Command::Serve(_))));
+    assert!(Args::try_parse_from(["zxs-helper", "serve", "--listen", "bad-listener"]).is_err());
 }

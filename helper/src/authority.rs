@@ -1,6 +1,6 @@
 //! Actual offline consumer for the opt-in independent disk format. Commands
 //! never select the current Engine pool protocol or its SQLite database.
-mod check;
+pub(crate) mod check;
 use crate::{Result, print, private_io};
 use command_line::{Args, Subcommand};
 use data_serialization::de::DeserializeOwned;

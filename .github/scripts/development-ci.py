@@ -21,8 +21,8 @@ PAUSED_JOBS = {
     'smb-sdk.yml': ('smb-sdk',),
 }
 SNAPSHOT_SHA256 = {
-    'ci.yml': '85784908a51d2bf72afd821bb6e4eac1b75244aea05db268ef673bdb0df808ce',
-    'release.yml': '35343409bd3833a5f180f4cf0e88a3fffcab82ee597e5e571cd2ffb6d4cad6ff',
+    'ci.yml': 'c076365d617c9cb94a97c8dfc8c2c5248af7ebae08d510d8209036f781ef177d',
+    'release.yml': '121aecec6acdcd34f2024b6e6e96a27c82c91d981c69c80fbb5f3bf5df4971ce',
     'smb-sdk.yml': '795075fb6a8adfe3ea88df18a84e0e631c9ed06b5f8a2ed611fda194e31cd062',
 }
 PAUSE = '    if: ${{ false }}\n'

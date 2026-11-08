@@ -1,3 +1,5 @@
+> 当前增量：`zxs-helper` 无子命令启动独立只读控制台，源码提供新逐盘检查、核验下载及退出；尚未构建或运行。其余本页写操作和主服务停服围栏仍未实现，见[具体边界](helper-console.md)。
+
 # 辅助工具的磁盘管理职责与迁移边界
 
 [辅助工具](../components/helper.md) · [架构决策](../adr/0017-helper-disk-management.md) · [现有协调器](online-disk-management.md)

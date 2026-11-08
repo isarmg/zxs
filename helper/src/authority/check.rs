@@ -1,7 +1,9 @@
 use crate::{Result, print};
 use data_serialization::Serialize;
 use std::path::Path;
-use storage_engine::disk_authority::{Digest, Error as DiskError, Identity, Token};
+use storage_engine::disk_authority::{
+    Digest, DiskSelection, Error as DiskError, Identity, IndependentDisk, Token,
+};
 
 #[derive(Serialize)]
 #[serialization(rename_all = "snake_case")]
@@ -20,10 +22,10 @@ enum Content {
 }
 
 #[derive(Serialize)]
-struct Copy<'a> {
-    owner: &'a Identity,
-    history_id: &'a Token,
-    file_id: &'a Token,
+struct Copy {
+    owner: Identity,
+    history_id: Token,
+    file_id: Token,
     commit: Digest,
     body: Digest,
     expected_bytes: u64,
@@ -31,18 +33,18 @@ struct Copy<'a> {
 }
 
 #[derive(Serialize)]
-struct Report<'a> {
+pub(crate) struct Report {
     format: &'static str,
     scope: &'static str,
     state: State,
-    identity: &'a Identity,
+    identity: Identity,
     checkpoint: Option<Digest>,
     sequence: u64,
-    copies: Vec<Copy<'a>>,
+    copies: Vec<Copy>,
 }
 
-pub(super) fn run(selection: &Path) -> Result<()> {
-    let disk = super::open(selection)?;
+pub(crate) fn collect(selection: &DiskSelection) -> std::result::Result<Report, DiskError> {
+    let disk = IndependentDisk::open(selection)?;
     let mut snapshot = disk.content_snapshot()?;
     let versions: Vec<_> = snapshot.versions().cloned().collect();
     let mut copies = Vec::with_capacity(versions.len());
@@ -52,12 +54,12 @@ pub(super) fn run(selection: &Path) -> Result<()> {
             Ok(_) => Content::Verified,
             Err(DiskError::ContentUnavailable(_)) => Content::TemporarilyUnavailable,
             Err(DiskError::Corrupt(_)) => Content::Corrupt,
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
         copies.push(Copy {
-            owner: version.owner(),
-            history_id: version.history_id(),
-            file_id: version.file_id(),
+            owner: version.owner().clone(),
+            history_id: version.history_id().clone(),
+            file_id: version.file_id().clone(),
             commit: version.commit(),
             body: version.body(),
             expected_bytes: copy.expected_bytes(),
@@ -75,15 +77,27 @@ pub(super) fn run(selection: &Path) -> Result<()> {
     } else {
         State::ContentIssues
     };
-    print(Report {
+    Ok(Report {
         format: "independent-disk-check",
         scope: "local-retained-published-content",
         state,
-        identity: snapshot.identity(),
+        identity: snapshot.identity().clone(),
         checkpoint: snapshot.checkpoint(),
         sequence: snapshot.sequence(),
         copies,
-    })?;
+    })
+}
+
+impl Report {
+    pub(crate) fn healthy(&self) -> bool {
+        !matches!(self.state, State::ContentIssues)
+    }
+}
+
+pub(super) fn run(selection: &Path) -> Result<()> {
+    let report = collect(&super::read::<DiskSelection>(selection)?)?;
+    let healthy = report.healthy();
+    print(report)?;
     if healthy {
         Ok(())
     } else {

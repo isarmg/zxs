@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZXS 辅助工具</title>
+  <link rel="stylesheet" href="/console.css">
+  <script src="/console.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>离线检查与文件导出</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
+    <section class="warning" aria-label="网络风险">
+      <strong>无认证 · root 权限 · 明文 HTTP</strong>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+    </section>
+    <p id="connection" role="status">连接辅助工具…</p>
+    <section class="card">
+      <h2>选择准确的独立磁盘</h2>
+      <p>使用 <code>independent-disk-journal</code> 的磁盘选择 JSON，必须包含绝对路径、来源身份、incarnation 和可选检查点。不自动发现或接纳陌生盘，也不把在线池格式当作此协议。</p>
+      <form id="check-form">
+        <label for="selection">磁盘选择 JSON</label>
+        <textarea id="selection" rows="12" spellcheck="false" autocomplete="off" required placeholder='{"path":"/mnt/disk","identity":{"origin":{"pool_id":"pool","disk_id":"disk","slot_id":"P01","binding_generation":1},"incarnation":"完整的64位小写摘要","role":"primary"},"known_checkpoint":null}'></textarea>
+        <label class="file-label" for="selection-file">或从本机选择 JSON 文件 <input id="selection-file" type="file" accept="application/json,.json"></label>
+        <label class="ack"><input id="writers-stopped" type="checkbox" required> 我已停止所选源盘的所有写入者，确认对这份准确选择执行只读检查。</label>
+        <p class="muted">这是操作人的确认，不是已取得主服务停服锁。本片不打开在线 Engine，不改变来源盘；读取仍受当前 root 身份、权限、路径固定和完整性边界限制，不能绕过服务账户所有权。</p>
+        <button id="check" type="submit">检查本盘保留的正文</button>
+      </form>
+    </section>
+    <section id="results" class="card" hidden>
+      <h2>检查结果</h2><p id="summary" role="status"></p>
+      <p class="muted">只证明本次读取期间的本盘保留版本。不证明全系统可恢复、当前在线权限、最新全局历史或正式接纳；没有内容不表示“恢复出空系统”。</p>
+      <div class="table-wrap"><table><thead><tr><th>历史 / 文件</th><th>版本</th><th>字节</th><th>正文状态</th><th>操作</th></tr></thead><tbody id="copies"></tbody></table></div>
+      <details><summary>完整报告与来源身份</summary><pre id="report"></pre></details>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+    <section class="card pending"><h2>尚未完成的能力</h2><p>首次系统初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、密码重置、安装/修复与内置 ZXS 载荷尚未提供。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
+    <footer>手动运行，不注册 systemd，不设置开机自启。关闭页面不会结束进程；请点“退出辅助工具”或在启动终端按 Ctrl+C，并等进程真正退出再移除磁盘。</footer>
+  </main>
+</body>
+</html>

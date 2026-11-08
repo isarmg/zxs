@@ -1,6 +1,7 @@
 //! Offline auxiliary utility. Stop the daemon before using it.
 mod authority;
 mod configuration;
+mod console;
 mod private_io;
 mod scrub;
 use command_line::{Parser, Subcommand};
@@ -16,7 +17,8 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
     after_help = "restore-system requires a majority of the configured original metadata members (one for a single-disk pool).
 Recovery preview/commit only accepts decided, unpublished operations with all original disks accessible. It requires a reviewed digest and explicit permanent-loss acknowledgement; it is not a reset or missing-disk replacement.
 Offline export validates one published version, not the entire pool or current permissions.
-Web console, first-run setup, disk addition/removal, foreign admission, password reset and installation/repair are not yet implemented. No planned-offline action is offered."
+With no command, start the root-only, unauthenticated read-only Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
+First-run setup, disk addition/removal, foreign admission, password reset and installation/repair are not yet implemented. No planned-offline action is offered."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
@@ -36,10 +38,12 @@ struct Args {
     #[arg(long, default_value = "admin", global = true)]
     principal: String,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Manually serve the independent read-only console; no login or autostart.
+    Serve(console::Options),
     /// Explicit independent disk journal, separate from online pools. Stop all writers first.
     Authority {
         #[command(subcommand)]
@@ -195,7 +199,11 @@ fn report_recovery_warnings(engine: &mut Engine) {
 fn run(args: Args) -> Result<()> {
     let retained_workspace_limits = args.workspace_limits()?;
     let root = args.root;
-    match args.command {
+    match args
+        .command
+        .unwrap_or_else(|| Command::Serve(console::Options::default()))
+    {
+        Command::Serve(options) => console::run(options),
         Command::Configuration { command } => configuration::run(command),
         Command::Authority { command } => authority::run(command),
         Command::Package { command } => match command {
