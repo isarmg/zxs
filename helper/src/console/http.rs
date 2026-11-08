@@ -67,6 +67,9 @@ pub(super) fn router(state: State) -> Router {
             "/api/initialization/storage-create",
             post(first_storage_create),
         )
+        .route("/api/disks/add-preview", post(disk_addition_preview))
+        .route("/api/disks/add-original", post(disk_addition_original))
+        .route("/api/disks/add-commit", post(disk_addition_commit))
         .route("/api/authority/check", post(check))
         .route("/api/authority/export", post(export))
         .route("/api/shutdown", post(shutdown))
@@ -173,8 +176,8 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "first_storage_initialization":"confirmed_empty_existing_roots_only", "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset"],
-        "not_implemented":["complete_first_run_setup","disk_add","disk_deregister","foreign_admission","later_disk_initialization","full_system_rebuild","other_samba_backends_and_account_creation","program_repair","systemd_smb_activation"]
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset","active_empty_directory_addition"],
+        "not_implemented":["complete_first_run_setup","general_disk_add","disk_deregister","foreign_admission","device_formatting_and_mounting","full_system_rebuild","other_samba_backends_and_account_creation","program_repair","systemd_smb_activation"]
     }))
 }
 
@@ -812,4 +815,67 @@ fn samba_reset_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failu
         "local_samba_password_reset",
         &error.to_string(),
     )
+}
+
+async fn disk_addition_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_addition::Input = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_addition::preview(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "active_disk_addition",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "addition_worker", error))??;
+    Ok(Json(result).into_response())
+}
+
+async fn disk_addition_original(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_addition::Original = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_addition::recover_preview(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "active_disk_addition",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "addition_worker", error))??;
+    Ok(Json(result).into_response())
+}
+
+async fn disk_addition_commit(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_addition::Commit = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_addition::commit(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "active_disk_addition",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "addition_worker", error))??;
+    Ok(Json(result).into_response())
 }

@@ -5,13 +5,16 @@ mod configuration;
 mod console;
 mod credentials;
 mod deployment;
-mod system_program;
+mod disk_addition;
 mod disk_databases;
 mod host;
 mod initialization;
 mod installation;
+mod managed_layout;
 mod private_io;
 mod scrub;
+mod service_worker;
+mod system_program;
 use command_line::{Parser, Subcommand};
 use json_codec::json;
 use std::path::PathBuf;
@@ -34,7 +37,9 @@ Systemd/Samba configuration can be prepared as an inactive bundle or installed a
 The independent Web console can create the first management-only administrator in the exact new empty private layout; no storage is initialized.
 The independent Web console can reset an existing ZXS administrator password with exact confirmation; it revokes ZXS sessions but does not update disaster-recovery credential replicas or Samba passwords.
 The Web console can initialize the exact first production batch of existing empty primary roots through a non-root worker; it neither mounts/formats devices nor starts a service.
-Complete installation readiness/clean-start gating, later disk addition/removal, foreign admission, Samba password reset, program repair and systemd/SMB activation are not yet implemented. No planned-offline action is offered."
+The independent Web console can add and initialize an exact empty directory batch in an existing production pool, retaining original membership intents and native receipts; this is not foreign import or an independent-authority migration.
+The Web console can reset a supported existing local tdbsam Samba password with explicit confirmation; other backends/account creation are not implemented.
+Complete installation readiness/all-path clean-start gating, disk removal, foreign admission, program repair and systemd/SMB activation are not yet implemented. No planned-offline action is offered."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
@@ -61,6 +66,9 @@ enum Command {
     /// Internal privilege-separated worker, never an alternate public initializer.
     #[command(hide = true)]
     InternalStorageWorker,
+    /// Internal current-pool addition owner under the configured service UID.
+    #[command(hide = true)]
+    InternalAdditionWorker,
     /// Manually serve the independent maintenance console; no login or autostart.
     Serve(console::Options),
     /// Inspect or install the matching embedded ZXS program only; no service setup.
@@ -249,6 +257,7 @@ fn run(args: Args) -> Result<()> {
         None
     };
     match command {
+        Command::InternalAdditionWorker => disk_addition::worker_entry(),
         Command::InternalStorageWorker => initialization::storage::process::entry(),
         Command::Serve(options) => console::run(options),
         Command::Install { command } => installation::run(command),
@@ -392,7 +401,8 @@ fn requires_service_exclusion(command: &Command) -> bool {
             accept_permanent_loss,
             ..
         } => *accept_permanent_loss,
-        Command::InternalStorageWorker
+        Command::InternalAdditionWorker
+        | Command::InternalStorageWorker
         | Command::Serve(_)
         | Command::Install { .. }
         | Command::Host { .. }

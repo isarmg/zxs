@@ -91,6 +91,27 @@
       <p class="muted">本阶段不是完整安装就绪：仍缺最终干净启动门禁、运行目录/依赖/VFS 与实际 systemd/SMB 激活。不要把首批存储回执当作所有首次安装步骤已完成。</p>
     </section>
     <section class="card">
+      <h2>已有池：添加并初始化准确的空目录批次</h2>
+      <p>只针对已初始化的 production 池与现有 <code>/zxs/data/{state,management,disks}</code> 布局。所有原盘和新目录必须在 <code>disks</code> 下，已有服务 UID/GID 与 0700；原盘和整批新目录须覆盖实际全部直接子目录。新目录必须为空，不接纳外来历史、不格式化设备，不修改原盘内容来冒充空盘。</p>
+      <form id="disk-add-form">
+        <label>现有服务账户 <input id="disk-add-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        <label>本批新目录 JSON 数组 <textarea id="disk-add-input" rows="7" spellcheck="false">[{"root_path":"/zxs/data/disks/new-primary","slot_id":"new-primary","level":1,"upstream_slot_id":null,"metadata_member":true}]</textarea></label>
+        <p class="muted">高级备份关系必须同批设置完整低级链，不能填虚拟占位以后再补。这里仅添加真正空目录，绝不表示外来备份盘已经接纳。原有不可用/已注销盘不会被隐藏或自动重用。</p>
+        <label class="ack"><input id="disk-add-writers" type="checkbox" required> 已停止 ZXS、Samba、旧二进制及其他写入者；预览会以服务账户打开既有 Engine，可能执行现有恢复/同步，不是任意盘的纯只读检查。</label>
+        <button type="submit">预览准确空目录批次</button>
+        <label>中断后原请求摘要 <input id="disk-add-digest" maxlength="64" autocomplete="off" spellcheck="false"></label>
+        <button id="disk-add-original" class="secondary" type="button">核对原计划和真实状态</button>
+      </form>
+      <pre id="disk-add-plan" hidden></pre>
+      <button id="disk-add-save" class="secondary" type="button" hidden>保存原计划与 operation ID</button>
+      <form id="disk-add-commit-form" hidden>
+        <label class="ack"><input id="disk-add-confirm" type="checkbox" required> 已核对这批根目录、身份、层级、元数据成员和摘要；只继续这一个原操作。</label>
+        <button type="submit">确认添加 / 继续同一原操作</button>
+      </form>
+      <pre id="disk-add-result" hidden></pre>
+      <p class="muted">共享原生 fence、控制归档、joint 和 activation 协议，成功仅以准确永久回执为准；中断可能已部分或全部发布，不删盘、不回滚或换编号重试。此片没有注销/移除、新计划下线、外来接纳、新逐盘权威迁移或完整系统就绪认证。可查询原操作，不能保证损坏介质可恢复。</p>
+    </section>
+    <section class="card">
       <h2>准备与安装 systemd / SMB 配置文件</h2>
       <p>生成与内置版本绑定的未激活配置包，存于已存在、root 所有且其他用户不可写的 <code>/zxs/.zxs-helper-deployment-摘要/</code>。不会写入 <code>/etc</code>、合并现有 Samba 共享、创建账户、设置密码，或执行服务 reload / start / enable。</p>
       <form id="deployment-form">

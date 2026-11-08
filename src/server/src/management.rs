@@ -31,7 +31,7 @@ mod terminal_readmission;
 pub(crate) mod terminal_resume;
 use terminal_backend::BackendState;
 mod integrity_scrub;
-pub(crate) mod storage_addition;
+pub mod storage_addition;
 pub(crate) mod storage_configuration;
 pub(crate) mod storage_lifecycle;
 pub(crate) mod storage_readmission;

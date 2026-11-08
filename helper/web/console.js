@@ -11,11 +11,12 @@ let configurationPreview = null;
 let administratorResetPreview = null;
 let firstAdministratorPreview = null;
 let firstStoragePreview = null;
+let diskAdditionPreview = null;
 let sambaPasswordPreview = null;
 let sambaPasswordOriginal = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -494,3 +495,58 @@ byId("samba-reset-status-form").addEventListener("submit",async event => {
   } catch (failure) { error(failure.message); } finally { setBusy(false); }
 });
 window.addEventListener("pagehide",clearSambaPasswords);
+
+function resetDiskAddition() {
+  diskAdditionPreview = null;
+  for (const id of ["disk-add-plan","disk-add-save","disk-add-commit-form","disk-add-result"]) byId(id).hidden = true;
+  byId("disk-add-confirm").checked = false;
+}
+function showDiskAddition(service_user, preview) {
+  diskAdditionPreview = {input:{service_user,request_digest:preview.request_digest,external_writers_stopped:true},plan:preview.plan};
+  byId("disk-add-digest").value = preview.request_digest;
+  byId("disk-add-plan").textContent = JSON.stringify(preview,null,2);
+  for (const id of ["disk-add-plan","disk-add-save","disk-add-commit-form"]) byId(id).hidden = false;
+}
+for (const id of ["disk-add-user","disk-add-input","disk-add-digest","disk-add-writers"]) byId(id).addEventListener("input",resetDiskAddition);
+byId("disk-add-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping) return;
+  resetDiskAddition(); error("");
+  const service_user = byId("disk-add-user").value;
+  let additions;
+  try { additions = JSON.parse(byId("disk-add-input").value); }
+  catch { error("新目录必须是明确列出整批根目录和关系的 JSON 数组。"); return; }
+  const operation_id = "op_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
+  setBusy(true);
+  try { showDiskAddition(service_user, await (await post("/api/disks/add-preview",{service_user,operation_id,additions,external_writers_stopped:byId("disk-add-writers").checked})).json()); }
+  catch (e) { error(e.message); } finally { setBusy(false); }
+});
+byId("disk-add-original").addEventListener("click", async () => {
+  if (busy || stopping) return;
+  const service_user = byId("disk-add-user").value;
+  const request_digest = byId("disk-add-digest").value;
+  resetDiskAddition(); error(""); setBusy(true);
+  try { showDiskAddition(service_user, await (await post("/api/disks/add-original",{service_user,request_digest,external_writers_stopped:byId("disk-add-writers").checked})).json()); }
+  catch (e) { error(e.message); } finally { setBusy(false); }
+});
+byId("disk-add-save").addEventListener("click", () => {
+  if (!diskAdditionPreview) return;
+  save(new Blob([JSON.stringify(diskAdditionPreview,null,2)],{type:"application/json"}),`zxs-addition-${diskAdditionPreview.input.request_digest}.json`);
+});
+byId("disk-add-commit-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping || !diskAdditionPreview) return;
+  const retained = diskAdditionPreview;
+  if (!confirm(`只添加 / 继续原操作 ${retained.plan.addition.request.operation_id}？中断可能已发布，不能清盘或换新编号。`)) return;
+  const body = {...retained,confirmation:"add-and-initialize-empty-directories"};
+  setBusy(true); error("");
+  try {
+    const result = await (await post("/api/disks/add-commit",body)).json();
+    byId("disk-add-result").textContent = JSON.stringify(result,null,2);
+    byId("disk-add-result").hidden = false;
+    diskAdditionPreview = null;
+    byId("disk-add-commit-form").hidden = true;
+  } catch (e) {
+    error(`${e.message} 原请求摘要：${retained.input.request_digest}。先核对原操作，不能根据失败响应推断未写入。`);
+    diskAdditionPreview = null;
+    byId("disk-add-commit-form").hidden = true;
+  } finally { setBusy(false); }
+});

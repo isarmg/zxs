@@ -23,9 +23,9 @@ mod foreign_intent;
 pub(crate) mod foreign_plan;
 mod graph;
 mod integrity_scrub;
+mod node_retirement;
 mod operations;
 mod ordinary_conversion;
-mod node_retirement;
 mod read_projection;
 mod storage_addition;
 pub(crate) mod storage_lifecycle;
@@ -129,10 +129,10 @@ impl EngineBackend {
     }
     /// Managed dispatch linearizes admission after acquiring the engine mutex.
     /// An operation already admitted may finish; queued requests see revocation.
-    pub(crate) fn set_management_auth(
-        &self,
-        auth: crate::auth::AuthReader,
-    ) -> Result<(), ApiError> {
+    /// Bind the existing primary credential authority for native dispatch. This
+    /// does not authenticate a network caller or create a management session.
+    /// The caller retains the AuthStore/engine owners for the full operation.
+    pub fn set_management_auth(&self, auth: crate::auth::AuthReader) -> Result<(), ApiError> {
         self.engine
             .lock()
             .expect("service state lock poisoned")
@@ -292,15 +292,21 @@ fn authorized_version<'a>(
     engine: &'a Engine,
     id: &str,
 ) -> Result<&'a storage_contract::FileVersion, ApiError> {
-    let version = engine.state().versions.get(id)
-        .filter(|version| engine.state().content_states.get(&version.version_id) != Some(&storage_contract::ContentState::Retired))
+    let version = engine
+        .state()
+        .versions
+        .get(id)
+        .filter(|version| {
+            engine.state().content_states.get(&version.version_id)
+                != Some(&storage_contract::ContentState::Retired)
+        })
         .ok_or_else(|| {
-        ApiError::new(
-            ::http::StatusCode::NOT_FOUND,
-            storage_contract::ErrorCode::NotFound,
-            "version not found",
-        )
-    })?;
+            ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::NotFound,
+                "version not found",
+            )
+        })?;
     repo_for_history(engine, &version.history_tree_id)?;
     Ok(version)
 }
@@ -1562,19 +1568,25 @@ impl Backend for EngineBackend {
         })
     }
     fn preview_node_retirement(
-        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        &self,
+        identity: &Identity,
+        request: storage_contract::node_retirement::Selection,
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::node_retirement::Preview, ApiError> {
         node_retirement::preview(self, identity, request, cancellation)
     }
     fn retire_file_nodes(
-        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        &self,
+        identity: &Identity,
+        request: storage_contract::node_retirement::Selection,
         operation: storage_contract::OperationId,
     ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
         node_retirement::submit(self, identity, request, operation)
     }
     fn resume_node_retirement(
-        &self, identity: &Identity, file: storage_contract::history_window::HistoryFileId,
+        &self,
+        identity: &Identity,
+        file: storage_contract::history_window::HistoryFileId,
         operation: storage_contract::OperationId,
     ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
         node_retirement::resume(self, identity, file, operation)

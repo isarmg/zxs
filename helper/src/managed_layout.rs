@@ -16,9 +16,9 @@ use std::{
     path::{Component, Path},
 };
 
-pub(super) const STATE: &str = "/zxs/data/state";
-pub(super) const MANAGEMENT: &str = "/zxs/data/management";
-pub(super) const DISKS: &str = "/zxs/data/disks";
+pub(crate) const STATE: &str = "/zxs/data/state";
+pub(crate) const MANAGEMENT: &str = "/zxs/data/management";
+pub(crate) const DISKS: &str = "/zxs/data/disks";
 const DATA: &str = "/zxs/data";
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -36,7 +36,7 @@ impl From<FileIdentity> for Identity {
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-pub(super) struct Context {
+pub(crate) struct Context {
     host: Identity,
     data: Identity,
     state: Identity,
@@ -44,7 +44,7 @@ pub(super) struct Context {
     discovery: Identity,
     pub account: Snapshot,
 }
-pub(super) struct Layout {
+pub(crate) struct Layout {
     account: LocalAccount,
     data: OpenAt2Root,
     state: OpenAt2Root,
@@ -100,8 +100,7 @@ impl Layout {
             owner(named.directory(), self.account.owner())?;
             if named.identity() != held.identity() {
                 return Err(
-                    "first-storage directory identity changed; original material was preserved"
-                        .into(),
+                    "managed directory identity changed; original material was preserved".into(),
                 );
             }
         }
@@ -136,14 +135,19 @@ impl Layout {
     /// Require every actual direct child to be selected. Unknown, missing,
     /// foreign, extra or inaccessible material cannot become a hidden candidate.
     pub fn inventory(&self, paths: &[String]) -> Result<()> {
-        let mut missing = names(paths)?;
+        names(paths)?;
+        self.inventory_all(paths)
+    }
+    /// All current roots and the exact new batch, not just the new selections.
+    pub fn inventory_all(&self, paths: &[String]) -> Result<()> {
+        let mut missing = all_names(paths)?;
         for name in self.disks.entries()? {
             let name = name?;
             let text = name
                 .to_str()
                 .ok_or("non-UTF-8 discovery material was preserved")?;
             if !missing.remove(text) {
-                return Err("unselected or duplicate discovery material was preserved; the entire first batch is required".into());
+                return Err("unselected or duplicate discovery material was preserved; the entire explicitly selected root set is required".into());
             }
             let file = self
                 .disks
@@ -170,7 +174,7 @@ fn private(root: &OpenAt2Root, path: &str) -> Result<PrivateDirectory> {
 fn owner(file: &File, expected: (u32, u32)) -> Result<()> {
     let meta = file.metadata()?;
     if (meta.uid(), meta.gid()) != expected || meta.mode() & 0o7777 != 0o700 {
-        return Err("first storage requires exact service UID/GID and 0700 directories; existing permissions were not changed".into());
+        return Err("managed storage requires exact service UID/GID and 0700 directories; existing permissions were not changed".into());
     }
     Ok(())
 }
@@ -186,12 +190,15 @@ fn entries(root: &OpenAt2Root, allowed: &[&str]) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn names(paths: &[String]) -> Result<BTreeSet<String>> {
+pub(crate) fn names(paths: &[String]) -> Result<BTreeSet<String>> {
     if paths.is_empty() || paths.len() > 32 {
         return Err(
             "select one to 32 existing empty roots for the first independent-primary batch".into(),
         );
     }
+    all_names(paths)
+}
+fn all_names(paths: &[String]) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for path in paths {
         let path = Path::new(path);

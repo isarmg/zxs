@@ -186,3 +186,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 独立 Web 的本地 Samba 密码重置
 
 手工 root 控制台新增受支持的既有本地 tdbsam 改密，准确匹配安装配置与账户，密码只经 stdin 送给已核验的固定 `smbpasswd`。它不是 `restore-system` 或管理员改密，不创建账户，不启用服务，结果不明只查询原记录、不自动重放。源码未编译/测试/审查/CI，见[支持范围和恢复限制](../design/helper-samba-password-reset.md)。
+
+## 已有池的空目录 Add 纵切
+
+独立 Web 可预览、明确添加并初始化当前 production 池的准确空目录批次，或核对/继续原意图。root 计划与服务 UID worker 在 helper，现有服务和工具共用原生 Add 控制记录、archive/joint/activation 及永久回执。只接受固定布局中完整原根集合和本批新空根，不格式化、不接纳外来盘、不提供计划下线；移除、外来完整链接纳及完整就绪仍未完成。源码未编译/测试/审查/CI，无真实系统操作，见[范围与失败语义](../design/helper-active-disk-addition.md)。

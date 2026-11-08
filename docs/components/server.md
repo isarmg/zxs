@@ -456,3 +456,7 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 `PUT /api/repositories/{repo}/recursive-backup-tree-configuration` 只把严格冻结的请求转发到独立 `configure_recursive_backup_tree`，不修改旧 `recursive-backup-configuration` 的永久收据或文件模式语义。两个入口共用原配置 GET、当前会话/管理状态转发和 writer 锁内身份复核。新入口仅接受目录 scope，目录目标须有元数据成员发布证明；不接收正文、自定义前缀或客户端权限。混合文件与空目录的临时磁盘/Router 定向定义见[HTTP 回归](../../test/server/integration/recursive_mixed_backup_http.rs)，不代表真实网络、浏览器或硬件掉电验收。
 
 备份 GET 与逐级备份 GET 的配置投影均返回 typed `effective_mode`。它在同一引擎读锁/Current 快照下从生效策略和已验证递归索引派生，不扫描操作标签或按前缀猜测，不写磁盘；模式不证明当前条目已捕获。递归写请求、旧永久收据和目标权限不变。
+
+## 共享原生 Add 控制 API
+
+`management::storage_addition::ActiveAddition` 同时供当前服务和 helper 调用，保持统一的目标规划、4 MiB 原控制格式、archive 绑定、固定 quorum 与永久回执。现有 HTTP 入口仍要求管理 session；原生入口须有当前主 AuthStore 的弱只读 admission capability，不允许 SMB binding 或仅凭灾备快照。helper 专用停服/进程/页面代码不放服务组件。此次源码抽取未编译/测试/审查/CI，见[辅助 Add 边界](../design/helper-active-disk-addition.md)。

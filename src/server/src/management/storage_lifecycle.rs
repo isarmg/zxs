@@ -131,20 +131,7 @@ fn finish(record: &mut StoredExit, result: OperationResult) {
 
 impl ManagementBackend {
     pub(super) fn require_settled_exit(&self) -> Result<(), ApiError> {
-        let Some(directory) = open(&self.inner.management_root)? else {
-            return Ok(());
-        };
-        let Some(operation) = read::<OperationId>(&directory, &latest_name())? else {
-            return Ok(());
-        };
-        let record = read_record(&directory, operation)?.ok_or_else(missing)?;
-        if record.status.state != ExitState::Completed {
-            return Err(ApiError::conflict(
-                ErrorCode::RecoveryRequired,
-                "continue the original pending exit before starting another storage plan",
-            ));
-        }
-        Ok(())
+        require_settled_exit(&self.inner.management_root)
     }
 
     pub(super) fn storage_exit(
@@ -441,3 +428,20 @@ pub(super) fn configuration_edges(
 #[cfg(test)]
 #[path = "../../../../test/server/unit/management/storage_lifecycle.rs"]
 mod tests;
+
+pub(super) fn require_settled_exit(root: &Path) -> Result<(), ApiError> {
+    let Some(directory) = open(root)? else {
+        return Ok(());
+    };
+    let Some(operation) = read::<OperationId>(&directory, &latest_name())? else {
+        return Ok(());
+    };
+    let record = read_record(&directory, operation)?.ok_or_else(missing)?;
+    if record.status.state != ExitState::Completed {
+        return Err(ApiError::conflict(
+            ErrorCode::RecoveryRequired,
+            "continue the original pending exit before starting another storage plan",
+        ));
+    }
+    Ok(())
+}

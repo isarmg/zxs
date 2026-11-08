@@ -39,6 +39,13 @@ impl AdmissionEngine {
         self.managed_auth = Some(auth);
     }
 
+    pub(super) fn managed_identity(&self, caller: &Identity) -> Result<Identity, ApiError> {
+        self.managed_auth
+            .as_ref()
+            .ok_or_else(ApiError::unauthorized)?
+            .revalidate_identity(caller)
+    }
+
     /// Config and business state cannot change through a shared Engine borrow.
     /// DerefMut clears this projection before mutation or whole-engine replacement.
     pub(super) fn listing_snapshot(&self) -> &str {

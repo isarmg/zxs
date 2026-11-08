@@ -757,3 +757,72 @@ fn cancellation_binds_original_preview_and_current_session_without_fake_pre_fenc
         ErrorCode::Unauthorized
     );
 }
+
+#[test]
+fn native_current_administrator_uses_shared_addition_without_fabricating_a_session() {
+    let f = fixture();
+    let request = request(selection(&f, "native-new-root"), "N01", true);
+    let identity = crate::lock(&f.auth).sole_identity().unwrap();
+    assert!(identity.admission_session.is_none());
+    // HTTP still rejects the same non-session native identity.
+    assert!(
+        f.backend
+            .preview_storage_addition(&identity, request.clone())
+            .is_err()
+    );
+    let backend = crate::lock(&f.backend.inner.state)
+        .backend
+        .engine()
+        .unwrap()
+        .clone();
+    let parent = PrivateDirectory::open_existing(&f.backend.inner.management_root).unwrap();
+    let control =
+        ActiveAddition::open(&backend, &identity, parent, f.discovery.to_str().unwrap()).unwrap();
+    let preview = control.preview(request).unwrap();
+    let operation = preview.request.operation_id;
+    let result = control.commit(AdditionCommit { preview }).unwrap();
+    assert_eq!(result.state, AdditionState::Completed);
+    assert_eq!(control.status(operation).unwrap(), result);
+    assert_eq!(control.resume(operation).unwrap(), result);
+    drop(control);
+    assert_eq!(
+        f.backend
+            .resume_storage_addition(
+                &f.identity,
+                AdditionResume {
+                    operation_id: operation,
+                    continuation: AdditionContinuation::Add
+                }
+            )
+            .unwrap(),
+        result
+    );
+}
+#[test]
+fn native_admission_does_not_relax_http_session_revocation() {
+    let f = fixture();
+    let identity = crate::lock(&f.auth).sole_identity().unwrap();
+    let backend = crate::lock(&f.backend.inner.state)
+        .backend
+        .engine()
+        .unwrap()
+        .clone();
+    // Revocation is checked against the primary AuthStore, not a cached
+    // disaster-recovery snapshot or a fabricated management session.
+    crate::lock(&f.auth).logout(&f.token).unwrap();
+    let current = crate::lock(&f.auth).sole_identity().unwrap();
+    let parent = PrivateDirectory::open_existing(&f.backend.inner.management_root).unwrap();
+    let control =
+        ActiveAddition::open(&backend, &current, parent, f.discovery.to_str().unwrap()).unwrap();
+    assert!(current.admission_session.is_none());
+    assert_eq!(current.principal, identity.principal);
+    drop(control);
+    assert!(
+        f.backend
+            .preview_storage_addition(
+                &f.identity,
+                request(selection(&f, "revoked-session-root"), "N02", true)
+            )
+            .is_err()
+    );
+}

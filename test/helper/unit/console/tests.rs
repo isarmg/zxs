@@ -423,3 +423,33 @@ async fn samba_password_malformed_secret_body_does_not_echo_it_or_start_a_progra
     assert_eq!(body["error"]["code"], "credential_request_json");
     assert!(!body.to_string().contains("must-not-echo-test-password"));
 }
+
+#[tokio::test]
+async fn existing_pool_addition_routes_reject_cross_origin_before_engine_access() {
+    for path in [
+        "/api/disks/add-preview",
+        "/api/disks/add-original",
+        "/api/disks/add-commit",
+    ] {
+        let mut request = post(path, json!({}));
+        request
+            .headers_mut()
+            .insert("origin", "http://untrusted.invalid:9040".parse().unwrap());
+        let response = http::router(state()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}
+#[tokio::test]
+async fn disk_remove_foreign_and_planned_offline_remain_unavailable() {
+    for path in [
+        "/api/disks/remove",
+        "/api/disks/foreign-admit",
+        "/api/disks/planned-offline",
+    ] {
+        let response = http::router(state())
+            .oneshot(post(path, json!({})))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}

@@ -215,7 +215,7 @@ impl Drop for AuthStore {
 /// takes a fresh snapshot. Weak ownership cannot keep credentials usable after
 /// the store (and its process-wide file lock) has been dropped.
 #[derive(Clone)]
-pub(crate) struct AuthReader {
+pub struct AuthReader {
     committed: Weak<RwLock<Option<Arc<Database>>>>,
     blocked: Weak<AtomicBool>,
 }
@@ -466,7 +466,9 @@ fn require_available(blocked: &AtomicBool) -> Result<(), ApiError> {
 }
 
 impl AuthStore {
-    pub(crate) fn reader(&self) -> AuthReader {
+    /// Read-only current-credential admission capability for an owned backend.
+    /// It cannot create sessions or mutate/reset credentials.
+    pub fn reader(&self) -> AuthReader {
         AuthReader {
             committed: Arc::downgrade(&self.committed),
             blocked: Arc::downgrade(&self.blocked),

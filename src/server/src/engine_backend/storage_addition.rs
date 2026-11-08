@@ -7,6 +7,18 @@ use storage_contract::{
 };
 
 impl EngineBackend {
+    pub(crate) fn addition_root(
+        &self,
+        identity: &Identity,
+    ) -> Result<std::path::PathBuf, ApiError> {
+        let engine = crate::lock(&self.engine);
+        engine.managed_identity(identity)?;
+        if identity.smb_binding.is_some() {
+            return Err(ApiError::forbidden());
+        }
+        Ok(engine.root().to_path_buf())
+    }
+
     pub(crate) fn addition_configuration(
         &self,
         identity: &Identity,

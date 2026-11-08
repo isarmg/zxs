@@ -1,6 +1,6 @@
 //! Root-coordinated first storage batch. Domain genesis and recovery stay in
 //! SetupRecovery/Engine; all helper IPC, plans and Web orchestration live here.
-mod layout;
+use crate::managed_layout as layout;
 pub(crate) mod process;
 mod worker;
 use crate::{Result, private_io::BundleDestination};
@@ -87,12 +87,6 @@ enum WorkerOutput {
     Preview { plan: Plan },
     OriginalInspected,
     Initialized { report: worker::Materialized },
-}
-#[derive(Serialize, Deserialize)]
-#[serialization(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-enum WorkerReply {
-    Success { result: WorkerOutput },
-    Failed { message: String },
 }
 struct Root {
     layout: layout::Layout,

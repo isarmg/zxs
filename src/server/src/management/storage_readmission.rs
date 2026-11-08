@@ -458,24 +458,7 @@ impl ManagementBackend {
     }
 
     pub(super) fn require_no_pending_readmission(&self) -> Result<(), ApiError> {
-        let Some(directory) = open(&self.inner.management_root)? else {
-            return Ok(());
-        };
-        if let Some(operation) = read::<OperationId>(&directory, &latest_name())? {
-            let record = read_record(&directory, operation)?.ok_or_else(|| {
-                ApiError::conflict(
-                    ErrorCode::RecoveryRequired,
-                    "latest readmission intent is missing",
-                )
-            })?;
-            if record.status.state != ReadmissionState::Completed {
-                return Err(ApiError::conflict(
-                    ErrorCode::RecoveryRequired,
-                    "continue the original pending readmission before starting another plan",
-                ));
-            }
-        }
-        Ok(())
+        require_no_pending_readmission(&self.inner.management_root)
     }
 
     pub(super) fn readmission_result(
@@ -594,3 +577,24 @@ pub(super) fn configuration_edges(
 #[cfg(test)]
 #[path = "../../../../test/server/unit/management/storage_readmission.rs"]
 mod tests;
+
+pub(super) fn require_no_pending_readmission(root: &Path) -> Result<(), ApiError> {
+    let Some(directory) = open(root)? else {
+        return Ok(());
+    };
+    if let Some(operation) = read::<OperationId>(&directory, &latest_name())? {
+        let record = read_record(&directory, operation)?.ok_or_else(|| {
+            ApiError::conflict(
+                ErrorCode::RecoveryRequired,
+                "latest readmission intent is missing",
+            )
+        })?;
+        if record.status.state != ReadmissionState::Completed {
+            return Err(ApiError::conflict(
+                ErrorCode::RecoveryRequired,
+                "continue the original pending readmission before starting another plan",
+            ));
+        }
+    }
+    Ok(())
+}

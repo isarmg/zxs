@@ -1,5 +1,7 @@
 //! Durable control-plane intent; engine receipts remain publication authority.
+mod active;
 use super::*;
+pub use active::ActiveAddition;
 use data_serialization::{Deserialize, Serialize, de::DeserializeOwned};
 use platform_io::fs_safety::{AtomicFile, EntryName, PrivateDirectory};
 use storage_contract::{Config, DiskConfig, ErrorCode, OperationId, storage_addition::*};
@@ -406,9 +408,20 @@ impl ManagementBackend {
         request: AdditionRequest,
     ) -> Result<AdditionPreview, ApiError> {
         let _gate = self.addition_gate(identity)?;
+        let backend = crate::lock(&self.inner.state).backend.engine().cloned();
+        if let Some(backend) = &backend {
+            let parent = PrivateDirectory::open_existing(&self.inner.management_root)
+                .map_err(storage_error)?;
+            return ActiveAddition::open(
+                backend,
+                identity,
+                parent,
+                self.inner.discovery_root.as_str(),
+            )?
+            .preview(request);
+        }
         self.require_settled_exit()?;
         self.require_no_pending_readmission()?;
-        let backend = crate::lock(&self.inner.state).backend.engine().cloned();
         let (preview, _, _) = self.prepare_addition(
             backend.as_deref(),
             identity,
@@ -453,8 +466,43 @@ impl ManagementBackend {
         let directory = parent
             .create_child(&EntryName::new(DIRECTORY).expect("invariant: static directory"))
             .map_err(storage_error)?;
+        if let Some(backend) = &backend {
+            let active = match &command {
+                AdditionMutation::Commit(request) => !request.preview.authority.is_terminal(),
+                AdditionMutation::Continue { operation, .. } => {
+                    read_record(&directory, *operation)?
+                        .is_some_and(|record| !record.status.preview.authority.is_terminal())
+                }
+            };
+            if active {
+                let control = ActiveAddition::open(
+                    backend,
+                    identity,
+                    parent,
+                    self.inner.discovery_root.as_str(),
+                )?;
+                let status = match command {
+                    AdditionMutation::Commit(request) => control.commit(*request)?,
+                    AdditionMutation::Continue {
+                        operation,
+                        continuation,
+                        preview_digest,
+                    } => control.continue_selected(
+                        operation,
+                        continuation,
+                        preview_digest.as_deref(),
+                    )?,
+                };
+                self.inner
+                    .disk_observation
+                    .lock()
+                    .expect("invariant: observation lock")
+                    .take();
+                return Ok(status);
+            }
+        }
         let mut held_directories = None;
-        let mut record = match command {
+        let record = match command {
             AdditionMutation::Commit(request) => {
                 let operation = request.preview.request.operation_id;
                 if let Some(saved) = read_record(&directory, operation)? {
@@ -547,79 +595,13 @@ impl ManagementBackend {
                 "the original addition Engine is unavailable",
             )
         })?;
-        // Even exact terminal replay requires a currently valid system session.
-        backend.addition_configuration(identity)?;
-        if record.status.state.is_terminal() {
-            return Ok(record.status);
-        }
-        if let Some(latest) = read::<OperationId>(&directory, &latest_name())?
-            && latest != record.status.operation_id
-        {
-            self.require_settled_addition(&directory)?;
-        }
-        let current_digest = configuration_digest(&backend.addition_configuration(identity)?);
-        if current_digest != record.status.preview.configuration_digest
-            && current_digest != configuration_digest(&record.target)
-        {
-            return Err(ApiError::conflict(
-                ErrorCode::GenerationMismatch,
-                "this pending operation belongs to a different pool configuration",
-            ));
-        }
-        if let Some(result) = backend.storage_addition_result(identity, &record)? {
-            finish(&mut record, result);
-            save(&directory, &record)?;
-            return Ok(record.status);
-        }
-        // Save the selected continuation before any irreversible shared-slot vote.
-        // Retrying an old commit body retains this choice rather than undoing Cancel.
-        record.status.state = running_state(record.status.continuation);
-        record.status.failure = None;
-        save(&directory, &record)?;
-        write(&directory, &latest_name(), &record.status.operation_id)?;
-        let intent = record.clone();
-        let outcome =
-            backend.run_storage_addition(identity, &intent, held_directories, |phase, archive| {
-                if let Some(archive) = archive {
-                    record.archive = Some(archive);
-                }
-                record.status.phase = phase;
-                record.status.state = running_state(record.status.continuation);
-                record.status.failure = None;
-                save(&directory, &record)
-            });
-        match outcome {
-            Ok(result) => {
-                finish(&mut record, result);
-                save(&directory, &record)?;
-                self.inner
-                    .disk_observation
-                    .lock()
-                    .expect("invariant: observation lock")
-                    .take();
-                Ok(record.status)
-            }
-            Err(error) => {
-                record.status.state = AdditionState::RecoveryRequired;
-                record.status.failure = Some(AdditionFailure {
-                    code: error.code,
-                    message: error.message.clone(),
-                });
-                if let Err(persistence) = save(&directory, &record) {
-                    tracing::error!(error = ?error, persistence = ?persistence, "addition failed and its diagnostic could not be synchronized");
-                    return Err(persistence);
-                }
-                Err(ApiError::new(
-                    http::StatusCode::SERVICE_UNAVAILABLE,
-                    ErrorCode::RecoveryRequired,
-                    format!(
-                        "addition {} needs recovery; query and continue the same operation",
-                        record.status.operation_id
-                    ),
-                )
-                .with_source(Arc::new(error)))
-            }
-        }
+        let status = execute_active(&backend, identity, &directory, record, held_directories)?;
+        self.inner
+            .disk_observation
+            .lock()
+            .expect("invariant: observation lock")
+            .take();
+        Ok(status)
     }
 
     pub(super) fn require_no_pending_addition(&self) -> Result<(), ApiError> {
@@ -640,21 +622,7 @@ impl ManagementBackend {
         &self,
         directory: &PrivateDirectory,
     ) -> Result<(), ApiError> {
-        if let Some(operation) = read::<OperationId>(directory, &latest_name())? {
-            let record: StoredAddition = read_record(directory, operation)?.ok_or_else(|| {
-                ApiError::conflict(
-                    ErrorCode::RecoveryRequired,
-                    "latest addition intent is missing",
-                )
-            })?;
-            if !record.status.state.is_terminal() {
-                return Err(ApiError::conflict(
-                    ErrorCode::RecoveryRequired,
-                    "continue the original pending addition before starting another plan",
-                ));
-            }
-        }
-        Ok(())
+        require_settled_addition(directory)
     }
 
     fn addition_status(
@@ -788,66 +756,190 @@ impl ManagementBackend {
                 (config, authority, stopped)
             }
         };
-        let mut target = config.clone();
-        if authority.is_terminal() {
-            for disk in &mut target.disks {
-                disk.metadata_member = false;
-            }
-        }
-        let mut directories = Vec::with_capacity(request.additions.len());
-        let mut excluded = vec![
-            self.inner.data_root.clone(),
-            self.inner.management_root.clone(),
-        ];
-        excluded.extend(
-            config
-                .disks
-                .iter()
-                .filter(|disk| !stopped.contains(&disk.root))
-                .map(|disk| disk.root.clone()),
-        );
-        for addition in &request.additions {
-            let held = crate::storage_directories::revalidate_fresh_within(
-                discovery_root,
-                &addition.selection,
-                &excluded,
-                &stopped,
-            )?;
-            let root = PathBuf::from(&held.selection().root_path);
-            excluded.push(root.clone());
-            let id_hash = digest(&(request.operation_id, &addition.slot_id));
-            let disk_id = format!("disk_{}", &id_hash[..32]);
-            directories.push(storage_engine::PendingMemberDirectory {
-                disk_id: disk_id.clone(),
-                directory: held.into_storage_directory(),
-            });
-            target.disks.push(DiskConfig {
-                slot_id: addition.slot_id.clone(),
-                disk_id,
-                root,
-                level: addition.level,
-                upstream_slot_id: addition.upstream_slot_id.clone(),
-                metadata_member: addition.metadata_member,
-                binding_generation: 1,
-                capacity_bytes: None,
-            });
-        }
-        crate::backend_storage_metadata::disk_directory_names(&target.disks)?;
-        storage_engine::ValidatedConfig::try_from(target.clone())
-            .map_err(crate::engine_backend::error)?;
-        let mut preview = AdditionPreview {
+        prepare_target(
+            config,
             authority,
-            pool_id: config.pool_id.clone(),
-            configuration_digest: configuration_digest(&config),
-            preview_digest: String::new(),
-            original_metadata_members: config.disks.iter().filter(|d| d.metadata_member).count(),
-            target_metadata_members: target.disks.iter().filter(|d| d.metadata_member).count(),
-            added_directories: request.additions.len(),
+            stopped,
             request,
-        };
-        preview.preview_digest = digest(&preview);
-        Ok((preview, target, directories))
+            discovery_root,
+            &self.inner.data_root,
+            &self.inner.management_root,
+        )
     }
+}
+
+fn require_settled_addition(directory: &PrivateDirectory) -> Result<(), ApiError> {
+    if let Some(operation) = read::<OperationId>(directory, &latest_name())? {
+        let record: StoredAddition = read_record(directory, operation)?.ok_or_else(|| {
+            ApiError::conflict(
+                ErrorCode::RecoveryRequired,
+                "latest addition intent is missing",
+            )
+        })?;
+        if !record.status.state.is_terminal() {
+            return Err(ApiError::conflict(
+                ErrorCode::RecoveryRequired,
+                "continue the original pending addition before starting another plan",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn execute_active(
+    backend: &EngineBackend,
+    identity: &Identity,
+    directory: &PrivateDirectory,
+    mut record: StoredAddition,
+    held_directories: Option<Vec<storage_engine::PendingMemberDirectory>>,
+) -> Result<AdditionStatus, ApiError> {
+    // Even exact replay revalidates the currently bound primary authority.
+    backend.addition_configuration(identity)?;
+    if record.status.state.is_terminal() {
+        return Ok(record.status);
+    }
+    if let Some(latest) = read::<OperationId>(directory, &latest_name())?
+        && latest != record.status.operation_id
+    {
+        require_settled_addition(directory)?;
+    }
+    let current_digest = configuration_digest(&backend.addition_configuration(identity)?);
+    if current_digest != record.status.preview.configuration_digest
+        && current_digest != configuration_digest(&record.target)
+    {
+        return Err(ApiError::conflict(
+            ErrorCode::GenerationMismatch,
+            "this pending operation belongs to a different pool configuration",
+        ));
+    }
+    if let Some(result) = backend.storage_addition_result(identity, &record)? {
+        finish(&mut record, result);
+        save(directory, &record)?;
+        return Ok(record.status);
+    }
+    // Save the selected continuation before any irreversible shared-slot vote.
+    // Retrying an old commit body retains this choice rather than undoing Cancel.
+    record.status.state = running_state(record.status.continuation);
+    record.status.failure = None;
+    save(directory, &record)?;
+    write(directory, &latest_name(), &record.status.operation_id)?;
+    let intent = record.clone();
+    let outcome =
+        backend.run_storage_addition(identity, &intent, held_directories, |phase, archive| {
+            if let Some(archive) = archive {
+                record.archive = Some(archive);
+            }
+            record.status.phase = phase;
+            record.status.state = running_state(record.status.continuation);
+            record.status.failure = None;
+            save(directory, &record)
+        });
+    match outcome {
+        Ok(result) => {
+            finish(&mut record, result);
+            save(directory, &record)?;
+            Ok(record.status)
+        }
+        Err(error) => {
+            record.status.state = AdditionState::RecoveryRequired;
+            record.status.failure = Some(AdditionFailure {
+                code: error.code,
+                message: error.message.clone(),
+            });
+            if let Err(persistence) = save(directory, &record) {
+                tracing::error!(error = ?error, persistence = ?persistence, "addition failed and its diagnostic could not be synchronized");
+                return Err(persistence);
+            }
+            Err(ApiError::new(
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                ErrorCode::RecoveryRequired,
+                format!(
+                    "addition {} needs recovery; query and continue the same operation",
+                    record.status.operation_id
+                ),
+            )
+            .with_source(Arc::new(error)))
+        }
+    }
+}
+
+fn prepare_target(
+    config: Config,
+    authority: AdditionAuthority,
+    stopped: Vec<PathBuf>,
+    request: AdditionRequest,
+    discovery_root: &str,
+    system_root: &Path,
+    management_root: &Path,
+) -> Result<
+    (
+        AdditionPreview,
+        Config,
+        Vec<storage_engine::PendingMemberDirectory>,
+    ),
+    ApiError,
+> {
+    if request.additions.is_empty() || request.additions.len() > 32 {
+        return Err(ApiError::invalid(
+            "select between one and 32 storage directories",
+        ));
+    }
+    let mut target = config.clone();
+    if authority.is_terminal() {
+        for disk in &mut target.disks {
+            disk.metadata_member = false;
+        }
+    }
+    let mut directories = Vec::with_capacity(request.additions.len());
+    let mut excluded = vec![system_root.to_path_buf(), management_root.to_path_buf()];
+    excluded.extend(
+        config
+            .disks
+            .iter()
+            .filter(|disk| !stopped.contains(&disk.root))
+            .map(|disk| disk.root.clone()),
+    );
+    for addition in &request.additions {
+        let held = crate::storage_directories::revalidate_fresh_within(
+            discovery_root,
+            &addition.selection,
+            &excluded,
+            &stopped,
+        )?;
+        let root = PathBuf::from(&held.selection().root_path);
+        excluded.push(root.clone());
+        let id_hash = digest(&(request.operation_id, &addition.slot_id));
+        let disk_id = format!("disk_{}", &id_hash[..32]);
+        directories.push(storage_engine::PendingMemberDirectory {
+            disk_id: disk_id.clone(),
+            directory: held.into_storage_directory(),
+        });
+        target.disks.push(DiskConfig {
+            slot_id: addition.slot_id.clone(),
+            disk_id,
+            root,
+            level: addition.level,
+            upstream_slot_id: addition.upstream_slot_id.clone(),
+            metadata_member: addition.metadata_member,
+            binding_generation: 1,
+            capacity_bytes: None,
+        });
+    }
+    crate::backend_storage_metadata::disk_directory_names(&target.disks)?;
+    storage_engine::ValidatedConfig::try_from(target.clone())
+        .map_err(crate::engine_backend::error)?;
+    let mut preview = AdditionPreview {
+        authority,
+        pool_id: config.pool_id.clone(),
+        configuration_digest: configuration_digest(&config),
+        preview_digest: String::new(),
+        original_metadata_members: config.disks.iter().filter(|d| d.metadata_member).count(),
+        target_metadata_members: target.disks.iter().filter(|d| d.metadata_member).count(),
+        added_directories: request.additions.len(),
+        request,
+    };
+    preview.preview_digest = digest(&preview);
+    Ok((preview, target, directories))
 }
 
 pub(super) fn configuration_edges(
