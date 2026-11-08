@@ -92,6 +92,11 @@ fn unique_native_final_voter_handover_and_cold_receipt_do_not_reopen_targets() {
     drop(owner);
     fixture.replace_disk_paths();
     let mut cold = fixture.owner().unwrap();
+    let boundary = cold.terminal_boundary().unwrap().unwrap();
+    assert_eq!(boundary.operation_id, status.operation_id);
+    assert!(!boundary.authority_hash.is_empty());
+    assert!(!boundary.registry.root_hash().is_empty());
+    assert_eq!(boundary.sequence, status.result.as_ref().unwrap().sequence);
     assert_eq!(cold.status(status.operation_id).unwrap(), status);
     assert_eq!(cold.commit(ExitCommit { preview }).unwrap(), status);
     let RegistrationSnapshot::TerminalManagement { registrations } = cold.registrations().unwrap()

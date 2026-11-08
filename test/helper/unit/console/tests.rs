@@ -458,6 +458,7 @@ async fn erase_alias_foreign_and_planned_offline_remain_unavailable() {
 async fn deregistration_routes_reject_cross_origin_before_native_owner() {
     for path in [
         "/api/disks/registrations",
+        "/api/disks/terminal-removal-inspect",
         "/api/disks/deregister-preview",
         "/api/disks/deregister-original",
         "/api/disks/deregister-commit",
@@ -521,4 +522,14 @@ async fn capabilities_distinguish_final_voter_from_new_terminal_registry_mutatio
     }
     assert_eq!(value["authentication"], "none");
     assert_eq!(value["source_writes_available"], false);
+}
+
+#[tokio::test]
+async fn terminal_inspection_has_no_operation_or_force_input() {
+    let response = http::router(state()).oneshot(post(
+        "/api/disks/terminal-removal-inspect",
+        json!({"service_user":"zxs","slot_id":"P02","expected_disk_id":"disk_original",
+            "external_writers_stopped":true,"operation_id":"op_11111111111111111111111111111111","force":true}),
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

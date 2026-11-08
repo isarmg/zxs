@@ -198,3 +198,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 最后元数据成员的终态注销
 
 独立 Web 的既有注销入口增加最后元数据成员路径，必须单独确认结束活动存储。服务 UID worker 在打开 Engine 前选择受保护的 terminal authority，以独占原生 owner 完成实际 I/O 关闭和原终态发布；冷态按同一原计划核对永久回执，不重新探测退役根，不制造零成员可写池。终态内剩余登记仍可展示，但新的后继注销、metadata resume 和外来完整链接纳未完成。源码未编译/测试/审查/CI，无实际系统操作，见[完整边界](../design/helper-terminal-disk-deregistration.md)。
+
+## 终态剩余登记检查前置
+
+独立 Web 可对终态剩余登记读取准确 authority/registry/绑定边界及直接依赖，下载明确不可执行的诊断报告。没有新 operation 或意图，`executable:false`；剩余成员的正式终态 successor 写者仍缺。该检查不探测目标，不是完整内容/健康或外来接纳证明，已决定原操作的打开恢复仍可能同步。源码未审查/编译/测试/CI，见[边界](../design/helper-terminal-removal-inspection.md)。

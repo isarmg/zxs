@@ -7,7 +7,7 @@ use super::storage_addition::{
 use super::*;
 pub use active::ActiveExit;
 use data_serialization::{Deserialize, Serialize};
-pub use exclusive::ExclusiveExit;
+pub use exclusive::{ExclusiveExit, TerminalBoundary};
 use platform_io::fs_safety::{EntryName, PrivateDirectory};
 use storage_contract::{
     Config, ErrorCode, OperationId, OperationResult, storage_addition::AdditionFailure,

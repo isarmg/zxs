@@ -1,5 +1,6 @@
 //! Root-owned offline deregistration intent. Never walks a target after D3;
 //! retained bytes and historical registration definitions are not deleted.
+pub(crate) mod terminal;
 mod worker;
 use crate::{
     Result,
@@ -82,6 +83,10 @@ struct WorkerRequest {
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
     Inventory,
+    InspectTerminal {
+        slot_id: String,
+        expected_disk_id: String,
+    },
     Preview {
         operation_id: OperationId,
         slot_id: String,
@@ -98,6 +103,7 @@ enum Action {
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Output {
     Inventory { inventory: worker::Inventory },
+    TerminalInspection { inspection: terminal::Inspection },
     Preview { plan: Plan },
     Original { status: Option<ExitStatus> },
     Status { status: ExitStatus },

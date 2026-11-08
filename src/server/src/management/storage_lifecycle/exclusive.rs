@@ -11,6 +11,17 @@ enum Source {
     Terminal(Box<TerminalManagement>),
 }
 
+/// Admitted, immutable terminal source metadata. This is a comparison boundary,
+/// not a successor authority, permission to write, or a replacement for opening
+/// and revalidating the original native owner.
+pub struct TerminalBoundary {
+    pub operation_id: OperationId,
+    pub authority_hash: String,
+    pub registry: storage_engine::DiskRegistryCommitment,
+    pub sequence: u64,
+    pub topology_generation: u64,
+}
+
 /// Owns an existing SYSTEM and its exclusive Engine or terminal authority.
 /// The caller retains the host lifetime lease and the live primary AuthStore.
 /// This is not first initialization, a service runtime, or foreign admission.
@@ -73,6 +84,22 @@ impl ExclusiveExit {
             ));
         }
         Ok(())
+    }
+    /// Capture only the held SYSTEM authority and registry commitment. No
+    /// stopped or retained data root is probed, and no successor is prepared.
+    pub fn terminal_boundary(&self) -> Result<Option<TerminalBoundary>, ApiError> {
+        self.check()?;
+        let Source::Terminal(terminal) = &self.source else {
+            return Ok(None);
+        };
+        let status = terminal.status();
+        Ok(Some(TerminalBoundary {
+            operation_id: status.operation_id,
+            authority_hash: status.authority_hash,
+            registry: terminal.registry().commitment().clone(),
+            sequence: terminal.state().sequence,
+            topology_generation: terminal.state().topology_generation,
+        }))
     }
     pub fn current_configuration(&self) -> Result<Config, ApiError> {
         self.check()?;

@@ -41,3 +41,6 @@ helper 的专用流程、账户降权、固定路径/身份、主服务 host lea
 终态重开复用既有 SYSTEM 归档/证据校验和 fsync，不新增业务盘遍历或后台 worker。登记关联仍为 O(登记数 × 历史配置数)，未作性能测量；原阶段同步、固定 quorum 和真实关闭规则没有减少。helper IPC 与计划继续有 64 KiB 上限，root 原计划格式和原生记录格式未变，拒绝不能解析的材料且不迁移旧格式。
 
 新增测试源码覆盖：最后 voter 的无 session 原生路径、真实权威/回执、全旧盘名替换后的冷查询与原重放、Stop/关闭/publication 三处中断、坏 terminal publication 不回退、主凭据 owner 消失后拒绝、过期预览不保存新意图、独立终态确认、能力列表不误报完整接纳。全部未执行。编译、浏览器、服务 UID 子进程、真实设备掉电/拔盘及组合回归均未验收。
+
+
+后继增加了[终态剩余登记检查](helper-terminal-removal-inspection.md)：可读取准确来源/目标和阻断原因，但没有新的 registry successor 提交能力，不能据此把以上未完成项改为已完成。

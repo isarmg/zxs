@@ -552,8 +552,10 @@ byId("disk-add-commit-form").addEventListener("submit", async event => {
   } finally { setBusy(false); }
 });
 
+let terminalRemovalInspection = null;
 function resetDiskRemoval() {
   diskRemovalPreview = null;
+  terminalRemovalInspection = null;
   for (const id of ["disk-remove-plan","disk-remove-save","disk-remove-commit-form","disk-remove-result"]) byId(id).hidden = true;
   byId("disk-remove-confirm").checked = false;
   byId("disk-remove-terminal").checked = false;
@@ -561,6 +563,7 @@ function resetDiskRemoval() {
   byId("disk-remove-terminal-label").hidden = true;
 }
 function showDiskRemoval(service_user,preview) {
+  byId("disk-remove-save").textContent = "保存原注销计划";
   diskRemovalPreview = {input:{service_user,request_digest:preview.request_digest,external_writers_stopped:true},plan:preview.plan};
   byId("disk-remove-digest").value = preview.request_digest;
   byId("disk-remove-plan").textContent = JSON.stringify(preview,null,2);
@@ -572,6 +575,7 @@ function showDiskRemoval(service_user,preview) {
 for (const id of ["disk-remove-user","disk-remove-writers","disk-remove-digest","disk-remove-target"]) byId(id).addEventListener("input",resetDiskRemoval);
 byId("disk-remove-user").addEventListener("input", () => {
   byId("disk-remove-target").replaceChildren(new Option("先读取准确服务账户的登记", ""));
+  delete byId("disk-remove-target").dataset.authority;
   byId("disk-remove-inventory").hidden = true;
 });
 byId("disk-remove-load").addEventListener("click", async () => {
@@ -582,17 +586,18 @@ byId("disk-remove-load").addEventListener("click", async () => {
   byId("disk-remove-inventory").hidden = true;
   try {
     const inventory = await (await post("/api/disks/registrations",{service_user,external_writers_stopped:byId("disk-remove-writers").checked})).json();
+    byId("disk-remove-target").dataset.authority = inventory.authority;
     for (const item of inventory.registrations) {
       const r = item.registration;
       const label = `${r.slot_id} · ${r.disk_id} · ${r.mode}（登记状态，不代表健康） · ${item.root_path}`;
       const option = new Option(label,JSON.stringify({slot_id:r.slot_id,expected_disk_id:r.disk_id}));
-      option.disabled = inventory.authority === "terminal_management";
+
       byId("disk-remove-target").append(option);
     }
     byId("disk-remove-inventory").textContent = JSON.stringify(inventory,null,2);
     byId("disk-remove-inventory").hidden = false;
     if (inventory.authority === "terminal_management") {
-      error("当前为终态管理权威，没有活动存储。可按原摘要核对或完成既有注销；不能新建剩余登记注销或自动恢复存储。");
+      error("当前为终态管理权威，没有活动存储。可以选择剩余登记检查其准确权威边界，但目前不能执行新的注销；原摘要查询/续作仍单独保留。");
     }
   } catch (e) { error(e.message); } finally { setBusy(false); }
 });
@@ -601,9 +606,22 @@ byId("disk-remove-form").addEventListener("submit", async event => {
   if (!byId("disk-remove-target").value) { error("先读取并选择准确的当前登记。"); return; }
   const target = JSON.parse(byId("disk-remove-target").value);
   const service_user = byId("disk-remove-user").value;
-  const operation_id = "op_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
+  const terminal = byId("disk-remove-target").dataset.authority === "terminal_management";
   resetDiskRemoval(); error(""); setBusy(true);
-  try { showDiskRemoval(service_user, await (await post("/api/disks/deregister-preview",{service_user,operation_id,...target,external_writers_stopped:byId("disk-remove-writers").checked})).json()); }
+  try {
+    if (terminal) {
+      const inspection = await (await post("/api/disks/terminal-removal-inspect",{service_user,...target,external_writers_stopped:byId("disk-remove-writers").checked})).json();
+      terminalRemovalInspection = inspection;
+      byId("disk-remove-plan").textContent = JSON.stringify(inspection,null,2);
+      byId("disk-remove-plan").hidden = false;
+      byId("disk-remove-save").textContent = "保存不可执行的终态检查报告";
+      byId("disk-remove-save").hidden = false;
+      error("检查完成，但没有创建注销操作。缺少终态登记后继发布协议，不能提交、擦盘或据此拔盘；该摘要不是操作/准入令牌。");
+    } else {
+      const operation_id = "op_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
+      showDiskRemoval(service_user, await (await post("/api/disks/deregister-preview",{service_user,operation_id,...target,external_writers_stopped:byId("disk-remove-writers").checked})).json());
+    }
+  }
   catch (e) { error(e.message); } finally { setBusy(false); }
 });
 byId("disk-remove-original").addEventListener("click", async () => {
@@ -616,6 +634,7 @@ byId("disk-remove-original").addEventListener("click", async () => {
 });
 byId("disk-remove-save").addEventListener("click", () => {
   if (diskRemovalPreview) save(new Blob([JSON.stringify(diskRemovalPreview,null,2)],{type:"application/json"}),`zxs-deregister-${diskRemovalPreview.input.request_digest}.json`);
+  else if (terminalRemovalInspection) save(new Blob([JSON.stringify(terminalRemovalInspection,null,2)],{type:"application/json"}),`zxs-terminal-inspection-${terminalRemovalInspection.inspection_digest}.json`);
 });
 byId("disk-remove-commit-form").addEventListener("submit", async event => {
   event.preventDefault(); if (busy || stopping || !diskRemovalPreview) return;

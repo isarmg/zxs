@@ -126,6 +126,14 @@ fn inventory(control: &ExclusiveExit) -> Result<Inventory> {
 pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
     let mut target = Target::open(&request.context)?;
     match request.action {
+        Action::InspectTerminal {
+            slot_id,
+            expected_disk_id,
+        } => {
+            let inspection = terminal::capture(&target.control, &slot_id, &expected_disk_id)?;
+            target.recheck()?;
+            Ok(Output::TerminalInspection { inspection })
+        }
         Action::Inventory => {
             let inventory = inventory(&target.control)?;
             target.recheck()?;
