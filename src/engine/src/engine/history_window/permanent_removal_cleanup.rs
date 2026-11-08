@@ -1,4 +1,4 @@
-//! Read-only evidence of current-route cleanup, never node retirement authority.
+//! Bound cleanup observations. Recorded original bindings survive route changes.
 use super::{HistoryCancellationCheckpoint, PermanentNodeRemovalAnalysis};
 use crate::{ContentState, Engine, Error, ErrorCode, Result};
 use storage_contract::history_window::{HistoryRoot, HistoryVersionId, HistoryWindowCancellation};
@@ -26,6 +26,8 @@ pub enum RemovalReplicaCleanupState {
 pub struct RemovalReplicaCleanup {
     version_id: HistoryVersionId,
     slot_id: String,
+    binding_generation: u64,
+    original_requirement: bool,
     state: RemovalReplicaCleanupState,
 }
 impl RemovalReplicaCleanup {
@@ -35,22 +37,36 @@ impl RemovalReplicaCleanup {
     pub fn slot_id(&self) -> &str {
         &self.slot_id
     }
+    pub fn binding_generation(&self) -> u64 { self.binding_generation }
+    pub fn original_requirement(&self) -> bool { self.original_requirement }
     pub fn state(&self) -> &RemovalReplicaCleanupState {
         &self.state
     }
 }
 
-/// Interval observation of the captured root's current placements only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemovalCleanupScope {
+    CurrentRoutes,
+    OriginalAndCurrentRoutes,
+}
+
+/// Interval observation of the declared scope. Original obligations are never
+/// replaced by a new slot generation or silently dropped after a route edit.
 /// Not a durable receipt, an all-ever-copies erasure claim, or permission to remove
 /// retained version/commit/source records. Cold callers must observe again.
 #[derive(Debug)]
 pub struct PermanentRemovalCleanupObservation {
     history_root: HistoryRoot,
+    scope: RemovalCleanupScope,
     replicas: Vec<RemovalReplicaCleanup>,
 }
 impl PermanentRemovalCleanupObservation {
     pub fn history_root(&self) -> HistoryRoot {
         self.history_root
+    }
+    pub fn scope(&self) -> RemovalCleanupScope { self.scope }
+    pub fn all_required_bindings_absent(&self) -> bool {
+        self.scope == RemovalCleanupScope::OriginalAndCurrentRoutes && self.all_current_routes_absent()
     }
     pub fn replicas(&self) -> &[RemovalReplicaCleanup] {
         &self.replicas
@@ -119,54 +135,66 @@ pub(super) fn inspect_selected(
     versions: &[HistoryVersionId],
     cancellation: &HistoryWindowCancellation,
 ) -> Result<PermanentRemovalCleanupObservation> {
-    let mut budget = Budget {
-        cancellation,
-        bytes: MAX_READ_BYTES,
-        checkpoints: MAX_CHECKPOINTS,
-        io_exhausted: false,
-    };
-    let mut replicas = Vec::new();
+    inspect_bindings(engine, history_root, versions, None, cancellation)
+}
+
+pub(super) fn inspect_required(
+    engine: &Engine,
+    history_root: HistoryRoot,
+    versions: &[HistoryVersionId],
+    required: &crate::node_retirement::CleanupRoutes,
+    cancellation: &HistoryWindowCancellation,
+) -> Result<PermanentRemovalCleanupObservation> {
+    inspect_bindings(engine, history_root, versions, Some(required), cancellation)
+}
+
+fn inspect_bindings(
+    engine: &Engine,
+    history_root: HistoryRoot,
+    versions: &[HistoryVersionId],
+    required: Option<&crate::node_retirement::CleanupRoutes>,
+    cancellation: &HistoryWindowCancellation,
+) -> Result<PermanentRemovalCleanupObservation> {
+    let mut budget = Budget { cancellation, bytes: MAX_READ_BYTES, checkpoints: MAX_CHECKPOINTS, io_exhausted: false };
+    let mut targets = std::collections::BTreeMap::new();
+    if let Some(required) = required {
+        for binding in &required.bindings {
+            budget.observe(0)?;
+            targets.insert((HistoryVersionId::parse(&binding.version_id)?, binding.slot_id.clone(), binding.binding_generation), true);
+            if targets.len() > MAX_REPLICAS { return Err(limit()); }
+        }
+    }
     for id in versions {
         budget.observe(0)?;
-        // The just-rechecked complete component proves these State identities.
-        let version = &engine.state.versions[id.as_str()];
         let placement = &engine.state.placements[id.as_str()];
-        if placement.route_slot_ids.len() > MAX_REPLICAS - replicas.len() {
-            return Err(limit());
-        }
         for slot in &placement.route_slot_ids {
             budget.observe(0)?;
-            let observed = match engine.state.content_states.get(id.as_str()).copied() {
-                Some(state @ (ContentState::Purged | ContentState::Migrated | ContentState::Retired)) => {
-                    inspect_replica(engine, version, slot, state, &mut budget)
-                }
-                None | Some(ContentState::Available) => {
-                    Ok(RemovalReplicaCleanupState::NotRequested)
-                }
-            };
-            let state = match observed {
-                Err(_) if budget.io_exhausted => return Err(limit()),
-                Ok(state) => state,
-                Err(error)
-                    if matches!(
-                        error.code(),
-                        ErrorCode::OperationAborted | ErrorCode::ResourceLimit
-                    ) =>
-                {
-                    return Err(error);
-                }
-                Err(error) => RemovalReplicaCleanupState::Unverified(error),
-            };
-            replicas.push(RemovalReplicaCleanup {
-                version_id: id.clone(),
-                slot_id: slot.clone(),
-                state,
-            });
+            targets.entry((id.clone(), slot.clone(), placement.binding_generations[slot])).or_insert(false);
+            if targets.len() > MAX_REPLICAS { return Err(limit()); }
         }
+    }
+    let mut replicas = Vec::new();
+    for ((id, slot, generation), original_requirement) in targets {
+        budget.observe(0)?;
+        let version = &engine.state.versions[id.as_str()];
+        let observed = match engine.state.content_states.get(id.as_str()).copied() {
+            Some(state @ (ContentState::Purged | ContentState::Migrated | ContentState::Retired)) => {
+                inspect_replica(engine, version, &slot, generation, state, &mut budget)
+            }
+            None | Some(ContentState::Available) => Ok(RemovalReplicaCleanupState::NotRequested),
+        };
+        let state = match observed {
+            Err(_) if budget.io_exhausted => return Err(limit()),
+            Ok(state) => state,
+            Err(error) if matches!(error.code(), ErrorCode::OperationAborted | ErrorCode::ResourceLimit) => return Err(error),
+            Err(error) => RemovalReplicaCleanupState::Unverified(error),
+        };
+        replicas.push(RemovalReplicaCleanup { version_id: id, slot_id: slot, binding_generation: generation, original_requirement, state });
     }
     budget.observe(0)?;
     Ok(PermanentRemovalCleanupObservation {
         history_root,
+        scope: if required.is_some() { RemovalCleanupScope::OriginalAndCurrentRoutes } else { RemovalCleanupScope::CurrentRoutes },
         replicas,
     })
 }
@@ -175,10 +203,14 @@ fn inspect_replica(
     engine: &Engine,
     version: &crate::FileVersion,
     slot: &str,
+    binding_generation: u64,
     state: ContentState,
     budget: &mut Budget<'_>,
 ) -> Result<RemovalReplicaCleanupState> {
     let disk = engine.disk(slot)?;
+    if disk.binding_generation != binding_generation {
+        return Err(Error::new(ErrorCode::DiskIdentityMismatch, "cleanup obligation belongs to another binding generation; original copy remains pending"));
+    }
     super::super::provenance::validate_owned_seal_observed(
         &engine.disk_resources,
         disk,

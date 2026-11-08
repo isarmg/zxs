@@ -137,7 +137,7 @@ fn receive(state: RwSignal<State>, attempt: &Attempt, value: Value) {
     let result = json_codec::from_value::<wire::Outcome>(value).map_err(|source| api::Error::from(DecodeError::Wire(source)))
         .and_then(|outcome| {
             if outcome.file_id != *attempt.selection.file_id() { return Err(malformed("Retirement cleanup names another file")); }
-            outcome.cleanup.validate(attempt.selection.version_ids()).map_err(DecodeError::Name)?;
+            outcome.cleanup.validate_for_receipt(attempt.selection.version_ids(), &outcome.operation).map_err(DecodeError::Name)?;
             outcome.separation.validate(&attempt.selection).map_err(DecodeError::Name)?;
             Ok((outcome.cleanup, outcome.separation))
         });
@@ -159,7 +159,7 @@ fn receive(state: RwSignal<State>, attempt: &Attempt, value: Value) {
 pub(super) fn dismiss(state: RwSignal<State>) {
     let can_close = state.with_untracked(|s| s.files.node_retirement.attempt.as_ref().is_some_and(|attempt| {
         !attempt.in_flight && (status(s, attempt) == SaveStatus::Rejected
-            || published(status(s, attempt)) && attempt.cleanup.as_ref().is_some_and(Cleanup::all_current_routes_absent))
+            || published(status(s, attempt)) && attempt.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent))
     }));
     if can_close { state.update(|s| { s.files.node_retirement.attempt = None; s.files.node_retirement.error = None; }); }
 }

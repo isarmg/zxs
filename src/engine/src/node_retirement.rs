@@ -8,6 +8,8 @@ use storage_contract::history_window::{HistoryFileId, HistoryRoot, HistoryTreeId
 
 mod publication;
 mod references;
+mod replicas;
+pub(crate) use replicas::{CleanupRoutes, original_cleanup_bindings};
 mod separation;
 pub use separation::PermanentNodeSeparation;
 pub(crate) use publication::{admit_current, verify};
@@ -29,6 +31,7 @@ pub(crate) struct Decision {
     archive_digest: String,
     inbound_references: references::ReferenceClosure,
     separation: separation::Separation,
+    pub(crate) cleanup_routes: CleanupRoutes,
 }
 
 fn invalid() -> Error {
@@ -111,6 +114,7 @@ pub(crate) fn decide(state: &State, request: Request) -> Result<Decision> {
         archive_digest: archive_digest(state, &request)?,
         inbound_references: references::capture(state, &request)?,
         separation: separation::Separation::capture(state, &request)?,
+        cleanup_routes: CleanupRoutes::capture(state, &request)?,
         request,
     })
 }

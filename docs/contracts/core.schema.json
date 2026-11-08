@@ -10564,12 +10564,20 @@
         },
         "status": {
           "$ref": "#/$defs/NodeRetirementReplicaState"
+        },
+        "binding_generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "original_requirement": {
+          "type": "boolean"
         }
       },
       "required": [
         "version_id",
         "slot_id",
-        "status"
+        "status",
+        "binding_generation",
+        "original_requirement"
       ]
     },
     "NodeRetirementCleanup": {
@@ -10592,12 +10600,19 @@
               "items": {
                 "$ref": "#/$defs/NodeRetirementReplica"
               }
+            },
+            "scope": {
+              "enum": [
+                "current_routes",
+                "original_and_current_routes"
+              ]
             }
           },
           "required": [
             "state",
             "history_root",
-            "replicas"
+            "replicas",
+            "scope"
           ]
         },
         {
@@ -10619,7 +10634,7 @@
           ]
         }
       ],
-      "description": "Only a nonempty complete current-route observation in which every replica is verified_absent reports current bodies absent. The (version_id, slot_id) pairs are unique and every selected version appears. Neither publication nor this interval observation proves erasure on offline disks/external backups or removal of immutable authentication records."
+      "description": "The published retirement response must cover the immutable original version/slot/binding-generation obligations plus all current routes. Every original binding from operation.result.retirement.cleanup_routes.bindings must appear exactly once with original_requirement=true. An unavailable old generation remains pending even if the slot is reused or today's routes shrink. Only the complete original_and_current_routes scope with every binding verified_absent reports observation completion. This is not a durable all-ever-copy erase receipt, offline external backup erasure, or removal of immutable authentication records."
     },
     "NodeRetirementOutcome": {
       "type": "object",

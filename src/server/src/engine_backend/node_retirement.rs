@@ -1,6 +1,6 @@
 //! Current administrator admission and exact file-bound retry, under the engine owner.
 use super::*;
-use storage_contract::{OperationId, history_window::{HistoryFileId, HistoryWindowCancellation}, node_retirement::{Cleanup, Outcome, Preview, Replica, ReplicaState, Selection, Separation}};
+use storage_contract::{OperationId, history_window::{HistoryFileId, HistoryWindowCancellation}, node_retirement::{CleanupScope, Cleanup, Outcome, Preview, Replica, ReplicaState, Selection, Separation}};
 
 fn identity(engine: &AdmissionEngine, caller: &Identity) -> Result<Identity, ApiError> {
     let current = current_protected_identity(engine, caller)?;
@@ -68,8 +68,14 @@ fn outcome(file_id: HistoryFileId, result: storage_engine::PermanentNodeRetireme
         Err(error) => Cleanup::Unverified { error_code: error.code().as_str().into() },
         Ok(observation) => Cleanup::Observed {
             history_root: observation.history_root(),
+            scope: match observation.scope() {
+                storage_engine::RemovalCleanupScope::CurrentRoutes => CleanupScope::CurrentRoutes,
+                storage_engine::RemovalCleanupScope::OriginalAndCurrentRoutes => CleanupScope::OriginalAndCurrentRoutes,
+            },
             replicas: observation.replicas().iter().map(|replica| Replica {
                 version_id: replica.version_id().clone(), slot_id: replica.slot_id().into(),
+                binding_generation: replica.binding_generation(),
+                original_requirement: replica.original_requirement(),
                 status: match replica.state() {
                     storage_engine::RemovalReplicaCleanupState::NotRequested => ReplicaState::NotRequested,
                     storage_engine::RemovalReplicaCleanupState::MissingTombstone => ReplicaState::MissingTombstone,

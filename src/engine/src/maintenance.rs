@@ -552,6 +552,7 @@ impl Engine {
         // indefinitely. Re-admit each actual cleanup target at first use, not
         // for every version, retaining the existing unavailable-target skip.
         let mut cleanup_slots = BTreeMap::new();
+        let original_bindings = crate::node_retirement::original_cleanup_bindings(&self.state)?;
         for (id, state) in &self.state.content_states {
             if *state == ContentState::Available {
                 continue;
@@ -595,9 +596,22 @@ impl Engine {
                 snapshot: snapshot.clone(),
                 content_state_proof,
             };
-            for slot in &p.route_slot_ids {
-                let d = self.disk(slot)?;
-                let admitted = cleanup_slots.entry(slot).or_insert_with(|| {
+            let mut targets = p.route_slot_ids.iter().map(|slot| {
+                (slot.clone(), p.binding_generations[slot])
+            }).collect::<BTreeSet<_>>();
+            if *state == ContentState::Retired {
+                let bindings = original_bindings.get(id).ok_or_else(|| Error::new(
+                    ErrorCode::PublicationInvalid, "retired body has no permanent original cleanup bindings",
+                ))?;
+                targets.extend(bindings.iter().map(|binding| (binding.slot_id.clone(), binding.binding_generation)));
+            }
+            for (slot, generation) in targets {
+                // Never reopen a withdrawn root or substitute today's disk for
+                // the original binding. The receipt keeps this obligation pending.
+                let Some(d) = self.config.disks.iter().find(|disk| {
+                    disk.slot_id == slot && disk.binding_generation == generation
+                }) else { continue; };
+                let admitted = cleanup_slots.entry((slot, generation)).or_insert_with(|| {
                     crate::engine::provenance::validate_owned_seal(
                         &self.disk_resources,
                         d,
@@ -623,6 +637,17 @@ impl Engine {
                         continue;
                     }
                     Err(error) => return Err(error),
+                }
+                if *state == ContentState::Retired {
+                    let stored: FileVersion = root.read_json_observed(&dir.join("version.json"), &mut |_| Ok(()))?;
+                    if stored != *v {
+                        return Err(Error::new(ErrorCode::ObjectCorrupt, "retirement cleanup descriptor differs from its retained identity"));
+                    }
+                    let metadata = crate::engine::provenance::MetadataReadContext::for_disk(
+                        &self.config, &handle.seal,
+                        d.metadata_member.then_some(self.metadata_integrity.as_ref()),
+                    );
+                    verify_retained_version_publication_at(root, &dir, v, Some(&metadata))?;
                 }
                 root.write_json(&dir.join("purged.json"), &tombstone, true)?;
                 // Both supported locations may coexist after interruption. Each

@@ -92,3 +92,21 @@ fn cold_retirement_requires_the_frozen_partition_and_inbound_closure_fields() {
     missing.operations.insert(operation, receipt);
     assert!(crate::node_retirement::admit_current(&missing).is_err(), "missing current-format proof is not silently defaulted");
 }
+
+#[test]
+fn cleanup_obligation_remains_the_original_binding_after_placement_change() {
+    let (_temp, engine, _before, operation, version) = fixture();
+    let before = crate::node_retirement::original_cleanup_bindings(engine.state()).unwrap();
+    let original = before[&version].clone();
+    let mut changed = engine.state().clone();
+    let mut placement = changed.placements[&version].clone();
+    for generation in placement.binding_generations.values_mut() { *generation += 1; }
+    changed.placements.insert(version.clone(), placement);
+    crate::node_retirement::admit_current(&changed).unwrap();
+    assert_eq!(crate::node_retirement::original_cleanup_bindings(&changed).unwrap()[&version], original);
+    let mut missing = changed;
+    let mut receipt = missing.operations[&operation].clone();
+    receipt.result["retirement"].as_object_mut().unwrap().remove("cleanup_routes");
+    missing.operations.insert(operation, receipt);
+    assert!(crate::node_retirement::admit_current(&missing).is_err());
+}

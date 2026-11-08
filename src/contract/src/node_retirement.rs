@@ -80,12 +80,15 @@ pub enum ReplicaState {
 pub struct Replica {
     pub version_id: HistoryVersionId,
     pub slot_id: String,
+    #[serialization(with = "crate::u64_string")]
+    pub binding_generation: u64,
+    pub original_requirement: bool,
     pub status: ReplicaState,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Cleanup {
-    Observed { history_root: HistoryRoot, replicas: Vec<Replica> },
+    Observed { history_root: HistoryRoot, scope: CleanupScope, replicas: Vec<Replica> },
     Unverified { error_code: String },
 }
 impl Cleanup {
@@ -97,7 +100,7 @@ impl Cleanup {
                 let mut covered = BTreeSet::new();
                 for replica in replicas {
                     if !versions.contains(&replica.version_id) || !valid_slot(&replica.slot_id)
-                        || !seen.insert((&replica.version_id, &replica.slot_id)) { return Err(invalid()); }
+                        || !seen.insert((&replica.version_id, &replica.slot_id, replica.binding_generation)) { return Err(invalid()); }
                     if let ReplicaState::Unverified { error_code } = &replica.status
                         && (error_code.is_empty() || error_code.len() > 128) { return Err(invalid()); }
                     covered.insert(&replica.version_id);
@@ -108,8 +111,38 @@ impl Cleanup {
             _ => Err(invalid()),
         }
     }
-    pub fn all_current_routes_absent(&self) -> bool {
-        matches!(self, Self::Observed { replicas, .. } if !replicas.is_empty() && replicas.iter().all(|r| matches!(r.status, ReplicaState::VerifiedAbsent)))
+    pub fn all_required_bindings_absent(&self) -> bool {
+        matches!(self, Self::Observed { scope: CleanupScope::OriginalAndCurrentRoutes, replicas, .. }
+            if !replicas.is_empty() && replicas.iter().any(|r| r.original_requirement)
+            && replicas.iter().all(|r| matches!(r.status, ReplicaState::VerifiedAbsent)))
+    }
+
+    /// A reply may not omit an offline original copy and certify only today's
+    /// replacement route. The exact original binding set comes from the receipt.
+    pub fn validate_for_receipt(&self, versions: &[HistoryVersionId], receipt: &json_codec::Value) -> Result<()> {
+        self.validate(versions)?;
+        let Self::Observed { scope, replicas, .. } = self else { return Ok(()); };
+        if *scope != CleanupScope::OriginalAndCurrentRoutes { return Err(invalid()); }
+        let required: RequiredBindings = json_codec::from_value(
+            receipt.get("result").and_then(|v| v.get("retirement"))
+                .and_then(|v| v.get("cleanup_routes")).ok_or_else(invalid)?.clone(),
+        )?;
+        if required.bindings.is_empty() || required.bindings.len() > MAX_REPLICAS
+            || required.bindings.windows(2).any(|pair| pair[0] >= pair[1]
+                || (pair[0].version_id == pair[1].version_id && pair[0].slot_id == pair[1].slot_id)) {
+            return Err(invalid());
+        }
+        let mut covered = BTreeSet::new();
+        for binding in &required.bindings {
+            if !versions.contains(&binding.version_id) || !valid_slot(&binding.slot_id) { return Err(invalid()); }
+            covered.insert(&binding.version_id);
+        }
+        if covered.len() != versions.len() { return Err(invalid()); }
+        let required = required.bindings.iter().map(|b| (&b.version_id, b.slot_id.as_str(), b.binding_generation)).collect::<BTreeSet<_>>();
+        let reported = replicas.iter().filter(|r| r.original_requirement)
+            .map(|r| (&r.version_id, r.slot_id.as_str(), r.binding_generation)).collect::<BTreeSet<_>>();
+        if required != reported { return Err(invalid()); }
+        Ok(())
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -168,3 +201,32 @@ impl Separation {
         }
     }
 }
+
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum CleanupScope { CurrentRoutes, OriginalAndCurrentRoutes }
+impl<'de> Deserialize<'de> for CleanupScope {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "current_routes" => Ok(Self::CurrentRoutes),
+            "original_and_current_routes" => Ok(Self::OriginalAndCurrentRoutes),
+            _ => Err(data_serialization::de::Error::custom("invalid cleanup observation scope")),
+        }
+    }
+}
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct RequiredBindings { bindings: Vec<RequiredBinding> }
+#[derive(Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serialization(deny_unknown_fields)]
+struct RequiredBinding {
+    version_id: HistoryVersionId,
+    slot_id: String,
+    #[serialization(with = "crate::u64_string")]
+    binding_generation: u64,
+}
+
+#[cfg(test)]
+#[path = "../../../test/contract/unit/node_retirement_tests.rs"]
+mod tests;

@@ -35,7 +35,7 @@ pub use permanent_removal::{
     RemovalParentProjection,
 };
 pub use permanent_removal_cleanup::{
-    PermanentRemovalCleanupObservation, RemovalReplicaCleanup, RemovalReplicaCleanupState,
+    PermanentRemovalCleanupObservation, RemovalCleanupScope, RemovalReplicaCleanup, RemovalReplicaCleanupState,
 };
 pub use read::{ContentMatchRead, FileHistorySourceRead, HistoryWindowRead, PermanentNodeRetirementOutcome, SharedHistoryRead};
 

@@ -9,6 +9,7 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
     for receipt in state.operations.values().filter(|r| r.kind == KIND) {
         let decision = decision(receipt)?;
         decision.request.validate()?;
+        decision.cleanup_routes.validate(&decision.request)?;
         decision.separation.validate(state, &decision.request)?;
         let principal = state.operation_principals.get(&receipt.operation_id).ok_or_else(invalid)?;
         Engine::require_actor(principal)?;

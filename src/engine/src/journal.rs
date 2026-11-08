@@ -1525,6 +1525,19 @@ fn verify_local_publication_with(
     Ok(())
 }
 
+/// Recheck the original version identity on a held root even when a previous
+/// cleanup already installed a tombstone. This does not grant body availability.
+pub(crate) fn verify_retained_version_publication_at(
+    root: &DiskRoot,
+    directory: &Path,
+    version: &FileVersion,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
+    verify_local_version_publication(
+        directory, version, &mut |path| root.read_bytes(path, MAX_METADATA), metadata,
+    )
+}
+
 /// Verify immutable publication identity independently of current availability.
 fn verify_local_version_publication(
     directory: &Path,

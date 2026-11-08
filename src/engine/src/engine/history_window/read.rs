@@ -520,7 +520,7 @@ impl Engine {
             let versions = decision.request.version_ids.iter()
                 .map(|id| HistoryVersionId::parse(id))
                 .collect::<storage_contract::Result<Vec<_>>>()?;
-            super::permanent_removal_cleanup::inspect_selected(self, root, &versions, cancel)
+            super::permanent_removal_cleanup::inspect_required(self, root, &versions, &decision.cleanup_routes, cancel)
         })();
         PermanentNodeRetirementOutcome { publication, separation, cleanup }
     }

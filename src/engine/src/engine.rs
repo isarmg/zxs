@@ -98,7 +98,7 @@ pub use history_window::{
     ContentMatchRead, CoupledNodeRetirement, FileHistorySourceRead, HistoryWindowCancellation,
     HistoryWindowRead, PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection,
     PermanentNodeRetirementOutcome, PermanentRemovalCleanupObservation, RemovalParentProjection,
-    RemovalReplicaCleanup, RemovalReplicaCleanupState, SharedHistoryRead,
+    RemovalCleanupScope, RemovalReplicaCleanup, RemovalReplicaCleanupState, SharedHistoryRead,
 };
 pub(crate) mod membership_transition;
 pub use membership_transition::{

@@ -28,8 +28,8 @@ fn summary(state: &State) -> Option<String> {
         SaveStatus::Unknown => t("发布结果未确认。只可查询或重试原操作，不得换新 ID 重提。", "Publication is unconfirmed. Query or retry only this original operation; do not submit a new ID."),
         SaveStatus::Rejected => t("本次请求被拒绝，没有确认任何退役发布。", "This request was rejected; no retirement publication was confirmed."),
         SaveStatus::Published | SaveStatus::Degraded => {
-            if attempt.cleanup.as_ref().is_some_and(Cleanup::all_current_routes_absent) {
-                t("节点已永久退役；本次观察确认当前放置副本正文均缺失。不是离线旧盘、外部备份或旧认证元数据的擦除证明。", "Nodes are permanently retired; this observation found no body on the current routes. It does not prove erasure of offline disks, external backups or old authentication metadata.")
+            if attempt.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent) {
+                t("节点已永久退役；本次观察确认原决定记录的副本义务及当前路由正文均缺失。不是离线旧盘、外部备份或旧认证元数据的擦除证明。", "Nodes are permanently retired; this observation found no body on the original recorded bindings or current routes. It does not prove erasure of offline disks, external backups or old authentication metadata.")
             } else {
                 t("节点退役已经发布，不可撤销；正文清理仍待完成或核验。请使用原操作继续清理。", "Retirement was published and cannot be undone. Body cleanup is still pending or unverified. Continue cleanup using the original operation.")
             }
@@ -45,7 +45,8 @@ fn replica_label(replica: &wire::Replica) -> String {
         wire::ReplicaState::VerifiedAbsent => t("已观察到正文缺失", "Body observed absent"),
         wire::ReplicaState::Unverified { error_code } => format!("{}: {}", t("未核验", "Unverified"), error_code),
     };
-    format!("{} · {} · {}", replica.version_id, replica.slot_id, label)
+    format!("{} · {} @ {} · {} · {}", replica.version_id, replica.slot_id, replica.binding_generation,
+        if replica.original_requirement { t("原决定义务", "Original obligation") } else { t("新增当前路由", "Additional current route") }, label)
 }
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     Effect::new(move |_| {
@@ -110,14 +111,14 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 wire::Separation::Unverified { error_code } => view!{<p class="zxs-row">{format!("{}: {}",t("原决定分组未核验", "Original decision groups unverified"), error_code)}</p>}.into_any(),
             })}
             {move ||state.with(|s|s.files.node_retirement.attempt.as_ref().and_then(|a|a.cleanup.clone())).map(|cleanup|match cleanup {
-                Cleanup::Observed{replicas,..}=>view!{<details class="zxs-stack"><summary class="zxs-row">{t("逐副本清理观察", "Per-replica cleanup observations")}</summary>{replicas.iter().map(|replica|view!{<p class="zxs-row">{replica_label(replica)}</p>}).collect_view()}</details>}.into_any(),
+                Cleanup::Observed{replicas,..}=>view!{<details class="zxs-stack"><summary class="zxs-row">{t("原副本义务与当前路由观察", "Original copy obligations and current routes")}</summary>{replicas.iter().map(|replica|view!{<p class="zxs-row">{replica_label(replica)}</p>}).collect_view()}</details>}.into_any(),
                 Cleanup::Unverified{error_code}=>view!{<p class="zxs-row">{format!("{}: {}",t("正文清理未核验", "Body cleanup unverified"),error_code)}</p>}.into_any(),
             })}
             <Show when=move ||state.with(|s|s.files.node_retirement.attempt.is_some())>
                 <p class="zxs-row">{t("请保留上方原操作 ID。整页刷新或重新登录会清空本页队列，但不会撤销已发布退役；之后只能用原操作查询/恢复。", "Keep the original operation ID above. Reloading or signing in again clears this page queue, not a published retirement; query or resume only the original operation.")}</p>
                 <div class="zxs-flow">
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|a.in_flight||!a.target.same_file(s)||!s.management.storage.writable()||s.files.mutation_pending||status(s,a)==SaveStatus::Rejected)) on:click=move |_|action::retry(state)>{t("重试原操作 / 继续正文清理", "Retry original operation / continue body cleanup")}</button>
-                <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|a.in_flight||!(status(s,a)==SaveStatus::Rejected||published(status(s,a))&&a.cleanup.as_ref().is_some_and(Cleanup::all_current_routes_absent)))) on:click=move |_|action::dismiss(state)>{t("关闭已确认结果", "Close confirmed result")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|a.in_flight||!(status(s,a)==SaveStatus::Rejected||published(status(s,a))&&a.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent)))) on:click=move |_|action::dismiss(state)>{t("关闭已确认结果", "Close confirmed result")}</button>
             </div></Show>
             {move ||state.with(|s|s.files.node_retirement.error.clone()).map(|error|view!{<p class="zxs-row" role="alert">{error.to_string()}</p>})}
         </details>

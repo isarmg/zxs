@@ -133,7 +133,7 @@ pub use engine::{
     PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
     PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection, PermanentNodeRetirementOutcome,
     PermanentRemovalCleanupObservation, RangeContent, ReadFile, ReadLease, RecoverySealContext,
-    RecoverySealFailure, RecoveryWarnings, RemovalParentProjection, RemovalReplicaCleanup,
+    RecoverySealFailure, RecoveryWarnings, RemovalCleanupScope, RemovalParentProjection, RemovalReplicaCleanup,
     RemovalReplicaCleanupState, RetainedWorkspaceLimits, SharedHistoryRead, SystemCatalogKind,
     SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor, SystemChangePage,
     SystemChangeReadError, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,

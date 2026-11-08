@@ -61,7 +61,7 @@
 
 冷恢复按收据的冻结 cohort 核身份/内容摘要并重算原分组，**不使用今日 content_state、HEAD 或后来的版本重判历史决定**。后续退役可以继续拆分，后续相同内容保存也可以重新连接有效节点，但不能改变旧收据或复活旧身份。HTTP Outcome 分开提供 `separation` 与 `cleanup`；文件详情显示原决定的真实分组并标清它不是今日图或清理证明。两种观察失败都不隐藏已发布事实。
 
-当前原生退役记录要求完整 `inbound_references` 和 `separation` 字段。缺少它们的早期未完整记录明确拒绝，不增加默认值、旧格式双读或隐式迁移；不重置或删除原材料。本轮不操作真实运行池。
+当前原生退役记录要求完整 `inbound_references`、`separation` 和 `cleanup_routes` 字段。缺少它们的早期未完整记录明确拒绝，不增加默认值、旧格式双读或隐式迁移；不重置或删除原材料。本轮不操作真实运行池。
 
 ## 冷恢复与不复活
 
@@ -81,15 +81,22 @@
 
 有退役记录的历史暂不使用仍包含归档节点的 SQLite 历史分页索引，回退权威有界扫描。HTTP 真实 Engine backend 的版本/来源准入也拒绝退役身份；普通 `file_history`、node/version/source 查询、内容匹配、节点来源和父投影同样使用有效域。原始 State 与历史 commit 审计是认证证据读取，不是可复活的节点 API。
 
-## 当前副本清理观察
+## 原副本义务与当前路由清理
 
-只读 `inspect_permanent_removal_cleanup` 仍用于未退役的条件选择。执行及恢复则按永久回执的准确版本集观察新根下的当前 routes。
+只读 `inspect_permanent_removal_cleanup` 仍用于未退役的条件选择。执行及恢复则按永久回执的准确版本集，观察原 `cleanup_routes` 与新根下当前 routes 的并集。
 
-每个当前副本分别返回 `NotRequested`、`MissingTombstone`、`PayloadPresent`、`VerifiedAbsent` 或保留具体原因的 `Unverified`。只有非空结果全部为 `VerifiedAbsent`，`all_current_routes_absent()` 才为真。缺失墓碑、缺失版本身份、不可读、错误归属、停止的 I/O gate 都不是成功。
+每个明确 slot + binding generation 分别返回 `NotRequested`、`MissingTombstone`、`PayloadPresent`、`VerifiedAbsent` 或保留具体原因的 `Unverified`。HTTP/Web 只有完整原义务与当前路由的非空结果全部为 `VerifiedAbsent`，`all_required_bindings_absent()` 才为真；只读的 current-only 观察不能替代原义务完成。缺失墓碑、缺失版本身份、不可读、错误归属、停止的 I/O gate 都不是成功。
+
+
+真实退役决定从 previous State 的 placement 冻结每个所选版本的原 slot/binding generation，最多 4,096 绑定。热发布重建完全相同的集合；原生回执永久保留，冷态验证其排序、唯一性和完整版本覆盖，但不拿今日 placement 改写原义务。路由缩减、slot 重用或换代，不会把原离线副本从报告中删除，也不会把替代盘上的空路径算成原副本已清除。
+
+普通冷恢复 `cleanup_purged` 与原操作重试继续原绑定和当前绑定的并集。只有仍正式注册且 generation 精确相同、原 held-root/I/O gate 和身份准入成功的目标才进行 I/O；缺盘、退出、换代只保留 pending，不重开被封锁的根或私自接纳旧盘。写入 RETIRED 墓碑及同步 unlink 前再次核本地 `version.json` 与独立原版本发布证明；已存在的合法墓碑不会阻止幂等继续清理。
+
+响应增加 scope、binding_generation、original_requirement。Web 对照同一原 operation 中的永久 binding 集核对逐行完整性，拒绝漏掉离线原副本、混用新的 generation 或仅报 current routes 的“完成”。正文缺失观察仍是区间事实，不是持久擦除回执；以前未记录的过往路由、已退出旧盘和外部副本不由这个集合凭空补齐。
 
 一旦查找观察到任一位置正文，就保留 `Present`，不能因后一次 stat 变成缺失而跳过另一位置。两处都观察缺失才能得到 `Absent`。
 
-观察仅证明当前 routes 的区间状态，不证明过去 unlink 的 fsync、退役盘、外部副本或断电后擦除终态。调用方不能把 `Published` 或 SQL 状态替代实际核验。
+观察仅证明声明的原义务/当前 routes 并集的区间状态，不证明过去 unlink 的 fsync、退役盘、外部副本或断电后擦除终态。调用方不能把 `Published` 或 SQL 状态替代实际核验。
 
 ## 资源及未验证边界
 
@@ -103,3 +110,5 @@
 测试源码：`test/engine/integration/content_matches/permanent_retirement.rs`（执行、最终连接切断、单文件内部祖先、原操作重试/冷开、来源拒绝、HEAD/工作区/旧根/有损包拒绝）与 `test/engine/unit/node_retirement_tests.rs`（回执/作者/状态/归档篡改反向闭包）。新 `RETIRED` 严格字符串编码也已加入契约测试源码。本提交另补未运行的生产 API 场景源码：同正文重复版本的最后见证、三文件传递连接、二次退役后原分组恢复、后续新版本重连但旧 ID 不复活、冷开原收据保持，以及新入向来源/缺当前格式证明的拒绝。
 
 **Engine 与 HTTP/Web 本轮全部新源码均未编译、测试、格式化、审查或运行 CI，浏览器未打开验收。** 以前 cb99 分析/清理片的定向通过记录不覆盖新增执行器、最新主线组合或这些测试。禁止据此标记永久节点删除目标或发行验收完成。
+
+本阶段仍不放开最后一个有效版本：完整文件终止需要 namespace、分支、D 冻结和永久文件身份墓碑共同决定。现有 HEAD/读取/恢复守卫保持拒绝，不把“允许最后版本变 RETIRED”冒充完成整文件永久删除。本轮补充的原绑定覆盖、漏项/换代拒绝与 placement 变化保留义务回归都仅为测试源码，未编译或执行。
