@@ -284,6 +284,27 @@ fn run(
             common.common_manifest_hash,
             common.original_disks.len(),
         );
+    })?;
+    let current = current_read::observe(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationCurrentReadAdmitted;
+        status.detail = format!(
+            "decision {hash} admits read-only Current namespaces on all {} targets against actual Publication and common database set {}; {} readable branch scopes and {} directory scopes, no active Engine Current/writer or source fence release",
+            current.targets,
+            current.common.common_manifest_hash,
+            current.readable_branch_scopes,
+            current.directory_scopes,
+        );
     })
 }
 fn spawn(

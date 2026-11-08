@@ -9,9 +9,9 @@ use std::{
 
 mod backup_preparation;
 pub use backup_preparation::{
-    BackupCommonDatabasesReport, BackupConfigurationReport, BackupDecidedTargets,
-    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupFirstCandidateReport,
-    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
     BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
     BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,

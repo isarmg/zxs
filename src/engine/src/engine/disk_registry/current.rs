@@ -5,8 +5,11 @@
 //! Recovery must reverify the registry and complete mask against its authenticated
 //! source before reconstructing this view. A serialized workspace is never itself
 //! a registry admission: workspaces without a live baseline remain fenced.
+//! Backup has a separate full-prefix read-only admission; it does not consume
+//! the lifecycle installation proof or create a live workspace baseline.
 use super::{DiskRegistryCommitment, Engine};
 mod admission;
+pub(in crate::engine) mod backup;
 mod backup_configuration;
 mod batch;
 pub(crate) use batch::CurrentBatchScope;

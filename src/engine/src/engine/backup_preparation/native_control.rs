@@ -7,9 +7,9 @@ mod archive;
 pub(in crate::engine) use archive::generation_objects::BackupNativeObjects;
 mod databases;
 pub use databases::{
-    BackupCommonDatabasesReport, BackupConfigurationReport, BackupDecidedTargets,
-    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupFirstCandidateReport,
-    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
     BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
     BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,

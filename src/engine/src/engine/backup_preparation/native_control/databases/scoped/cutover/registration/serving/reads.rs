@@ -50,8 +50,12 @@ impl BackupServingRead {
         Ok(())
     }
 
-    fn entry<'a>(&self, state: &'a State) -> Result<&'a Entry> {
-        let (head, entries) = self.scope.entries(state)?;
+    fn entry<'a>(
+        &self,
+        admitted: &'a crate::engine::disk_registry::current::backup::BackupNamespaceAdmission<'_>,
+    ) -> Result<&'a Entry> {
+        let state = admitted.state();
+        let (head, entries) = self.scope.entries(admitted)?;
         if head != self.head_id {
             return Err(Error::new(
                 ErrorCode::BaseHeadMismatch,
@@ -112,50 +116,48 @@ pub(in super::super) fn read_entry(
     let stop = AtomicBool::new(false);
     let plan = Plan::capture(prepared, decision, expected, &stop)?;
     plan.observe(prepared, decision, expected, &stop)?;
-    let result = plan.with_image(prepared, index, &stop, |image, state| {
-        let entry = request.entry(state)?;
-        let version = state
-            .versions
-            .get(&entry.version_id)
-            .expect("invariant: admitted published namespace covers its file version");
-        if entry.file_id != version.file_id {
-            return Err(invalid("serving entry crosses a file identity"));
-        }
-        let home = image.file_home(
-            &version.history_tree_id,
-            &version.file_id,
-            &version.version_id,
-        )?;
-        // Image verification also binds the actual file/directory SQLite and
-        // all historical nodes. Range bytes are withheld until the same open
-        // inode has been read and hashed in full, including a zero-length read.
-        image.verify(&prepared.targets[index].root, &stop)?;
-        let (version, bytes) = image.read_version_range(
-            &prepared.targets[index].root,
-            &entry.version_id,
-            request.offset,
-            request.length,
-            &stop,
-        )?;
-        Ok(BackupServingContent {
-            publication_hash: plan
-                .registry
-                .configuration()
-                .publication
-                .publication
-                .publication_hash
-                .clone(),
-            registry: plan.registry.configuration().registry.clone(),
-            target_slot_id: request.target_slot_id.clone(),
-            scope: request.scope.clone(),
-            head_id: request.head_id.clone(),
-            entry: entry.clone(),
-            version,
-            relative_container: home.to_owned(),
-            offset: request.offset,
-            bytes,
-        })
-    })?;
+    let result = plan
+        .registry
+        .with_namespaces(prepared, index, expected, &stop, |admitted| {
+            plan.with_image(prepared, index, &stop, |image, state| {
+                let entry = request.entry(admitted)?;
+                let version = state
+                    .versions
+                    .get(&entry.version_id)
+                    .expect("invariant: admitted published namespace covers its file version");
+                if entry.file_id != version.file_id {
+                    return Err(invalid("serving entry crosses a file identity"));
+                }
+                let home = image.file_home(
+                    &version.history_tree_id,
+                    &version.file_id,
+                    &version.version_id,
+                )?;
+                // Image verification also binds the actual file/directory SQLite and
+                // all historical nodes. Range bytes are withheld until the same open
+                // inode has been read and hashed in full, including a zero-length read.
+                image.verify(&prepared.targets[index].root, &stop)?;
+                let (version, bytes) = image.read_version_range(
+                    &prepared.targets[index].root,
+                    &entry.version_id,
+                    request.offset,
+                    request.length,
+                    &stop,
+                )?;
+                Ok(BackupServingContent {
+                    publication_hash: admitted.publication_hash().to_owned(),
+                    registry: admitted.registry().clone(),
+                    target_slot_id: request.target_slot_id.clone(),
+                    scope: request.scope.clone(),
+                    head_id: request.head_id.clone(),
+                    entry: entry.clone(),
+                    version,
+                    relative_container: home.to_owned(),
+                    offset: request.offset,
+                    bytes,
+                })
+            })
+        })?;
     plan.observe(prepared, decision, expected, &stop)?;
     Ok(result)
 }

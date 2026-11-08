@@ -7,9 +7,9 @@ mod materials;
 mod runtime;
 mod scoped;
 pub use scoped::{
-    BackupCommonDatabasesReport, BackupConfigurationReport, BackupDecidedTargets,
-    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupFirstCandidateReport,
-    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
     BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
     BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,

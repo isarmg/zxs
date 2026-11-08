@@ -249,6 +249,60 @@ impl Plan {
             stop,
         )
     }
+    /// The callback only receives a read-only typed Current loan built from
+    /// this target's native Publication, graph and complete snapshot. None can
+    /// be replaced with target zero's State or a cached public report.
+    pub(super) fn with_namespaces<T>(
+        &self,
+        prepared: &PreparedBackupRegistry,
+        index: usize,
+        expected: &BackupFirstPublicationHash,
+        stop: &AtomicBool,
+        action: impl FnOnce(
+            &crate::engine::disk_registry::current::backup::BackupNamespaceAdmission<'_>,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        let target = &prepared.targets[index];
+        let job = &prepared.task.selection().jobs()[index];
+        named_target(&target.root, job)?;
+        let graph = self.verify(target, stop)?;
+        let published = self.state_at(target, stop)?;
+        let publication =
+            first_publication::read_at(prepared, self.candidate(), expected, target, stop)?;
+        let mut replay = crate::engine::disk_registry::current::backup::BackupNamespaceReplay::new(
+            self.candidate(),
+        )?;
+        let (control, _) =
+            crate::engine::backup_preparation::native_control::archive::read_observed(
+                &target.root,
+                job,
+                &prepared
+                    .task
+                    .installation
+                    .evidence
+                    .task
+                    .scoped
+                    .objects
+                    .native
+                    .archive_hash,
+                stop,
+                &mut |_, candidate, _, state| replay.observe(candidate, state),
+            )?;
+        if control.state_hash != prepared.source_evidence().state_hash()
+            || self.candidate().candidate().previous_snapshot.as_deref()
+                != Some(control.snapshot_hash.as_str())
+        {
+            return Err(invalid(
+                "Backup Current archive does not bind the original complete source",
+            ));
+        }
+        let view = replay.finish(&publication, self.candidate(), &graph, &published)?;
+        let result = action(&view)?;
+        preparation_checkpoint(stop)?;
+        named_target(&target.root, job)?;
+        Ok(result)
+    }
+
     fn report(&self, state: &State) -> BackupPublishedRegistryReport {
         BackupPublishedRegistryReport {
             configuration: self.resolved.report.clone(),

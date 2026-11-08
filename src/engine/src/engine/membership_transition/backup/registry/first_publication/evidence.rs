@@ -193,6 +193,28 @@ impl PreparedBackupFirstPublication {
         Ok(admitted)
     }
 
+    /// Consume native Publication evidence, not a public diagnostic report or
+    /// the prospective PUBLISHED receipt embedded in a prepared snapshot.
+    pub(in crate::engine) fn require_namespace_candidate(
+        &self,
+        candidate: &PreparedBackupFirstCandidate,
+    ) -> Result<()> {
+        verify_publication_seal(candidate.candidate(), &self.publication, &self.seal)?;
+        if self.report.candidate_hash != candidate.hash()
+            || self.report.authority_hash != candidate.authority_hash()
+            || self.report.decision_hash != *candidate.decision_hash()
+            || self.report.snapshot_hash != candidate.snapshot_hash()
+            || self.report.first_sequence != candidate.sequence()
+            || self.publication.result != *candidate.result()
+            || self.publication.recovery.is_some()
+        {
+            return Err(invalid(
+                "Backup namespace admission does not consume its exact actual first Publication",
+            ));
+        }
+        Ok(())
+    }
+
     pub(in crate::engine) fn report(&self) -> &BackupFirstPublicationReport {
         &self.report
     }

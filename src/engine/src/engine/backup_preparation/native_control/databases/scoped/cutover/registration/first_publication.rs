@@ -234,6 +234,22 @@ pub(super) fn prepare(
     )
 }
 
+/// Read this exact target's native witness. The expected hash comes from the
+/// original caller/native source, never from this target's completion file.
+/// The enclosing observation still checks every selected body and target.
+pub(super) fn read_at(
+    prepared: &PreparedBackupRegistry,
+    candidate: &PreparedBackupFirstCandidate,
+    expected: &BackupFirstPublicationHash,
+    target: &Target,
+    stop: &AtomicBool,
+) -> Result<PreparedBackupFirstPublication> {
+    preparation_checkpoint(stop)?;
+    let plan = Plan::load(prepared, candidate, expected, &target.root)?;
+    plan.verify(&target.root, stop)?;
+    Ok(plan.evidence)
+}
+
 pub(super) fn observe(
     prepared: &PreparedBackupRegistry,
     decision: &AdmittedBackupDecision,

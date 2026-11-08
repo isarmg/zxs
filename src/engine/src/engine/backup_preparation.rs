@@ -22,9 +22,9 @@ mod inspection;
 mod native_control;
 pub(in crate::engine) use native_control::BackupNativeObjects;
 pub use native_control::{
-    BackupCommonDatabasesReport, BackupConfigurationReport, BackupDecidedTargets,
-    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupFirstCandidateReport,
-    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
     BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
     BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
@@ -135,6 +135,10 @@ pub enum BackupPreparationPhase {
     /// Common published database copies on SYSTEM/all original disks/targets.
     /// Active aliases, Current/writers and the source fence remain unchanged.
     GenerationCommonDatabasesInstalled,
+    /// Every target's exact first published namespace has read-only Current
+    /// admission after all common databases. This cannot install an active
+    /// CurrentNamespaces, a writer or a source-fence release.
+    GenerationCurrentReadAdmitted,
     Blocked,
     SourceChanged,
 }

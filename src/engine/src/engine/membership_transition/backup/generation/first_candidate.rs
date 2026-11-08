@@ -334,6 +334,20 @@ impl PreparedBackupFirstCandidate {
         self.verify_at(&root.private_child(&disk.root.join("metadata"))?, stop)
     }
 
+    /// The prescribed native State remains bound to the immutable first
+    /// Candidate even when a separate Current read consumer admits it.
+    pub(in crate::engine) fn require_state(
+        &self,
+        state: &crate::history_package::AdmittedState,
+    ) -> Result<()> {
+        if object_hash("backup-first-candidate-state", state.state())? != self.state_hash {
+            return Err(invalid(
+                "saved first candidate does not preserve the exact prescribed complete State",
+            ));
+        }
+        Ok(())
+    }
+
     /// Disk readback uses the native strict candidate decoder, authenticated
     /// snapshot resolver and complete State admission. Every decode is charged,
     /// including repeats, before returning a prepared-material observation.
@@ -359,11 +373,7 @@ impl PreparedBackupFirstCandidate {
         let state = crate::journal::resolve_admitted_snapshot(snapshot, |kind, hash| {
             budget.read(held, kind, hash, stop)
         })?;
-        if object_hash("backup-first-candidate-state", state.state())? != self.state_hash {
-            return Err(invalid(
-                "saved first candidate does not preserve the exact prescribed complete State",
-            ));
-        }
+        self.require_state(&state)?;
         // History graph bytes are also exact encoder outputs. Read each actual
         // native object under its hash, rather than trusting a manifest digest.
         for path in self.files.keys() {

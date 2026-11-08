@@ -87,3 +87,47 @@ fn budget() -> Error {
         "Backup registry exceeds 4096 objects or 64 MiB",
     )
 }
+
+impl VerifiedDiskRegistry {
+    /// Private replay baseline, not an admitted Current or a persisted graph.
+    /// The actual source publications and final registry must still be consumed.
+    pub(in crate::engine) fn backup_replay_base(original: &ValidatedConfig) -> Result<Self> {
+        if original.generation().is_some() {
+            return Err(invalid("Backup namespace replay requires fixed Genesis"));
+        }
+        Ok(encode_registry(base_state(original, &State::default(), None))?.expected)
+    }
+
+    /// Bind a read graph to the prescribed, already published Backup State.
+    /// The caller additionally consumes actual Publication and target-local
+    /// graph evidence; this check alone grants no namespace or writer lease.
+    pub(in crate::engine) fn require_backup_namespace(
+        &self,
+        candidate: &crate::engine::membership_transition::PreparedBackupFirstCandidate,
+        published: &AdmittedState,
+    ) -> Result<()> {
+        let state = published.state();
+        if candidate.original_config().generation().is_some()
+            || candidate.candidate().registry().is_some()
+            || self.state.source.pool_id != candidate.candidate().pool_id
+            || self.state.source.membership_authority.as_deref() != Some(candidate.authority_hash())
+            || self.state.source.snapshot_hash.as_deref() != Some(candidate.snapshot_hash())
+            || self.state.source.sequence != candidate.sequence()
+            || state.sequence != candidate.sequence()
+            || self.state.source.topology_generation != state.topology_generation
+            || self.state.predecessor.is_none()
+            || self.state.pending_exit.is_some()
+            || !self.state.detached.is_empty()
+            || self
+                .state
+                .registrations
+                .values()
+                .any(|entry| entry.mode != RegistrationMode::Enabled)
+        {
+            return Err(invalid(
+                "Backup Current read graph differs from the fixed-source published generation",
+            ));
+        }
+        Ok(())
+    }
+}

@@ -6,7 +6,9 @@ use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
 mod common_databases;
+mod current_read;
 pub use common_databases::{BackupCommonDatabasesReport, BackupOriginalDatabaseReport};
+pub use current_read::BackupCurrentReadReport;
 mod published_scopes;
 pub use published_scopes::{BackupPublishedScopeTargetReport, BackupPublishedScopesReport};
 mod serving;

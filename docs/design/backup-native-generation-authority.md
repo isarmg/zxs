@@ -272,3 +272,30 @@ SYSTEM 保留的原任务在冷开重建旧权威和旧 fence 后，可重复同
 最多 32 原盘、8 目标和一个 SYSTEM。新增选择前每个 SYSTEM/原盘单独检查 80 MiB 保守余量，实际安装按一份最多 64 MiB SYSTEM 或两份各最多 32 MiB 本盘库加目录/原子临时/完成余量计算；不把统计当物理 reservation。共享文件系统/外部空间消耗可导致中途 NoSpace，保留原数据和未完成诊断，不伪成功。完整 scopes 仍受上一阶段 81 库/128 MiB 限制，manifest/完成描述各 64 KiB；已有原子临时文件最多保留 1,024 项，不删除或提升为证据。
 
 后台会多次读完整原前缀、目标集合和实际数据库，成本随完整历史、原盘和目标数变化，不是热查询或硬时限保证。同步 I/O 仅在检查点响应取消。按用户要求本片未审查、编译、测试、静态检查或 CI，未实际操作盘；共同副本落盘不构成最终活动迁移验收。
+
+
+<a id="backup-current-read"></a>
+
+## Backup 首笔发布的专属 Current 只读准入
+
+共同数据库副本不等于普通 CurrentRegistry 或活动 writer。原首笔 Backup Candidate 的持久表示没有生命周期 registry 字段，不能修改其旧字节、重算旧 receipt，或借 Add/Exit 的 `AdmittedDiskExitPublication` 解除门禁。本片独立接入 `disk_registry/current/backup`，只返回不可序列化、不能转换为普通 Current 或可写 lease 的内部借用。
+
+### 从实际完整前缀重建，而非清空索引
+
+每次读取在指定目标的持有根内验证原完整 native archive，逐笔消费实际 Candidate/Publication/seal、永久回执和已准入完整 State。私有累加器从原固定 Genesis registry 和空 State 起步，通过普通 `CurrentNamespaces::advance` 的精确写集规则重建命名空间、历史身份及递归备份策略索引。不能从最终 HEAD 简单创建空策略索引，也不只按收据 kind 认定变更合法。完整 archive 返回前累加器不产生任何读取或写入能力；原有 Current 无法准入的历史操作明确报错，不回退到裸 State。
+
+完整前缀末端须同时匹配原任务冻结 State/hash 和首笔 Backup 的前驱 snapshot，再绑定该目标实际保存的首笔 Publication/seal、原确定 Candidate 完整 State 和实际 native registry。命名空间数量、每个原 HEAD 及实际 entries 均须保持；最终 registry 的 pool、authority、snapshot、sequence、topology generation、原 predecessor 和全部 Enabled 登记必须相同。首笔后继只能改变既定路由和控制字段，不能借读取入口换历史树。最终所有 scope 强制只读，没有 `into_current`、可写 State 或普通工作区 baseline 的输出。
+
+### 真实读入口与原任务恢复
+
+既有 `read_published_namespace` 和 `read_published_entry_range` 经此消费者解析准确 scope。不是给旧 JSON 增加一个“已准入”标签：选定目标必须有自己的完整原生前缀、真实首笔 Publication、registry 和完整 snapshot，不以源盘、目标零号或缓存报告替代。分页仍有 1–256 项及 4 MiB 上限；正文仍精确绑定 HEAD/entry/version，并在同一个实际文件 fd 完整核长/散列后返回有界范围。D、Migrated 和 Purged/Retired 的原拒绝语义保留。宿主仍须另做认证和逐 scope 授权，这些 API 尚未接普通 HTTP/SMB。
+
+原后台任务在 `GenerationCommonDatabasesInstalled` 后，对全目标建立上述只读视图并核对同一完整 namespace 计数；前后再次观察 SYSTEM、全部原盘、全目标的共同库与原 metadata 全员真实 Publication，再记录 `GenerationCurrentReadAdmitted`。新增 `Engine::inspect_backup_current_read` 只接受原 actor/task、无活动后台冲突、原锁和全部真实根，按相同路径重新读取。进度记录不是权威，不保存可复用的“已准入”能力；冷恢复继续原任务并重做实际证明，不凭旧 phase 跳过验读或解除 fence。
+
+### 限制与成本
+
+当前只支持原固定 Genesis 完整前缀，仍受每轮 2,048 publication、32,768 对象读取/日志帧及 128 MiB 元数据预算。读取增加逐目标全前缀重放和完整 namespace 比较；持有一份上一 State 的结构共享克隆、派生 Current，以及原 archive 当前/前一 State；事件等非共享字段仍有复制成本。正文入口另持有已有 image 验读的完整 State。这不是 O(页大小) 的热查询，也没有缓存、吞吐或内存峰值验收；同步 I/O 取消仍只在既有检查点响应。全量状态解码之间按实际失去追踪的 `All` 写集路径处理，不伪造稀疏变更。
+
+活动 SYSTEM `index.sqlite` 和原盘根库别名、Engine Config/Current、runtime target writer、下一笔 publication、未来规则及源围栏均未切换。旧源、原 receipt 和旧 Candidate 保留，H03 不因只读准入开放，原池仍可能停写。目标数据库和 Current 读借用不能替代未来共同活动资源/权限的完整证明。
+
+按用户要求，本片仅编写生产代码和文档，未审查、编译、测试、静态检查或 CI，未在真实盘运行任何入口；不声称最终迁移或安全解除围栏已完成。

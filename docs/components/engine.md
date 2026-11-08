@@ -310,3 +310,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### SYSTEM/全部原盘共同的后继数据库副本
 
 原 Backup worker 在目标 scopes 完整后，用原 Engine 所有配置盘的持有根、原 seal 与 I/O lease，将同一 Publication 的 SYSTEM-current 和各盘精确 current/history 独立写入各自 `backup-common-databases` 专属目录；SYSTEM 意图先落，整批实际读回及原 metadata Publication 再核后，全参与方保存同一完成描述。`GenerationCommonDatabasesInstalled` 和只读 `inspect_backup_common_databases` 不代表活动别名切换；已有任一完成描述后的整批缺损拒绝补造，原任务可继续未完成标记。活动 index/原盘根库、Current/writer、源 fence 仍不变，H03 不放行。见[共同安装与恢复边界](../design/backup-native-generation-authority.md#backup-common-databases)。未审查/编译/测试/CI或操作真实盘。
+
+
+### Backup 专属 Current 只读准入
+
+`disk_registry/current/backup` 从每个选定目标的实际完整固定 Genesis 发布链逐笔重放普通精确写集及递归策略，再绑定其真实首笔 Backup Publication、完整 State 与 registry；既有 namespace/body 读取消费此内部只读借用，不再只查裸 State。原后台在共同数据库读回后新增 `GenerationCurrentReadAdmitted`，`inspect_backup_current_read` 重新观察同一任务全部参与方。旧 Candidate/receipt 不改，也不借生命周期 Add/Exit 证明。仍无普通 Engine Current/活动数据库别名切换、target writer 或源解围栏，H03 保持拒绝。全前缀重放不是热查询；具体预算和边界见 [Current 只读准入](../design/backup-native-generation-authority.md#backup-current-read)。未审查、编译、测试、静态检查或 CI，未操作真实盘。
