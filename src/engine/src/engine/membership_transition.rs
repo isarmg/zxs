@@ -14,7 +14,9 @@ pub(crate) use backup::PreparedBackupFirstCandidate;
 pub(in crate::engine) use backup::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl, PreparedBackupAuthority,
 };
-pub use backup::{BackupFirstFinalizeReport, BackupRegistryDecisionHash};
+pub use backup::{
+    BackupFirstFinalizeReport, BackupFirstPublicationReport, BackupRegistryDecisionHash,
+};
 mod complete_chain;
 pub use abort::MembershipAbortStatus;
 mod decision;

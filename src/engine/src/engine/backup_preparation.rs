@@ -106,6 +106,9 @@ pub enum BackupPreparationPhase {
     /// Real ACCEPT and FINALIZE in every original member's reserved first
     /// generation journal. No Publication, active target writer or source release.
     GenerationFirstCandidateFinalized,
+    /// Actual first Publication, all-original seal and route-local proofs in
+    /// the reserved generation. Still no active Config/writer or source release.
+    GenerationFirstCandidatePublished,
     Blocked,
     SourceChanged,
 }

@@ -24,6 +24,7 @@ fn budget() -> Error {
 /// authorizes returning business success. Only actual publication barriers can.
 pub(crate) struct PreparedBackupFirstCandidate {
     candidate: Candidate,
+    result: OperationResult,
     object: PreparedMetadataObject,
     files: BTreeMap<PathBuf, NativeBytes>,
     original: ValidatedConfig,
@@ -171,6 +172,7 @@ impl BackupCore {
         let object = PreparedMetadataObject::new("candidate", &candidate, MAX_METADATA)?;
         let mut prepared = PreparedBackupFirstCandidate {
             candidate,
+            result: result.clone(),
             object,
             files: BTreeMap::new(),
             original: intent.origin.config().clone(),
@@ -205,6 +207,12 @@ impl PreparedBackupAuthority {
 }
 
 impl PreparedBackupFirstCandidate {
+    pub(crate) fn candidate(&self) -> &Candidate {
+        &self.candidate
+    }
+    pub(crate) fn result(&self) -> &OperationResult {
+        &self.result
+    }
     fn add(&mut self, kind: &'static str, hash: &str, bytes: &[u8]) -> Result<()> {
         let path = object_path(kind, hash);
         if let Some(saved) = self.files.get(&path) {

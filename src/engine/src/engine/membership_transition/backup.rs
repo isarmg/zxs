@@ -11,7 +11,9 @@ pub(crate) use generation::PreparedBackupFirstCandidate;
 pub(in crate::engine) use registry::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl,
 };
-pub use registry::{BackupFirstFinalizeReport, BackupRegistryDecisionHash};
+pub use registry::{
+    BackupFirstFinalizeReport, BackupFirstPublicationReport, BackupRegistryDecisionHash,
+};
 
 pub(super) fn verify_intent(intent: &TransitionIntent) -> Result<()> {
     let Origin::BackupCutover { config, evidence } = &intent.origin else {

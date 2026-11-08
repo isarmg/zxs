@@ -99,7 +99,7 @@ impl BackupCore {
     pub(in crate::engine::membership_transition) fn activation_required() -> Error {
         Error::new(
             ErrorCode::UnsupportedOperation,
-            "Backup generation is selected but active Config/CurrentRegistry, first publication and target writer installation are not available; preserve the source fence",
+            "Backup generation requires active Config/CurrentRegistry and target writer installation; even a reserved first Publication cannot release the source fence",
         )
     }
 }

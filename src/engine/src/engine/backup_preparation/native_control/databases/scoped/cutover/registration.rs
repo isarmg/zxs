@@ -216,6 +216,30 @@ impl PreparedBackupRegistry {
     pub(in crate::engine) fn projection(&self) -> &BackupRegistryProjection {
         &self.projection
     }
+    /// A locked, still-isolated selected root for its exact new identity. This
+    /// is only a payload-proof destination, never DiskResources admission.
+    pub(in crate::engine) fn payload_target(
+        &self,
+        slot: &str,
+        generation: u64,
+    ) -> Result<Option<(&DiskRoot, &DiskRegistrationIdentity)>> {
+        let Some(index) = self
+            .projection
+            .targets
+            .iter()
+            .position(|target| target.node.identity.slot_id == slot)
+        else {
+            return Ok(None);
+        };
+        let identity = &self.projection.targets[index].node.identity;
+        if identity.binding_generation != generation {
+            return Err(invalid(
+                "first Backup payload substitutes a target binding generation",
+            ));
+        }
+        self.recheck_names()?;
+        Ok(Some((&self.targets[index].root, identity)))
+    }
     pub(in crate::engine) fn recheck_names(&self) -> Result<()> {
         for (target, job) in self.targets.iter().zip(self.task.selection().jobs()) {
             named_target(&target.root, job)?;

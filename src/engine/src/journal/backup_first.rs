@@ -1,6 +1,7 @@
 //! A bounded, prescribed Backup first slot under the *original* writer leases.
-//! This is not an active-generation JournalWriter. No caller can append a
-//! Publication or a later slot, extract its writer, or clear the source fence.
+//! This is not an active-generation JournalWriter. Only the prescribed first
+//! ACCEPT/FINALIZE/Publication slot is writable; it cannot append a later slot,
+//! extract its writer, install an active marker, or clear the source fence.
 use super::*;
 use crate::engine::membership_transition::{PreparedBackupFirstCandidate, pending::activation};
 
@@ -120,14 +121,41 @@ impl<'a> BackupFirstJournal<'a> {
             .map(|(record, _)| record.object_hash.as_str()))
     }
     pub(crate) fn require_finalized(&self, hash: &str) -> Result<Receipt> {
-        let torn = matches!(&self.state, Some(SlotState::Scanned(opened)) if opened.scan.torn_tail);
-        if torn || self.finalized_hash()? != Some(hash) {
+        // A torn third frame is not a lost second-frame FINALIZE. It can only
+        // be repaired by the exact publication path after complete proof I/O.
+        if self.finalized_hash()? != Some(hash) {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "original member has no complete exact Backup FINALIZE",
             ));
         }
         let (record, frame_hash) = &self.records()?[1];
+        Ok(Receipt {
+            disk_id: self.disk.disk_id.clone(),
+            slot_id: self.disk.slot_id.clone(),
+            frame_hash: frame_hash.clone(),
+            record: record.clone(),
+        })
+    }
+    pub(crate) fn published_hash(&self) -> Result<Option<&str>> {
+        Ok(self
+            .records()?
+            .get(2)
+            .map(|(record, _)| record.object_hash.as_str()))
+    }
+    pub(crate) fn publication_started(&self) -> Result<bool> {
+        Ok(self.records()?.len() == 3
+            || matches!(&self.state, Some(SlotState::Scanned(opened)) if opened.scan.records.len() == 2 && opened.scan.torn_tail)
+            || matches!(&self.state, Some(SlotState::Synchronized(writer)) if writer.records().len() == 2 && writer.needs_recovery()))
+    }
+    pub(crate) fn require_published(&self, hash: &str) -> Result<Receipt> {
+        if self.published_hash()? != Some(hash) {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "original member has no exact first Backup Publication",
+            ));
+        }
+        let (record, frame_hash) = &self.records()?[2];
         Ok(Receipt {
             disk_id: self.disk.disk_id.clone(),
             slot_id: self.disk.slot_id.clone(),
@@ -164,9 +192,53 @@ impl<'a> BackupFirstJournal<'a> {
         }
         self.append(RecordType::Finalize, &hash)
     }
+    pub(crate) fn publish(&mut self, publication: &Publication) -> Result<Receipt> {
+        let own = self.require_finalized(&object_hash("finalize", &publication.finalize)?)?;
+        if publication.candidate_hash != self.candidate.hash()
+            || publication.finalize.candidate_hash != self.candidate.hash()
+            || publication.recovery.is_some()
+            || !publication
+                .finalize_receipts
+                .iter()
+                .any(|receipt| receipt == &own)
+            || canonical_json(&publication.result)? != canonical_json(self.candidate.result())?
+        {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "Backup Publication must bind the actual original FINALIZE and exact first result",
+            ));
+        }
+        let hash = object_hash("publication", publication)?;
+        if self.published_hash()?.is_some_and(|saved| saved != hash) {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "Backup first slot published another immutable result",
+            ));
+        }
+        self.append(RecordType::Publication, &hash)
+    }
     fn append(&mut self, kind: RecordType, hash: &str) -> Result<Receipt> {
-        // Only the two private callers above select a record kind. A failure or
+        // Only the three private callers above select a record kind. A failure or
         // unwind consumes this writer until a fresh bounded prefix admission.
+        let existing = self
+            .records()?
+            .iter()
+            .find(|(record, _)| record.record_type == kind)
+            .map(|(record, frame_hash)| Receipt {
+                disk_id: self.disk.disk_id.clone(),
+                slot_id: self.disk.slot_id.clone(),
+                frame_hash: frame_hash.clone(),
+                record: record.clone(),
+            });
+        if existing
+            .as_ref()
+            .is_some_and(|receipt| receipt.record.object_hash != hash)
+        {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "Backup first-slot append conflicts with its existing frame",
+            ));
+        }
         let state = self.state.take().ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,
@@ -178,14 +250,21 @@ impl<'a> BackupFirstJournal<'a> {
             SlotState::Synchronized(writer) => writer,
         };
         writer.io.verify_singleton()?;
-        writer.repair_torn_tail()?;
-        let receipt = writer.append(
-            &self.disk,
-            kind,
-            self.candidate.sequence(),
-            self.candidate.hash(),
-            hash,
-        )?;
+        let receipt = match existing {
+            // Idempotent ACCEPT/FINALIZE must never erase a torn Publication.
+            // Sync the actual existing prefix, but leave its suffix untouched.
+            Some(receipt) => receipt,
+            None => {
+                writer.repair_torn_tail()?;
+                writer.append(
+                    &self.disk,
+                    kind,
+                    self.candidate.sequence(),
+                    self.candidate.hash(),
+                    hash,
+                )?
+            }
+        };
         // Repeat both real barriers even for an existing receipt. Cache presence
         // is not a completed fsync after an earlier uncertain create/append.
         writer.io.synchronize(
@@ -199,23 +278,24 @@ impl<'a> BackupFirstJournal<'a> {
 }
 
 fn validate_prefix(scan: &Scan, candidate: &PreparedBackupFirstCandidate) -> Result<()> {
-    if scan.records.len() == 2 && scan.torn_tail {
+    if scan.records.len() == 3 && scan.torn_tail {
         return Err(Error::new(
             ErrorCode::LogCorrupt,
-            "bytes after complete Backup FINALIZE cannot be repaired as a known first-slot tail",
+            "bytes after complete Backup Publication cannot be repaired as a known first-slot tail",
         ));
     }
-    if scan.records.len() > 2 {
+    if scan.records.len() > 3 {
         return Err(Error::new(
             ErrorCode::UnsupportedOperation,
-            "Backup first-slot recovery cannot consume a Publication or later record",
+            "Backup first-slot recovery cannot consume a later slot",
         ));
     }
     for (index, (record, _)) in scan.records.iter().enumerate() {
-        let kind = if index == 0 {
-            RecordType::Accept
-        } else {
-            RecordType::Finalize
+        let kind = match index {
+            0 => RecordType::Accept,
+            1 => RecordType::Finalize,
+            2 => RecordType::Publication,
+            _ => unreachable!("invariant: first slot has at most three frames"),
         };
         if record.record_type != kind
             || record.sequence != candidate.sequence()
@@ -229,7 +309,7 @@ fn validate_prefix(scan: &Scan, candidate: &PreparedBackupFirstCandidate) -> Res
         {
             return Err(Error::new(
                 ErrorCode::LogFork,
-                "Backup first journal is not the exact ACCEPT/FINALIZE prefix",
+                "Backup first journal is not the exact ACCEPT/FINALIZE/Publication prefix",
             ));
         }
     }

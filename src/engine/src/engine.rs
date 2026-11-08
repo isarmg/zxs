@@ -24,7 +24,9 @@ pub use backup_preparation::{
     BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
     BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
-pub use membership_transition::{BackupFirstFinalizeReport, BackupRegistryDecisionHash};
+pub use membership_transition::{
+    BackupFirstFinalizeReport, BackupFirstPublicationReport, BackupRegistryDecisionHash,
+};
 mod config;
 pub use config::ValidatedConfig;
 mod disk_registry;

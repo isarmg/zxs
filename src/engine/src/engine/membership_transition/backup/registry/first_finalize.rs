@@ -77,7 +77,7 @@ fn report(
 }
 
 impl BackupChoiceContext {
-    fn require_first_candidate(
+    pub(super) fn require_first_candidate(
         &self,
         prepared: &PreparedBackupRegistry,
         candidate: &PreparedBackupFirstCandidate,
@@ -109,6 +109,7 @@ impl BackupChoiceContext {
         self.require_first_candidate(prepared, candidate, stop)?;
         let mut slots = BTreeMap::new();
         let mut has_finalize = false;
+        let mut publication_started = false;
         // No new journal or vote before every original prefix and capacity is
         // checked. Unknown/future records are never truncated into this format.
         for (id, source) in &self.sources {
@@ -117,8 +118,14 @@ impl BackupChoiceContext {
             let slot = BackupFirstJournal::inspect(&source.root, &source.disk, candidate)?;
             if let Some(slot) = &slot {
                 has_finalize |= slot.finalized_hash()?.is_some();
+                publication_started |= slot.publication_started()?;
             }
             slots.insert(id.clone(), slot);
+        }
+        if publication_started {
+            // A third frame, even torn, is after the ALL-FINALIZE barrier. A
+            // missing earlier receipt/object is not a fresh preparation job.
+            return self.observe_first_finalize(prepared, candidate, stop);
         }
         if has_finalize {
             // A complete FINALIZE proves the earlier all-ACCEPT barrier was
@@ -226,6 +233,20 @@ impl BackupChoiceContext {
         candidate: &PreparedBackupFirstCandidate,
         stop: &AtomicBool,
     ) -> Result<BackupFirstFinalizeReport> {
+        let (finalize, _) = self.first_finalize_evidence(prepared, candidate, stop)?;
+        Ok(report(
+            candidate,
+            object_hash("finalize", &finalize)?,
+            self.intent.operation_id,
+        ))
+    }
+
+    pub(super) fn first_finalize_evidence(
+        &self,
+        prepared: &PreparedBackupRegistry,
+        candidate: &PreparedBackupFirstCandidate,
+        stop: &AtomicBool,
+    ) -> Result<(Finalize, Vec<Receipt>)> {
         self.require_first_candidate(prepared, candidate, stop)?;
         let mut slots = BTreeMap::new();
         let mut accepts = Vec::with_capacity(self.sources.len());
@@ -242,6 +263,7 @@ impl BackupChoiceContext {
         }
         let finalize = finalization(candidate, accepts)?;
         let object = PreparedMetadataObject::new("finalize", &finalize, MAX_METADATA)?;
+        let mut receipts = Vec::with_capacity(self.sources.len());
         for (id, source) in &self.sources {
             source.recheck(stop)?;
             let actual =
@@ -252,9 +274,9 @@ impl BackupChoiceContext {
                     "original native Finalize object differs",
                 ));
             }
-            slots[id].require_finalized(&object.hash)?;
+            receipts.push(slots[id].require_finalized(&object.hash)?);
         }
         self.require_first_candidate(prepared, candidate, stop)?;
-        Ok(report(candidate, object.hash, self.intent.operation_id))
+        Ok((finalize, receipts))
     }
 }

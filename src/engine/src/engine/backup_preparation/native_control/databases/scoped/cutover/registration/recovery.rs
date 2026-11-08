@@ -339,6 +339,49 @@ impl Engine {
 }
 
 impl Engine {
+    /// Inspect the real first publication in the reserved native generation.
+    /// Requires all original source members and every selected target, reads
+    /// every actual routed body, and never repairs/writes or installs a serving
+    /// generation. A Publication report is not migration-success authority.
+    pub fn inspect_backup_first_publication(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<crate::BackupFirstPublicationReport> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let task = Task::read(&DiskRoot::open(&self.root)?)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "first Backup Publication inspection belongs to another actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the retained worker before first Publication inspection",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        choices.observe_first_publication(&prepared, &candidate, &stop)
+    }
+
     /// Observe actual native ACCEPT/FINALIZE from every original member. This
     /// needs the original fenced Engine and complete selected target set; the
     /// detached target reader cannot manufacture these live acknowledgements.

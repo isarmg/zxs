@@ -14,6 +14,10 @@ use std::{io::Read, sync::atomic::AtomicBool};
 
 mod first_finalize;
 pub use first_finalize::BackupFirstFinalizeReport;
+mod first_publication;
+pub use first_publication::BackupFirstPublicationReport;
+mod payloads;
+use payloads::PayloadSource;
 mod control;
 pub(in crate::engine) use control::BackupFrozenControl;
 mod recovery;
@@ -48,6 +52,7 @@ pub(in crate::engine) struct BackupChoiceContext {
     intent: TransitionIntent,
     transition_hash: String,
     sources: BTreeMap<String, Source>,
+    payload_sources: BTreeMap<String, PayloadSource>,
 }
 
 impl Engine {
@@ -112,10 +117,24 @@ impl Engine {
                 "registry decision requires every original member, never a reduced online quorum",
             ));
         }
+        let Origin::BackupCutover { evidence, .. } = &fence.intent.origin else {
+            unreachable!("invariant: fenced Backup capability checked the origin");
+        };
+        let mut payload_sources = BTreeMap::new();
+        for slot in evidence.retained_payload_slots() {
+            let disk = self
+                .config
+                .disks
+                .iter()
+                .find(|disk| disk.slot_id == slot)
+                .expect("invariant: frozen original source slot exists");
+            payload_sources.insert(slot, PayloadSource::capture(self, disk)?);
+        }
         Ok(BackupChoiceContext {
             intent: fence.intent.clone(),
             transition_hash,
             sources,
+            payload_sources,
         })
     }
 }

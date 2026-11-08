@@ -96,6 +96,29 @@ impl BackupSourceFenceEvidence {
     pub(in crate::engine) fn state_hash(&self) -> &str {
         &self.task.scoped.objects.state_hash
     }
+    /// The exact unchanged ancestors of the selected source, excluding the
+    /// replaced terminal. Only these original disks owe new payload receipts;
+    /// targets are admitted independently and are never original voters.
+    pub(in crate::engine) fn retained_payload_slots(&self) -> Vec<String> {
+        let mut slot = self.task.topology.source.slot_id.as_str();
+        let mut slots = Vec::new();
+        loop {
+            let disk = self
+                .task
+                .original
+                .disks
+                .iter()
+                .find(|disk| disk.slot_id == slot)
+                .expect("invariant: admitted source topology retains its complete original chain");
+            slots.push(disk.slot_id.clone());
+            match &disk.upstream_slot_id {
+                Some(upstream) => slot = upstream,
+                None => break,
+            }
+        }
+        slots.reverse();
+        slots
+    }
 }
 
 pub(in crate::engine) struct PreparedBackupSourceFence {

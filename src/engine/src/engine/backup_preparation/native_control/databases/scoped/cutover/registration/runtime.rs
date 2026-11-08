@@ -10,6 +10,9 @@ impl Engine {
     /// target writer, publish business success or release the original stop.
     /// The same background task now reserves and finalizes its exact first
     /// native candidate on every original metadata member, never on new voters.
+    /// It then verifies every actual routed payload and writes the first native
+    /// Publication/seal in that reserved generation. Serving activation remains
+    /// separate: the original pool stays fenced even after this stage succeeds.
     /// Hosts must authenticate this separate, explicit request. Ordinary settings
     /// and helper admission do not call it automatically.
     pub fn start_backup_registry_placement_decision(
@@ -187,6 +190,16 @@ fn run(
             finalized.candidate_hash,
             finalized.finalize_hash,
             finalized.original_metadata_members.len(),
+        );
+    })?;
+    let published = choices.publish_first_candidate(&prepared, &candidate, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationFirstCandidatePublished;
+        status.detail = format!(
+            "decision {hash} has actual reserved-generation Publication {} with {} verified payload receipts and all {} original member acknowledgements; active Config/Current, target writer and source fence release remain unavailable",
+            published.publication_hash,
+            published.payload_receipts,
+            published.original_metadata_members.len(),
         );
     })
 }

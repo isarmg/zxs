@@ -8,7 +8,7 @@
 
 该 core 的外层及证书都有严格字段闭包。证书重新核原 transition、所有原成员及真实选择 receipt 的规范关联；新增冷态投影检查将完整源配置、被冻结的源和原末端、每个指定目标的身份/物理绑定/根名/逐级前缀与原任务逐项绑定。所有目标的完整文件和目录仓库地址转成相同的相对单位表，父子仓库及版本集合不分散到不同目标。完整旧 State 的序列、规范摘要及 native snapshot 根必须与 source fence 原出版边界相同。
 
-这些是**选择身份与材料准入**，不是已经发布的新活动 generation。现已在隔离目标生成下述首笔 native Candidate；本片推进到全部原成员的真实 ACCEPT/FINALIZE，但仍不生成 Publication。类型中没有偷偷把原 Config 作为新的有效拓扑：`effective_config` 对 Backup 明确失败，原生 registry/Current 转换、I/O 限定和普通激活仍拒绝。即使把这种 core 放进普通 generation 标记，也不能用旧 voters/旧 Config 启用目标 writer。原 Add/Abort/Exit/Readmission 行为没有被映射为 Backup。
+这些是**选择身份与材料准入**，不是已经发布的新活动 generation。现已在隔离目标生成下述首笔 native Candidate；已有全部原成员的真实 ACCEPT/FINALIZE；本片继续生成保留代际中的真实首笔 Publication/seal，活动切换仍未接通。类型中没有偷偷把原 Config 作为新的有效拓扑：`effective_config` 对 Backup 明确失败，原生 registry/Current 转换、I/O 限定和普通激活仍拒绝。即使把这种 core 放进普通 generation 标记，也不能用旧 voters/旧 Config 启用目标 writer。原 Add/Abort/Exit/Readmission 行为没有被映射为 Backup。
 
 本片按指示没有审查、编译、测试、静态检查或 CI。仅对编辑的 Rust 文件执行格式化，不是编译或产品验收。
 
@@ -34,7 +34,7 @@
 - 实际 I/O/fsync 可能阻塞，取消检查点不构成任意故障下的硬关机承诺。
 - 仍只支持完整固定 Genesis、单 primary 祖先链、替换一条原末端及明确选择的一至八个全副本目标；复杂旧分叉、异盘父子合流与外来高等级一次完整链正式接纳均未完成。
 
-**最终活动切换仍未完成**：新的有效多下级 Config/CurrentRegistry、首笔 Publication、对应出版封印、serving locator、完整新绑定历史数据库、未来备份策略延续、目标 writer 和源围栏安全解除都还需要共同闭合。Candidate 与本片新增的首槽 ACCEPT/FINALIZE 不能替代这些条件。旧正文、旧数据库和全部永久收据不删，源池仍可能停写，已作 Backup 选择后不能假装可任意改作 Abort。不能把 `GenerationAuthorityPrepared` 显示成迁移成功或 H03 外来盘接纳成功。
+**最终活动切换仍未完成**：新的有效多下级 Config/CurrentRegistry、serving locator、完整新绑定历史数据库、未来备份策略延续、目标 writer 和源围栏安全解除都还需要共同闭合。首槽 Candidate、ACCEPT/FINALIZE 及本片保留代际的 Publication/seal 不能替代这些活动条件。旧正文、旧数据库和全部永久收据不删，源池仍可能停写，已作 Backup 选择后不能假装可任意改作 Abort。不能把 `GenerationAuthorityPrepared` 显示成迁移成功或 H03 外来盘接纳成功。
 
 
 <a id="backup-first-candidate"></a>
@@ -90,3 +90,35 @@ SYSTEM 保留的原任务在冷开重建旧权威和旧 fence 后，可重复同
 - Candidate 原 8,192 对象 / 128 MiB 上限保留。每原盘保守预留完整对象及 authority 的两倍字节、两份 native metadata 最大对象、16 MiB 固定余量及每对象 8 KiB 目录空间；不借其他盘空闲容量。每次元数据读取、编码和同步仍可能阻塞；取消检查点不等于硬实时关机保证。
 - **没有写 Publication / publication seal，没有真实逐路正文 CommitProof，没有切换活动 Config / CurrentRegistry / serving locator / 新绑定数据库，没有启用目标 writer 或解除源 fence。** 新 Finalize 不能把候选内的 PUBLISHED 模板变成活动结果；源池仍可能停写。现有完整固定 Genesis、单 primary 原链、一条原末端、显式 1–8 全副本目标及父子同层同盘范围不扩大，外来完整链正式接纳仍关闭。
 - 按用户要求本片未审查、编译、测试、静态检查或 CI；未实际触发任何备份、日志、磁盘或服务操作。
+
+
+<a id="backup-first-publication"></a>
+
+## 保留代际的真实首笔 Publication
+
+本片不再用材料完成标记代替出版：同一已决定后台任务在原盘全员真实 `FINALIZE` 之后，继续写真实 `CommitProof`、`Publication`、原成员日志帧和 `PublicationSeal`。新的 `GenerationFirstCandidatePublished` 仅表示**保留代际首笔出版完成**，不是服务切换成功，仍不向活动 State 插入迁移结果或解除原写停。
+
+### 真实逐路正文与独立目标
+
+- 原源围栏能力另外持有保留下级链每个来源盘的原 I/O lease、物理根/封印和已有 writer 锁；不把被替换的旧末端当新目标的替代副本，不用在线子集减少义务。
+- 每个 AVAILABLE 版本的 Candidate route 必须恰好覆盖完整保留祖先链和全部明确目标。父子同层同盘和完整单位仍来自已决定实体表，不改变路径、HEAD、旧数据库或旧收据。
+- 每一条实际 route 均从自己的盘读取 `version.json`、准确 checksum manifest 和完整正文。描述、checksums 和正文使用各自持有的同一 FD，整文件 BLAKE3 与逐块校验后复核 inode/大小/时间戳及当前名字，再执行文件及父目录同步；容量计划或一次成功的进度缓存不是验存。
+- 原源使用已有真实 container resolver。目标使用其自身已核的 `histories/<history>/versions/<version>/content/<creation_name>` 保留 native package 正文，不回退到旧源或另一目标，也不从未激活的名字解析器任取内容。带直接上游逐级前缀的完整 `activation-image` 和全部对象库继续由共同决定门禁独立重验；它们未安装为活动 serving locator。这仍可能保留同盘的 package 与实体 image 两份正文，未做清理/去重。
+- 每个证明绑定精确 Candidate、实际全员 Finalize、version 摘要、目标 disk/slot 及完整 route，写入普通 native 版本证明位置。已有不同首笔证明时使用该 Candidate 的 `protection-proofs`，旧证明不覆盖；新目标仍没有活动 `disk.json`/I/O admission。
+
+### 同一个原决定的发布与恢复
+
+1. 全员真实 ACCEPT/FINALIZE 和候选依赖必须齐全。先预留每个实际目标/来源根的证明、原子临时及原成员出版元数据空间，再执行第一笔新证明写入。
+2. 只从已同步并独立读回的实际 CommitProof 形成 payload receipt 向量，按 version/disk 固定排序。所有原 metadata 成员先持久化完整同字节 Publication 对象，随后在所选 generation 的独立日志追加第三帧；新目标不投票。
+3. 各原盘实际同步返回的 receipt 再从原盘新读回；全部到齐后用既有 `verify_publication_seal` 核实际链并保存不可覆盖 seal，再在每个真实 route 保存同一原生 local publication proof。
+4. 冷续作仍只用原 operation/actor/决定/目标集合。出现任一完整或撕裂的第三帧后，早先全部 Finalize、Publication 对象和真实 CommitProof 必须仍在；丢失这些前置证据时拒绝，不借另一成员的后续凭据重新造票。可补同字节未完成的其余第三帧、seal 和 local publication。
+5. 首槽仅允许 ACCEPT/FINALIZE/Publication 三帧。仅在已经重验完整原任务及正文证据后，明确 Publication 写路径可截断第三帧的已知撕裂尾部；重试 ACCEPT/FINALIZE 不修掉这个尾部。三帧之后有任何尾部或后续槽均拒绝保留，不把未知日志重置为新任务。
+
+`Engine::inspect_backup_first_publication` 是原 fenced Engine 的只读观察，需要全部原成员和全部原目标，重新流式验每条 route，观察原日志、对象、seal 和 local proof，不创建/修复/同步，也不返回活动成功结果。离线目标读者仍不能代替原成员提供新票。
+
+### 预算与明确限制
+
+- 新逐路证明向量最多 65,536 项，每份 native JSON 沿用 64 MiB 上限。每个根单独预留实际序列化大小、原子临时、目录项与 16 MiB 余量；不以其他盘空闲替代。过大的 local proof 在第一笔新证明写入前拒绝。
+- 真实核验成本随保留正文总量 × 完整目标/来源 route 增长；发布前后会重验，普通保存路径未加入此全量扫描。停止检查点仍不承诺任意故障 I/O 的硬关机时限。
+- 没有安装有效 fanout Config/CurrentRegistry、最终绑定范围数据库或 serving locator，没有活动目标 writer、策略延续、source-unfence 或 helper/H03 正式接纳；普通 Backup activation 继续明确拒绝。即使本报告存在，也不能当作运行态完成或把未完成目标注册为普通成员。
+- 按用户要求，本片未审查、编译、测试、静态校验或 CI，未对真实池触发上述操作；仅生产源码、文档和 TASKS 更新。
