@@ -92,6 +92,21 @@ impl AdmittedBackupDecision {
     pub(in crate::engine) fn hash(&self) -> BackupRegistryDecisionHash {
         BackupRegistryDecisionHash(self.certificate.hash.clone())
     }
+    /// Reserved native successor sequence only. Computing it creates neither
+    /// a Candidate nor an operation result or publication proof.
+    pub(in crate::engine) fn intended_first_sequence(&self) -> Result<u64> {
+        self.stored
+            .core
+            .transition
+            .fence_sequence
+            .checked_add(1)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ResourceLimit,
+                    "backup generation sequence exhausted",
+                )
+            })
+    }
     pub(in crate::engine) fn operation(&self) -> OperationId {
         self.stored.core.transition.operation_id
     }

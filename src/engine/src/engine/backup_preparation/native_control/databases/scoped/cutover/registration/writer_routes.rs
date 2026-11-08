@@ -162,6 +162,10 @@ impl Routes {
         })
     }
 
+    pub(super) fn units(&self) -> &EntityPlacement {
+        &self.material.units
+    }
+
     pub(super) fn report(&self) -> BackupWriterRoutesReport {
         self.report.clone()
     }

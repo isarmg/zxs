@@ -5,6 +5,8 @@ use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
+mod generation_inputs;
+pub use generation_inputs::BackupGenerationPreparationReport;
 mod recovery;
 mod runtime;
 mod writer_routes;

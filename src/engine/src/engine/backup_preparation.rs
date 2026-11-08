@@ -29,8 +29,8 @@ pub use native_control::{
 };
 pub use native_control::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupWriterDestination,
-    BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub(in crate::engine) use native_control::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
@@ -89,6 +89,9 @@ pub enum BackupPreparationPhase {
     /// Exact complete fanout and whole-unit writer-route material exists on
     /// every selected target. No native generation publication or writer lease.
     WriterRoutesPrepared,
+    /// Complete unpublished native routing snapshots on every selected target.
+    /// No final Candidate, active topology, writer lease or source release.
+    GenerationInputsPrepared,
     Blocked,
     SourceChanged,
 }

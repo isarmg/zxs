@@ -7,8 +7,8 @@ mod archive;
 mod databases;
 pub use databases::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupWriterDestination,
-    BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 mod runtime;
 pub use archive::BackupNativeControlReport;

@@ -6,6 +6,18 @@ impl SnapshotReuse {
     }
 }
 impl PreparedSnapshot {
+    /// Visit exactly this encoder invocation's immutable objects. This is an
+    /// export of preparation bytes, never a publication or State admission.
+    /// Incremental encodings may still refer to unvisited predecessor objects.
+    pub(crate) fn visit_prepared_objects(
+        &self,
+        visit: &mut impl FnMut(&'static str, &str, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        for object in &self.objects {
+            visit(object.kind(), &object.hash, object.bytes())?;
+        }
+        Ok(())
+    }
     /// Every entry here came from this encoder invocation, even if its digest
     /// names an older object. Installation therefore always compares and syncs.
     #[cfg(test)]

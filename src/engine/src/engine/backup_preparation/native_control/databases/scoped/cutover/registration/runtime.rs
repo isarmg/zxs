@@ -140,6 +140,15 @@ fn run(
             routes.material_hash,
             routes.targets.len(),
         );
+    })?;
+    let inputs = generation_inputs::prepare(&prepared, &decision, stop)?;
+    choices.observe_decision(&prepared, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationInputsPrepared;
+        status.detail = format!(
+            "decision {hash} retains unpublished native routing snapshot {} on all {} targets; final Backup authority, publication and active writers are absent; source remains stopped",
+            inputs.routing_snapshot_hash, inputs.targets,
+        );
     })
 }
 fn spawn(

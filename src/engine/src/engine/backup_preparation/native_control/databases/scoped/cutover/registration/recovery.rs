@@ -51,6 +51,25 @@ impl BackupDecidedTargets {
         )
     }
 
+    /// Observe actual unpublished native metadata from every independent target.
+    /// Neither the snapshot hash nor this report is an active generation proof.
+    pub fn inspect_generation_inputs(&self) -> Result<BackupGenerationPreparationReport> {
+        generation_inputs::observe(&self.prepared, &self.decision, &AtomicBool::new(false))
+    }
+
+    /// Explicit offline continuation of the already chosen task's isolated
+    /// materials. An independently retained decision digest was required at
+    /// open. No source/SYSTEM root is probed, no new choice is issued, and no
+    /// active marker, receipt, writer or source-unfence is created. The caller
+    /// must authorize these no-clobber target writes, not merely a read request.
+    pub fn resume_generation_preparation(&mut self) -> Result<BackupGenerationPreparationReport> {
+        let stop = AtomicBool::new(false);
+        require_isolated(&self.prepared.targets)?;
+        self.decision.verify_targets(&self.prepared, &stop)?;
+        writer_routes::prepare(&self.prepared, &self.decision, &stop)?;
+        generation_inputs::prepare(&self.prepared, &self.decision, &stop)
+    }
+
     /// Resolve one complete file to the full explicitly selected set. The
     /// caller cannot supply a subset of its versions or choose a sibling as a
     /// linear next hop. These frozen addresses carry no I/O/write admission.

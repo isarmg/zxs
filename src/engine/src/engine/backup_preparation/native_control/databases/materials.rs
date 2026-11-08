@@ -10,12 +10,14 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) enum Namespace {
     Objects,
     Scopes,
+    BackupGeneration,
 }
 impl Namespace {
     fn name(self) -> &'static str {
         match self {
             Self::Objects => "object-databases",
             Self::Scopes => "scoped-databases",
+            Self::BackupGeneration => "backup-generation-inputs",
         }
     }
 }
