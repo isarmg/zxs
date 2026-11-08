@@ -271,7 +271,7 @@ impl ResumeCancellation {
 
 /// Checks a linear hash-linked chain. Cancelled operations are permanent and
 /// cannot be hidden by a later request, actor change, or successful resumption.
-pub(in crate::engine::membership_transition) fn verify_history(
+pub(in crate::engine) fn verify_history(
     terminal: &TerminalAuthority,
     cancelled: &[ResumeCancellation],
     selected: Option<&ResumeProposal>,
@@ -328,4 +328,10 @@ pub(in crate::engine) fn apply_history(
         state.operations.insert(result.operation_id, result);
     }
     Ok(())
+}
+
+impl ResumeCancellation {
+    pub(in crate::engine) fn verify_frozen_source(&self, source: &State) -> Result<()> {
+        self.proposal.verify_source(source)
+    }
 }

@@ -6,6 +6,7 @@ use super::*;
 use crate::{DiskRegistryCommitment, object_hash};
 pub(in crate::engine) use completion::VerifiedRetirementStopSource;
 pub(super) use completion::{Completed, HistoricalCompleted};
+pub use completion::{TerminalRetirementArchive, TerminalRetirementCheckpoint};
 use data_serialization::{Deserialize, Serialize};
 
 pub(super) const INTENT: &str = "retirement-intent.json";
@@ -282,35 +283,7 @@ impl TerminalManagement {
         registry: &TerminalRegistry,
         state: &State,
     ) -> Result<()> {
-        Engine::require_actor(&intent.principal)?;
-        if intent.source != self.retirement_source_at(registry, state) {
-            return Err(failure(
-                ErrorCode::GenerationMismatch,
-                "terminal retirement source differs from its exact predecessor registry/state",
-            ));
-        }
-        if state.operations.contains_key(&intent.operation_id) {
-            return Err(failure(
-                ErrorCode::IdempotencyKeyReused,
-                "terminal retirement ID already belongs to permanent history",
-            ));
-        }
-        let registered = registry
-            .registered_disks()
-            .find(|disk| disk.disk_id == intent.target.disk_id)
-            .ok_or_else(|| {
-                failure(
-                    ErrorCode::DiskIdentityMismatch,
-                    "terminal retirement target is not a retained registration",
-                )
-            })?;
-        if registered.identity() != intent.target || registered.metadata_member {
-            return Err(failure(
-                ErrorCode::DiskIdentityMismatch,
-                "terminal retirement must select the exact no-voter binding",
-            ));
-        }
-        Ok(())
+        validate_at(&self.verified.authority, registry, state, intent)
     }
     fn load_terminal_retirement(&self) -> Result<Option<Pending>> {
         let directory = self.retirement_directory();
@@ -381,3 +354,49 @@ fn failure(code: ErrorCode, message: &'static str) -> Error {
 #[cfg(test)]
 #[path = "../../../../../../test/engine/unit/engine/terminal_retirement_decision_tests.rs"]
 mod tests;
+
+fn validate_at(
+    authority: &TerminalAuthority,
+    registry: &TerminalRegistry,
+    state: &State,
+    intent: &Intent,
+) -> Result<()> {
+    Engine::require_actor(&intent.principal)?;
+    if intent.source
+        != (Source {
+            pool_id: authority.original().pool_id.clone(),
+            terminal_operation_id: authority.operation_id(),
+            terminal_authority_hash: authority.hash()?,
+            registry: registry.commitment().clone(),
+            sequence: state.sequence,
+            topology_generation: state.topology_generation,
+        })
+    {
+        return Err(failure(
+            ErrorCode::GenerationMismatch,
+            "terminal retirement source differs from its exact predecessor registry/state",
+        ));
+    }
+    if state.operations.contains_key(&intent.operation_id) {
+        return Err(failure(
+            ErrorCode::IdempotencyKeyReused,
+            "terminal retirement ID already belongs to permanent history",
+        ));
+    }
+    let registered = registry
+        .registered_disks()
+        .find(|disk| disk.disk_id == intent.target.disk_id)
+        .ok_or_else(|| {
+            failure(
+                ErrorCode::DiskIdentityMismatch,
+                "terminal retirement target is not a retained registration",
+            )
+        })?;
+    if registered.identity() != intent.target || registered.metadata_member {
+        return Err(failure(
+            ErrorCode::DiskIdentityMismatch,
+            "terminal retirement must select the exact no-voter binding",
+        ));
+    }
+    Ok(())
+}

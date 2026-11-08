@@ -572,3 +572,175 @@ fn unmasked_retirement_successor_is_rejected_without_implicit_upgrade() {
     assert!(TerminalManagement::open(&root).is_err());
     assert_eq!(fs::read(&successor).unwrap(), unmasked);
 }
+
+#[test]
+fn portable_complete_chain_preserves_checkpoint_and_never_opens_retired_roots() {
+    let mut fixture = Fixture::new();
+    for index in [1, 2] {
+        let plan = fixture
+            .terminal
+            .preview_terminal_retirement(
+                &fixture.config.disks[index].disk_id,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        fixture
+            .terminal
+            .complete_terminal_retirement(&plan)
+            .unwrap();
+    }
+    let archive = fixture.terminal.export_retirement_archive().unwrap();
+    let checkpoint = archive.checkpoint().clone();
+    assert_eq!(checkpoint.completed_retirements, 2);
+    assert_eq!(
+        checkpoint.registry,
+        *fixture.terminal.registry().commitment()
+    );
+    assert_eq!(checkpoint.sequence, fixture.terminal.state().sequence);
+    assert!(!checkpoint.target_writer_admitted);
+    assert!(!checkpoint.active_namespace_admitted);
+    assert!(!checkpoint.metadata_resumption_supported);
+    assert!(!checkpoint.live_io_exclusion_transferred);
+    for disk in &fixture.config.disks {
+        fs::rename(&disk.root, disk.root.with_extension("checkpoint-held")).unwrap();
+        fs::write(&disk.root, b"must not be opened during checkpoint capture").unwrap();
+    }
+    let verified = fixture
+        .terminal
+        .verify_retirement_archive(archive.bytes(), &checkpoint.digest)
+        .unwrap();
+    assert_eq!(verified.digest, checkpoint.digest);
+    let system = fixture.system();
+    drop(fixture.terminal);
+    let cold = TerminalManagement::open(&system).unwrap();
+    assert_eq!(
+        cold.export_retirement_archive().unwrap().bytes(),
+        archive.bytes()
+    );
+    assert!(cold.require_no_terminal_retirement().is_err());
+}
+#[test]
+fn pending_child_never_exports_completed_prefix_as_current() {
+    let mut fixture = Fixture::new();
+    let first = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&first)
+        .unwrap();
+    let checkpoint = fixture.terminal.export_retirement_archive().unwrap();
+    let next = fixture
+        .terminal
+        .preview_terminal_retirement(
+            &fixture.config.disks[2].disk_id,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    fixture.terminal.stage_terminal_retirement(&next).unwrap();
+    assert!(fixture.terminal.export_retirement_archive().is_err());
+    // An independently retained older digest only verifies that old checkpoint,
+    // not latest-ness and not permission to finish or discard the pending child.
+    assert!(
+        fixture
+            .terminal
+            .verify_retirement_archive(checkpoint.bytes(), &checkpoint.checkpoint().digest)
+            .is_ok()
+    );
+    assert!(
+        fixture
+            .terminal
+            .terminal_retirement_status()
+            .unwrap()
+            .is_some()
+    );
+}
+#[test]
+fn portable_checkpoint_rejects_truncation_reorder_and_rehashed_receipt_mutation() {
+    let mut fixture = Fixture::new();
+    for index in [1, 2] {
+        let plan = fixture
+            .terminal
+            .preview_terminal_retirement(
+                &fixture.config.disks[index].disk_id,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        fixture
+            .terminal
+            .complete_terminal_retirement(&plan)
+            .unwrap();
+    }
+    let archive = fixture.terminal.export_retirement_archive().unwrap();
+    let body: json_codec::Value = json_codec::from_slice(archive.bytes()).unwrap();
+    assert!(
+        fixture
+            .terminal
+            .verify_retirement_archive(archive.bytes(), &"0".repeat(64))
+            .is_err()
+    );
+    for change in 0..4 {
+        let mut changed = body.clone();
+        match change {
+            0 => {
+                changed["frames"].as_array_mut().unwrap().pop();
+            }
+            1 => {
+                changed["frames"].as_array_mut().unwrap().swap(0, 1);
+            }
+            2 => {
+                changed["frames"][1]["completed"]["result"]["sequence"] = "999".into();
+            }
+            _ => {
+                changed["frames"][1]["predecessor"]["predecessor_completion"] =
+                    "0".repeat(64).into();
+            }
+        }
+        let digest = object_hash("terminal-retirement-chain-checkpoint", &changed).unwrap();
+        assert!(
+            fixture
+                .terminal
+                .verify_retirement_archive(&json_codec::to_vec(&changed).unwrap(), &digest)
+                .is_err()
+        );
+    }
+}
+#[test]
+fn portable_checkpoint_rejects_rehashed_mask_loss_and_conflicting_stop_binding() {
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&plan)
+        .unwrap();
+    let archive = fixture.terminal.export_retirement_archive().unwrap();
+    let body: json_codec::Value = json_codec::from_slice(archive.bytes()).unwrap();
+    let mut changed = body.clone();
+    let hash = changed["frames"][0]["successor"]["occurrence_mask_hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    changed["frames"][0]["successor"]["objects"]
+        .as_object_mut()
+        .unwrap()
+        .remove(&hash)
+        .unwrap();
+    let digest = object_hash("terminal-retirement-chain-checkpoint", &changed).unwrap();
+    assert!(
+        fixture
+            .terminal
+            .verify_retirement_archive(&json_codec::to_vec(&changed).unwrap(), &digest)
+            .is_err()
+    );
+    let mut changed = body;
+    changed["frames"][0]["stop"]["native"]["plan"]["operation_id"] =
+        OperationId::generate().unwrap().to_string().into();
+    let digest = object_hash("terminal-retirement-chain-checkpoint", &changed).unwrap();
+    assert!(
+        fixture
+            .terminal
+            .verify_retirement_archive(&json_codec::to_vec(&changed).unwrap(), &digest)
+            .is_err()
+    );
+}

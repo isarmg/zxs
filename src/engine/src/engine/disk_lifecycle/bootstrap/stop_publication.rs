@@ -7,7 +7,7 @@ use crate::engine::membership_transition::{
 };
 use data_serialization::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum StopFormat {
     #[serialization(rename = "prepared-ordinary-exit-stop")]
     Exit,
@@ -19,7 +19,7 @@ enum StopFormat {
 
 /// This is a bounded immutable plan, not an authorization token. Its optional
 /// relocation and stop are persisted together before either ledger publication.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(in crate::engine) struct PreparedStop {
     format: StopFormat,
@@ -401,4 +401,64 @@ fn terminal_digest(verified: &VerifiedTerminalAuthority) -> Result<IntentDigest>
             source: std::io::Error::other(source),
         })?;
     IntentDigest::parse(&digest)
+}
+
+/// Portable exact Stop bytes plus their predecessor. A snapshot verifies only
+/// recorded semantics: it never grants publication, live D3 or a probe permit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(in crate::engine) struct RetirementStopSnapshot {
+    plan: PreparedStop,
+    predecessor: Record,
+}
+impl BootstrapStore {
+    pub(in crate::engine) fn retirement_stop_snapshot(
+        &self,
+        plan: &PreparedStop,
+    ) -> Result<RetirementStopSnapshot> {
+        self.check_stop_plan(plan)?;
+        Ok(RetirementStopSnapshot {
+            plan: plan.clone(),
+            predecessor: self.load_chain(&plan.previous)?.record,
+        })
+    }
+}
+impl RetirementStopSnapshot {
+    pub(in crate::engine) fn require_same_plan(&self, plan: &PreparedStop) -> Result<()> {
+        if &self.plan != plan {
+            return Err(BootstrapError::ManagementOnly(
+                "portable stop binding differs from its original plan",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(in crate::engine) fn verify(
+        &self,
+        target: &DiskRegistrationIdentity,
+        operation: OperationId,
+        digest: IntentDigest,
+        epoch: Option<&str>,
+    ) -> Result<()> {
+        let plan = &self.plan;
+        let previous = locator(&self.predecessor)?;
+        if !matches!(plan.format, StopFormat::Retirement)
+            || plan.relocation.is_some()
+            || &plan.target != target
+            || plan.operation_id != operation
+            || plan.intent_digest != digest
+            || previous.head != plan.previous
+            || stop_record(StopFormat::Retirement, &previous, target, operation, digest)?
+                != plan.stopped
+            || locator(&plan.stopped)?
+                .recorded_admission_epoch(target)?
+                .as_deref()
+                != epoch
+        {
+            return Err(BootstrapError::ManagementOnly(
+                "portable retirement Stop snapshot changed its exact predecessor, target or epoch",
+            ));
+        }
+        Ok(())
+    }
 }

@@ -5,6 +5,7 @@ const MAX_RECORD_BYTES: usize = 64 * 1024;
 pub(crate) trait Request: Serialize + DeserializeOwned {
     type Output: Serialize + DeserializeOwned;
     const COMMAND: &'static str;
+    const MAX_RESPONSE_BYTES: usize = MAX_RECORD_BYTES;
     fn account(&self) -> &crate::account::Snapshot;
     fn execute(self) -> crate::Result<Self::Output>;
 }
@@ -83,7 +84,7 @@ pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
         .expect("invariant: worker stdout was requested as a pipe");
     let mut collected = Vec::new();
     let read = (&mut output)
-        .take(MAX_RECORD_BYTES as u64 + 1)
+        .take(T::MAX_RESPONSE_BYTES as u64 + 1)
         .read_to_end(&mut collected);
     // Drain an overlong controlled child without unbounded allocations. Never
     // let a blocked stdout keep the child alive after its owner returns.
@@ -93,7 +94,7 @@ pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
     written?;
     read?;
     drained?;
-    if !status.success() || collected.len() > MAX_RECORD_BYTES {
+    if !status.success() || collected.len() > T::MAX_RESPONSE_BYTES {
         return Err("storage worker failed or exceeded its bounded reply; preserve original intent, no rollback is claimed".into());
     }
     match json_codec::from_slice::<Reply<T::Output>>(&collected)
@@ -136,7 +137,7 @@ pub(crate) fn entry<T: Request>() -> Result<()> {
         },
     };
     let bytes = json_codec::to_vec(&reply)?;
-    if bytes.len() > MAX_RECORD_BYTES {
+    if bytes.len() > T::MAX_RESPONSE_BYTES {
         return Err("storage worker reply exceeds its bound".into());
     }
     let mut output = std::io::stdout().lock();

@@ -14,7 +14,10 @@ use crate::{
     disk::{DiskIoBinding, DiskRoot, RecoveredDiskIo, WriterLocks},
     engine::membership_transition::terminal::{TerminalAuthority, VerifiedTerminalAuthority},
 };
-pub use retirement::{TerminalRetirementPhase, TerminalRetirementPlan, TerminalRetirementStatus};
+pub use retirement::{
+    TerminalRetirementArchive, TerminalRetirementCheckpoint, TerminalRetirementPhase,
+    TerminalRetirementPlan, TerminalRetirementStatus,
+};
 use std::{path::Path, sync::Arc};
 use store::TerminalStore;
 

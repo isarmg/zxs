@@ -77,6 +77,8 @@ enum Command {
     InternalRemovalWorker,
     #[command(hide = true)]
     InternalReadmissionWorker,
+    #[command(hide = true)]
+    InternalTerminalChainWorker,
     /// Manually serve the independent maintenance console; no login or autostart.
     Serve(console::Options),
     /// Inspect or install the matching embedded ZXS program only; no service setup.
@@ -267,6 +269,7 @@ fn run(args: Args) -> Result<()> {
     match command {
         Command::InternalRemovalWorker => disk_removal::worker_entry(),
         Command::InternalReadmissionWorker => disk_readmission::worker_entry(),
+        Command::InternalTerminalChainWorker => disk_removal::chain_archive::worker_entry(),
         Command::InternalAdditionWorker => disk_addition::worker_entry(),
         Command::InternalStorageWorker => initialization::storage::process::entry(),
         Command::Serve(options) => console::run(options),
@@ -411,7 +414,8 @@ fn requires_service_exclusion(command: &Command) -> bool {
             accept_permanent_loss,
             ..
         } => *accept_permanent_loss,
-        Command::InternalReadmissionWorker
+        Command::InternalTerminalChainWorker
+        | Command::InternalReadmissionWorker
         | Command::InternalRemovalWorker
         | Command::InternalAdditionWorker
         | Command::InternalStorageWorker

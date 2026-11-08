@@ -39,3 +39,6 @@ registry successor 只新增该目标的 DetachedBinding，绑定前驱、视图
 完整 mask 与 registry 编码在保存新 intent 前执行上限检查；整体 successor 仍受现有单元数据对象 `MAX_METADATA` 上限约束。大型集合超过该界限时明确拒绝，不丢页或放宽限制。生成/语义比较扫描冻结 scope 与版本，冷恢复按全部 frame 重建准备态，未作性能或容量验收声明。初始准备态、当前前驱和当前 successor 使用已有 Arc 表结构；不存在每个历史 frame 永久保留一份全图的新增成本。
 
 新增测试源码包括连续备份持有者移除、不复活原已隐藏路径、保留不可变历史与曾用身份、错前驱投影、重哈希遗漏、冷态 mask 页缺失和旧 unmasked successor 拒绝。全部未运行，不能作为通过证据。
+
+
+后继新增[完整可携带检查点](terminal-retirement-portable-checkpoint.md)，将每笔原选择、链接、Stop、registry/mask 和永久回执一起捕获并进行相对原可信归档的严格重放，独立 Web 可下载。它仍不是 ResumeCore，以上 metadata/活动存储门禁保持；没有编译、测试或 CI 通过结论。

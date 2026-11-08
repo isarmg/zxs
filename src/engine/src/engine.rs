@@ -52,9 +52,9 @@ pub use disk_lifecycle::{
     FrozenDeregistrationBoundary, ImpactPage, ImpactPageSize, NamespaceDeregistrationPreview,
     NamespaceOccurrenceImpact, NamespaceOccurrenceScan, OccurrenceVisibility, RegisteredHolders,
     RegistrationEffect, TargetPlacementRole, TerminalDiskExit, TerminalManagement,
-    TerminalManagementStatus, TerminalRegistrationState, TerminalRetirementPhase,
-    TerminalRetirementPlan, TerminalRetirementStatus, VersionDeregistrationImpact,
-    VersionImpactScan,
+    TerminalManagementStatus, TerminalRegistrationState, TerminalRetirementArchive,
+    TerminalRetirementCheckpoint, TerminalRetirementPhase, TerminalRetirementPlan,
+    TerminalRetirementStatus, VersionDeregistrationImpact, VersionImpactScan,
 };
 pub use disk_registry::published::terminal::TerminalRegistry;
 mod planning;

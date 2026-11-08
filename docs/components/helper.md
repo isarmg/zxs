@@ -223,3 +223,8 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 保留终态元数据目录的重新接纳
 
 独立 Web 新增原 terminal authority 下仍登记 Disabled 元数据目录的预览、明确新 epoch 确认及原操作查询/续作。helper 专用 root 计划/降权 worker/页面留在 helper，共用 native 记录、resume selector 与实际 Publication/永久回执；不启动服务，不称全池健康或安装就绪。任何已开始终态逐笔移除链、Detached/外来/替换根或缺证明均拒绝，不新增计划下线。未审查/编译/测试/CI，无真实系统操作，见[可执行范围与限制](../design/helper-terminal-retained-readmission.md)。
+
+
+## 完整终态移除链检查点下载
+
+独立 Web 可在所有逐笔移除均已完成时，通过服务 UID worker 导出准确的完整选择/Stop 快照/registry-mask 图/永久回执检查点，并显示必须另存的可信摘要。未决不导出旧前缀，损坏不补空；原完整控制归档须另外保留。它不支持整链 readmission/外来正式接纳，不转移 live I/O 排除，不启动服务。源码未审查/编译/测试/CI，见[捕获、相对来源核验及容量边界](../design/terminal-retirement-portable-checkpoint.md)。

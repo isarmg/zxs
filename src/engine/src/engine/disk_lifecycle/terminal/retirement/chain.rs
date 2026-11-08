@@ -8,11 +8,11 @@ pub(super) const NEXT: &str = "retirement-next.json";
 pub(super) const OPERATIONS: &str = "retirement-operations";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct Next {
+pub(super) struct Next {
     format: Format,
-    predecessor_completion: String,
-    intent: Intent,
-    intent_digest: String,
+    pub(super) predecessor_completion: String,
+    pub(super) intent: Intent,
+    pub(super) intent_digest: String,
 }
 impl TerminalManagement {
     pub(in crate::engine::disk_lifecycle::terminal) fn retirement_base_registry(

@@ -270,3 +270,47 @@ impl TerminalManagement {
         Ok(())
     }
 }
+
+/// Verify a retained historical stop without opening a target or consulting a
+/// mutable locator. This cannot prove current live I/O exclusion by itself.
+pub(super) fn verify_portable_existing_stop(
+    stop: &ExistingStop,
+    authority: &TerminalAuthority,
+    registry: &TerminalRegistry,
+    plan: &TerminalRetirementPlan,
+    successor: &Successor,
+) -> Result<()> {
+    let epoch = authority.io_admission_epoch(&plan.target().disk_id)?;
+    if stop.target != *plan.target()
+        || stop.retirement_digest != plan.digest
+        || stop.successor_hash != successor.hash()?
+        || stop.admission_epoch != epoch
+        || registry.registration(plan.target())? != Some(crate::RegistrationMode::Disabled)
+    {
+        return Err(failure(
+            ErrorCode::LogFork,
+            "portable retained Stop differs from its exact registered lifetime",
+        ));
+    }
+    if authority.target() == *plan.target()
+        && authority.operation_id() == stop.operation_id
+        && authority.transition_hash()? == stop.intent_digest
+        && authority.action() == MembershipExitAction::PlannedOffline
+    {
+        return Ok(());
+    }
+    authority
+        .predecessor()
+        .ok_or_else(|| {
+            failure(
+                ErrorCode::PublicationInvalid,
+                "portable retained Stop has no original authority",
+            )
+        })?
+        .verify_bootstrap_stop_epoch(
+            plan.target(),
+            stop.operation_id,
+            &stop.intent_digest,
+            epoch.as_deref(),
+        )
+}

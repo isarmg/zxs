@@ -3,6 +3,7 @@ use super::*;
 
 /// Authenticated registrations after the final voter has left. This type has
 /// deliberately no candidate, publication or ordinary-write admission method.
+#[derive(Clone)]
 pub struct TerminalRegistry {
     verified: VerifiedDiskRegistry,
     retired_in_management: bool,

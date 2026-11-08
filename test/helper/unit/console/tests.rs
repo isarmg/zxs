@@ -610,3 +610,29 @@ async fn readmission_input_refuses_replacement_or_foreign_force_before_system_ac
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
+
+#[tokio::test]
+async fn terminal_chain_export_requires_same_origin_and_explicit_stopped_writers() {
+    let mut request = post("/api/disks/terminal-chain-export", json!({}));
+    request
+        .headers_mut()
+        .insert("origin", "http://untrusted.invalid:9040".parse().unwrap());
+    assert_eq!(
+        http::router(state())
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let response = http::router(state())
+        .oneshot(post(
+            "/api/disks/terminal-chain-export",
+            json!({"service_user":"zxs","external_writers_stopped":false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = http::router(state()).oneshot(post("/api/disks/terminal-chain-export", json!({"service_user":"zxs","external_writers_stopped":true,"foreign_chain":"untrusted","activate":true}))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

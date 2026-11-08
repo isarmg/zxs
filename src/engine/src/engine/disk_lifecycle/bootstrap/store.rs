@@ -13,7 +13,7 @@ use platform_io::fs_safety::{
 };
 pub(in crate::engine) use readmission::PreparedReadmission;
 use std::{io::Read, os::unix::fs::MetadataExt};
-pub(in crate::engine) use stop_publication::PreparedStop;
+pub(in crate::engine) use stop_publication::{PreparedStop, RetirementStopSnapshot};
 
 const HEAD_FILE: &str = "head.json";
 const LOCK_FILE: &str = "writer.lock";

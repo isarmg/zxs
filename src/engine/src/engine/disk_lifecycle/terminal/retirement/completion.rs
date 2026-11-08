@@ -1,6 +1,7 @@
 //! Exact sequential management-only registry and occurrence-mask successors.
 //! Prepared namespaces are not active. No target pathname is resolved in recovery.
 use super::*;
+mod portable;
 mod stopped;
 use crate::{
     RegistryExitEffect, RegistryExitRequest,
@@ -9,6 +10,7 @@ use crate::{
     engine::disk_registry::published::occurrence::{FrozenDetachSource, ProjectionError},
     journal::PreparedMetadataObject,
 };
+pub use portable::{TerminalRetirementArchive, TerminalRetirementCheckpoint};
 use std::collections::BTreeMap;
 pub(super) use stopped::EXISTING;
 
@@ -233,83 +235,13 @@ impl TerminalManagement {
         plan: &TerminalRetirementPlan,
         successor: &Successor,
     ) -> Result<VerifiedSuccessor> {
-        if successor.intent_digest != plan.digest {
-            return Err(failure(
-                ErrorCode::LogFork,
-                "terminal successor names another retirement",
-            ));
-        }
-        successor.hash()?;
-        let registry = self
-            .retirement_base_registry()
-            .verify_management_retirement(
-                registry_request(plan, &successor.occurrence_mask_hash),
-                &successor.registry,
-                |kind, hash| successor.read(kind, hash),
-            )?;
-        let source = FrozenDetachSource::capture_terminal(
-            &self.verified.state,
-            self.original_configuration(),
+        verify_successor(
+            &self.verified,
             self.retirement_base_registry(),
             &self.retirement_base_namespaces,
-            plan.target(),
+            plan,
+            successor,
         )
-        .map_err(projection_error)?;
-        let namespaces = source
-            .verify_mask(&successor.occurrence_mask_hash, |kind, hash| {
-                successor.read(kind, hash)
-            })
-            .and_then(|mask| mask.prepare_terminal_retirement_namespaces(&registry))
-            .map_err(projection_error)?;
-        Ok(VerifiedSuccessor {
-            registry,
-            namespaces,
-        })
-    }
-    fn retirement_result_for(
-        &self,
-        plan: &TerminalRetirementPlan,
-        successor: &Successor,
-    ) -> Result<OperationResult> {
-        let sequence = plan.intent.source.sequence.checked_add(1).ok_or_else(|| {
-            failure(
-                ErrorCode::ResourceLimit,
-                "terminal retirement sequence exhausted",
-            )
-        })?;
-        let topology = plan
-            .intent
-            .source
-            .topology_generation
-            .checked_add(1)
-            .ok_or_else(|| {
-                failure(
-                    ErrorCode::ResourceLimit,
-                    "terminal retirement topology exhausted",
-                )
-            })?;
-        Ok(OperationResult {
-            operation_id: plan.operation_id(),
-            kind: "disk-deregister".into(),
-            commit_id: None,
-            history_tree_id: None,
-            branch_id: None,
-            commit_state: storage_contract::CommitState::Published,
-            protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
-            current_health: storage_contract::CurrentHealth::Unknown,
-            request_digest: plan.digest.clone(),
-            sequence,
-            result: json_codec::json!({
-                "authority_kind":"terminal-retirement", "authority":successor.hash()?,
-                "disk_id":plan.target().disk_id, "slot_id":plan.target().slot_id,
-                "binding_generation":plan.target().binding_generation.to_string(),
-                "registration":"detached", "target_io":"closed", "active_metadata_members":0,
-                "topology_generation":topology.to_string(), "registry":successor.registry,
-                "occurrence_mask_hash":successor.occurrence_mask_hash,
-                "namespace_projection_verified":true,
-                "active_namespace_admitted":false, "metadata_resumption_supported":false,
-            }),
-        })
     }
     /// Complete only the captured original no-voter registration. A later
     /// request must extend a completed native predecessor. Previously stopped
@@ -334,7 +266,7 @@ impl TerminalManagement {
         }
         // All pure successor/budget/overflow checks precede the first intent.
         let successor = self.prepare_retirement_successor(plan)?;
-        let result = self.retirement_result_for(plan, &successor)?;
+        let result = retirement_result_for(plan, &successor)?;
         if self.starts_new_retirement_frame(plan) || self.load_terminal_retirement()?.is_none() {
             self.require_retirement_stop_target(plan.target())?;
         }
@@ -526,7 +458,7 @@ impl TerminalManagement {
             format: Format::Retirement,
             intent_digest: plan.digest.clone(),
             successor_hash: successor.hash()?,
-            result: self.retirement_result_for(plan, &successor)?,
+            result: retirement_result_for(plan, &successor)?,
         };
         if complete != expected {
             return Err(failure(
@@ -635,4 +567,88 @@ fn projection_error(error: ProjectionError) -> Error {
         ErrorCode::PublicationInvalid,
         "terminal retirement must preserve the complete inherited namespace and exact occurrence removal",
     )
+}
+
+fn verify_successor(
+    verified: &VerifiedTerminalAuthority,
+    predecessor: &TerminalRegistry,
+    namespaces: &PreparedCurrentNamespaces,
+    plan: &TerminalRetirementPlan,
+    successor: &Successor,
+) -> Result<VerifiedSuccessor> {
+    if successor.intent_digest != plan.digest {
+        return Err(failure(
+            ErrorCode::LogFork,
+            "terminal successor names another retirement",
+        ));
+    }
+    successor.hash()?;
+    let registry = predecessor.verify_management_retirement(
+        registry_request(plan, &successor.occurrence_mask_hash),
+        &successor.registry,
+        |kind, hash| successor.read(kind, hash),
+    )?;
+    let source = FrozenDetachSource::capture_terminal(
+        &verified.state,
+        verified.authority.original(),
+        predecessor,
+        namespaces,
+        plan.target(),
+    )
+    .map_err(projection_error)?;
+    let namespaces = source
+        .verify_mask(&successor.occurrence_mask_hash, |kind, hash| {
+            successor.read(kind, hash)
+        })
+        .and_then(|mask| mask.prepare_terminal_retirement_namespaces(&registry))
+        .map_err(projection_error)?;
+    Ok(VerifiedSuccessor {
+        registry,
+        namespaces,
+    })
+}
+
+fn retirement_result_for(
+    plan: &TerminalRetirementPlan,
+    successor: &Successor,
+) -> Result<OperationResult> {
+    let sequence = plan.intent.source.sequence.checked_add(1).ok_or_else(|| {
+        failure(
+            ErrorCode::ResourceLimit,
+            "terminal retirement sequence exhausted",
+        )
+    })?;
+    let topology = plan
+        .intent
+        .source
+        .topology_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            failure(
+                ErrorCode::ResourceLimit,
+                "terminal retirement topology exhausted",
+            )
+        })?;
+    Ok(OperationResult {
+        operation_id: plan.operation_id(),
+        kind: "disk-deregister".into(),
+        commit_id: None,
+        history_tree_id: None,
+        branch_id: None,
+        commit_state: storage_contract::CommitState::Published,
+        protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+        current_health: storage_contract::CurrentHealth::Unknown,
+        request_digest: plan.digest.clone(),
+        sequence,
+        result: json_codec::json!({
+            "authority_kind":"terminal-retirement", "authority":successor.hash()?,
+            "disk_id":plan.target().disk_id, "slot_id":plan.target().slot_id,
+            "binding_generation":plan.target().binding_generation.to_string(),
+            "registration":"detached", "target_io":"closed", "active_metadata_members":0,
+            "topology_generation":topology.to_string(), "registry":successor.registry,
+            "occurrence_mask_hash":successor.occurrence_mask_hash,
+            "namespace_projection_verified":true,
+            "active_namespace_admitted":false, "metadata_resumption_supported":false,
+        }),
+    })
 }

@@ -142,3 +142,18 @@ fn retirement_preview(
         source_topology_generation: plan.source_topology_generation(),
     })
 }
+
+impl ExclusiveExit {
+    /// Complete source-checkpoint export, not metadata resumption or foreign
+    /// admission. The caller continues to own host exclusion and primary auth.
+    pub fn export_terminal_retirement_archive(
+        &self,
+    ) -> Result<storage_engine::TerminalRetirementArchive, ApiError> {
+        let archive = self
+            .retirement_owner()?
+            .export_retirement_archive()
+            .map_err(crate::engine_backend::error)?;
+        self.check()?;
+        Ok(archive)
+    }
+}

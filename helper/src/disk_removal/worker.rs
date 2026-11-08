@@ -27,15 +27,15 @@ struct Registration {
     level: u32,
     upstream_slot_id: Option<String>,
 }
-struct Target {
-    control: ExclusiveExit,
+pub(super) struct Target {
+    pub(super) control: ExclusiveExit,
     auth: AuthStore,
     prepared: PreparedService,
     layout: Layout,
     lease: ServiceLease,
 }
 impl Target {
-    fn open(context: &layout::Context) -> Result<Self> {
+    pub(super) fn open(context: &layout::Context) -> Result<Self> {
         let lease = ServiceLease::host()?;
         let layout = Layout::open(context.account.name.as_str().into())?;
         if layout.context(lease.identity()) != *context {
@@ -65,7 +65,7 @@ impl Target {
         target.recheck()?;
         Ok(target)
     }
-    fn recheck(&self) -> Result<()> {
+    pub(super) fn recheck(&self) -> Result<()> {
         self.lease.recheck()?;
         self.layout.recheck()?;
         self.prepared.recheck()?;
