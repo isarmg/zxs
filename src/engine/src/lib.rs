@@ -12,7 +12,10 @@ pub use error::{
 pub type Result<T> = std::result::Result<T, Error>;
 mod authority_selection;
 mod business;
-pub use business::FileHistoryCopyRequest;
+pub use business::{
+    CurrentFileHistoryMove, FileHistoryCopyRequest, FileHistoryMoveCapture,
+    FileHistoryMoveRequest, FileHistoryMoveSourceDigest,
+};
 mod container_storage;
 mod database_install;
 pub use container_storage::DirectoryLayoutReceipt;

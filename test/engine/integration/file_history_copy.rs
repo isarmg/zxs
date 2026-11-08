@@ -685,3 +685,6 @@ fn history_copy_preserves_consumed_branch_aliases_and_merge_frontier() {
 
 #[path = "file_history_copy/file_databases.rs"]
 mod file_databases;
+
+#[path = "file_history_copy/move_capture.rs"]
+mod move_capture;
