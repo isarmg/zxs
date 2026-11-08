@@ -20,10 +20,11 @@ mod execution;
 mod inspection;
 mod native_control;
 pub use native_control::{
-    BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
-    BackupObjectDatabasePreparationReport, BackupScopedDatabasePreparationReport,
-    offline_check_backup_native_preparation, offline_check_backup_object_databases,
-    offline_check_backup_scoped_databases,
+    BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
+    BackupNativePreparationReport, BackupNativeTargetReport, BackupObjectDatabasePreparationReport,
+    BackupPreparedTopologyNode, BackupScopedDatabasePreparationReport, BackupTopologyTarget,
+    offline_check_backup_cutover_inputs, offline_check_backup_native_preparation,
+    offline_check_backup_object_databases, offline_check_backup_scoped_databases,
 };
 mod snapshot;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
@@ -66,6 +67,9 @@ pub enum BackupPreparationPhase {
     /// SYSTEM-current and original disk-current/history SQLite only. Full
     /// historical scopes, replacement bindings and cutover remain absent.
     ScopedDatabasesPrepared,
+    /// Explicit complete prospective subtree accepted in the preparation domain.
+    /// No final authority, source fence or active fanout route is installed.
+    CutoverInputsPrepared,
     Blocked,
     SourceChanged,
 }

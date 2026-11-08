@@ -2,6 +2,11 @@
 //! Not complete historical SYSTEM scope, replacement identities, or cutover.
 use super::*;
 
+mod cutover;
+pub use cutover::{
+    BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupPreparedTopologyNode,
+    BackupTopologyTarget, offline_check_backup_cutover_inputs,
+};
 mod projection;
 mod runtime;
 mod store;
@@ -126,8 +131,24 @@ pub fn offline_check_backup_scoped_databases(
             "scoped target selection/order differs from original intent",
         ));
     }
-    let stop = AtomicBool::new(false);
-    let objects = super::verify_at(&task.objects, &roots.iter().collect::<Vec<_>>(), &stop)?;
+    verify_at(
+        &task,
+        &roots.iter().collect::<Vec<_>>(),
+        &AtomicBool::new(false),
+    )
+}
+
+fn verify_at(
+    task: &ScopedTask,
+    roots: &[&DiskRoot],
+    stop: &AtomicBool,
+) -> Result<BackupScopedDatabasePreparationReport> {
+    if roots.len() != task.objects.native.selection.jobs().len() {
+        return Err(invalid(
+            "scoped verification requires every original selected target",
+        ));
+    }
+    let objects = super::verify_at(&task.objects, roots, stop)?;
     let intent = task.bytes()?;
     let mut completion = None;
     for (root, job) in roots.iter().zip(task.objects.native.selection.jobs()) {
@@ -136,9 +157,9 @@ pub fn offline_check_backup_scoped_databases(
                 "target scoped intent belongs to another original task",
             ));
         }
-        let scopes = PreparedScopes::capture(root, &task, job, &stop)?;
-        store::verify(root, &scopes, &stop)?;
-        let observation = report(&task, objects.clone(), &scopes)?;
+        let scopes = PreparedScopes::capture(root, task, job, stop)?;
+        store::verify(root, &scopes, stop)?;
+        let observation = report(task, objects.clone(), &scopes)?;
         let bytes = completion_bytes(&observation)?;
         if root.read_bytes(&root.path().join(COMPLETE), MAX_TASK)? != bytes
             || completion

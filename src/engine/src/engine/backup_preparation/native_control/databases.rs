@@ -7,7 +7,11 @@ mod materials;
 mod runtime;
 mod scoped;
 mod store;
-pub use scoped::{BackupScopedDatabasePreparationReport, offline_check_backup_scoped_databases};
+pub use scoped::{
+    BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupPreparedTopologyNode,
+    BackupScopedDatabasePreparationReport, BackupTopologyTarget,
+    offline_check_backup_cutover_inputs, offline_check_backup_scoped_databases,
+};
 
 const FORMAT: &str = "zxs-backup-object-databases";
 const TASK: &str = "backup-preparation/object-databases.json";

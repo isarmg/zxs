@@ -36,13 +36,14 @@ pub mod disk_authority;
 mod engine;
 pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
-    BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
-    BackupObjectDatabasePreparationReport, BackupPreparationBatchReport, BackupPreparationPhase,
-    BackupPreparationReport, BackupPreparationRequest, BackupPreparationStatus,
-    BackupScopedDatabasePreparationReport, RecoveryDataRoot,
-    offline_check_backup_native_preparation, offline_check_backup_object_databases,
-    offline_check_backup_preparation, offline_check_backup_preparation_batch,
-    offline_check_backup_scoped_databases,
+    BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
+    BackupNativePreparationReport, BackupNativeTargetReport, BackupObjectDatabasePreparationReport,
+    BackupPreparationBatchReport, BackupPreparationPhase, BackupPreparationReport,
+    BackupPreparationRequest, BackupPreparationStatus, BackupPreparedTopologyNode,
+    BackupScopedDatabasePreparationReport, BackupTopologyTarget, RecoveryDataRoot,
+    offline_check_backup_cutover_inputs, offline_check_backup_native_preparation,
+    offline_check_backup_object_databases, offline_check_backup_preparation,
+    offline_check_backup_preparation_batch, offline_check_backup_scoped_databases,
 };
 pub use engine::{
     FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,

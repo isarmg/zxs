@@ -260,3 +260,9 @@
 `start_backup_scoped_database_preparation` 在原对象库阶段后，后台向每个原选定目标追加真实 SYSTEM 当前索引与所有原盘 current／history SQLite。每个 peer 独立重放自己的原生出版前缀、编码期望并比对实际字节；原 task 先在 SYSTEM 持久保存，原操作冷开优先续作。所有库仍是隔离材料，保留原 scope，不把候选目标变成原盘身份。
 
 这些已有派生格式不覆盖完整 SYSTEM 时间线和盘根目录／标签全审计，因此 `ScopedDatabasesPrepared` 不是三范围完整迁移或最终切换。详见[目标范围数据库](../design/backup-scoped-database-preparation.md)。当前未编译、测试、审查或 CI，未删除源、改路由、发出 ACCEPT 或接纳待加入盘。
+
+### 显式多级切换输入（本片，未验证）
+
+在 `5b7f0a29` 原范围 SQLite 准备之后，新增[多级切换输入](../design/backup-cutover-inputs.md)：原 actor/operation 下明确指定每个新目标身份与直接来源，允许同批分叉与多级子树，所有新祖先必须在同一完整目标集合中。它独立于旧活动 Config，逐目标重新读取真实完整材料，再写原物理根绑定的持久输入确认；普通冷开优先续作，错误或源变化不降级为成功。
+
+终态 `CutoverInputsPrepared` 仍不是切换。当前只有原末级边/完整池的同盘全副本准备，没有实现最终成员投票、源围栏、原生 registry+placement 决定、完整历史库或活动 fanout，不开放准备盘运行权威。按用户要求本组合未审查、编译、测试或运行 CI。

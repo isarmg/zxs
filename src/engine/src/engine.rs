@@ -9,10 +9,12 @@ use std::{
 
 mod backup_preparation;
 pub use backup_preparation::{
-    BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
-    BackupObjectDatabasePreparationReport, BackupPreparationBatchReport, BackupPreparationPhase,
-    BackupPreparationReport, BackupPreparationRequest, BackupPreparationStatus,
-    BackupScopedDatabasePreparationReport, offline_check_backup_native_preparation,
+    BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
+    BackupNativePreparationReport, BackupNativeTargetReport, BackupObjectDatabasePreparationReport,
+    BackupPreparationBatchReport, BackupPreparationPhase, BackupPreparationReport,
+    BackupPreparationRequest, BackupPreparationStatus, BackupPreparedTopologyNode,
+    BackupScopedDatabasePreparationReport, BackupTopologyTarget,
+    offline_check_backup_cutover_inputs, offline_check_backup_native_preparation,
     offline_check_backup_object_databases, offline_check_backup_preparation,
     offline_check_backup_preparation_batch, offline_check_backup_scoped_databases,
 };
@@ -99,8 +101,8 @@ mod history_window;
 pub use history_window::{
     ContentMatchRead, CoupledNodeRetirement, FileHistorySourceRead, HistoryWindowCancellation,
     HistoryWindowRead, PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection,
-    PermanentNodeRetirementOutcome, PermanentRemovalCleanupObservation, RemovalParentProjection,
-    RemovalCleanupScope, RemovalReplicaCleanup, RemovalReplicaCleanupState, SharedHistoryRead,
+    PermanentNodeRetirementOutcome, PermanentRemovalCleanupObservation, RemovalCleanupScope,
+    RemovalParentProjection, RemovalReplicaCleanup, RemovalReplicaCleanupState, SharedHistoryRead,
 };
 pub(crate) mod membership_transition;
 pub use membership_transition::{
