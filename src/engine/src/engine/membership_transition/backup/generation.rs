@@ -11,6 +11,7 @@ use crate::engine::membership_transition::pending::activation::{
 };
 use registry::{AdmittedBackupDecision, BackupDecisionCertificate};
 mod first_candidate;
+mod replay;
 pub(crate) use first_candidate::PreparedBackupFirstCandidate;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

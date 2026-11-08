@@ -41,7 +41,7 @@ struct NativeBytes {
 }
 
 impl BackupCore {
-    fn first_state(
+    pub(in crate::engine::membership_transition) fn first_state(
         &self,
         authority_hash: &str,
         source: &State,
@@ -100,7 +100,7 @@ impl BackupCore {
         Ok(next)
     }
 
-    fn first_candidate(
+    pub(in crate::engine::membership_transition) fn first_candidate(
         &self,
         authority: &PreparedMetadataObject,
         source: &State,

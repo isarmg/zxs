@@ -541,6 +541,11 @@ impl Engine {
         let Some(generation) = self.config.generation().cloned() else {
             return Ok(());
         };
+        if generation.portable.is_backup() {
+            return Err(
+                crate::engine::membership_transition::backup::BackupCore::activation_required(),
+            );
+        }
         if generation.portable.is_exit() {
             return self.promote_disk_exit_resources();
         }
@@ -705,6 +710,14 @@ impl Engine {
             self.config.generation().cloned().ok_or_else(|| {
                 Error::new(ErrorCode::RecoveryRequired, "no generation authority")
             })?;
+        if generation.portable.is_backup() {
+            // A real reserved Publication can now be semantically replayed,
+            // but the Add completion path must not persist a second empty-
+            // payload result, rebuild selected SQLite, or release any fence.
+            return Err(
+                crate::engine::membership_transition::backup::BackupCore::activation_required(),
+            );
+        }
         if generation.portable.is_exit() {
             return self.complete_disk_exit_generation();
         }

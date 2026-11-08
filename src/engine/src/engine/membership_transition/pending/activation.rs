@@ -12,6 +12,7 @@ const GENERATION_FILE: &str = "metadata/pool-membership/generation.json";
 type WorkspaceRootAliases = BTreeMap<(String, String, u64), BTreeSet<PathBuf>>;
 
 mod authority;
+mod backup;
 pub(in crate::engine) mod exit;
 #[path = "../readmission/activation.rs"]
 mod readmission;
@@ -76,6 +77,9 @@ impl Generation {
         (operation == self.intent.operation_id).then(|| format!("tx_{}", &self.hash[..32]))
     }
     fn result(&self) -> Result<OperationResult> {
+        if let Some(core) = self.portable.backup_core() {
+            return self.backup_first_state(core).map(|(_, result)| result);
+        }
         let effective = self.portable.effective_config()?;
         let topology_steps = if self.portable.terminal_resume_core().is_some() {
             2
@@ -148,6 +152,9 @@ impl Generation {
         })
     }
     fn next_state(&self) -> Result<(State, OperationResult)> {
+        if let Some(core) = self.portable.backup_core() {
+            return self.backup_first_state(core);
+        }
         let mut next = match self.portable.terminal_resume_core() {
             Some(core) => (*core.management_state(&self.base)?).clone(),
             None => (*self.base).clone(),
@@ -233,12 +240,8 @@ pub(crate) use recovery::{
 
 impl Generation {
     pub(crate) fn verify_activation_candidate(&self, candidate: &Candidate) -> Result<()> {
-        if matches!(&self.intent.origin, Origin::BackupCutover { .. }) && !self.portable.is_abort()
-        {
-            return Err(Error::new(
-                ErrorCode::UnsupportedOperation,
-                "a backup route decision cannot use the ordinary generation activation candidate",
-            ));
+        if let Some(core) = self.portable.backup_core() {
+            return self.verify_backup_first_candidate(core, candidate);
         }
         self.portable.verify_registry_source(&self.base)?;
         let (state, result) = self.next_state()?;

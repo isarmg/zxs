@@ -796,6 +796,12 @@ impl PortableAuthority {
     pub(in crate::engine::membership_transition) fn is_backup(&self) -> bool {
         matches!(self.head, AuthorityCore::Backup(_))
     }
+    pub(super) fn backup_core(&self) -> Option<&BackupCore> {
+        match &self.head {
+            AuthorityCore::Backup(core) => Some(core),
+            _ => None,
+        }
+    }
     pub(in crate::engine::membership_transition) fn is_abort(&self) -> bool {
         matches!(self.head, AuthorityCore::Abort(_))
     }
@@ -1313,6 +1319,9 @@ impl PortableAuthority {
                     })?
                     .1;
                 let node = self.node(hash)?;
+                if let AuthorityCore::Backup(core) = node {
+                    return core.verify_first_slot(candidate, hash);
+                }
                 match self.registry_for_node(node)? {
                     Some(registry) => registry.verify_lifecycle_candidate(candidate, hash),
                     None => node
@@ -1352,6 +1361,13 @@ impl PortableAuthority {
                 ErrorCode::PublicationInvalid,
                 "candidate does not bind this generation authority",
             ));
+        }
+        if let AuthorityCore::Backup(core) = &self.head {
+            // Only the exact first-slot envelope is admitted here. Full State
+            // replay below the generation/archive consumer is still required;
+            // this cannot authorize a later slot or an active registry.
+            core.verify_first_slot(candidate, &self.hash()?)?;
+            return core.effective_config();
         }
         let config = self.head.effective_config(&intent)?;
         match self.registry_for_node(&self.head)? {
