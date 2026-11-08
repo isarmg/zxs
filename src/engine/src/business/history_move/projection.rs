@@ -4,6 +4,9 @@ use super::*;
 use history_copy::{CopyRoute, retained::CopiedLifecycle};
 use json_codec::json;
 
+mod native;
+pub(crate) use native::{KIND as NATIVE_KIND, NativeMoveDraft, reject_unclosed_publication};
+
 struct ProjectionInput<'a> {
     capture: &'a FileHistoryMoveCapture,
     route: &'a CopyRoute,

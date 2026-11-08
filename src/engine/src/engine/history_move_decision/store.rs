@@ -56,6 +56,16 @@ impl Scope {
         }
         artifacts
     }
+
+    fn native_artifacts(self, native: &crate::business::NativeMoveDraft) -> Vec<Artifact<'_>> {
+        let mut artifacts = vec![Artifact::Exact {
+            name: "native-operation.json", bytes: native.envelope(),
+        }];
+        if let Self::Metadata = self {
+            artifacts.push(Artifact::Exact { name: "native-state.json", bytes: native.state() });
+        }
+        artifacts
+    }
 }
 
 enum Artifact<'a> {
@@ -189,10 +199,22 @@ impl Store {
     }
 
     pub(super) fn install(&self, materials: &Materials, cancellation: &HistoryWindowCancellation) -> Result<()> {
-        self.check_names()?;
         let artifacts = self.scope.artifacts(materials);
+        self.install_artifacts(&artifacts, cancellation)
+    }
+
+    pub(super) fn install_native(
+        &self,
+        native: &crate::business::NativeMoveDraft,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<()> {
+        self.install_artifacts(&self.scope.native_artifacts(native), cancellation)
+    }
+
+    fn install_artifacts(&self, artifacts: &[Artifact<'_>], cancellation: &HistoryWindowCancellation) -> Result<()> {
+        self.check_names()?;
         let mut remaining = 0u64;
-        for artifact in &artifacts {
+        for artifact in artifacts {
             checkpoint(cancellation)?;
             if self.root.open_optional_read_regular(&self.root.path().join(artifact.name()))?.is_none() {
                 remaining = remaining.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
@@ -201,7 +223,7 @@ impl Store {
         if self.root.available()? < remaining.checked_add(self.reserve).ok_or_else(limit)? {
             return Err(Error::new(ErrorCode::NoSpace, "remaining joint move inputs would consume metadata reserve"));
         }
-        for artifact in &artifacts {
+        for artifact in artifacts {
             checkpoint(cancellation)?;
             self.check_names()?;
             let path = self.root.path().join(artifact.name());
@@ -216,14 +238,51 @@ impl Store {
         if self.root.available()? < self.reserve {
             return Err(Error::new(ErrorCode::NoSpace, "joint move input metadata reserve changed"));
         }
-        self.verify(materials, cancellation)
+        self.verify_artifacts(artifacts, cancellation)
     }
 
     pub(super) fn verify(&self, materials: &Materials, cancellation: &HistoryWindowCancellation) -> Result<()> {
+        self.verify_artifacts(&self.scope.artifacts(materials), cancellation)
+    }
+
+    pub(super) fn verify_native(
+        &self,
+        native: &crate::business::NativeMoveDraft,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<()> {
+        self.verify_artifacts(&self.scope.native_artifacts(native), cancellation)
+    }
+
+    pub(super) fn require_native_capacity(
+        engine: &Engine,
+        materials: &Materials,
+        participant: &DiskScope,
+        native: &crate::business::NativeMoveDraft,
+    ) -> Result<()> {
+        let disk = engine.disk(&participant.identity.slot_id)?;
+        let Some(capacity) = disk.capacity_bytes else { return Ok(()); };
+        let scope = if participant.carries_state() { Scope::Metadata } else { Scope::Payload };
+        let mut required = storage_bytes(scope, materials)?;
+        if participant.roles.contains(&Role::Target) {
+            required = required.checked_add(materials.target_preparation_bytes).ok_or_else(limit)?;
+        }
+        if participant.carries_state() {
+            required = required.checked_add(2 * 1024 * 1024).ok_or_else(limit)?;
+        }
+        for artifact in scope.native_artifacts(native) {
+            required = required.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
+        }
+        if engine.used_bytes(&participant.identity.slot_id).checked_add(required).ok_or_else(limit)? > capacity {
+            return Err(Error::new(ErrorCode::NoSpace, "native move draft exceeds configured participant capacity"));
+        }
+        Ok(())
+    }
+
+    fn verify_artifacts(&self, artifacts: &[Artifact<'_>], cancellation: &HistoryWindowCancellation) -> Result<()> {
         self.check_names()?;
-        for artifact in self.scope.artifacts(materials) {
+        for artifact in artifacts {
             checkpoint(cancellation)?;
-            self.read_artifact(&artifact, false)?;
+            self.read_artifact(artifact, false)?;
         }
         self.check_names()
     }

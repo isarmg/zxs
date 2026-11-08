@@ -697,3 +697,6 @@ mod move_target;
 
 #[path = "file_history_copy/move_decision.rs"]
 mod move_decision;
+
+#[path = "file_history_copy/move_native.rs"]
+mod move_native;

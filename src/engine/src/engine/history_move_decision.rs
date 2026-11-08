@@ -6,6 +6,8 @@ use data_serialization::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod materials;
+mod native;
+pub use native::FileHistoryMoveNativePreparation;
 mod store;
 use materials::Materials;
 

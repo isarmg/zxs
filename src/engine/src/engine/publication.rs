@@ -897,6 +897,7 @@ impl crate::engine::PlanningContext<'_> {
         maximum: usize,
         cache_maximum: usize,
     ) -> Result<DetachedPublication> {
+        crate::business::reject_unclosed_file_history_move(self.state, &next, &result)?;
         let next_current_namespaces = self
             .current_namespaces
             .map(|view| view.advance(self.state, &next).map(std::sync::Arc::new))

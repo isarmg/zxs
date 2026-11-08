@@ -56,6 +56,7 @@ pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRe
 mod history_move_decision;
 pub use history_move_decision::{
     FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation,
+    FileHistoryMoveNativePreparation,
 };
 mod history_move_target;
 pub use history_move_target::FileHistoryMoveTargetReport;

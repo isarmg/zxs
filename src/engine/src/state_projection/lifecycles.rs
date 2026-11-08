@@ -12,7 +12,7 @@ pub(crate) enum DeletionOwner<'a> {
 }
 pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
     let field = match receipt.kind.as_str() {
-        "file.delete" => "deletion_node",
+        "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND => "deletion_node",
         "file.delete.undo" => "removed_deletion_node",
         _ => return DeletionOwner::Other,
     };
@@ -29,7 +29,9 @@ pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
     }
 }
 pub(crate) fn history_copy_owner(receipt: &OperationResult) -> DeletionOwner<'_> {
-    if !crate::business::history_copy::is_kind(&receipt.kind) {
+    if !crate::business::history_copy::is_kind(&receipt.kind)
+        && receipt.kind != crate::business::FILE_HISTORY_MOVE_KIND
+    {
         return DeletionOwner::Other;
     }
     match receipt

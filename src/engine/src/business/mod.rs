@@ -18,7 +18,10 @@ pub use history_move::{
     CurrentFileHistoryMove, CurrentFileHistoryMoveProjection, FileHistoryMoveCapture,
     FileHistoryMoveProjection, FileHistoryMoveRequest, FileHistoryMoveSourceDigest,
 };
-pub(crate) use history_move::FileHistoryMoveReplay;
+pub(crate) use history_move::{
+    FileHistoryMoveReplay, NATIVE_KIND as FILE_HISTORY_MOVE_KIND, NativeMoveDraft,
+    reject_unclosed_publication as reject_unclosed_file_history_move,
+};
 pub(crate) mod file_ancestry;
 mod file_history_merges;
 pub(crate) mod file_merges;

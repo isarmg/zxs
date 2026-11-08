@@ -61,7 +61,7 @@ fn invalid() -> Error {
 fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
     let receipt = &state.operations[&id];
     let (action, key) = match receipt.kind.as_str() {
-        "file.delete" => (DeletionAction::Delete, "deletion_node"),
+        "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND => (DeletionAction::Delete, "deletion_node"),
         "file.delete.undo" => (DeletionAction::Undo, "removed_deletion_node"),
         _ => return Err(invalid()),
     };
@@ -121,7 +121,9 @@ pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<Lifecy
         if receipt.operation_id != *id {
             return Err(invalid());
         }
-        if receipt.kind == crate::business::history_copy::RETAINED_KIND {
+        if receipt.kind == crate::business::history_copy::RETAINED_KIND
+            || receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND
+        {
             let copied = crate::business::history_copy::retained::read(receipt, file)?;
             for event in copied.events {
                 insert(event)?;

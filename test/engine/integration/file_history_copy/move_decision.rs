@@ -6,7 +6,7 @@ use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 const DIRECTORY: &str = "file-history-move-decision-inputs";
 
-fn plan(fixture: &mut Fixture) -> (FileHistoryMoveProjection, FileHistoryMoveRecoveryInfo) {
+pub(super) fn plan(fixture: &mut Fixture) -> (FileHistoryMoveProjection, FileHistoryMoveRecoveryInfo) {
     let file = entry(&fixture.engine, &fixture.source, "source.txt");
     let captured = fixture.engine.capture_file_history_move(FileHistoryMoveRequest {
         namespace: &request(&fixture.engine, &fixture.source, &fixture.target),
@@ -144,7 +144,7 @@ fn a_missing_required_member_is_not_hidden_by_other_complete_replicas() {
     let mut fixture = Fixture::new(false);
     let (projection, recovery) = plan(&mut fixture);
     let original = prepare(&mut fixture, &projection, &recovery);
-    let root = disk_root(&fixture.engine, "B02").join(DIRECTORY);
+    let root = disk_root(&fixture.engine, "B01").join(DIRECTORY);
     let path = root.join("source-file.sqlite");
     let bytes = fs::read(&path).unwrap();
     fs::remove_file(&path).unwrap();
