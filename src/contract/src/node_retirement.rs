@@ -43,6 +43,7 @@ pub struct Preview {
     #[serialization(with = "crate::u64_string")]
     pub retained_commit_entries: u64,
     pub affected_branch_heads: Vec<HistoryBranchId>,
+    pub archived_branch_heads: Vec<HistoryBranchId>,
     pub frozen_files: Vec<HistoryFileId>,
     pub last_live_files: Vec<HistoryFileId>,
 }
@@ -52,12 +53,14 @@ impl Preview {
         let count = self.file_components.iter().map(Vec::len).sum::<usize>();
         let nodes = self.coupled_node_ids.iter().collect::<BTreeSet<_>>();
         let heads = self.affected_branch_heads.iter().collect::<BTreeSet<_>>();
+        let archived = self.archived_branch_heads.iter().collect::<BTreeSet<_>>();
         let frozen = self.frozen_files.iter().collect::<BTreeSet<_>>();
         let last = self.last_live_files.iter().collect::<BTreeSet<_>>();
         if self.file_id != *selection.file_id() || self.history_root != selection.history_root()
             || self.version_ids != selection.version_ids() || self.coupled_node_ids.len() > MAX_SHARED_HISTORY_NODES
             || self.coupled_node_ids.is_empty() || nodes.len() != self.coupled_node_ids.len()
             || heads.len() != self.affected_branch_heads.len() || frozen.len() != self.frozen_files.len()
+            || !archived.is_subset(&heads) || self.archived_branch_heads.windows(2).any(|pair| pair[0] >= pair[1])
             || !frozen.is_subset(&files) || !last.is_subset(&files)
             || self.last_live_files.windows(2).any(|pair| pair[0] >= pair[1])
             || self.file_components.is_empty()
@@ -191,7 +194,9 @@ impl Separation {
             count += file.version_ids.len();
             if &file.file_id != reported || file.version_ids.is_empty() || count > 65_536
                 || file.version_ids.windows(2).any(|pair| pair[0] >= pair[1])
-                || !file.version_ids.iter().any(|id| selection.version_ids().binary_search(id).is_ok()) {
+                || !file.version_ids.iter().any(|id| selection.version_ids().binary_search(id).is_ok())
+                || file.retained_frontier.branch_ids.len() > crate::shared_history::MAX_SHARED_HISTORY_BRANCHES
+                || file.retained_frontier.branch_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
                 return Err(invalid());
             }
         }
@@ -261,7 +266,19 @@ struct RequiredBinding {
 struct TerminalFiles { files: Vec<TerminalFile> }
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct TerminalFile { file_id: HistoryFileId, version_ids: Vec<HistoryVersionId> }
+struct TerminalFile {
+    file_id: HistoryFileId,
+    version_ids: Vec<HistoryVersionId>,
+    retained_frontier: RetainedFrontier,
+}
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct RetainedFrontier {
+    branch_ids: Vec<HistoryBranchId>,
+    // Native State admission recomputes the commitment. Transport admits its shape.
+    #[serialization(rename = "digest")]
+    _digest: HistoryRoot,
+}
 
 #[cfg(test)]
 #[path = "../../../test/contract/unit/node_retirement_tests.rs"]

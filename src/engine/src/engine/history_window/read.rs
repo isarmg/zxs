@@ -469,11 +469,14 @@ impl Engine {
             |engine, next, _| {
                 engine.recheck_shared_history(read)?;
                 let analysis = read.permanent_removal_analysis(selection)?;
-                if !analysis.affected_branch_heads().is_empty() || !analysis.frozen_files().is_empty() {
-                    return Err(Error::new(storage_contract::ErrorCode::ContentPinned, "retirement selection has a retained HEAD or frozen file"));
+                let decision = crate::node_retirement::decide(&engine.state, request.clone())?;
+                let archived = decision.archived_branch_ids();
+                if analysis.affected_branch_heads().iter().any(|branch| !archived.contains(branch.as_str()))
+                    || !analysis.frozen_files().is_empty() {
+                    return Err(Error::new(storage_contract::ErrorCode::ContentPinned, "retirement selection has a live HEAD outside its complete terminal frontier or a frozen D file"));
                 }
                 engine.repository_for_history(&request.history_tree_id)?;
-                engine.check_purge(&request.history_tree_id, &request.version_ids)?;
+                engine.check_retirement_purge(&request.history_tree_id, &request.version_ids, &decision)?;
                 // Open workspaces may hold source selections not yet present in
                 // their base commit. Conservatively close this entire history.
                 if engine.workspaces.values().any(|workspace| {
@@ -483,7 +486,6 @@ impl Engine {
                 }) {
                     return Err(Error::new(storage_contract::ErrorCode::WorkspaceBusy, "retirement history has an open workspace"));
                 }
-                let decision = crate::node_retirement::decide(&engine.state, request.clone())?;
                 for id in &request.version_ids { next.content_states.insert(id.clone(), crate::ContentState::Retired); }
                 Ok(json_codec::json!({"retirement": decision}))
             },

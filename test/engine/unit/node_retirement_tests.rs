@@ -115,6 +115,8 @@ fn terminal_fixture() -> (tempfile::TempDir, Engine, State, OperationId, String)
     let (temp, mut engine, _before, _operation, old) = fixture();
     let repository = engine.state().repositories.values().next().unwrap().clone();
     let current = engine.namespace_tree(&repository.main_branch_id).unwrap().get("a").unwrap().clone();
+    engine.create_file_branch(&current.file_id, &current.version_id, &storage_contract::BranchName::parse("retained").unwrap(),
+        "admin", OperationId::generate().unwrap()).unwrap();
     engine.file_namespace(&repository.repository_id,
         NamespaceOperation::parse(storage_contract::NamespaceOperationKind::Delete, "a", None).unwrap(),
         "admin", OperationId::generate().unwrap()).unwrap();
@@ -159,4 +161,29 @@ fn completely_retired_file_requires_its_exact_terminal_receipt() {
     receipt.result["retirement"]["file_terminations"]["files"] = json_codec::json!([]);
     erased.operations.insert(operation, receipt);
     assert!(crate::node_retirement::admit_current(&erased).is_err());
+}
+
+
+#[test]
+fn terminal_frontier_rejects_branch_changes_new_aliases_and_selection_changes_on_cold_admission() {
+    let (_temp, engine, _before, operation, version) = terminal_fixture();
+    let file = engine.state().versions[&version].file_id.clone();
+    let branch = engine.state().branches.values().find(|branch| branch.file_id.as_deref() == Some(file.as_str())).unwrap().clone();
+    let mut changed = engine.state().clone();
+    let mut modified = branch.clone();
+    modified.generation += 1;
+    changed.branches.insert(branch.branch_id.clone(), modified);
+    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    let mut changed = engine.state().clone();
+    changed.file_branch_aliases.insert(branch.branch_id.clone(), branch.branch_id.clone());
+    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    let mut changed = engine.state().clone();
+    if changed.file_selections.contains_key(&file) { changed.file_selections.remove(&file); }
+    else { changed.file_selections.insert(file.clone(), branch.branch_id.clone()); }
+    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    let mut changed = engine.state().clone();
+    let mut receipt = changed.operations[&operation].clone();
+    receipt.result["retirement"]["file_terminations"]["files"][0].as_object_mut().unwrap().remove("retained_frontier");
+    changed.operations.insert(operation, receipt);
+    assert!(crate::node_retirement::admit_current(&changed).is_err());
 }

@@ -188,18 +188,58 @@ fn detached_last_node_retires_and_resumes_without_reviving_the_old_file_identity
 }
 
 #[test]
-fn detached_path_does_not_make_a_retained_file_branch_terminable() {
+fn detached_file_branches_become_frozen_terminal_evidence_and_cannot_open_workspaces() {
     let mut pool = Pool::new();
     pool.save(&[("a", b"retained head")]);
     let old = pool.entry("a");
     pool.engine.create_file_branch(&old.file_id, &old.version_id, &BranchName::parse("retained").unwrap(),
         "admin", OperationId::generate().unwrap()).unwrap();
+    let branches = pool.engine.state().branches.values().filter(|branch| branch.file_id.as_deref() == Some(old.file_id.as_str()))
+        .map(|branch| (branch.branch_id.clone(), branch.clone())).collect::<std::collections::BTreeMap<_, _>>();
     pool.engine.file_namespace(&pool.repository,
         storage_engine::NamespaceOperation::parse(storage_contract::NamespaceOperationKind::Delete, "a", None).unwrap(),
         "admin", OperationId::generate().unwrap()).unwrap();
     let read = super::permanent_removal::read(&pool, &old.file_id);
+    let operation = OperationId::generate().unwrap();
+    let analysis = read.permanent_removal_analysis(&super::permanent_removal::selection(&[&old.version_id])).unwrap();
+    assert_eq!(analysis.archived_branch_heads().iter().map(|id| id.as_str()).collect::<std::collections::BTreeSet<_>>(), branches.keys().map(String::as_str).collect());
+    let outcome = pool.engine.retire_file_nodes(&read, &super::permanent_removal::selection(&[&old.version_id]),
+        "admin", operation).unwrap();
+    assert!(outcome.cleanup().unwrap().all_required_bindings_absent());
+    for (id, original) in &branches {
+        assert_eq!(&pool.engine.state().branches[id], original, "terminal archival does not rewrite branch evidence");
+        assert!(pool.engine.create_workspace(id, "admin").is_err());
+    }
+    let root = pool.root.clone();
+    drop(pool.engine);
+    pool.engine = Engine::open(&root).unwrap();
+    assert!(pool.engine.resume_file_node_retirement(operation, "admin").unwrap().cleanup().unwrap().all_required_bindings_absent());
+    for id in branches.keys() { assert!(pool.engine.create_workspace(id, "admin").is_err()); }
+    pool.save(&[("unrelated", b"still writable")]);
+    assert_ne!(pool.entry("unrelated").file_id, old.file_id);
+}
+
+#[test]
+fn retained_file_branch_terminal_decision_does_not_override_current_namespace_or_D() {
+    let mut pool = Pool::new();
+    pool.save(&[("a", b"not detached")]);
+    let old = pool.entry("a");
+    pool.engine.create_file_branch(&old.file_id, &old.version_id, &BranchName::parse("retained").unwrap(),
+        "admin", OperationId::generate().unwrap()).unwrap();
+    let selection = super::permanent_removal::selection(&[&old.version_id]);
+    let read = super::permanent_removal::read(&pool, &old.file_id);
     let before = pool.engine.state().sequence;
-    assert!(pool.engine.retire_file_nodes(&read, &super::permanent_removal::selection(&[&old.version_id]),
-        "admin", OperationId::generate().unwrap()).is_err());
+    assert!(pool.engine.retire_file_nodes(&read, &selection, "admin", OperationId::generate().unwrap()).is_err());
+    assert_eq!(pool.engine.state().sequence, before);
+    pool.engine.soft_delete_file(storage_engine::DeleteFileRequest {
+        target: storage_engine::FileDeletionTarget {
+            repository_id: &storage_contract::history_window::HistoryRepositoryId::parse(&pool.repository).unwrap(),
+            file_id: &storage_contract::history_window::HistoryFileId::parse(&old.file_id).unwrap(),
+            path: &name_policy::LookupPath::parse("a").unwrap(),
+        }, principal: "admin", operation_id: OperationId::generate().unwrap(),
+    }).unwrap();
+    let read = super::permanent_removal::read(&pool, &old.file_id);
+    let before = pool.engine.state().sequence;
+    assert!(pool.engine.retire_file_nodes(&read, &selection, "admin", OperationId::generate().unwrap()).is_err());
     assert_eq!(pool.engine.state().sequence, before);
 }

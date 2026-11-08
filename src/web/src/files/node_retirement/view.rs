@@ -18,7 +18,7 @@ fn can_edit(state: &State) -> bool {
 fn can_submit(state: &State) -> bool {
     let model = &state.files.node_retirement;
     can_edit(state) && model.confirmed && model.preview.as_ref().is_some_and(|preview| {
-        preview.affected_branch_heads.is_empty() && preview.frozen_files.is_empty()
+        preview.affected_branch_heads.iter().all(|branch| preview.archived_branch_heads.contains(branch)) && preview.frozen_files.is_empty()
             && model.selection().is_some_and(|selection| preview.validate(&selection).is_ok())
     })
 }
@@ -60,7 +60,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         <details class="zxs-entry-section zxs-stack" data-zxs-node-retirement="true">
             <summary class="zxs-row">{t("永久退役历史节点", "Permanently retire historical nodes")}</summary>
             <p class="zxs-row">{t("此操作不可撤销：移除所选正文及复用它的事件，并清理正文。旧节点描述和提交证明仍保留作认证。只有跨文件共享关系全部消失才拆分联合图；单文件内部不拆分。", "This cannot be undone: selected bodies and their coupled events leave the live history, and their payloads are cleaned up. Old descriptors and commit proofs remain for authentication. Files separate only after all cross-file sharing paths disappear; internal deletion never splits a file.")}</p>
-            <p class="zxs-row">{t("HEAD、合并参与节点、当前/冻结目录引用、开放工作区或读取租约仍会阻止执行。最后有效版本仅限已完全脱离这些引用的文件，终止后原 file_id 不可复活。预览不是执行许可或擦除证明。", "HEADs, merge participants, current/frozen directory references, open workspaces and read leases still block execution. Last-node retirement requires a fully detached file and permanently closes its original file_id. Preview is not execution permission or erasure proof.")}</p>
+            <p class="zxs-row">{t("当前 namespace、D、目录/Git、工作区或读取租约仍会阻止执行。已经脱离这些引用的文件可把完整保留分支 HEAD/合并前沿永久归档，与最后节点一起终止；原 file_id 不可复活。预览不是执行许可或擦除证明。", "Current namespace, D, directory/Git references, workspaces and read leases still block execution. A detached file can permanently archive its complete branch HEAD/merge frontier with its last nodes; its original file_id cannot revive. Preview is not execution permission or erasure proof.")}</p>
             <Show when=move ||state.with(|s|s.files.node_retirement.attempt.is_none())>
                 <fieldset class="zxs-stack" disabled=move ||!state.with(can_edit)>
                     <legend class="zxs-row">{t("从当前历史页显式选择正文版本", "Explicitly select body versions from this history page")}</legend>
@@ -87,9 +87,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     <div class="zxs-stack" role="status">
                         <p class="zxs-row">{format!("{} {} · {} {} · {} {}",t("正文版本", "Body versions"),preview.version_ids.len(),t("耦合事件", "Coupled events"),preview.coupled_node_ids.len(),t("退役后文件分组", "File components after retirement"),preview.file_components.len())}</p>
                         <p class="zxs-row">{format!("{} {}",t("保留的原提交引用：", "Original commit references retained:"),preview.retained_commit_entries)}</p>
+                        <p class="zxs-row">{format!("{} {}",t("可条件归档的完整文件分支 HEAD 数：", "Conditional complete-file branch HEAD archives:"),preview.archived_branch_heads.len())}</p>
                         <p class="zxs-row">{format!("{} {}",t("选择覆盖最后有效版本的文件（仍须脱离引用）：", "Files whose last live versions are selected (references must still be detached):"),preview.last_live_files.iter().map(ToString::to_string).collect::<Vec<_>>().join(" · "))}</p>
                         {preview.file_components.into_iter().map(|component|view!{<p class="zxs-row">{component.iter().map(ToString::to_string).collect::<Vec<_>>().join(" · ")}</p>}).collect_view()}
-                        {(!preview.affected_branch_heads.is_empty()||!preview.frozen_files.is_empty()).then(||view!{<p class="zxs-row">{t("当前选择包含保留 HEAD 或已软删除的冻结文件，不能执行。", "This selection includes a retained HEAD or a soft-deleted frozen file and cannot execute.")}</p>})}
+                        {(preview.affected_branch_heads.iter().any(|branch| !preview.archived_branch_heads.contains(branch))||!preview.frozen_files.is_empty()).then(||view!{<p class="zxs-row">{t("当前选择包含不可归档的活动 HEAD 或 D 冻结文件，不能执行。", "This selection includes a non-archivable live HEAD or D-frozen file and cannot execute.")}</p>})}
                     </div>
                 })}
                 <label class="zxs-row zxs-flow"><input type="checkbox" disabled=move ||!state.with(can_edit)||state.with(|s|s.files.node_retirement.preview.is_none()) prop:checked=move ||state.with(|s|s.files.node_retirement.confirmed)

@@ -93,6 +93,7 @@ pub struct PermanentNodeRemovalAnalysis {
     parent_projection: Vec<RemovalParentProjection>,
     retained_commit_entries: usize,
     affected_branch_heads: Vec<HistoryBranchId>,
+    archived_branch_heads: Vec<HistoryBranchId>,
     frozen_files: Vec<HistoryFileId>,
     last_live_files: Vec<HistoryFileId>,
 }
@@ -127,6 +128,9 @@ impl PermanentNodeRemovalAnalysis {
     pub fn affected_branch_heads(&self) -> &[HistoryBranchId] {
         &self.affected_branch_heads
     }
+    /// Conditional terminal frontiers only. Execution still checks current
+    /// ownership, root, read leases, workspaces and the complete write set.
+    pub fn archived_branch_heads(&self) -> &[HistoryBranchId] { &self.archived_branch_heads }
     pub fn frozen_files(&self) -> &[HistoryFileId] {
         &self.frozen_files
     }
@@ -238,6 +242,23 @@ pub(super) fn analyze(
         work.step()?;
         if !selected.contains(&version.version_id) { last_live_files.remove(&version.file_id); }
     }
+    let mut archived_branch_heads = BTreeSet::new();
+    for file in &last_live_files {
+        work.step()?;
+        match crate::node_retirement::prospective_archived_branches(query.state, file.as_str(), graph.history_tree_id.as_str()) {
+            Ok(branches) => {
+                for branch in branches {
+                    work.step()?;
+                    let branch = HistoryBranchId::parse(&branch)?;
+                    if affected_branch_heads.contains(&branch) { archived_branch_heads.insert(branch); }
+                }
+            }
+            // A known retained namespace/D/path reference leaves its HEAD in
+            // the affected set, never in the conditional archive candidates.
+            Err(error) if error.code() == ErrorCode::ContentPinned => {}
+            Err(error) => return Err(error),
+        }
+    }
     let frozen_files = selected_files
         .into_iter()
         .filter(|file| query.state.file_deletions.contains_key(file.as_str()))
@@ -252,6 +273,7 @@ pub(super) fn analyze(
         parent_projection,
         retained_commit_entries,
         affected_branch_heads,
+        archived_branch_heads: archived_branch_heads.into_iter().collect(),
         frozen_files,
         last_live_files: last_live_files.into_iter().collect(),
     })

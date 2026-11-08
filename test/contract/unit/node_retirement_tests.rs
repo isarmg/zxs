@@ -60,8 +60,25 @@ fn termination_observation_must_match_the_exact_original_receipt() {
         history_root: root(), original_files: vec![file.clone()], terminated_files: vec![file.clone()],
         file_components: vec![vec![file.clone()]],
     };
-    let exact = json!({"result":{"retirement":{"file_terminations":{"files":[{"file_id":file,"version_ids":[version()]}]}}}});
+    let exact = json!({"result":{"retirement":{"file_terminations":{"files":[{"file_id":file,"version_ids":[version()],"retained_frontier":{"branch_ids":[],"digest":root()}}]}}}});
     separation.validate_for_receipt(&selection, &exact).unwrap();
     assert!(separation.validate_for_receipt(&selection, &json!({"result":{"retirement":{"file_terminations":{"files":[]}}}})).is_err());
     assert!(separation.validate_for_receipt(&selection, &json!({"result":{"retirement":{}}})).is_err());
+}
+
+
+#[test]
+fn terminal_transport_requires_the_canonical_archived_frontier() {
+    let file = HistoryFileId::parse(&format!("file_{}", "c".repeat(32))).unwrap();
+    let selection = Selection::new(file.clone(), root(), vec![version()]).unwrap();
+    let separation = Separation::Published {
+        history_root: root(), original_files: vec![file.clone()], terminated_files: vec![file.clone()],
+        file_components: vec![vec![file.clone()]],
+    };
+    let missing = json!({"result":{"retirement":{"file_terminations":{"files":[{"file_id":file,"version_ids":[version()]}]}}}});
+    assert!(separation.validate_for_receipt(&selection, &missing).is_err());
+    let branch = format!("br_{}", "d".repeat(32));
+    let duplicated = json!({"result":{"retirement":{"file_terminations":{"files":[{"file_id":file,"version_ids":[version()],
+        "retained_frontier":{"branch_ids":[branch,branch],"digest":root()}}]}}}});
+    assert!(separation.validate_for_receipt(&selection, &duplicated).is_err());
 }

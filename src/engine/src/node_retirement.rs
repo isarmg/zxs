@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::history_window::{HistoryFileId, HistoryRoot, HistoryTreeId, HistoryVersionId};
 
 mod publication;
+mod frontier;
 mod references;
 mod replicas;
 pub(crate) use replicas::{CleanupRoutes, original_cleanup_bindings};
@@ -44,6 +45,24 @@ fn pinned() -> Error {
 }
 pub(crate) fn is_retired(state: &State, version: &str) -> bool {
     state.content_states.get(version) == Some(&ContentState::Retired)
+}
+/// This is an early refusal on an already admitted State. Durable authorization
+/// comes from the exact terminal receipt closure, never from this predicate.
+pub(crate) fn is_terminal_file(state: &State, file: &str) -> bool {
+    let mut found = false;
+    for version in state.versions.values().filter(|version| version.file_id == file) {
+        if !is_retired(state, &version.version_id) { return false; }
+        found = true;
+    }
+    found
+}
+impl Decision {
+    pub(crate) fn archived_branch_ids(&self) -> BTreeSet<String> {
+        self.file_terminations.files.iter().flat_map(|file| file.retained_frontier.branch_ids.iter().cloned()).collect()
+    }
+}
+pub(crate) fn prospective_archived_branches(state: &State, file: &str, history: &str) -> Result<Vec<String>> {
+    Ok(frontier::RetainedFrontier::capture(state, file, history)?.branch_ids)
 }
 pub(crate) fn node_version<'a>(state: &'a State, node: &'a str) -> Option<&'a str> {
     state.versions.get(node).map(|v| v.version_id.as_str())
@@ -126,10 +145,12 @@ pub(crate) fn decision(receipt: &OperationResult) -> Result<Decision> {
     json_codec::from_value(receipt.result.get("retirement").ok_or_else(invalid)?.clone()).map_err(Into::into)
 }
 
-/// Published snapshot closure. Current heads may never refer to a retired body.
-/// Retained commit/source proofs are not live heads and remain untouched.
-fn require_live_references(state: &State) -> Result<()> {
+/// Published snapshot closure. Only exact terminal branch frontiers admitted
+/// above are archival HEADs; all current namespace/directory/D roots stay live
+/// and may not refer to retired bodies. Original proofs remain untouched.
+fn require_live_references(state: &State, terminals: &BTreeSet<String>, archived: &BTreeSet<String>) -> Result<()> {
     for branch in state.branches.values() {
+        if archived.contains(&branch.branch_id) { continue; }
         if branch.file_node_id.as_deref().is_some_and(|id| node_is_retired(state, id))
             || branch.pending_file_versions.values().any(|id| is_retired(state, id))
             || state.commits.get(&branch.head_commit_id).is_some_and(|commit| {
@@ -164,6 +185,7 @@ fn require_live_references(state: &State) -> Result<()> {
         if node.parent_node_ids.iter().chain(node.branch_heads.values()).any(|id| node_is_retired(state, id)) { return Err(pinned()); }
     }
     for merge in state.file_branch_merges.values() {
+        if terminals.contains(&merge.file_id) { continue; }
         if node_is_retired(state, &merge.result_node_id)
             || merge.parent_node_ids.iter().chain(&merge.input_node_ids).chain(std::iter::once(&merge.chosen_node_id)).any(|id| node_is_retired(state, id)) {
             return Err(pinned());

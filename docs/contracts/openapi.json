@@ -20353,7 +20353,16 @@
             "items": {
               "$ref": "#/components/schemas/FileId"
             },
-            "description": "Conditional files for which the explicit selection covers every remaining live body. Existing HEAD, directory, D, branch, workspace or lease references still prevent termination."
+            "description": "Conditional files for which the explicit selection covers every remaining live body. Their own complete file-branch HEAD/merge frontier may be permanently archived only after all current namespace, path, directory/Git and D references are detached; workspaces and leases still block."
+          },
+          "archived_branch_heads": {
+            "type": "array",
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/BranchId"
+            },
+            "description": "Sorted subset of affected_branch_heads whose complete selected stable file has a capturable retained frontier and no current namespace, path context, directory or D reference. Conditional only; execution still rechecks leases, workspaces, Git and the complete current-root decision."
           }
         },
         "required": [
@@ -20366,7 +20375,8 @@
           "retained_commit_entries",
           "affected_branch_heads",
           "frozen_files",
-          "last_live_files"
+          "last_live_files",
+          "archived_branch_heads"
         ],
         "description": "All file components are disjoint and contain at most 64 files in total including origin. The response is bound to the exact sorted selection and root. Known HEAD/deletion blockers are not an exhaustive execution admission result."
       },
@@ -20621,7 +20631,7 @@
             ]
           }
         ],
-        "description": "Exact original publication-time separation, never today's topology or body cleanup. Original files are sorted/unique, include the selected origin, and are covered once by disjoint sorted components. Bound to the original request root. The permanent native decision freezes and authenticates the complete original live version cohort; cold admission recomputes this historical partition without filtering later retirements or adding later saves. terminated_files is sorted/unique and exactly matches operation.result.retirement.file_terminations.files. Each terminal file is a singleton original component with every retained version permanently retired; no future version may reuse that stable file_id. Current HEAD/D/branch termination is not supported by this detached-file slice."
+        "description": "Exact original publication-time separation, never today's topology or body cleanup. Original files are sorted/unique, include the selected origin, and are covered once by disjoint sorted components. Bound to the original request root. The permanent native decision freezes and authenticates the complete original live version cohort; cold admission recomputes this historical partition without filtering later retirements or adding later saves. terminated_files is sorted/unique and exactly matches operation.result.retirement.file_terminations.files. Each terminal file is a singleton original component with every retained version permanently retired; no future version may reuse that stable file_id. Current namespace/D termination is not supported. Each native terminal record requires retained_frontier with canonical branch_ids and digest. Native admission freezes exact branch records, HEAD commits, aliases, merges, selection, write origin and selection generation; those branch HEADs remain immutable evidence, never writable identities."
       }
     }
   }

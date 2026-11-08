@@ -369,6 +369,15 @@ impl Engine {
         Ok(result)
     }
     pub(crate) fn check_purge(&self, history: &str, versions: &[String]) -> Result<()> {
+        self.check_purge_with_archived(history, versions, &BTreeSet::new())
+    }
+    /// Only the exact branch set frozen by a complete terminal decision may be
+    /// read as immutable evidence instead of a live HEAD. Every other purge
+    /// admission, including leases, directories, Git and workspaces, is unchanged.
+    pub(crate) fn check_retirement_purge(&self, history: &str, versions: &[String], decision: &crate::node_retirement::Decision) -> Result<()> {
+        self.check_purge_with_archived(history, versions, &decision.archived_branch_ids())
+    }
+    fn check_purge_with_archived(&self, history: &str, versions: &[String], archived: &BTreeSet<String>) -> Result<()> {
         let selected = versions.iter().collect::<BTreeSet<_>>();
         let reads = self
             .reads
@@ -382,7 +391,7 @@ impl Engine {
             self.state
                 .branches
                 .values()
-                .filter(|branch| branch.state == BranchState::Active)
+                .filter(|branch| branch.state == BranchState::Active && !archived.contains(&branch.branch_id))
                 .filter_map(|branch| self.state.commits.get(&branch.head_commit_id))
                 .flat_map(|commit| &commit.entries)
                 .filter(|entry| selected.contains(&entry.version_id))

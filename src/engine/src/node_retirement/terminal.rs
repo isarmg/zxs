@@ -1,5 +1,5 @@
-//! Last-node decisions close a detached stable identity, not only its old bodies.
-//! Current namespace/HEAD/D references are still rejected by the common guard.
+//! Last-node decisions close stable identity and freeze retained branch evidence.
+//! Current namespace, directory and D references still require detachment.
 use super::*;
 
 const MAX_TERMINAL_VERSIONS: usize = 65_536;
@@ -9,6 +9,7 @@ const MAX_TERMINAL_VERSIONS: usize = 65_536;
 pub(super) struct TerminalFile {
     pub(super) file_id: String,
     version_ids: Vec<String>,
+    pub(super) retained_frontier: frontier::RetainedFrontier,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,18 +33,6 @@ fn retained_versions<'a>(state: &'a State, files: &BTreeSet<&str>) -> Result<BTr
     Ok(result)
 }
 
-fn require_detached(state: &State, file: &str) -> Result<()> {
-    if state.file_deletions.contains_key(file)
-        || state.file_selections.contains_key(file)
-        || state.file_write_origins.contains_key(file)
-        || state.branches.values().any(|branch| branch.file_id.as_deref() == Some(file))
-        || state.file_branch_merges.values().any(|event| event.file_id == file) {
-        return Err(Error::new(ErrorCode::ContentPinned,
-            "last-node retirement requires a detached file; retained file branches or a deletion frontier require whole-file termination"));
-    }
-    Ok(())
-}
-
 impl TerminalFiles {
     pub(super) fn capture(state: &State, request: &Request) -> Result<Self> {
         let selected = request.version_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
@@ -51,9 +40,9 @@ impl TerminalFiles {
         let mut ended = Vec::new();
         for (file, versions) in retained_versions(state, &files)? {
             if versions.iter().any(|id| !selected.contains(id) && !is_retired(state, id)) { continue; }
-            require_detached(state, file)?;
+            let retained_frontier = frontier::RetainedFrontier::capture(state, file, &request.history_tree_id)?;
             if versions.iter().any(|id| state.versions[*id].history_tree_id != request.history_tree_id) { return Err(invalid()); }
-            ended.push(TerminalFile { file_id: file.into(), version_ids: versions.into_iter().map(str::to_owned).collect() });
+            ended.push(TerminalFile { file_id: file.into(), version_ids: versions.into_iter().map(str::to_owned).collect(), retained_frontier });
         }
         Ok(Self { files: ended })
     }
@@ -66,7 +55,7 @@ impl TerminalFiles {
         let mut total = 0;
         for file in &self.files {
             HistoryFileId::parse(&file.file_id)?;
-            require_detached(state, &file.file_id)?;
+            file.retained_frontier.validate(state, &file.file_id, &request.history_tree_id)?;
             total += file.version_ids.len();
             if file.version_ids.is_empty() || total > MAX_TERMINAL_VERSIONS
                 || file.version_ids.windows(2).any(|pair| pair[0] >= pair[1])

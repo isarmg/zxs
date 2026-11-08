@@ -41,7 +41,7 @@ pub(super) fn submit(state: RwSignal<State>) {
         let selection = model.selection()?;
         let preview = model.preview.as_ref()?;
         if model.target.as_ref() != Some(&target) || model.loading || model.attempt.is_some() || !model.confirmed
-            || preview.validate(&selection).is_err() || !preview.affected_branch_heads.is_empty() || !preview.frozen_files.is_empty() { return None; }
+            || preview.validate(&selection).is_err() || preview.affected_branch_heads.iter().any(|branch| !preview.archived_branch_heads.contains(branch)) || !preview.frozen_files.is_empty() { return None; }
         Some((target, selection))
     });
     let Some((target, selection)) = request else { return; };

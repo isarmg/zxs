@@ -6,6 +6,7 @@ use storage_contract::{MapChanges, SequenceChanges, TrackedOperations};
 pub(crate) fn admit_current(state: &State) -> Result<()> {
     let mut retired = BTreeSet::new();
     let mut terminals = BTreeSet::new();
+    let mut archived = BTreeSet::new();
     let mut receipts = BTreeMap::new();
     for receipt in state.operations.values().filter(|r| r.kind == KIND) {
         let decision = decision(receipt)?;
@@ -13,6 +14,7 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
         decision.cleanup_routes.validate(&decision.request)?;
         decision.separation.validate(state, &decision.request)?;
         decision.file_terminations.validate(state, &decision.request)?;
+        archived.extend(decision.archived_branch_ids());
         for file in &decision.file_terminations.files {
             if !terminals.insert(file.file_id.clone()) { return Err(invalid()); }
         }
@@ -47,7 +49,7 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
         return Err(invalid());
     }
     terminal::require_complete(state, &terminals)?;
-    if !retired.is_empty() { require_live_references(state)?; }
+    if !retired.is_empty() { require_live_references(state, &terminals, &archived)?; }
     Ok(())
 }
 
