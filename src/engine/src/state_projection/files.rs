@@ -62,6 +62,9 @@ impl FileVersions {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FileRows {
+    pub(crate) deletion_operations: super::lifecycles::DeletionOperations,
+    pub(crate) branches: SharedRecords<()>,
+    pub(crate) merge_links: SharedRecords<()>,
     pub(crate) pending_branches: SharedRecords<()>,
     pub(crate) path_nodes: SharedRecords<()>,
     pub(crate) metadata_nodes: SharedRecords<()>,
@@ -72,6 +75,8 @@ pub(crate) struct FileRows {
 
 #[derive(Clone, Copy)]
 enum FileField {
+    Branch,
+    MergeLink,
     PendingBranch,
     PathNode,
     MetadataNode,
@@ -83,6 +88,8 @@ enum FileField {
 impl FileRows {
     fn field(&mut self, field: FileField) -> &mut SharedRecords<()> {
         match field {
+            FileField::Branch => &mut self.branches,
+            FileField::MergeLink => &mut self.merge_links,
             FileField::PendingBranch => &mut self.pending_branches,
             FileField::PathNode => &mut self.path_nodes,
             FileField::MetadataNode => &mut self.metadata_nodes,
@@ -92,8 +99,11 @@ impl FileRows {
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         let Self {
+            deletion_operations,
+            branches,
+            merge_links,
             pending_branches,
             path_nodes,
             metadata_nodes,
@@ -101,13 +111,40 @@ impl FileRows {
             contexts,
             aliases,
         } = self;
-        pending_branches.is_empty()
+        deletion_operations.is_empty()
+            && branches.is_empty()
+            && merge_links.is_empty()
+            && pending_branches.is_empty()
             && path_nodes.is_empty()
             && metadata_nodes.is_empty()
             && merges.is_empty()
             && contexts.is_empty()
             && aliases.is_empty()
     }
+}
+
+fn link_branches<'a>(state: &'a State, key: &str) -> BTreeSet<&'a str> {
+    state
+        .merge_links
+        .get(key)
+        .into_iter()
+        .flat_map(|link| {
+            [
+                link.source_branch_id.as_str(),
+                link.target_branch_id.as_str(),
+            ]
+        })
+        .collect()
+}
+
+fn link_files<'a>(state: &'a State, key: &str) -> BTreeSet<&'a str> {
+    state
+        .merge_links
+        .get(key)
+        .into_iter()
+        .flat_map(|link| [&link.source_branch_id, &link.target_branch_id])
+        .filter_map(|branch| state.branches.get(branch)?.file_id.as_deref())
+        .collect()
 }
 
 fn context_file<'a>(state: &'a State, key: &str) -> Option<&'a str> {
@@ -209,8 +246,19 @@ impl DerivedOwners {
 
     pub(super) fn build_file_rows(&mut self, state: &State) {
         for (key, branch) in state.branches.iter() {
+            if let Some(file) = &branch.file_id {
+                self.file_member(file, FileField::Branch, key, true);
+            }
             for file in branch.pending_file_versions.keys() {
                 self.file_member(file, FileField::PendingBranch, key, true);
+            }
+        }
+        for key in state.merge_links.keys() {
+            for branch in link_branches(state, key) {
+                self.branch_links.add(branch, key);
+            }
+            for file in link_files(state, key) {
+                self.file_member(file, FileField::MergeLink, key, true);
             }
         }
         macro_rules! direct {
@@ -246,6 +294,12 @@ impl DerivedOwners {
         for key in &writes.rows[&Field::Branches] {
             let previous = before.branches.get(key);
             let next = after.branches.get(key);
+            self.move_file_member(
+                FileField::Branch,
+                key,
+                previous.and_then(|branch| branch.file_id.as_deref()),
+                next.and_then(|branch| branch.file_id.as_deref()),
+            );
             let previous_files = previous
                 .into_iter()
                 .flat_map(|branch| branch.pending_file_versions.keys())
@@ -259,6 +313,47 @@ impl DerivedOwners {
             }
             for file in next_files.difference(&previous_files) {
                 self.file_member(file, FileField::PendingBranch, key, true);
+            }
+        }
+        let mut links = writes.rows[&Field::MergeLinks].clone();
+        // Membership follows both changed links and changes in endpoint
+        // ownership. A reverse relation avoids a full merge-link scan on each
+        // ordinary first save that creates an independent file branch.
+        for key in &writes.rows[&Field::MergeLinks] {
+            let previous = link_branches(before, key);
+            let next = link_branches(after, key);
+            for branch in previous.difference(&next) {
+                self.branch_links.remove(branch, key);
+            }
+            for branch in next.difference(&previous) {
+                self.branch_links.add(branch, key);
+            }
+        }
+        for id in &writes.rows[&Field::Branches] {
+            if before
+                .branches
+                .get(id)
+                .and_then(|branch| branch.file_id.as_ref())
+                != after
+                    .branches
+                    .get(id)
+                    .and_then(|branch| branch.file_id.as_ref())
+            {
+                for index in [old, &*self] {
+                    index.branch_links.each(id, |key| {
+                        links.insert(key.to_owned());
+                    });
+                }
+            }
+        }
+        for key in links {
+            let previous = link_files(before, &key);
+            let next = link_files(after, &key);
+            for file in previous.difference(&next) {
+                self.file_member(file, FileField::MergeLink, &key, false);
+            }
+            for file in next.difference(&previous) {
+                self.file_member(file, FileField::MergeLink, &key, true);
             }
         }
         macro_rules! direct {

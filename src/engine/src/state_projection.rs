@@ -7,6 +7,7 @@ use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{ContentState, MapChanges, NamespaceEntryKind, SharedRecords};
 mod files;
+pub(crate) mod lifecycles;
 pub(crate) use files::FileRows;
 
 // One schema drives State coverage, row lookup, membership, and graph field names.
@@ -83,6 +84,9 @@ macro_rules! define_fields {
                 let mut writes = Self {
                     histories: exact_keys(after.histories.changes_since(&before.histories))?,
                     repositories: exact_keys(after.repositories.changes_since(&before.repositories))?,
+                    operations: exact_keys(after.operations.changes_since(&before.operations))?
+                        .union(&exact_keys(after.operation_principals.changes_since(&before.operation_principals))?)
+                        .copied().collect(),
                     ..Self::default()
                 };
                 $(writes.rows.insert(Field::$variant,
@@ -244,7 +248,7 @@ fn directory_branch_owners(
         .map(|branch| index.repositories.owners(&branch.repository_id))
         .unwrap_or_default()
 }
-fn exact_keys(changes: MapChanges) -> Option<BTreeSet<String>> {
+fn exact_keys<K: Ord + Clone>(changes: MapChanges<K>) -> Option<BTreeSet<K>> {
     match changes {
         MapChanges::Keys(keys) => Some(keys.as_ref().clone()),
         MapChanges::All => None,
@@ -370,10 +374,13 @@ pub(crate) struct DerivedOwners {
     history_rows: SharedRecords<Rows>,
     file_rows: SharedRecords<FileRows>,
     branch_contexts: SharedRecords<SharedRecords<()>>,
+    branch_links: References,
+    unscoped_deletions: lifecycles::DeletionOperations,
 }
 
 #[derive(Clone, Default)]
 struct Writes {
+    operations: BTreeSet<storage_contract::OperationId>,
     rows: BTreeMap<Field, BTreeSet<String>>,
     histories: BTreeSet<String>,
     repositories: BTreeSet<String>,
@@ -546,6 +553,7 @@ impl DerivedOwners {
             });
         }
         index.build_file_rows(state);
+        index.build_deletion_rows(state);
         index
     }
     pub(super) fn rows(&self, history: &str) -> Option<&Rows> {
@@ -664,6 +672,7 @@ impl DerivedOwners {
         let mut owners = index.clone();
         owners.update_dependencies(before, after, &writes, &mut affected);
         owners.update_file_rows(before, after, index, &writes);
+        owners.update_deletion_rows(before, after, &writes);
         for key in &writes.histories {
             if before.histories.get(key) != after.histories.get(key)
                 && let Some(histories) = histories.as_deref_mut()

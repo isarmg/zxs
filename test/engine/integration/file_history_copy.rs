@@ -682,3 +682,6 @@ fn history_copy_preserves_consumed_branch_aliases_and_merge_frontier() {
     assert_eq!(entry(&engine, &target, "copied.txt"), copied);
     assert_eq!(bytes(&engine, &copied.version_id), b"new full body");
 }
+
+#[path = "file_history_copy/file_databases.rs"]
+mod file_databases;

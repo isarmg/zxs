@@ -2,6 +2,7 @@
 use crate::{disk::*, *};
 mod changes;
 mod directory_database;
+pub(crate) mod file_database;
 mod layout_batch;
 mod layout_goals;
 mod layout_locator;
@@ -1015,6 +1016,7 @@ struct PreparedName {
     name: String,
     offset: u64,
     length: usize,
+    database: Option<file_database::install::PreparedFile>,
 }
 impl PreparedNames {
     pub(crate) fn apply(self) -> Result<()> {
@@ -1034,6 +1036,9 @@ impl PreparedNames {
         for item in cache.items {
             let root = &item.disk.root;
             if !path_directory_exists_at(root, root.path(), &item.history)? {
+                if item.database.is_some() {
+                    return Err(invalid("prepared file database history disappeared"));
+                }
                 continue;
             }
             let Some(current) = container_at(
@@ -1044,8 +1049,14 @@ impl PreparedNames {
                 &mut |_| Ok(()),
             )?
             else {
+                if item.database.is_some() {
+                    return Err(invalid("prepared file database container disappeared"));
+                }
                 continue;
             };
+            if let Some(database) = &item.database {
+                database.check_entity(root, &current)?;
+            }
             let stable = item.history.join("file-containers").join(&item.file);
             let locator = item
                 .history
@@ -1072,6 +1083,9 @@ impl PreparedNames {
             cache.file.read_exact(&mut bytes)?;
             root.write_atomic(&named.join("container.json"), &bytes, true)?;
             root.sync_dir(&named)?;
+            if let Some(database) = item.database {
+                database.apply(root, &named, observe)?;
+            }
         }
         Ok(receipt)
     }
@@ -1103,8 +1117,7 @@ pub(crate) fn repair_historical_names(
         resources,
         &projection,
         MAX_METADATA,
-        true,
-        true,
+        NamePreparation::HistoricalPrefix,
         shared_layout::PreparedLayouts::default(),
     )?
     .apply()
@@ -1157,7 +1170,12 @@ fn prepare_names_with_admission(
         admission,
     )?;
     prepare_names_inner(
-        config, resources, projection, maximum, false, false, layouts,
+        config,
+        resources,
+        projection,
+        maximum,
+        NamePreparation::Candidate(admission),
+        layouts,
     )
 }
 
@@ -1179,8 +1197,7 @@ pub(crate) fn prepare_layout_repair(
         resources,
         &projection,
         MAX_METADATA,
-        true,
-        false,
+        NamePreparation::CurrentStateRepair(admission),
         layouts,
     )
 }
@@ -1253,20 +1270,40 @@ pub(crate) fn validate_new_projection_paths(projection: &ProjectionTransition<'_
     Ok(())
 }
 
+enum NamePreparation {
+    Candidate(crate::database_install::InstallAdmission),
+    HistoricalPrefix,
+    CurrentStateRepair(crate::database_install::InstallAdmission),
+}
+
 fn prepare_names_inner(
     config: &ValidatedConfig,
     resources: &Arc<DiskResources>,
     projection: &ProjectionTransition<'_>,
     maximum: usize,
-    historical: bool,
-    skip_shared: bool,
+    mode: NamePreparation,
     layouts: shared_layout::PreparedLayouts,
 ) -> Result<PreparedNames> {
+    let (historical, skip_shared, admission) = match mode {
+        NamePreparation::Candidate(admission) => (false, false, admission),
+        NamePreparation::HistoricalPrefix => (
+            true,
+            true,
+            crate::database_install::InstallAdmission::DecidedRecovery,
+        ),
+        NamePreparation::CurrentStateRepair(admission) => (true, false, admission),
+    };
     let previous = projection.previous();
     let view = projection.next();
     let next = view.state();
     let mut cache: Option<PreparedNameCache> = None;
+    let mut reservations = crate::database_install::Reservations::default();
+    layouts.reserve_databases(&mut reservations)?;
+    let mut database_bytes = 0usize;
     let mut files = changed_files(previous.state(), next);
+    if !skip_shared {
+        files.extend(file_database::changes::affected(previous.state(), next));
+    }
     files.extend(layouts.files().cloned());
     for file in files {
         let locations = projection_locations(previous, view, &file);
@@ -1373,6 +1410,29 @@ fn prepare_names_inner(
                 object.remove("layout_owner_directory_id");
             }
             let bytes = encode_metadata(&descriptor_value, maximum)?;
+            // Historical prefix cache repair never writes a newer local DB.
+            // Only this complete candidate or final admitted State may install.
+            let database = if skip_shared {
+                None
+            } else {
+                let database = file_database::install::PreparedFile::capture(
+                    &held.root,
+                    (&history, &history_id),
+                    &current,
+                    &file,
+                    view,
+                    admission,
+                )?;
+                database_bytes += database.byte_len();
+                if database_bytes > file_database::MAX_TOTAL_BYTES {
+                    return Err(Error::new(
+                        ErrorCode::ResourceLimit,
+                        "file databases exceed the preparation byte budget",
+                    ));
+                }
+                reservations.add(held, &history, database.reservation())?;
+                Some(database)
+            };
             let staged = match &mut cache {
                 Some(staged) => staged,
                 empty @ None => empty.insert(PreparedNameCache {
@@ -1391,9 +1451,12 @@ fn prepare_names_inner(
                 name: name.to_owned(),
                 offset,
                 length: bytes.len(),
+                database,
             });
         }
     }
+    // The file and directory installers share one retained history hierarchy.
+    reservations.check(admission)?;
     // Surface staging allocation/writeback failures before any decision.
     if let Some(staged) = &cache {
         staged.file.sync_data()?;

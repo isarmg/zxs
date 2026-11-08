@@ -368,6 +368,17 @@ fn write_mode(root: &DiskRoot) -> Result<()> {
 }
 
 impl PreparedLayouts {
+    pub(super) fn reserve_databases(
+        &self,
+        reservations: &mut crate::database_install::Reservations,
+    ) -> Result<()> {
+        for history in &self.histories {
+            for (_, install) in &history.databases {
+                reservations.add(&history.disk, &history.history, install.reservation())?;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn projection(
         &self,
         slot: &str,

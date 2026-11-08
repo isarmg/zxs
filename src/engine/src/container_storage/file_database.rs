@@ -1,0 +1,283 @@
+//! File-local SQLite projection of a captured State, not publication authority.
+//! It never opens a disk pathname through SQLite and never authorizes a move.
+use crate::{Error, ErrorCode, Result, state_projection::StateProjection};
+use data_serialization::Serialize;
+use platform_io::sqlite::block_on_sqlite_connection;
+use sqlite_access::{
+    Connection, Executor, Row, SqliteConnection,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
+};
+
+pub(super) mod changes;
+pub(super) mod install;
+mod projection;
+mod rows;
+
+pub(crate) const NAME: &str = ".zxs-file.sqlite";
+const FORMAT: &str = "file-local-retained-graph";
+pub(super) const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+pub(super) const MAX_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ROWS: usize = 65_536;
+const META: &str = "CREATE TABLE identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), format TEXT NOT NULL, file_id TEXT NOT NULL, history_tree_id TEXT NOT NULL, source_sequence TEXT NOT NULL, records_hash TEXT NOT NULL) STRICT";
+const RECORDS: &str = "CREATE TABLE records (kind TEXT NOT NULL CHECK(kind IN ('file','version','branch','anchor','metadata','deletion','lifecycle','merge','merge_link')), id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id)) STRICT";
+
+#[derive(Serialize)]
+struct Record {
+    kind: &'static str,
+    id: String,
+    body: String,
+}
+pub(super) struct Prepared {
+    pub(super) bytes: Vec<u8>,
+}
+fn invalid(message: &str) -> Error {
+    Error::new(ErrorCode::ContainerLayoutInvalid, message)
+}
+fn budget() -> Error {
+    Error::new(
+        ErrorCode::ResourceLimit,
+        "file database exceeds its bounded record or byte budget",
+    )
+}
+async fn finish<T>(result: Result<T>, connection: SqliteConnection) -> Result<T> {
+    match (result, connection.close().await) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Err(close)) => Err(Error::Cleanup {
+            operation: Box::new(error),
+            cleanup: std::io::Error::other(close),
+        }),
+    }
+}
+
+/// Rows originate from the captured State and its tied owner index. The caller
+/// must prove publication admission before installation. Neither this projection
+/// nor its self digest grants authority or proves a complete historical copy.
+pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> Result<Prepared> {
+    storage_contract::validate_id(file, "file")?;
+    storage_contract::validate_id(history, "history")?;
+    if !view
+        .owners()
+        .file_histories(file)
+        .map(String::as_str)
+        .eq([history])
+    {
+        return Err(invalid(
+            "file database requires one exact retained history owner",
+        ));
+    }
+    let records = projection::records(view, file)?;
+    let hash = storage_contract::object_hash("file-local-records", &records)?;
+    let sequence = view.state().sequence;
+    let bytes = block_on_sqlite_connection(async {
+        let options = SqliteConnectOptions::new()
+            .in_memory(true)
+            .journal_mode(SqliteJournalMode::Memory);
+        let mut connection = SqliteConnection::connect_with(&options).await?;
+        let result = async {
+            connection.execute("PRAGMA page_size=4096").await?;
+            connection.execute("PRAGMA max_page_count=4096").await?;
+            let mut tx = connection.begin().await?;
+            tx.execute(META).await?;
+            tx.execute(RECORDS).await?;
+            sqlite_access::query("INSERT INTO identity VALUES(1,?,?,?,?,?)")
+                .bind(FORMAT)
+                .bind(file)
+                .bind(history)
+                .bind(sequence.to_string())
+                .bind(&hash)
+                .execute(&mut *tx)
+                .await?;
+            for record in records {
+                sqlite_access::query("INSERT INTO records VALUES(?,?,?)")
+                    .bind(record.kind)
+                    .bind(record.id)
+                    .bind(record.body)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
+            let bytes = connection.serialize(None).await?;
+            if bytes.len() > MAX_BYTES {
+                return Err(budget());
+            }
+            Ok(bytes.to_vec())
+        }
+        .await;
+        finish(result, connection).await
+    })?;
+    Ok(Prepared { bytes })
+}
+
+/// A pure byte boundary. Resource identity and installation belong to the
+/// common installer; this verifier never reopens a pathname or authorizes I/O.
+pub(super) fn verify_scope(bytes: &[u8], file: &str, history: &str) -> Result<()> {
+    let identity = verify(bytes).map_err(|error| {
+        error.context(
+            ErrorCode::ContainerLayoutInvalid,
+            "file database failed bounded format verification",
+        )
+    })?;
+    if identity != (file.to_owned(), history.to_owned()) {
+        return Err(invalid("file database belongs to another container"));
+    }
+    Ok(())
+}
+
+fn verify(bytes: &[u8]) -> Result<(String, String)> {
+    if bytes.len() > MAX_BYTES {
+        return Err(budget());
+    }
+    let database = SqliteOwnedBuf::try_from(bytes)?;
+    block_on_sqlite_connection(async {
+        let mut connection =
+            SqliteConnection::connect_with(&SqliteConnectOptions::new().in_memory(true)).await?;
+        let result = async {
+            connection.deserialize(None, database, true).await?;
+            verify_connection(&mut connection).await
+        }
+        .await;
+        finish(result, connection).await
+    })
+}
+async fn verify_schema(connection: &mut SqliteConnection) -> Result<()> {
+    let schemas = sqlite_access::query(
+        "SELECT name,type,tbl_name,sql FROM sqlite_schema ORDER BY name LIMIT 4",
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    let expected = [
+        ("identity", "table", "identity", Some(META)),
+        ("records", "table", "records", Some(RECORDS)),
+        ("sqlite_autoindex_records_1", "index", "records", None),
+    ];
+    if schemas.len() != expected.len() {
+        return Err(invalid("file database has unexpected schema objects"));
+    }
+    for (row, (name, kind, table, ddl)) in schemas.into_iter().zip(expected) {
+        if row.try_get::<String, _>("name")? != name
+            || row.try_get::<String, _>("type")? != kind
+            || row.try_get::<String, _>("tbl_name")? != table
+            || row.try_get::<Option<String>, _>("sql")?.as_deref() != ddl
+        {
+            return Err(invalid(
+                "file database schema differs from the supported format",
+            ));
+        }
+    }
+    Ok(())
+}
+async fn read_records(
+    connection: &mut SqliteConnection,
+    file: &str,
+    history: &str,
+    sequence: u64,
+) -> Result<Vec<Record>> {
+    let mut records = Vec::<Record>::new();
+    let mut bytes = 0;
+    let mut validation = rows::Validation::new(file, history, sequence);
+    loop {
+        // Enumerate one bounded row at a time. Shared overflow payloads in a
+        // corrupt DB must not multiply into an unbounded fetch_all allocation.
+        let row = match records.last() {
+            Some(last) => sqlite_access::query(
+                "SELECT kind,id,body FROM records WHERE (kind,id)>(?,?) ORDER BY kind,id LIMIT 1",
+            )
+            .bind(last.kind)
+            .bind(&last.id)
+            .fetch_optional(&mut *connection)
+            .await?,
+            None => {
+                sqlite_access::query("SELECT kind,id,body FROM records ORDER BY kind,id LIMIT 1")
+                    .fetch_optional(&mut *connection)
+                    .await?
+            }
+        };
+        let Some(row) = row else {
+            break;
+        };
+        if records.len() == MAX_ROWS {
+            return Err(budget());
+        }
+        let kind: String = row.try_get("kind")?;
+        let kind = match kind.as_str() {
+            "file" => "file",
+            "version" => "version",
+            "branch" => "branch",
+            "anchor" => "anchor",
+            "metadata" => "metadata",
+            "deletion" => "deletion",
+            "lifecycle" => "lifecycle",
+            "merge" => "merge",
+            "merge_link" => "merge_link",
+            _ => return Err(invalid("file database record kind is unsupported")),
+        };
+        let id: String = row.try_get("id")?;
+        if id.is_empty() {
+            return Err(invalid("file database record identity is empty"));
+        }
+        let body: String = row.try_get("body")?;
+        bytes += id.len() + body.len();
+        if bytes > projection::MAX_RECORD_BYTES {
+            return Err(budget());
+        }
+        validation.admit(kind, &id, &body)?;
+        records.push(Record { kind, id, body });
+    }
+    validation.finish()?;
+    Ok(records)
+}
+async fn verify_connection(connection: &mut SqliteConnection) -> Result<(String, String)> {
+    platform_io::sqlite::enable_defensive(connection)
+        .await
+        .map_err(|error| {
+            Error::from(std::io::Error::other(error)).context(
+                ErrorCode::ContainerLayoutInvalid,
+                "cannot secure file SQLite reader",
+            )
+        })?;
+    let limits = platform_io::sqlite::ConnectionLimits::new(MAX_BYTES as u32)
+        .with_max_sql_bytes(4096)
+        .with_max_vm_operations(100_000)
+        .with_max_bind_parameters(16);
+    platform_io::sqlite::apply_connection_limits(connection, limits)
+        .await
+        .map_err(|error| {
+            Error::from(std::io::Error::other(error)).context(
+                ErrorCode::ContainerLayoutInvalid,
+                "cannot bound file SQLite reader",
+            )
+        })?;
+    verify_schema(connection).await?;
+    let identities = sqlite_access::query("SELECT * FROM identity LIMIT 2")
+        .fetch_all(&mut *connection)
+        .await?;
+    if identities.len() != 1 {
+        return Err(invalid("file database has no unique owner"));
+    }
+    let owner = &identities[0];
+    if owner.try_get::<i64, _>("singleton")? != 1 || owner.try_get::<String, _>("format")? != FORMAT
+    {
+        return Err(invalid("file database belongs to another format"));
+    }
+    let file: String = owner.try_get("file_id")?;
+    storage_contract::validate_id(&file, "file")?;
+    let history: String = owner.try_get("history_tree_id")?;
+    storage_contract::validate_id(&history, "history")?;
+    let sequence =
+        storage_contract::parse_u64_decimal(&owner.try_get::<String, _>("source_sequence")?)?;
+    let records = read_records(connection, &file, &history, sequence).await?;
+    if storage_contract::object_hash("file-local-records", &records)?
+        != owner.try_get::<String, _>("records_hash")?
+    {
+        return Err(invalid(
+            "file database records differ from their recorded digest",
+        ));
+    }
+    Ok((file, history))
+}
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/container_storage/file_database_tests.rs"]
+mod tests;

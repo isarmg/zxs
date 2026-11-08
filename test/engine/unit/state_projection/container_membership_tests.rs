@@ -6,6 +6,9 @@ use json_codec::json;
 #[derive(Default, Debug, PartialEq, Eq)]
 struct Membership {
     versions_by_history: BTreeMap<String, BTreeSet<String>>,
+    deletion_operations: BTreeSet<storage_contract::OperationId>,
+    branches: BTreeSet<String>,
+    merge_links: BTreeSet<String>,
     pending_branches: BTreeSet<String>,
     path_nodes: BTreeSet<String>,
     metadata_nodes: BTreeSet<String>,
@@ -16,6 +19,25 @@ struct Membership {
 
 fn full_memberships(state: &State) -> BTreeMap<String, Membership> {
     let mut expected = BTreeMap::<String, Membership>::new();
+    for (id, receipt) in state.operations.iter() {
+        let key = match receipt.kind.as_str() {
+            "file.delete" => "deletion_node",
+            "file.delete.undo" => "removed_deletion_node",
+            _ => continue,
+        };
+        if let Some(file) = receipt
+            .result
+            .get(key)
+            .and_then(|node| node.get("file_id"))
+            .and_then(Value::as_str)
+        {
+            expected
+                .entry(file.to_owned())
+                .or_default()
+                .deletion_operations
+                .insert(*id);
+        }
+    }
     for (id, version) in state.versions.iter() {
         let file = expected.entry(version.file_id.clone()).or_default();
         file.versions_by_history
@@ -24,12 +46,34 @@ fn full_memberships(state: &State) -> BTreeMap<String, Membership> {
             .insert(id.clone());
     }
     for (id, branch) in state.branches.iter() {
+        if let Some(file) = &branch.file_id {
+            expected
+                .entry(file.clone())
+                .or_default()
+                .branches
+                .insert(id.clone());
+        }
         for file in branch.pending_file_versions.keys() {
             expected
                 .entry(file.clone())
                 .or_default()
                 .pending_branches
                 .insert(id.clone());
+        }
+    }
+    for (id, link) in state.merge_links.iter() {
+        for branch in [&link.source_branch_id, &link.target_branch_id] {
+            if let Some(file) = state
+                .branches
+                .get(branch)
+                .and_then(|branch| branch.file_id.as_ref())
+            {
+                expected
+                    .entry(file.clone())
+                    .or_default()
+                    .merge_links
+                    .insert(id.clone());
+            }
         }
     }
     for (id, node) in state.file_path_nodes.iter() {
@@ -102,6 +146,9 @@ fn assert_memberships(state: &State, index: &DerivedOwners) {
             ..Membership::default()
         };
         if let Some(rows) = index.file_rows(&file) {
+            actual.deletion_operations = rows.deletion_operations.keys().copied().collect();
+            actual.branches = rows.branches.keys().cloned().collect();
+            actual.merge_links = rows.merge_links.keys().cloned().collect();
             actual.pending_branches = rows.pending_branches.keys().cloned().collect();
             actual.path_nodes = rows.path_nodes.keys().cloned().collect();
             actual.metadata_nodes = rows.metadata_nodes.keys().cloned().collect();
@@ -188,6 +235,19 @@ fn fixture() -> State {
         );
     }
     state.file_branch_aliases.insert("b-a".into(), "b-b".into());
+    state.merge_links.insert(
+        "link-a".into(),
+        storage_contract::MergeLink {
+            merge_link_id: "link-a".into(),
+            history_tree_id: "h1".into(),
+            source_branch_id: "b-a".into(),
+            target_branch_id: "b-b".into(),
+            source_commit_id: "commit".into(),
+            target_commit_id: "commit".into(),
+            author: "admin".into(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
+        },
+    );
     state.file_path_nodes.insert(
         "path-a".into(),
         record(json!({
@@ -272,6 +332,7 @@ fn every_container_membership_insert_delete_and_same_value_has_a_full_scan_oracl
         file_path_nodes,
         file_metadata_nodes,
         file_branch_merges,
+        merge_links,
     );
 }
 
@@ -660,4 +721,57 @@ fn cold_shared_directory_owners_follow_commit_insert_rewrite_and_last_removal() 
             .0
             .contains_key("shared")
     );
+}
+
+#[test]
+fn deletion_membership_retains_undo_and_reowners_receipts_without_losing_malformed_inputs() {
+    let file_a = format!("file_{}", "a".repeat(32));
+    let file_c = format!("file_{}", "c".repeat(32));
+    let before = fixture();
+    let index = DerivedOwners::from_state(&before);
+    let id = storage_contract::OperationId::generate().unwrap();
+    let mut after = candidate(&before);
+    let receipt = storage_contract::OperationResult {
+        operation_id: id,
+        kind: "file.delete.undo".into(),
+        commit_id: None,
+        history_tree_id: None,
+        branch_id: None,
+        commit_state: storage_contract::CommitState::Published,
+        protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+        current_health: storage_contract::CurrentHealth::Healthy,
+        request_digest: "classification-only".into(),
+        sequence: 1,
+        result: json!({"removed_deletion_node":{"file_id":file_a}}),
+    };
+    after.operations.insert(id, receipt);
+    let next = compare(&before, &after, &index);
+    assert!(
+        next.file_rows(&file_a)
+            .unwrap()
+            .deletion_operations
+            .contains_key(&id)
+    );
+    let mut moved = candidate(&after);
+    moved.operations.get_mut(&id).unwrap().result =
+        json!({"removed_deletion_node":{"file_id":file_c}});
+    let moved_index = compare(&after, &moved, &next);
+    assert!(
+        !moved_index
+            .file_rows(&file_a)
+            .is_some_and(|rows| rows.deletion_operations.contains_key(&id))
+    );
+    let mut malformed = candidate(&moved);
+    malformed.operations.get_mut(&id).unwrap().result = json!({});
+    let malformed_index = compare(&moved, &malformed, &moved_index);
+    assert!(malformed_index.malformed_deletion_receipts());
+    assert!(
+        !malformed_index
+            .file_rows(&file_c)
+            .is_some_and(|rows| rows.deletion_operations.contains_key(&id))
+    );
+    let mut deleted = candidate(&malformed);
+    deleted.operations.remove(&id);
+    let deleted_index = compare(&malformed, &deleted, &malformed_index);
+    assert!(!deleted_index.malformed_deletion_receipts());
 }

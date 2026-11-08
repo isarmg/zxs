@@ -40,6 +40,10 @@ impl InstallAdmission {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum Scope {
+    File {
+        history: String,
+        file: String,
+    },
     Directory {
         history: String,
         repository: String,
@@ -57,8 +61,19 @@ impl Scope {
             directory: directory.into(),
         })
     }
+    pub(crate) fn file(history: &str, file: &str) -> Result<Self> {
+        storage_contract::validate_id(history, "history")?;
+        storage_contract::validate_id(file, "file")?;
+        Ok(Self::File {
+            history: history.into(),
+            file: file.into(),
+        })
+    }
     fn leaf(&self) -> &'static str {
-        crate::container_storage::directory_database_name()
+        match self {
+            Self::Directory { .. } => crate::container_storage::directory_database_name(),
+            Self::File { .. } => crate::container_storage::file_database::NAME,
+        }
     }
 }
 
@@ -155,6 +170,10 @@ impl PreparedInstall {
             "scoped-database-install-source",
             &self.source,
         )?)
+    }
+
+    pub(crate) fn byte_len(&self) -> usize {
+        self.bytes.len()
     }
 
     pub(crate) fn reservation(&self) -> (u64, usize) {
@@ -373,6 +392,56 @@ pub(crate) fn check_budget(
         }
     }
     Ok(())
+}
+
+/// One combined per-history allowance for all consumers in a publication. Each
+/// class must contribute before the decision; separate class quotas cannot
+/// protect a shared retention directory.
+#[derive(Default)]
+pub(crate) struct Reservations {
+    histories: std::collections::BTreeMap<(String, PathBuf), HistoryReservation>,
+}
+struct HistoryReservation {
+    disk: std::sync::Arc<crate::disk::DiskHandle>,
+    bytes: u64,
+    entries: usize,
+}
+impl Reservations {
+    pub(crate) fn add(
+        &mut self,
+        disk: &std::sync::Arc<crate::disk::DiskHandle>,
+        history: &Path,
+        reservation: (u64, usize),
+    ) -> Result<()> {
+        let entry = self
+            .histories
+            .entry((disk.seal.disk_id.clone(), history.to_owned()))
+            .or_insert_with(|| HistoryReservation {
+                disk: std::sync::Arc::clone(disk),
+                bytes: 0,
+                entries: 0,
+            });
+        entry.bytes = entry
+            .bytes
+            .checked_add(reservation.0)
+            .ok_or_else(retention_limit)?;
+        entry.entries = entry
+            .entries
+            .checked_add(reservation.1)
+            .ok_or_else(retention_limit)?;
+        Ok(())
+    }
+    pub(crate) fn check(self, admission: InstallAdmission) -> Result<()> {
+        for ((_, history), reservation) in self.histories {
+            admission.check(
+                &reservation.disk.root,
+                &history,
+                reservation.bytes,
+                reservation.entries,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

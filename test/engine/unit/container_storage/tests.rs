@@ -971,8 +971,13 @@ fn empty_name_projection_has_no_staging_file() {
                 &resources,
                 &ProjectionTransition::new(&previous, next, None).unwrap(),
                 0,
-                historical,
-                historical,
+                if historical {
+                    NamePreparation::HistoricalPrefix
+                } else {
+                    NamePreparation::Candidate(
+                        crate::database_install::InstallAdmission::NewOperation,
+                    )
+                },
                 shared_layout::PreparedLayouts::default(),
             )
             .unwrap();

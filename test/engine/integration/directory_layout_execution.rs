@@ -841,3 +841,6 @@ mod sqlite_review_regressions;
 
 #[path = "directory_layout_execution/sqlite_install_recovery_review.rs"]
 mod sqlite_install_recovery_review;
+
+#[path = "directory_layout_execution/file_database_budget.rs"]
+mod file_database_budget;
