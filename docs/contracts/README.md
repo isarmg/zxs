@@ -178,3 +178,5 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 `POST /api/repositories/{repo}/directory-layout/reconcile` 接受严格 `DirectoryLayoutReconcileBody`，必须带规范 `expected_namespace_head`。锁内重新确认当前管理员与外层 main HEAD 后，调用真实 Engine 实体执行器。作用域是整个外层仓库所有已初始化目录，采用执行时各独立 stable main 最新保存状态（包含未提交内容）；外层 HEAD 检查不承诺冻结整个目录森林预览。
 
 返回 `DirectoryLayoutResult` 的必需计数与状态序号均为规范 u64 十进制字符串，不返回无限列表或伪造业务 `operation_id`。数量只描述结构性实体布局，不验证正文；不可用项非零必须显示部分可用。显式启用后，已有保存/冷恢复链维护布局。请求断开不撤销已准入任务，容量与 writer 锁由后台执行持有至终态；未知结果不能宣称未执行，需刷新存储/目录、先处理恢复要求后再显式检查，不自动重试。
+
+`BackupConfigurationMode` 是备份 GET 的必需 `effective_mode`，只描述有效策略来源，不证明所选目录已被捕获。`unconfigured` 仍使用仓库默认份数；`custom` 来自 Current 中非递归规则；`recursive-files` / `recursive-directory-tree` 仅来自完整已验证索引；`retained` 不猜原模式，`unverified` 不提供逐级模式证明。旧操作收据与写入请求均不增加此字段。

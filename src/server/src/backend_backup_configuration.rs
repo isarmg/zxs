@@ -64,6 +64,7 @@ pub(crate) struct BackupConfigurationResponse {
     scope: BackupScopeResponse,
     policy_id: Option<String>,
     effective_policy_id: Option<String>,
+    effective_mode: storage_contract::BackupConfigurationMode,
     #[serialization(with = "storage_contract::u64_string")]
     generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
@@ -86,6 +87,7 @@ impl From<storage_contract::BackupConfigurationSnapshot> for BackupConfiguration
             scope,
             policy_id,
             effective_policy_id,
+            effective_mode,
             generation,
             effective_generation,
             inherited,
@@ -104,6 +106,7 @@ impl From<storage_contract::BackupConfigurationSnapshot> for BackupConfiguration
             scope: BackupScopeResponse { id, kind, path },
             policy_id,
             effective_policy_id,
+            effective_mode,
             generation,
             effective_generation,
             inherited,

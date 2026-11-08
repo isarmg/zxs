@@ -581,3 +581,6 @@ mod follow;
 
 #[path = "recursive_backup_empty_follow.rs"]
 mod empty_follow;
+
+#[path = "recursive_backup_mode.rs"]
+mod mode;

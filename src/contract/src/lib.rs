@@ -41,7 +41,7 @@ pub use placement_configuration::{
     PlacementConfigurationSnapshot, PlacementScope, PrimaryPlacementBlock, PrimaryPlacementTarget,
 };
 mod backup_configuration;
-pub use backup_configuration::{BackupConfigurationSnapshot, BackupScope};
+pub use backup_configuration::{BackupConfigurationMode, BackupConfigurationSnapshot, BackupScope};
 mod branch_name;
 mod repository_name;
 pub use repository_name::RepositoryName;

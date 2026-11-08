@@ -17,7 +17,7 @@ fn response() -> Value {
         "configuration": {
             "scope":{"id":"scope","kind":"directory","path":"docs"},
             "generation":u64::MAX.to_string(),"effective_generation":"7","inherited":false,
-            "policy_id":null,"effective_policy_id":null,"target_copies":3,
+            "policy_id":null,"effective_policy_id":null,"effective_mode":"unconfigured","target_copies":3,
             "backup_prefixes":{"B01":"old"},"backup_routes":[["P01","B01","C01"]],
             "max_copies":3,"file_count":"1","backup_paths":{"B01":"old/file"}
         },
@@ -131,6 +131,7 @@ fn recursive_capture_required_fields_unknown_fields_and_nullable_upstream_are_st
         "/capture/disks/P01/identity/disk_id",
         "/capture/disks/P01/identity/slot_id",
         "/capture/disks/P01/identity/binding_generation",
+        "/configuration/effective_mode",
         "/configuration/file_count",
         "/configuration/generation",
         "/configuration/backup_routes",
@@ -563,5 +564,117 @@ fn mixed_mode_cannot_change_while_pending_or_unknown_in_either_direction() {
                 assert!(state.with_untracked(|s|s.files.publications.is_empty()));
             }
         }
+    });
+}
+
+#[test]
+fn effective_mode_is_required_and_unknown_values_do_not_enable_saving() {
+    for mode in [json!("future-mode"), json!(null), json!(4)] {
+        let mut wire = response();
+        wire["configuration"]["effective_mode"] = mode;
+        assert!(read_response(wire, &draft()).is_err());
+    }
+}
+
+#[test]
+fn current_load_initializes_directory_mode_without_claiming_capture_or_changing_wire_request() {
+    Owner::new().with(|| {
+        for (mode, expected) in [
+            ("unconfigured", Mode::Files),
+            ("custom", Mode::Files),
+            ("recursive-files", Mode::Files),
+            ("recursive-directory-tree", Mode::DirectoryTree),
+            ("retained", Mode::Files),
+            ("unverified", Mode::Files),
+        ] {
+            let state = RwSignal::new(State {
+                authenticated: true,
+                session_epoch: 7,
+                ..Default::default()
+            });
+            state.update(|s| s.files.recursive_backup = Some(draft()));
+            let mut wire = response();
+            wire["configuration"]["effective_mode"] = json!(mode);
+            wire["configuration"]["inherited"] = json!(true);
+            complete_load(
+                state,
+                7,
+                "draft",
+                Ok(read_response(wire, &draft()).unwrap()),
+            );
+            state.with_untracked(|s| {
+                let d = s.files.recursive_backup.as_ref().unwrap();
+                assert!(d.mode == expected, "{mode}");
+                let body = request(d).unwrap();
+                assert!(body.get("effective_mode").is_none());
+                assert_eq!(body["capture"], response()["capture"]);
+            });
+        }
+    });
+}
+
+#[test]
+fn file_inheriting_tree_keeps_effective_mode_but_saves_only_an_independent_file_rule() {
+    Owner::new().with(|| {
+        let mut initial = State {
+            authenticated: true,
+            session_epoch: 7,
+            ..Default::default()
+        };
+        initial.management.storage = crate::management::Storage::Ready;
+        initial.files.writable = true;
+        initial.files.recursive_backup = Some(draft());
+        let state = RwSignal::new(initial);
+        let mut wire = response();
+        wire["configuration"]["scope"]["kind"] = json!("file");
+        wire["configuration"]["effective_mode"] = json!("recursive-directory-tree");
+        wire["configuration"]["inherited"] = json!(true);
+        complete_load(
+            state,
+            7,
+            "draft",
+            Ok(read_response(wire, &draft()).unwrap()),
+        );
+        select_mode(state, "directory-tree".into());
+        state.with_untracked(|s| {
+            let d = s.files.recursive_backup.as_ref().unwrap();
+            assert!(d.mode == Mode::Files);
+            assert_eq!(
+                d.response().unwrap().configuration.effective_mode,
+                storage_contract::BackupConfigurationMode::RecursiveDirectoryTree
+            );
+            assert!(
+                d.mode
+                    .endpoint("repo")
+                    .ends_with("/recursive-backup-configuration")
+            );
+        });
+    });
+}
+
+#[test]
+fn replaced_or_old_session_mode_cannot_reset_a_current_selection() {
+    Owner::new().with(|| {
+        let mut initial = State {
+            authenticated: true,
+            session_epoch: 7,
+            ..Default::default()
+        };
+        let mut current = ready();
+        current.id = "new".into();
+        current.mode = Mode::DirectoryTree;
+        initial.files.recursive_backup = Some(current);
+        let state = RwSignal::new(initial);
+        for (epoch, id) in [(7, "old"), (6, "new")] {
+            complete_load(
+                state,
+                epoch,
+                id,
+                Ok(read_response(response(), &draft()).unwrap()),
+            );
+        }
+        assert!(state.with_untracked(
+            |s| s.files.recursive_backup.as_ref().unwrap().mode == Mode::DirectoryTree
+        ));
     });
 }

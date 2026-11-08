@@ -1,6 +1,35 @@
 use super::*;
 use web_interface::components::{LoadingState, Select, SelectOption};
 
+fn effective_mode_text(mode: storage_contract::BackupConfigurationMode) -> String {
+    use storage_contract::BackupConfigurationMode;
+    match mode {
+        BackupConfigurationMode::Unconfigured => t(
+            "无显式备份策略，使用仓库默认份数。",
+            "No explicit backup policy; repository default copy count applies.",
+        ),
+        BackupConfigurationMode::Custom => t(
+            "有效策略：自定义前缀。保存将改用所选逐级模式。",
+            "Effective policy: custom prefixes. Saving switches to the selected recursive mode.",
+        ),
+        BackupConfigurationMode::RecursiveFiles => {
+            t("有效策略：文件模式。", "Effective policy: files.")
+        }
+        BackupConfigurationMode::RecursiveDirectoryTree => t(
+            "有效策略：文件与目录（含空目录）。",
+            "Effective policy: files and directories (including empty folders).",
+        ),
+        BackupConfigurationMode::Retained => t(
+            "有效策略：保留的文件设置，无法据此确定原递归模式。保存将建立新的规则。",
+            "Effective policy: retained file settings; the original recursive mode is not established. Saving creates a new rule.",
+        ),
+        BackupConfigurationMode::Unverified => t(
+            "当前没有经过验证的逐级模式依据。保存前请明确选择新模式。",
+            "No verified recursive-mode evidence is available. Choose the new mode before saving.",
+        ),
+    }
+}
+
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     let open = Memo::new(move |_| state.with(|s| s.files.recursive_backup.is_some()));
     let disabled = Signal::derive(move || {
@@ -137,7 +166,9 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().and_then(Draft::response).is_some_and(|r|r.configuration.inherited))><p class="zxs-row">{t("当前继承上级规则；保存会为此范围单独设置逐级规则。","This scope inherits its parent’s rule. Saving sets recursive protection for this scope.")}</p></Show>
                 <p class="zxs-row">{t("前缀预览不包含主盘完整路径；有名称的仓库保留仓库名，磁盘根仓库不添加仓库名。来源变化时服务器会拒绝旧依据，请重新读取后复核。","The preview below shows prefixes, not the full primary path. Named repositories retain their name; disk-root repositories do not add one. If sources change, the server rejects the old baseline. Reload and review before saving.")}</p>
                 <Select label=t("本次保存模式","Mode for this save") options=mode_options value=mode disabled=disabled on_change=Callback::new(move |value:String|select_mode(state,value))/>
-                <p class="zxs-row">{t("此选项控制新的保存请求，不表示服务器已配置的模式。重新读取会恢复原有文件模式。","This choice controls the new request; it does not identify the server’s configured mode. Reloading resets it to existing file mode.")}</p>
+                <p class="zxs-row" role="status">{move ||state.with(|s|s.files.recursive_backup.as_ref().and_then(Draft::response).map(|r|effective_mode_text(r.configuration.effective_mode)).unwrap_or_default())}</p>
+                <p class="zxs-row">{t("重新读取会按当前有效策略初始化本次保存模式。有效策略不代表此条目已被捕获；新增空目录仍须保存才能加入快照。","Reloading initializes this save from the effective policy. The policy does not prove this entry was captured; newly created empty folders still need a save to enter the snapshot.")}</p>
+                <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().and_then(Draft::response).is_some_and(|r|r.configuration.scope.kind==storage_contract::NamespaceEntryKind::File && r.configuration.effective_mode==storage_contract::BackupConfigurationMode::RecursiveDirectoryTree))><p class="zxs-row">{t("此文件继承文件与目录策略；单独保存文件只设置文件规则，不重存父目录快照。","This file inherits a files-and-directories policy. Saving it separately creates a file-only rule and does not republish its parent’s directory snapshot.")}</p></Show>
                 <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().is_some_and(|d|d.mode==Mode::DirectoryTree))><p class="zxs-row" role="status">{t("文件与目录模式要求所有目录备份目标均为元数据成员。不满足时整笔请求拒绝，不会静默退回只备份文件。","Files and directories mode requires every directory backup target to be a metadata member. If unsupported, the entire request is rejected, never silently reduced to files only.")}</p></Show>
                 <Select label=t("目标份数","Target copy count") options=options value=target disabled=disabled on_change=Callback::new(move |value:String|select_copies(state,value))/>
                 <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().and_then(Draft::response).is_some_and(|r|r.configuration.file_count==0))><p class="zxs-row" role="status">{t("此范围没有文件。保存将发布当前目录及其空子目录；目标须为元数据成员，服务器会复核来源和目标。","This scope has no files. Saving publishes this directory and its empty descendants. Targets must be metadata members; the server rechecks sources and targets.")}</p></Show>

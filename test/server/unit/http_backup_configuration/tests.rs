@@ -137,6 +137,7 @@ fn read_wire_keeps_nulls_empty_collections_numeric_counts_and_decimal_generation
         },
         policy_id: None,
         effective_policy_id: Some("inherited".into()),
+        effective_mode: storage_contract::BackupConfigurationMode::RecursiveFiles,
         generation: 0,
         effective_generation: u64::MAX,
         inherited: true,
@@ -156,6 +157,6 @@ fn read_wire_keeps_nulls_empty_collections_numeric_counts_and_decimal_generation
     assert!(wire.get("can_manage").is_none());
     assert_eq!(
         wire,
-        json!({"scope":{"id":"repo","kind":"directory","path":""},"policy_id":null,"effective_policy_id":"inherited","generation":"0","effective_generation":u64::MAX.to_string(),"inherited":true,"target_copies":2,"backup_prefixes":{},"route_slot_ids":[],"available_route_slot_ids":["P01"],"backup_routes":[["P01"]],"backup_slot_ids":[],"max_copies":1,"file_count":u64::MAX.to_string(),"backup_paths":{}})
+        json!({"scope":{"id":"repo","kind":"directory","path":""},"policy_id":null,"effective_policy_id":"inherited","effective_mode":"recursive-files","generation":"0","effective_generation":u64::MAX.to_string(),"inherited":true,"target_copies":2,"backup_prefixes":{},"route_slot_ids":[],"available_route_slot_ids":["P01"],"backup_routes":[["P01"]],"backup_slot_ids":[],"max_copies":1,"file_count":u64::MAX.to_string(),"backup_paths":{}})
     );
 }

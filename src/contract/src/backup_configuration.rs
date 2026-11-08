@@ -1,6 +1,20 @@
 //! Owned backup-policy read projection, independent of its HTTP encoding.
 use crate::NamespaceEntryKind;
+use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Origin of the effective policy, not proof that an entry was captured.
+/// `Unconfigured` still uses the repository's default placement/copy count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "kebab-case")]
+pub enum BackupConfigurationMode {
+    Unconfigured,
+    Custom,
+    RecursiveFiles,
+    RecursiveDirectoryTree,
+    Retained,
+    Unverified,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BackupScope {
@@ -14,6 +28,7 @@ pub struct BackupConfigurationSnapshot {
     pub scope: BackupScope,
     pub policy_id: Option<String>,
     pub effective_policy_id: Option<String>,
+    pub effective_mode: BackupConfigurationMode,
     pub generation: u64,
     pub effective_generation: u64,
     pub inherited: bool,

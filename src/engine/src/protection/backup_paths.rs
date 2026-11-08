@@ -546,6 +546,15 @@ impl Engine {
         let inherited = effective.is_some_and(|policy| {
             policy.inheritable && exact.is_none_or(|exact| exact.policy_id != policy.policy_id)
         });
+        use storage_contract::BackupConfigurationMode;
+        let effective_mode = match effective {
+            None => BackupConfigurationMode::Unconfigured,
+            Some(policy) if !policy.inheritable => BackupConfigurationMode::Retained,
+            Some(policy) => match admitted_current {
+                Some(current) => current.backup_configuration_mode(policy)?,
+                None => BackupConfigurationMode::Unverified,
+            },
+        };
         retain_inherited_files(
             &self.state,
             current.entries(),
@@ -624,6 +633,7 @@ impl Engine {
             },
             policy_id: exact.map(|policy| policy.policy_id.clone()),
             effective_policy_id: effective.map(|policy| policy.policy_id.clone()),
+            effective_mode,
             generation: exact.map_or(0, |policy| policy.generation),
             effective_generation: effective.map_or(0, |policy| policy.generation),
             inherited,

@@ -5450,6 +5450,71 @@
         "next_after_version_id": null
       },
       "layer": "schema"
+    },
+    {
+      "name": "backup-effective-mode-unconfigured",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": "unconfigured"
+    },
+    {
+      "name": "backup-effective-mode-custom",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": "custom"
+    },
+    {
+      "name": "backup-effective-mode-recursive-files",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": "recursive-files"
+    },
+    {
+      "name": "backup-effective-mode-recursive-directory-tree",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": "recursive-directory-tree"
+    },
+    {
+      "name": "backup-effective-mode-retained",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": "retained"
+    },
+    {
+      "name": "backup-effective-mode-unverified",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": "unverified"
+    },
+    {
+      "name": "recursive-backup-effective-mode-present",
+      "schema": "RecursiveBackupConfiguration",
+      "layer": "schema",
+      "value": {
+        "configuration": {
+          "scope": {},
+          "generation": "0",
+          "target_copies": 1,
+          "backup_prefixes": {},
+          "route_slot_ids": [
+            "P01"
+          ],
+          "inherited": false,
+          "file_count": "0",
+          "effective_mode": "recursive-directory-tree"
+        },
+        "capture": {
+          "format": "recursive-backup-source-paths",
+          "source_sequence": "1",
+          "source_business_generation": "1",
+          "registry": {
+            "root_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "view_generation": "1"
+          },
+          "disks": {}
+        }
+      }
     }
   ],
   "negative": [
@@ -19221,6 +19286,52 @@
         "next_after_version_id": null
       },
       "layer": "semantic"
+    },
+    {
+      "name": "backup-effective-mode-invalid-unknown",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": "unknown"
+    },
+    {
+      "name": "backup-effective-mode-invalid-null",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": null
+    },
+    {
+      "name": "backup-effective-mode-invalid-number",
+      "schema": "BackupConfigurationMode",
+      "layer": "schema",
+      "value": 1
+    },
+    {
+      "name": "recursive-backup-effective-mode-required",
+      "schema": "RecursiveBackupConfiguration",
+      "layer": "schema",
+      "value": {
+        "configuration": {
+          "scope": {},
+          "generation": "0",
+          "target_copies": 1,
+          "backup_prefixes": {},
+          "route_slot_ids": [
+            "P01"
+          ],
+          "inherited": false,
+          "file_count": "0"
+        },
+        "capture": {
+          "format": "recursive-backup-source-paths",
+          "source_sequence": "1",
+          "source_business_generation": "1",
+          "registry": {
+            "root_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "view_generation": "1"
+          },
+          "disks": {}
+        }
+      }
     }
   ],
   "canonical": [

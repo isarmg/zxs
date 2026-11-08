@@ -322,6 +322,7 @@ fn recorded_backup_configuration() -> storage_contract::BackupConfigurationSnaps
         },
         policy_id: None,
         effective_policy_id: Some("parent".into()),
+        effective_mode: storage_contract::BackupConfigurationMode::RecursiveFiles,
         generation: 0,
         effective_generation: 7,
         inherited: true,

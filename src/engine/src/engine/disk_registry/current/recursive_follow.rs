@@ -179,6 +179,24 @@ impl PolicyIndex {
 }
 
 impl CurrentNamespaces {
+    /// This index contains only fully admitted publications, including cold replay.
+    pub(crate) fn backup_configuration_mode(
+        &self,
+        policy: &ProtectionPolicy,
+    ) -> Result<storage_contract::BackupConfigurationMode> {
+        use storage_contract::BackupConfigurationMode;
+        let Some(bound) = self.recursive_policies.policies.get(&policy.policy_id) else {
+            return Ok(BackupConfigurationMode::Custom);
+        };
+        if &bound.policy != policy || !policy.inheritable {
+            return Err(invalid());
+        }
+        Ok(match bound.mode {
+            RecursiveBackupMode::Files => BackupConfigurationMode::RecursiveFiles,
+            RecursiveBackupMode::DirectoryTree => BackupConfigurationMode::RecursiveDirectoryTree,
+        })
+    }
+
     /// Old native namespace receipts never rewrote recursive backup paths.
     /// A different kind cannot acquire that new capability by dropping its plan.
     pub(super) fn require_recursive_paths_unchanged(

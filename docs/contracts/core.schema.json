@@ -9824,6 +9824,9 @@
               },
               "uniqueItems": true,
               "description": "所有backup_routes中备份slot的去重并集。选择n份时对各链前n项取备份并集，逐slot要求用户prefix。"
+            },
+            "effective_mode": {
+              "$ref": "#/$defs/BackupConfigurationMode"
             }
           },
           "required": [
@@ -9833,7 +9836,8 @@
             "route_slot_ids",
             "scope",
             "inherited",
-            "file_count"
+            "file_count",
+            "effective_mode"
           ],
           "additionalProperties": true
         },
@@ -10000,6 +10004,18 @@
         "next_after_version_id"
       ],
       "description": "Read-only same-history nonempty-content candidates from other files; immutable size/hash equality does not create a shared identity or establish body availability. Empty source has no matches. Ordered version cursor is scoped by exact source and history root."
+    },
+    "BackupConfigurationMode": {
+      "type": "string",
+      "enum": [
+        "unconfigured",
+        "custom",
+        "recursive-files",
+        "recursive-directory-tree",
+        "retained",
+        "unverified"
+      ],
+      "description": "当前有效策略来源模式，不是所选条目已被捕获的证明。unconfigured仍使用仓库默认份数；retained不猜原模式；非Current的现行策略为unverified。递归模式仅来自完整已验证Current索引。"
     }
   }
 }

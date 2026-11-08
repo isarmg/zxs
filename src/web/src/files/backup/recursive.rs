@@ -73,6 +73,7 @@ impl Response {
 #[derive(Clone, Deserialize)]
 struct Configuration {
     scope: Scope,
+    effective_mode: storage_contract::BackupConfigurationMode,
     #[serialization(with = "storage_contract::u64_string")]
     generation: u64,
     inherited: bool,
@@ -99,6 +100,16 @@ impl Draft {
     }
 }
 impl Configuration {
+    fn save_mode(&self) -> Mode {
+        if self.effective_mode == storage_contract::BackupConfigurationMode::RecursiveDirectoryTree
+            && self.scope.kind == storage_contract::NamespaceEntryKind::Directory
+        {
+            Mode::DirectoryTree
+        } else {
+            Mode::Files
+        }
+    }
+
     fn capacity(&self) -> usize {
         self.max_copies
             .min(self.backup_routes.iter().map(Vec::len).min().unwrap_or(0))
@@ -214,6 +225,7 @@ fn complete_load(
     match result {
         Ok(response) => state.update(|s| {
             if let Some(draft) = s.files.recursive_backup.as_mut() {
+                draft.mode = response.configuration.save_mode();
                 draft.load = Load::Ready(Box::new(response));
             }
         }),

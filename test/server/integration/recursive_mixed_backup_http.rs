@@ -60,6 +60,20 @@ async fn mixed_http_publishes_files_and_empty_directories_together_and_cold_retr
     let body = mixed_body(&app, &token, &old_endpoint, "mixed").await;
     let receipt = success(&app, &token, "PUT", &endpoint, Some(body.clone())).await;
     assert_eq!(receipt["operation_kind"], "backup.configure-recursive-tree");
+    for path in ["mixed", "mixed/empty", "mixed/report"] {
+        let current = success(
+            &app,
+            &token,
+            "GET",
+            &format!("{old_endpoint}?path={path}"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            current["configuration"]["effective_mode"],
+            "recursive-directory-tree"
+        );
+    }
     for (index, slot, prefix) in [
         (1, "B01", "disk-0/Files/mixed"),
         (2, "C01", "disk-1/disk-0/Files/mixed"),
@@ -120,6 +134,18 @@ async fn mixed_http_publishes_files_and_empty_directories_together_and_cold_retr
             && row.operation_id().to_string() == receipt["operation_id"].as_str().unwrap()));
     }
     let app = router(engine, AuthStore::open(&system).unwrap(), &system);
+    let current = success(
+        &app,
+        &token,
+        "GET",
+        &format!("{old_endpoint}?path=mixed"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        current["configuration"]["effective_mode"],
+        "recursive-directory-tree"
+    );
     assert_eq!(
         success(&app, &token, "PUT", &endpoint, Some(body)).await,
         receipt
@@ -234,6 +260,18 @@ async fn legacy_recursive_http_remains_files_only_and_cannot_retry_as_tree_kind(
     let body = mixed_body(&app, &token, &old_endpoint, "mixed").await;
     let receipt = success(&app, &token, "PUT", &old_endpoint, Some(body.clone())).await;
     assert_eq!(receipt["operation_kind"], "backup.configure-recursive");
+    let current = success(
+        &app,
+        &token,
+        "GET",
+        &format!("{old_endpoint}?path=mixed"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        current["configuration"]["effective_mode"],
+        "recursive-files"
+    );
     let listing = success(
         &app,
         &token,
