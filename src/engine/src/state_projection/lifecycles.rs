@@ -28,23 +28,58 @@ pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
         Some(_) | None => DeletionOwner::Malformed,
     }
 }
+pub(crate) fn history_copy_owner(receipt: &OperationResult) -> DeletionOwner<'_> {
+    if !crate::business::history_copy::is_kind(&receipt.kind) {
+        return DeletionOwner::Other;
+    }
+    match receipt
+        .result
+        .get("file_id")
+        .and_then(json_codec::Value::as_str)
+    {
+        Some(file) if storage_contract::validate_id(file, "file").is_ok() => {
+            DeletionOwner::File(file)
+        }
+        Some(_) | None => DeletionOwner::Malformed,
+    }
+}
+#[derive(Clone, Copy)]
+enum Membership {
+    Deletion,
+    HistoryCopy,
+}
 impl DerivedOwners {
     pub(crate) fn malformed_deletion_receipts(&self) -> bool {
         !self.unscoped_deletions.is_empty()
     }
-    fn deletion_member(&mut self, id: OperationId, owner: DeletionOwner<'_>, add: bool) {
+    pub(crate) fn malformed_history_copy_receipts(&self) -> bool {
+        !self.unscoped_history_copies.is_empty()
+    }
+    fn receipt_member(
+        &mut self,
+        id: OperationId,
+        owner: DeletionOwner<'_>,
+        membership: Membership,
+        add: bool,
+    ) {
         let rows = match owner {
             DeletionOwner::Other => return,
-            DeletionOwner::Malformed => &mut self.unscoped_deletions,
+            DeletionOwner::Malformed => match membership {
+                Membership::Deletion => &mut self.unscoped_deletions,
+                Membership::HistoryCopy => &mut self.unscoped_history_copies,
+            },
             DeletionOwner::File(file) => {
                 if add && !self.file_rows.contains_key(file) {
                     self.file_rows.insert(file.to_owned(), FileRows::default());
                 }
-                &mut self
+                let rows = self
                     .file_rows
                     .get_mut(file)
-                    .expect("invariant: retained lifecycle has its file membership")
-                    .deletion_operations
+                    .expect("invariant: retained receipt has its file membership");
+                match membership {
+                    Membership::Deletion => &mut rows.deletion_operations,
+                    Membership::HistoryCopy => &mut rows.history_copies,
+                }
             }
         };
         if add {
@@ -70,7 +105,13 @@ impl DerivedOwners {
     }
     pub(super) fn build_deletion_rows(&mut self, state: &State) {
         for (id, receipt) in state.operations.iter() {
-            self.deletion_member(*id, owner(receipt), true);
+            self.receipt_member(*id, owner(receipt), Membership::Deletion, true);
+            self.receipt_member(
+                *id,
+                history_copy_owner(receipt),
+                Membership::HistoryCopy,
+                true,
+            );
         }
     }
     pub(super) fn update_deletion_rows(&mut self, before: &State, after: &State, writes: &Writes) {
@@ -81,8 +122,20 @@ impl DerivedOwners {
                 .map_or(DeletionOwner::Other, owner);
             let next = after.operations.get(id).map_or(DeletionOwner::Other, owner);
             if previous != next {
-                self.deletion_member(*id, previous, false);
-                self.deletion_member(*id, next, true);
+                self.receipt_member(*id, previous, Membership::Deletion, false);
+                self.receipt_member(*id, next, Membership::Deletion, true);
+            }
+            let previous = before
+                .operations
+                .get(id)
+                .map_or(DeletionOwner::Other, history_copy_owner);
+            let next = after
+                .operations
+                .get(id)
+                .map_or(DeletionOwner::Other, history_copy_owner);
+            if previous != next {
+                self.receipt_member(*id, previous, Membership::HistoryCopy, false);
+                self.receipt_member(*id, next, Membership::HistoryCopy, true);
             }
         }
     }

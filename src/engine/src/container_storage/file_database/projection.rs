@@ -27,45 +27,6 @@ impl Records {
         Ok(())
     }
 }
-fn lifecycle(state: &crate::State, id: crate::OperationId, file: &str) -> Result<LifecycleRow> {
-    let receipt = &state.operations[&id];
-    let (action, key) = match receipt.kind.as_str() {
-        "file.delete" => (DeletionAction::Delete, "deletion_node"),
-        "file.delete.undo" => (DeletionAction::Undo, "removed_deletion_node"),
-        _ => unreachable!("invariant: deletion membership contains only lifecycle receipts"),
-    };
-    // Decode retained source material once at this actual persistence boundary;
-    // never serialize the whole receipt or its exterior path into the file DB.
-    let source: crate::FileDeletionNode = json_codec::from_value(
-        receipt
-            .result
-            .get(key)
-            .ok_or_else(|| invalid("retained deletion receipt has no node"))?
-            .clone(),
-    )?;
-    let author = state
-        .operation_principals
-        .get(&id)
-        .ok_or_else(|| invalid("retained deletion receipt has no principal"))?;
-    if receipt.operation_id != id
-        || source.file_id != file
-        || action == DeletionAction::Delete
-            && (source.operation_id != id
-                || source.sequence != receipt.sequence
-                || source.author != *author)
-    {
-        return Err(invalid(
-            "retained deletion receipt has inconsistent local identity",
-        ));
-    }
-    Ok(LifecycleRow {
-        operation_id: id,
-        action,
-        sequence: receipt.sequence,
-        author: author.clone(),
-        node: (&source).into(),
-    })
-}
 pub(super) fn records(view: StateProjection<'_>, file: &str) -> Result<Vec<Record>> {
     if view.owners().malformed_deletion_receipts() {
         return Err(invalid(
@@ -175,9 +136,9 @@ pub(super) fn records(view: StateProjection<'_>, file: &str) -> Result<Vec<Recor
                 },
             )?;
         }
-        for id in memberships.deletion_operations.keys() {
-            rows.add("lifecycle", &id.to_string(), &lifecycle(state, *id, file)?)?;
-        }
+    }
+    for event in crate::file_deletion::retained::events(view, file)? {
+        rows.add("lifecycle", &event.operation_id.to_string(), &event)?;
     }
     if let Some(node) = state.file_deletions.get(file) {
         rows.add("deletion", &node.node_id, &DeletionRow::from(node))?;

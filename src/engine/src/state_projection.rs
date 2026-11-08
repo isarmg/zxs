@@ -376,6 +376,7 @@ pub(crate) struct DerivedOwners {
     branch_contexts: SharedRecords<SharedRecords<()>>,
     branch_links: References,
     unscoped_deletions: lifecycles::DeletionOperations,
+    unscoped_history_copies: lifecycles::DeletionOperations,
 }
 
 #[derive(Clone, Default)]

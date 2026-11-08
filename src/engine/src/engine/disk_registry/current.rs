@@ -211,7 +211,7 @@ impl CurrentNamespaces {
         // Imports without an exact current occurrence proof remain fenced.
         // Admitted planners must verify their own projected sources and
         // reference closure before a resulting state can be published.
-        if kind == crate::business::history_copy::KIND
+        if crate::business::history_copy::is_kind(kind)
             || kind == "repository.create"
             || kind == "workspace.commit"
             || kind == "workspace.namespace.admit"

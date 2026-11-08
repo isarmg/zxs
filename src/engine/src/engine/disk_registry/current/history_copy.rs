@@ -1,6 +1,6 @@
 //! Exact online history-fork admission, shared by preparation and cold recovery.
 use super::*;
-use crate::business::history_copy::{self, CopyRoute, FileHistoryCopyRequest, KIND, invalid};
+use crate::business::history_copy::{self, CopyKind, CopyRoute, FileHistoryCopyRequest, invalid};
 use crate::engine::{Prepared, ReadSource};
 use crate::{CommitState, CurrentHealth, Event, OperationResult, ProtectionAtPublish};
 use json_codec::json;
@@ -13,15 +13,13 @@ fn receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Operation
         if before == after {
             return Ok(());
         }
-        if before
-            .into_iter()
-            .chain(after)
-            .any(|op| op.kind == KIND || op.result.get("history_copy_request").is_some())
-        {
+        if before.into_iter().chain(after).any(|op| {
+            history_copy::is_kind(&op.kind) || op.result.get("history_copy_request").is_some()
+        }) {
             let current = after.ok_or_else(invalid)?;
             if before.is_some()
                 || current.operation_id != *id
-                || current.kind != KIND
+                || !history_copy::is_kind(&current.kind)
                 || found.replace(current).is_some()
             {
                 return Err(invalid());
@@ -123,7 +121,7 @@ impl CurrentNamespaces {
         if next
             .operations
             .get(&candidate.operation_id)
-            .is_some_and(|op| op.kind == KIND)
+            .is_some_and(|op| history_copy::is_kind(&op.kind))
         {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -141,6 +139,7 @@ impl CurrentNamespaces {
         let Some(op) = receipt(previous, next)? else {
             return Ok(None);
         };
+        let kind = CopyKind::parse(&op.kind)?;
         let principal = next
             .operation_principals
             .get(&op.operation_id)
@@ -170,7 +169,8 @@ impl CurrentNamespaces {
         }
         if op.sequence != next.sequence
             || next.sequence <= previous.sequence
-            || op.request_digest != Engine::native_request_digest(KIND, principal, &json!(request))?
+            || op.request_digest
+                != Engine::native_request_digest(&op.kind, principal, &json!(request))?
             || op.commit_state != CommitState::Published
             || op.current_health != CurrentHealth::Healthy
             || op.protection_at_publish != ProtectionAtPublish::TargetMet
@@ -187,7 +187,7 @@ impl CurrentNamespaces {
             .business_generation
             .checked_add(1)
             .ok_or_else(invalid)?;
-        let mut result = history_copy::apply(
+        let mut result = kind.transform()(
             previous,
             &mut expected,
             Some(self),
@@ -229,7 +229,7 @@ impl CurrentNamespaces {
         expected.events.push(Event {
             sequence: next.sequence,
             operation_id: op.operation_id,
-            kind: KIND.into(),
+            kind: op.kind.clone(),
             object_id: op.commit_id.clone().ok_or_else(invalid)?,
         });
         if !same_write_set(previous, &expected, next) {

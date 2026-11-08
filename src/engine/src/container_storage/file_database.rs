@@ -54,7 +54,7 @@ async fn finish<T>(result: Result<T>, connection: SqliteConnection) -> Result<T>
 /// Rows originate from the captured State and its tied owner index. The caller
 /// must prove publication admission before installation. Neither this projection
 /// nor its self digest grants authority or proves a complete historical copy.
-pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> Result<Prepared> {
+fn validated_records(view: StateProjection<'_>, file: &str, history: &str) -> Result<Vec<Record>> {
     storage_contract::validate_id(file, "file")?;
     storage_contract::validate_id(history, "history")?;
     if !view
@@ -68,6 +68,56 @@ pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> R
         ));
     }
     let records = projection::records(view, file)?;
+    let mut validation = rows::Validation::new(file, history, view.state().sequence);
+    for record in &records {
+        validation.admit(record.kind, &record.id, &record.body)?;
+    }
+    validation.finish()?;
+    Ok(records)
+}
+
+pub(crate) struct CopyCapture {
+    pub(crate) records_hash: String,
+    pub(crate) events: Vec<crate::file_deletion::retained::LifecycleRow>,
+}
+
+/// A complete bounded logical snapshot, not proof of a physical DB or disk.
+/// The copy publication separately proves body sources and installs the exact
+/// target database. A move cannot use this alone as its three-scope proof.
+pub(crate) fn capture_copy(state: &crate::State, file: &str, history: &str) -> Result<CopyCapture> {
+    let transition = crate::state_projection::ProjectionTransition::new(state, state, None)?;
+    let view = transition.previous();
+    if view.owners().file_rows(file).is_some_and(|rows| {
+        rows.history_copies
+            .keys()
+            .any(|id| state.operations[id].kind == crate::business::history_copy::KIND)
+    }) {
+        return Err(Error::new(
+            ErrorCode::UnsupportedOperation,
+            "the older graph-only copy has no retained lifecycle closure; preserve it without upgrading its receipt",
+        ));
+    }
+    let records = validated_records(view, file, history)?;
+    let records_hash = storage_contract::object_hash("file-local-records", &records)?;
+    let mut events = records
+        .iter()
+        .filter(|record| record.kind == "lifecycle")
+        .map(|record| {
+            storage_contract::decode_strict::<crate::file_deletion::retained::LifecycleRow>(
+                record.body.as_bytes(),
+            )
+            .map_err(Error::from)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    events.sort_by_key(|event| event.sequence);
+    Ok(CopyCapture {
+        records_hash,
+        events,
+    })
+}
+
+pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> Result<Prepared> {
+    let records = validated_records(view, file, history)?;
     let hash = storage_contract::object_hash("file-local-records", &records)?;
     let sequence = view.state().sequence;
     let bytes = block_on_sqlite_connection(async {

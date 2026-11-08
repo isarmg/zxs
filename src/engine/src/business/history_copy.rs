@@ -6,6 +6,48 @@ use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const KIND: &str = "file.history.copy";
+pub(crate) const RETAINED_KIND: &str = "file.history.copy.retained";
+pub(crate) mod retained;
+pub(crate) fn is_kind(kind: &str) -> bool {
+    matches!(kind, KIND | RETAINED_KIND)
+}
+
+pub(crate) type CopyTransform = fn(
+    &State,
+    &mut State,
+    Option<&crate::engine::CurrentNamespaces>,
+    &FileHistoryCopyRequest,
+    &CopyRoute,
+    &str,
+    OperationId,
+) -> Result<Value>;
+
+#[derive(Clone, Copy)]
+pub(crate) enum CopyKind {
+    Graph,
+    Retained,
+}
+impl CopyKind {
+    pub(crate) fn parse(kind: &str) -> Result<Self> {
+        match kind {
+            KIND => Ok(Self::Graph),
+            RETAINED_KIND => Ok(Self::Retained),
+            _ => Err(invalid()),
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Graph => KIND,
+            Self::Retained => RETAINED_KIND,
+        }
+    }
+    pub(crate) fn transform(self) -> CopyTransform {
+        match self {
+            Self::Graph => apply,
+            Self::Retained => retained::apply,
+        }
+    }
+}
 
 /// First online slice: one saved file into an empty, uninitialized repository
 /// on another primary. Both exact namespace heads are part of the request.
@@ -629,8 +671,31 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
+        self.copy_file_history_kind(request, principal, operation, CopyKind::Graph)
+    }
+
+    /// Copy the retained graph and complete path-free historical D/undo audit.
+    /// The target's own permanent receipt holds the imported prefix, including
+    /// copies of copies; no live D or source mutation is published. This is not
+    /// atomic SMB move, three-scope DB migration, or a backup-policy migration.
+    pub fn copy_retained_file_history(
+        &mut self,
+        request: &FileHistoryCopyRequest,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
+        self.copy_file_history_kind(request, principal, operation, CopyKind::Retained)
+    }
+
+    fn copy_file_history_kind(
+        &mut self,
+        request: &FileHistoryCopyRequest,
+        principal: &str,
+        operation: OperationId,
+        kind: CopyKind,
+    ) -> Result<OperationResult> {
         self.mutate(
-            KIND,
+            kind.name(),
             principal,
             operation,
             json!(request),
@@ -659,7 +724,7 @@ impl Engine {
                     slots,
                     bindings,
                 };
-                let result = apply(
+                let result = kind.transform()(
                     engine.state(),
                     next,
                     engine.current_namespaces.as_deref(),

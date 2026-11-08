@@ -97,6 +97,11 @@ pub(crate) fn affected(previous: &State, next: &State) -> BTreeSet<String> {
             {
                 files.insert(file.to_owned());
             }
+            if let crate::state_projection::lifecycles::DeletionOwner::File(file) =
+                crate::state_projection::lifecycles::history_copy_owner(receipt)
+            {
+                files.insert(file.to_owned());
+            }
         }
     }
     // Retain whole immutable node rows. Cold All inputs cannot assume that an

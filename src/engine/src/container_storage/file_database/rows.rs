@@ -63,52 +63,7 @@ pub(super) struct MetadataRow {
     pub parent_node_ids: Vec<String>,
     pub note: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serialization(deny_unknown_fields)]
-pub(super) struct DeletionRow {
-    pub node_id: String,
-    pub history_tree_id: String,
-    pub file_id: String,
-    pub branch_heads: BTreeMap<String, String>,
-    pub parent_node_ids: Vec<String>,
-    pub operation_id: OperationId,
-    pub author: String,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub sequence: u64,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub created_at: u64,
-}
-impl From<&crate::FileDeletionNode> for DeletionRow {
-    fn from(node: &crate::FileDeletionNode) -> Self {
-        Self {
-            node_id: node.node_id.clone(),
-            history_tree_id: node.history_tree_id.clone(),
-            file_id: node.file_id.clone(),
-            branch_heads: node.branch_heads.clone(),
-            parent_node_ids: node.parent_node_ids.clone(),
-            operation_id: node.operation_id,
-            author: node.author.clone(),
-            sequence: node.sequence,
-            created_at: node.created_at,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-#[serialization(rename_all = "snake_case")]
-pub(super) enum DeletionAction {
-    Delete,
-    Undo,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub(super) struct LifecycleRow {
-    pub operation_id: OperationId,
-    pub action: DeletionAction,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub sequence: u64,
-    pub author: String,
-    pub node: DeletionRow,
-}
+pub(super) use crate::file_deletion::retained::{DeletionAction, DeletionRow, LifecycleRow};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct LinkRow {

@@ -454,3 +454,6 @@ fn file_database_self_consistent_omitted_history_cannot_replace_captured_state()
     );
     assert_eq!(fs::read(orphan).unwrap(), preserved);
 }
+
+#[path = "retained_lifecycle.rs"]
+mod retained_lifecycle;

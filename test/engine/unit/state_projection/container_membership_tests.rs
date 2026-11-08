@@ -7,6 +7,7 @@ use json_codec::json;
 struct Membership {
     versions_by_history: BTreeMap<String, BTreeSet<String>>,
     deletion_operations: BTreeSet<storage_contract::OperationId>,
+    history_copies: BTreeSet<storage_contract::OperationId>,
     branches: BTreeSet<String>,
     merge_links: BTreeSet<String>,
     pending_branches: BTreeSet<String>,
@@ -20,6 +21,19 @@ struct Membership {
 fn full_memberships(state: &State) -> BTreeMap<String, Membership> {
     let mut expected = BTreeMap::<String, Membership>::new();
     for (id, receipt) in state.operations.iter() {
+        if matches!(
+            receipt.kind.as_str(),
+            "file.history.copy" | "file.history.copy.retained"
+        ) {
+            if let Some(file) = receipt.result.get("file_id").and_then(Value::as_str) {
+                expected
+                    .entry(file.to_owned())
+                    .or_default()
+                    .history_copies
+                    .insert(*id);
+            }
+            continue;
+        }
         let key = match receipt.kind.as_str() {
             "file.delete" => "deletion_node",
             "file.delete.undo" => "removed_deletion_node",
@@ -147,6 +161,7 @@ fn assert_memberships(state: &State, index: &DerivedOwners) {
         };
         if let Some(rows) = index.file_rows(&file) {
             actual.deletion_operations = rows.deletion_operations.keys().copied().collect();
+            actual.history_copies = rows.history_copies.keys().copied().collect();
             actual.branches = rows.branches.keys().cloned().collect();
             actual.merge_links = rows.merge_links.keys().cloned().collect();
             actual.pending_branches = rows.pending_branches.keys().cloned().collect();
@@ -774,4 +789,54 @@ fn deletion_membership_retains_undo_and_reowners_receipts_without_losing_malform
     deleted.operations.remove(&id);
     let deleted_index = compare(&malformed, &deleted, &malformed_index);
     assert!(!deleted_index.malformed_deletion_receipts());
+}
+
+#[test]
+fn retained_copy_membership_is_incremental_and_preserves_malformed_origin_evidence() {
+    let file_a = format!("file_{}", "a".repeat(32));
+    let file_b = format!("file_{}", "b".repeat(32));
+    let before = fixture();
+    let owners = DerivedOwners::from_state(&before);
+    let id = storage_contract::OperationId::generate().unwrap();
+    let mut after = candidate(&before);
+    after.operations.insert(
+        id,
+        storage_contract::OperationResult {
+            operation_id: id,
+            kind: "file.history.copy.retained".into(),
+            commit_id: None,
+            history_tree_id: None,
+            branch_id: None,
+            commit_state: storage_contract::CommitState::Published,
+            protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+            current_health: storage_contract::CurrentHealth::Healthy,
+            request_digest: "classification-only-not-an-admission-proof".into(),
+            sequence: 1,
+            result: json!({"file_id":file_a}),
+        },
+    );
+    let owners = compare(&before, &after, &owners);
+    assert!(
+        owners
+            .file_rows(&file_a)
+            .unwrap()
+            .history_copies
+            .contains_key(&id)
+    );
+    let mut moved = candidate(&after);
+    moved.operations.get_mut(&id).unwrap().result = json!({"file_id":file_b});
+    let owners = compare(&after, &moved, &owners);
+    assert!(
+        !owners
+            .file_rows(&file_a)
+            .is_some_and(|rows| rows.history_copies.contains_key(&id))
+    );
+    let mut malformed = candidate(&moved);
+    malformed.operations.get_mut(&id).unwrap().result = json!({});
+    let owners = compare(&moved, &malformed, &owners);
+    assert!(owners.malformed_history_copy_receipts());
+    let mut deleted = candidate(&malformed);
+    deleted.operations.remove(&id);
+    let owners = compare(&malformed, &deleted, &owners);
+    assert!(!owners.malformed_history_copy_receipts());
 }
