@@ -4,8 +4,10 @@ use super::*;
 use std::path::{Component, Path};
 
 mod archive;
+mod databases;
 mod runtime;
 pub use archive::BackupNativeControlReport;
+pub use databases::{BackupObjectDatabasePreparationReport, offline_check_backup_object_databases};
 
 const FORMAT: &str = "zxs-backup-native-preparation";
 const TASK: &str = "backup-preparation/native-control.json";
@@ -275,7 +277,15 @@ pub fn offline_check_backup_native_preparation(
         ));
     }
     let held = roots.iter().collect::<Vec<_>>();
-    let report = verify_targets(&task, &held, &AtomicBool::new(false))?;
+    verify_completed(&task, &held, &AtomicBool::new(false))
+}
+
+fn verify_completed(
+    task: &NativeTask,
+    roots: &[&DiskRoot],
+    stop: &AtomicBool,
+) -> Result<BackupNativePreparationReport> {
+    let report = verify_targets(task, roots, stop)?;
     let bytes = canonical_json(&report)?;
     if bytes.len() > MAX_TASK {
         return Err(Error::new(
@@ -284,6 +294,7 @@ pub fn offline_check_backup_native_preparation(
         ));
     }
     for (root, job) in roots.iter().zip(task.selection.jobs()) {
+        crate::history_package::preparation_checkpoint(stop)?;
         if root.read_bytes(&root.path().join(COMPLETE), MAX_TASK)? != bytes {
             return Err(invalid(
                 "native completion is missing or differs from verified material",
@@ -294,4 +305,9 @@ pub fn offline_check_backup_native_preparation(
     Ok(report)
 }
 
-pub(super) use runtime::resume;
+pub(super) fn resume(engine: &mut Engine, system: &DiskRoot) -> Result<bool> {
+    if databases::resume(engine, system)? {
+        return Ok(true);
+    }
+    runtime::resume(engine, system)
+}

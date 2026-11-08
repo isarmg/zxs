@@ -36,10 +36,10 @@ pub mod disk_authority;
 mod engine;
 pub use engine::{
     BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
-    BackupPreparationBatchReport, BackupPreparationPhase, BackupPreparationReport,
-    BackupPreparationRequest, BackupPreparationStatus, RecoveryDataRoot,
-    offline_check_backup_native_preparation, offline_check_backup_preparation,
-    offline_check_backup_preparation_batch,
+    BackupObjectDatabasePreparationReport, BackupPreparationBatchReport, BackupPreparationPhase,
+    BackupPreparationReport, BackupPreparationRequest, BackupPreparationStatus, RecoveryDataRoot,
+    offline_check_backup_native_preparation, offline_check_backup_object_databases,
+    offline_check_backup_preparation, offline_check_backup_preparation_batch,
 };
 pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub use engine::FileHistoryMoveTargetReport;

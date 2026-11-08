@@ -43,3 +43,7 @@ SYSTEM 原任务先持久化，然后各目标写 `native-preparation.json`、�
 尚缺：membership／registry 代际归档拼接、三范围 SQLite 的目标安装和独立恢复、准备期间并发变更的增量收束、按完整单元的实际多下级活动拓扑、父子旧异盘合流、helper 一次性完整低级链正式接纳，以及**新旧权威共同决定与最终切换的冷重放**。正常 ZXS 仍不得注册未完成候选或展示待接入成员。
 
 未来切换必须消费完整目标证据并发布一项专用、可恢复、精确写集的决定；不能把此报告放进现有普通 handoff 来绕过拓扑相等检查。旧收据和源数据继续保留，清理另行授权。相关任务见根 [TASKS T03/T07](../../TASKS.md)，总体约束见 [备份换盘 ADR](../adr/backup-target-replacement.md)。
+
+## 后继对象数据库阶段
+
+后继 `start_backup_object_database_preparation` 消费本阶段的整个原任务，追加文件／目录 SQLite 的隔离准备和独立验存，不更改本阶段标记。冷开优先恢复后继，不能由再次调用较早入口将其降格成旧阶段成功。此后继仍无最终切换或三范围权威安装，详见[对象数据库准备](backup-object-database-preparation.md)。

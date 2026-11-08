@@ -242,3 +242,9 @@
 ### 原固定成员控制前缀后台准备（后继生产源码，未验收）
 
 显式调用 `start_backup_native_preparation` 可为原单目标／二至八目标材料任务追加完整 fixed-genesis journal、逐出版 Snapshot／history 图和原收据绑定的 payload proof 复制。SYSTEM 先保存不可变全目标任务，后台逐盘验存，正常冷开续作；旧 `HistoryPrepared` 不被改写为新阶段成功。新 `NativeControlPrepared` 和只读报告均不是活动盘权威。实现范围、资源上限及未编译／测试／审查／CI边界见[原生控制材料准备](../design/backup-native-control-preparation.md)。代际归档、三范围数据库安装、完整低级链 helper 准入与最终共同切换仍未完成，普通 handoff 不放宽。
+
+### 全目标对象 SQLite 准备（后继源码，未验收）
+
+`start_backup_object_database_preparation` 在原 native 完整目标集合后追加实际 FILE／目录仓库 SQLite 编码、隔离落盘、逐盘读取和共同阶段记录；同任务正常冷开自动续作。`offline_check_backup_object_databases` 逐目标从其完整 State 重新构造期望，不依靠源、完成 flag 或另一健康 peer。每盘都保留全部文件及父子目录仓库，不分片；旧 graph-only copy 缺 lifecycle、未知准备条目、空间不足或原证据损坏整单阻塞。旧材料不覆盖、不删除。
+
+这里只准备隔离对象库，不是活动容器安装、SYSTEM／盘根历史库闭合或最终共同切换。`ObjectDatabasesPrepared` 不是接纳令牌，完整低级链 helper 写者和代际归档仍未实现。范围、资源和未编译／测试／审查／CI边界见[对象数据库准备](../design/backup-object-database-preparation.md)。

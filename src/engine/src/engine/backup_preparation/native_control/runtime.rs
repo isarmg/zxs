@@ -3,8 +3,8 @@
 use super::*;
 use archive::PreparedArchive;
 
-struct Target {
-    root: DiskRoot,
+pub(super) struct Target {
+    pub(super) root: DiskRoot,
     _lock: AdvisoryLock,
 }
 
@@ -46,7 +46,7 @@ impl Engine {
             worker.join()?;
         }
         if crate::history_package::preparation_path_exists(&system, &self.root.join(TASK))? {
-            resume(self, &system)?;
+            super::resume(self, &system)?;
         } else {
             let work = prepare(self, &selection)?;
             let archive = PreparedArchive::freeze(self, selection.first())?;
@@ -72,7 +72,7 @@ impl Engine {
     }
 }
 
-fn prepare(engine: &Engine, selection: &Selection) -> Result<Vec<Target>> {
+pub(super) fn prepare(engine: &Engine, selection: &Selection) -> Result<Vec<Target>> {
     if !selection.first().binding_matches(engine)? {
         return Err(invalid(
             "native source changed; original task cannot be resampled",

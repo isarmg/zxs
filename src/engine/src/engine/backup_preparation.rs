@@ -21,7 +21,8 @@ mod inspection;
 mod native_control;
 pub use native_control::{
     BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
-    offline_check_backup_native_preparation,
+    BackupObjectDatabasePreparationReport, offline_check_backup_native_preparation,
+    offline_check_backup_object_databases,
 };
 mod snapshot;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
@@ -58,6 +59,9 @@ pub enum BackupPreparationPhase {
     /// Complete original fixed-genesis native evidence only. No target
     /// membership, database installation, or final authority switch.
     NativeControlPrepared,
+    /// All selected targets retain file/directory SQLite from complete State.
+    /// SYSTEM/disk historical scopes and authoritative cutover remain absent.
+    ObjectDatabasesPrepared,
     Blocked,
     SourceChanged,
 }
