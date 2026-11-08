@@ -9,9 +9,10 @@ use std::{
 
 mod backup_preparation;
 pub use backup_preparation::{
+    BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
     BackupPreparationBatchReport, BackupPreparationPhase, BackupPreparationReport,
-    BackupPreparationRequest, BackupPreparationStatus, offline_check_backup_preparation,
-    offline_check_backup_preparation_batch,
+    BackupPreparationRequest, BackupPreparationStatus, offline_check_backup_native_preparation,
+    offline_check_backup_preparation, offline_check_backup_preparation_batch,
 };
 mod config;
 pub use config::ValidatedConfig;

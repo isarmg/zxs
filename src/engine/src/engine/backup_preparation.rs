@@ -18,6 +18,11 @@ use std::{
 mod batch;
 mod execution;
 mod inspection;
+mod native_control;
+pub use native_control::{
+    BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
+    offline_check_backup_native_preparation,
+};
 mod snapshot;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
 pub use inspection::{BackupPreparationReport, offline_check_backup_preparation};
@@ -50,6 +55,9 @@ pub enum BackupPreparationPhase {
     /// Frozen history/State material only. Native control closure, database projections and
     /// the topology/placement activation decision are not implemented here.
     HistoryPrepared,
+    /// Complete original fixed-genesis native evidence only. No target
+    /// membership, database installation, or final authority switch.
+    NativeControlPrepared,
     Blocked,
     SourceChanged,
 }
@@ -327,6 +335,9 @@ impl Engine {
 
     pub(super) fn resume_backup_preparation(&mut self) -> Result<()> {
         let system = DiskRoot::open(&self.root)?;
+        if native_control::resume(self, &system)? {
+            return Ok(());
+        }
         if batch::resume(self, &system)? {
             return Ok(());
         }

@@ -35,9 +35,11 @@ mod disk;
 pub mod disk_authority;
 mod engine;
 pub use engine::{
+    BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
     BackupPreparationBatchReport, BackupPreparationPhase, BackupPreparationReport,
     BackupPreparationRequest, BackupPreparationStatus, RecoveryDataRoot,
-    offline_check_backup_preparation, offline_check_backup_preparation_batch,
+    offline_check_backup_native_preparation, offline_check_backup_preparation,
+    offline_check_backup_preparation_batch,
 };
 pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub use engine::FileHistoryMoveTargetReport;
@@ -87,10 +89,10 @@ mod metadata_budget;
 mod metadata_map;
 mod node_retirement;
 pub use node_retirement::PermanentNodeSeparation;
-mod shared_file_topology;
 mod protection;
 mod publication_evidence;
 mod repair;
+mod shared_file_topology;
 mod state_projection;
 mod wire;
 pub use business::{

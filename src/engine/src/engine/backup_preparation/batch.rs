@@ -4,9 +4,9 @@ use super::*;
 use std::{collections::BTreeSet, path::Component};
 
 const FORMAT: &str = "zxs-backup-whole-unit-batch";
-const BATCH_JOB: &str = "backup-preparation/batch.json";
+pub(super) const BATCH_JOB: &str = "backup-preparation/batch.json";
 const BATCH_INTENT: &str = "backup-batch.json";
-const BATCH_COMPLETE: &str = "backup-batch-prepared.json";
+pub(super) const BATCH_COMPLETE: &str = "backup-batch-prepared.json";
 const MAX_TARGETS: usize = 8;
 const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
 
@@ -19,13 +19,20 @@ pub(super) struct Batch {
 }
 
 impl Batch {
+    pub(super) fn jobs(&self) -> &[Job] {
+        &self.targets
+    }
+    pub(super) fn request(&self) -> &BackupPreparationRequest {
+        &self.request
+    }
+
     fn first(&self) -> &Job {
         self.targets
             .first()
             .expect("invariant: admitted nonempty batch")
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         validate_request(&self.request)?;
         if self.format != FORMAT || self.targets.len() != self.request.target_paths.len() {
             return Err(invalid("backup batch omits or adds a selected target"));
@@ -144,7 +151,7 @@ fn require_no_single(system: &DiskRoot) -> Result<()> {
     Ok(())
 }
 
-fn read_batch(system: &DiskRoot) -> Result<Batch> {
+pub(super) fn read_batch(system: &DiskRoot) -> Result<Batch> {
     let batch: Batch =
         decode_strict(&system.read_bytes(&system.path().join(BATCH_JOB), MAX_BATCH_BYTES)?)?;
     batch.validate()?;
@@ -275,7 +282,10 @@ impl Engine {
             .expect("invariant: retained batch worker"))
     }
 
-    fn check_batch_scope(&self, request: &BackupPreparationRequest) -> Result<()> {
+    pub(in crate::engine::backup_preparation) fn check_batch_scope(
+        &self,
+        request: &BackupPreparationRequest,
+    ) -> Result<()> {
         self.check_backup_preparation_scope(&single_request(
             request,
             request.target_paths[0].clone(),
@@ -305,7 +315,10 @@ impl Engine {
         Ok(())
     }
 
-    fn check_batch_targets(&self, roots: &[DiskRoot]) -> Result<()> {
+    pub(in crate::engine::backup_preparation) fn check_batch_targets(
+        &self,
+        roots: &[DiskRoot],
+    ) -> Result<()> {
         let mut identities = BTreeSet::new();
         let mut devices = BTreeSet::new();
         if self.config.mode == Mode::Production {
@@ -479,7 +492,7 @@ pub fn offline_check_backup_preparation_batch(
     Ok(report)
 }
 
-fn verify_targets(
+pub(super) fn verify_targets(
     batch: &Batch,
     roots: &[&DiskRoot],
     stop: &AtomicBool,
