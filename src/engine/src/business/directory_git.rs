@@ -3,9 +3,11 @@
 use super::directory_staging::Ids;
 use super::*;
 mod branches;
+mod rename;
 mod retention;
 mod status;
 use json_codec::{Value, json};
+pub(crate) use rename::RenameOwnership;
 pub(crate) use retention::{protected_git_versions, staged_owned_files};
 pub use status::DirectoryGitStatusRead;
 use std::collections::{BTreeMap, BTreeSet};

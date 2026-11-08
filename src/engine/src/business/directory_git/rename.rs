@@ -1,0 +1,116 @@
+//! Rename may directly leave a directory repository only before that file has
+//! appeared in one of its explicit commits. Working saves and indexes do not
+//! count; a historical export needs an independent full-history copy instead.
+use super::*;
+
+pub(crate) struct RenameOwnership<'a> {
+    before: BTreeMap<&'a str, &'a str>,
+    after: BTreeMap<&'a str, &'a str>,
+    departures: BTreeMap<&'a str, BTreeSet<&'a str>>,
+}
+
+impl<'a> RenameOwnership<'a> {
+    pub(crate) fn new(
+        state: &State,
+        repository: &'a str,
+        before: &'a [Entry],
+        after: &'a [Entry],
+    ) -> Self {
+        Self {
+            before: owners(state, repository, before),
+            after: owners(state, repository, after),
+            departures: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn track(&mut self, source: &'a Entry, target: &Entry) {
+        let Some(owner) = owner_at(&self.before, source.lookup_key()) else {
+            return;
+        };
+        if owner_at(&self.after, target.lookup_key()) != Some(owner) {
+            self.departures
+                .entry(owner)
+                .or_default()
+                .insert(&source.file_id);
+        }
+    }
+
+    pub(crate) fn require_direct(&self, state: &State) -> Result<()> {
+        if self.departures.is_empty() {
+            return Ok(());
+        }
+        // Query every explicit historical node, not just the current HEAD or
+        // selected branch. No history scan is needed for an in-owner rename.
+        for tree in state.directory_trees.values() {
+            let branch = &state.directory_branches[&tree.directory_branch_id];
+            let Some(files) = self.departures.get(branch.directory_id.as_str()) else {
+                continue;
+            };
+            if storage_contract::directory_staging::directory_tree_is_committed(state, tree)
+                && contains_owned_file(tree, files)
+            {
+                return Err(Error::new(
+                    ErrorCode::UnsupportedOperation,
+                    "renaming a historically committed file out of its directory repository requires a full-history copy; source and destination are unchanged",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn owners<'a>(
+    state: &State,
+    repository: &'a str,
+    entries: &'a [Entry],
+) -> BTreeMap<&'a str, &'a str> {
+    let mut result = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == NamespaceEntryKind::Directory
+                && state
+                    .directory_git_repositories
+                    .contains_key(&entry.entry_id)
+        })
+        .map(|entry| (entry.lookup_key(), entry.entry_id.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    if state.directory_git_repositories.contains_key(repository) {
+        result.insert("", repository);
+    }
+    result
+}
+
+fn owner_at<'a>(owners: &BTreeMap<&str, &'a str>, mut key: &str) -> Option<&'a str> {
+    while let Some((parent, _)) = key.rsplit_once('/') {
+        if let Some(owner) = owners.get(parent) {
+            return Some(owner);
+        }
+        key = parent;
+    }
+    owners.get("").copied()
+}
+
+fn contains_owned_file(tree: &DirectoryTree, files: &BTreeSet<&str>) -> bool {
+    let children = tree
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == NamespaceEntryKind::Directory
+                && tree.directory_refs.contains_key(&entry.entry_id)
+        })
+        .map(Entry::lookup_key)
+        .collect::<BTreeSet<_>>();
+    tree.entries.iter().any(|entry| {
+        if entry.kind != NamespaceEntryKind::File || !files.contains(entry.file_id.as_str()) {
+            return false;
+        }
+        let mut key = entry.lookup_key();
+        while let Some((parent, _)) = key.rsplit_once('/') {
+            if children.contains(parent) {
+                return false;
+            }
+            key = parent;
+        }
+        true
+    })
+}

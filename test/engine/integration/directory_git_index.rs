@@ -1,6 +1,8 @@
 //! Public-engine regressions for explicit index snapshots and live working files.
 #[path = "directory_git_index/file_separation.rs"]
 mod file_separation;
+#[path = "directory_git_index/rename.rs"]
+mod rename;
 use std::io::Read;
 use storage_engine::{
     CommitRequest, Config, DirectoryCommitRequest, Engine, ErrorCode, OperationId, OperationResult,

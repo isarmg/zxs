@@ -1,5 +1,7 @@
 //! Phase-one local SMB bridge acceptance through its public listener and Client.
 //! These are real framed Unix RPC/FD/Engine tests, not Samba network tests.
+#[path = "phase1_smb_rpc/directory_rename.rs"]
+mod directory_rename;
 use smb_protocol::{
     client::{Client, RemoteError, RemoteErrorCode},
     protocol::{DirectoryPage, NamespaceOperation, OpenResult, Request},

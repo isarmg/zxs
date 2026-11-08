@@ -860,6 +860,10 @@ pub(crate) fn namespace_locations(
     principal: &str,
     operation: OperationId,
 ) -> Result<()> {
+    let mut ownership = changes
+        .iter()
+        .any(|change| matches!(change, NamespaceOperation::Rename { .. }))
+        .then(|| directory_git::RenameOwnership::new(state, repository, before, after));
     // Workspace entries may not be sorted yet. Keep the first path match,
     // just like `find`, without rescanning all siblings for every file.
     let mut after_by_path = BTreeMap::new();
@@ -931,6 +935,9 @@ pub(crate) fn namespace_locations(
                     && e.file_id == old.file_id
             })
         {
+            if let Some(ownership) = &mut ownership {
+                ownership.track(old, current);
+            }
             let context = original_contexts
                 .get(&context_key_from_key(repository, old.lookup_key()))
                 .cloned();
@@ -975,6 +982,9 @@ pub(crate) fn namespace_locations(
                 }
             }
         }
+    }
+    if let Some(ownership) = ownership {
+        ownership.require_direct(state)?;
     }
     for (file, path) in physical_outcomes {
         state
