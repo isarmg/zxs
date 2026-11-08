@@ -7,6 +7,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+mod backup_preparation;
+pub use backup_preparation::{
+    BackupPreparationPhase, BackupPreparationRequest, BackupPreparationStatus,
+};
 mod config;
 pub use config::ValidatedConfig;
 mod disk_registry;
@@ -172,6 +176,7 @@ pub struct Engine {
     pub(crate) workspace_namespace_baselines: BTreeMap<String, WorkspaceNamespaceBaseline>,
     workspace_budget: workspace_budget::WorkspaceBudget,
     pub(crate) blocked: bool,
+    backup_preparation: Option<backup_preparation::Worker>,
     membership_fence: Option<membership_transition::AdmittedFence>,
     pending_membership: Option<membership_transition::pending::PendingMembership>,
     pending_disk_exit: Option<membership_transition::pending::activation::exit::PendingDiskExit>,
@@ -570,6 +575,7 @@ impl Engine {
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
+            backup_preparation: None,
             membership_fence: None,
             pending_membership: None,
             pending_disk_exit: None,
@@ -687,6 +693,9 @@ impl Engine {
         engine.retire_published_readmission_plan()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
+        if mode == RecoveryMode::CompletePending {
+            engine.resume_backup_preparation()?;
+        }
         Ok(engine)
     }
 
@@ -750,6 +759,7 @@ impl Engine {
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
+            backup_preparation: None,
             membership_fence: None,
             pending_membership: None,
             pending_disk_exit: None,

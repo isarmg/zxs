@@ -1,0 +1,183 @@
+//! Real frozen task/roots with a controlled worker panic. This tests ownership
+//! and failure observation, not a production I/O path causing that panic.
+use super::*;
+use std::{
+    fs,
+    os::unix::fs::DirBuilderExt,
+    time::{Duration, Instant},
+};
+
+struct Fixture {
+    temp: tempfile::TempDir,
+    engine: Engine,
+    target: PathBuf,
+    request: BackupPreparationRequest,
+    job: Vec<u8>,
+    state: Vec<u8>,
+}
+impl Fixture {
+    fn new() -> Self {
+        let temp = tempfile::Builder::new()
+            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let config =
+            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
+        let repository = engine
+            .create_disk_root("P01", "admin", OperationId::generate().unwrap())
+            .unwrap();
+        let workspace = engine
+            .create_workspace(&repository.main_branch_id, "admin")
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "body", b"frozen panic fixture")
+            .unwrap();
+        engine
+            .commit_workspace(CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: OperationId::generate().unwrap(),
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "worker panic fixture".into(),
+                request_digest: None,
+            })
+            .unwrap();
+        let target = temp.path().join("target");
+        fs::DirBuilder::new().mode(0o700).create(&target).unwrap();
+        let request = BackupPreparationRequest {
+            operation_id: OperationId::generate().unwrap(),
+            principal: "admin".into(),
+            source_slot_id: "B01".into(),
+            target_paths: vec![target.clone()],
+            expected_sequence: engine.state.sequence,
+        };
+        engine
+            .start_backup_preparation(request.clone(), File::open(&target).unwrap())
+            .unwrap();
+        assert_eq!(
+            engine.wait_backup_preparation().unwrap().phase,
+            BackupPreparationPhase::HistoryPrepared
+        );
+        let job = fs::read(temp.path().join("system").join(JOB)).unwrap();
+        let state = canonical_json(engine.state()).unwrap();
+        Self {
+            temp,
+            engine,
+            target,
+            request,
+            job,
+            state,
+        }
+    }
+    fn install_panicking_owner(&mut self, poison: bool) {
+        let root = DiskRoot::open(&self.target).unwrap();
+        let lock = AdvisoryLock::directory(&root.directory(root.path()).unwrap()).unwrap();
+        let locks = self.engine.retain_writer_locks().unwrap();
+        let plans = self.engine.backup_history_plans().unwrap();
+        let worker = self.engine.backup_preparation.as_mut().unwrap();
+        assert!(worker.thread.is_none());
+        *worker.state.lock().unwrap() = worker.job.status();
+        let state = Arc::clone(&worker.state);
+        worker.thread = Some(std::thread::spawn(move || {
+            let (_root, _lock, _locks, _plans) = (root, lock, locks, plans);
+            if poison {
+                let _status = state.lock().unwrap();
+                panic!("controlled preparation owner panic with poisoned diagnostic cache");
+            }
+            panic!("controlled preparation owner panic outside diagnostic cache");
+        }));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !worker.thread.as_ref().unwrap().is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "controlled panic did not terminate"
+            );
+            std::thread::yield_now();
+        }
+    }
+    fn assert_blocked_and_retained(&self) {
+        let status = self.engine.backup_preparation_status().unwrap();
+        assert_eq!(status.operation_id, self.request.operation_id);
+        assert_eq!(status.phase, BackupPreparationPhase::Blocked);
+        assert_eq!(status.error_code, Some(ErrorCode::RecoveryRequired));
+        assert_eq!(canonical_json(self.engine.state()).unwrap(), self.state);
+        assert_eq!(
+            fs::read(self.temp.path().join("system").join(JOB)).unwrap(),
+            self.job
+        );
+    }
+    fn assert_target_lock_released(&self) {
+        let root = DiskRoot::open(&self.target).unwrap();
+        let held = AdvisoryLock::directory(&root.directory(root.path()).unwrap()).unwrap();
+        // Positive control: these are distinct open-file descriptions, so a
+        // second owner cannot also acquire the still-held lock.
+        assert!(AdvisoryLock::directory(&root.directory(root.path()).unwrap()).is_err());
+        drop(held);
+    }
+    fn retry(&mut self) -> Result<BackupPreparationStatus> {
+        self.engine
+            .start_backup_preparation(self.request.clone(), File::open(&self.target).unwrap())
+    }
+    fn assert_same_task_completes(mut self) {
+        self.retry().unwrap();
+        let completed = self.engine.wait_backup_preparation().unwrap();
+        assert_eq!(completed.operation_id, self.request.operation_id);
+        assert_eq!(completed.phase, BackupPreparationPhase::HistoryPrepared);
+        assert_eq!(
+            fs::read(self.temp.path().join("system").join(JOB)).unwrap(),
+            self.job
+        );
+        assert_eq!(canonical_json(self.engine.state()).unwrap(), self.state);
+        drop(self.engine);
+        let mut engine = Engine::open(&self.temp.path().join("system")).unwrap();
+        let cold = engine.wait_backup_preparation().unwrap();
+        assert_eq!(cold.operation_id, self.request.operation_id);
+        assert_eq!(cold.phase, BackupPreparationPhase::HistoryPrepared);
+    }
+}
+
+#[test]
+fn panicking_worker_wait_retains_failure_and_releases_owned_resources() {
+    let mut fixture = Fixture::new();
+    fixture.install_panicking_owner(false);
+    assert_eq!(
+        fixture.engine.wait_backup_preparation().unwrap_err().code(),
+        ErrorCode::RecoveryRequired
+    );
+    fixture.assert_blocked_and_retained();
+    assert_eq!(
+        fixture.engine.wait_backup_preparation().unwrap().phase,
+        BackupPreparationPhase::Blocked
+    );
+    fixture.assert_target_lock_released();
+    fixture.assert_same_task_completes();
+}
+
+#[test]
+fn panicking_worker_retry_keeps_the_task_until_exact_reverification() {
+    let mut fixture = Fixture::new();
+    fixture.install_panicking_owner(false);
+    assert_eq!(
+        fixture.retry().unwrap_err().code(),
+        ErrorCode::RecoveryRequired
+    );
+    fixture.assert_blocked_and_retained();
+    fixture.assert_target_lock_released();
+    fixture.assert_same_task_completes();
+}
+
+#[test]
+fn poisoned_progress_is_reported_as_unavailable_not_a_healthy_or_missing_task() {
+    let mut fixture = Fixture::new();
+    fixture.install_panicking_owner(true);
+    fixture.assert_blocked_and_retained();
+    assert_eq!(
+        fixture.engine.wait_backup_preparation().unwrap_err().code(),
+        ErrorCode::RecoveryRequired
+    );
+    fixture.assert_blocked_and_retained();
+    fixture.assert_target_lock_released();
+    fixture.assert_same_task_completes();
+}

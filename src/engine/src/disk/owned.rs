@@ -345,7 +345,7 @@ impl DiskRoot {
     pub(crate) fn copy_verified_bytes_synced(
         &self,
         path: &Path,
-        input: &mut ReadFile,
+        input: &mut impl Read,
         expectation: platform_io::payload::Expectation,
     ) -> Result<()> {
         let operation = self.operation()?;
@@ -639,11 +639,11 @@ struct RootOperation<'a> {
     lease: Option<DiskIoLease>,
 }
 
-struct OperationCopyReader<'a, 'root> {
-    input: &'a mut ReadFile,
+struct OperationCopyReader<'a, 'root, R> {
+    input: &'a mut R,
     operation: &'a RootOperation<'root>,
 }
-impl Read for OperationCopyReader<'_, '_> {
+impl<R: Read> Read for OperationCopyReader<'_, '_, R> {
     fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
         self.operation
             .check_running()

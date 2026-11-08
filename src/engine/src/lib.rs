@@ -30,7 +30,9 @@ pub use directory_conversion::{
 mod disk;
 pub mod disk_authority;
 mod engine;
-pub use engine::RecoveryDataRoot;
+pub use engine::{
+    BackupPreparationPhase, BackupPreparationRequest, BackupPreparationStatus, RecoveryDataRoot,
+};
 pub use engine::{
     TerminalMetadataResume, TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,

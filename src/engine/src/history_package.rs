@@ -17,8 +17,13 @@ mod projection_delta_tests;
 pub(crate) use graph::{EncodedHistory, decode_history_root};
 mod file_deletions;
 mod manifest;
+mod preparation;
 mod state_read;
 pub use manifest::HistoryManifest;
+pub(crate) use preparation::{
+    PreparedHistoryPackage, install_preparation_bytes, preparation_checkpoint,
+    preparation_path_exists,
+};
 pub(crate) use state_read::{AdmittedState, RawState, SharedAdmittedState};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -645,18 +650,26 @@ fn package_object(package: &Path, kind: &str, hash: &str) -> Result<PathBuf> {
 }
 
 fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, HistoryPackageReport)> {
-    let proof: PackageProof = decode_proof(&read_bytes(
+    load_package_at(&DiskRoot::open(package)?, &mut |_| Ok(()))
+}
+fn load_package_at(
+    root: &DiskRoot,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<(HistoryManifest, PackageProof, HistoryPackageReport)> {
+    let package = root.path();
+    let proof: PackageProof = decode_proof(&root.read_bytes_observed(
         &package.join("publication.json"),
         MAX_METADATA,
+        observe,
     )?)?;
     if proof.candidate.generation().is_some() {
-        let authority: crate::engine::membership_transition::pending::activation::PortableAuthority = read_json(&package.join("membership-generation.json"))?;
+        let authority: crate::engine::membership_transition::pending::activation::PortableAuthority = root.read_json_observed(&package.join("membership-generation.json"), observe)?;
         authority.verify_candidate(&proof.candidate)?;
     }
-    let root = AuthenticatedMetadataObject::authenticate(
+    let manifest_root = AuthenticatedMetadataObject::authenticate(
         "history-manifest",
         &proof.manifest_hash,
-        read_json(&package.join("manifest.json"))?,
+        root.read_json_observed(&package.join("manifest.json"), observe)?,
     )
     .map_err(|error| {
         error.context(
@@ -664,12 +677,12 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
             "manifest is not bound by the published candidate",
         )
     })?;
-    let hash = root.hash().to_owned();
-    let (manifest, _) = graph::resolve_with_objects(root, |kind, hash| {
+    let hash = manifest_root.hash().to_owned();
+    let (manifest, _) = graph::resolve_with_objects(manifest_root, |kind, hash| {
         AuthenticatedMetadataObject::authenticate(
             kind,
             hash,
-            read_json(&package_object(package, kind, hash)?)?,
+            root.read_json_observed(&package_object(package, kind, hash)?, observe)?,
         )
     })?;
     manifest.validate()?;
@@ -694,14 +707,7 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
     for (id, version) in &manifest.versions {
         if manifest.content_states[id] == ContentState::Available {
             let directory = package_version(package, id);
-            let metadata: FileVersion = read_json(&directory.join("version.json"))?;
-            if object_hash("version", &metadata)? != object_hash("version", version)? {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::HistoryPackageInvalid,
-                    "packaged version metadata differs",
-                ));
-            }
-            verify_payload(&directory, version)?;
+            verify_package_payload_at(root, &directory, version, observe)?;
             full_files += 1;
             full_bytes = full_bytes
                 .checked_add(version.logical_size)
@@ -728,6 +734,46 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
     };
     Ok((manifest, proof, report))
 }
+
+fn verify_package_payload_at(
+    root: &DiskRoot,
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<()> {
+    let metadata: FileVersion =
+        root.read_json_observed(&directory.join("version.json"), observe)?;
+    if object_hash("version", &metadata)? != object_hash("version", version)? {
+        return Err(Error::new(
+            ErrorCode::HistoryPackageInvalid,
+            "packaged version metadata differs",
+        ));
+    }
+    let length = checksum_manifest_length(version)?;
+    let bytes = root.read_bytes_observed(&directory.join("checksums.bin"), length, observe)?;
+    if bytes.len() != length
+        || blake3::hash(&bytes).to_hex().as_str() != version.checksum_manifest_hash
+    {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "packaged checksum commitment differs",
+        ));
+    }
+    let manifest = ChecksumManifest::decode(&bytes)?;
+    if manifest.logical_size != version.logical_size
+        || manifest.chunk_bytes != version.checksum_chunk_bytes
+    {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "packaged checksum header differs",
+        ));
+    }
+    let file = root.open_read_regular(&directory.join("content").join(&version.creation_name))?;
+    drop(verify_open_payload_observed(
+        file, manifest, version, observe,
+    )?);
+    Ok(())
+}
 /// Validate one history without a system index, source pool, network or account store.
 pub fn offline_check_history_package(package: &Path) -> Result<HistoryPackageReport> {
     load_package(package).map(|(_, _, report)| report)
@@ -738,117 +784,11 @@ impl Engine {
         history: &str,
         destination: &Path,
     ) -> Result<HistoryPackageReport> {
-        self.repository_for_history(history)?;
-        let manifest = HistoryManifest::project_state(&self.state, history)?;
-        let mut proof = None;
-        let mut graph_objects = Vec::new();
-        let crate::engine::EvidenceMembers {
-            members,
-            first_error,
-        } = self.trusted_evidence_members();
-        for disk in &members {
-            for (record, _) in self
-                .metadata_integrity
-                .observe(scan_configured_at(
-                    &self.disk_resources.get(disk)?.root,
-                    disk,
-                    &self.config,
-                ))?
-                .records
-                .into_iter()
-                .rev()
-                .filter(|(r, _)| r.record_type == RecordType::Publication)
-            {
-                let candidate: Candidate =
-                    crate::publication_evidence::verified_object_observed_at(
-                        &self.disk_resources,
-                        &members,
-                        "candidate",
-                        &record.candidate_hash,
-                        &mut |error| self.metadata_integrity.fault(error),
-                    )?;
-                self.verify_candidate_membership(&candidate)?;
-                if candidate.pool_id != self.config.pool_id || candidate.sequence != record.sequence
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::PublicationInvalid,
-                        "candidate differs from journal or pool",
-                    ));
-                }
-                let (value, history_root_proof) = crate::metadata_map::read_proof(
-                    &candidate.history_roots,
-                    history,
-                    |kind, hash| {
-                        crate::publication_evidence::verified_graph_object_observed_at(
-                            &self.disk_resources,
-                            &members,
-                            kind,
-                            hash,
-                            &mut |error| self.metadata_integrity.fault(error),
-                        )
-                    },
-                )?;
-                let Some(value) = value else {
-                    continue;
-                };
-                let hash = value
-                    .as_str()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorCode::ObjectCorrupt,
-                            "history catalog digest is not text",
-                        )
-                    })?
-                    .to_owned();
-                let (bound, objects) = bound_history_graph_observed_at(
-                    &self.disk_resources,
-                    &members,
-                    &hash,
-                    &mut |error| self.metadata_integrity.fault(error),
-                )?;
-                if canonical_json(&bound)? != canonical_json(&manifest)? {
-                    continue;
-                }
-                graph_objects = objects;
-                let publication: Publication =
-                    crate::publication_evidence::verified_object_observed_at(
-                        &self.disk_resources,
-                        &members,
-                        "publication",
-                        &record.object_hash,
-                        &mut |error| self.metadata_integrity.fault(error),
-                    )?;
-                let publication_seal: PublicationSeal =
-                    crate::publication_evidence::verified_publication_seal_observed_at(
-                        &self.disk_resources,
-                        &members,
-                        &candidate,
-                        &publication,
-                        &mut |error| self.metadata_integrity.fault(error),
-                    )?;
-                proof = Some(PackageProof {
-                    manifest_hash: hash.clone(),
-                    candidate,
-                    publication,
-                    publication_seal,
-                    history_root_proof,
-                });
-                break;
-            }
-            if proof.is_some() {
-                break;
-            }
-        }
-        let proof = proof.ok_or_else(|| match first_error {
-            Some(error) => error.context(
-                storage_contract::ErrorCode::RecoveryRequired,
-                "no published manifest matches the current history",
-            ),
-            None => Error::new(
-                storage_contract::ErrorCode::RecoveryRequired,
-                "no published manifest matches the current history",
-            ),
-        })?;
+        let preparation::HistoryMetadata {
+            manifest,
+            proof,
+            graph_objects,
+        } = self.history_package_metadata(history)?;
         let parent = destination
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
