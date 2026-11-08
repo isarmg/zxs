@@ -8,6 +8,7 @@ use crate::engine::backup_preparation::native_control::databases::materials::{
 use crate::engine::membership_transition::{
     AdmittedBackupDecision, BackupRegistryDecisionHash, PreparedBackupAuthority,
 };
+use crate::history_package::AdmittedState;
 
 const DIRECTORY: &str = "backup-generation-authority";
 const COMPLETE: &str = "generation-authority-prepared.json";
@@ -73,6 +74,15 @@ impl Plan {
         index: usize,
         stop: &AtomicBool,
     ) -> Result<Self> {
+        Self::capture_input(prepared, decision, inputs, index, stop).map(|(plan, _)| plan)
+    }
+    fn capture_input(
+        prepared: &PreparedBackupRegistry,
+        decision: &AdmittedBackupDecision,
+        inputs: &BackupGenerationPreparationReport,
+        index: usize,
+        stop: &AtomicBool,
+    ) -> Result<(Self, AdmittedState)> {
         let (control, observed) =
             generation_control::read_authority_input(prepared, decision, inputs, index, stop)?;
         let source = snapshot::read(
@@ -123,13 +133,16 @@ impl Plan {
             targets: prepared.targets.len(),
             authority_bytes_per_target: authority.bytes().len() as u64,
         };
-        Ok(Self {
-            authority,
-            object_path,
-            manifest,
-            completion,
-            report,
-        })
+        Ok((
+            Self {
+                authority,
+                object_path,
+                manifest,
+                completion,
+                report,
+            },
+            source,
+        ))
     }
     fn files(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
@@ -243,4 +256,19 @@ pub(super) fn observe(
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
     Ok(first.expect("invariant: admitted preparation contains one to eight targets"))
+}
+
+/// Borrow no source/peer shortcut: the first-candidate recipe receives this
+/// target's own complete admitted State and its read-back native authority.
+pub(super) fn read_candidate_input(
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    inputs: &BackupGenerationPreparationReport,
+    index: usize,
+    stop: &AtomicBool,
+) -> Result<(PreparedBackupAuthority, AdmittedState)> {
+    let (plan, source) = Plan::capture_input(prepared, decision, inputs, index, stop)?;
+    plan.verify(&prepared.targets[index].root, stop)?;
+    plan.require_completion(&prepared.targets[index].root)?;
+    Ok((plan.authority, source))
 }

@@ -13,6 +13,7 @@ mod backup;
 pub use backup::BackupRegistryDecisionHash;
 pub(in crate::engine) use backup::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl, PreparedBackupAuthority,
+    PreparedBackupFirstCandidate,
 };
 mod complete_chain;
 pub use abort::MembershipAbortStatus;

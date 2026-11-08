@@ -6,37 +6,34 @@ use crate::history_package::AdmittedState;
 const MAX_ROUTING_BYTES: usize = 16 * 1024 * 1024;
 
 struct Selection {
-    report: BackupWriterRoutesReport,
+    targets: Vec<BackupPreparedTopologyNode>,
+    primary: DiskRegistrationIdentity,
+    replaced: DiskRegistrationIdentity,
     retained: Vec<String>,
     slots: Vec<String>,
     bindings: BTreeMap<String, u64>,
     topology_generation: u64,
 }
 impl Selection {
-    fn new(routes: &writer_routes::Routes, before: &State) -> Result<Self> {
-        let mut report = routes.report();
-        report
-            .targets
-            .sort_by_key(|target| (target.level, target.identity.slot_id.to_ascii_lowercase()));
-        let retained = report
-            .retained_source_chain
+    fn new(
+        chain: &[DiskRegistrationIdentity],
+        mut targets: Vec<BackupPreparedTopologyNode>,
+        replaced: &DiskRegistrationIdentity,
+        before: &State,
+    ) -> Result<Self> {
+        targets.sort_by_key(|target| (target.level, target.identity.slot_id.to_ascii_lowercase()));
+        let retained = chain
             .iter()
             .map(|id| id.slot_id.clone())
             .collect::<Vec<_>>();
         let slots = retained
             .iter()
             .cloned()
-            .chain(
-                report
-                    .targets
-                    .iter()
-                    .map(|target| target.identity.slot_id.clone()),
-            )
+            .chain(targets.iter().map(|target| target.identity.slot_id.clone()))
             .collect::<Vec<_>>();
-        let bindings = report
-            .retained_source_chain
+        let bindings = chain
             .iter()
-            .chain(report.targets.iter().map(|target| &target.identity))
+            .chain(targets.iter().map(|target| &target.identity))
             .map(|id| (id.slot_id.clone(), id.binding_generation))
             .collect::<BTreeMap<_, _>>();
         if bindings.len() != slots.len() {
@@ -45,7 +42,9 @@ impl Selection {
             ));
         }
         Ok(Self {
-            report,
+            targets,
+            primary: chain[0].clone(),
+            replaced: replaced.clone(),
             retained,
             slots,
             bindings,
@@ -60,17 +59,18 @@ impl Selection {
         &self,
         previous: &storage_contract::Placement,
     ) -> Result<storage_contract::Placement> {
-        let primary = &self.report.retained_source_chain[0];
-        let replaced = &self.report.retained_replaced_terminal;
+        let primary = &self.primary;
+        let replaced = &self.replaced;
         if previous.primary_slot_id != primary.slot_id
             || !previous.route_slot_ids.starts_with(&self.retained)
             || previous
                 .route_slot_ids
                 .iter()
                 .any(|slot| !self.retained.contains(slot) && slot != &replaced.slot_id)
-            || self.report.retained_source_chain.iter().any(|id| {
-                previous.binding_generations.get(&id.slot_id) != Some(&id.binding_generation)
-            })
+            || self
+                .retained
+                .iter()
+                .any(|slot| previous.binding_generations.get(slot) != self.bindings.get(slot))
             || (previous.route_slot_ids.contains(&replaced.slot_id)
                 && previous.binding_generations.get(&replaced.slot_id)
                     != Some(&replaced.binding_generation))
@@ -105,7 +105,7 @@ impl Selection {
             .get(file)
             .cloned()
             .unwrap_or_default();
-        for target in &self.report.targets {
+        for target in &self.targets {
             let path = format!("{}/{}", target.source_prefix.join("/"), location);
             name_policy::PortablePath::parse(&path)?;
             if paths
@@ -136,8 +136,43 @@ pub(super) fn project(
     routes: &writer_routes::Routes,
     stop: &AtomicBool,
 ) -> Result<State> {
-    let before = source.state();
-    let selection = Selection::new(routes, before)?;
+    let report = routes.report();
+    let selection = Selection::new(
+        &report.retained_source_chain,
+        report.targets,
+        &report.retained_replaced_terminal,
+        source.state(),
+    )?;
+    project_units(source.state(), routes.units(), &selection, stop)
+}
+
+pub(in crate::engine::backup_preparation) fn project_frozen(
+    source: &State,
+    evidence: &BackupSourceFenceEvidence,
+    projection: &BackupRegistryProjection,
+    stop: &AtomicBool,
+) -> Result<State> {
+    let (chain, units) =
+        writer_routes::frozen_selection(projection, &evidence.task.original, stop)?;
+    let selection = Selection::new(
+        &chain,
+        projection
+            .targets
+            .iter()
+            .map(|target| target.node.clone())
+            .collect(),
+        &projection.replaced_terminal,
+        source,
+    )?;
+    project_units(source, &units, &selection, stop)
+}
+
+fn project_units(
+    before: &State,
+    units: &EntityPlacement,
+    selection: &Selection,
+    stop: &AtomicBool,
+) -> Result<State> {
     let mut after = before.clone();
     after.begin_tracking();
     // This is still the original sequence. Only a future authenticated Backup
@@ -145,7 +180,7 @@ pub(super) fn project(
     after.topology_generation = selection.topology_generation;
     let mut covered = BTreeSet::new();
     let mut bytes = 0;
-    for file in &routes.units().files {
+    for file in &units.files {
         preparation_checkpoint(stop)?;
         let paths = selection.paths(before, &file.file_id)?;
         charge(&paths, &mut bytes)?;

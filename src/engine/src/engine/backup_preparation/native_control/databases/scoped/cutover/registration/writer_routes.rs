@@ -101,18 +101,11 @@ impl Routes {
         stop: &AtomicBool,
     ) -> Result<Self> {
         let projection = &prepared.projection;
-        let source_chain = source_chain(prepared)?;
-        require_complete_selected_topology(prepared, &source_chain)?;
-        let first = &projection.targets[0];
-        let units = first.entities.relative_to(&first.node.source_prefix)?;
-        for target in &projection.targets[1..] {
-            preparation_checkpoint(stop)?;
-            if target.entities.relative_to(&target.node.source_prefix)? != units {
-                return Err(invalid(
-                    "selected targets split a file, repository, parent/child boundary or retained version set",
-                ));
-            }
-        }
+        let (source_chain, units) = frozen_selection(
+            projection,
+            &prepared.task.installation.evidence.task.original,
+            stop,
+        )?;
         let material = Material {
             format: FORMAT,
             decision_hash: decision.hash().as_str().into(),
@@ -232,10 +225,10 @@ impl Routes {
 /// The original single-chain Config restriction remains in force until the
 /// missing Backup generation publication can provide its real authority.
 fn require_complete_selected_topology(
-    prepared: &PreparedBackupRegistry,
+    original: &Config,
+    projection: &BackupRegistryProjection,
     retained: &[DiskRegistrationIdentity],
 ) -> Result<()> {
-    let original = &prepared.task.installation.evidence.task.original;
     let selected_old = retained
         .iter()
         .map(|disk| disk.slot_id.as_str())
@@ -250,8 +243,7 @@ fn require_complete_selected_topology(
             level: disk.level,
         })
         .chain(
-            prepared
-                .projection
+            projection
                 .targets
                 .iter()
                 .map(|target| crate::route_topology::Node {
@@ -265,8 +257,7 @@ fn require_complete_selected_topology(
         .iter()
         .map(|disk| disk.slot_id.clone())
         .chain(
-            prepared
-                .projection
+            projection
                 .targets
                 .iter()
                 .map(|target| target.node.identity.slot_id.clone()),
@@ -277,12 +268,14 @@ fn require_complete_selected_topology(
     Ok(())
 }
 
-fn source_chain(prepared: &PreparedBackupRegistry) -> Result<Vec<DiskRegistrationIdentity>> {
-    let original = &prepared.task.installation.evidence.task.original;
+fn source_chain(
+    original: &Config,
+    projection: &BackupRegistryProjection,
+) -> Result<Vec<DiskRegistrationIdentity>> {
     let mut disk = original
         .disks
         .iter()
-        .find(|disk| disk.slot_id == prepared.projection.source.slot_id)
+        .find(|disk| disk.slot_id == projection.source.slot_id)
         .expect("invariant: admitted selection has an original source");
     let mut chain = Vec::new();
     loop {
@@ -309,6 +302,28 @@ fn source_chain(prepared: &PreparedBackupRegistry) -> Result<Vec<DiskRegistratio
     }
     chain.reverse();
     Ok(chain)
+}
+
+/// Shared pure selection used by the original image reader and the native
+/// first-candidate recipe. It grants no image or filesystem admission.
+pub(super) fn frozen_selection(
+    projection: &BackupRegistryProjection,
+    original: &Config,
+    stop: &AtomicBool,
+) -> Result<(Vec<DiskRegistrationIdentity>, EntityPlacement)> {
+    let chain = source_chain(original, projection)?;
+    require_complete_selected_topology(original, projection, &chain)?;
+    let first = &projection.targets[0];
+    let units = first.entities.relative_to(&first.node.source_prefix)?;
+    for target in &projection.targets[1..] {
+        preparation_checkpoint(stop)?;
+        if target.entities.relative_to(&target.node.source_prefix)? != units {
+            return Err(invalid(
+                "selected targets split a file, repository, parent/child boundary or retained version set",
+            ));
+        }
+    }
+    Ok((chain, units))
 }
 
 fn encode(value: &impl Serialize) -> Result<Vec<u8>> {

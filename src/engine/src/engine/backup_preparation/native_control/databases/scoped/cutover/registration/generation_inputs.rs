@@ -7,7 +7,7 @@ use crate::engine::backup_preparation::native_control::databases::materials::{
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupRegistryDecisionHash};
 use crate::journal::prepare_snapshot;
 
-mod routing;
+pub(super) mod routing;
 
 const FORMAT: &str = "zxs-backup-generation-routing-inputs";
 const COMPLETE: &str = "generation-inputs-prepared.json";

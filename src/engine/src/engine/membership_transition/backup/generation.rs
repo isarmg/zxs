@@ -10,6 +10,8 @@ use crate::engine::membership_transition::pending::activation::{
     AUTHORITY_KIND, PortableAuthority,
 };
 use registry::{AdmittedBackupDecision, BackupDecisionCertificate};
+mod first_candidate;
+pub(in crate::engine) use first_candidate::PreparedBackupFirstCandidate;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum Format {
@@ -106,6 +108,7 @@ impl BackupCore {
 /// isolated target preparation namespace. No method installs generation.json,
 /// a serving seal, mutable State, journal frame or DiskResources.
 pub(in crate::engine) struct PreparedBackupAuthority {
+    core: BackupCore,
     object: PreparedMetadataObject,
 }
 impl PreparedBackupAuthority {
@@ -130,16 +133,18 @@ impl PreparedBackupAuthority {
                 "Backup generation inputs do not bind one original selected decision",
             ));
         }
-        let authority = PortableAuthority::new_backup(BackupCore {
+        let core = BackupCore {
             format: Format::BackupRegistryGeneration,
             decision: decision.certificate(),
             archive: control.archive().clone(),
             generation_inputs_hash: inputs.inputs_hash.clone(),
             routing_snapshot_hash: inputs.routing_snapshot_hash.clone(),
             control_inputs_hash: observed.inputs_hash.clone(),
-        })?;
+        };
+        let authority = PortableAuthority::new_backup(core.clone())?;
         authority.verify_registry_source(source)?;
         Ok(Self {
+            core,
             object: PreparedMetadataObject::new(AUTHORITY_KIND, &authority, MAX_METADATA)?,
         })
     }

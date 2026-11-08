@@ -71,6 +71,22 @@ impl BackupDecidedTargets {
         generation_authority::observe(&self.prepared, &self.decision, &AtomicBool::new(false))
     }
 
+    /// Reconstruct the original exact first candidate from each target's own
+    /// archived source and native Backup core, then read and admit its complete
+    /// snapshot. The returned metadata does not mean the candidate was accepted
+    /// or published and cannot grant writer/source-unfence authority.
+    pub fn inspect_first_generation_candidate(&self) -> Result<BackupFirstCandidateReport> {
+        first_candidate::observe(&self.prepared, &self.decision, &AtomicBool::new(false))
+    }
+
+    /// Continue only this selected task's isolated native candidate bytes. The
+    /// caller must authorize target writes. No source/SYSTEM is opened, no old
+    /// receipt is replaced, and missing original authority/archive remains an
+    /// error rather than permission to synthesize an active generation.
+    pub fn resume_first_candidate_preparation(&mut self) -> Result<BackupFirstCandidateReport> {
+        first_candidate::prepare(&self.prepared, &self.decision, &AtomicBool::new(false))
+    }
+
     /// Explicit no-clobber writes of this original task's native authority
     /// material only. Missing fenced control bytes remain an error, not a new
     /// synthesized source. The caller must authorize target writes. No source

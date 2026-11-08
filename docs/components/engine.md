@@ -257,3 +257,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### 原生 Backup generation 选择身份
 
 [原生 authority 边界](../design/backup-native-generation-authority.md)新增严格 Backup core，绑定原全成员决定、真实 fenced archive、完整路由快照和闭合目标集合。后台逐目标推导/无覆盖安装/原生读回后进入 `GenerationAuthorityPrepared`，离线视图可只读重验或显式续写同一隔离材料。有效 Config、CurrentRegistry 与 I/O 转换仍硬拒绝 Backup，不能落一份 core 就套用旧 Config 或普通 Add 启用 writer；首笔 publication、目标激活及源解围栏尚未实现。未审查、编译、测试或 CI。
+
+
+## Backup 原决定的首笔候选准备
+
+隔离后台链在真实 native Backup 选择身份之后，生成原决定的确定性首笔 `Candidate`、完整 native snapshot/history 依赖和全部 AVAILABLE 保留版本的保护义务，逐目标无覆盖安装并进行真实生产读回。`GenerationFirstCandidatePrepared` 与 `BackupFirstCandidateReport` 只表示候选材料，不返回迁移成功；离线读取和显式原任务续写分别是 `inspect_first_generation_candidate`、`resume_first_candidate_preparation`。完整写集、预算及保留规则见[首笔候选闭包](../design/backup-native-generation-authority.md#backup-first-candidate)。没有 ACCEPT/FINALIZE/PUBLICATION、活动 writer 或源围栏解除；本片未审查/编译/测试/CI。

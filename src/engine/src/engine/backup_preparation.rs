@@ -30,7 +30,7 @@ pub use native_control::{
 };
 pub use native_control::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
     BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
@@ -100,6 +100,9 @@ pub enum BackupPreparationPhase {
     /// Strict native Backup authority object on every isolated target. It is
     /// not a first publication or an active Config/Current/writer installation.
     GenerationAuthorityPrepared,
+    /// Exact first native Candidate and complete prospective State, read back
+    /// on all isolated targets. No ACCEPT/FINALIZE/Publication or writer grant.
+    GenerationFirstCandidatePrepared,
     Blocked,
     SourceChanged,
 }

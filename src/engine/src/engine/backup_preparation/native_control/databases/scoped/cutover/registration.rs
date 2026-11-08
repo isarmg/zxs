@@ -5,6 +5,8 @@ use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
+mod first_candidate;
+pub use first_candidate::BackupFirstCandidateReport;
 mod generation_authority;
 pub use generation_authority::BackupGenerationAuthorityReport;
 mod generation_control;
@@ -73,6 +75,25 @@ pub(in crate::engine) struct BackupRegistryProjection {
     targets: Vec<TargetProjection>,
 }
 impl BackupRegistryProjection {
+    /// Deterministic metadata recipe, not I/O admission or published State.
+    /// Both the pre-decision routing snapshot and the first native candidate
+    /// use the same complete whole-unit projection.
+    pub(in crate::engine) fn project_unpublished_routing(
+        &self,
+        evidence: &BackupSourceFenceEvidence,
+        source: &State,
+        stop: &AtomicBool,
+    ) -> Result<State> {
+        generation_inputs::routing::project_frozen(source, evidence, self, stop)
+    }
+
+    pub(in crate::engine) fn selected_nodes(&self) -> Vec<BackupPreparedTopologyNode> {
+        self.targets
+            .iter()
+            .map(|target| target.node.clone())
+            .collect()
+    }
+
     /// Pure cold closure of the selected topology and physical target bindings.
     /// This grants no filesystem I/O: actual image admission remains required.
     pub(in crate::engine) fn verify_frozen_selection(

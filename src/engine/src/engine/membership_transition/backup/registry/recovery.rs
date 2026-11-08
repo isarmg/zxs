@@ -160,6 +160,9 @@ impl AdmittedBackupDecision {
     ) -> &BTreeMap<String, OriginalMember> {
         &self.stored.core.original_members
     }
+    pub(in crate::engine::membership_transition) fn projection(&self) -> &BackupRegistryProjection {
+        &self.stored.core.registry_placement
+    }
     pub(in crate::engine::membership_transition) fn certificate(
         &self,
     ) -> BackupDecisionCertificate {

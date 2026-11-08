@@ -48,7 +48,7 @@ pub use engine::{
 };
 pub use engine::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryDecisionHash,
     BackupRegistryRecoveryReport, BackupWriterDestination, BackupWriterRoutesReport,
     open_decided_backup_targets,

@@ -20,7 +20,7 @@ pub use backup_preparation::{
 };
 pub use backup_preparation::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
     BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };

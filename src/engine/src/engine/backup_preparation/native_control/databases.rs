@@ -8,7 +8,7 @@ mod runtime;
 mod scoped;
 pub use scoped::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
     BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };

@@ -166,6 +166,15 @@ fn run(
             "decision {hash} retains strict native Backup authority {} on {} isolated targets; first publication, active Current/Config, target writer and source release remain unavailable",
             authority.authority_hash, authority.targets,
         );
+    })?;
+    let first = first_candidate::prepare(&prepared, &decision, stop)?;
+    choices.observe_decision(&prepared, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationFirstCandidatePrepared;
+        status.detail = format!(
+            "decision {hash} retains exact native first candidate {} and complete snapshot {} on {} isolated targets; no ACCEPT/FINALIZE/Publication, active target writer or source fence release",
+            first.candidate_hash, first.snapshot_hash, first.targets,
+        );
     })
 }
 fn spawn(

@@ -13,6 +13,7 @@ pub(super) enum Namespace {
     BackupGeneration,
     GenerationControl,
     GenerationAuthority,
+    GenerationFirstCandidate,
 }
 impl Namespace {
     fn name(self) -> &'static str {
@@ -22,6 +23,7 @@ impl Namespace {
             Self::BackupGeneration => "backup-generation-inputs",
             Self::GenerationControl => "backup-generation-control",
             Self::GenerationAuthority => "backup-generation-authority",
+            Self::GenerationFirstCandidate => "backup-generation-first-candidate",
         }
     }
 }
@@ -113,7 +115,9 @@ fn inventory(
             let name = entry.map_err(fs_error)?;
             if matches!(
                 prepared.namespace,
-                Namespace::GenerationControl | Namespace::GenerationAuthority
+                Namespace::GenerationControl
+                    | Namespace::GenerationAuthority
+                    | Namespace::GenerationFirstCandidate
             ) && platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
             {
                 // Preserve interrupted private atomic writes, never promote,
