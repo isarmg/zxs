@@ -273,3 +273,7 @@
 `47109fc3` 的多级切换输入之后，新增[源写围栏](../design/backup-source-fence.md)：可信宿主显式调用 `begin_backup_cutover_fence`，重新取得全目标锁并独立重验全部材料，才在原成员上持久写同一原生 MembershipFence。原边界和实际 receipt 保持，部分成功和冷开继续阻写，不删除源或开放目标。`backup_cutover_fence_status` 只报告实际原成员围栏，不等于全目标最终投票。
 
 同一原操作可补齐围栏，也可走固定原 quorum 的认证 Abort 和取消 publication；永久结果为 `backup-cutover-cancelled`，原 Config 的盘集合与原业务材料保留。普通 Joint/Add 明确拒绝这种 source-only origin。当前没有完整迁移调度/目标激活，因此该步骤可能长期全池停写，不能藏在普通设置后自动执行。取消后新代际的后继准备仍不支持。完整最终决定、活动多下级路由、目标实体/完整历史库安装和 helper 完整链准入继续未完成。依要求未审查、编译、测试或运行 CI。
+
+## 源围栏后的隔离实体安装切片
+
+[目标实体安装](../design/backup-target-entity-installation.md)将原完整目标中的文件／目录材料复制成独立物理单位，并以原生围栏绑定任务恢复；不变更 Config、registry、placement 或源数据，不解除全池停写。真正最终切换仍未闭合。此片按当前指示未审查／编译／测试／CI。

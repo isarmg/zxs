@@ -1,6 +1,7 @@
 //! Ordinary version files in one renameable directory per stable file identity.
 use crate::{disk::*, *};
 pub(crate) mod backup_databases;
+pub(crate) mod backup_entities;
 mod changes;
 mod directory_database;
 pub(crate) mod file_database;

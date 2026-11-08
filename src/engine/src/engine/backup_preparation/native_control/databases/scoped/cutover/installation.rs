@@ -1,0 +1,401 @@
+//! Recover the same source-fenced operation and install isolated target entities.
+//! This does not choose a successor authority, release a fence or serve a disk.
+use super::*;
+use crate::container_storage::backup_entities::Image;
+use crate::engine::backup_preparation::native_control::databases::runtime::update;
+
+const FORMAT: &str = "zxs-backup-fenced-entity-installation";
+const TASK: &str = "backup-preparation/target-entities.json";
+const INTENT: &str = "target-entities-intent.json";
+const ACCEPTANCE: &str = "target-entities-installed.json";
+const COMPLETE: &str = "target-entity-set-installed.json";
+const MAX_INTENT: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct Task {
+    format: String,
+    source_fence_hash: String,
+    evidence: BackupSourceFenceEvidence,
+}
+impl Task {
+    fn selection(&self) -> &Selection {
+        self.evidence.task.selection()
+    }
+    fn validate(&self) -> Result<()> {
+        if self.format != FORMAT
+            || self.source_fence_hash.len() != 64
+            || !self
+                .source_fence_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(invalid("unsupported fenced target installation task"));
+        }
+        let task = &self.evidence.task;
+        let job = task.selection().first();
+        self.evidence.validate(
+            &crate::ValidatedConfig::try_from(task.original.clone())?,
+            task.request.operation_id,
+            &task.request.principal,
+            job.request.expected_sequence,
+            &job.snapshot,
+        )
+    }
+    fn bytes(&self) -> Result<Vec<u8>> {
+        let bytes = canonical_json(self)?;
+        if bytes.len() > MAX_INTENT {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "fenced target installation exceeds intent bound",
+            ));
+        }
+        Ok(bytes)
+    }
+    fn current(engine: &Engine, operation: OperationId, principal: &str) -> Result<Self> {
+        let (source_fence_hash, evidence) = engine.fenced_backup_inputs(operation, principal)?;
+        Ok(Self {
+            format: FORMAT.into(),
+            source_fence_hash,
+            evidence,
+        })
+    }
+    fn read(system: &DiskRoot) -> Result<Self> {
+        let task: Self = crate::journal::decode_proof(
+            &system.read_bytes(&system.path().join(TASK), MAX_INTENT)?,
+        )?;
+        task.validate()?;
+        Ok(task)
+    }
+    fn require_current(&self, engine: &Engine) -> Result<()> {
+        let request = &self.evidence.task.request;
+        if self.bytes()?
+            != Self::current(engine, request.operation_id, &request.principal)?.bytes()?
+        {
+            return Err(invalid(
+                "target installation differs from the admitted original native fence; targets untouched",
+            ));
+        }
+        Ok(())
+    }
+}
+struct Target {
+    root: DiskRoot,
+    _lock: AdvisoryLock,
+}
+
+impl Engine {
+    /// Start/continue the exact source-fenced task's target entity installation.
+    /// All original members must already have the same durable native barrier.
+    /// Target data is copied from target-local verified packages, not moved from
+    /// the source. This remains a whole-pool write stop, NOT migration success.
+    /// Hosts must authenticate the caller; no HTTP/helper entry is installed.
+    pub fn start_backup_target_installation(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupPreparationStatus> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let task = Task::current(self, operation, principal)?;
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the same retained backup worker; no parallel image installer started",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let system = DiskRoot::open(&self.root)?;
+        if preparation_path_exists(&system, &self.root.join(TASK))? {
+            if Task::read(&system)?.bytes()? != task.bytes()? {
+                return Err(Error::new(
+                    ErrorCode::IdempotencyKeyReused,
+                    "target entity task belongs to another original source fence",
+                ));
+            }
+            resume_fenced(self, &system)?;
+        } else {
+            let targets = acquire(self, &task)?;
+            // System owner intent is durable before the first new target file.
+            install_preparation_bytes(&system, &self.root.join(TASK), &task.bytes()?)?;
+            self.backup_preparation = Some(match spawn(self, task.clone(), system, targets) {
+                Ok(worker) => worker,
+                Err(error) => task
+                    .selection()
+                    .clone()
+                    .idle(error, BackupPreparationPhase::Blocked),
+            });
+        }
+        self.backup_preparation_status()
+            .ok_or_else(|| invalid("target image task has no observable worker"))
+    }
+}
+
+fn acquire(engine: &Engine, task: &Task) -> Result<Vec<Target>> {
+    // The only exception to ordinary require_write is this narrow, source-fence
+    // capability. No raw SYSTEM file can take this branch. Original all-member
+    // seals, State and prefix are checked before reopening any target pathname.
+    task.require_current(engine)?;
+    engine.check_batch_scope(&task.selection().first().request)?;
+    let roots = task
+        .selection()
+        .jobs()
+        .iter()
+        .map(|job| DiskRoot::open(&job.request.target_paths[0]))
+        .collect::<Result<Vec<_>>>()?;
+    engine.check_batch_targets(&roots)?;
+    let mut targets = Vec::with_capacity(roots.len());
+    for (root, job) in roots.into_iter().zip(task.selection().jobs()) {
+        named_target(&root, job)?;
+        let lock = AdvisoryLock::directory(&root.directory(root.path())?).map_err(fs_error)?;
+        if PhysicalBinding::of(&root)? != job.target {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "fenced target directory changed",
+            ));
+        }
+        targets.push(Target { root, _lock: lock });
+    }
+    Ok(targets)
+}
+
+/// Called only after Engine recovery admitted the original source State/fence.
+/// No current task or partial fence is inferred from an old progress cache.
+pub(in crate::engine::backup_preparation) fn resume_fenced(
+    engine: &mut Engine,
+    system: &DiskRoot,
+) -> Result<bool> {
+    if !preparation_path_exists(system, &system.path().join(TASK))? {
+        return Ok(false);
+    }
+    let task = Task::read(system)?;
+    let resumed = (|| {
+        let targets = acquire(engine, &task)?;
+        spawn(
+            engine,
+            task.clone(),
+            DiskRoot::open(system.path())?,
+            targets,
+        )
+    })();
+    engine.backup_preparation = Some(match resumed {
+        Ok(worker) => worker,
+        Err(error) => task
+            .selection()
+            .clone()
+            .idle(error, BackupPreparationPhase::Blocked),
+    });
+    Ok(true)
+}
+
+#[derive(Serialize)]
+struct Acceptance<'a> {
+    format: &'static str,
+    source_fence_hash: &'a str,
+    task_hash: &'a str,
+    node: &'a BackupPreparedTopologyNode,
+    physical: &'a PhysicalBinding,
+    image_manifest_hash: String,
+    whole_files: usize,
+    directory_repositories: usize,
+    #[serialization(with = "storage_contract::u64_string")]
+    bodies: u64,
+    #[serialization(with = "storage_contract::u64_string")]
+    body_bytes: u64,
+}
+fn acceptance(task: &Task, task_hash: &str, index: usize, image: &Image<'_>) -> Result<Vec<u8>> {
+    bounded(&Acceptance {
+        format: FORMAT,
+        source_fence_hash: &task.source_fence_hash,
+        task_hash,
+        node: &task.evidence.task.topology.nodes[index],
+        physical: &task.selection().jobs()[index].target,
+        image_manifest_hash: image.manifest_hash(),
+        whole_files: image.file_units,
+        directory_repositories: image.directory_repositories,
+        bodies: image.bodies,
+        body_bytes: image.body_bytes,
+    })
+}
+
+fn with_image<T>(
+    task: &Task,
+    target: &Target,
+    index: usize,
+    stop: &AtomicBool,
+    action: impl FnOnce(&Image<'_>) -> Result<T>,
+) -> Result<T> {
+    let job = &task.selection().jobs()[index];
+    named_target(&target.root, job)?;
+    let state = snapshot::read(&target.root, job, stop)?;
+    if object_hash("backup-prepared-state", state.state())? != task.evidence.state_hash() {
+        return Err(invalid("target image snapshot differs from original fence"));
+    }
+    let image = Image::capture(
+        &target.root,
+        &state,
+        &task.evidence.task.topology.nodes[index].source_prefix,
+        &task.source_fence_hash,
+        stop,
+    )?;
+    if image.file_units != task.evidence.report.whole_file_units_per_target
+        || image.directory_repositories != task.evidence.report.directory_repositories_per_target
+        || image.bodies != job.total_files
+        || image.body_bytes != job.total_bytes
+    {
+        return Err(invalid(
+            "target image is not the entire original supported unit",
+        ));
+    }
+    let result = action(&image)?;
+    named_target(&target.root, job)?;
+    Ok(result)
+}
+
+fn run(
+    task: &Task,
+    system: &DiskRoot,
+    targets: &[Target],
+    progress: &Mutex<BackupPreparationStatus>,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let roots = targets
+        .iter()
+        .map(|target| &target.root)
+        .collect::<Vec<_>>();
+    let observed = super::verify_at(&task.evidence.task, &roots, stop)?;
+    if bounded(&observed)? != bounded(&task.evidence.report)? {
+        return Err(invalid("fenced original cutover materials changed"));
+    }
+    // Complete topology preflight before the first image or acknowledgement.
+    for (index, target) in targets.iter().enumerate() {
+        with_image(task, target, index, stop, |image| {
+            image.require_capacity(&target.root, stop)
+        })?;
+    }
+    let intent = task.bytes()?;
+    let hash = object_hash(FORMAT, task)?;
+    let mut acceptances = Vec::with_capacity(targets.len());
+    for (index, target) in targets.iter().enumerate() {
+        preparation_checkpoint(stop)?;
+        update(system, progress, |status| {
+            status.phase = BackupPreparationPhase::Copying;
+            status.detail = format!(
+                "installing independent target entity image {}/{}; source remains stopped and original bytes retained",
+                index + 1,
+                targets.len()
+            );
+        })?;
+        install_preparation_bytes(&target.root, &target.root.path().join(INTENT), &intent)?;
+        let accepted = with_image(task, target, index, stop, |image| {
+            image.install(&target.root, stop)?;
+            acceptance(task, &hash, index, image)
+        })?;
+        install_preparation_bytes(
+            &target.root,
+            &target.root.path().join(ACCEPTANCE),
+            &accepted,
+        )?;
+        acceptances.push(accepted);
+        let completed = index as u64 + 1;
+        update(system, progress, |status| {
+            status.completed_files = task.selection().first().total_files * completed;
+            status.completed_bytes = task.selection().first().total_bytes * completed;
+        })?;
+    }
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::Verifying;
+        status.detail = "independently rereading every installed image before whole-target completion; no authority publication".into();
+    })?;
+    for (index, target) in targets.iter().enumerate() {
+        with_image(task, target, index, stop, |image| {
+            image.verify(&target.root, stop)?;
+            if target
+                .root
+                .read_bytes(&target.root.path().join(ACCEPTANCE), MAX_TASK)?
+                != acceptance(task, &hash, index, image)?
+            {
+                return Err(invalid("target image lacks its exact durable acceptance"));
+            }
+            Ok(())
+        })?;
+    }
+    #[derive(Serialize)]
+    struct Completion<'a> {
+        format: &'static str,
+        source_fence_hash: &'a str,
+        task_hash: &'a str,
+        target_acceptance_hashes: Vec<String>,
+    }
+    let complete = bounded(&Completion {
+        format: FORMAT,
+        source_fence_hash: &task.source_fence_hash,
+        task_hash: &hash,
+        target_acceptance_hashes: acceptances
+            .iter()
+            .map(|bytes| blake3::hash(bytes).to_hex().to_string())
+            .collect(),
+    })?;
+    for (target, job) in targets.iter().zip(task.selection().jobs()) {
+        preparation_checkpoint(stop)?;
+        named_target(&target.root, job)?;
+        install_preparation_bytes(&target.root, &target.root.path().join(COMPLETE), &complete)?;
+    }
+    for (target, job) in targets.iter().zip(task.selection().jobs()) {
+        named_target(&target.root, job)?;
+    }
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::TargetEntitiesPrepared;
+        status.completed_files = status.total_files;
+        status.completed_bytes = status.total_bytes;
+        status.detail = "all isolated whole-unit entity images installed and verified; source write fence remains, active target registry/placement and final authority are not implemented".into();
+    })
+}
+
+fn spawn(engine: &Engine, task: Task, system: DiskRoot, targets: Vec<Target>) -> Result<Worker> {
+    let locks = engine.retain_writer_locks()?;
+    let mut initial = task.selection().status();
+    initial.detail =
+        "recovering exact source-fenced installation; no active target or source deletion".into();
+    let state = Arc::new(Mutex::new(initial));
+    let stop = Arc::new(AtomicBool::new(false));
+    let progress = Arc::clone(&state);
+    let cancel = Arc::clone(&stop);
+    let frozen = task.clone();
+    let thread = std::thread::Builder::new()
+        .name("zxs-backup-target-entities".into())
+        .spawn(move || {
+            let _locks = locks;
+            if let Err(error) = run(&frozen, &system, &targets, &progress, &cancel)
+                && let Err(persistence) = update(&system, &progress, |status| {
+                    status.phase = BackupPreparationPhase::Blocked;
+                    status.error_code = Some(error.code());
+                    status.detail = error.to_string();
+                })
+            {
+                progress
+                    .lock()
+                    .expect("invariant: entity diagnostic mutex poisoned")
+                    .detail = format!("{error}; progress persistence failed: {persistence}");
+            }
+        })?;
+    let job = task.selection().first().clone();
+    let batch = match task.evidence.task.scoped.objects.native.selection {
+        Selection::Single(_) => None,
+        Selection::Batch(batch) => Some(batch),
+    };
+    Ok(Worker {
+        job,
+        batch,
+        state,
+        stop,
+        thread: Some(thread),
+    })
+}

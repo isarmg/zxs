@@ -8,6 +8,7 @@ mod databases;
 mod runtime;
 pub use archive::BackupNativeControlReport;
 pub(in crate::engine) use databases::BackupSourceFenceEvidence;
+pub(in crate::engine::backup_preparation) use databases::resume_fenced;
 pub use databases::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest,
     BackupObjectDatabasePreparationReport, BackupPreparedTopologyNode,

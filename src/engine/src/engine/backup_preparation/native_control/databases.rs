@@ -8,6 +8,7 @@ mod runtime;
 mod scoped;
 mod store;
 pub(in crate::engine) use scoped::BackupSourceFenceEvidence;
+pub(in crate::engine::backup_preparation) use scoped::resume_fenced;
 pub use scoped::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupPreparedTopologyNode,
     BackupScopedDatabasePreparationReport, BackupTopologyTarget,

@@ -72,6 +72,9 @@ pub enum BackupPreparationPhase {
     /// This material stage alone installs no source fence, final authority or
     /// active fanout route; explicit native fencing is a separate operation.
     CutoverInputsPrepared,
+    /// Independent entity images on every selected target, still isolated. The
+    /// source remains fenced; no target membership or final placement exists.
+    TargetEntitiesPrepared,
     Blocked,
     SourceChanged,
 }
@@ -334,11 +337,12 @@ impl Engine {
             }
         }
         if let Some(fence) = self.backup_cutover_fence_status() {
-            status.phase = BackupPreparationPhase::Blocked;
-            status.error_code = Some(ErrorCode::RecoveryRequired);
+            status.error_code.get_or_insert(ErrorCode::RecoveryRequired);
+            // Preserve the worker's actual phase/error. Source authority is a
+            // separate fact and must not erase in-progress/capacity diagnostics.
             status.detail = format!(
-                "original generation is write-fenced ({}/{} durable original member receipts); target activation is not implemented; same-operation fence retry or certified cancellation is required",
-                fence.confirmed_members, fence.original_members,
+                "original generation remains write-fenced ({}/{} native receipts); no final target authority: {}",
+                fence.confirmed_members, fence.original_members, status.detail,
             );
         }
         Some(status)
@@ -357,6 +361,9 @@ impl Engine {
 
     pub(super) fn resume_backup_preparation(&mut self) -> Result<()> {
         let system = DiskRoot::open(&self.root)?;
+        if native_control::resume_fenced(self, &system)? {
+            return Ok(());
+        }
         if native_control::resume(self, &system)? {
             return Ok(());
         }

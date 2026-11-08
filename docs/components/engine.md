@@ -226,3 +226,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 `disk_catalog_statuses` 是无 I/O 的逐盘维护事实，不是健康准入。当前库刷新失败与已发布业务结果分离；离线 PreservePending 不自动写库。历史伴随库新增 `disk_history_statuses` 和正常冷开/发布连续维护：完整来源建立前缀证明，后续从准确前后 State 追加本盘差异；不相关发布不重写，但持久覆盖和进程内观察覆盖分别显示。失败保留原来源，不回滚权威回执；此后继也未编译、测试、审查或运行 CI。
 
 离线 `inspect_disk_database_material` 不创建 Engine、不打开 SYSTEM，只在明确选定的盘根及准确登记下解析/折叠当前和历史材料；本地自洽不等于已认证来源或恢复权威。原 `restore_from_disks*` 则在真实权威恢复完成后维护这两份派生索引并保留各自错误；辅助工具不再把该维护误称全部三范围恢复。见[离线数据库材料](../design/offline-disk-database-material.md)。本片未编译、测试、审查或运行 CI。
+
+### 源围栏后隔离目标实体
+
+`start_backup_target_installation` 在完整原生源围栏后后台复制并读回所有准确目标的 FILE 正文／数据库和目录仓库森林，冷开只续原任务；完成相位仍不授权目标，也不解除全池写停。范围、预算和硬中止临时文件拒绝边界见[目标实体安装](../design/backup-target-entity-installation.md)。本片无编译／测试／审查／CI。

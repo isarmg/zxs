@@ -6,8 +6,8 @@ use crate::engine::backup_preparation::native_control::runtime::Target;
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(in crate::engine) struct BackupSourceFenceEvidence {
-    task: CutoverTask,
-    report: BackupCutoverPreparationReport,
+    pub(super) task: CutoverTask,
+    pub(super) report: BackupCutoverPreparationReport,
 }
 impl std::fmt::Debug for BackupSourceFenceEvidence {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

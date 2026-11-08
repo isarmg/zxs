@@ -138,6 +138,40 @@ impl Engine {
         self.verify_membership_fence_prefix(Some(self.state.sequence), self.snapshot.as_deref())
     }
 
+    /// Read-only capability for an isolated target copy. Only the same original
+    /// native barrier can supply this evidence; a SYSTEM progress/task file
+    /// cannot authorize it. It deliberately grants no target writer authority.
+    pub(in crate::engine) fn fenced_backup_inputs(
+        &self,
+        operation_id: OperationId,
+        principal: &str,
+    ) -> Result<(String, BackupSourceFenceEvidence)> {
+        self.require_backup_fence_request(operation_id, principal)?;
+        let fence = self
+            .membership_fence
+            .as_ref()
+            .expect("invariant: exact backup fence admitted");
+        let Origin::BackupCutover { config, evidence } = &fence.intent.origin else {
+            unreachable!("invariant: exact backup origin checked");
+        };
+        if !self.blocked
+            || self.current_namespaces.is_some()
+            || canonical_json(config)? != canonical_json(&self.config)?
+            || object_hash("backup-prepared-state", &self.state)? != evidence.state_hash()
+            || !self
+                .membership_fence_status()
+                .expect("invariant: native fence present")
+                .all_members_fenced()
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "target installation requires the complete original native barrier and unchanged source State; no targets opened",
+            ));
+        }
+        self.validate_fence_members(&fence.intent.fence_members_at(&self.config)?)?;
+        Ok((fence.hash.clone(), (**evidence).clone()))
+    }
+
     /// Actual admitted native fence receipts, never the target preparation
     /// progress cache. A quorum-fenced source does not authorize new targets.
     pub fn backup_cutover_fence_status(&self) -> Option<MembershipFenceStatus> {

@@ -15,7 +15,7 @@ const MAX_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-enum Scope {
+pub(super) enum Scope {
     File {
         history: String,
         file: String,
@@ -69,6 +69,9 @@ pub(crate) struct Database {
     bytes: Vec<u8>,
 }
 impl Database {
+    pub(super) fn into_parts(self) -> (Scope, Vec<u8>) {
+        (self.descriptor.scope, self.bytes)
+    }
     pub(crate) fn path(&self) -> PathBuf {
         self.descriptor.scope.path()
     }
@@ -95,6 +98,9 @@ pub(crate) struct PreparedDatabases {
     directories: usize,
 }
 impl PreparedDatabases {
+    pub(super) fn into_databases(self) -> Vec<Database> {
+        self.databases
+    }
     pub(crate) fn capture(admitted: &AdmittedState, stop: &AtomicBool) -> Result<Self> {
         let state = admitted.state();
         let mut files = BTreeMap::new();
