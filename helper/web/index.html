@@ -154,7 +154,7 @@
       <button id="terminal-chain-export" class="secondary" type="button">核对当前完整链并下载检查点</button>
       <pre id="terminal-chain-report" hidden></pre>
       <h3>生成终态移除链后的原元数据恢复提案</h3>
-      <p>按上方选中的仍登记 Disabled 原元数据盘，重放完整终态移除链，生成精确单盘恢复 registry 和完整继承命名空间提案。低级祖先必须仍有 Enabled 登记；历史 Config 中的已移除或停用祖先不能替代。此阶段不会打开目标/祖先目录、保留操作、写入新决定或恢复活动存储，下载文件不能用作执行令牌。目标真实决定、发布、Current 和 locator 仍未接通，不能把报告当成重新接纳成功。</p>
+      <p>按上方选中的仍登记 Disabled 原元数据盘，重放完整终态移除链，生成精确单盘恢复 registry 和完整继承命名空间提案。低级祖先必须仍有 Enabled 登记；历史 Config 中的已移除或停用祖先不能替代。此阶段不会打开目标/祖先目录、保留操作、写入新决定或恢复活动存储，下载文件不能用作执行令牌。目标决定和首笔输入须在下方单独确认准备；真实发布、Current 和 locator 仍未接通，不能把报告当成重新接纳成功。</p>
       <button id="terminal-chain-readmit" class="secondary" type="button">仅生成并下载完整来源恢复提案</button>
       <pre id="terminal-chain-readmit-report" hidden></pre>
       <details>
@@ -166,6 +166,12 @@
           <button type="submit">确认准备目标决定 / 续作同一请求</button>
         </form>
         <pre id="chain-target-result" hidden></pre>
+        <form id="chain-first-form" hidden>
+          <h4>继续准备首笔原生输入，不执行发布</h4>
+          <p>此步只用于上面已有原决定的同一请求。在 SYSTEM 和原目标各保留完整 core、State、registry、历史页及首笔 Candidate，独立读回；每根另需完整材料空间。编码中的预期 PUBLISHED 回执还没有真正提交，不表示接纳或可启动服务。中断后只能续作原请求，完成材料缺损不会自动重建。</p>
+          <label class="ack"><input id="chain-first-ack" type="checkbox" required> 确认仅准备隔离原生输入，不发布、不启用 writer、不开始服务；保留原决定和额外材料，不换盘或清理证据。</label>
+          <button type="submit">确认准备 / 续作原首笔输入</button>
+        </form>
       </details>
     </section>
     <section class="card">

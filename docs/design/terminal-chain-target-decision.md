@@ -57,3 +57,7 @@
 提案、选择和证书各用现有 64 MiB native 对象预算，首次源写前预检；helper 同步/查询 IPC 请求和响应仍限 64 KiB，不传输完整大提案。来源重放和目标独立归档读取成本随完整历史与终态链增长，当前没有新增后台轮询或无界重试。完整源验证在选择/读回时重复以保持持久证据有效，尚未测量最坏链内存、延迟和 fsync 次数。
 
 本片新增 4 项真实根/独立选择/冷态/目标失败测试源码与 2 项 HTTP 边界源码，均未运行。真实断电、磁盘替换、Samba/多进程竞争、浏览器重复点击、发布包与最终激活仍无通过证据。
+
+## 首笔原生输入后继
+
+后继 [完整终态链首笔原生输入](terminal-chain-first-native-inputs.md) 将本片的真实选择与目标票组合成独立严格 core，并在两根准备确定的全 State/registry/history/Candidate。新增 activation-selected/first-candidate-prepared 阶段；已开始该步骤后，本片同步入口只核对原票，不重建丢失的原证据。它仍没有 PortableAuthority/活动 writer 转换或真实首笔 Publication，本页的正式 readmission/H03 禁止边界不变。

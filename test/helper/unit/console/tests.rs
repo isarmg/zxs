@@ -725,6 +725,7 @@ async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown(
     for path in [
         "/api/disks/terminal-chain-target-status",
         "/api/disks/terminal-chain-target-synchronize",
+        "/api/disks/terminal-chain-first-prepare",
     ] {
         let mut request = post(path, json!({}));
         request
@@ -801,4 +802,49 @@ async fn chain_target_status_requires_stopped_writers_and_has_no_activate_parame
             StatusCode::BAD_REQUEST
         );
     }
+}
+
+#[tokio::test]
+async fn chain_first_preparation_requires_exact_plan_and_does_not_accept_activation() {
+    let path = "/api/disks/terminal-chain-first-prepare";
+    for additional in [
+        "force",
+        "activate",
+        "root_path",
+        "foreign_chain",
+        "core",
+        "state",
+        "candidate",
+    ] {
+        let mut value = json!({
+            "service_user":"zxs", "external_writers_stopped":true,
+            "confirmation":"prepare-chain-first-inputs-without-publication",
+            "acknowledge_unpublished_inputs":true,
+        });
+        value[additional] = "untrusted".into();
+        assert_eq!(
+            http::router(state())
+                .oneshot(post(path, value))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    // No native original plan can be synthesized from an arbitrary JSON blob.
+    assert_eq!(
+        http::router(state())
+            .oneshot(post(
+                path,
+                json!({
+                    "service_user":"zxs", "external_writers_stopped":true,
+                    "confirmation":"prepare-chain-first-inputs-without-publication",
+                    "acknowledge_unpublished_inputs":true, "plan":{},
+                })
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
 }

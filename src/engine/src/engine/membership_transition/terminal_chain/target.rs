@@ -3,7 +3,7 @@
 use super::*;
 use crate::engine::disk_lifecycle::bootstrap::runtime::{management_error, open_store};
 pub(super) struct Held {
-    root: DiskRoot,
+    pub(super) root: DiskRoot,
     writer: std::sync::Arc<crate::disk::FenceOwner>,
     pub(super) identity: MemberIdentity,
     pub(super) seal: DiskSeal,
@@ -42,7 +42,7 @@ impl Held {
         held.verify(proposal)?;
         Ok(held)
     }
-    fn verify(&self, proposal: &ChainReadmissionProposal) -> Result<()> {
+    pub(super) fn verify(&self, proposal: &ChainReadmissionProposal) -> Result<()> {
         reservation::verify_writer(&self.root, &self.writer)?;
         self.identity.verify_physical_root(&self.root)?;
         let actual = decode_seal(
@@ -65,6 +65,18 @@ impl Held {
         selection: &Selection,
     ) -> Result<TerminalChainReadmissionStatus> {
         self.verify(&selection.proposal)?;
+        if activation::started(management)? {
+            self.verify_decision(selection)?;
+            require_selected(management, selection)?;
+            let mut status = management.chain_readmission_status()?.ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "selected chain request disappeared",
+                )
+            })?;
+            status.target_reverified_this_call = true;
+            return Ok(status);
+        }
         let source = management.control_archive();
         let archive = PendingControlArchive::from_installed(
             management
@@ -131,5 +143,62 @@ impl Held {
             .system_root()
             .write_json(&operation(management).join(RECEIPT), &saved, false)?;
         selection.status(Some(&saved), true)
+    }
+}
+
+impl Held {
+    /// A selected first-slot preparation may only reread the original complete
+    /// target decision. Missing evidence is not a reason to choose/install anew.
+    pub(super) fn verify_decision(
+        &self,
+        selection: &Selection,
+    ) -> Result<(Certificate, VerifiedTerminalAuthority)> {
+        self.verify(&selection.proposal)?;
+        if self.identity != selection.directory {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "terminal-chain target changed its selected physical identity",
+            ));
+        }
+        validate_stored_seal(&self.seal, &selection.original_seal)?;
+        let hash = selection.hash()?;
+        let parent = self.root.private_child(&pending::member_directory(
+            selection.proposal.target_disk(),
+            &hash,
+        ))?;
+        let saved: Selection = decode_strict(
+            &parent.read_bytes(&parent.path().join("chain-selection.json"), MAX_METADATA)?,
+        )?;
+        if saved.hash()? != hash {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "terminal-chain target retains another source selection",
+            ));
+        }
+        let certificate: Certificate = decode_strict(
+            &parent.read_bytes(&parent.path().join("chain-certificate.json"), MAX_METADATA)?,
+        )?;
+        selection.verify_certificate(&certificate)?;
+        let archive = PendingControlArchive::from_installed(
+            parent.private_child(&parent.path().join(pending::CONTROL_ARCHIVE_DIRECTORY))?,
+            selection.terminal.archive_root_hash(),
+            &selection.terminal.transition_hash()?,
+        )?;
+        let source = selection
+            .terminal
+            .clone()
+            .verify_installed_archive(&archive)?;
+        selection.verify(&source)?;
+        let store = DecisionStore::open(&self.root, &self.identity, &hash, false)?;
+        let actual = store.terminal_chain_receipt(&hash, &selection.acceptance()?, false)?;
+        if actual != certificate.decision {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "terminal-chain target certificate lost its actual immutable vote",
+            ));
+        }
+        store.verify_receipt(&actual, true)?;
+        self.verify(&selection.proposal)?;
+        Ok((certificate, source))
     }
 }

@@ -237,3 +237,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 整链原目标决定准备
 
 [原目标决定准备](../design/terminal-chain-target-decision.md)在独立确认后保留原 SYSTEM 请求，核原 Stop/物理目录/锁，安装完整控制归档并写目标真实不可覆盖 native choice。查询只读原来源证书，显式续作才再探目标。它没有活动 writer/首笔 Publication/Current/locator，不完成 readmission 或 H03；无取消换盘，失败保留证据。此片未编译、测试、CI 或实际操作系统。
+
+### 完整终态链首笔原生输入
+
+已有原目标实际决定之后，独立控制台提供明确确认的 `POST /api/disks/terminal-chain-first-prepare`，持原请求在 SYSTEM/原目标分别保存并重验完整 core、State、registry、history 和 Candidate。见[原生输入与冷恢复边界](../design/terminal-chain-first-native-inputs.md)。不是实际 Publication 或活动 writer，不启动服务、不放开 H03；预期 Published 结果只存在隔离快照。SOURCE 查询仍不探目标，完成后材料缺损拒绝自动补造。本片未审查/编译/测试/CI、未操作实际系统。

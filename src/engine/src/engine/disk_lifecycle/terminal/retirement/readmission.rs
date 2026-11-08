@@ -325,6 +325,24 @@ impl Proposal {
         let checkpoint = self.source.verify(source)?;
         self.verify_projection(source, &checkpoint)
     }
+    pub(in crate::engine) fn activation_source(
+        &self,
+        source: &VerifiedTerminalAuthority,
+    ) -> Result<VerifiedRetirementCheckpoint> {
+        let checkpoint = self.source.verify(source)?;
+        self.verify_projection(source, &checkpoint)?;
+        Ok(checkpoint)
+    }
+    pub(in crate::engine) fn visit_registry_objects(
+        &self,
+        visit: &mut impl FnMut(&str, &str, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        for (hash, object) in &self.objects {
+            let bytes = crate::canonical_json(&object.value)?;
+            visit(&object.kind, hash, &bytes)?;
+        }
+        Ok(())
+    }
     pub(in crate::engine) fn checkpoint_digest(&self) -> &str {
         &self.checkpoint_digest
     }

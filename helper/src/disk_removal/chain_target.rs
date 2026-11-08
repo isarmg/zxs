@@ -11,6 +11,15 @@ pub(crate) struct Commit {
     confirmation: String,
     acknowledge_reserved_request_without_activation: bool,
 }
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct FirstInput {
+    service_user: String,
+    external_writers_stopped: bool,
+    plan: Plan,
+    confirmation: String,
+    acknowledge_unpublished_inputs: bool,
+}
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Status {
@@ -30,6 +39,7 @@ struct Request {
 enum Action {
     Status,
     Synchronize { plan: Plan },
+    PrepareFirst { plan: Plan },
 }
 impl crate::service_worker::Request for Request {
     type Output = Status;
@@ -42,6 +52,24 @@ impl crate::service_worker::Request for Request {
         target.recheck()?;
         let native = match self.action {
             Action::Status => target.control.terminal_chain_readmission_status()?,
+            Action::PrepareFirst { plan } => {
+                if plan.context != self.context
+                    || plan.credential != target.credential_revision()?
+                {
+                    return Err(
+                        "chain first-input host or primary credential revision changed".into(),
+                    );
+                }
+                let preparation = plan.preparation;
+                Some(target.control.prepare_terminal_chain_first_candidate(
+                    storage_contract::storage_readmission::ReadmissionRequest {
+                        operation_id: preparation.operation_id,
+                        slot_id: preparation.target.slot_id,
+                        expected_disk_id: preparation.target.disk_id,
+                    },
+                    &preparation.proposal_digest,
+                )?)
+            }
             Action::Synchronize { plan } => {
                 if plan.context != self.context
                     || plan.credential != target.credential_revision()?
@@ -87,7 +115,7 @@ fn run(input: InventoryInput, action: Action) -> Result<Status> {
     stopped(input.external_writers_stopped)?;
     let root = Root::open(input.service_user.clone())?;
     let context = root.context.clone();
-    if let Action::Synchronize { plan } = &action
+    if let Action::Synchronize { plan } | Action::PrepareFirst { plan } = &action
         && plan.context != context
     {
         return Err("chain target no longer matches its original host/account/layout".into());
@@ -120,5 +148,20 @@ pub(crate) fn synchronize(input: Commit) -> Result<Status> {
             external_writers_stopped: input.external_writers_stopped,
         },
         Action::Synchronize { plan: input.plan },
+    )
+}
+
+pub(crate) fn prepare_first(input: FirstInput) -> Result<Status> {
+    if input.confirmation != "prepare-chain-first-inputs-without-publication"
+        || !input.acknowledge_unpublished_inputs
+    {
+        return Err("explicitly acknowledge isolated native inputs, extra SYSTEM/target storage, no Publication or active writer, and same-request recovery only".into());
+    }
+    run(
+        InventoryInput {
+            service_user: input.service_user,
+            external_writers_stopped: input.external_writers_stopped,
+        },
+        Action::PrepareFirst { plan: input.plan },
     )
 }

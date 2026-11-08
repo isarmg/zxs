@@ -12,7 +12,10 @@ use crate::engine::disk_lifecycle::terminal::{
 };
 use platform_io::fs_safety::linux::FileIdentity;
 use std::path::{Path, PathBuf};
+mod activation;
+mod first;
 mod target;
+pub use activation::TerminalChainReadmissionActivation;
 
 const REQUEST: &str = "chain-readmission.json";
 const RECEIPT: &str = "chain-readmission-target.json";
@@ -43,6 +46,8 @@ struct Certificate {
 pub enum TerminalChainReadmissionPhase {
     SourceSelected,
     TargetDecisionPreserved,
+    ActivationSelected,
+    FirstCandidatePrepared,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -53,6 +58,7 @@ pub struct TerminalChainReadmissionStatus {
     pub source_request_reserved: bool,
     pub target_decision_hash: Option<String>,
     pub target_reverified_this_call: bool,
+    pub activation: Option<TerminalChainReadmissionActivation>,
     pub active_writer_admitted: bool,
     pub metadata_resumption_supported: bool,
 }
@@ -72,7 +78,7 @@ fn load<T: data_serialization::de::DeserializeOwned>(
         .transpose()
 }
 pub(in crate::engine) fn owns_initial_entry(name: &str) -> bool {
-    matches!(name, REQUEST | RECEIPT)
+    matches!(name, REQUEST | RECEIPT) || activation::owns_initial_entry(name)
 }
 
 impl Selection {
@@ -174,6 +180,7 @@ impl Selection {
             source_request_reserved: true,
             target_decision_hash: certificate.map(|c| c.decision.hash().into()),
             target_reverified_this_call: fresh,
+            activation: None,
             active_writer_admitted: false,
             metadata_resumption_supported: false,
         })
@@ -208,12 +215,18 @@ fn selected(management: &TerminalManagement) -> Result<Option<Selection>> {
     Ok(Some(selection))
 }
 pub(in crate::engine) fn validate_selection(management: &TerminalManagement) -> Result<()> {
-    selected(management).map(|_| ())
+    match selected(management)? {
+        Some(selection) => activation::validate_source(management, &selection),
+        None => activation::require_absent(management),
+    }
 }
 
 impl TerminalManagement {
     pub(in crate::engine) fn chain_readmission_selected(&self) -> Result<bool> {
         let root = self.system_root();
+        if activation::started(self)? {
+            return Ok(true);
+        }
         for name in [REQUEST, RECEIPT] {
             // Presence, even corrupt/partial, is restrictive until the original
             // native consumer validates it. It can never mean a vacant source.
@@ -242,7 +255,9 @@ impl TerminalManagement {
             .map(|selection| {
                 let certificate: Option<Certificate> =
                     load(self.system_root(), &operation(self).join(RECEIPT))?;
-                selection.status(certificate.as_ref(), false)
+                let mut status = selection.status(certificate.as_ref(), false)?;
+                activation::observe(self, &selection, &mut status)?;
+                Ok(status)
             })
             .transpose()
     }

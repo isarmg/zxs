@@ -1227,3 +1227,315 @@ fn chain_target_cannot_replace_the_original_decision_choice_or_physical_root() {
     );
     assert!(fixture.terminal.operation(operation).is_none());
 }
+
+fn prepare_chain_first_fixture() -> (
+    Fixture,
+    OperationId,
+    crate::TerminalChainReadmissionProposal,
+    crate::TerminalChainReadmissionStatus,
+) {
+    let (mut fixture, operation, proposal) = chain_target_fixture();
+    let directory = retained_chain_directory(&fixture);
+    fixture
+        .terminal
+        .synchronize_chain_readmission_target(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .prepare_chain_readmission_activation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    (fixture, operation, proposal, status)
+}
+fn chain_first_target(
+    fixture: &Fixture,
+    status: &crate::TerminalChainReadmissionStatus,
+) -> PathBuf {
+    fixture.config.disks[0]
+        .root
+        .join("metadata/membership-pending")
+        .join(&status.selection_hash)
+        .join("first-candidate")
+}
+fn chain_first_object(root: &std::path::Path, kind: &str, hash: &str) -> PathBuf {
+    root.join("objects")
+        .join(kind)
+        .join(&hash[..2])
+        .join(format!("{hash}.json"))
+}
+
+#[test]
+fn chain_first_native_candidate_preserves_full_receipts_but_never_admits_live_state() {
+    let (fixture, operation, _, status) = prepare_chain_first_fixture();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::FirstCandidatePrepared
+    );
+    assert!(!status.active_writer_admitted);
+    assert!(!status.metadata_resumption_supported);
+    let first = status.activation.as_ref().unwrap();
+    assert!(first.source_material_reverified_this_call);
+    assert!(first.target_material_reverified_this_call);
+    assert!(!first.first_publication_recorded);
+    let root = chain_first_target(&fixture, &status);
+    let core = fs::read(chain_first_object(
+        &root,
+        "membership-generation",
+        &first.core_hash,
+    ))
+    .unwrap();
+    assert!(
+        crate::decode_strict::<
+            crate::engine::membership_transition::pending::activation::PortableAuthority,
+        >(&core)
+        .is_err()
+    );
+    let candidate: crate::journal::Candidate = crate::decode_strict(
+        &fs::read(chain_first_object(
+            &root,
+            "candidate",
+            &first.candidate_hash,
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(candidate.sequence, fixture.terminal.state().sequence + 1);
+    assert_eq!(candidate.generation(), Some(first.core_hash.as_str()));
+    assert_eq!(
+        candidate.metadata_disk_ids,
+        vec![fixture.config.disks[0].disk_id.clone()]
+    );
+    assert!(candidate.versions.is_empty());
+    let read = |kind: &'static str, hash: &str| {
+        let bytes = fs::read(chain_first_object(&root, kind, hash)).unwrap();
+        crate::journal::AuthenticatedMetadataObject::authenticate(
+            kind,
+            hash,
+            crate::strict_json(&bytes).unwrap(),
+        )
+    };
+    let snapshot: crate::journal::Snapshot = json_codec::from_value(
+        read("snapshot", &candidate.snapshot_hash)
+            .unwrap()
+            .into_value(),
+    )
+    .unwrap();
+    let next = crate::journal::resolve_admitted_snapshot(snapshot, read).unwrap();
+    for (id, result) in &fixture.terminal.state().operations {
+        assert_eq!(next.state().operations.get(id), Some(result));
+        assert_eq!(
+            next.state().operation_principals.get(id),
+            fixture.terminal.state().operation_principals.get(id)
+        );
+    }
+    assert_eq!(
+        next.state().operations.len(),
+        fixture.terminal.state().operations.len() + 1
+    );
+    assert!(next.state().operations.contains_key(&operation));
+    assert!(fixture.terminal.operation(operation).is_none());
+    assert_eq!(
+        next.state().business_generation,
+        fixture.terminal.state().business_generation
+    );
+    assert_eq!(
+        next.state().topology_generation,
+        fixture.terminal.state().topology_generation + 1
+    );
+    assert!(fixture.terminal.writer_locks().is_err());
+    assert!(
+        !fixture.config.disks[0]
+            .root
+            .join("metadata/membership-generations")
+            .join(&first.core_hash)
+            .exists()
+    );
+}
+
+#[test]
+fn chain_first_cold_source_status_never_probes_missing_target_and_repeats_exact_inputs() {
+    let (fixture, operation, proposal, status) = prepare_chain_first_fixture();
+    let system = fixture.system();
+    let target = fixture.config.disks[0].root.clone();
+    let disk_id = fixture.config.disks[0].disk_id.clone();
+    let first_hash = status.activation.as_ref().unwrap().candidate_hash.clone();
+    let original_seal = fs::read(target.join("disk.json")).unwrap();
+    drop(fixture.terminal);
+    fs::rename(&target, target.with_extension("first-input-missing")).unwrap();
+    fs::write(&target, b"source-only query must not probe").unwrap();
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    let observed = cold.chain_readmission_status().unwrap().unwrap();
+    assert_eq!(
+        observed.phase,
+        crate::TerminalChainReadmissionPhase::FirstCandidatePrepared
+    );
+    let first = observed.activation.unwrap();
+    assert_eq!(first.candidate_hash, first_hash);
+    assert!(first.source_material_reverified_this_call);
+    assert!(!first.target_material_reverified_this_call);
+    assert!(!observed.target_reverified_this_call);
+    fs::remove_file(&target).unwrap();
+    fs::rename(target.with_extension("first-input-missing"), &target).unwrap();
+    let repeated = cold
+        .prepare_chain_readmission_activation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id,
+                directory: fs::File::open(&target).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(repeated.activation.unwrap().candidate_hash, first_hash);
+    assert_eq!(fs::read(target.join("disk.json")).unwrap(), original_seal);
+    assert!(cold.operation(operation).is_none());
+    drop(cold);
+    assert!(Engine::open(&system).is_err());
+}
+
+#[test]
+fn completed_chain_first_target_damage_is_not_repaired_from_system_copy() {
+    let (mut fixture, operation, proposal, status) = prepare_chain_first_fixture();
+    let root = chain_first_target(&fixture, &status);
+    let path = chain_first_object(
+        &root,
+        "candidate",
+        &status.activation.as_ref().unwrap().candidate_hash,
+    );
+    fs::remove_file(&path).unwrap();
+    let observed = fixture
+        .terminal
+        .chain_readmission_status()
+        .unwrap()
+        .unwrap();
+    assert!(
+        !observed
+            .activation
+            .unwrap()
+            .target_material_reverified_this_call
+    );
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_readmission_activation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(!path.exists());
+    assert!(fixture.terminal.operation(operation).is_none());
+}
+
+#[test]
+fn chain_first_partial_inputs_retain_exact_selection_and_only_original_retry() {
+    let (mut fixture, operation, proposal) = chain_target_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .synchronize_chain_readmission_target(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let path = chain_first_target(&fixture, &status);
+    fs::write(&path, b"leave obstruction intact").unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_readmission_activation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"leave obstruction intact");
+    let selected = fixture
+        .terminal
+        .chain_readmission_status()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        selected.phase,
+        crate::TerminalChainReadmissionPhase::ActivationSelected
+    );
+    assert!(
+        !selected
+            .activation
+            .as_ref()
+            .unwrap()
+            .source_material_reverified_this_call
+    );
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_readmission_activation(
+                "other",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    fs::remove_file(&path).unwrap();
+    let system = fixture.system();
+    let target = fixture.config.disks[0].root.clone();
+    let disk_id = fixture.config.disks[0].disk_id.clone();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    let continued = cold
+        .prepare_chain_readmission_activation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id,
+                directory: fs::File::open(target).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        continued.activation.unwrap().candidate_hash,
+        selected.activation.unwrap().candidate_hash
+    );
+    assert!(cold.operation(operation).is_none());
+}
+
+#[test]
+fn chain_first_changed_source_selection_rejects_cold_recovery_without_overwrite() {
+    let (fixture, _, _, _) = prepare_chain_first_fixture();
+    let selected = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join("chain-first-selected.json");
+    let mut value: json_codec::Value = crate::decode_strict(&fs::read(&selected).unwrap()).unwrap();
+    value["core_hash"] = "0".repeat(64).into();
+    let bytes = crate::canonical_json(&value).unwrap();
+    fs::write(&selected, &bytes).unwrap();
+    let system = fixture.system();
+    drop(fixture.terminal);
+    assert!(TerminalManagement::open(&system).is_err());
+    assert_eq!(fs::read(selected).unwrap(), bytes);
+}
