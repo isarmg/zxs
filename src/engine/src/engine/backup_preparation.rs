@@ -23,14 +23,15 @@ mod native_control;
 pub(in crate::engine) use native_control::BackupNativeObjects;
 pub use native_control::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
-    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
-    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
-    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
-    BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
+    BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
+    BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
+    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
+    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -139,6 +140,9 @@ pub enum BackupPreparationPhase {
     /// admission after all common databases. This cannot install an active
     /// CurrentNamespaces, a writer or a source-fence release.
     GenerationCurrentReadAdmitted,
+    /// The same published database set resolves by typed identity on all
+    /// participants. Normal active aliases/writer and source fence are unchanged.
+    GenerationDatabaseAliasesInstalled,
     Blocked,
     SourceChanged,
 }

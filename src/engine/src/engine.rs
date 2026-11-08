@@ -10,14 +10,15 @@ use std::{
 mod backup_preparation;
 pub use backup_preparation::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
-    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
-    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
-    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
-    BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
+    BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
+    BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
+    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
+    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use backup_preparation::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,

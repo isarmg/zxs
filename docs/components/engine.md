@@ -315,3 +315,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### Backup 专属 Current 只读准入
 
 `disk_registry/current/backup` 从每个选定目标的实际完整固定 Genesis 发布链逐笔重放普通精确写集及递归策略，再绑定其真实首笔 Backup Publication、完整 State 与 registry；既有 namespace/body 读取消费此内部只读借用，不再只查裸 State。原后台在共同数据库读回后新增 `GenerationCurrentReadAdmitted`，`inspect_backup_current_read` 重新观察同一任务全部参与方。旧 Candidate/receipt 不改，也不借生命周期 Add/Exit 证明。仍无普通 Engine Current/活动数据库别名切换、target writer 或源解围栏，H03 保持拒绝。全前缀重放不是热查询；具体预算和边界见 [Current 只读准入](../design/backup-native-generation-authority.md#backup-current-read)。未审查、编译、测试、静态检查或 CI，未操作真实盘。
+
+
+### Backup 已发布数据库范围别名
+
+原后台从同一实际 Publication/Current 证明生成 SYSTEM、全部原盘与所有目标的精确数据库范围表，先落 SYSTEM 意图再无覆盖保存全参与方同一记录。`inspect_backup_database_aliases` 与 `read_backup_database_range` 仅按原 actor/task 和类型化身份读取实际库，完整同 fd 验存及前后全体证明成立才返回有界字节；没有调用方路径、其他副本 fallback 或普通活动库替换。`GenerationDatabaseAliasesInstalled` 仍不安装 target writer 或解除源 fence。名称、原请求恢复和预算见[已发布范围别名](../design/backup-published-database-aliases.md)。未审查/编译/测试/CI，未操作真实盘。

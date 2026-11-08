@@ -928,6 +928,97 @@ impl Engine {
         Ok(report)
     }
 
+    /// Read the exact all-participant generation-local alias set. This never
+    /// rebinds a normal database path or installs an ordinary Engine writer.
+    pub fn inspect_backup_database_aliases(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupDatabaseAliasesReport> {
+        self.with_backup_database_aliases(operation, principal, database_aliases::observe)
+    }
+
+    /// Bounded bytes from one typed published database scope. The complete
+    /// selected file is hashed through the same fd before releasing any range;
+    /// the original actor/task and every participant are required before/after.
+    /// This does not query the old active SYSTEM database or accept file paths.
+    pub fn read_backup_database_range(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+        request: &BackupDatabaseRead,
+    ) -> Result<BackupDatabaseRange> {
+        self.with_backup_database_aliases(
+            operation,
+            principal,
+            |context, prepared, decision, expected, stop| {
+                database_aliases::read_range(context, prepared, decision, expected, request, stop)
+            },
+        )
+    }
+
+    fn with_backup_database_aliases<T>(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+        action: impl FnOnce(
+            &common_databases::Context<'_>,
+            &PreparedBackupRegistry,
+            &crate::engine::membership_transition::AdmittedBackupDecision,
+            &BackupFirstPublicationHash,
+            &AtomicBool,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let system = DiskRoot::open(&self.root)?;
+        let task = Task::read(&system)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "Backup database aliases belong to another original actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the original Backup database worker",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let sources = common_databases::Sources::capture(self, &system)?;
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        let actual = choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        let expected = BackupFirstPublicationHash::parse(&actual.publication_hash)?;
+        let result = action(
+            &common_databases::Context {
+                system: &system,
+                sources: &sources,
+                choices: &choices,
+            },
+            &prepared,
+            &decision,
+            &expected,
+            &stop,
+        )?;
+        choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        Ok(result)
+    }
+
     /// Observe actual native ACCEPT/FINALIZE from every original member. This
     /// needs the original fenced Engine and complete selected target set; the
     /// detached target reader cannot manufacture these live acknowledgements.

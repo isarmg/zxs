@@ -103,7 +103,7 @@ impl Sources {
         }
         Ok(())
     }
-    pub(super) fn recheck(&self, system: &DiskRoot) -> Result<()> {
+    pub(in super::super) fn recheck(&self, system: &DiskRoot) -> Result<()> {
         if PhysicalBinding::of(&DiskRoot::open(system.path())?)? != self.system {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,
@@ -144,7 +144,7 @@ impl Sources {
     pub(super) fn system_writer_binding(&self) -> &PhysicalBinding {
         &self.system_writer
     }
-    pub(super) fn for_each(
+    pub(in super::super) fn for_each(
         &self,
         stop: &AtomicBool,
         mut action: impl FnMut(&DiskRoot, &DiskRegistrationIdentity) -> Result<()>,

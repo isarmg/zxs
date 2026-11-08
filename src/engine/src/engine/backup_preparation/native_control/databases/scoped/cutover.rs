@@ -14,14 +14,15 @@ pub(in crate::engine) use fence::BackupSourceFenceEvidence;
 pub(in crate::engine::backup_preparation) use installation::resume_fenced;
 pub use registration::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
-    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
-    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
-    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
-    BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
+    BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
+    BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
+    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
+    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub(in crate::engine) use registration::{
     BackupRegistryProjection, MAX_DECISION_BYTES, PreparedBackupRegistry,

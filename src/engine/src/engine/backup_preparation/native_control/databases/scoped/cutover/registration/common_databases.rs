@@ -28,6 +28,7 @@ pub struct BackupCommonDatabasesReport {
     pub published: BackupPublishedScopesReport,
     pub common_manifest_hash: String,
     pub system_database_bytes: u64,
+    pub system_database_hash: String,
     pub original_disks: Vec<BackupOriginalDatabaseReport>,
 }
 #[derive(Serialize)]
@@ -148,6 +149,7 @@ impl Plan {
             published,
             common_manifest_hash: blake3::hash(&common).to_hex().to_string(),
             system_database_bytes: scopes.system().len() as u64,
+            system_database_hash: blake3::hash(scopes.system()).to_hex().to_string(),
             original_disks: originals,
         };
         Ok(Self {

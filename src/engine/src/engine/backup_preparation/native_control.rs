@@ -8,14 +8,15 @@ pub(in crate::engine) use archive::generation_objects::BackupNativeObjects;
 mod databases;
 pub use databases::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
-    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
-    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
-    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
-    BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
+    BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
+    BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
+    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
+    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 mod runtime;
 pub use archive::BackupNativeControlReport;

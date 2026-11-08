@@ -38,15 +38,17 @@ mod engine;
 pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
-    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupFirstCandidateReport, BackupFirstFinalizeReport, BackupFirstPublicationHash,
-    BackupFirstPublicationReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
-    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
-    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
-    BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryDecisionHash,
-    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
-    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
+    BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupFileWriterRoute, BackupFirstCandidateReport, BackupFirstFinalizeReport,
+    BackupFirstPublicationHash, BackupFirstPublicationReport, BackupGenerationAuthorityReport,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
+    BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
+    BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
+    BackupRegistryDecisionHash, BackupRegistryRecoveryReport, BackupServingContent,
+    BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
+    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub use engine::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,

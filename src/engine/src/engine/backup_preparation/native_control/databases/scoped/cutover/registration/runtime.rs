@@ -305,6 +305,25 @@ fn run(
             current.readable_branch_scopes,
             current.directory_scopes,
         );
+    })?;
+    let aliases = database_aliases::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationDatabaseAliasesInstalled;
+        status.detail = format!(
+            "decision {hash} resolves {} exact published database aliases in set {}; generation-local reads only, no ordinary active alias/writer switch or source fence release",
+            aliases.aliases.len(),
+            aliases.aliases_hash,
+        );
     })
 }
 fn spawn(
