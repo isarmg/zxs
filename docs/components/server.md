@@ -69,6 +69,9 @@ HTTP 默认监听 `0.0.0.0:7400`，可通过 `--listen` 指定其他 IPv4 或 IP
 不可覆盖保留到准确目标数据盘；这不是现有 plans/execute 的开放。返回仅有
 `intent_saved` 与 `execution=unavailable`，没有正文复制、全池 ID 预留或 namespace
 完成。实时会话、停止/成员围栏与同 FD 耐久性边界见[执行意图设计](../design/foreign-import-writer-first-slice.md)。
+保存／重放仅保留准确目标 writer 和 I/O lease，不因无关盘的运行时静默门禁而失败；
+目标本身的门禁仍拒绝。当前真实 HTTP 与目标门禁验证范围见
+[定向回归说明](../validation/foreign-admission-http-20261108.md)。
 
 `--setup-disk` 白名单仍服务既有离线恢复用途，`POST /api/setup/restore-system` 保持原授权与凭据恢复语义。公开 `preset-preview`、`initialize-preset`、`complete-initialization` 路由已移除，不提供旧初始化格式兼容。缺少可信权威或凭据损坏不得推断为新安装，也不得自动创建管理员。
 

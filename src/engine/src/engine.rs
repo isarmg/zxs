@@ -377,6 +377,16 @@ impl Engine {
         self._locks.retain()
     }
 
+    /// Target-local intent persistence is not a pool publication and does not
+    /// admit unrelated disk I/O. The caller holds the target activity lease.
+    pub(crate) fn retain_disk_writer_locks(
+        &self,
+        disk: &DiskConfig,
+        root: &crate::disk::DiskRoot,
+    ) -> Result<crate::disk::WriterLocks> {
+        self._locks.retain_disk(disk, root)
+    }
+
     /// Candidate membership is immutable and must never shrink with availability.
     pub(crate) fn verify_candidate_membership(
         &self,

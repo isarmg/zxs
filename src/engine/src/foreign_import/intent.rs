@@ -332,8 +332,7 @@ impl Engine {
         let disk = self.disk(&mapping.target.slot_id)?;
         let root = &self.disk_resources.get(disk)?.root;
         let _activity = root.retain_io_activity()?;
-        let locks = self.retain_writer_locks()?;
-        locks.verify_disk(disk, root)?;
+        let _locks = self.retain_disk_writer_locks(disk, root)?;
         if PhysicalBinding::of(root)? != prepared.record.target.physical {
             return Err(stale("foreign intent target physical binding changed"));
         }
@@ -419,8 +418,7 @@ impl Engine {
         let disk = self.disk(&target.slot_id)?;
         let root = &self.disk_resources.get(disk)?.root;
         let _activity = root.retain_io_activity()?;
-        let locks = self.retain_writer_locks()?;
-        locks.verify_disk(disk, root)?;
+        let _locks = self.retain_disk_writer_locks(disk, root)?;
         let Some(observed) = persist::read(root, operation)? else {
             return Ok(None);
         };

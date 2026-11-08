@@ -157,6 +157,30 @@ impl WriterLocks {
         Ok(self.clone())
     }
 
+    /// Target-local control writes retain exactly their admitted disk, without
+    /// acquiring ordinary I/O on unrelated members. The caller must keep the
+    /// target activity lease alive across the entire write and error cleanup.
+    pub(crate) fn retain_disk(&self, disk: &crate::DiskConfig, root: &DiskRoot) -> Result<Self> {
+        let writer = self.disks.get(&disk.disk_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "member writer lock is not held",
+            )
+        })?;
+        if !writer.binding.same_domain(root.io_binding()?) {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "target root and retained writer have different admission domains",
+            ));
+        }
+        self.verify_disk(disk, root)?;
+        Ok(Self {
+            system: Arc::clone(&self.system),
+            selection: Arc::clone(&self.selection),
+            disks: BTreeMap::from([(disk.disk_id.clone(), writer.clone())]),
+        })
+    }
+
     /// A detached synchronous worker keeps every real tail fenced, including
     /// errors and stack-owned cleanup. Idle preparations hold no ordinary count.
     pub(crate) fn activity(&self) -> Result<Vec<DiskIoLease>> {

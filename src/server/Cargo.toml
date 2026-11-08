@@ -92,3 +92,8 @@ required-features = ["core"]
 name = "recursive_backup_http"
 path = "../../test/server/integration/recursive_backup_http.rs"
 required-features = ["core"]
+
+[[test]]
+name = "foreign_admission"
+path = "../../test/server/integration/foreign_admission.rs"
+required-features = ["core"]
