@@ -11,6 +11,8 @@ use sqlite_access::{
 use std::path::Path;
 
 mod projection;
+mod material;
+pub(super) use material::{read_material, reconstruct_material};
 
 pub(crate) const NAME: &str = ".zxs-directory.sqlite";
 const FORMAT: &str = "directory-local-compositions";
@@ -57,6 +59,16 @@ pub(super) fn prepare(state: &State, directory: &str) -> Result<Prepared> {
     let records = projection::records(state, directory)?;
     let hash = storage_contract::object_hash("directory-local-records", &records)?;
     let git = &state.directory_git_repositories[directory];
+    encode_records(records, &git.repository_id, directory, state.sequence, &hash)
+}
+
+fn encode_records(
+    records: Vec<Record>,
+    repository: &str,
+    directory: &str,
+    sequence: u64,
+    hash: &str,
+) -> Result<Prepared> {
     let bytes = block_on_sqlite_connection(async {
         let options = SqliteConnectOptions::new()
             .in_memory(true)
@@ -70,9 +82,9 @@ pub(super) fn prepare(state: &State, directory: &str) -> Result<Prepared> {
             tx.execute(RECORDS).await?;
             sqlite_access::query("INSERT INTO identity VALUES(1,?,?,?,?,?)")
                 .bind(FORMAT)
-                .bind(&git.repository_id)
+                .bind(repository)
                 .bind(directory)
-                .bind(state.sequence.to_string())
+                .bind(sequence.to_string())
                 .bind(&hash)
                 .execute(&mut *tx)
                 .await?;
@@ -130,6 +142,9 @@ pub(super) fn verify_scope(bytes: &[u8], repository: &str, directory: &str) -> R
 }
 
 struct StoredIdentity {
+    records: Vec<Record>,
+    sequence: u64,
+    records_hash: String,
     repository: String,
     directory: super::layout_locator::DirectoryId,
 }
@@ -296,16 +311,19 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<StoredId
         },
     )?;
     let directory = super::layout_locator::DirectoryId::parse(&directory)?;
-    storage_contract::parse_u64_decimal(&owner.try_get::<String, _>("source_sequence")?)?;
+    let sequence = storage_contract::parse_u64_decimal(&owner.try_get::<String, _>("source_sequence")?)?;
     let records = read_records(connection).await?;
-    if storage_contract::object_hash("directory-local-records", &records)?
-        != owner.try_get::<String, _>("records_hash")?
+    let records_hash = storage_contract::object_hash("directory-local-records", &records)?;
+    if records_hash != owner.try_get::<String, _>("records_hash")?
     {
         return Err(invalid(
             "directory database records do not match their recorded digest",
         ));
     }
     Ok(StoredIdentity {
+        records,
+        sequence,
+        records_hash,
         repository,
         directory,
     })

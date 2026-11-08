@@ -273,3 +273,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 终态链准确 generation 冷选择与独立读回
 
 `POST /api/disks/terminal-chain-generation-select` 为原请求保存 SYSTEM 选择/完成与原目标 `chain-authority.json`，绑定已完成实际 epoch 决定、完整 generation 日志和普通对象。独立 `terminal-chain-generation-read` 只验读，不补造；返回从安装后对象重建的冻结 Current 统计，来源查询仍不探目标且不返回本次 Current。持有读者遇到普通对象丢失也不能回退隔离材料。**不是通用活动 authority，不更改 locator、Stop、seal 或数据库，不启 writer/服务、不完成 readmission/H03**。见[精确恢复与未完边界](../design/terminal-chain-generation-selector.md)。未审查/编译/测试/CI，无真实系统操作。
+
+### 对象内部数据库救援文件
+
+`object-database inspect/export/rebuild` 现在对应实际文件/目录内部SQLite读取、完整救援归档和独立镜像重建。重建只读归档与显式scope，不依赖原SYSTEM/原盘；输出限定新 `.object-db.json` / `.recovered.sqlite`，无覆盖且不使用活动数据库名。Inspect/Export持有当前服务生命周期租约并要求全部写者停止；Rebuild不接入服务。完整边界、格式、路径范围及未运行状态见 [对象库救援规范](../design/object-database-material-reconstruction.md)，这不是全盘/全系统恢复或自动接纳。

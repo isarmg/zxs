@@ -20,7 +20,11 @@ pub use business::{
 };
 mod container_storage;
 mod database_install;
-pub use container_storage::DirectoryLayoutReceipt;
+pub use container_storage::{
+    DirectoryLayoutReceipt, MAX_OBJECT_DATABASE_ARCHIVE_BYTES, ObjectDatabaseMaterial,
+    ObjectDatabaseRecord, ObjectDatabaseReconstruction, ObjectDatabaseScope,
+    inspect_object_database_material, reconstruct_object_database_material,
+};
 mod directory_layout;
 pub use directory_layout::LayoutError as DirectoryLayoutError;
 mod degraded_recovery;

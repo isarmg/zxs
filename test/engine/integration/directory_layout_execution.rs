@@ -844,3 +844,6 @@ mod sqlite_install_recovery_review;
 
 #[path = "directory_layout_execution/file_database_budget.rs"]
 mod file_database_budget;
+
+#[path = "directory_layout_execution/object_material.rs"]
+mod object_material;

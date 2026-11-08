@@ -121,7 +121,6 @@ impl<'a> Validation<'a> {
         Ok(())
     }
     pub(super) fn admit(&mut self, kind: &str, id: &str, body: &str) -> crate::Result<()> {
-        use storage_contract::decode_strict;
         let prefix = match kind {
             "file" => "file",
             "version" => "ver",
@@ -137,12 +136,12 @@ impl<'a> Validation<'a> {
         storage_contract::validate_id(id, prefix)?;
         let (owner, own_id) = match kind {
             "file" => {
-                let row: FileRow = decode_strict(body.as_bytes())?;
+                let row: FileRow = decode_local(body.as_bytes())?;
                 self.file_row = true;
                 (row.file_id.clone(), row.file_id)
             }
             "version" => {
-                let row: VersionRow = decode_strict(body.as_bytes())?;
+                let row: VersionRow = decode_local(body.as_bytes())?;
                 crate::container_storage::validate_version(&row.version)?;
                 self.node(
                     &row.version.version_id,
@@ -153,7 +152,7 @@ impl<'a> Validation<'a> {
                 (row.version.file_id, row.version.version_id)
             }
             "branch" => {
-                let row: BranchRow = decode_strict(body.as_bytes())?;
+                let row: BranchRow = decode_local(body.as_bytes())?;
                 storage_contract::validate_branch_name(&row.name)?;
                 storage_contract::history_window::HistoryNodeId::parse(&row.head_node_id)?;
                 self.scope(&row.history_tree_id)?;
@@ -162,12 +161,12 @@ impl<'a> Validation<'a> {
                 identity
             }
             "anchor" => {
-                let row: AnchorRow = decode_strict(body.as_bytes())?;
+                let row: AnchorRow = decode_local(body.as_bytes())?;
                 self.node(&row.node_id, &row.history_tree_id, row.sequence)?;
                 (row.file_id, row.node_id)
             }
             "metadata" => {
-                let row: MetadataRow = decode_strict(body.as_bytes())?;
+                let row: MetadataRow = decode_local(body.as_bytes())?;
                 self.node(
                     &row.node.node_id,
                     &row.node.history_tree_id,
@@ -176,7 +175,7 @@ impl<'a> Validation<'a> {
                 (row.node.file_id, row.node.node_id)
             }
             "deletion" => {
-                let row: DeletionRow = decode_strict(body.as_bytes())?;
+                let row: DeletionRow = decode_local(body.as_bytes())?;
                 validate_deletion(&row)?;
                 self.scope(&row.history_tree_id)?;
                 self.sequence(row.sequence)?;
@@ -189,7 +188,7 @@ impl<'a> Validation<'a> {
                 identity
             }
             "lifecycle" => {
-                let row: LifecycleRow = decode_strict(body.as_bytes())?;
+                let row: LifecycleRow = decode_local(body.as_bytes())?;
                 validate_deletion(&row.node)?;
                 self.scope(&row.node.history_tree_id)?;
                 self.sequence(row.sequence)?;
@@ -201,13 +200,13 @@ impl<'a> Validation<'a> {
                 identity
             }
             "merge" => {
-                let row: FileBranchMerge = decode_strict(body.as_bytes())?;
+                let row: FileBranchMerge = decode_local(body.as_bytes())?;
                 self.scope(&row.history_tree_id)?;
                 self.sequence(row.sequence)?;
                 (row.file_id, row.merge_id)
             }
             "merge_link" => {
-                let row: LinkRow = decode_strict(body.as_bytes())?;
+                let row: LinkRow = decode_local(body.as_bytes())?;
                 self.scope(&row.link.history_tree_id)?;
                 (row.file_id, row.link.merge_link_id)
             }
@@ -313,4 +312,13 @@ fn validate_deletion(row: &DeletionRow) -> crate::Result<()> {
         ));
     }
     Ok(())
+}
+
+
+fn decode_local<T: for<'de> Deserialize<'de> + Serialize>(bytes: &[u8]) -> crate::Result<T> {
+    let row: T = storage_contract::decode_strict(bytes)?;
+    if crate::disk::encode_metadata(&row, super::projection::MAX_RECORD_BYTES)? != bytes {
+        return Err(super::invalid("file database row is not canonical typed metadata"));
+    }
+    Ok(row)
 }

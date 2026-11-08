@@ -12,6 +12,8 @@ pub(super) mod changes;
 pub(super) mod install;
 mod projection;
 mod rows;
+mod material;
+pub(super) use material::{read_material, reconstruct_material};
 
 pub(crate) const NAME: &str = ".zxs-file.sqlite";
 const FORMAT: &str = "file-local-retained-graph";
@@ -297,6 +299,7 @@ fn verify(bytes: &[u8]) -> Result<(String, String)> {
 }
 
 struct VerifiedSnapshot {
+    records: Vec<Record>,
     file: String,
     history: String,
     sequence: u64,
@@ -453,7 +456,7 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<Verified
             "file database records differ from their recorded digest",
         ));
     }
-    Ok(VerifiedSnapshot { file, history, sequence, records_hash })
+    Ok(VerifiedSnapshot { file, history, sequence, records_hash, records })
 }
 
 #[cfg(test)]

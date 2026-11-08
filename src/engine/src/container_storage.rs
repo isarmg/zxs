@@ -4,6 +4,12 @@ pub(crate) mod backup_databases;
 pub(crate) mod backup_entities;
 mod changes;
 mod directory_database;
+mod object_database;
+pub use object_database::{
+    MAX_OBJECT_DATABASE_ARCHIVE_BYTES, ObjectDatabaseMaterial, ObjectDatabaseRecord,
+    ObjectDatabaseReconstruction, ObjectDatabaseScope, inspect_object_database_material,
+    reconstruct_object_database_material,
+};
 pub(crate) mod file_database;
 mod layout_batch;
 mod layout_goals;

@@ -58,3 +58,7 @@ zxs-helper disk-databases selected-disk.json --scope history --records
 ## 空目录材料
 
 当前新格式和历史 fold 同时保留已发布原生递归目录副本，版本数为零不再等于没有本盘目录。helper 的摘要增加 `backup_directories` 计数，`--records` 输出 `current-backup-directory` 及 `history-inventory-backup-directory`；身份、路径、来源代表与当前覆盖一起返回，不在源盘建目录。完整范围、旧字节保全及未验证状态见[目录范围规范](disk-backup-directory-catalog.md)。本片没有扩大正式恢复或 authority-restored 保证。
+
+## 对象内部库的独立材料
+
+盘根 current/history 与文件/目录内部库仍是不同范围。后继 [对象库救援归档与重建](object-database-material-reconstruction.md) 只处理明确选中的单对象SQLite，允许从已保留归档生成独立救援镜像；不依据盘根owner路径选对象、不安装活动库、不授予本入口新的系统恢复权威。

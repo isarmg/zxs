@@ -579,3 +579,68 @@ fn file_database_hot_lifecycle_memberships_equal_cold_projection_and_self_hash_i
     .unwrap();
     assert_ne!(incomplete, expected);
 }
+
+#[test]
+fn isolated_file_material_rebuilds_sqlite_after_original_system_and_database_are_gone() {
+    let fixture = Fixture::new();
+    let scope = ObjectDatabaseScope::File {
+        file_id: fixture.file.file_id.clone(),
+        history_tree_id: fixture.repo.history_tree_id.clone(),
+    };
+    let bytes = fixture.bytes();
+    let survivor = tempfile::tempdir().unwrap();
+    std::fs::write(survivor.path().join(NAME), bytes).unwrap();
+    drop(fixture);
+    let material = inspect_object_database_material(
+        std::fs::File::open(survivor.path()).unwrap(), survivor.path().into(), &scope,
+    ).unwrap();
+    let archive = material.archive_bytes().unwrap();
+    std::fs::remove_file(survivor.path().join(NAME)).unwrap();
+    let rebuilt = reconstruct_object_database_material(&archive, &scope).unwrap();
+    assert_eq!(rebuilt.material(), &material);
+    assert_eq!(read_material(rebuilt.database_bytes()).unwrap(), material);
+    assert!(!survivor.path().join(NAME).exists());
+    assert!(material.records().iter().all(|record| !record.body_json().contains("outside/path")));
+}
+
+#[test]
+fn file_material_refuses_wrong_scope_and_retains_unknown_sidecar() {
+    let fixture = Fixture::new();
+    let survivor = tempfile::tempdir().unwrap();
+    let bytes = fixture.bytes();
+    std::fs::write(survivor.path().join(NAME), &bytes).unwrap();
+    let scope = ObjectDatabaseScope::File {
+        file_id: fixture.file.file_id.clone(), history_tree_id: fixture.repo.history_tree_id.clone(),
+    };
+    let wrong = ObjectDatabaseScope::File {
+        file_id: format!("file_{}", "a".repeat(32)), history_tree_id: fixture.repo.history_tree_id.clone(),
+    };
+    assert!(inspect_object_database_material(
+        std::fs::File::open(survivor.path()).unwrap(), survivor.path().into(), &wrong,
+    ).is_err());
+    let sidecar = survivor.path().join(format!("{NAME}-wal"));
+    std::fs::write(&sidecar, b"unknown retained WAL").unwrap();
+    assert!(inspect_object_database_material(
+        std::fs::File::open(survivor.path()).unwrap(), survivor.path().into(), &scope,
+    ).is_err());
+    assert_eq!(std::fs::read(sidecar).unwrap(), b"unknown retained WAL");
+    assert_eq!(std::fs::read(survivor.path().join(NAME)).unwrap(), bytes);
+}
+
+#[test]
+fn recomputed_file_archive_digest_cannot_add_an_external_path_record() {
+    let fixture = Fixture::new();
+    let material = read_material(&fixture.bytes()).unwrap();
+    let mut archive: json_codec::Value = json_codec::from_slice(&material.archive_bytes().unwrap()).unwrap();
+    let record = archive["material"]["records"].as_array_mut().unwrap().iter_mut()
+        .find(|record| record["kind"] == "file").unwrap();
+    let mut body: json_codec::Value = json_codec::from_str(record["body"].as_str().unwrap()).unwrap();
+    body["external_path"] = json_codec::json!("other/disk/private");
+    record["body"] = json_codec::json!(String::from_utf8(storage_contract::canonical_json(&body).unwrap()).unwrap());
+    archive["material"]["records_hash"] = json_codec::json!(
+        storage_contract::object_hash("file-local-records", &archive["material"]["records"]).unwrap()
+    );
+    assert!(reconstruct_object_database_material(
+        &storage_contract::canonical_json(&archive).unwrap(), material.scope(),
+    ).is_err());
+}

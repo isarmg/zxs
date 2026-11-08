@@ -7,6 +7,7 @@ mod credentials;
 mod deployment;
 mod disk_addition;
 mod disk_databases;
+mod object_databases;
 mod disk_readmission;
 mod disk_removal;
 mod host;
@@ -32,6 +33,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 Recovery preview/commit only accepts decided, unpublished operations with all original disks accessible. It requires a reviewed digest and explicit permanent-loss acknowledgement; it is not a reset or missing-disk replacement.
 Offline export validates one published version, not the entire pool or current permissions.
 Disk-databases reads selected local SQLite inventories without SYSTEM; local consistency is not publication authority or content health.
+Object-database exports object-local metadata and reconstructs standalone rescue SQLite from that archive; it never installs an active database or grants authority.
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
 The matching release helper can install only its embedded ZXS executable at /usr/local/bin/zxs without overwriting different bytes.
 Engine recovery commands require the current-daemon /zxs lifetime lease; host preview/prepare can create that root without initializing the system.
@@ -145,6 +147,11 @@ enum Command {
     },
     /// Inspect current/history SQLite with explicit disk identity; never restores authority.
     DiskDatabases(disk_databases::Options),
+    /// Inspect, export or reconstruct isolated file/directory SQLite material.
+    ObjectDatabase {
+        #[command(subcommand)]
+        command: object_databases::Command,
+    },
     OfflineExport {
         disk: PathBuf,
         version: String,
@@ -286,6 +293,7 @@ fn run(args: Args) -> Result<()> {
         Command::Configuration { command } => configuration::run(command),
         Command::Authority { command } => authority::run(command),
         Command::DiskDatabases(options) => disk_databases::run(options),
+        Command::ObjectDatabase { command } => object_databases::run(command),
         Command::Package { command } => match command {
             PackageCommand::Check { package } => {
                 print(storage_engine::offline_check_history_package(&package)?)
@@ -409,6 +417,7 @@ fn run(args: Args) -> Result<()> {
 /// export. Keep its host lease until the synchronous command and all owners end.
 fn requires_service_exclusion(command: &Command) -> bool {
     match command {
+        Command::ObjectDatabase { command } => object_databases::requires_service_exclusion(command),
         Command::RestoreSystem { .. }
         | Command::DiskDatabases(_)
         | Command::RecoveryPreview { .. }
