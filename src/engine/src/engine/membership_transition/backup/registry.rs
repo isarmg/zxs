@@ -12,6 +12,8 @@ use decision::{DecisionReceipt, DecisionStore};
 use pending::{MemberIdentity, admission};
 use std::{io::Read, sync::atomic::AtomicBool};
 
+mod control;
+pub(in crate::engine) use control::BackupFrozenControl;
 mod recovery;
 pub(in crate::engine) use recovery::AdmittedBackupDecision;
 pub use recovery::BackupRegistryDecisionHash;

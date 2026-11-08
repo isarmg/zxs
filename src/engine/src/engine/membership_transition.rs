@@ -8,9 +8,12 @@ use std::collections::BTreeMap;
 
 mod abort;
 mod archive;
+pub(in crate::engine) use archive::PreparedBackupControl;
 mod backup;
 pub use backup::BackupRegistryDecisionHash;
-pub(in crate::engine) use backup::{AdmittedBackupDecision, BackupChoiceContext};
+pub(in crate::engine) use backup::{
+    AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl,
+};
 mod complete_chain;
 pub use abort::MembershipAbortStatus;
 mod decision;

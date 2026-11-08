@@ -10,8 +10,9 @@ pub use cutover::{
 };
 pub use cutover::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
+    BackupRegistryRecoveryReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub(in crate::engine) use cutover::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,

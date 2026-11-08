@@ -20,6 +20,7 @@ mod batch;
 mod execution;
 mod inspection;
 mod native_control;
+pub(in crate::engine) use native_control::BackupNativeObjects;
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
     BackupNativePreparationReport, BackupNativeTargetReport, BackupObjectDatabasePreparationReport,
@@ -29,8 +30,9 @@ pub use native_control::{
 };
 pub use native_control::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
+    BackupRegistryRecoveryReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub(in crate::engine) use native_control::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
@@ -92,6 +94,9 @@ pub enum BackupPreparationPhase {
     /// Complete unpublished native routing snapshots on every selected target.
     /// No final Candidate, active topology, writer lease or source release.
     GenerationInputsPrepared,
+    /// Normal native predecessor archives including actual original fenced
+    /// journals on every target. No successor authority or writer activation.
+    GenerationControlPrepared,
     Blocked,
     SourceChanged,
 }

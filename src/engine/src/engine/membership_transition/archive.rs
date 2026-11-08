@@ -770,3 +770,5 @@ pub use persistent::{MembershipControlArchive, verify_membership_control_archive
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/engine/membership_archive_tests.rs"]
 mod tests;
+
+pub(in crate::engine) use persistent::PreparedBackupControl;

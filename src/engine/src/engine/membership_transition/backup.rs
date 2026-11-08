@@ -5,7 +5,9 @@ use super::*;
 mod registry;
 use crate::engine::backup_preparation::BackupSourceFenceEvidence;
 pub use registry::BackupRegistryDecisionHash;
-pub(in crate::engine) use registry::{AdmittedBackupDecision, BackupChoiceContext};
+pub(in crate::engine) use registry::{
+    AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl,
+};
 
 pub(super) fn verify_intent(intent: &TransitionIntent) -> Result<()> {
     let Origin::BackupCutover { config, evidence } = &intent.origin else {

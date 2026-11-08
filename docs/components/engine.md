@@ -248,3 +248,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### 已决定备份的 native 路由快照材料
 
 [未发布路由快照](../design/backup-generation-routing-snapshot.md)将已决定完整目标集的下一步写集编码为真实 native snapshot/map 对象，原后台任务无覆盖补缺；每个目标由自身完整源快照推导，保留所有旧 receipt/生命周期/私有 State 字段。显式离线原决定续作可在原源/SYSTEM 不可用时仅补隔离材料。`GenerationInputsPrepared` 不是已发布 generation：不发成功回执、不启用目标 writer、不清源围栏；真正 Backup authority、首个 publication、新范围历史库与 serving locator 仍缺。按要求本片未编译/测试/审查/CI。
+
+### 已决定备份的原生围栏控制归档
+
+[原围栏控制归档](../design/backup-generation-control-archive.md)把实际原成员配置/封印/完整 fenced journals 与每个目标自己的完整 native 前缀组合为现有 membership-control-archive 字节，并接原后台任务、全目标读回及离线只读重验。`GenerationControlPrepared` 不授予新 generation、target writer 或源围栏解除。未审查、编译、测试或 CI；不是完整迁移完成声明。

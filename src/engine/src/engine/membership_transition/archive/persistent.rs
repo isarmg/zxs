@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 #[path = "namespace_replay.rs"]
 pub(in crate::engine::membership_transition) mod namespace_replay;
 
+mod backup;
+pub(in crate::engine) use backup::PreparedBackupControl;
+
 const ROOT_KIND: &str = "membership-control-archive";
 pub(super) const SEAL_KIND: &str = "membership-publication-seal";
 const ROOT_FILE: &str = "archive-root.json";

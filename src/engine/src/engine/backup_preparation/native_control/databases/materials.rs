@@ -11,6 +11,7 @@ pub(super) enum Namespace {
     Objects,
     Scopes,
     BackupGeneration,
+    GenerationControl,
 }
 impl Namespace {
     fn name(self) -> &'static str {
@@ -18,6 +19,7 @@ impl Namespace {
             Self::Objects => "object-databases",
             Self::Scopes => "scoped-databases",
             Self::BackupGeneration => "backup-generation-inputs",
+            Self::GenerationControl => "backup-generation-control",
         }
     }
 }
@@ -100,12 +102,29 @@ fn inventory(
     let held = root.private_child(&path)?;
     let expected = entries(prepared)?;
     let mut seen = BTreeSet::new();
+    let mut retained_staging = 0usize;
     let mut pending = vec![PathBuf::new()];
     while let Some(relative) = pending.pop() {
         preparation_checkpoint(stop)?;
         for entry in held.entries(&held.path().join(&relative))? {
             preparation_checkpoint(stop)?;
             let name = entry.map_err(fs_error)?;
+            if matches!(prepared.namespace, Namespace::GenerationControl)
+                && platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
+            {
+                // Preserve interrupted private atomic writes, never promote,
+                // count as evidence, overwrite or remove them. Bound hostile
+                // staging inventories independently of the exact material set.
+                retained_staging += 1;
+                if retained_staging > 1024 {
+                    return Err(Error::new(
+                        ErrorCode::ResourceLimit,
+                        "native control preparation has too many retained atomic staging files",
+                    ));
+                }
+                held.open_read_regular(&held.path().join(&relative).join(name.as_path()))?;
+                continue;
+            }
             let child = relative.join(name);
             let file = *expected.get(&child).ok_or_else(|| {
                 Error::new(

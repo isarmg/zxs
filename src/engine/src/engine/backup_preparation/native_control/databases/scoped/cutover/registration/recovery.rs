@@ -57,6 +57,13 @@ impl BackupDecidedTargets {
         generation_inputs::observe(&self.prepared, &self.decision, &AtomicBool::new(false))
     }
 
+    /// Independently replay every target's normal native predecessor archive,
+    /// including its exact original MembershipFence journals. No source/SYSTEM
+    /// access, repair, new vote or writer activation is performed.
+    pub fn inspect_generation_control(&self) -> Result<BackupGenerationControlReport> {
+        generation_control::observe(&self.prepared, &self.decision, &AtomicBool::new(false))
+    }
+
     /// Explicit offline continuation of the already chosen task's isolated
     /// materials. An independently retained decision digest was required at
     /// open. No source/SYSTEM root is probed, no new choice is issued, and no

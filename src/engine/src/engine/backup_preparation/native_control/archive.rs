@@ -12,6 +12,9 @@ use crate::publication_evidence::{verified_graph_object_at, verified_publication
 use data_serialization::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "generation_objects.rs"]
+pub(super) mod generation_objects;
+
 const FORMAT: &str = "zxs-backup-native-control";
 const ROOT: &str = "native-control";
 const MAX_BYTES: usize = 128 * 1024 * 1024;

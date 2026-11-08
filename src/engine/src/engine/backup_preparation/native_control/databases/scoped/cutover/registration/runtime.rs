@@ -149,6 +149,14 @@ fn run(
             "decision {hash} retains unpublished native routing snapshot {} on all {} targets; final Backup authority, publication and active writers are absent; source remains stopped",
             inputs.routing_snapshot_hash, inputs.targets,
         );
+    })?;
+    let control = generation_control::prepare(&prepared, &decision, &choices, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationControlPrepared;
+        status.detail = format!(
+            "decision {hash} retains normal native control archive {} including all original fenced journals on {} targets; no successor publication or target writer exists; source remains stopped",
+            control.native_control_root, control.targets,
+        );
     })
 }
 fn spawn(

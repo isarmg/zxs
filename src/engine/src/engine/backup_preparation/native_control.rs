@@ -4,11 +4,13 @@ use super::*;
 use std::path::{Component, Path};
 
 mod archive;
+pub(in crate::engine) use archive::generation_objects::BackupNativeObjects;
 mod databases;
 pub use databases::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
+    BackupRegistryRecoveryReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 mod runtime;
 pub use archive::BackupNativeControlReport;

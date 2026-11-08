@@ -139,6 +139,12 @@ impl AdmittedBackupDecision {
         }
         Ok(())
     }
+    pub(super) fn transition(&self) -> &TransitionIntent {
+        &self.stored.core.transition
+    }
+    pub(super) fn original_members(&self) -> &BTreeMap<String, OriginalMember> {
+        &self.stored.core.original_members
+    }
     fn bind_prepared(&self, prepared: &PreparedBackupRegistry) -> Result<()> {
         self.bind_source(prepared.source_fence_hash(), prepared.source_evidence())?;
         if canonical_json(prepared.projection())?
