@@ -10333,6 +10333,314 @@
           }
         }
       }
+    },
+    "NodeRetirementPreviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "version_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/VersionId"
+          }
+        }
+      },
+      "required": [
+        "history_root",
+        "version_ids"
+      ],
+      "description": "Exact origin file comes only from the path. Select 1–512 distinct body version IDs; server sorts IDs before binding the request. Maximum request body: 65536 bytes. Preview is not execution admission."
+    },
+    "NodeRetirementRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "version_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/VersionId"
+          }
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "confirmation": {
+          "const": "PERMANENTLY_RETIRE_NODES"
+        }
+      },
+      "required": [
+        "history_root",
+        "version_ids",
+        "operation_id",
+        "confirmation"
+      ],
+      "description": "Irreversible live-node retirement and current-route body cleanup. Explicit confirmation is mandatory. Retry the exact original file/root/versions with the original operation ID; publication and cleanup are separate results."
+    },
+    "NodeRetirementResumeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "description": "Resume cleanup for this file and the original actor/operation. Does not publish another decision or permit a new selection."
+    },
+    "NodeRetirementPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "version_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/VersionId"
+          }
+        },
+        "coupled_node_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/SharedHistoryNodeId"
+          }
+        },
+        "file_components": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/FileId"
+            }
+          }
+        },
+        "retained_commit_entries": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "affected_branch_heads": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/BranchId"
+          }
+        },
+        "frozen_files": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/FileId"
+          }
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "version_ids",
+        "coupled_node_ids",
+        "file_components",
+        "retained_commit_entries",
+        "affected_branch_heads",
+        "frozen_files"
+      ],
+      "description": "All file components are disjoint and contain at most 64 files in total including origin. The response is bound to the exact sorted selection and root. Known HEAD/deletion blockers are not an exhaustive execution admission result."
+    },
+    "NodeRetirementReplicaState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "not_requested"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "missing_tombstone"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "payload_present"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "verified_absent"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "unverified"
+            },
+            "error_code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "state",
+            "error_code"
+          ]
+        }
+      ]
+    },
+    "NodeRetirementReplica": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "status": {
+          "$ref": "#/$defs/NodeRetirementReplicaState"
+        }
+      },
+      "required": [
+        "version_id",
+        "slot_id",
+        "status"
+      ]
+    },
+    "NodeRetirementCleanup": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "observed"
+            },
+            "history_root": {
+              "$ref": "#/$defs/HistoryRoot"
+            },
+            "replicas": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4096,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/NodeRetirementReplica"
+              }
+            }
+          },
+          "required": [
+            "state",
+            "history_root",
+            "replicas"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "unverified"
+            },
+            "error_code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "state",
+            "error_code"
+          ]
+        }
+      ],
+      "description": "Only a nonempty complete current-route observation in which every replica is verified_absent reports current bodies absent. The (version_id, slot_id) pairs are unique and every selected version appears. Neither publication nor this interval observation proves erasure on offline disks/external backups or removal of immutable authentication records."
+    },
+    "NodeRetirementOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "operation": {
+          "$ref": "#/$defs/GenericOperation"
+        },
+        "cleanup": {
+          "$ref": "#/$defs/NodeRetirementCleanup"
+        }
+      },
+      "required": [
+        "file_id",
+        "operation",
+        "cleanup"
+      ],
+      "description": "Native file.nodes.retire receipt plus separate body cleanup result. A failed cleanup cannot roll back or conceal published retirement. The result retains the original exact request for operation polling and retry."
     }
   }
 }

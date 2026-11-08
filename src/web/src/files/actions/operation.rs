@@ -13,7 +13,8 @@ use web_interface::tasks::spawn_local;
 /// success responses retain the original ID, draft and write fence for polling.
 pub(crate) fn record_receipt(state: RwSignal<State>, id: &str, value: Value) -> SaveStatus {
     let operation =
-        if state.with_untracked(|s| crate::files::review::receipt_kind_matches(s, id, &value)) {
+        if state.with_untracked(|s| crate::files::review::receipt_kind_matches(s, id, &value)
+            && crate::files::node_retirement::receipt_matches(s, id, &value)) {
             FileOperation::from_receipt(id, &value)
         } else {
             FileOperation::unknown(id)
@@ -76,7 +77,8 @@ fn poll_work(state: &State) -> Option<(u64, Vec<String>)> {
         .operations
         .iter()
         .filter(|operation| operation.status() == SaveStatus::Unknown)
-        .filter(|operation| !crate::files::review::tag_attempt_in_flight(state, operation.id()))
+        .filter(|operation| !crate::files::review::tag_attempt_in_flight(state, operation.id())
+            && !crate::files::node_retirement::in_flight(state, operation.id()))
         .filter_map(|operation| {
             let id = operation.id();
             (!state

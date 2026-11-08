@@ -75,6 +75,7 @@ pub(crate) struct Model {
     pub placement: Option<super::placement::Draft>,
     pub tag_edit: Option<super::tags::Draft>,
     pub checked_nodes: super::tags::Selection,
+    pub node_retirement: super::node_retirement::Model,
     pub publications: super::review::Publications,
     pub tag_submission: Option<super::review::TagSubmission>,
     pub operations: Vec<FileOperation>,

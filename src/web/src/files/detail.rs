@@ -277,6 +277,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                     {version_tree::view(state)}
                     {super::content_matches::view(state)}
                     {super::shared_history::view(state)}
+                    {super::node_retirement::view(state)}
                     {super::history::auxiliary_view(state)}
                     {merge::history(state)}
                     <Show when=move ||state.with(|s|!s.files.history_loading&&!s.files.file_history.loaded())><p class="zxs-row" role="status">{t("历史尚未加载。","History has not been loaded.")}</p></Show>

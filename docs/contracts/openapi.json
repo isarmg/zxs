@@ -9690,6 +9690,180 @@
         "x-rejectUnknownQueryParameters": true,
         "x-rejectDuplicateQueryParameters": true
       }
+    },
+    "/api/file-manager/files/{file}/node-retirement/preview": {
+      "post": {
+        "operationId": "previewPermanentNodeRetirement",
+        "description": "Read-only complete conditional impact at the exact history root; current administrator is checked before capture and after preparation. No body erase or operation receipt is created. Read work is cancelable.",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeRetirementPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded typed result. Native publication and current-route cleanup are not interchangeable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeRetirementPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid, duplicate or unknown body field, empty/duplicate/oversize selection, or missing exact confirmation."
+          },
+          "401": {
+            "description": "Unauthenticated or revoked administrator session."
+          },
+          "403": {
+            "description": "Non-administrator/SMB identity is not allowed; normal CSRF/origin protection also applies."
+          },
+          "409": {
+            "description": "Changed history, protected live reference/workspace/lease, or operation identity conflicts. Do not interpret a retry rejection as proof an earlier uncertain request did not publish."
+          },
+          "429": {
+            "description": "Bounded worker capacity or complete analysis/observation resource budget exceeded."
+          },
+          "500": {
+            "description": "Invalid persistent state, backend failure or response encoding exceeds 1 MiB. Publication may already exist; query the original operation ID."
+          }
+        },
+        "x-maxRequestBytes": 65536,
+        "x-maxResponseBytes": 1048576
+      }
+    },
+    "/api/file-manager/files/{file}/node-retirement": {
+      "post": {
+        "operationId": "retireFileNodesPermanently",
+        "description": "Explicit irreversible detail action for the authenticated administrator, never SMB soft delete. Bind original file, history root and sorted selected versions to one permanent operation. Retained HEADs/merge participation/last live versions/current and frozen directory references/workspaces/leases are rejected by the Engine. HTTP disconnect does not cancel an admitted worker. Same-key exact retry is resolved before stale-root capture. Immutable authentication records remain.",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeRetirementRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded typed result. Native publication and current-route cleanup are not interchangeable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeRetirementOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid, duplicate or unknown body field, empty/duplicate/oversize selection, or missing exact confirmation."
+          },
+          "401": {
+            "description": "Unauthenticated or revoked administrator session."
+          },
+          "403": {
+            "description": "Non-administrator/SMB identity is not allowed; normal CSRF/origin protection also applies."
+          },
+          "409": {
+            "description": "Changed history, protected live reference/workspace/lease, or operation identity conflicts. Do not interpret a retry rejection as proof an earlier uncertain request did not publish."
+          },
+          "429": {
+            "description": "Bounded worker capacity or complete analysis/observation resource budget exceeded."
+          },
+          "500": {
+            "description": "Invalid persistent state, backend failure or response encoding exceeds 1 MiB. Publication may already exist; query the original operation ID."
+          }
+        },
+        "x-maxRequestBytes": 65536,
+        "x-maxResponseBytes": 1048576
+      }
+    },
+    "/api/file-manager/files/{file}/node-retirement/resume": {
+      "post": {
+        "operationId": "resumePermanentNodeRetirement",
+        "description": "Resume only the original file-bound actor-owned retirement decision and current-route body cleanup, including after server restart. No new operation or new selection is created. An unavailable cleanup report must not conceal an existing permanent receipt.",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeRetirementResumeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded typed result. Native publication and current-route cleanup are not interchangeable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeRetirementOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid, duplicate or unknown body field, empty/duplicate/oversize selection, or missing exact confirmation."
+          },
+          "401": {
+            "description": "Unauthenticated or revoked administrator session."
+          },
+          "403": {
+            "description": "Non-administrator/SMB identity is not allowed; normal CSRF/origin protection also applies."
+          },
+          "409": {
+            "description": "Changed history, protected live reference/workspace/lease, or operation identity conflicts. Do not interpret a retry rejection as proof an earlier uncertain request did not publish."
+          },
+          "429": {
+            "description": "Bounded worker capacity or complete analysis/observation resource budget exceeded."
+          },
+          "500": {
+            "description": "Invalid persistent state, backend failure or response encoding exceeds 1 MiB. Publication may already exist; query the original operation ID."
+          }
+        },
+        "x-maxRequestBytes": 65536,
+        "x-maxResponseBytes": 1048576
+      }
     }
   },
   "components": {
@@ -20037,6 +20211,314 @@
             }
           }
         }
+      },
+      "NodeRetirementPreviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "version_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 512,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/VersionId"
+            }
+          }
+        },
+        "required": [
+          "history_root",
+          "version_ids"
+        ],
+        "description": "Exact origin file comes only from the path. Select 1–512 distinct body version IDs; server sorts IDs before binding the request. Maximum request body: 65536 bytes. Preview is not execution admission."
+      },
+      "NodeRetirementRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "version_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 512,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/VersionId"
+            }
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "confirmation": {
+            "const": "PERMANENTLY_RETIRE_NODES"
+          }
+        },
+        "required": [
+          "history_root",
+          "version_ids",
+          "operation_id",
+          "confirmation"
+        ],
+        "description": "Irreversible live-node retirement and current-route body cleanup. Explicit confirmation is mandatory. Retry the exact original file/root/versions with the original operation ID; publication and cleanup are separate results."
+      },
+      "NodeRetirementResumeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "description": "Resume cleanup for this file and the original actor/operation. Does not publish another decision or permit a new selection."
+      },
+      "NodeRetirementPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "version_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 512,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/VersionId"
+            }
+          },
+          "coupled_node_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 512,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/SharedHistoryNodeId"
+            }
+          },
+          "file_components": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/components/schemas/FileId"
+              }
+            }
+          },
+          "retained_commit_entries": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "affected_branch_heads": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/BranchId"
+            }
+          },
+          "frozen_files": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "version_ids",
+          "coupled_node_ids",
+          "file_components",
+          "retained_commit_entries",
+          "affected_branch_heads",
+          "frozen_files"
+        ],
+        "description": "All file components are disjoint and contain at most 64 files in total including origin. The response is bound to the exact sorted selection and root. Known HEAD/deletion blockers are not an exhaustive execution admission result."
+      },
+      "NodeRetirementReplicaState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "not_requested"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "missing_tombstone"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "payload_present"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "verified_absent"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "unverified"
+              },
+              "error_code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "state",
+              "error_code"
+            ]
+          }
+        ]
+      },
+      "NodeRetirementReplica": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NodeRetirementReplicaState"
+          }
+        },
+        "required": [
+          "version_id",
+          "slot_id",
+          "status"
+        ]
+      },
+      "NodeRetirementCleanup": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "observed"
+              },
+              "history_root": {
+                "$ref": "#/components/schemas/HistoryRoot"
+              },
+              "replicas": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4096,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/components/schemas/NodeRetirementReplica"
+                }
+              }
+            },
+            "required": [
+              "state",
+              "history_root",
+              "replicas"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "unverified"
+              },
+              "error_code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "state",
+              "error_code"
+            ]
+          }
+        ],
+        "description": "Only a nonempty complete current-route observation in which every replica is verified_absent reports current bodies absent. The (version_id, slot_id) pairs are unique and every selected version appears. Neither publication nor this interval observation proves erasure on offline disks/external backups or removal of immutable authentication records."
+      },
+      "NodeRetirementOutcome": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/GenericOperation"
+          },
+          "cleanup": {
+            "$ref": "#/components/schemas/NodeRetirementCleanup"
+          }
+        },
+        "required": [
+          "file_id",
+          "operation",
+          "cleanup"
+        ],
+        "description": "Native file.nodes.retire receipt plus separate body cleanup result. A failed cleanup cannot roll back or conceal published retirement. The result retains the original exact request for operation polling and retry."
       }
     }
   }

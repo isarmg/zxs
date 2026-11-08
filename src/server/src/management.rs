@@ -1356,6 +1356,24 @@ impl Backend for ManagementBackend {
             .backend()?
             .default_directory_branch(identity, repository_id)
     }
+    fn preview_node_retirement(
+        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::node_retirement::Preview, crate::ApiError> {
+        self.inner.backend()?.preview_node_retirement(identity, request, cancellation)
+    }
+    fn retire_file_nodes(
+        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::node_retirement::Outcome, crate::ApiError> {
+        self.inner.backend()?.retire_file_nodes(identity, request, operation)
+    }
+    fn resume_node_retirement(
+        &self, identity: &Identity, file: storage_contract::history_window::HistoryFileId,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::node_retirement::Outcome, crate::ApiError> {
+        self.inner.backend()?.resume_node_retirement(identity, file, operation)
+    }
     fn shared_history(
         &self,
         identity: &Identity,

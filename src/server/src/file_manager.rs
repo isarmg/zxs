@@ -24,6 +24,18 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_disk_directory::create),
         )
         .route(
+            "/api/file-manager/files/{file}/node-retirement/preview",
+            post(http_node_retirement::preview),
+        )
+        .route(
+            "/api/file-manager/files/{file}/node-retirement",
+            post(http_node_retirement::submit),
+        )
+        .route(
+            "/api/file-manager/files/{file}/node-retirement/resume",
+            post(http_node_retirement::resume),
+        )
+        .route(
             "/api/file-manager/files/{file}/shared-history",
             get(http_shared_history::read),
         )

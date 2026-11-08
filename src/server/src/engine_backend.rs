@@ -25,6 +25,7 @@ mod graph;
 mod integrity_scrub;
 mod operations;
 mod ordinary_conversion;
+mod node_retirement;
 mod read_projection;
 mod storage_addition;
 pub(crate) mod storage_lifecycle;
@@ -1559,6 +1560,24 @@ impl Backend for EngineBackend {
                 .collect(),
             },
         })
+    }
+    fn preview_node_retirement(
+        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::node_retirement::Preview, ApiError> {
+        node_retirement::preview(self, identity, request, cancellation)
+    }
+    fn retire_file_nodes(
+        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
+        node_retirement::submit(self, identity, request, operation)
+    }
+    fn resume_node_retirement(
+        &self, identity: &Identity, file: storage_contract::history_window::HistoryFileId,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
+        node_retirement::resume(self, identity, file, operation)
     }
     fn shared_history(
         &self,

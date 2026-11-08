@@ -519,3 +519,44 @@ impl Engine {
         PermanentNodeRetirementOutcome { publication, cleanup }
     }
 }
+
+impl Engine {
+    /// Transport retry of the original selection, before recapturing its now-old
+    /// root. A same-key different file/root/version list must never resume cleanup.
+    pub fn retry_file_node_retirement_at_root(
+        &mut self, operation_id: crate::OperationId, principal: &str,
+        file: &HistoryFileId, root: HistoryRoot, selection: &super::PermanentNodeRemovalSelection,
+    ) -> Result<PermanentNodeRetirementOutcome> {
+        Self::require_actor(principal)?;
+        if self.operation_owner(operation_id)?.as_deref() != Some(principal) {
+            return Err(Error::new(storage_contract::ErrorCode::IdempotencyKeyReused, "retirement operation belongs to another actor"));
+        }
+        let receipt = self.state.operations.get(&operation_id)
+            .filter(|receipt| receipt.kind == crate::node_retirement::KIND)
+            .ok_or_else(|| Error::new(storage_contract::ErrorCode::IdempotencyKeyReused, "operation is not this retirement request"))?;
+        let decision = crate::node_retirement::decision(receipt)?;
+        if decision.request.origin_file_id != file.as_str() || decision.request.history_root != root.to_string()
+            || !decision.request.version_ids.iter().map(String::as_str).eq(selection.versions().iter().map(HistoryVersionId::as_str)) {
+            return Err(Error::new(storage_contract::ErrorCode::IdempotencyKeyReused, "retirement operation is bound to another file, root or version selection"));
+        }
+        self.resume_file_node_retirement(operation_id, principal)
+    }
+
+    /// Resume only the original file's operation. A detail URL cannot silently
+    /// redirect recovery to another file, even for the same administrator.
+    pub fn resume_file_node_retirement_for_file(
+        &mut self, file: &HistoryFileId, operation_id: crate::OperationId, principal: &str,
+    ) -> Result<PermanentNodeRetirementOutcome> {
+        Self::require_actor(principal)?;
+        if self.operation_owner(operation_id)?.as_deref() != Some(principal) {
+            return Err(Error::new(storage_contract::ErrorCode::IdempotencyKeyReused, "retirement operation belongs to another actor"));
+        }
+        let receipt = self.state.operations.get(&operation_id)
+            .filter(|receipt| receipt.kind == crate::node_retirement::KIND)
+            .ok_or_else(|| Error::new(storage_contract::ErrorCode::InvalidRequest, "retirement operation not found"))?;
+        if crate::node_retirement::decision(receipt)?.request.origin_file_id != file.as_str() {
+            return Err(Error::new(storage_contract::ErrorCode::InvalidRequest, "retirement operation belongs to another file"));
+        }
+        self.resume_file_node_retirement(operation_id, principal)
+    }
+}

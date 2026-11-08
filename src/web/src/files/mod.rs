@@ -12,6 +12,7 @@ mod merge;
 mod model;
 mod naming;
 mod node_card;
+mod node_retirement;
 mod page;
 mod placement;
 mod review;
