@@ -154,7 +154,7 @@
       <button id="terminal-chain-export" class="secondary" type="button">核对当前完整链并下载检查点</button>
       <pre id="terminal-chain-report" hidden></pre>
       <h3>生成终态移除链后的原元数据恢复提案</h3>
-      <p>按上方选中的仍登记 Disabled 原元数据盘，重放完整终态移除链，生成精确单盘恢复 registry 和完整继承命名空间提案。低级祖先必须仍有 Enabled 登记；历史 Config 中的已移除或停用祖先不能替代。此阶段不会打开目标/祖先目录、保留操作、写入新决定或恢复活动存储，下载文件不能用作执行令牌。目标决定和首笔输入须在下方单独确认准备；真实发布、Current 和 locator 仍未接通，不能把报告当成重新接纳成功。</p>
+      <p>按上方选中的仍登记 Disabled 原元数据盘，重放完整终态移除链，生成精确单盘恢复 registry 和完整继承命名空间提案。低级祖先必须仍有 Enabled 登记；历史 Config 中的已移除或停用祖先不能替代。此阶段不会打开目标/祖先目录、保留操作、写入新决定或恢复活动存储，下载文件不能用作执行令牌。目标决定和首笔输入须在下方单独确认准备；真实首笔发布和冻结 Current 读取已另有独立入口；活动 Current、writer 和 locator 仍未接通，不能把提案或读取报告当成重新接纳成功。</p>
       <button id="terminal-chain-readmit" class="secondary" type="button">仅生成并下载完整来源恢复提案</button>
       <pre id="terminal-chain-readmit-report" hidden></pre>
       <details>
@@ -166,6 +166,8 @@
           <button type="submit">确认准备目标决定 / 续作同一请求</button>
         </form>
         <pre id="chain-target-result" hidden></pre>
+        <button id="chain-current-read" type="button" class="secondary" hidden>读回原目标实际发布证据并检查冻结 Current</button>
+        <p>此检查会持有所选原盘锁，读取实际三帧日志、两根完整快照及全链继承命名空间。它只返回已发布冻结视图的统计，不修复缺损材料、不读取文件正文，也不消费 Stop、分配新 epoch 或启用运行态 writer；不是重新接纳完成。</p>
         <form id="chain-first-form" hidden>
           <h4>继续准备首笔原生输入，不执行发布</h4>
           <p>此步只用于上面已有原决定的同一请求。在 SYSTEM 和原目标各保留完整 core、State、registry、历史页及首笔 Candidate，独立读回；每根另需完整材料空间。编码中的预期 PUBLISHED 回执还没有真正提交，不表示接纳或可启动服务。中断后只能续作原请求，完成材料缺损不会自动重建。</p>

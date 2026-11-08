@@ -52,3 +52,5 @@ Publication 开始后首笔输入安装接口关闭，不能用准备入口重�
 五项新增实际临时根／三帧／原请求冷态／已知 torn 第三帧／完成后丢失／前置拒绝测试源码，及一项 HTTP 严格输入、既有 Origin/CSRF/忙碌/关闭边界扩展均未运行。
 
 仍缺从完整 native core 与真实 Publication 到专用活动代际的认证转换、精确 Stop 消费与新 epoch、Current/serving locator、运行数据库绑定和实际 target writer。外来完整低级链 H03 也没有以此绕过最终权威证明；全部保持拒绝，不能把一个真正首笔 Publication 概括成整个重新接纳完成。
+
+后继[冻结 Current 消费者](terminal-chain-published-current.md)已接实际三帧/两根完整输入的只读准入与独立控制台检查，不改变本片对活动 writer、新 epoch、Stop 消费和正式 readmission 的拒绝边界。

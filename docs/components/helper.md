@@ -245,3 +245,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 完整终态链真实首笔发布
 
 已有两根完整首笔输入之后，独立 `POST /api/disks/terminal-chain-first-publish` 按原请求执行实际 ACCEPT/FINALIZE/Publication 三帧、原生 seal 与双根证据，见[真实首槽与恢复边界](../design/terminal-chain-first-publication.md)。有单独不可撤销发布确认；不消费 Stop、不启用活动 Current/writer、不启动服务、不完成 H03。已完成证据丢失拒绝重建，source-only 状态不探目标。本片未审查/编译/测试/CI，无实际系统操作。
+
+### 终态链已发布冻结 Current 检查
+
+`POST /api/disks/terminal-chain-current` 从原首槽 Publication、完整 checkpoint 和实际原目标日志构造真正 `CurrentNamespaces` 只读消费者，返回经过继承 mask 投影的分支/条目统计。它不修复缺损对象或尾部，不消费 Stop/新 epoch，不安装活动 Engine Current、writer 或启动服务；helper 仍返回 `completed_readmission:false`。网络无认证 root、原 Origin/CSRF/Host、停服和 lifetime owner 边界不变。源码和未运行回归说明见[终态链冻结 Current](../design/terminal-chain-published-current.md)。

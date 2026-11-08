@@ -275,6 +275,9 @@ impl Prepared {
         self.verify_at(root)
     }
     pub(super) fn verify_at(&self, root: &DiskRoot) -> Result<()> {
+        self.read_at(root).map(|_| ())
+    }
+    pub(super) fn read_at(&self, root: &DiskRoot) -> Result<crate::history_package::AdmittedState> {
         let mut budget = ReadBudget::default();
         // Equality to the typed source recipe is essential; self-consistent
         // replaced State/Candidate bytes alone are never sufficient authority.
@@ -316,7 +319,7 @@ impl Prepared {
                 return Err(invalid("terminal-chain native dependency digest changed"));
             }
         }
-        Ok(())
+        Ok(state)
     }
 }
 pub(super) fn address(kind: &str, hash: &str) -> Result<PathBuf> {

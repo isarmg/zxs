@@ -13,9 +13,12 @@ use crate::engine::disk_lifecycle::terminal::{
 use platform_io::fs_safety::linux::FileIdentity;
 use std::path::{Path, PathBuf};
 mod activation;
+mod current;
 mod first;
 mod publication;
+pub use current::{TerminalChainPublishedCurrent, TerminalChainPublishedCurrentReport};
 pub(crate) use publication::FirstSlotOwner;
+pub(in crate::engine) use publication::PublishedProof;
 pub use publication::TerminalChainFirstPublication;
 mod target;
 pub use activation::TerminalChainReadmissionActivation;

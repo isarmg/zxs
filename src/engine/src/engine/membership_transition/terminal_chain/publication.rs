@@ -265,12 +265,15 @@ impl FirstSlotOwner<'_> {
         Ok(())
     }
     fn verify_recorded(&self, recorded: &Recorded) -> Result<()> {
+        self.read_recorded(recorded).map(|_| ())
+    }
+    fn read_recorded(&self, recorded: &Recorded) -> Result<crate::history_package::AdmittedState> {
         self.recheck()?;
         recorded.verify(self.prepared)?;
         recorded.verify_objects(&self.source)?;
         recorded.verify_objects(&self.target)?;
         self.prepared.verify_at(&self.source)?;
-        self.prepared.verify_at(&self.target)?;
+        let state = self.prepared.read_at(&self.target)?;
         self.held.verify_decision(self.selection)?;
         let observed = TerminalChainFirstJournal::inspect(self)?.ok_or_else(|| {
             Error::new(
@@ -285,7 +288,8 @@ impl FirstSlotOwner<'_> {
                 "terminal-chain Publication seal differs from actual target journal",
             ));
         }
-        Ok(())
+        self.recheck()?;
+        Ok(state)
     }
 }
 impl TerminalManagement {
@@ -513,4 +517,115 @@ fn publish(owner: &FirstSlotOwner<'_>) -> Result<Recorded> {
         ));
     }
     Ok(recorded)
+}
+
+/// Exact full native input and actual three-frame target readback. This owned
+/// evidence admits a frozen namespace reader, never I/O or Engine installation.
+/// Only `read_existing` below constructs it; persisted JSON is not this token.
+pub(in crate::engine) struct PublishedProof {
+    candidate: Candidate,
+    recorded: Recorded,
+    state: crate::history_package::AdmittedState,
+    frozen_sequence: u64,
+}
+impl PublishedProof {
+    pub(in crate::engine) fn state(&self) -> &State {
+        self.state.state()
+    }
+    pub(in crate::engine) fn registry(&self) -> &crate::DiskRegistryCommitment {
+        self.candidate
+            .registry()
+            .expect("invariant: exact chain candidate has a registry")
+    }
+    pub(in crate::engine) fn snapshot(&self) -> &str {
+        &self.candidate.snapshot_hash
+    }
+    pub(in crate::engine) fn frozen_snapshot(&self) -> &str {
+        self.candidate
+            .previous_snapshot
+            .as_deref()
+            .expect("invariant: chain first slot has exact published predecessor")
+    }
+    pub(in crate::engine) fn frozen_sequence(&self) -> u64 {
+        self.frozen_sequence
+    }
+    pub(super) fn report(&self) -> Result<TerminalChainFirstPublication> {
+        self.recorded.report(true)
+    }
+    pub(super) fn manifest(&self) -> &Manifest {
+        &self.recorded.manifest
+    }
+}
+
+/// No installation, receipt completion, tail repair or source-only fallback.
+/// Even a self-consistent source seal cannot replace the actual held target log.
+pub(super) fn read_existing(
+    management: &TerminalManagement,
+    selection: &Selection,
+    prepared: &Prepared,
+    held: &target::Held,
+) -> Result<PublishedProof> {
+    let inputs = activation::saved(management)?.ok_or_else(|| {
+        Error::new(
+            ErrorCode::RecoveryRequired,
+            "published Current requires original first inputs",
+        )
+    })?;
+    activation::exact(&inputs, prepared.manifest())?;
+    if !activation::source_prepared(management, &inputs)?
+        || !selected_manifest(management, prepared)?
+    {
+        return Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "published Current requires completed original input and Publication selections",
+        ));
+    }
+    let source_record: Recorded = load(
+        management.system_root(),
+        &operation(management).join(RECEIPT_FILE),
+    )?
+    .ok_or_else(|| {
+        Error::new(
+            ErrorCode::RecoveryRequired,
+            "published Current requires completed SYSTEM Publication evidence",
+        )
+    })?;
+    let target = held.root.private_child(
+        &pending::member_directory(prepared.disk(), &selection.hash()?)
+            .join(activation::TARGET_DIRECTORY),
+    )?;
+    let target_inputs: Manifest = decode_strict(&target.read_bytes(
+        &target.path().join(activation::TARGET_PREPARED),
+        MAX_METADATA,
+    )?)?;
+    activation::exact(&target_inputs, prepared.manifest())?;
+    let target_record: Recorded =
+        decode_strict(&target.read_bytes(&target.path().join(TARGET_RECEIPT), MAX_EVIDENCE)?)?;
+    if canonical_json(&source_record)? != canonical_json(&target_record)? {
+        return Err(Error::new(
+            ErrorCode::LogFork,
+            "published Current source and target Publication evidence differ",
+        ));
+    }
+    let owner = FirstSlotOwner {
+        management,
+        selection,
+        held,
+        prepared,
+        source: source_root(management)?,
+        target,
+    };
+    let state = owner.read_recorded(&source_record)?;
+    Ok(PublishedProof {
+        candidate: prepared.candidate().clone(),
+        recorded: source_record,
+        state,
+        frozen_sequence: selection
+            .terminal
+            .intent()
+            .boundary
+            .as_ref()
+            .expect("invariant: chain source has exact published boundary")
+            .sequence,
+    })
 }

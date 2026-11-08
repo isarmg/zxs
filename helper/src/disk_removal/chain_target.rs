@@ -29,6 +29,13 @@ pub(crate) struct PublicationInput {
     confirmation: String,
     acknowledge_publication_without_activation: bool,
 }
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct CurrentInput {
+    service_user: String,
+    external_writers_stopped: bool,
+    plan: Plan,
+}
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Status {
@@ -36,6 +43,7 @@ pub(crate) struct Status {
     native: Option<storage_engine::TerminalChainReadmissionStatus>,
     service_started: bool,
     completed_readmission: bool,
+    published_current: Option<storage_engine::TerminalChainPublishedCurrentReport>,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -50,6 +58,7 @@ enum Action {
     Synchronize { plan: Plan },
     PrepareFirst { plan: Plan },
     PublishFirst { plan: Plan },
+    InspectPublished { plan: Plan },
 }
 impl crate::service_worker::Request for Request {
     type Output = Status;
@@ -60,8 +69,28 @@ impl crate::service_worker::Request for Request {
     fn execute(self) -> Result<Status> {
         let mut target = worker::Target::open(&self.context)?;
         target.recheck()?;
+        let mut published_current = None;
         let native = match self.action {
             Action::Status => target.control.terminal_chain_readmission_status()?,
+            Action::InspectPublished { plan } => {
+                if plan.context != self.context
+                    || plan.credential != target.credential_revision()?
+                {
+                    return Err(
+                        "published Current host or primary credential revision changed".into(),
+                    );
+                }
+                let preparation = plan.preparation;
+                published_current = Some(target.control.inspect_terminal_chain_current(
+                    storage_contract::storage_readmission::ReadmissionRequest {
+                        operation_id: preparation.operation_id,
+                        slot_id: preparation.target.slot_id,
+                        expected_disk_id: preparation.target.disk_id,
+                    },
+                    &preparation.proposal_digest,
+                )?);
+                target.control.terminal_chain_readmission_status()?
+            }
             Action::PublishFirst { plan } => {
                 if plan.context != self.context
                     || plan.credential != target.credential_revision()?
@@ -133,6 +162,7 @@ impl crate::service_worker::Request for Request {
             plan,
             service_started: false,
             completed_readmission: false,
+            published_current,
         })
     }
 }
@@ -145,7 +175,8 @@ fn run(input: InventoryInput, action: Action) -> Result<Status> {
     let context = root.context.clone();
     if let Action::Synchronize { plan }
     | Action::PrepareFirst { plan }
-    | Action::PublishFirst { plan } = &action
+    | Action::PublishFirst { plan }
+    | Action::InspectPublished { plan } = &action
         && plan.context != context
     {
         return Err("chain target no longer matches its original host/account/layout".into());
@@ -208,5 +239,16 @@ pub(crate) fn publish_first(input: PublicationInput) -> Result<Status> {
             external_writers_stopped: input.external_writers_stopped,
         },
         Action::PublishFirst { plan: input.plan },
+    )
+}
+
+/// A real Current consumer, not an activation or request completion endpoint.
+pub(crate) fn inspect_current(input: CurrentInput) -> Result<Status> {
+    run(
+        InventoryInput {
+            service_user: input.service_user,
+            external_writers_stopped: input.external_writers_stopped,
+        },
+        Action::InspectPublished { plan: input.plan },
     )
 }

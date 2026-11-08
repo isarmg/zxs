@@ -40,7 +40,8 @@ pub use pending::terminal_resume::{
 };
 pub(crate) use terminal_chain::FirstSlotOwner;
 pub use terminal_chain::{
-    TerminalChainFirstPublication, TerminalChainReadmissionActivation,
+    TerminalChainFirstPublication, TerminalChainPublishedCurrent,
+    TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
     TerminalChainReadmissionPhase, TerminalChainReadmissionStatus,
 };
 pub use terminal_resume::{TerminalMetadataResumeAdmission, TerminalReadmissionPreview};

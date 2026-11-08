@@ -369,3 +369,60 @@ impl ExclusiveExit {
         Ok(status)
     }
 }
+
+impl ExclusiveExit {
+    /// Inspect the real published frozen Current while holding the original
+    /// stopped directory. Does not consume Stop or install an active Engine.
+    pub fn inspect_terminal_chain_current(
+        &mut self,
+        request: storage_contract::storage_readmission::ReadmissionRequest,
+        proposal_digest: &str,
+    ) -> Result<storage_engine::TerminalChainPublishedCurrentReport, ApiError> {
+        self.check()?;
+        let _owner = acquire_owner(&self.management)?;
+        require_settled(self.management.path())?;
+        let preparation = self
+            .terminal_chain_readmission_status()?
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    ErrorCode::RecoveryRequired,
+                    "published Current requires original completed Publication",
+                )
+            })?
+            .preparation;
+        if preparation.operation_id != request.operation_id
+            || preparation.proposal_digest != proposal_digest
+            || preparation.target.disk_id != request.expected_disk_id
+            || preparation.target.slot_id != request.slot_id
+            || preparation.principal != self.identity.principal
+        {
+            return Err(ApiError::conflict(
+                ErrorCode::GenerationMismatch,
+                "published Current differs from original selected source",
+            ));
+        }
+        self.auth.revalidate_identity(&self.identity)?;
+        let directory =
+            PrivateDirectory::open_existing(&preparation.target_root).map_err(storage_error)?;
+        let directory = platform_io::fs_safety::linux::OpenAt2Root::from_private_directory(
+            directory,
+            platform_io::fs_safety::linux::MountPolicy::SameMount,
+        )
+        .map_err(storage_error)?;
+        let terminal = self.retirement_owner()?;
+        let reader = terminal
+            .open_chain_published_current(
+                &self.identity.principal,
+                request.operation_id,
+                proposal_digest,
+                storage_engine::PendingMemberDirectory {
+                    disk_id: request.expected_disk_id,
+                    directory: directory.into_directory(),
+                },
+            )
+            .map_err(crate::engine_backend::error)?;
+        let report = reader.report().map_err(crate::engine_backend::error)?;
+        self.check()?;
+        Ok(report)
+    }
+}

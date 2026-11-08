@@ -248,19 +248,7 @@ impl Proposal {
                 "chain readmission changed original binding, stopped lifetime or configuration",
             ));
         }
-        let registry = TerminalRegistry::verify_checkpoint_readmission(
-            checkpoint,
-            &self.configuration,
-            &self.target,
-            &self.registry,
-            |kind, hash| self.read(kind, hash),
-        )?;
-        // Full inherited masks/hidden occurrences survive the registry change.
-        // The result is still a prepared view, never a CurrentNamespaces reader.
-        checkpoint
-            .namespaces()
-            .clone()
-            .continue_terminal_registry(checkpoint.registry(), &registry)?;
+        self.namespaces(checkpoint)?;
         Ok(())
     }
     fn read(&self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
@@ -332,6 +320,22 @@ impl Proposal {
         let checkpoint = self.source.verify(source)?;
         self.verify_projection(source, &checkpoint)?;
         Ok(checkpoint)
+    }
+    pub(in crate::engine) fn namespaces(
+        &self,
+        checkpoint: &VerifiedRetirementCheckpoint,
+    ) -> Result<crate::engine::disk_registry::current::PreparedCurrentNamespaces> {
+        let registry = TerminalRegistry::verify_checkpoint_readmission(
+            checkpoint,
+            &self.configuration,
+            &self.target,
+            &self.registry,
+            |kind, hash| self.read(kind, hash),
+        )?;
+        checkpoint
+            .namespaces()
+            .clone()
+            .continue_terminal_registry(checkpoint.registry(), &registry)
     }
     pub(in crate::engine) fn visit_registry_objects(
         &self,

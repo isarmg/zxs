@@ -29,6 +29,7 @@ mod plan_cancellation;
 mod recursive_follow;
 mod relocation;
 mod smb_bindings;
+mod terminal_chain;
 mod workspace;
 use crate::{
     BranchState, Commit, Entry, Error, ErrorCode, NamespaceEntryKind, NamespaceOperation, Result,

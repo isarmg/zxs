@@ -1786,3 +1786,219 @@ fn chain_publication_requires_exact_completed_inputs_before_selecting_publicatio
             .is_none()
     );
 }
+
+#[test]
+fn chain_published_current_reads_actual_projection_but_preserves_stop_and_live_state() {
+    let (fixture, operation, proposal, status) = published_chain_first_fixture();
+    let root = chain_first_target(&fixture, &status);
+    let journal = root.join("first-publication/journal.bin");
+    let prior_log = fs::read(&journal).unwrap();
+    let prior_seal = fs::read(fixture.config.disks[0].root.join("disk.json")).unwrap();
+    let branch_ids: Vec<_> = fixture.terminal.state().branches.keys().cloned().collect();
+    let directory_ids: Vec<_> = fixture
+        .terminal
+        .state()
+        .directory_branches
+        .keys()
+        .cloned()
+        .collect();
+    let directory = retained_chain_directory(&fixture);
+    let reader = fixture
+        .terminal
+        .open_chain_published_current(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let report = reader.report().unwrap();
+    assert_eq!(report.registry, status.preparation.proposed_registry);
+    assert_eq!(
+        report.publication_hash,
+        status.publication.as_ref().unwrap().publication_hash
+    );
+    assert_eq!(
+        report.sequence,
+        status.activation.as_ref().unwrap().sequence
+    );
+    assert_eq!(report.file_branch_count, branch_ids.len());
+    assert!(report.frozen_namespace_admitted);
+    assert!(report.target_reverified_this_call);
+    assert!(!report.active_engine_admitted);
+    assert!(!report.target_writer_admitted);
+    assert!(!report.stop_consumed);
+    let mut files = 0_u64;
+    for branch in branch_ids {
+        files += reader.branch_entries(&branch).unwrap().len() as u64;
+    }
+    let mut directories = 0_u64;
+    for branch in directory_ids {
+        directories += reader.directory_entries(&branch).unwrap().len() as u64;
+    }
+    assert_eq!(report.visible_file_branch_entries, files);
+    assert_eq!(report.visible_directory_branch_entries, directories);
+    assert_eq!(
+        reader.branch_entries("absent").unwrap_err().code(),
+        ErrorCode::NotFound
+    );
+    drop(reader);
+    assert_eq!(fs::read(journal).unwrap(), prior_log);
+    assert_eq!(
+        fs::read(fixture.config.disks[0].root.join("disk.json")).unwrap(),
+        prior_seal
+    );
+    assert!(fixture.terminal.operation(operation).is_none());
+    assert!(fixture.terminal.writer_locks().is_err());
+    assert!(
+        !fixture.config.disks[0]
+            .root
+            .join("metadata/membership-generations")
+            .join(report.core_hash)
+            .exists()
+    );
+}
+
+#[test]
+fn chain_published_current_never_promotes_prepared_candidate_or_repairs_missing_log() {
+    let (fixture, operation, proposal, status) = prepare_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .open_chain_published_current(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    let root = chain_first_target(&fixture, &status);
+    assert!(!root.join("first-publication").exists());
+    drop(fixture);
+    let (fixture, operation, proposal, status) = published_chain_first_fixture();
+    let root = chain_first_target(&fixture, &status);
+    let journal = root.join("first-publication/journal.bin");
+    fs::remove_file(&journal).unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .open_chain_published_current(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(!journal.exists());
+    assert!(fixture.terminal.operation(operation).is_none());
+}
+
+#[test]
+fn chain_published_current_has_no_source_only_fallback_and_reopens_original_cold_target() {
+    let (fixture, operation, proposal, status) = published_chain_first_fixture();
+    let system = fixture.system();
+    let root = fixture.config.disks[0].root.clone();
+    let disk_id = fixture.config.disks[0].disk_id.clone();
+    drop(fixture.terminal);
+    fs::rename(&root, root.with_extension("published-current-held")).unwrap();
+    fs::write(&root, b"not the selected original directory").unwrap();
+    let cold = TerminalManagement::open(&system).unwrap();
+    assert_eq!(
+        cold.chain_readmission_status().unwrap().unwrap().phase,
+        crate::TerminalChainReadmissionPhase::FirstPublicationPreserved
+    );
+    assert!(
+        cold.open_chain_published_current(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id: disk_id.clone(),
+                directory: fs::File::open(root.with_extension("published-current-held")).unwrap(),
+            },
+        )
+        .is_err()
+    );
+    fs::remove_file(&root).unwrap();
+    fs::rename(root.with_extension("published-current-held"), &root).unwrap();
+    let reader = cold
+        .open_chain_published_current(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id,
+                directory: fs::File::open(&root).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        reader.report().unwrap().seal_hash,
+        status.publication.unwrap().seal_hash
+    );
+    drop(reader);
+    assert!(cold.operation(operation).is_none());
+    drop(cold);
+    assert!(Engine::open(&system).is_err());
+}
+
+#[test]
+fn chain_published_current_rejects_changed_native_inputs_without_overwriting_them() {
+    let (fixture, operation, proposal, status) = published_chain_first_fixture();
+    let root = chain_first_target(&fixture, &status);
+    let path = chain_first_object(&root, "snapshot", &status.activation.unwrap().snapshot_hash);
+    fs::write(&path, b"damaged actual native snapshot").unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .open_chain_published_current(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read(path).unwrap(), b"damaged actual native snapshot");
+    assert!(fixture.terminal.operation(operation).is_none());
+}
+
+#[test]
+fn chain_published_current_holds_exact_target_and_rejects_other_actor() {
+    let (fixture, operation, proposal, _) = published_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .open_chain_published_current(
+                "other",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    let directory = retained_chain_directory(&fixture);
+    let reader = fixture
+        .terminal
+        .open_chain_published_current(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let root = fixture.config.disks[0].root.clone();
+    fs::rename(&root, root.with_extension("reader-held")).unwrap();
+    fs::create_dir(&root).unwrap();
+    assert!(reader.report().is_err());
+    assert!(reader.branch_entries("absent").is_err());
+    drop(reader);
+    fs::remove_dir(&root).unwrap();
+    fs::rename(root.with_extension("reader-held"), &root).unwrap();
+}

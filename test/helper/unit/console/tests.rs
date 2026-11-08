@@ -727,6 +727,7 @@ async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown(
         "/api/disks/terminal-chain-target-synchronize",
         "/api/disks/terminal-chain-first-prepare",
         "/api/disks/terminal-chain-first-publish",
+        "/api/disks/terminal-chain-current",
     ] {
         let mut request = post(path, json!({}));
         request
@@ -876,6 +877,30 @@ async fn chain_publication_rejects_unselected_recipe_and_unsupported_activation_
                 .unwrap()
                 .status(),
             StatusCode::BAD_REQUEST
+        );
+    }
+}
+
+#[test]
+fn chain_current_input_rejects_caller_authority_or_activation_overrides() {
+    for field in [
+        "publication",
+        "seal",
+        "state",
+        "registry",
+        "force",
+        "consume_stop",
+        "new_epoch",
+        "root",
+        "foreign_chain",
+    ] {
+        let mut value = json_codec::json!({
+            "service_user":"zxs", "external_writers_stopped":true, "plan":{}
+        });
+        value[field] = true.into();
+        assert!(
+            json_codec::from_value::<crate::disk_removal::chain_target::CurrentInput>(value)
+                .is_err()
         );
     }
 }
