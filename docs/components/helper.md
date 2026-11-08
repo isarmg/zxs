@@ -214,3 +214,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 终态逐笔移除与原结果
 
 首笔入口现可在上一笔确实完成后重新读取剩余登记，逐笔预览/确认；中断时只继续该根计划的原操作。既有 Stop 的 Disabled 绑定可在核心核对原权威与 epoch 后移除，不把 Disabled 状态本身当证明。父链原完成、子链原未决可同时展示，历史任一原摘要都核准确永久结果。仍不支持 metadata resume/活动存储恢复、取消、外来正式接纳或完整就绪；缺根/证明、坏前驱或孤立目录均拒绝并保留。源码未验证，见[逐笔链](../design/terminal-retirement-chain.md)。
+
+## 终态原结果的命名空间证明
+
+原独立 Web 的逐笔移除/续作现由核心强制核完整 mask 和准确 Detached successor，原永久结果显示 mask hash 与 namespace_projection_verified。预览只告知这一必需条件，不是准备完成；所有 metadata/活动存储恢复标志仍 false。无新登录、自启或实际系统操作，无编译/测试/审查/CI，见[边界](../design/terminal-retirement-namespace-closure.md)。

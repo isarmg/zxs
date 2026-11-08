@@ -6,6 +6,7 @@ use super::bootstrap::{
     IntentDigest,
     runtime::{management_error, open_store},
 };
+use crate::engine::disk_registry::current::PreparedCurrentNamespaces;
 use crate::{
     DiskRegistrationIdentity, Engine, Error, ErrorCode, MembershipControlArchive,
     MembershipExitAction, OperationId, OperationResult, RegisteredDisk, Result, State,
@@ -56,6 +57,7 @@ pub struct TerminalManagement {
     retirement_completion: Option<retirement::Completed>,
     retirement_history: Vec<retirement::HistoricalCompleted>,
     retirement_base_registry: Option<TerminalRegistry>,
+    retirement_base_namespaces: PreparedCurrentNamespaces,
     retirement_directory: Option<DiskRoot>,
     _locks: WriterLocks,
     _target_stop: RecoveredDiskIo,
@@ -237,8 +239,9 @@ impl TerminalManagement {
         )?;
         let mut management = Self {
             store,
-            verified,
             retirement_base_state: Arc::clone(&state),
+            retirement_base_namespaces: verified.namespaces.clone(),
+            verified,
             retirement_completion: None,
             retirement_history: Vec::new(),
             retirement_base_registry: None,

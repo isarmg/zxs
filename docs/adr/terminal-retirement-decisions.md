@@ -19,3 +19,7 @@
 仍没有取消能力；调用 staging 只允许同原决定完成，不能另选请求。即使首笔完成，也持续阻断 metadata resume，直到后继注册/命名空间消费者完成。因此直接 staging 只供明确的原生集成者使用，不能作为普通设置隐式调用，也不能在用户只请求检查时创建。拒绝了直接改列表、保存 helper 意图后返回完成、借旧终态 authority 伪造后继，以及无条件清文件/换编号重试。
 
 最终移除仍须保存历史定义与正文，并正确处理剩余 registry、旧引用、Stop、冷恢复和 metadata resume 的防复活闭包。这个选择不授权物理擦除，也不代替外来备份盘一次完整低级链接纳所需的最终 writer。
+
+## 终态命名空间准备闭包
+
+逐笔 successor 现必须携带完整 occurrence mask 与准确 DetachedBinding，并从原归档/前笔准备态冷重建；它不成为活动 namespace。metadata resume 新 authority 尚未消费整链，全部既有阻断保留。旧无 mask successor 拒绝保留，不增加兼容。见[实现与未完成 readmission](../design/terminal-retirement-namespace-closure.md)。本片未审查/编译/测试/CI。

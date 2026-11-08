@@ -284,3 +284,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### Backup 目标公共 Publication 与离线原证据续存
 
 后台原任务在真实首笔出版之后，将同一 native Publication/seal 无覆盖存入所有选定目标，包含零 AVAILABLE 历史；全部本地正文、原 CommitProof/local proof 和候选依赖读回后到 `GenerationFirstPublicationRetained`。新增 `inspect_backup_target_publication`；独立保存 decision 与 `BackupFirstPublicationHash` 的 `BackupDecidedTargets` 可验读、范围恢复或显式续存原公共证据，不访问旧源/SYSTEM，也不补造缺票。没有完整公共见证则要求原任务恢复，任一冲突/损坏保留拒绝。仍无活动 Config/CurrentRegistry、目标 writer、源解围栏或正式 H03 接纳。见[目标公共出版闭包](../design/backup-native-generation-authority.md#backup-target-publication)。未审查、编译、测试或 CI。
+
+## 终态移除的 namespace 准备证明
+
+每笔管理 successor 必需完整 occurrence mask/Detached 分区，原 terminal archive 解析保留未激活投影，随后逐笔来源匹配/语义核对/Stop/D3/永久结果冷重建。准备态保留既有隐藏项、身份和不可用版本，不安装活动 Engine 或取消 resume 门禁。旧无 mask successor 拒绝，缺页/错误来源不自动补空。源码未审查/编译/测试/CI，见[闭包](../design/terminal-retirement-namespace-closure.md)。

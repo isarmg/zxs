@@ -507,3 +507,68 @@ fn unrelated_terminal_child_is_not_adopted_as_another_registration_decision() {
     assert!(TerminalManagement::open(&root).is_err());
     assert!(Engine::open(&root).is_err());
 }
+
+#[test]
+fn completed_retirement_requires_its_mask_graph_during_cold_open() {
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    let result = fixture
+        .terminal
+        .complete_terminal_retirement(&plan)
+        .unwrap();
+    assert_eq!(result.result["namespace_projection_verified"], true);
+    assert_eq!(result.result["active_namespace_admitted"], false);
+    assert_eq!(result.result["metadata_resumption_supported"], false);
+    let mask = result.result["occurrence_mask_hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let successor = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join(completion::SUCCESSOR);
+    let root = fixture.system();
+    drop(fixture.terminal);
+    let mut body: json_codec::Value =
+        json_codec::from_slice(&fs::read(&successor).unwrap()).unwrap();
+    assert!(
+        body["objects"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&mask)
+            .is_some()
+    );
+    let corrupt = json_codec::to_vec(&body).unwrap();
+    fs::write(&successor, &corrupt).unwrap();
+    assert!(TerminalManagement::open(&root).is_err());
+    assert!(Engine::open(&root).is_err());
+    assert_eq!(fs::read(&successor).unwrap(), corrupt);
+}
+
+#[test]
+fn unmasked_retirement_successor_is_rejected_without_implicit_upgrade() {
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&plan)
+        .unwrap();
+    let successor = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join(completion::SUCCESSOR);
+    let root = fixture.system();
+    drop(fixture.terminal);
+    let mut body: json_codec::Value =
+        json_codec::from_slice(&fs::read(&successor).unwrap()).unwrap();
+    body.as_object_mut().unwrap().remove("occurrence_mask_hash");
+    body["format"] = json_codec::json!("terminal-registration-retirement");
+    let unmasked = json_codec::to_vec(&body).unwrap();
+    fs::write(&successor, &unmasked).unwrap();
+    assert!(TerminalManagement::open(&root).is_err());
+    assert_eq!(fs::read(&successor).unwrap(), unmasked);
+}

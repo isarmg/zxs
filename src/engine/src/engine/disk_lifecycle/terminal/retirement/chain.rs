@@ -42,6 +42,19 @@ impl TerminalManagement {
             self.retirement_base_registry()
         }
     }
+    pub(super) fn namespaces_for_retirement_plan(
+        &self,
+        plan: &TerminalRetirementPlan,
+    ) -> &PreparedCurrentNamespaces {
+        if self.starts_new_retirement_frame(plan) {
+            self.retirement_completion
+                .as_ref()
+                .expect("invariant: next retirement has a held completed predecessor")
+                .namespaces()
+        } else {
+            &self.retirement_base_namespaces
+        }
+    }
     pub(super) fn validate_retirement_proposal(&self, plan: &TerminalRetirementPlan) -> Result<()> {
         if object_hash(DIGEST_KIND, &plan.intent)? != plan.digest {
             return Err(failure(
@@ -139,13 +152,14 @@ impl TerminalManagement {
         container.private_dir(&child_path)?;
         let child = container.private_child(&child_path)?;
         self.retirement_base_state = Arc::clone(&self.state);
-        let (registry, historical) = self
+        let completed = self
             .retirement_completion
             .take()
             .expect("invariant: verified next link has a held predecessor")
             .into_history();
-        self.retirement_base_registry = Some(registry);
-        self.retirement_history.push(historical);
+        self.retirement_base_registry = Some(completed.registry);
+        self.retirement_base_namespaces = completed.namespaces;
+        self.retirement_history.push(completed.historical);
         self.retirement_directory = Some(child);
         // The parent link contains all bytes needed after any child creation
         // interruption; no helper JSON or scan of unknown directories is used.

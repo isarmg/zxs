@@ -9,21 +9,21 @@ pub struct TerminalRegistry {
 }
 
 impl TerminalRegistry {
-    // A no-voter successor, not a serving occurrence-mask publication.
+    // A no-voter successor binds exact occurrence removal, but is not serving authority.
     pub(in crate::engine) fn prepare_management_retirement(
         &self,
-        identity: &DiskRegistrationIdentity,
+        request: RegistryExitRequest,
     ) -> Result<PreparedDiskRegistry> {
-        encode_registry(self.retirement_state(identity)?)
+        encode_registry(self.retirement_state(request)?)
     }
     pub(in crate::engine) fn verify_management_retirement(
         &self,
-        identity: &DiskRegistrationIdentity,
+        request: RegistryExitRequest,
         expected: &DiskRegistryCommitment,
         read: impl FnMut(&'static str, &str) -> Result<Vec<u8>>,
     ) -> Result<Self> {
         let loaded = load_registry(expected, read)?;
-        if loaded != self.retirement_state(identity)? {
+        if loaded != self.retirement_state(request)? {
             return Err(invalid(
                 "terminal retirement changes more than its exact registration",
             ));
@@ -36,15 +36,21 @@ impl TerminalRegistry {
             retired_in_management: true,
         })
     }
-    fn retirement_state(&self, identity: &DiskRegistrationIdentity) -> Result<RegistryState> {
-        self.verified.require_identity(identity)?;
+    fn retirement_state(&self, request: RegistryExitRequest) -> Result<RegistryState> {
+        request.validate()?;
+        self.verified.require_identity(&request.target)?;
+        if !matches!(request.effect, RegistryExitEffect::Detach { .. }) {
+            return Err(invalid(
+                "terminal retirement requires an exact occurrence mask",
+            ));
+        }
         if !self.verified.state.voters.is_empty() || self.verified.state.pending_exit.is_none() {
             return Err(invalid(
                 "retirement requires the exact no-voter terminal registry",
             ));
         }
         let mut next = self.verified.state.clone();
-        if next.registrations.remove(&identity.disk_id).is_none() {
+        if next.registrations.remove(&request.target.disk_id).is_none() {
             return Err(invalid("terminal retirement target is not registered"));
         }
         next.predecessor = Some(self.commitment().clone());
@@ -52,14 +58,22 @@ impl TerminalRegistry {
             .view_generation
             .checked_add(1)
             .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "registry generation exhausted"))?;
-        // Keep historical definitions, earlier masks and the final-voter intent.
-        // No invented detach mask is made consumable by an active namespace.
+        next.detached.insert(
+            request.target.disk_id.clone(),
+            DetachedBinding {
+                predecessor: self.commitment().clone(),
+                request,
+                view_generation: next.view_generation,
+            },
+        );
+        // The original terminal intent still owns the no-voter boundary. Each
+        // later detached binding independently names its exact operation/mask.
         Ok(next)
     }
     pub(in crate::engine) fn require_resumable(&self) -> Result<()> {
         if self.retired_in_management {
             return Err(invalid(
-                "management retirement successor lacks an active namespace/readmission consumer",
+                "management retirement successor has no admitted readmission generation",
             ));
         }
         Ok(())

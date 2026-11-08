@@ -41,3 +41,7 @@ D3 在这里仅表示该 no-voter 管理登记/永久结果的最终发布，**�
 一次提交新增三份有界 SYSTEM envelope（successor、stop plan、completion），保留既有两份选择和 bootstrap record/head file+directory fsync；没有删减持久化屏障。registry 图和业务 State 在管理边界克隆/编码，成本随登记/历史状态增长，过大则在首个 native intent 前拒绝；不是文件热路径性能优化。冷读保留原控制归档全量认证和 locator 链校验成本。没有测量或吞吐结论。
 
 新增测试**源码**覆盖首笔真实完成、冷态原结果/重复执行、目标路径替换仍不探测、历史定义保留、Stop 后最终 marker 缺失续作、缺 Stop 的伪完成拒绝，以及第二笔/metadata resume 拒绝。全部未运行；不代表组合、掉电、真实设备、服务身份或浏览器通过。
+
+## occurrence-mask 后继
+
+当前 successor 已改为必需的 masked-registry 格式，并在原执行与冷恢复路径消费完整命名空间准备闭包；早期仅登记的形状不作兼容或升级。仍不是活动 namespace 或 readmission 授权，见[当前边界](terminal-retirement-namespace-closure.md)。

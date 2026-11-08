@@ -28,7 +28,7 @@ helper 复用既有三项 terminal-retirement 接口和原根计划，只有当�
 
 ## 仍然关闭的边界
 
-当前 registry successor 只表达管理登记，保留历史但没有可供 active namespace 消费的新 occurrence-mask/history 闭包。fresh/retained metadata resume 和 readmission 仍拒绝，不能从旧 Config 复活已移除盘。没有取消、擦除、格式化、卸载或失败自动回滚。损坏祖先证据不是可自动恢复的正常掉电窗口。
+本片后继已为每笔 registry successor 补齐[命名空间准备闭包](terminal-retirement-namespace-closure.md)，包括完整 occurrence mask 和 Detached 分区；这仍没有 active namespace/新 resume authority 消费。fresh/retained metadata resume 和 readmission 仍拒绝，不能从旧 Config 复活已移除盘。没有取消、擦除、格式化、卸载或失败自动回滚。损坏祖先证据不是可自动恢复的正常掉电窗口。
 
 备份当前虽已有原成员首笔 Publication/seal 和逐路 CommitProof 源码，仍没有可安全激活的目标 Config/Current/serving locator/target writer 或源解围栏公开 API。因此外来二级及以上盘的完整低级链正式接纳仍拒绝，不借普通 Add、此管理链、材料或布尔意图返回成功。H03 未完成。
 

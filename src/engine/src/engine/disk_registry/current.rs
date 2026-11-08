@@ -98,6 +98,7 @@ pub(crate) struct CurrentNamespaces {
     pub(in crate::engine::disk_registry) recursive_policies: Arc<recursive_follow::PolicyIndex>,
 }
 
+#[derive(Clone)]
 pub(in crate::engine) struct PreparedCurrentNamespaces {
     pub(in crate::engine::disk_registry) view: CurrentNamespaces,
 }

@@ -19,6 +19,7 @@ use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod continuation;
+mod terminal_retirement;
 
 const MASK_KIND: &str = "disk-occurrence-mask";
 

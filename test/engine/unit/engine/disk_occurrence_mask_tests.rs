@@ -355,6 +355,206 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     out
 }
 
+fn terminal_fixture() -> (tempfile::TempDir, Engine, VerifiedDiskRegistry) {
+    let mut frozen = Fixture::new();
+    frozen
+        .state
+        .repositories
+        .get_mut(&id("repo", 1))
+        .unwrap()
+        .primary_slot_id = "D04".into();
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = (*frozen.config).clone();
+    for (n, disk) in config.disks.iter_mut().enumerate() {
+        disk.root = temp.path().join(format!("retirement-{n}"));
+        disk.metadata_member = n == 0;
+    }
+    let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
+    engine.state = Arc::new(frozen.state);
+    engine.snapshot = Some(
+        crate::journal::prepare_snapshot(&engine.state, MAX_METADATA)
+            .unwrap()
+            .hash,
+    );
+    let base = registry(&engine.prepare_disk_registry_base().unwrap());
+    (temp, engine, base)
+}
+
+fn terminal_request(
+    base: &VerifiedDiskRegistry,
+    slot: &str,
+    mask: &str,
+    operation: usize,
+) -> RegistryExitRequest {
+    RegistryExitRequest {
+        target: target(base, slot),
+        operation_id: id("op", operation).parse().unwrap(),
+        principal: "admin".into(),
+        request_digest: "1".repeat(64),
+        intent_hash: "2".repeat(64),
+        effect: RegistryExitEffect::Detach {
+            occurrence_mask_hash: mask.into(),
+        },
+    }
+}
+
+#[test]
+fn terminal_retirement_masks_preserve_earlier_removals_until_last_registered_holder_leaves() {
+    let (_temp, engine, base) = terminal_fixture();
+    let frozen = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let mask = frozen.prepare_mask().unwrap();
+    let mask_objects = objects(&mask);
+    let prepared = base
+        .prepare_terminal_exit(terminal_request(&base, "P01", mask.hash(), 30))
+        .unwrap();
+    let registry_objects: Objects = prepared
+        .objects()
+        .map(|(kind, hash, bytes)| ((kind.into(), hash.into()), bytes.to_vec()))
+        .collect();
+    let mut terminal = base
+        .verify_terminal_successor(prepared.commitment(), |kind, hash| {
+            read(&registry_objects, kind, hash)
+        })
+        .unwrap();
+    let mut namespaces = frozen
+        .verify_mask(mask.hash(), |kind, hash| read(&mask_objects, kind, hash))
+        .unwrap()
+        .prepare_current_namespaces(terminal.verified_registry())
+        .unwrap();
+    let original_entries = engine.state.commits[&id("commit", 1)].entries.clone();
+
+    for (number, slot) in [(31, "B01"), (32, "C01")] {
+        let source = FrozenDetachSource::capture_terminal(
+            &engine.state,
+            &engine.config,
+            &terminal,
+            &namespaces,
+            &target(&base, slot),
+        )
+        .unwrap();
+        let mask = source.prepare_mask().unwrap();
+        let mask_objects = objects(&mask);
+        let request = terminal_request(&base, slot, mask.hash(), number);
+        let prepared = terminal
+            .prepare_management_retirement(request.clone())
+            .unwrap();
+        let registry_objects: Objects = prepared
+            .objects()
+            .map(|(kind, hash, bytes)| ((kind.into(), hash.into()), bytes.to_vec()))
+            .collect();
+        let next = terminal
+            .verify_management_retirement(request, prepared.commitment(), |kind, hash| {
+                read(&registry_objects, kind, hash)
+            })
+            .unwrap();
+        let next_namespaces = source
+            .verify_mask(mask.hash(), |kind, hash| read(&mask_objects, kind, hash))
+            .unwrap()
+            .prepare_terminal_retirement_namespaces(&next)
+            .unwrap();
+        let entries = next_namespaces
+            .view
+            .branch_entries(&id("br", 1), &id("commit", 1))
+            .unwrap();
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !matches!(entry.path(), "a" | "c"))
+        );
+        assert_eq!(
+            entries.iter().any(|entry| entry.path() == "dir/b"),
+            slot == "B01"
+        );
+        assert!(next.require_resumable().is_err());
+        assert_eq!(
+            next.verified_registry().state.detached.len(),
+            if slot == "B01" { 2 } else { 3 }
+        );
+        terminal = next;
+        namespaces = next_namespaces;
+    }
+    assert_eq!(
+        engine.state.commits[&id("commit", 1)].entries,
+        original_entries
+    );
+    assert_eq!(namespaces.view.branches[&id("br", 1)].hidden_paths.len(), 3);
+    assert!(namespaces.view.known_files.contains(&id("file", 1)));
+    assert!(namespaces.view.unavailable_versions.contains(&id("ver", 2)));
+    assert_eq!(terminal.registered_disks().len(), 1);
+}
+
+#[test]
+fn terminal_retirement_mask_cannot_use_a_predecessor_or_rehashed_omission_as_current_namespace() {
+    let (_temp, engine, base) = terminal_fixture();
+    let frozen = FrozenDetachSource::capture(&engine, &base, &target(&base, "P01")).unwrap();
+    let mask = frozen.prepare_mask().unwrap();
+    let mask_objects = objects(&mask);
+    let prepared = base
+        .prepare_terminal_exit(terminal_request(&base, "P01", mask.hash(), 40))
+        .unwrap();
+    let registry_objects: Objects = prepared
+        .objects()
+        .map(|(kind, hash, bytes)| ((kind.into(), hash.into()), bytes.to_vec()))
+        .collect();
+    let terminal = base
+        .verify_terminal_successor(prepared.commitment(), |kind, hash| {
+            read(&registry_objects, kind, hash)
+        })
+        .unwrap();
+    let namespaces = frozen
+        .verify_mask(mask.hash(), |kind, hash| read(&mask_objects, kind, hash))
+        .unwrap()
+        .prepare_current_namespaces(terminal.verified_registry())
+        .unwrap();
+    let source = FrozenDetachSource::capture_terminal(
+        &engine.state,
+        &engine.config,
+        &terminal,
+        &namespaces,
+        &target(&base, "B01"),
+    )
+    .unwrap();
+    let expected = source.prepare_mask().unwrap();
+    let request = terminal_request(&base, "B01", expected.hash(), 41);
+    let prepared = terminal
+        .prepare_management_retirement(request.clone())
+        .unwrap();
+    let registry_objects: Objects = prepared
+        .objects()
+        .map(|(kind, hash, bytes)| ((kind.into(), hash.into()), bytes.to_vec()))
+        .collect();
+    let next = terminal
+        .verify_management_retirement(request, prepared.commitment(), |kind, hash| {
+            read(&registry_objects, kind, hash)
+        })
+        .unwrap();
+    assert!(
+        FrozenDetachSource::capture_terminal(
+            &engine.state,
+            &engine.config,
+            &next,
+            &namespaces,
+            &target(&base, "C01")
+        )
+        .is_err()
+    );
+    let mut omitted = source.expected().unwrap();
+    omitted
+        .scopes
+        .remove(&NamespaceScope::Commit(id("commit", 1)).key().unwrap());
+    let forged = encode_mask(&omitted).unwrap();
+    let forged_objects = objects(&forged);
+    assert!(
+        source
+            .verify_mask(forged.hash(), |kind, hash| read(
+                &forged_objects,
+                kind,
+                hash
+            ))
+            .is_err()
+    );
+}
+
 #[test]
 fn membership_registry_occurrence_mixed_namespace_is_one_write_baseline() {
     let (_temp, engine, base) = fixture(true);

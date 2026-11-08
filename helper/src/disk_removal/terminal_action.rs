@@ -37,6 +37,7 @@ pub(crate) struct Preview {
     active_namespace_admitted: bool,
     metadata_resumption_supported: bool,
     another_terminal_retirement_supported: bool,
+    occurrence_mask_required: bool,
 }
 fn digest(plan: &Plan) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(json_codec::to_vec(plan)?)))
@@ -79,6 +80,7 @@ fn response(plan: Plan, original_result: Option<OperationResult>) -> Result<Prev
         active_namespace_admitted: false,
         metadata_resumption_supported: false,
         another_terminal_retirement_supported: true,
+        occurrence_mask_required: true,
     })
 }
 pub(crate) fn preview(input: Input) -> Result<Preview> {

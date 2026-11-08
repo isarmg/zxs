@@ -47,6 +47,8 @@ pub(in crate::engine) struct VerifiedTerminalAuthority {
     pub(in crate::engine) registry: TerminalRegistry,
     pub(in crate::engine) state: Arc<State>,
     pub(in crate::engine) history: BTreeMap<u64, String>,
+    pub(in crate::engine) namespaces:
+        crate::engine::disk_registry::current::PreparedCurrentNamespaces,
 }
 
 impl TerminalAuthority {
@@ -360,19 +362,23 @@ impl TerminalAuthority {
             ),
         }
         .map_err(projection_error)?;
-        if let RegistryExitEffect::Detach {
-            occurrence_mask_hash,
-        } = &request.effect
-        {
-            detach
+        let namespaces = match &request.effect {
+            RegistryExitEffect::Disable => {
+                detach.prepare_disabled_namespaces(registry.verified_registry())
+            }
+            RegistryExitEffect::Detach {
+                occurrence_mask_hash,
+            } => detach
                 .verify_mask(occurrence_mask_hash, |kind, hash| self.read(kind, hash))
-                .map_err(projection_error)?;
+                .and_then(|mask| mask.prepare_current_namespaces(registry.verified_registry())),
         }
+        .map_err(projection_error)?;
         Ok(VerifiedTerminalAuthority {
             authority: self,
             registry,
             state,
             history,
+            namespaces,
         })
     }
 }

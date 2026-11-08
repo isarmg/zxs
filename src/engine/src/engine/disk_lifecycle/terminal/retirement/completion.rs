@@ -1,9 +1,12 @@
-//! Exact sequential management-only registry successors. No active namespace or new
-//! voter is admitted, and no data pathname is touched, including during recovery.
+//! Exact sequential management-only registry and occurrence-mask successors.
+//! Prepared namespaces are not active. No target pathname is resolved in recovery.
 use super::*;
 mod stopped;
 use crate::{
-    disk::MAX_METADATA, engine::disk_lifecycle::bootstrap::store::PreparedStop,
+    RegistryExitEffect, RegistryExitRequest,
+    disk::MAX_METADATA,
+    engine::disk_lifecycle::bootstrap::store::PreparedStop,
+    engine::disk_registry::published::occurrence::{FrozenDetachSource, ProjectionError},
     journal::PreparedMetadataObject,
 };
 use std::collections::BTreeMap;
@@ -14,19 +17,29 @@ pub(super) const STOP: &str = "retirement-stop.json";
 pub(super) const COMPLETE: &str = "retirement-complete.json";
 const SUCCESSOR_KIND: &str = "terminal-retirement-registry-successor";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct GraphObject {
     kind: String,
     value: json_codec::Value,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+enum SuccessorFormat {
+    #[serialization(rename = "terminal-retirement-masked-registry")]
+    MaskedRegistry,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Successor {
-    format: Format,
+    format: SuccessorFormat,
     intent_digest: String,
     registry: DiskRegistryCommitment,
+    occurrence_mask_hash: String,
     objects: BTreeMap<String, GraphObject>,
+}
+struct VerifiedSuccessor {
+    registry: TerminalRegistry,
+    namespaces: PreparedCurrentNamespaces,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -46,6 +59,7 @@ struct Completion {
 
 pub(in crate::engine::disk_lifecycle::terminal) struct Completed {
     pub(in crate::engine::disk_lifecycle::terminal) registry: TerminalRegistry,
+    namespaces: PreparedCurrentNamespaces,
     result: OperationResult,
     principal: String,
     plan: TerminalRetirementPlan,
@@ -169,24 +183,46 @@ impl TerminalManagement {
                 .io_admission_epoch(&plan.target().disk_id)?,
         })
     }
+    fn retirement_namespace_source<'a>(
+        &'a self,
+        plan: &TerminalRetirementPlan,
+    ) -> Result<FrozenDetachSource<'a>> {
+        FrozenDetachSource::capture_terminal(
+            &self.verified.state,
+            self.original_configuration(),
+            self.registry_for_retirement_plan(plan),
+            self.namespaces_for_retirement_plan(plan),
+            plan.target(),
+        )
+        .map_err(projection_error)
+    }
     fn prepare_retirement_successor(&self, plan: &TerminalRetirementPlan) -> Result<Successor> {
+        let source = self.retirement_namespace_source(plan)?;
+        let mask = source.prepare_mask().map_err(projection_error)?;
         let prepared = self
             .registry_for_retirement_plan(plan)
-            .prepare_management_retirement(plan.target())?;
+            .prepare_management_retirement(registry_request(plan, mask.hash()))?;
         let mut objects = BTreeMap::new();
-        for (kind, hash, bytes) in prepared.objects() {
-            objects.insert(
-                hash.to_owned(),
-                GraphObject {
-                    kind: kind.into(),
-                    value: crate::decode_strict(bytes)?,
-                },
-            );
+        for (kind, hash, bytes) in prepared.objects().chain(mask.objects()) {
+            let object = GraphObject {
+                kind: kind.into(),
+                value: crate::decode_strict(bytes)?,
+            };
+            if objects
+                .insert(hash.to_owned(), object.clone())
+                .is_some_and(|old| old != object)
+            {
+                return Err(failure(
+                    ErrorCode::LogFork,
+                    "terminal successor object collision",
+                ));
+            }
         }
         let successor = Successor {
-            format: Format::Retirement,
+            format: SuccessorFormat::MaskedRegistry,
             intent_digest: plan.digest.clone(),
             registry: prepared.commitment().clone(),
+            occurrence_mask_hash: mask.hash().into(),
             objects,
         };
         successor.hash()?; // Bound the complete immutable envelope before staging.
@@ -196,7 +232,7 @@ impl TerminalManagement {
         &self,
         plan: &TerminalRetirementPlan,
         successor: &Successor,
-    ) -> Result<TerminalRegistry> {
+    ) -> Result<VerifiedSuccessor> {
         if successor.intent_digest != plan.digest {
             return Err(failure(
                 ErrorCode::LogFork,
@@ -204,10 +240,31 @@ impl TerminalManagement {
             ));
         }
         successor.hash()?;
-        self.retirement_base_registry()
-            .verify_management_retirement(plan.target(), &successor.registry, |kind, hash| {
+        let registry = self
+            .retirement_base_registry()
+            .verify_management_retirement(
+                registry_request(plan, &successor.occurrence_mask_hash),
+                &successor.registry,
+                |kind, hash| successor.read(kind, hash),
+            )?;
+        let source = FrozenDetachSource::capture_terminal(
+            &self.verified.state,
+            self.original_configuration(),
+            self.retirement_base_registry(),
+            &self.retirement_base_namespaces,
+            plan.target(),
+        )
+        .map_err(projection_error)?;
+        let namespaces = source
+            .verify_mask(&successor.occurrence_mask_hash, |kind, hash| {
                 successor.read(kind, hash)
             })
+            .and_then(|mask| mask.prepare_terminal_retirement_namespaces(&registry))
+            .map_err(projection_error)?;
+        Ok(VerifiedSuccessor {
+            registry,
+            namespaces,
+        })
     }
     fn retirement_result_for(
         &self,
@@ -248,6 +305,8 @@ impl TerminalManagement {
                 "binding_generation":plan.target().binding_generation.to_string(),
                 "registration":"detached", "target_io":"closed", "active_metadata_members":0,
                 "topology_generation":topology.to_string(), "registry":successor.registry,
+                "occurrence_mask_hash":successor.occurrence_mask_hash,
+                "namespace_projection_verified":true,
                 "active_namespace_admitted":false, "metadata_resumption_supported":false,
             }),
         })
@@ -449,7 +508,7 @@ impl TerminalManagement {
         })?;
         let plan = &pending.plan;
         let source = self.selected_retirement(plan)?;
-        let registry = self.verify_retirement_successor(plan, &successor)?;
+        let verified = self.verify_retirement_successor(plan, &successor)?;
         let Some(stop) = self.verify_retirement_stop_material(plan, &successor, &source)? else {
             if complete.is_some() {
                 return Err(failure(
@@ -476,7 +535,8 @@ impl TerminalManagement {
             ));
         }
         Ok(Some(Completed {
-            registry,
+            registry: verified.registry,
+            namespaces: verified.namespaces,
             completion_hash: object_hash("terminal-retirement-completion", &complete)?,
             result: complete.result,
             principal: plan.principal().into(),
@@ -517,6 +577,9 @@ impl Completed {
     pub(super) fn hash(&self) -> &str {
         &self.completion_hash
     }
+    pub(super) fn namespaces(&self) -> &PreparedCurrentNamespaces {
+        &self.namespaces
+    }
 }
 
 /// Historical outcome and its live exclusion, without retaining another full
@@ -534,15 +597,42 @@ impl HistoricalCompleted {
         &self.result
     }
 }
+pub(super) struct CompletedPredecessor {
+    pub(super) registry: TerminalRegistry,
+    pub(super) namespaces: PreparedCurrentNamespaces,
+    pub(super) historical: HistoricalCompleted,
+}
 impl Completed {
-    pub(super) fn into_history(self) -> (TerminalRegistry, HistoricalCompleted) {
-        (
-            self.registry,
-            HistoricalCompleted {
+    pub(super) fn into_history(self) -> CompletedPredecessor {
+        CompletedPredecessor {
+            registry: self.registry,
+            namespaces: self.namespaces,
+            historical: HistoricalCompleted {
                 plan: self.plan,
                 result: self.result,
                 _stop: self._stop,
             },
-        )
+        }
     }
+}
+fn registry_request(
+    plan: &TerminalRetirementPlan,
+    occurrence_mask_hash: &str,
+) -> RegistryExitRequest {
+    RegistryExitRequest {
+        target: plan.target().clone(),
+        operation_id: plan.operation_id(),
+        principal: plan.principal().into(),
+        request_digest: plan.digest().into(),
+        intent_hash: plan.digest().into(),
+        effect: RegistryExitEffect::Detach {
+            occurrence_mask_hash: occurrence_mask_hash.into(),
+        },
+    }
+}
+fn projection_error(error: ProjectionError) -> Error {
+    Error::from(std::io::Error::other(error)).context(
+        ErrorCode::PublicationInvalid,
+        "terminal retirement must preserve the complete inherited namespace and exact occurrence removal",
+    )
 }
