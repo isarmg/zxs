@@ -184,3 +184,77 @@ impl ExclusiveExit {
         Ok(proposal)
     }
 }
+
+impl ExclusiveExit {
+    pub fn terminal_chain_readmission_status(
+        &self,
+    ) -> Result<Option<storage_engine::TerminalChainReadmissionStatus>, ApiError> {
+        let status = self
+            .retirement_owner()?
+            .chain_readmission_status()
+            .map_err(crate::engine_backend::error)?;
+        if status
+            .as_ref()
+            .is_some_and(|s| s.preparation.principal != self.identity.principal)
+        {
+            return Err(ApiError::forbidden());
+        }
+        self.check()?;
+        Ok(status)
+    }
+    /// Explicit preparation of the target's immutable choice, not a Completed
+    /// OperationResult. The main service stays unable to enter active storage.
+    pub fn synchronize_terminal_chain_readmission(
+        &mut self,
+        request: storage_contract::storage_readmission::ReadmissionRequest,
+        proposal_digest: &str,
+    ) -> Result<storage_engine::TerminalChainReadmissionStatus, ApiError> {
+        self.check()?;
+        let _owner = acquire_owner(&self.management)?;
+        require_settled(self.management.path())?;
+        let preparation = match self.terminal_chain_readmission_status()? {
+            Some(status) => status.preparation,
+            None => self
+                .prepare_terminal_chain_readmission(request.clone())?
+                .preparation()
+                .clone(),
+        };
+        if preparation.operation_id != request.operation_id
+            || preparation.proposal_digest != proposal_digest
+            || preparation.target.disk_id != request.expected_disk_id
+            || preparation.target.slot_id != request.slot_id
+            || preparation.principal != self.identity.principal
+        {
+            return Err(ApiError::conflict(
+                ErrorCode::GenerationMismatch,
+                "chain readmission target selection differs from the original source proposal",
+            ));
+        }
+        self.auth.revalidate_identity(&self.identity)?;
+        // Resolve only the native-selected original pathname after the complete
+        // source comparison. Browser-supplied root paths never enter this step.
+        let directory =
+            PrivateDirectory::open_existing(&preparation.target_root).map_err(storage_error)?;
+        let directory = platform_io::fs_safety::linux::OpenAt2Root::from_private_directory(
+            directory,
+            platform_io::fs_safety::linux::MountPolicy::SameMount,
+        )
+        .map_err(storage_error)?;
+        let Source::Terminal(terminal) = &mut self.source else {
+            return Err(terminal_mutation_unavailable());
+        };
+        let status = terminal
+            .synchronize_chain_readmission_target(
+                &self.identity.principal,
+                request.operation_id,
+                proposal_digest,
+                storage_engine::PendingMemberDirectory {
+                    disk_id: request.expected_disk_id,
+                    directory: directory.into_directory(),
+                },
+            )
+            .map_err(crate::engine_backend::error)?;
+        self.check()?;
+        Ok(status)
+    }
+}

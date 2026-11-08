@@ -719,3 +719,86 @@ async fn chain_readmission_proposal_does_not_accept_force_or_foreign_roots() {
         StatusCode::CONFLICT
     );
 }
+
+#[tokio::test]
+async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown() {
+    for path in [
+        "/api/disks/terminal-chain-target-status",
+        "/api/disks/terminal-chain-target-synchronize",
+    ] {
+        let mut request = post(path, json!({}));
+        request
+            .headers_mut()
+            .insert("origin", "http://untrusted.invalid:9040".parse().unwrap());
+        assert_eq!(
+            http::router(state())
+                .oneshot(request)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let mut request = post(path, json!({}));
+        request.headers_mut().remove("x-zxs-helper-csrf");
+        assert_eq!(
+            http::router(state())
+                .oneshot(request)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let busy = state();
+        let permit = busy.jobs.clone().try_acquire_owned().unwrap();
+        assert_eq!(
+            http::router(busy)
+                .oneshot(post(path, json!({})))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        drop(permit);
+        let stopped = state();
+        stopped.stopping.send_replace(true);
+        assert_eq!(
+            http::router(stopped)
+                .oneshot(post(path, json!({})))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+}
+
+#[tokio::test]
+async fn chain_target_status_requires_stopped_writers_and_has_no_activate_parameter() {
+    let path = "/api/disks/terminal-chain-target-status";
+    let response = http::router(state())
+        .oneshot(post(
+            path,
+            json!({"service_user":"zxs","external_writers_stopped":false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    for field in [
+        "force",
+        "activate",
+        "root_path",
+        "foreign_chain",
+        "proposal",
+    ] {
+        let mut input = json!({"service_user":"zxs","external_writers_stopped":true});
+        input[field] = "untrusted".into();
+        assert_eq!(
+            http::router(state())
+                .oneshot(post(path, input))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+}

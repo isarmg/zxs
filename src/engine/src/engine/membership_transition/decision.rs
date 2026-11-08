@@ -50,6 +50,10 @@ enum Choice {
         core_hash: String,
         acceptance_hash: String,
     },
+    TerminalChainReadmission {
+        core_hash: String,
+        acceptance_hash: String,
+    },
     TerminalResumeCancel {
         core_hash: String,
         acceptance_hash: String,
@@ -93,6 +97,10 @@ impl DecisionRecord {
                 acceptance_hash,
             }
             | Choice::TerminalResumeCancel {
+                core_hash,
+                acceptance_hash,
+            }
+            | Choice::TerminalChainReadmission {
                 core_hash,
                 acceptance_hash,
             } => (core_hash, acceptance_hash),
@@ -1135,4 +1143,76 @@ fn backup_record(
             acceptance_hash: acceptance.into(),
         },
     })
+}
+
+// Disjoint from old TerminalResume: an original-terminal-only consumer cannot
+// treat this chain-bound selection as one of its own votes.
+fn terminal_chain_record(
+    transition: &str,
+    identity: &MemberIdentity,
+    core: &str,
+    acceptance: &str,
+) -> Result<DecisionRecord> {
+    validate_hash(transition)?;
+    validate_hash(core)?;
+    validate_hash(acceptance)?;
+    Ok(DecisionRecord {
+        format: DecisionFormat::Decision,
+        transition_hash: transition.into(),
+        identity: identity.clone(),
+        choice: Choice::TerminalChainReadmission {
+            core_hash: core.into(),
+            acceptance_hash: acceptance.into(),
+        },
+    })
+}
+impl DecisionReceipt {
+    pub(super) fn plan_terminal_chain(
+        transition: &str,
+        identity: &MemberIdentity,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<Self> {
+        let record = terminal_chain_record(transition, identity, core, acceptance)?;
+        Ok(Self {
+            record_hash: object_hash(DECISION_KIND, &record)?,
+            record,
+        })
+    }
+    pub(super) fn verify_terminal_chain(
+        &self,
+        transition: &str,
+        identity: &MemberIdentity,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<()> {
+        if self != &Self::plan_terminal_chain(transition, identity, core, acceptance)? {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "terminal chain target decision differs",
+            ));
+        }
+        Ok(())
+    }
+}
+impl DecisionStore {
+    pub(super) fn terminal_chain_receipt(
+        &self,
+        core: &str,
+        acceptance: &str,
+        install: bool,
+    ) -> Result<DecisionReceipt> {
+        let record = terminal_chain_record(
+            &self.binding.transition_hash,
+            &self.binding.identity,
+            core,
+            acceptance,
+        )?;
+        self.select(
+            &record,
+            install,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
+    }
 }

@@ -2,6 +2,7 @@
 //! retained bytes and historical registration definitions are not deleted.
 pub(crate) mod chain_archive;
 pub(crate) mod chain_readmission;
+pub(crate) mod chain_target;
 pub(crate) mod terminal;
 pub(crate) mod terminal_action;
 mod worker;

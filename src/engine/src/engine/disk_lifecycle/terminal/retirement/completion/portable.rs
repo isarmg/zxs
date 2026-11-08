@@ -311,6 +311,7 @@ impl TerminalManagement {
     /// Capture only the complete current chain. Unfinished links/operations fail;
     /// there is no prefix-as-latest fallback and no data-root open in this method.
     pub fn export_retirement_archive(&self) -> Result<TerminalRetirementArchive> {
+        self.require_no_chain_readmission()?;
         let (wire, _) = self.current_retirement_checkpoint()?;
         let object = PreparedMetadataObject::new(KIND, &wire, MAX_METADATA)?;
         Ok(TerminalRetirementArchive {
@@ -319,7 +320,7 @@ impl TerminalManagement {
         })
     }
 
-    pub(in crate::engine::disk_lifecycle::terminal) fn current_retirement_checkpoint(
+    pub(in crate::engine) fn current_retirement_checkpoint(
         &self,
     ) -> Result<(RetirementCheckpointProof, VerifiedRetirementCheckpoint)> {
         self.store.verify_writer(&self._locks)?;

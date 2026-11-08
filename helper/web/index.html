@@ -157,6 +157,16 @@
       <p>按上方选中的仍登记 Disabled 原元数据盘，重放完整终态移除链，生成精确单盘恢复 registry 和完整继承命名空间提案。低级祖先必须仍有 Enabled 登记；历史 Config 中的已移除或停用祖先不能替代。此阶段不会打开目标/祖先目录、保留操作、写入新决定或恢复活动存储，下载文件不能用作执行令牌。目标真实决定、发布、Current 和 locator 仍未接通，不能把报告当成重新接纳成功。</p>
       <button id="terminal-chain-readmit" class="secondary" type="button">仅生成并下载完整来源恢复提案</button>
       <pre id="terminal-chain-readmit-report" hidden></pre>
+      <details>
+        <summary>准备原目标的真实决定，仍不恢复活动存储</summary>
+        <p class="warning">这是有持久影响的准备阶段：会保留准确原请求、阻止新的终态移除，打开并锁住所选原目录，安装完整控制归档和独立目标决定。它不能完成 readmission、启用 writer 或启动服务；当前没有取消或换盘接口。若只需保存材料，请不要执行此步。中断后只能查询并续作同一请求，不删除证据或换编号重做。</p>
+        <button id="chain-target-status" type="button" class="secondary">读取原目标决定准备状态（不打开目标）</button>
+        <form id="chain-target-form" hidden>
+          <label class="ack"><input id="chain-target-ack" type="checkbox" required> 已核对原盘/slot/操作/提案摘要，确认只准备目标决定并保留来源，不是重新接纳完成，不能启动服务，也没有取消或换盘接口。</label>
+          <button type="submit">确认准备目标决定 / 续作同一请求</button>
+        </form>
+        <pre id="chain-target-result" hidden></pre>
+      </details>
     </section>
     <section class="card">
       <h2>终态管理：重新接纳保留的原元数据目录</h2>

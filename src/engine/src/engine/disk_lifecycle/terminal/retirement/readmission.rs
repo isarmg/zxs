@@ -30,7 +30,7 @@ struct GraphObject {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct Proposal {
+pub(in crate::engine) struct Proposal {
     format: ProposalFormat,
     operation_id: OperationId,
     principal: String,
@@ -51,6 +51,7 @@ pub struct TerminalChainReadmissionPreparation {
     pub principal: String,
     pub source: TerminalRetirementCheckpoint,
     pub target: DiskRegistrationIdentity,
+    pub target_root: std::path::PathBuf,
     pub proposed_registry: DiskRegistryCommitment,
     pub proposed_configuration_hash: String,
     pub previous_admission: Option<String>,
@@ -86,6 +87,7 @@ impl TerminalManagement {
         operation_id: OperationId,
     ) -> Result<TerminalChainReadmissionProposal> {
         Engine::require_actor(principal)?;
+        self.require_no_chain_readmission()?;
         let (source, checkpoint) = self.current_retirement_checkpoint()?;
         let (target, configuration, stopped) =
             select_target(&self.verified, &checkpoint, disk_id, operation_id)?;
@@ -290,6 +292,7 @@ impl Proposal {
             principal: self.principal.clone(),
             source: self.source.report(self.checkpoint_digest.clone()),
             target: self.target.clone(),
+            target_root: self.target_disk().root.clone(),
             proposed_registry: self.registry.clone(),
             proposed_configuration_hash: object_hash("membership-target", &self.configuration)?,
             previous_admission: self.stopped.previous_admission.clone(),
@@ -299,5 +302,57 @@ impl Proposal {
             active_namespace_admitted: false,
             metadata_resumption_supported: false,
         })
+    }
+}
+
+impl Proposal {
+    pub(in crate::engine) fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAX_METADATA {
+            return Err(failure(
+                ErrorCode::ResourceLimit,
+                "chain proposal exceeds budget",
+            ));
+        }
+        crate::decode_strict(bytes).map_err(Into::into)
+    }
+    pub(in crate::engine) fn hash(&self) -> Result<String> {
+        Ok(object_hash(KIND, self)?)
+    }
+    pub(in crate::engine) fn verify_source(
+        &self,
+        source: &VerifiedTerminalAuthority,
+    ) -> Result<()> {
+        let checkpoint = self.source.verify(source)?;
+        self.verify_projection(source, &checkpoint)
+    }
+    pub(in crate::engine) fn checkpoint_digest(&self) -> &str {
+        &self.checkpoint_digest
+    }
+    pub(in crate::engine) fn target(&self) -> &DiskRegistrationIdentity {
+        &self.target
+    }
+    pub(in crate::engine) fn configuration(&self) -> &ValidatedConfig {
+        &self.configuration
+    }
+    pub(in crate::engine) fn operation(&self) -> OperationId {
+        self.operation_id
+    }
+    pub(in crate::engine) fn principal(&self) -> &str {
+        &self.principal
+    }
+    pub(in crate::engine) fn seal_format(&self) -> &DiskSealFormat {
+        &self.stopped.seal_format
+    }
+    pub(in crate::engine) fn preparation(&self) -> Result<TerminalChainReadmissionPreparation> {
+        self.report(self.hash()?)
+    }
+    pub(in crate::engine) fn target_disk(&self) -> &crate::DiskConfig {
+        self.configuration
+            .disks
+            .iter()
+            .find(|disk| disk.disk_id == self.target.disk_id)
+            .expect(
+                "invariant: verified chain proposal selects a configured original metadata disk",
+            )
     }
 }

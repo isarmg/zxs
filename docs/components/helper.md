@@ -232,3 +232,8 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 完整终态链后的恢复提案
 
 [原生整链恢复提案](../design/terminal-chain-readmission-proposal.md)将完整 checkpoint 验证类型接到单一原 Disabled metadata 的 registry/namespace 准备，并提供独立 Web 下载。它不保留 operation、不打开目标、没有投票或活动发布能力；正式整链 readmission 与外来完整链接纳仍拒绝。原无移除链 retained readmission 路径保持。此片未编译、测试或 CI。
+
+
+### 整链原目标决定准备
+
+[原目标决定准备](../design/terminal-chain-target-decision.md)在独立确认后保留原 SYSTEM 请求，核原 Stop/物理目录/锁，安装完整控制归档并写目标真实不可覆盖 native choice。查询只读原来源证书，显式续作才再探目标。它没有活动 writer/首笔 Publication/Current/locator，不完成 readmission 或 H03；无取消换盘，失败保留证据。此片未编译、测试、CI 或实际操作系统。

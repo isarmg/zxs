@@ -10,6 +10,7 @@ pub(super) use completion::{Completed, HistoricalCompleted};
 pub(in crate::engine) use completion::{RetirementCheckpointProof, VerifiedRetirementCheckpoint};
 pub use completion::{TerminalRetirementArchive, TerminalRetirementCheckpoint};
 use data_serialization::{Deserialize, Serialize};
+pub(in crate::engine) use readmission::Proposal as ChainReadmissionProposal;
 pub use readmission::{TerminalChainReadmissionPreparation, TerminalChainReadmissionProposal};
 
 pub(super) const INTENT: &str = "retirement-intent.json";
@@ -126,6 +127,7 @@ impl TerminalManagement {
         operation_id: OperationId,
     ) -> Result<TerminalRetirementPlan> {
         self.store.verify_writer(&self._locks)?;
+        self.require_no_chain_readmission()?;
         self.require_no_pending_retirement()?;
         Engine::require_actor(principal)?;
         let target = self
@@ -159,6 +161,17 @@ impl TerminalManagement {
         plan: &TerminalRetirementPlan,
     ) -> Result<TerminalRetirementStatus> {
         self.store.verify_writer(&self._locks)?;
+        // A selected chain decision freezes this registry. Cold replay may only
+        // re-establish already-completed original frames, never select a new one.
+        if self.chain_readmission_selected()?
+            && (self.starts_new_retirement_frame(plan)
+                || self.read_retirement_completion()?.is_none())
+        {
+            return Err(failure(
+                ErrorCode::RecoveryRequired,
+                "chain readmission owns the exact terminal source",
+            ));
+        }
         self.select_retirement_frame(plan)?;
         self.validate_retirement(&plan.intent)?;
         if object_hash(DIGEST_KIND, &plan.intent)? != plan.digest {

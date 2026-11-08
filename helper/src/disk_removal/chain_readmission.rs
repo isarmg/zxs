@@ -7,9 +7,17 @@ struct Request {
     context: layout::Context,
     readmission: storage_contract::storage_readmission::ReadmissionRequest,
 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(super) struct Plan {
+    pub(super) context: layout::Context,
+    pub(super) credential: CredentialRevision,
+    pub(super) preparation: storage_engine::TerminalChainReadmissionPreparation,
+}
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Export {
+    plan: Plan,
     preparation: storage_engine::TerminalChainReadmissionPreparation,
     payload: String,
     source_open_recovery_may_write: bool,
@@ -33,6 +41,11 @@ impl crate::service_worker::Request for Request {
             .prepare_terminal_chain_readmission(self.readmission)?;
         target.recheck()?;
         Ok(Export {
+            plan: Plan {
+                context: self.context,
+                credential: target.credential_revision()?,
+                preparation: proposal.preparation().clone(),
+            },
             preparation: proposal.preparation().clone(),
             payload: String::from_utf8(proposal.bytes().to_vec())?,
             source_open_recovery_may_write: true,

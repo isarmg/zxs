@@ -979,3 +979,251 @@ fn resume_inventory_recognizes_retirement_ownership_without_accepting_unknown_ma
     assert!(TerminalManagement::open(&system).is_err());
     assert_eq!(fs::read(unknown).unwrap(), b"{}");
 }
+
+fn chain_target_fixture() -> (
+    Fixture,
+    OperationId,
+    crate::TerminalChainReadmissionProposal,
+) {
+    let mut fixture = Fixture::with_action(MembershipExitAction::PlannedOffline);
+    let retired = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&retired)
+        .unwrap();
+    let operation = OperationId::generate().unwrap();
+    let proposal = fixture
+        .terminal
+        .prepare_chain_readmission_proposal(&fixture.config.disks[0].disk_id, "admin", operation)
+        .unwrap();
+    (fixture, operation, proposal)
+}
+fn retained_chain_directory(fixture: &Fixture) -> crate::PendingMemberDirectory {
+    crate::PendingMemberDirectory {
+        disk_id: fixture.config.disks[0].disk_id.clone(),
+        directory: fs::File::open(&fixture.config.disks[0].root).unwrap(),
+    }
+}
+
+#[test]
+fn actual_chain_target_decision_preserves_old_seal_and_never_admits_writer() {
+    let (mut fixture, operation, proposal) = chain_target_fixture();
+    let root = fixture.config.disks[0].root.clone();
+    let seal = fs::read(root.join("disk.json")).unwrap();
+    let before = fixture.terminal.registry().commitment().clone();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .synchronize_chain_readmission_target(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::TargetDecisionPreserved
+    );
+    assert!(status.target_reverified_this_call);
+    assert!(status.source_request_reserved);
+    assert!(status.target_decision_hash.is_some());
+    assert!(!status.active_writer_admitted);
+    assert!(!status.metadata_resumption_supported);
+    assert_eq!(fs::read(root.join("disk.json")).unwrap(), seal);
+    assert_eq!(*fixture.terminal.registry().commitment(), before);
+    assert!(fixture.terminal.operation(operation).is_none());
+    assert!(
+        fixture
+            .terminal
+            .preview_terminal_retirement(
+                &fixture.config.disks[2].disk_id,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .is_err()
+    );
+    assert!(fixture.terminal.export_retirement_archive().is_err());
+    let vote_path = root
+        .join("metadata/membership-decisions")
+        .join(&status.selection_hash)
+        .join("decision.json");
+    let vote: json_codec::Value = json_codec::from_slice(&fs::read(&vote_path).unwrap()).unwrap();
+    assert_eq!(vote["choice"]["kind"], "TerminalChainReadmission");
+    let system = fixture.system();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    let observed = cold.chain_readmission_status().unwrap().unwrap();
+    assert_eq!(observed.selection_hash, status.selection_hash);
+    assert!(!observed.target_reverified_this_call);
+    let repeated = cold
+        .synchronize_chain_readmission_target(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id: fixture.config.disks[0].disk_id.clone(),
+                directory: fs::File::open(root).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(repeated.target_decision_hash, status.target_decision_hash);
+    assert!(cold.writer_locks().is_err());
+    drop(cold);
+    assert!(Engine::open(&system).is_err());
+}
+
+#[test]
+fn chain_target_status_does_not_open_missing_target_or_claim_fresh_durability() {
+    let (mut fixture, operation, proposal) = chain_target_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let result = fixture
+        .terminal
+        .synchronize_chain_readmission_target(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let system = fixture.system();
+    drop(fixture.terminal);
+    let root = &fixture.config.disks[0].root;
+    fs::rename(root, root.with_extension("selected-missing")).unwrap();
+    fs::write(root, b"do not probe from source-only status").unwrap();
+    let cold = TerminalManagement::open(&system).unwrap();
+    let status = cold.chain_readmission_status().unwrap().unwrap();
+    assert_eq!(status.selection_hash, result.selection_hash);
+    assert!(!status.target_reverified_this_call);
+    assert!(!status.active_writer_admitted);
+    assert_eq!(
+        fs::read(root).unwrap(),
+        b"do not probe from source-only status"
+    );
+}
+
+#[test]
+fn chain_target_original_request_survives_target_archive_failure_and_only_exact_retry() {
+    let (mut fixture, operation, proposal) = chain_target_fixture();
+    let root = fixture.config.disks[0].root.clone();
+    // Replace only the target metadata namespace, not any source/archive data.
+    fs::rename(root.join("metadata"), root.join("held-metadata")).unwrap();
+    fs::write(root.join("metadata"), b"target copy unavailable").unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .synchronize_chain_readmission_target(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    let selected = fixture
+        .terminal
+        .chain_readmission_status()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        selected.phase,
+        crate::TerminalChainReadmissionPhase::SourceSelected
+    );
+    assert!(!selected.target_reverified_this_call);
+    assert!(selected.target_decision_hash.is_none());
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .synchronize_chain_readmission_target(
+                "other",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .synchronize_chain_readmission_target(
+                "admin",
+                OperationId::generate().unwrap(),
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    fs::remove_file(root.join("metadata")).unwrap();
+    fs::rename(root.join("held-metadata"), root.join("metadata")).unwrap();
+    let directory = retained_chain_directory(&fixture);
+    let resumed = fixture
+        .terminal
+        .synchronize_chain_readmission_target(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    assert_eq!(resumed.selection_hash, selected.selection_hash);
+    assert_eq!(
+        resumed.phase,
+        crate::TerminalChainReadmissionPhase::TargetDecisionPreserved
+    );
+}
+
+#[test]
+fn chain_target_cannot_replace_the_original_decision_choice_or_physical_root() {
+    let (mut fixture, operation, proposal) = chain_target_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .synchronize_chain_readmission_target(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let root = fixture.config.disks[0].root.clone();
+    let vote_path = root
+        .join("metadata/membership-decisions")
+        .join(&status.selection_hash)
+        .join("decision.json");
+    let mut vote: json_codec::Value =
+        json_codec::from_slice(&fs::read(&vote_path).unwrap()).unwrap();
+    vote["choice"]["kind"] = "TerminalResume".into();
+    let corrupt = json_codec::to_vec(&vote).unwrap();
+    fs::write(&vote_path, &corrupt).unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .synchronize_chain_readmission_target(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read(vote_path).unwrap(), corrupt);
+    fs::rename(&root, root.with_extension("selected-original")).unwrap();
+    fs::create_dir(&root).unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .synchronize_chain_readmission_target(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(fixture.terminal.operation(operation).is_none());
+}

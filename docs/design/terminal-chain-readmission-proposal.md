@@ -35,7 +35,7 @@
 
 新 `POST /api/disks/terminal-chain-readmission-proposal` 使用准确服务账户、原盘 ID/slot、拟用 operation 和已停止外部写者确认。principal 来自原主认证 store，不接受浏览器自行指定。root 编排器与服务 UID 的 `internal-chain-readmission-worker` 继续使用固定布局、host 租约、原 SYSTEM writer 和实际主认证重新核验。HTTP 保留 Origin/CSRF、单工作槽、关闭状态和严格输入；没有上传/force/自动接纳选项。
 
-页面仅下载提案并显示明确未完成字段，不提供执行按钮。选择、账户、写者确认变化或相关操作开始时隐藏旧报告。工具依旧 root 手动运行、0.0.0.0 无登录，使用可信隔离网络/防火墙、用完退出的风险提示保持。不增加 helper 自启或修改网络。
+提案入口仍仅下载并显示明确未完成字段。后继的[原目标决定准备](terminal-chain-target-decision.md)在单独确认后可保留原请求并写真实目标决定，但仍不能完成激活。选择、账户、写者确认变化或相关操作开始时隐藏旧报告。工具依旧 root 手动运行、0.0.0.0 无登录，使用可信隔离网络/防火墙、用完退出的风险提示保持。不增加 helper 自启或修改网络。
 
 这里不写新 native request，不持久化提案到 SYSTEM，不触碰目标目录，也不启动服务。但打开原 SYSTEM 仍沿已有协议恢复/同步先前已选操作，因此整个 HTTP 请求不能称为完全只读。
 
@@ -46,3 +46,6 @@ resume attempt inventory 现在只把明确由 terminal retirement 模块拥有�
 完整 checkpoint 和提案各受单个 native 元数据对象 64 MiB 上限约束，超限不裁剪。提案 worker 响应上限是 128 MiB 加 64 KiB，输入仍 64 KiB，其他 worker 不变。原生捕获将同一次验证得到的 State/registry/prepared namespace 交给提案构造，不再通过下载 JSON 解码重放一遍；下载检查点时不保留投影 State。复杂度仍随完整链与冻结历史增长，提案验证会克隆一份 prepared namespace 用于绑定检查；未测量大链内存、延迟、网络中断或吞吐。
 
 后续必须将这份完整来源纳入真正的 target decision/ResumeCore，独立核原物理目录与 stopped lifetime、真实 writer/新 epoch、首笔 Publication、Current/locator、永久结果和冷恢复选择器，才能放开移除链后的 readmission。H03 还需要外来来源映射及完整低级链最终 writer，不得用本片提案、Backup 隔离材料或普通 Add 替代。
+
+
+后继：[原目标决定准备](terminal-chain-target-decision.md)已消费完整提案并独立核原物理目录与实际 native vote；仍不是最终 ResumeCore/Publication/Current/locator，以上提案本身没有执行权限的边界保持。

@@ -35,6 +35,9 @@ pub(super) struct Target {
     lease: ServiceLease,
 }
 impl Target {
+    pub(super) fn credential_revision(&self) -> Result<CredentialRevision> {
+        Ok(self.auth.credential_revision()?)
+    }
     pub(super) fn open(context: &layout::Context) -> Result<Self> {
         let lease = ServiceLease::host()?;
         let layout = Layout::open(context.account.name.as_str().into())?;

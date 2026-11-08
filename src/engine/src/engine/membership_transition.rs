@@ -26,6 +26,7 @@ mod effect;
 pub(in crate::engine) mod readmission;
 pub use readmission::{DiskReadmissionPhase, DiskReadmissionStatus};
 pub(in crate::engine) mod terminal;
+pub(in crate::engine) mod terminal_chain;
 pub(in crate::engine) mod terminal_resume;
 pub use effect::MembershipExitAction;
 use effect::{ExitEffect, validate_transition_target};
@@ -37,6 +38,7 @@ pub use pending::terminal_resume::{
     TerminalMetadataResume, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumeStatus,
 };
+pub use terminal_chain::{TerminalChainReadmissionPhase, TerminalChainReadmissionStatus};
 pub use terminal_resume::{TerminalMetadataResumeAdmission, TerminalReadmissionPreview};
 pub(crate) mod pending;
 pub use archive::{

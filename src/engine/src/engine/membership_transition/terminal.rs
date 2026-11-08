@@ -304,6 +304,22 @@ impl TerminalAuthority {
             &expected.root_hash,
             &expected.transition_hash,
         )?;
+        self.verify_installed_archive(&archive)
+    }
+
+    pub(in crate::engine::membership_transition) fn verify_installed_archive(
+        self,
+        archive: &PendingControlArchive,
+    ) -> Result<VerifiedTerminalAuthority> {
+        self.validate_intent()?;
+        if object_hash("membership-control-archive", &archive.generation_root())?
+            != self.archive_root
+        {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "terminal installed archive root differs",
+            ));
+        }
         let (state, history) = archive.generation_base(&self.intent)?;
         let state = Arc::new(state);
         let source = self.source_registry(&state)?;
@@ -313,7 +329,7 @@ impl TerminalAuthority {
         if request.target != self.target()
             || request.operation_id != self.operation_id()
             || request.principal != self.intent.principal
-            || request.intent_hash != expected.transition_hash
+            || request.intent_hash != self.transition_hash()?
             || request.request_digest != expected.transition_hash
             || !matches!(
                 (&request.effect, self.action()),

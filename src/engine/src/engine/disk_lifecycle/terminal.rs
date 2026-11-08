@@ -257,6 +257,7 @@ impl TerminalManagement {
         };
         management.validate_terminal_retirement()?;
         management.restore_terminal_retirement()?;
+        crate::engine::membership_transition::terminal_chain::validate_selection(&management)?;
         Ok(management)
     }
 
@@ -334,6 +335,9 @@ impl TerminalManagement {
 
     pub(in crate::engine) fn verified_authority(&self) -> &VerifiedTerminalAuthority {
         &self.verified
+    }
+    pub(in crate::engine) fn verify_held_terminal_writer(&self) -> Result<()> {
+        self.store.verify_writer(&self._locks)
     }
     pub(in crate::engine) fn system_root(&self) -> &DiskRoot {
         self.store.system()
