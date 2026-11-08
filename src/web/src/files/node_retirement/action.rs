@@ -50,7 +50,7 @@ pub(super) fn submit(state: RwSignal<State>) {
     let Some(operation) = crate::ui::file_operation_id(state) else { return; };
     let attempt = Attempt {
         target, principal, selection, operation: operation.clone(), in_flight: false,
-        uncertain: false, restored: false, retry_confirmed: false, cleanup: None, separation: None,
+        uncertain: false, restored: false, resume_only: false, retry_confirmed: false, cleanup: None, separation: None,
     };
     let record = match recovery::save(&attempt) {
         Ok(record) => record,
@@ -175,9 +175,7 @@ fn receive(state: RwSignal<State>, attempt: &Attempt, value: Value) {
 }
 pub(super) fn dismiss(state: RwSignal<State>, operation: &str, epoch: u64) {
     let attempt = state.with_untracked(|s| s.files.node_retirement.attempt.as_ref().filter(|attempt| {
-        attempt.operation == operation && attempt.target.epoch == epoch && attempt.owned_by(s) && !attempt.in_flight
-            && (status(s, attempt) == SaveStatus::Rejected
-                || published(status(s, attempt)) && attempt.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent))
+        attempt.operation == operation && attempt.target.epoch == epoch && attempt.dismiss_allowed(s)
     }).cloned());
     let Some(attempt) = attempt else { return; };
     match recovery::remove(&attempt) {

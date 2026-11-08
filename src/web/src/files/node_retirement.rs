@@ -30,6 +30,7 @@ struct Attempt {
     in_flight: bool,
     uncertain: bool,
     restored: bool,
+    resume_only: bool,
     retry_confirmed: bool,
     cleanup: Option<Cleanup>,
     separation: Option<wire::Separation>,
@@ -41,7 +42,13 @@ impl Attempt {
     fn retry_allowed(&self, state: &State) -> bool {
         self.owned_by(state) && state.management.storage.writable() && !state.files.mutation_pending
             && !self.in_flight && status(state, self) != SaveStatus::Rejected
+            && (!self.resume_only || published(status(state, self)))
             && (!self.restored || published(status(state, self)) || self.retry_confirmed)
+    }
+    fn dismiss_allowed(&self, state: &State) -> bool {
+        self.owned_by(state) && !self.in_flight
+            && ((!self.resume_only && status(state, self) == SaveStatus::Rejected)
+                || published(status(state, self)) && self.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent))
     }
 }
 #[derive(Clone, Default)]

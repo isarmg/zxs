@@ -3,6 +3,7 @@
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{ErrorCode, OperationId};
+mod receipt_lookup;
 
 const PREFIX: &str = "zxs:node-retirement:";
 const MAX_RECORDS: usize = 32;
@@ -13,6 +14,8 @@ const MAX_LABEL_BYTES: usize = 4096;
 enum Format {
     #[serialization(rename = "file-node-retirement-recovery")]
     Request,
+    #[serialization(rename = "file-node-retirement-resume-recovery")]
+    ResumeOnly,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +73,7 @@ impl Record {
     }
     fn from_attempt(attempt: &Attempt) -> Self {
         Self {
-            format: Format::Request,
+            format: if attempt.resume_only { Format::ResumeOnly } else { Format::Request },
             principal: attempt.principal.clone(),
             operation: attempt.operation.parse().expect("invariant: UI generated a canonical operation identity"),
             file_id: attempt.selection.file_id().clone(),
@@ -90,6 +93,19 @@ impl Record {
         }
         Ok(record)
     }
+    fn encode(&self) -> Result<String, api::Error> {
+        self.selection()?;
+        let bytes = json_codec::to_string(self).map_err(wire_error)?;
+        if bytes.len() > wire::MAX_REQUEST_BYTES {
+            return Err(api::error(ErrorCode::ResourceLimit, "Retirement recovery request exceeds its byte budget."));
+        }
+        Ok(bytes)
+    }
+    fn same_request(&self, other: &Self) -> bool {
+        self.principal == other.principal && self.operation == other.operation
+            && self.file_id == other.file_id && self.history_root == other.history_root
+            && self.version_ids == other.version_ids
+    }
     fn restored_attempt(&self, epoch: u64) -> Result<Attempt, api::Error> {
         Ok(Attempt {
             target: Target {
@@ -98,7 +114,8 @@ impl Record {
             },
             principal: self.principal.clone(),
             selection: self.selection()?, operation: self.operation.to_string(),
-            in_flight: false, uncertain: true, restored: true, retry_confirmed: false,
+            in_flight: false, uncertain: true, restored: true,
+            resume_only: self.format == Format::ResumeOnly, retry_confirmed: false,
             cleanup: None, separation: None,
         })
     }
@@ -137,11 +154,11 @@ pub(super) fn save(attempt: &Attempt) -> Result<Record, api::Error> {
         return Err(failure(t("请先处理本机保留的节点退役操作。", "Resolve the retained retirement operations first.")));
     }
     let record = Record::from_attempt(attempt);
-    record.selection()?;
-    let bytes = json_codec::to_string(&record).map_err(wire_error)?;
-    if bytes.len() > wire::MAX_REQUEST_BYTES {
-        return Err(api::error(ErrorCode::ResourceLimit, "Retirement recovery request exceeds its byte budget."));
-    }
+    persist(&record)?;
+    Ok(record)
+}
+fn persist(record: &Record) -> Result<(), api::Error> {
+    let bytes = record.encode()?;
     let storage = storage()?;
     let key = record.key();
     if storage.get_item(&key).map_err(api::js_error)?.is_some() {
@@ -150,10 +167,25 @@ pub(super) fn save(attempt: &Attempt) -> Result<Record, api::Error> {
     storage.set_item(&key, &bytes).map_err(api::js_error)?;
     let saved = storage.get_item(&key).map_err(api::js_error)?
         .ok_or_else(|| failure("Retirement recovery write was not confirmed; no permanent request was sent."))?;
-    if Record::decode(&key, &attempt.principal, &saved)? != record {
+    if Record::decode(&key, &record.principal, &saved)? != *record {
         return Err(failure("Retirement recovery read-back changed; no permanent request was sent."));
     }
-    Ok(record)
+    Ok(())
+}
+fn retain_published(record: &Record) -> Result<Record, api::Error> {
+    let records = load(&record.principal)?;
+    if let Some(existing) = records.iter().find(|saved| saved.operation == record.operation) {
+        if !existing.same_request(record) {
+            return Err(failure("The retained operation has another exact request; neither record was replaced."));
+        }
+        // Preserve the original label and original submission/recovery mode.
+        return Ok(existing.clone());
+    }
+    if records.len() == MAX_RECORDS {
+        return Err(api::error(ErrorCode::ResourceLimit, "Retirement recovery queue already contains 32 operations; no records were removed."));
+    }
+    persist(record)?;
+    Ok(record.clone())
 }
 pub(super) fn saved(model: &mut Model, record: Record) {
     model.recovery.records.push(record);
@@ -240,6 +272,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         }
     });
     view! {
+        {receipt_lookup::view(state)}
         <Show when=move ||state.with(|s|s.session_active() && (s.files.node_retirement.attempt.is_some() || !s.files.node_retirement.recovery.records.is_empty() || s.files.node_retirement.recovery.error.is_some()))>
             <aside class="zxs-entry-section zxs-stack" data-zxs-node-retirement-recovery="true">
                 <h2 class="zxs-row">{t("节点永久退役：原操作恢复", "Permanent node retirement: original-operation recovery")}</h2>

@@ -26,6 +26,7 @@ fn can_submit(state: &State) -> bool {
 fn summary(state: &State) -> Option<String> {
     let attempt = state.files.node_retirement.attempt.as_ref()?;
     let text = match status(state, attempt) {
+        SaveStatus::Unknown if attempt.resume_only => t("此恢复入口只允许继续已经发布的原操作。当前会话尚未核到准确发布收据，只可查询，不能重发原删除请求。", "This recovery entry can only resume an already published operation. This session has not confirmed its exact publication receipt; only receipt lookup is allowed, never resubmission of the original deletion."),
         SaveStatus::Unknown => t("发布结果未确认。只可查询或重试原操作，不得换新 ID 重提。", "Publication is unconfirmed. Query or retry only this original operation; do not submit a new ID."),
         SaveStatus::Rejected => t("本次请求被拒绝，没有确认任何退役发布。", "This request was rejected; no retirement publication was confirmed."),
         SaveStatus::Published | SaveStatus::Degraded => {
@@ -134,7 +135,7 @@ pub(super) fn attempt_view(state: RwSignal<State>) -> impl IntoView {
             })}
             <Show when=move ||state.with(|s|s.files.node_retirement.attempt.is_some())>
                 <p class="zxs-row">{t("原请求已保存在本浏览器。刷新或重新登录后仍只使用这个原操作；清除网站数据、换浏览器或换设备不会转移恢复记录，请另外保留原操作 ID。", "The original request is retained in this browser. Reloading or signing in again keeps the same operation. Clearing site data, changing browsers or changing devices does not transfer recovery records; keep the operation ID separately.")}</p>
-                <Show when=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_some_and(|a|a.restored && status(s,a)==SaveStatus::Unknown))>
+                <Show when=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_some_and(|a|a.restored && !a.resume_only && status(s,a)==SaveStatus::Unknown))>
                     <details class="zxs-stack"><summary class="zxs-row">{t("核对本机保存的准确版本", "Review the exact locally saved versions")}</summary>
                         <p class="zxs-row">{move ||state.with(|s|s.files.node_retirement.attempt.as_ref().map(|a|a.selection.history_root().to_string()).unwrap_or_default())}</p>
                         {move ||state.with(|s|s.files.node_retirement.attempt.as_ref().map(|a|a.selection.version_ids().to_vec()).unwrap_or_default()).into_iter().map(|id|view!{<p class="zxs-row">{id.to_string()}</p>}).collect_view()}
@@ -150,7 +151,7 @@ pub(super) fn attempt_view(state: RwSignal<State>) -> impl IntoView {
                 </Show>
                 <div class="zxs-flow">
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|!a.retry_allowed(s))) on:click=move |_|operation.with_value(|id|action::retry(state,id,epoch))>{t("重试原操作 / 继续正文清理", "Retry original operation / continue body cleanup")}</button>
-                <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|a.in_flight||!(status(s,a)==SaveStatus::Rejected||published(status(s,a))&&a.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent)))) on:click=move |_|operation.with_value(|id|action::dismiss(state,id,epoch))>{t("关闭已确认结果", "Close confirmed result")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|!a.dismiss_allowed(s))) on:click=move |_|operation.with_value(|id|action::dismiss(state,id,epoch))>{t("关闭已确认结果", "Close confirmed result")}</button>
             </div></Show>
 
                     {move ||state.with(|s|s.files.node_retirement.error.clone()).map(|error|view!{<p class="zxs-row" role="alert">{error.to_string()}</p>})}
