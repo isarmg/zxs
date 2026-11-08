@@ -482,3 +482,9 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 目录 Git 初始化、暂存和提交使用独立接口，不把普通文件保存当成目录提交，也不递归提交子仓库。准确目录尚未初始化时，所属祖先可以返回，但列表的 `directory_branches_supported` 仍为 false。旧 `/api/repositories/{repo}/directory-scopes` 公开入口已移除，不自动迁移为 Git 初始化。
 
 状态 GET 必须给 `path`，根为显式空字符串，未知或重复查询字段拒绝。完整响应最多 1 MiB，超限失败而不截断；所有 nullable 字段必须出现。`staged` 与增改删计数对应暂存区相对 HEAD 的变化，必填 `unstaged` 表示工作区尚未暂存的变化，提交不会采用这些后续保存。工作树与 index 代数在暂存/提交时同时复核，独立子仓库边界变化要求重新暂存。结果不明保留原操作 ID 查询，不以新 ID 盲重试。请求、状态与严格整数编码见机器契约，授权和实际归属仍由服务器及核心检查，详见[目录 Git HTTP 边界](components/server/src/directory-git.md)。
+
+### 同历史域非空内容候选
+
+`GET /api/file-manager/files/{file}/content-matches?node_id=...&history_root=...&limit=16[&after_version_id=...]` 返回 `ContentMatchPage`。必填 `limit` 为 1–64，响应上限 64 KiB；未知字段、错误 ID 和不属于当前匹配集合的继续位置返回 400。身份或会话失效为 401，源节点不属于该文件/历史为 404，捕获、翻页或返回前历史根改变为 `HISTORY_CHANGED` (409)，后端槽不足为 429；响应超出字节预算返回 500 / `RESPONSE_TOO_LARGE`，不会发送截断页。当前根校验不提供旧根租约。
+
+匹配只涵盖同一历史域的其他文件，要求非零长度与完整摘要相等。结果按版本 ID 排序，`next_after_version_id` 必须出现，非空表示还有下一页，将其作为下一次请求的 `after_version_id`；第一页省略 `after_version_id`。`creation_name` 是版本创建时的名称，不是当前路径。正文已清除仍保留候选事实；持久内容状态不表示当前可读性。此端点只读，不创建共享身份、永久连接或新的操作收据。精确语义见[文件节点投影及候选查询](design/file-merge-tags-backup.md)。

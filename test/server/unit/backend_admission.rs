@@ -590,6 +590,16 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn content_matches(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::content_matches::ContentMatchRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::content_matches::ContentMatchPage, crate::ApiError> {
+        self.gate.cancellations.lock().unwrap().push(cancellation);
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history_source(
         &self,
         _identity: &crate::auth::Identity,
@@ -1244,6 +1254,10 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
         "GET",
         "/api/file-manager/files/file_00000000000000000000000000000000/merge-history/source?node_id=ver_00000000000000000000000000000000&history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     ),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/content-matches?node_id=ver_00000000000000000000000000000000&history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&limit=1",
+    ),
     ("POST", "/api/file-manager/files/file/metadata"),
     ("POST", "/api/file-manager/versions/version/metadata"),
     ("PATCH", "/api/file-manager/files/file/nodes/node"),
@@ -1339,6 +1353,34 @@ async fn directory_git_http_cancellation_reaches_the_authorized_backend() {
     let root = crate::tests::private_tempdir();
     let (app, gate, _release) = fixture(root.path(), 0, false);
     let route = "/api/repositories/repo_00000000000000000000000000000000/directory-git?path=";
+    let waiter = tokio::spawn(workspace_request(app, "GET", route));
+    tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    {
+        let signals = gate.cancellations.lock().unwrap();
+        assert_eq!(signals.len(), 1);
+        assert!(!signals[0].is_cancelled());
+    }
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(gate.cancellations.lock().unwrap()[0].is_cancelled());
+    assert_eq!(gate.finished.available_permits(), 0);
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(5), gate.finished.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+}
+
+#[tokio::test]
+async fn content_matches_http_cancellation_reaches_the_authorized_backend() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let route = "/api/file-manager/files/file_00000000000000000000000000000000/content-matches?node_id=ver_00000000000000000000000000000000&history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&limit=1";
     let waiter = tokio::spawn(workspace_request(app, "GET", route));
     tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
         .await

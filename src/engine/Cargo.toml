@@ -91,3 +91,7 @@ path = "../../test/engine/integration/directory_layout_execution.rs"
 [[test]]
 name = "directory_layout_recovery_boundaries"
 path = "../../test/engine/integration/directory_layout_recovery_boundaries.rs"
+
+[[test]]
+name = "content_matches"
+path = "../../test/engine/integration/content_matches.rs"

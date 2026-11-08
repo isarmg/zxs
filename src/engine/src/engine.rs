@@ -66,7 +66,9 @@ mod directory_layout;
 mod history_selection;
 pub use directory_history::DirectoryHistoryRead;
 mod history_window;
-pub use history_window::{FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead};
+pub use history_window::{
+    ContentMatchRead, FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead,
+};
 pub(crate) mod membership_transition;
 pub use membership_transition::{
     DiskExitPhase, DiskExitStatus, DiskReadmissionPhase, DiskReadmissionStatus,

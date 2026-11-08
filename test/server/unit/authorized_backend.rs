@@ -1174,6 +1174,20 @@ impl Backend for RecordingBackend {
             directory_branches: vec![],
         })
     }
+    fn content_matches(
+        &self,
+        identity: &Identity,
+        request: storage_contract::content_matches::ContentMatchRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::content_matches::ContentMatchPage, ApiError> {
+        *self.history_cancellation.lock().unwrap() = Some(cancellation);
+        self.record(
+            "content_matches",
+            Some(identity),
+            json!({"route":request.route(),"query":request.query_fields()}),
+        )?;
+        Err(sentinel_error("content_matches"))
+    }
     fn file_history_source(
         &self,
         identity: &Identity,
@@ -2969,6 +2983,57 @@ fn historical_source_override_preserves_request_identity_and_revocation() {
         fixture
             .backend
             .file_history_source(
+                &fixture.identity,
+                request,
+                storage_contract::history_window::HistoryWindowCancellation::new()
+            )
+            .unwrap_err()
+            .status,
+        401
+    );
+    assert!(fixture.probe.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn content_matches_override_preserves_request_identity_and_revocation() {
+    let fixture = Fixture::new();
+    let request = storage_contract::content_matches::ContentMatchRequest::parse(
+        "file_00000000000000000000000000000000",
+        "ver_00000000000000000000000000000000",
+        &"a".repeat(64),
+        None,
+        1,
+    )
+    .unwrap();
+    let cancellation = storage_contract::history_window::HistoryWindowCancellation::new();
+    let error = fixture
+        .backend
+        .content_matches(&fixture.identity, request.clone(), cancellation.clone())
+        .unwrap_err();
+    assert_error(error, "content_matches");
+    let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
+    assert_eq!(calls.len(), 1);
+    assert_identity(calls[0].identity.as_ref(), &fixture.identity);
+    assert_eq!(
+        calls[0].arguments,
+        json!({"route":request.route(),"query":request.query_fields()})
+    );
+    cancellation.cancel();
+    assert!(
+        fixture
+            .probe
+            .history_cancellation
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .is_cancelled()
+    );
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
+    assert_eq!(
+        fixture
+            .backend
+            .content_matches(
                 &fixture.identity,
                 request,
                 storage_contract::history_window::HistoryWindowCancellation::new()

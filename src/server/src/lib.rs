@@ -47,6 +47,7 @@ mod bounded_history_http;
 mod history_window_encode;
 mod history_window_http;
 mod history_window_query;
+mod http_content_matches;
 mod http_directory_git;
 mod http_directory_history;
 mod http_directory_layout;
@@ -773,6 +774,14 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         repository_id: &str,
     ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
+    fn content_matches(
+        &self,
+        _identity: &Identity,
+        _request: storage_contract::content_matches::ContentMatchRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::content_matches::ContentMatchPage, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn file_history_source(
         &self,
         _identity: &Identity,
@@ -1527,6 +1536,15 @@ impl Backend for AuthorizedBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.backend
             .default_directory_branch(&self.current(identity)?, repository_id)
+    }
+    fn content_matches(
+        &self,
+        identity: &Identity,
+        request: storage_contract::content_matches::ContentMatchRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::content_matches::ContentMatchPage, ApiError> {
+        self.backend
+            .content_matches(&self.current(identity)?, request, cancellation)
     }
     fn file_history_source(
         &self,

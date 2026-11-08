@@ -1558,6 +1558,31 @@ impl Backend for EngineBackend {
             },
         })
     }
+    fn content_matches(
+        &self,
+        identity: &Identity,
+        request: storage_contract::content_matches::ContentMatchRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::content_matches::ContentMatchPage, ApiError> {
+        let read = {
+            let engine = self
+                .engine
+                .lock()
+                .expect("invariant: service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            engine
+                .capture_content_matches(request, cancellation)
+                .map_err(error)?
+        };
+        let page = read.page().map_err(error);
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        engine.recheck_content_matches(&read).map_err(error)?;
+        page
+    }
     fn file_history_source(
         &self,
         identity: &Identity,

@@ -9545,6 +9545,88 @@
           }
         }
       }
+    },
+    "/api/file-manager/files/{file}/content-matches": {
+      "get": {
+        "operationId": "readFileContentMatches",
+        "description": "Explicit read-only candidate lookup: same history, other files, equal nonzero logical size and content hash. Includes retained PURGED metadata, not current body health. Does not associate identities or change links, branches, history, or disk bytes. Version-key order, at most 64 results and 64 KiB response; scan is O(retained versions), cancellation checked per record. Exact root and current administrator authentication are rechecked before response. after_version_id must itself be a matching version under this source/root.",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            }
+          },
+          {
+            "name": "after_version_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/VersionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded same-history candidates, not shared-node associations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentMatchPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unknown query fields, nonmatching continuation, or cancellation."
+          },
+          "401": {
+            "description": "Unauthenticated or revoked session."
+          },
+          "404": {
+            "description": "Unknown file/node or node outside the file/history."
+          },
+          "409": {
+            "description": "HISTORY_CHANGED; refresh the current history root."
+          },
+          "429": {
+            "description": "Backend capacity exceeded."
+          },
+          "500": {
+            "description": "Invalid backend page or RESPONSE_TOO_LARGE during bounded encoding."
+          }
+        },
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true
+      }
     }
   },
   "components": {
@@ -19449,6 +19531,116 @@
           "unavailable_histories"
         ],
         "additionalProperties": false
+      },
+      "ContentMatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "creation_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "content_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "AVAILABLE",
+                  "PURGED",
+                  "MIGRATED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "creation_name",
+          "file_id",
+          "version_id",
+          "content_state"
+        ]
+      },
+      "ContentMatchPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "source_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "source_version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "logical_size": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "source_content_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "AVAILABLE",
+                  "PURGED",
+                  "MIGRATED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "matches": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/ContentMatch"
+            }
+          },
+          "next_after_version_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VersionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "source_node_id",
+          "source_version_id",
+          "history_tree_id",
+          "history_root",
+          "logical_size",
+          "content_hash",
+          "source_content_state",
+          "matches",
+          "next_after_version_id"
+        ],
+        "description": "Read-only same-history nonempty-content candidates from other files; immutable size/hash equality does not create a shared identity or establish body availability. Empty source has no matches. Ordered version cursor is scoped by exact source and history root."
       }
     }
   }

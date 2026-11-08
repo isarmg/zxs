@@ -3,6 +3,7 @@
 pub mod api_path;
 pub mod client_protocol;
 mod content_hash;
+pub mod content_matches;
 pub mod directory_git;
 pub mod directory_history;
 pub mod directory_staging;

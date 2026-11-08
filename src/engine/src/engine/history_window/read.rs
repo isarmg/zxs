@@ -293,3 +293,53 @@ impl Engine {
         self.recheck_history_window(&read.read)
     }
 }
+
+/// One bounded, same-history observation of equal nonempty content metadata.
+/// This holds no content lease and cannot authorize association, merge or purge.
+pub struct ContentMatchRead {
+    read: HistoryWindowRead,
+    request: storage_contract::content_matches::ContentMatchRequest,
+}
+impl ContentMatchRead {
+    /// Prepare outside the Engine lock, then recheck before exposing the page.
+    /// O(retained versions) scan time, O(page limit) additional result storage.
+    /// Fails for cancellation, a node outside the admitted file/history, or a
+    /// continuation that is not a matching version of another file.
+    pub fn page(&self) -> Result<storage_contract::content_matches::ContentMatchPage> {
+        self.read.cancellation.checkpoint()?;
+        let preparation = self
+            .read
+            .preparation
+            .lock()
+            .expect("invariant: history preparation lock poisoned");
+        let PagePreparation::Pending { view, .. } = &*preparation else {
+            unreachable!("invariant: match-only read never prepares an ordinary history page");
+        };
+        let query = query::Query::new_with_owner(
+            view,
+            &self.read.request,
+            &self.read.context,
+            &self.read.cancellation,
+            Some(&self.read.owner_version),
+        )?;
+        super::content_matches::project(&query, &self.request)
+    }
+}
+impl Engine {
+    /// Capture a currently admitted file/history root. The service supplies current
+    /// authentication; no body reads or persistent mutations occur here. Missing
+    /// ownership, stale roots and cancellation retain the history-read errors.
+    pub fn capture_content_matches(
+        &self,
+        request: storage_contract::content_matches::ContentMatchRequest,
+        cancellation: HistoryWindowCancellation,
+    ) -> Result<ContentMatchRead> {
+        let read = self.capture_history_window(request.history_request(), cancellation)?;
+        Ok(ContentMatchRead { read, request })
+    }
+    /// Reject cancellation or a changed current ownership/context/history root.
+    /// Authentication is rechecked separately by the service under this lock.
+    pub fn recheck_content_matches(&self, read: &ContentMatchRead) -> Result<()> {
+        self.recheck_history_window(&read.read)
+    }
+}

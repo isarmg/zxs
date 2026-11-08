@@ -310,6 +310,27 @@ fn semantics(name: &str, value: &Value) -> Result {
             let _: storage_contract::disk_details::DiskNoteResponse =
                 json_codec::from_value(value.clone())?;
         }
+        "ContentMatchPage" => {
+            use storage_contract::content_matches::{
+                ContentMatchPage, ContentMatchRequest, MAX_CONTENT_MATCHES,
+            };
+            let page: ContentMatchPage = json_codec::from_value(value.clone())?;
+            // Vectors carry no originating query. Check page-local invariants;
+            // HTTP and Web also validate against the actual request and cursor.
+            let limit = if page.next_after_version_id.is_some() {
+                page.matches.len()
+            } else {
+                MAX_CONTENT_MATCHES
+            };
+            let request = ContentMatchRequest::parse(
+                page.file_id.as_str(),
+                page.source_node_id.as_str(),
+                &page.history_root.to_string(),
+                None,
+                limit,
+            )?;
+            page.validate(&request)?;
+        }
         "HistoryWindowPage"
         | "HistoryNodesPage"
         | "HistoryVersionsPage"
@@ -997,3 +1018,7 @@ mod history_window_tests;
 #[cfg(test)]
 #[path = "../../../test/tools/contract-check/unit/placement_configuration_tests.rs"]
 mod placement_configuration_tests;
+
+#[cfg(test)]
+#[path = "../../../test/tools/contract-check/unit/content_matches_tests.rs"]
+mod content_matches_tests;

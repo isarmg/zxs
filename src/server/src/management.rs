@@ -1356,6 +1356,16 @@ impl Backend for ManagementBackend {
             .backend()?
             .default_directory_branch(identity, repository_id)
     }
+    fn content_matches(
+        &self,
+        identity: &Identity,
+        request: storage_contract::content_matches::ContentMatchRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::content_matches::ContentMatchPage, crate::ApiError> {
+        self.inner
+            .backend()?
+            .content_matches(identity, request, cancellation)
+    }
     fn file_history_source(
         &self,
         identity: &Identity,

@@ -1,5 +1,7 @@
 //! Phase-one body saves and file-node tags through the real authenticated HTTP
 //! router. Temporary level-one roots do not require a Samba daemon or a browser.
+#[path = "phase1_save_tags/content_matches.rs"]
+mod content_matches;
 #[path = "phase1_save_tags/directory_git.rs"]
 mod directory_git;
 #[path = "phase1_save_tags/discovery.rs"]

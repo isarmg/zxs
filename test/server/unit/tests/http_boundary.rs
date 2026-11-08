@@ -878,6 +878,14 @@ impl Backend for PanickingBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         panic!("private default directory branch panic detail")
     }
+    fn content_matches(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::content_matches::ContentMatchRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::content_matches::ContentMatchPage, crate::ApiError> {
+        panic!("private content matches panic detail")
+    }
     fn file_history_source(
         &self,
         _identity: &crate::auth::Identity,
@@ -1209,6 +1217,11 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         (
             "GET",
             "/api/file-manager/files/file_00000000000000000000000000000000/merge-history/source?node_id=ver_00000000000000000000000000000000&history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/content-matches?node_id=ver_00000000000000000000000000000000&history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&limit=1",
             None,
         ),
         ("GET", "/api/repositories/repo/backup-configuration", None),

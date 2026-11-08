@@ -5426,6 +5426,30 @@
         "unavailable_histories": "0"
       },
       "layer": "schema"
+    },
+    {
+      "name": "content-match-purged-metadata",
+      "schema": "ContentMatchPage",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "source_node_id": "ver_00000000000000000000000000000001",
+        "source_version_id": "ver_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_size": "3",
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_content_state": "PURGED",
+        "matches": [
+          {
+            "creation_name": "retained.txt",
+            "file_id": "file_00000000000000000000000000000002",
+            "version_id": "ver_00000000000000000000000000000002",
+            "content_state": "PURGED"
+          }
+        ],
+        "next_after_version_id": null
+      },
+      "layer": "schema"
     }
   ],
   "negative": [
@@ -19077,6 +19101,126 @@
         "unavailable_containers": "1"
       },
       "layer": "schema"
+    },
+    {
+      "name": "content-match-missing-nullable",
+      "schema": "ContentMatchPage",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "source_node_id": "ver_00000000000000000000000000000001",
+        "source_version_id": "ver_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_size": "3",
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_content_state": "PURGED",
+        "matches": [
+          {
+            "creation_name": "retained.txt",
+            "file_id": "file_00000000000000000000000000000002",
+            "version_id": "ver_00000000000000000000000000000002",
+            "content_state": "PURGED"
+          }
+        ]
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "content-match-extra-field",
+      "schema": "ContentMatchPage",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "source_node_id": "ver_00000000000000000000000000000001",
+        "source_version_id": "ver_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_size": "3",
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_content_state": "PURGED",
+        "matches": [
+          {
+            "creation_name": "retained.txt",
+            "file_id": "file_00000000000000000000000000000002",
+            "version_id": "ver_00000000000000000000000000000002",
+            "content_state": "PURGED"
+          }
+        ],
+        "next_after_version_id": null,
+        "automatic_association": true
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "content-match-numeric-size",
+      "schema": "ContentMatchPage",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "source_node_id": "ver_00000000000000000000000000000001",
+        "source_version_id": "ver_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_size": 3,
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_content_state": "PURGED",
+        "matches": [
+          {
+            "creation_name": "retained.txt",
+            "file_id": "file_00000000000000000000000000000002",
+            "version_id": "ver_00000000000000000000000000000002",
+            "content_state": "PURGED"
+          }
+        ],
+        "next_after_version_id": null
+      },
+      "layer": "schema"
+    },
+    {
+      "name": "content-match-empty-with-match",
+      "schema": "ContentMatchPage",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "source_node_id": "ver_00000000000000000000000000000001",
+        "source_version_id": "ver_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_size": "0",
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_content_state": "PURGED",
+        "matches": [
+          {
+            "creation_name": "retained.txt",
+            "file_id": "file_00000000000000000000000000000002",
+            "version_id": "ver_00000000000000000000000000000002",
+            "content_state": "PURGED"
+          }
+        ],
+        "next_after_version_id": null
+      },
+      "layer": "semantic"
+    },
+    {
+      "name": "content-match-same-file",
+      "schema": "ContentMatchPage",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "source_node_id": "ver_00000000000000000000000000000001",
+        "source_version_id": "ver_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_size": "3",
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_content_state": "PURGED",
+        "matches": [
+          {
+            "creation_name": "retained.txt",
+            "file_id": "file_00000000000000000000000000000001",
+            "version_id": "ver_00000000000000000000000000000002",
+            "content_state": "PURGED"
+          }
+        ],
+        "next_after_version_id": null
+      },
+      "layer": "semantic"
     }
   ],
   "canonical": [

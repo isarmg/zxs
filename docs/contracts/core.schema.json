@@ -9890,6 +9890,116 @@
         "unavailable_histories"
       ],
       "additionalProperties": false
+    },
+    "ContentMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "creation_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "content_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "AVAILABLE",
+                "PURGED",
+                "MIGRATED"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "creation_name",
+        "file_id",
+        "version_id",
+        "content_state"
+      ]
+    },
+    "ContentMatchPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "source_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "source_version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "logical_size": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "source_content_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "AVAILABLE",
+                "PURGED",
+                "MIGRATED"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matches": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/ContentMatch"
+          }
+        },
+        "next_after_version_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "source_node_id",
+        "source_version_id",
+        "history_tree_id",
+        "history_root",
+        "logical_size",
+        "content_hash",
+        "source_content_state",
+        "matches",
+        "next_after_version_id"
+      ],
+      "description": "Read-only same-history nonempty-content candidates from other files; immutable size/hash equality does not create a shared identity or establish body availability. Empty source has no matches. Ordered version cursor is scoped by exact source and history root."
     }
   }
 }

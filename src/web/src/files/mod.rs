@@ -2,6 +2,7 @@ mod actions;
 mod backup;
 mod batch;
 mod branch;
+mod content_matches;
 mod detail;
 mod directory_history;
 mod history;
