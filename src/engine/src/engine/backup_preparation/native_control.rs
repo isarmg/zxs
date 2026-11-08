@@ -5,6 +5,10 @@ use std::path::{Component, Path};
 
 mod archive;
 mod databases;
+pub use databases::{
+    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    open_decided_backup_targets,
+};
 mod runtime;
 pub use archive::BackupNativeControlReport;
 pub(in crate::engine::backup_preparation) use databases::resume_fenced;

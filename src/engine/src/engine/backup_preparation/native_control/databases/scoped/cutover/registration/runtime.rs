@@ -65,7 +65,7 @@ impl Engine {
             .ok_or_else(|| invalid("registry task has no diagnostic"))
     }
 }
-fn acquire(engine: &Engine, task: &Task) -> Result<(Vec<Target>, BackupChoiceContext)> {
+pub(super) fn acquire(engine: &Engine, task: &Task) -> Result<(Vec<Target>, BackupChoiceContext)> {
     // The native capability and all source seals are admitted before a target
     // name is reopened; SYSTEM JSON is only the owner intent, not the authority.
     task.installation.require_current(engine)?;
@@ -114,7 +114,10 @@ fn run(
         status.detail = "verifying every installed whole-unit image before one native registry/placement choice; original writes remain fenced".into();
     })?;
     let prepared = PreparedBackupRegistry::capture(task, targets, stop)?;
-    let hash = choices.decide(&prepared, stop)?;
+    let hash = match choices.recover_decision_if_present(&prepared, stop)? {
+        Some(hash) => hash,
+        None => choices.decide(&prepared, stop)?,
+    };
     update(system, progress, |status| {
         status.phase = BackupPreparationPhase::RegistryPlacementDecided;
         status.completed_files = status.total_files;

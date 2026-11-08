@@ -6,6 +6,10 @@ use crate::container_storage::backup_databases::PreparedDatabases;
 mod materials;
 mod runtime;
 mod scoped;
+pub use scoped::{
+    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    open_decided_backup_targets,
+};
 mod store;
 pub(in crate::engine::backup_preparation) use scoped::resume_fenced;
 pub use scoped::{

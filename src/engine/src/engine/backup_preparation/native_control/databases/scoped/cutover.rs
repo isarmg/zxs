@@ -12,6 +12,10 @@ mod installation;
 mod registration;
 pub(in crate::engine) use fence::BackupSourceFenceEvidence;
 pub(in crate::engine::backup_preparation) use installation::resume_fenced;
+pub use registration::{
+    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    open_decided_backup_targets,
+};
 pub(in crate::engine) use registration::{
     BackupRegistryProjection, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };

@@ -71,6 +71,14 @@ impl Task {
         task.validate()?;
         Ok(task)
     }
+    /// Read only the original target intent. It conveys no authority; callers
+    /// must bind it to the independently trusted native decision before use.
+    pub(super) fn read_target(root: &DiskRoot) -> Result<Self> {
+        let task: Self =
+            crate::journal::decode_proof(&root.read_bytes(&root.path().join(INTENT), MAX_INTENT)?)?;
+        task.validate()?;
+        Ok(task)
+    }
     pub(super) fn require_current(&self, engine: &Engine) -> Result<()> {
         let request = &self.evidence.task.request;
         if self.bytes()?
@@ -85,7 +93,7 @@ impl Task {
 }
 pub(super) struct Target {
     pub(super) root: DiskRoot,
-    _lock: AdvisoryLock,
+    pub(super) _lock: AdvisoryLock,
 }
 
 impl Engine {

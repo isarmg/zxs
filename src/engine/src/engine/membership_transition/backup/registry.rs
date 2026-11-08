@@ -12,13 +12,18 @@ use decision::{DecisionReceipt, DecisionStore};
 use pending::{MemberIdentity, admission};
 use std::{io::Read, sync::atomic::AtomicBool};
 
+mod recovery;
+pub(in crate::engine) use recovery::AdmittedBackupDecision;
+pub use recovery::BackupRegistryDecisionHash;
+
 const CORE_KIND: &str = "backup-registry-placement-core";
 const ACCEPTANCE_KIND: &str = "backup-registry-placement-acceptance";
 const CERTIFICATE_KIND: &str = "backup-registry-placement-certificate";
 const RETAINED: &str = "metadata/backup-registry-decisions";
 const RESERVE: u64 = 16 * 1024 * 1024;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 struct OriginalMember {
     identity: MemberIdentity,
     seal_hash: String,

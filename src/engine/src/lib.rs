@@ -46,6 +46,10 @@ pub use engine::{
     offline_check_backup_preparation_batch, offline_check_backup_scoped_databases,
 };
 pub use engine::{
+    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryDecisionHash,
+    BackupRegistryRecoveryReport, open_decided_backup_targets,
+};
+pub use engine::{
     FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,
     FileHistoryMoveDecisionObligation, FileHistoryMoveNativePreparation,
 };

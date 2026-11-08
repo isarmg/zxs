@@ -2,12 +2,14 @@
 //! each initialized directory repository has one home on this complete target.
 use super::*;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct EntityPlacement {
     files: Vec<FileHome>,
     directories: Vec<DirectoryHome>,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 struct FileHome {
     history_tree_id: String,
     file_id: String,
@@ -15,7 +17,8 @@ struct FileHome {
     directory_id: Option<String>,
     version_ids: BTreeSet<String>,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 struct DirectoryHome {
     history_tree_id: String,
     directory_id: String,

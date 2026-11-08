@@ -27,6 +27,10 @@ pub use native_control::{
     offline_check_backup_cutover_inputs, offline_check_backup_native_preparation,
     offline_check_backup_object_databases, offline_check_backup_scoped_databases,
 };
+pub use native_control::{
+    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    open_decided_backup_targets,
+};
 pub(in crate::engine) use native_control::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };

@@ -5,7 +5,12 @@ use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
+mod recovery;
 mod runtime;
+pub use recovery::{
+    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    open_decided_backup_targets,
+};
 pub(super) use runtime::resume;
 const FORMAT: &str = "zxs-backup-registry-placement";
 const TASK: &str = "backup-preparation/registry-placement.json";
@@ -43,9 +48,10 @@ impl Task {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(in crate::engine) struct BackupRegistryProjection {
-    format: &'static str,
+    format: String,
     source_fence_hash: String,
     original_state_hash: String,
     original_configuration_hash: String,
@@ -55,7 +61,8 @@ pub(in crate::engine) struct BackupRegistryProjection {
     retained_original_disks: Vec<DiskConfig>,
     targets: Vec<TargetProjection>,
 }
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 struct TargetProjection {
     node: BackupPreparedTopologyNode,
     physical: PhysicalBinding,
@@ -81,6 +88,43 @@ impl PreparedBackupRegistry {
             targets,
             projection,
         })
+    }
+    pub(in crate::engine) fn source_evidence(&self) -> &BackupSourceFenceEvidence {
+        &self.task.installation.evidence
+    }
+    pub(in crate::engine) fn decision_copy(&self) -> Result<Option<Vec<u8>>> {
+        self.recheck_names()?;
+        for target in &self.targets {
+            inventory(&target.root)?;
+            let path = target.root.path().join(DIRECTORY).join(DECISION);
+            if preparation_path_exists(&target.root, &path)? {
+                return target.root.read_bytes(&path, MAX_DECISION_BYTES).map(Some);
+            }
+        }
+        Ok(None)
+    }
+    pub(in crate::engine) fn require_decision_copies(
+        &self,
+        inputs: &[u8],
+        decision: &[u8],
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        for target in &self.targets {
+            preparation_checkpoint(stop)?;
+            inventory(&target.root)?;
+            for (name, expected) in [(INPUTS, inputs), (DECISION, decision)] {
+                if target.root.read_bytes(
+                    &target.root.path().join(DIRECTORY).join(name),
+                    MAX_DECISION_BYTES,
+                )? != expected
+                {
+                    return Err(invalid(
+                        "selected target has another or incomplete native decision",
+                    ));
+                }
+            }
+        }
+        self.recheck_names()
     }
     pub(in crate::engine) fn source_fence_hash(&self) -> &str {
         &self.task.installation.source_fence_hash
@@ -189,7 +233,7 @@ fn project(task: &Task, targets: &[Target], stop: &AtomicBool) -> Result<BackupR
         )?);
     }
     Ok(BackupRegistryProjection {
-        format: FORMAT,
+        format: FORMAT.into(),
         source_fence_hash: installation.source_fence_hash.clone(),
         original_state_hash: installation.evidence.state_hash().into(),
         original_configuration_hash: task.selection().first().configuration_hash.clone(),

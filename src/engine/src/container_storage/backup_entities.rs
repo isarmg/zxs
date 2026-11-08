@@ -11,7 +11,7 @@ use crate::{
     disk::*,
     history_package::{AdmittedState, preparation_checkpoint},
 };
-use data_serialization::Serialize;
+use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -19,8 +19,10 @@ use std::{
 };
 
 mod placement;
+mod recovery;
 mod store;
 pub(crate) use placement::EntityPlacement;
+pub(crate) use recovery::MAX_RECOVERY_RANGE;
 const ROOT: &str = "activation-image";
 const MANIFEST: &str = "manifest.json";
 const MAX_ENTRIES: usize = 100_000;

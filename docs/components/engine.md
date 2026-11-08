@@ -232,3 +232,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 `start_backup_target_installation` 在完整原生源围栏后后台复制并读回所有准确目标的 FILE 正文／数据库和目录仓库森林，冷开只续原任务；完成相位仍不授权目标，也不解除全池写停。范围、预算和硬中止临时文件拒绝边界见[目标实体安装](../design/backup-target-entity-installation.md)。本片无编译／测试／审查／CI。
 
 `start_backup_registry_placement_decision` 在同一 source fence 的原成员共享槽内选择完整目标身份与实体地址，并将实际全成员凭据保存至全目标，冷开仅重建原任务。`RegistryPlacementDecided` 仍不释放全池停写；足够原选择后认证取消可能不再可达，不能作为普通设置的隐式阶段。准确范围见[共同 registry/placement 决定](../design/backup-registry-placement-decision.md)。本片未审查、编译、测试或 CI。
+
+### 已决定备份目标恢复
+
+`inspect_backup_registry_decision` 读取原成员真实共同选择和全部完整目标，供宿主独立保存决定摘要；`open_decided_backup_targets` 仅在该摘要与完整原目标集合均满足时提供有界、同次全正文校验的冻结恢复读取。原决定恢复不补缺票，读入口不生成 active Config/Generation、不开放 writer、不解除源围栏。见[具体边界](../design/backup-decided-target-recovery.md)。本片未审查、编译、测试或 CI。

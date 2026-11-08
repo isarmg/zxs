@@ -281,3 +281,7 @@
 ## 后继：原成员共同 registry/placement 选择
 
 [共同选择切片](../design/backup-registry-placement-decision.md)使用 source fence 的真实原成员共享决定槽，一次绑定全部目标身份、完整实体地址及旧源保留。实际全成员选择和全目标证书落盘仍不等于活动 writer 或最终切换；足够 Backup 选择会使认证 Abort 不可达，原池仍停写，不能接成普通设置隐藏操作。没有调用实际操作，按要求未审查、编译、测试或 CI。
+
+### 原共同决定的恢复读取
+
+`6b016b79` 后续的[已决定目标恢复](../design/backup-decided-target-recovery.md)只允许在全部原 native 票已存在时重装同一证书，并提供外部可信摘要绑定的完整目标冻结 reader。未编译/测试/审查/CI；不是最终激活或解围栏，源数据与停写均保留。
