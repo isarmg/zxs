@@ -48,9 +48,14 @@ impl Engine {
             &self.disk_resources,
             &self.state,
             Some(&selected),
+            crate::database_install::InstallAdmission::NewOperation,
         )?;
         self.blocked = true;
-        match names.apply_with_receipt() {
+        #[cfg(feature = "fault-injection")]
+        let applied = names.apply_observed(&mut |point| self.failpoint(point));
+        #[cfg(not(feature = "fault-injection"))]
+        let applied = names.apply_with_receipt();
+        match applied {
             Ok(receipt) => {
                 self.blocked = false;
                 Ok(receipt)

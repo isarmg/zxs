@@ -14,6 +14,7 @@ mod authority_selection;
 mod business;
 pub use business::FileHistoryCopyRequest;
 mod container_storage;
+mod database_install;
 pub use container_storage::DirectoryLayoutReceipt;
 mod directory_layout;
 pub use directory_layout::LayoutError as DirectoryLayoutError;

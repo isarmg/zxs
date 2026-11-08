@@ -61,6 +61,7 @@ struct PreparedHistory {
     history_id: String,
     slot_id: String,
     batch: Batch,
+    databases: Vec<(DirectoryId, crate::database_install::PreparedInstall)>,
     deferred: Vec<DeferredFile>,
     missing: Vec<String>,
     private: PrivatePreparation,
@@ -379,7 +380,10 @@ impl PreparedLayouts {
     pub(super) fn files(&self) -> impl Iterator<Item = &String> {
         self.projections.keys().map(|(_, _, file)| file)
     }
-    pub(super) fn apply(self) -> Result<DirectoryLayoutReceipt> {
+    pub(super) fn apply(
+        self,
+        observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<DirectoryLayoutReceipt> {
         let mut receipt = DirectoryLayoutReceipt {
             state_sequence: self.sequence,
             unavailable_containers: self.missing,
@@ -448,6 +452,16 @@ impl PreparedLayouts {
             // this point the preparation owner must preserve every new entity.
             history.private.referenced = true;
             layout_batch::apply(&anchor, &history.batch, &mut |_| Ok(()))?;
+            for (id, database) in history.databases {
+                let intent = layout_locator::load_directory(&anchor, &id, &mut |_| Ok(()))?;
+                let target = layout_locator::locate_directory(&anchor, &intent, &mut |_| Ok(()))?;
+                database.apply(root, observe)?;
+                // All mutation used the originally held entity, even if its
+                // name was replaced. Do not claim completion at another inode.
+                if !intent.inode().matches(root, &target)? {
+                    return Err(invalid("database entity name changed during installation"));
+                }
+            }
             history.private.cleanup_completed_parent();
             receipt.directories = receipt
                 .directories
@@ -484,6 +498,7 @@ pub(super) fn prepare(
     next: &State,
     explicit: Option<&BTreeSet<String>>,
     repair: bool,
+    admission: crate::database_install::InstallAdmission,
 ) -> Result<PreparedLayouts> {
     let selected = match explicit {
         Some(selected) => selected.clone(),
@@ -545,6 +560,7 @@ pub(super) fn prepare(
             }
         }
     }
+    let mut database_bytes = 0usize;
     for ((slot, history_id), goal) in groups {
         let disk = config
             .disks
@@ -810,7 +826,73 @@ pub(super) fn prepare(
                     .private_dir(target.parent().expect("outside target parent"))?;
             }
         }
-        let batch = Batch { directories, files };
+        let database_owners = directories
+            .iter()
+            .filter_map(|change| {
+                let id = change.intent.directory_id();
+                next.directory_git_repositories
+                    .get(id.as_str())
+                    .or_else(|| previous.directory_git_repositories.get(id.as_str()))
+                    .map(|git| (id.clone(), git.repository_id.clone()))
+            })
+            .collect();
+        let mut databases = Vec::new();
+        if let Some(goal) = goal {
+            for id in goal
+                .directories
+                .keys()
+                .filter(|id| next.directory_git_repositories.contains_key(id.as_str()))
+            {
+                let database = super::directory_database::prepare(next, id.as_str())?;
+                database_bytes += database.bytes.len();
+                if database_bytes > super::directory_database::MAX_TOTAL_BYTES {
+                    return Err(Error::new(
+                        ErrorCode::ResourceLimit,
+                        "directory databases exceed the layout preparation byte budget",
+                    ));
+                }
+                let change = directories
+                    .iter()
+                    .find(|change| change.intent.directory_id() == id)
+                    .expect("invariant: database has its directory move");
+                let repository = &next.directory_git_repositories[id.as_str()].repository_id;
+                let scope = crate::database_install::Scope::directory(
+                    &history_id,
+                    repository,
+                    id.as_str(),
+                )?;
+                let install = crate::database_install::PreparedInstall::capture(
+                    &held.root,
+                    &history,
+                    (&sources[id], change.intent.inode().identity()),
+                    (scope, admission),
+                    database.bytes,
+                    super::directory_database::MAX_BYTES,
+                    |bytes| super::directory_database::verify_scope(bytes, repository, id.as_str()),
+                )?;
+                databases.push((id.clone(), install));
+            }
+        }
+        let (reserved_bytes, reserved_entries) =
+            databases
+                .iter()
+                .try_fold((0u64, 0usize), |(bytes, entries), (_, install)| {
+                    let (next_bytes, next_entries) = install.reservation();
+                    Ok::<_, Error>((
+                        bytes
+                            .checked_add(next_bytes)
+                            .ok_or_else(|| invalid("database retention budget overflow"))?,
+                        entries
+                            .checked_add(next_entries)
+                            .ok_or_else(|| invalid("database retention entry budget overflow"))?,
+                    ))
+                })?;
+        admission.check(&held.root, &history, reserved_bytes, reserved_entries)?;
+        let batch = Batch {
+            directories,
+            files,
+            databases: database_owners,
+        };
         // Stage parents are metadata only; needed by the zero-rename preflight.
         held.root
             .private_dir(&history.join(".zxs-layout/staging"))?;
@@ -823,6 +905,7 @@ pub(super) fn prepare(
             history_id,
             slot_id: slot,
             batch,
+            databases,
             deferred,
             missing,
             private: preparation,

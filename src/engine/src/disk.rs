@@ -20,6 +20,7 @@ pub use admission::{
 };
 mod owned;
 pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
+pub(crate) use owned::{FileStamp, HeldRegular, InstallExchange};
 mod fencing;
 pub(crate) use fencing::{DiskWriter, FenceOwner, WriterLocks};
 mod discovery;

@@ -147,7 +147,8 @@ impl Error {
         match self {
             Self::DirectoryLayout(error) => match error.as_ref() {
                 crate::DirectoryLayoutError::ResourceLimit => ErrorCode::ResourceLimit,
-                crate::DirectoryLayoutError::ExtraDirectoryCollision { .. } => {
+                crate::DirectoryLayoutError::ExtraDirectoryCollision { .. }
+                | crate::DirectoryLayoutError::ReservedMetadataCollision { .. } => {
                     ErrorCode::NameCollision
                 }
                 crate::DirectoryLayoutError::RepositoryMissing { .. }

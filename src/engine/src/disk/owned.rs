@@ -8,6 +8,9 @@ use std::{
     sync::{Arc, OnceLock, RwLock, RwLockReadGuard},
 };
 
+mod install;
+pub(crate) use install::{FileStamp, HeldRegular, InstallExchange};
+
 /// A path is an address below this held root, never a request to reopen the root.
 pub(crate) struct DiskRoot {
     path: PathBuf,
@@ -397,6 +400,26 @@ impl DiskRoot {
     pub(crate) fn private_child(&self, path: &Path) -> Result<Self> {
         let operation = self.operation()?;
         let directory = operation.directory(path)?;
+        let directory =
+            OpenAt2Root::from_directory(directory, MountPolicy::SameMount).map_err(fs_error)?;
+        Self::held(path.to_owned(), directory, self.binding().cloned())
+    }
+
+    /// Check the intended entity on the very descriptor that all later child
+    /// operations retain. A later replacement of its name cannot retarget I/O.
+    pub(crate) fn private_child_matching(
+        &self,
+        path: &Path,
+        expected: platform_io::fs_safety::linux::FileIdentity,
+    ) -> Result<Self> {
+        let operation = self.operation()?;
+        let directory = operation.directory(path)?;
+        if platform_io::fs_safety::linux::FileIdentity::from_fd(&directory)? != expected {
+            return Err(Error::new(
+                ErrorCode::ContainerLayoutInvalid,
+                "database entity identity changed before retaining its directory",
+            ));
+        }
         let directory =
             OpenAt2Root::from_directory(directory, MountPolicy::SameMount).map_err(fs_error)?;
         Self::held(path.to_owned(), directory, self.binding().cloned())

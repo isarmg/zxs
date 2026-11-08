@@ -248,6 +248,7 @@ fn two_file_containers_swap_without_replacing_either_inode() {
         address(&fixture.root_id, "left"),
     );
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![fixture.root_change()],
         files: vec![left.clone(), right.clone()],
     };
@@ -276,6 +277,7 @@ fn file_and_directory_with_nested_entities_exchange_names_as_whole_containers() 
     );
     let outside = fixture.file('b', &fixture.root_id, "B", address(&fixture.root_id, "A"));
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![fixture.root_change(), directory.clone(), nested.clone()],
         files: vec![inside.clone(), outside.clone()],
     };
@@ -310,6 +312,7 @@ fn parent_rename_translates_child_locators_without_staging_the_child() {
         address(child.intent.directory_id(), "data"),
     );
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![fixture.root_change(), parent.clone(), child.clone()],
         files: vec![file.clone()],
     };
@@ -359,6 +362,7 @@ fn unknown_empty_directory_and_symlink_targets_are_rejected_without_record_write
         let record = file_locator_path(&fixture.anchor(), file.intent.file_id()).unwrap();
         let bytes = fixture.root.read_bytes(&record, 64 * 1024).unwrap();
         let batch = Batch {
+            databases: BTreeMap::new(),
             directories: vec![fixture.root_change()],
             files: vec![file.clone()],
         };
@@ -394,6 +398,7 @@ fn replaced_source_inode_is_rejected_before_persisting_a_new_move() {
     let replacement = EntityInode::capture(&fixture.root, &source).unwrap();
     assert_ne!(replacement, file.intent.inode());
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![fixture.root_change()],
         files: vec![file.clone()],
     };
@@ -471,7 +476,11 @@ fn reload_batch(fixture: &Fixture, batch: &Batch) -> Batch {
             next
         })
         .collect();
-    Batch { directories, files }
+    Batch {
+        directories,
+        files,
+        databases: batch.databases.clone(),
+    }
 }
 
 #[test]
@@ -490,6 +499,7 @@ fn stopped_after_file_staging_reloads_exact_records_and_converges() {
         address(&fixture.root_id, "left"),
     );
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![fixture.root_change()],
         files: vec![left.clone(), right.clone()],
     };
@@ -565,6 +575,7 @@ fn prepared_root_with_its_final_basename_and_prepared_child_survive_cold_rebuild
     }
     let file = fixture.stable_file('a', "namespace/source", address(&child_id, "data"));
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories,
         files: vec![file.clone()],
     };
@@ -637,6 +648,7 @@ fn staged_ancestor_reloads_following_children_and_old_tails_stop_at_the_new_file
     );
     let outside = fixture.file('b', &fixture.root_id, "B", address(&fixture.root_id, "A"));
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![
             fixture.root_change(),
             parent.clone(),
@@ -733,6 +745,7 @@ fn stable_exit_from_a_retired_directory_recovers_and_drops_its_directory_depende
     fixture.root.private_dir(&stable_parent).unwrap();
     let target = stable_parent.join("archived");
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![fixture.root_change(), directory.clone()],
         files: vec![file.clone()],
     };
@@ -799,6 +812,7 @@ fn stable_target_below_its_own_container_is_rejected_before_record_writes() {
     let record = file_locator_path(&fixture.anchor(), file.intent.file_id()).unwrap();
     let bytes = fixture.root.read_bytes(&record, 64 * 1024).unwrap();
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![fixture.root_change()],
         files: vec![file.clone()],
     };
@@ -851,6 +865,7 @@ fn topology_uses_the_smallest_ready_id_and_excludes_retired_directories() {
     )
     .unwrap();
     let batch = Batch {
+        databases: BTreeMap::new(),
         directories: vec![
             early_child.clone(),
             late.clone(),

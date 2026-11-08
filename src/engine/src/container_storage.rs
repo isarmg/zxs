@@ -1,6 +1,7 @@
 //! Ordinary version files in one renameable directory per stable file identity.
 use crate::{disk::*, *};
 mod changes;
+mod directory_database;
 mod layout_batch;
 mod layout_goals;
 mod layout_locator;
@@ -19,6 +20,14 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+pub(crate) fn directory_database_name() -> &'static str {
+    directory_database::NAME
+}
+
+pub(crate) fn validate_database_directory_id(value: &str) -> Result<()> {
+    layout_locator::DirectoryId::parse(value).map(|_| ())
+}
 
 fn invalid(message: &str) -> Error {
     Error::new(storage_contract::ErrorCode::ContainerLayoutInvalid, message)
@@ -343,12 +352,12 @@ fn container_at(
     }
     let root = history.join("file-containers");
     if !directory_exists_at(disk, &root)? {
-        reject_unindexed_shared_file(disk, history, file_id, observe)?;
+        reject_unindexed_shared_file(disk, history, history_id, file_id, observe)?;
         return Ok(None);
     }
     let root = root.join(file_id);
     if !directory_exists_at(disk, &root)? {
-        reject_unindexed_shared_file(disk, history, file_id, observe)?;
+        reject_unindexed_shared_file(disk, history, history_id, file_id, observe)?;
         return Ok(None);
     }
     let mut selected = None;
@@ -394,7 +403,7 @@ fn container_at(
         // A complete bounded namespace absence check is needed only when the
         // ordinary stable anchor also has no container; it never rebuilds or
         // adopts an unindexed shared object.
-        reject_unindexed_shared_file(disk, history, file_id, observe)?;
+        reject_unindexed_shared_file(disk, history, history_id, file_id, observe)?;
     }
     Ok(selected)
 }
@@ -402,6 +411,7 @@ fn container_at(
 fn reject_unindexed_shared_file(
     disk: &DiskRoot,
     history: &Path,
+    history_id: Option<&str>,
     file_id: &str,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<()> {
@@ -411,6 +421,7 @@ fn reject_unindexed_shared_file(
     }
     let mut remaining = vec![(namespace, 0usize)];
     let mut visited = 0usize;
+    let mut database_bytes = 0usize;
     while let Some((directory, depth)) = remaining.pop() {
         observe(0)?;
         if depth > 64 || visited == 1_000_000 {
@@ -441,6 +452,21 @@ fn reject_unindexed_shared_file(
             observe(0)?;
             let entry = entry?;
             let path = directory.join(entry.as_path());
+            if entry.as_os_str() == directory_database::NAME {
+                let history_id = history_id.ok_or_else(|| {
+                    invalid("directory database inventory requires an admitted history")
+                })?;
+                database_bytes += directory_database::verify_located_at(
+                    disk, history, history_id, &path, observe,
+                )?;
+                if database_bytes > directory_database::MAX_TOTAL_BYTES {
+                    return Err(Error::new(
+                        ErrorCode::ResourceLimit,
+                        "directory database absence inventory exceeds its byte budget",
+                    ));
+                }
+                continue;
+            }
             let metadata = disk
                 .optional_metadata(&path)?
                 .ok_or_else(|| invalid("shared namespace changed during its absence inventory"))?;
@@ -995,7 +1021,13 @@ impl PreparedNames {
         self.apply_with_receipt().map(|_| ())
     }
     pub(crate) fn apply_with_receipt(self) -> Result<DirectoryLayoutReceipt> {
-        let receipt = self.layouts.apply()?;
+        self.apply_observed(&mut |_| Ok(()))
+    }
+    pub(crate) fn apply_observed(
+        self,
+        observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<DirectoryLayoutReceipt> {
+        let receipt = self.layouts.apply(observe)?;
         let Some(mut cache) = self.cache else {
             return Ok(receipt);
         };
@@ -1084,6 +1116,37 @@ pub(crate) fn prepare_names(
     projection: &ProjectionTransition<'_>,
     maximum: usize,
 ) -> Result<PreparedNames> {
+    prepare_names_with_admission(
+        config,
+        resources,
+        projection,
+        maximum,
+        crate::database_install::InstallAdmission::NewOperation,
+    )
+}
+
+pub(crate) fn prepare_recovered_names(
+    config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
+    projection: &ProjectionTransition<'_>,
+    maximum: usize,
+) -> Result<PreparedNames> {
+    prepare_names_with_admission(
+        config,
+        resources,
+        projection,
+        maximum,
+        crate::database_install::InstallAdmission::DecidedRecovery,
+    )
+}
+
+fn prepare_names_with_admission(
+    config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
+    projection: &ProjectionTransition<'_>,
+    maximum: usize,
+    admission: crate::database_install::InstallAdmission,
+) -> Result<PreparedNames> {
     let layouts = shared_layout::prepare(
         config,
         resources,
@@ -1091,6 +1154,7 @@ pub(crate) fn prepare_names(
         projection.next().state(),
         None,
         false,
+        admission,
     )?;
     prepare_names_inner(
         config, resources, projection, maximum, false, false, layouts,
@@ -1104,8 +1168,10 @@ pub(crate) fn prepare_layout_repair(
     resources: &Arc<DiskResources>,
     state: &State,
     explicit: Option<&BTreeSet<String>>,
+    admission: crate::database_install::InstallAdmission,
 ) -> Result<PreparedNames> {
-    let layouts = shared_layout::prepare(config, resources, state, state, explicit, true)?;
+    let layouts =
+        shared_layout::prepare(config, resources, state, state, explicit, true, admission)?;
     let empty = State::default();
     let projection = ProjectionTransition::new(&empty, state, None)?;
     prepare_names_inner(

@@ -142,6 +142,12 @@ pub enum LayoutError {
         name: String,
         path: String,
     },
+    #[error("reserved directory metadata name {name} conflicts with {path} in {directory_id}")]
+    ReservedMetadataCollision {
+        directory_id: String,
+        name: String,
+        path: String,
+    },
     #[error("main target {path} in {directory_id} has no ordinary directory parent at {parent}")]
     MainStructureConflict {
         directory_id: String,
@@ -430,6 +436,15 @@ fn main_layouts<'a>(
                 return Err(LayoutError::ExtraDirectoryCollision {
                     directory_id: (*directory).into(),
                     name: extra.as_str().into(),
+                    path: path.into_string(),
+                });
+            }
+            if path.key().split('/').next()
+                == Some(crate::container_storage::directory_database_name())
+            {
+                return Err(LayoutError::ReservedMetadataCollision {
+                    directory_id: (*directory).into(),
+                    name: crate::container_storage::directory_database_name().into(),
                     path: path.into_string(),
                 });
             }
@@ -1096,6 +1111,11 @@ pub(crate) fn plan_root<'a>(
     }
     for layout in repositories.values() {
         joined(layout.root.as_ref(), extra.as_str(), &mut budget)?;
+        joined(
+            layout.root.as_ref(),
+            crate::container_storage::directory_database_name(),
+            &mut budget,
+        )?;
         for path in layout.directories.keys() {
             joined(layout.root.as_ref(), path, &mut budget)?;
         }

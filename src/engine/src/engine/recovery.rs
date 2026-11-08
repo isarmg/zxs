@@ -665,6 +665,7 @@ impl Engine {
                 &self.disk_resources,
                 &self.state,
                 None,
+                crate::database_install::InstallAdmission::DecidedRecovery,
             )?
             .apply()?;
         }

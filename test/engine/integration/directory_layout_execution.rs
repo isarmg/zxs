@@ -794,6 +794,8 @@ fn finalized_before_layout_application_recovers_after_private_cleanup() {
         .engine
         .reconcile_directory_layout(&fixture.repository.repository_id)
         .unwrap();
+    let database = fixture.root().join(".zxs-directory.sqlite");
+    let before = databases::records(&database);
     let prepared = fixture.prepare_save("Decided/new.txt", b"decided before layout application");
     fixture.engine.inject_fault_once("after_finalize");
     let error = fixture
@@ -801,6 +803,7 @@ fn finalized_before_layout_application_recovers_after_private_cleanup() {
         .finish_workspace_commit(prepared)
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::InDoubt);
+    assert_eq!(databases::records(&database), before);
     assert!(!fixture.root().join("Decided").exists());
     assert!(
         fs::read_dir(fixture.history().join(".zxs-layout/prepared"))
@@ -810,6 +813,13 @@ fn finalized_before_layout_application_recovers_after_private_cleanup() {
     );
     let fixture = fixture.reopen();
     let entry = fixture.entry("Decided/new.txt");
+    assert!(
+        databases::records(&database)
+            .values()
+            .filter_map(|record| record.get("entries"))
+            .flat_map(|entries| entries.as_array().unwrap())
+            .any(|saved| saved["version_id"] == entry.version_id)
+    );
     fixture.assert_body(
         &fixture.root().join("Decided/new.txt"),
         &entry,
@@ -822,3 +832,12 @@ fn finalized_before_layout_application_recovers_after_private_cleanup() {
             .is_none()
     );
 }
+
+#[path = "directory_layout_execution/databases.rs"]
+mod databases;
+
+#[path = "directory_layout_execution/sqlite_review_regressions.rs"]
+mod sqlite_review_regressions;
+
+#[path = "directory_layout_execution/sqlite_install_recovery_review.rs"]
+mod sqlite_install_recovery_review;

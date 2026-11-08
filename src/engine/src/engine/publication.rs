@@ -516,7 +516,7 @@ impl Engine {
             None => {
                 let projection =
                     crate::state_projection::ProjectionTransition::new(&self.state, next, None)?;
-                crate::container_storage::prepare_names(
+                crate::container_storage::prepare_recovered_names(
                     &self.config,
                     &self.disk_resources,
                     &projection,
@@ -564,6 +564,9 @@ impl Engine {
         self.failpoint("after_finalize")?;
         // Only a decided candidate may rename a published file container.
         // A crash leaves the operation indeterminate and recovery replays it.
+        #[cfg(feature = "fault-injection")]
+        names.apply_observed(&mut |point| self.failpoint(point))?;
+        #[cfg(not(feature = "fault-injection"))]
         names.apply()?;
         let directory_result = next.operations.get(&c.operation_id).ok_or_else(|| {
             Error::new(

@@ -42,6 +42,8 @@ pub(super) struct FutureFile {
 
 #[derive(Clone, Debug)]
 pub(super) struct Batch {
+    /// Initialized directory identities permitted to carry a local database.
+    pub(super) databases: BTreeMap<DirectoryId, String>,
     /// Every registered directory in the admitted moving namespace, including
     /// unchanged descendants, retired directories and new private preparations.
     pub(super) directories: Vec<DirectoryMove>,
@@ -517,6 +519,7 @@ fn inventory(
     anchor: &HistoryAnchor<'_>,
     prepared: &Prepared,
     locations: &BTreeMap<PathBuf, (Entity, EntityInode)>,
+    databases: &BTreeMap<DirectoryId, String>,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<()> {
     let mut roots: BTreeSet<_> = prepared.directory_sources.values().cloned().collect();
@@ -524,10 +527,35 @@ fn inventory(
     if probe(anchor, &repositories, observe)?.is_some() {
         roots.insert(repositories);
     }
+    let mut database_bytes = 0usize;
     for root in roots {
         for entry in anchor.root().entries(&root)? {
             observe(0)?;
             let path = root.join(entry?.as_path());
+            if path
+                .file_name()
+                .is_some_and(|name| name == super::directory_database::NAME)
+            {
+                let directory = prepared
+                    .directory_sources
+                    .iter()
+                    .find(|(_, source)| **source == root)
+                    .and_then(|(id, _)| databases.get(id).map(|repository| (id, repository)))
+                    .ok_or_else(|| invalid("database appears outside an initialized directory"))?;
+                database_bytes += super::directory_database::verify_at(
+                    anchor.root(),
+                    &path,
+                    directory.1,
+                    directory.0.as_str(),
+                )?;
+                if database_bytes > super::directory_database::MAX_TOTAL_BYTES {
+                    return Err(crate::Error::new(
+                        storage_contract::ErrorCode::ResourceLimit,
+                        "directory database inventory exceeds its byte budget",
+                    ));
+                }
+                continue;
+            }
             let Some((_, inode)) = locations.get(&path) else {
                 return Err(invalid(format!(
                     "managed directory contains an unregistered entry: {path:?}"
@@ -807,7 +835,7 @@ fn prepare(
     prepare_files(anchor, batch, &mut prepared, observe)?;
     let locations = entity_locations(&prepared)?;
     targets(anchor, &prepared, &changes, future, &locations, observe)?;
-    inventory(anchor, &prepared, &locations, observe)?;
+    inventory(anchor, &prepared, &locations, &batch.databases, observe)?;
     anchor.check(anchor.history_id())?;
     Ok(prepared)
 }
