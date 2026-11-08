@@ -260,6 +260,7 @@ impl Engine {
         }
         self.require_no_commit_preparation()?;
         let added = self.validate_pending_target()?;
+        self.require_pending_addition_chain()?;
         let source = PendingControlArchive::open(self, source_archive, expected_archive_root)?;
         let pending =
             self.admit_pending_members(source, expected_archive_root, added, directories)?;
@@ -291,6 +292,7 @@ impl Engine {
 
     fn resume_pending_control(&mut self, pending: &mut PendingMembership) -> Result<()> {
         self.validate_pending_target()?;
+        self.require_pending_addition_chain()?;
         pending.source.verify_current_fence(self)?;
         for member in &pending.members {
             self.validate_pending_resource(member)?;

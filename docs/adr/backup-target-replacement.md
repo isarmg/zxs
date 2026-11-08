@@ -248,3 +248,9 @@
 `start_backup_object_database_preparation` 在原 native 完整目标集合后追加实际 FILE／目录仓库 SQLite 编码、隔离落盘、逐盘读取和共同阶段记录；同任务正常冷开自动续作。`offline_check_backup_object_databases` 逐目标从其完整 State 重新构造期望，不依靠源、完成 flag 或另一健康 peer。每盘都保留全部文件及父子目录仓库，不分片；旧 graph-only copy 缺 lifecycle、未知准备条目、空间不足或原证据损坏整单阻塞。旧材料不覆盖、不删除。
 
 这里只准备隔离对象库，不是活动容器安装、SYSTEM／盘根历史库闭合或最终共同切换。`ObjectDatabasesPrepared` 不是接纳令牌，完整低级链 helper 写者和代际归档仍未实现。范围、资源和未编译／测试／审查／CI边界见[对象数据库准备](../design/backup-object-database-preparation.md)。
+
+### 既有 Add 写者的完整低级链门禁（后继源码，未验收）
+
+本片在纯 Add 开始准备、待成员接纳／续作和每个新 Joint 选择前，沿新增盘逐跳核所有必要原祖先的 Enabled 登记、实际 held 根／命名根和 seal。新增祖先必须属于同一 exact-root 批次，不接受 Config 中的 Disabled／Detached 历史条目或待补占位。冷态按原 Add 的认证 registry 核链，不用今日掉盘改写已存在的投票或收据。
+
+这是[完整链生产门禁](../design/membership-complete-backup-chain.md)，不是外来 helper 接纳或迁移最终切换；活动多下级路由、源增量、三范围完整数据库安装与共同决定仍未完成。按当前指令未编译、测试、审查或 CI，不增加旧格式转换或删改原数据。

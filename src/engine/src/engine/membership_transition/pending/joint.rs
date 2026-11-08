@@ -478,6 +478,13 @@ impl Engine {
                     }
                     _ => None,
                 };
+                if install {
+                    store.decision.admit_fresh_joint(
+                        &proposal.object.hash,
+                        &acceptance.hash,
+                        || self.require_pending_addition_chain(),
+                    )?;
+                }
                 let decision = store.decision.joint_receipt(
                     &proposal.object.hash,
                     &acceptance.hash,

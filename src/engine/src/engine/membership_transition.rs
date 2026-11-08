@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 mod abort;
 mod archive;
+mod complete_chain;
 pub use abort::MembershipAbortStatus;
 mod decision;
 mod effect;
@@ -291,6 +292,7 @@ impl Engine {
     ) -> Result<MembershipFenceStatus> {
         let target = ValidatedConfig::try_from(target)?;
         pending::admission::validate_pure_add_target(&self.config, &target, &self.root)?;
+        self.require_addition_chain(&target)?;
         self.begin_membership_handoff_with_effect(target, None, principal, operation_id)
     }
 
@@ -306,6 +308,7 @@ impl Engine {
     ) -> Result<MembershipFenceStatus> {
         let target = ValidatedConfig::try_from(target)?;
         pending::admission::validate_pure_add_target(&self.config, &target, &self.root)?;
+        self.require_addition_chain(&target)?;
         self.begin_membership_handoff_prepared(
             target,
             None,

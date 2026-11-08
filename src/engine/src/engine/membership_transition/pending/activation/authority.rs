@@ -259,9 +259,15 @@ impl AuthorityNode {
                 "generation authority is not a pure addition",
             ));
         }
-        if let Some(registry) = &self.registry {
-            registry.verify(&verified.intent, &verified.intent.target)?;
-        }
+        let registry = self
+            .registry
+            .as_ref()
+            .map(|registry| registry.verify(&verified.intent, &verified.intent.target))
+            .transpose()?;
+        crate::engine::membership_transition::complete_chain::verify_authority_chain(
+            &verified.intent,
+            registry.as_ref(),
+        )?;
         Ok(verified.intent)
     }
 }

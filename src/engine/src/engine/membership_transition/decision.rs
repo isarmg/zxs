@@ -552,6 +552,31 @@ impl DecisionStore {
         }
         Ok(())
     }
+    /// Admit today's mutable chain only for an empty decision slot. An exact
+    /// existing receipt remains immutable and is synchronized by joint_receipt;
+    /// another choice or an uncertain read is never treated as an empty slot.
+    pub(super) fn admit_fresh_joint(
+        &self,
+        proposal: &str,
+        acceptance: &str,
+        admit: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let expected = joint_record(
+            &self.binding.transition_hash,
+            &self.binding.identity,
+            proposal,
+            acceptance,
+        )?;
+        match self.observe()? {
+            None => admit(),
+            Some((_, record)) if record == expected => Ok(()),
+            Some(_) => Err(Error::new(
+                ErrorCode::LogFork,
+                "membership decision differs from the proposed joint choice",
+            )),
+        }
+    }
+
     pub(super) fn joint_receipt(
         &self,
         proposal: &str,

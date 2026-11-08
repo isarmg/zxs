@@ -48,7 +48,9 @@ impl Engine {
         {
             return Err(unsupported());
         }
-        validate_pure_add_target(origin, target, &self.root)
+        let added = validate_pure_add_target(origin, target, &self.root)?;
+        self.require_addition_chain_registry(target)?;
+        Ok(added)
     }
 
     pub(super) fn admit_pending_members(
