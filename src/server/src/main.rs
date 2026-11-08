@@ -22,9 +22,14 @@ fn log_filter_from_env() -> std::result::Result<EnvFilter, LogFilterError> {
     }
 }
 
-/// Direct service entry. Daily administration and initialization belong in Web.
+/// Direct service entry. Offline preparation belongs to the independent helper.
 #[derive(Parser)]
-#[command(name = "zxs", version, about = "ZXS storage and Web management daemon")]
+#[command(
+    name = "zxs",
+    version,
+    about = "ZXS storage and Web management daemon",
+    after_help = "The current daemon requires an existing root-owned /zxs maintenance root and holds its exclusive OS lease until all runtime workers exit. Prepare the root with zxs-helper host preview/prepare. The root is not proof of completed system initialization. Stop older or nonparticipating writers separately; no service manager is invoked."
+)]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
     #[arg(long, requires_all = ["max_retained_workspaces_per_principal", "max_retained_workspace_metadata_bytes", "max_retained_workspace_metadata_bytes_per_principal"])]
@@ -148,7 +153,23 @@ fn main() -> std::process::ExitCode {
         .with_writer(std::io::stderr)
         .log_internal_errors(false)
         .init();
-    let result = run_with_runtime(args);
+    // Keep this owner outside #[tokio::main]: its return includes runtime
+    // destruction and the join of blocking work, including startup failures.
+    let lease = match platform_io::service_lease::ServiceLease::host() {
+        Ok(lease) => lease,
+        Err(error) => {
+            eprintln!(
+                "zxs: service exclusion unavailable: {error}; use the root helper host preview/prepare when /zxs is absent. Stop and drain a participating daemon/helper before retrying. No runtime or pool was opened."
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let mut result = run_with_runtime(args);
+    if let Err(error) = lease.recheck() {
+        eprintln!("zxs: service lease root changed: {error}; inspect the host before restarting");
+        result = std::process::ExitCode::FAILURE;
+    }
+    drop(lease);
     // This point is after Tokio has joined its blocking pool, not merely after
     // the HTTP connection futures stopped. Do not log completion earlier.
     tracing::info!("daemon runtime stopped; admitted blocking work joined");

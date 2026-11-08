@@ -57,3 +57,7 @@ POST 输入最大 64 KiB，正文读取期限 15 秒；磁盘读取只允许一�
 ## 后继部署准备
 
 独立控制台新增 `/api/deployment/preview`、`/api/deployment/prepare`，按完整输入生成和保存[未激活 systemd/SMB 配置包](helper-deployment-preparation.md)。该事务复用同一 CSRF/Origin、单任务 owner 与排空，固定写 `/zxs` 的新专用目录，不替换现用服务配置，未取得主服务停服租约也不宣称服务已启用。源码未运行。
+
+## 根目录准备与当前 daemon 租约
+
+后继 `/api/host/preview`、`/api/host/prepare` 提供 root 明确确认的固定 `/zxs` 空根准备，不能当完整初始化。部署包准备现在与当前 ZXS 二进制共享同一目录 inode 租约，空闲控制台不持锁，也不宣称 Samba/旧二进制已停。见[生命周期边界](helper-service-exclusion.md)。源码未运行。

@@ -19,6 +19,7 @@ pub mod fs_safety;
 pub mod payload;
 pub mod schema_identity;
 pub mod secret;
+pub mod service_lease;
 pub mod sqlite;
 
 fn lower_hex(bytes: &[u8]) -> String {

@@ -22,7 +22,7 @@ zxs-helper deployment prepare --service-user zxs --service-group zxs \
 
 ## 原子发布与可恢复范围
 
-固定父目录 `/zxs` 必须已存在、当前 root 所有且其他用户/组不可写。它不会被自动创建、chown 或放宽权限。持有目录 fd 和同目录非阻塞排他锁，所有目标文件相对该 fd 操作，并在完成点重核父路径身份。这是**辅助工具准备事务锁，不是 ZXS/Samba 服务停服锁**。
+固定父目录 `/zxs` 必须已存在、当前 root 所有且其他用户/组不可写。它不会被自动创建、chown 或放宽权限。持有目录 fd 和同目录非阻塞排他锁，所有目标文件相对该 fd 操作，并在完成点重核父路径身份。后继[生命周期互斥](helper-service-exclusion.md)使当前 ZXS 可执行程序也必须持有同一 inode 锁，故准备期间能排斥该当前 daemon；**不是 Samba、旧二进制或任意外部写者的停服证明**。
 
 确认 `prepare-inactive-configuration` 后，将 `manifest.json`、`zxs.service` 及可选 `smb.conf` 写入 `0700` 的 `.zxs-helper-deployment-<摘要>.pending/`，文件为 `0600`、普通单链接。所有字节同步，目录同步后用 `RENAME_NOREPLACE` 整目录发布为 `.zxs-helper-deployment-<摘要>/`，再同步父目录。目标名不被系统服务自动读取；不写 `/etc`，没有 reload、start、enable、账户命令或密码提交。
 
@@ -35,6 +35,6 @@ UI 输入更改立即取消旧预览与确认；确认请求携带冻结输入�
 
 ## 生效前仍未实现的条件
 
-实际 systemd/Samba 安装、外部语法校验、依赖/VFS 安装、Unix/Samba 账户与 passdb、私有目录准备、首次系统/磁盘初始化、完整交接与主服务全生命周期互斥均未完成。不得将 `systemctl is-active` 的瞬时状态或“已停服”复选框当并发安全证明。后续真正替换现用配置前须有服务租约、原配置备份与持久提交/恢复，并显式决定是否加载、启动或启用开机服务。本片没有尝试这些动作，因此也不需要伪造已停服的事实。
+实际 systemd/Samba 安装、外部语法校验、依赖/VFS 安装、Unix/Samba 账户与 passdb、私有目录准备、首次系统/磁盘初始化、完整交接与旧版/第三方进程与 Samba 生命周期互斥均未完成。当前 ZXS 二进制的共用租约已有后继源码，但尚未构建/运行。不得将 `systemctl is-active` 的瞬时状态或“已停服”复选框当并发安全证明。后续真正替换现用配置前须有服务租约、原配置备份与持久提交/恢复，并显式决定是否加载、启动或启用开机服务。本片没有尝试这些动作，因此也不需要伪造已停服的事实。
 
 部署包不是业务权威或运行准备完成标记。主服务不能消费它作为已初始化、已准入或已恢复的系统。包中的 `required_before_activation` 和结果中的 `live_configuration_modified=false`、`service_started_or_enabled=false`、`system_initialized=false` 必须保持可见。

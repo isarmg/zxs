@@ -12,9 +12,18 @@
     <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、首装与部署准备</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、生成未激活配置或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根、生成未激活配置或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
+    <section class="card">
+      <h2>准备安装根与运行互斥</h2>
+      <p>只在缺少时原子创建 root 所有、0755 的 <code>/zxs</code>，已有安全目录只核验并同步，不改已有权限或内容。当前 ZXS 可执行程序启动前独占该目录的 OS 租约，直到所有运行时工作结束。准备此空根不代表账户、磁盘或系统已经初始化。</p>
+      <p class="muted">不会停止或启动任何服务。旧二进制、第三方进程、Samba/passdb 和其他设备写入者不受此协议自动约束，仍须单独停服。这里的成功回执不证明当前没有其他进程运行。</p>
+      <button id="host-preview" type="button">预览安装根准备</button>
+      <pre id="host-plan" hidden></pre>
+      <button id="host-prepare" type="button" hidden>确认仅准备 /zxs 根目录</button>
+      <pre id="host-receipt" hidden></pre>
+    </section>
     <section class="card">
       <h2>安装内置 ZXS 程序</h2>
       <p>只将匹配版本可执行文件放到 <code>/usr/local/bin/zxs</code>，已有不同内容、链接或不安全权限一律拒绝，不覆盖数据、配置或凭据。相同文件可重新核验并同步持久化。本片不会安装依赖、设置 systemd/SMB、初始化系统或启动 ZXS。</p>
@@ -38,7 +47,7 @@
           <label>Samba 独立认证账户 <input id="smb-account" maxlength="32" autocomplete="off" spellcheck="false" placeholder="zxs-owner"></label>
           <label>可信 Samba 连接 UID <input id="smb-peer-uid" type="number" min="0" max="4294967295" step="1" value="0" autocomplete="off"></label>
         </div>
-        <p class="muted">UID 0 只适用于已经验证桥接在 Samba root 身份下连接的主机。这些账户名只做语法约束，尚未核实系统账户、UID、VFS ABI、依赖、路径权限或初次初始化。原样准备不是配置生效，也不是已取得主服务停服锁。</p>
+        <p class="muted">UID 0 只适用于已经验证桥接在 Samba root 身份下连接的主机。这些账户名只做语法约束，尚未核实系统账户、UID、VFS ABI、依赖、路径权限或初次初始化。准备期间与当前 ZXS 可执行程序互斥，但不证明旧版或 Samba 已停。原样准备不是配置生效。</p>
         <button id="deployment-preview" type="submit">预览准确配置</button>
       </form>
       <pre id="deployment-plan" hidden></pre>

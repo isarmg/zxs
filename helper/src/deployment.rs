@@ -99,6 +99,7 @@ pub(crate) struct Preview {
     live_configuration_modified: bool,
     service_started_or_enabled: bool,
     service_exclusion_established: bool,
+    participating_daemon_exclusion: &'static str,
     required_before_activation: &'static [&'static str],
 }
 const REQUIREMENTS: &[&str] = &[
@@ -141,6 +142,7 @@ fn build(input: Input) -> Result<(BundleDestination, Preview)> {
             live_configuration_modified: false,
             service_started_or_enabled: false,
             service_exclusion_established: false,
+            participating_daemon_exclusion: "held_during_this_operation_only",
             required_before_activation: REQUIREMENTS,
         },
     ))
@@ -174,7 +176,7 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     Ok(
         json!({"state":state,"destination":preview.destination,"request_digest":preview.request_digest,
         "live_configuration_modified":false,"service_started_or_enabled":false,
-        "service_exclusion_established":false,"system_initialized":false,"samba_credentials_changed":false,
+        "service_exclusion_established":false,"participating_daemon_exclusion":"held_during_this_operation_only","system_initialized":false,"samba_credentials_changed":false,
         "required_before_activation":REQUIREMENTS}),
     )
 }

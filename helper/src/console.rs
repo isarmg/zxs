@@ -11,7 +11,7 @@ use tokio::sync::{Semaphore, watch};
 
 const DEFAULT_PORT: u16 = 9040;
 pub(super) const MAX_REQUEST_BYTES: usize = 64 * 1024;
-const WARNING: &str = "WARNING: unauthenticated root helper console over plain HTTP. Any reachable person can inspect/export selected disk data, install its embedded ZXS program, prepare inactive deployment files or stop this helper. Use only a trusted isolated network/firewall; exit after use. This program does not change your firewall, install systemd or enable autostart.";
+const WARNING: &str = "WARNING: unauthenticated root helper console over plain HTTP. Any reachable person can inspect/export selected disk data, install its embedded ZXS program, prepare its host root and inactive deployment files or stop this helper. Use only a trusted isolated network/firewall; exit after use. This program does not change your firewall, install systemd or enable autostart.";
 
 #[derive(Args, Clone, Debug)]
 pub(crate) struct Options {
@@ -77,7 +77,7 @@ async fn serve(options: Options) -> Result<()> {
     let state = State::new(listen, csrf, stopping.clone());
     eprintln!("zxs-helper: {WARNING}");
     eprintln!(
-        "zxs-helper: listening on {listen}; open http://<host-IP>:{} . Independent-disk checks/downloads are read-only; embedded program installation is fixed-path and never replaces different bytes. Stop all source writers first; no whole-service exclusion has been established.",
+        "zxs-helper: listening on {listen}; open http://<host-IP>:{} . Independent-disk checks/downloads are read-only; embedded program installation is fixed-path and never replaces different bytes. Stop all source writers first; this console holds no service lease between operations; current ZXS executables and Engine recovery commands coordinate through /zxs. Older binaries and external/Samba writers require separate exclusion.",
         listen.port()
     );
     http_routing::serve(listener, http::router(state))

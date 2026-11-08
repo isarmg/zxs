@@ -14,6 +14,7 @@ crate 入口在编译期拒绝非 Linux、非 x86_64 或非 64 位目标；内�
 | `payload` | 有长度上限的完整流式写入、BLAKE3 校验、新 inode、不可覆盖发布 |
 | `sqlite` | SQLx 0.9 索引连接、WAL/FULL/外键、defensive、原生连接限额、完整性及快照检查 |
 | `schema_identity` | 索引表结构身份和确定性指纹 |
+| `service_lease` | 稳定目录 inode 的非阻塞 OS 排他租约；当前二进制与 helper Engine 命令的生命周期前置，不是初始化/业务权威 |
 | `secret` | 默认脱敏、不可序列化、释放时清零的秘密类型 |
 | `disk_smart` | 已持有块设备的同步只读 NVMe／SAT 健康命令、固定缓冲区与准确完成错误 |
 

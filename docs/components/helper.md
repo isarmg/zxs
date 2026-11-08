@@ -152,3 +152,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 未激活部署配置包
 
 `deployment preview` / `deployment prepare` 与独立 Web 现有源码可准备匹配版本的 systemd/Samba 配置，精确摘要确认后仅发布到 `/zxs` 下独立新目录，不覆盖现用配置、不执行系统命令、不启动或启用服务。部署包不是已初始化交接。源码未构建或运行，实际激活仍缺全生命周期停服互斥与完整初始化证明。见[配置准备边界](../design/helper-deployment-preparation.md)。
+
+## 当前 daemon 生命周期互斥与根准备
+
+新增 `host preview` / `host prepare` 和同名 Web 页面，只原子准备缺失的固定 root 所有 `/zxs`。当前 daemon 与打开 Engine 的 helper CLI 使用同一 OS 目录租约，daemon 持有到 Tokio 阻塞池结束。源码未构建/运行，不包含旧二进制、Samba/passdb 或任意第三方写者，完整首次初始化与凭据重置仍未实现。见[准确范围](../design/helper-service-exclusion.md)。

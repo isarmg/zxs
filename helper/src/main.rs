@@ -3,6 +3,7 @@ mod authority;
 mod configuration;
 mod console;
 mod deployment;
+mod host;
 mod installation;
 mod private_io;
 mod scrub;
@@ -21,6 +22,7 @@ Recovery preview/commit only accepts decided, unpublished operations with all or
 Offline export validates one published version, not the entire pool or current permissions.
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
 The matching release helper can install only its embedded ZXS executable at /usr/local/bin/zxs without overwriting different bytes.
+Engine recovery commands require the current-daemon /zxs lifetime lease; host preview/prepare can create that root without initializing the system.
 Systemd/Samba configuration can be prepared as an inactive bundle, never installed or activated.
 First-run setup, disk addition/removal, foreign admission, password reset, program repair and active systemd/SMB installation are not yet implemented. No planned-offline action is offered."
 )]
@@ -52,6 +54,11 @@ enum Command {
     Install {
         #[command(subcommand)]
         command: installation::Command,
+    },
+    /// Prepare the root-owned host lease directory only, not accounts or storage.
+    Host {
+        #[command(subcommand)]
+        command: host::Command,
     },
     /// Prepare an inactive, version-bound systemd/Samba bundle, never activate it.
     Deployment {
@@ -213,12 +220,18 @@ fn report_recovery_warnings(engine: &mut Engine) {
 fn run(args: Args) -> Result<()> {
     let retained_workspace_limits = args.workspace_limits()?;
     let root = args.root;
-    match args
+    let command = args
         .command
-        .unwrap_or_else(|| Command::Serve(console::Options::default()))
-    {
+        .unwrap_or_else(|| Command::Serve(console::Options::default()));
+    let _lease = if requires_service_exclusion(&command) {
+        Some(platform_io::service_lease::ServiceLease::host()?)
+    } else {
+        None
+    };
+    match command {
         Command::Serve(options) => console::run(options),
         Command::Install { command } => installation::run(command),
+        Command::Host { command } => host::run(command),
         Command::Deployment { command } => deployment::run(command),
         Command::Configuration { command } => configuration::run(command),
         Command::Authority { command } => authority::run(command),
@@ -343,6 +356,35 @@ fn run(args: Args) -> Result<()> {
             storage_engine::offline_export(&disk, &version, &output)?;
             print(json!({"version_id":version,"exported":output_text,"mode":"offline-isolated"}))
         }
+    }
+}
+
+/// Engine open can replay durable work even for a command named preview or
+/// export. Keep its host lease until the synchronous command and all owners end.
+fn requires_service_exclusion(command: &Command) -> bool {
+    match command {
+        Command::RestoreSystem { .. }
+        | Command::RecoveryPreview { .. }
+        | Command::Scrub
+        | Command::Package {
+            command: PackageCommand::Export { .. } | PackageCommand::Restore { .. },
+        } => true,
+        Command::RecoveryCommit {
+            accept_permanent_loss,
+            ..
+        } => *accept_permanent_loss,
+        Command::Serve(_)
+        | Command::Install { .. }
+        | Command::Host { .. }
+        | Command::Deployment { .. }
+        | Command::Authority { .. }
+        | Command::Configuration { .. }
+        | Command::Package {
+            command: PackageCommand::Check { .. },
+        }
+        | Command::WorkspaceInventory
+        | Command::OfflineCheck { .. }
+        | Command::OfflineExport { .. } => false,
     }
 }
 

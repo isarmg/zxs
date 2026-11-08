@@ -2,8 +2,10 @@
 //! /tmp); files are owner-only and single-linked. Existing outputs are never
 //! clobbered; draft replacements require a held transaction.
 mod bundle;
+mod host_root;
 use crate::Result;
 pub(crate) use bundle::{BundleDestination, BundlePublication};
+pub(crate) use host_root::HostRoot;
 use platform_io::fs_safety::{
     AtomicCommitError, EntryName,
     linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},

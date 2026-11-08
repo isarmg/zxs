@@ -5,9 +5,10 @@ let busy = false;
 let stopping = false;
 let installationPreview = null;
 let deploymentPreview = null;
+let hostPreview = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -142,5 +143,26 @@ byId("deployment-prepare").addEventListener("click", async () => {
     byId("deployment-receipt").textContent = JSON.stringify(receipt, null, 2);
     byId("deployment-receipt").hidden = false;
   } catch (failure) { error(`${failure.message}。如果连接中断，不要删除 pending 材料；保留准确预览并重试同一请求。`); }
+  finally { setBusy(false); }
+});
+
+byId("host-preview").addEventListener("click", async () => {
+  if (busy || stopping) return;
+  hostPreview = null; byId("host-prepare").hidden = true; byId("host-receipt").hidden = true;
+  byId("host-plan").hidden = true; error(""); setBusy(true);
+  try {
+    hostPreview = await (await post("/api/host/preview", {})).json();
+    byId("host-plan").textContent = JSON.stringify(hostPreview, null, 2);
+    byId("host-plan").hidden = false; byId("host-prepare").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("host-prepare").addEventListener("click", async () => {
+  if (busy || stopping || !hostPreview) return;
+  if (!window.confirm("确认只准备 /zxs 安装根？已有安全目录不改权限和内容；不会创建账户、初始化磁盘或启动服务。这不是系统初始化完成。")) return;
+  error(""); setBusy(true);
+  try {
+    const receipt = await (await post("/api/host/prepare", {request_digest:hostPreview.request_digest,confirmation:"prepare-host-root-only"})).json();
+    byId("host-receipt").textContent = JSON.stringify(receipt, null, 2); byId("host-receipt").hidden = false;
+  } catch (failure) { error(`${failure.message}。结果不确定时保留 pending 材料，仅按准确请求重试，不手工清空目录。`); }
   finally { setBusy(false); }
 });
