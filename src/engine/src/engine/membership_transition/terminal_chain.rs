@@ -15,8 +15,10 @@ use std::path::{Path, PathBuf};
 mod activation;
 mod current;
 mod epoch;
+mod epoch_decision;
 pub(in crate::engine) use epoch::ChainEpochSource;
 pub use epoch::TerminalChainActivationPlanReport;
+pub use epoch_decision::TerminalChainIoDecisionReport;
 mod first;
 mod publication;
 pub use current::{TerminalChainPublishedCurrent, TerminalChainPublishedCurrentReport};
@@ -60,6 +62,8 @@ pub enum TerminalChainReadmissionPhase {
     FirstPublicationPending,
     FirstPublicationPreserved,
     ActivationPlanSelected,
+    IoDecisionPending,
+    IoDecisionPreserved,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -73,6 +77,7 @@ pub struct TerminalChainReadmissionStatus {
     pub activation: Option<TerminalChainReadmissionActivation>,
     pub publication: Option<TerminalChainFirstPublication>,
     pub activation_plan: Option<TerminalChainActivationPlanReport>,
+    pub io_decision: Option<TerminalChainIoDecisionReport>,
     pub active_writer_admitted: bool,
     pub metadata_resumption_supported: bool,
 }
@@ -200,6 +205,7 @@ impl Selection {
             activation: None,
             publication: None,
             activation_plan: None,
+            io_decision: None,
             active_writer_admitted: false,
             metadata_resumption_supported: false,
         })

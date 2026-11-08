@@ -253,3 +253,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 终态链新 epoch / Stop 后继计划
 
 `POST /api/disks/terminal-chain-activation-plan` 在真实首槽与完整冻结 Current 后，绑定原实际目录、Stop、前次 epoch 和 Publication，保存唯一未来 epoch 及 bootstrap 后继计划。此阶段**不更新活动 locator/head、不消费 Stop、不启用 writer**，仍没有完成 readmission/H03。source-only 查询只显示历史计划，不冒充本次目标核验。单独确认、停服/host owner/Origin/CSRF 与风险提示保留，详见[原生后继计划](../design/terminal-chain-activation-plan.md)。未审查/编译/测试/CI，未操作实际系统。
+
+### 终态链原目标真实 epoch 决定
+
+`POST /api/disks/terminal-chain-io-decide` 在原精确计划后，重新核验实际 Publication/冻结 Current 与原物理根，在原盘作出独立 `TerminalChainIoAdmission` 原生不可覆盖决定，双端保留原计划及决定并提供同原请求显式续作。它不是只存草稿，但仍**不消费 Stop、不更新 locator、不启用活动 writer 或完成 readmission/H03**。必须单独确认不可撤销及失败可能已决定；来源查询不冒充目标 fresh。详见[真实 epoch 决定](../design/terminal-chain-io-decision.md)。未审查/编译/测试/CI，未操作实际系统。

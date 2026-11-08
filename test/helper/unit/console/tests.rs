@@ -729,6 +729,7 @@ async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown(
         "/api/disks/terminal-chain-first-publish",
         "/api/disks/terminal-chain-current",
         "/api/disks/terminal-chain-activation-plan",
+        "/api/disks/terminal-chain-io-decide",
     ] {
         let mut request = post(path, json!({}));
         request
@@ -927,5 +928,33 @@ fn chain_activation_plan_input_has_no_caller_epoch_or_locator_override() {
             json_codec::from_value::<crate::disk_removal::chain_target::ActivationPlanInput>(value)
                 .is_err()
         );
+    }
+}
+
+#[test]
+fn chain_io_decision_input_rejects_caller_supplied_vote_epoch_or_active_writer() {
+    for field in [
+        "new_epoch",
+        "decision",
+        "receipt",
+        "target_root",
+        "bootstrap",
+        "force",
+        "consume_stop",
+        "target_writer",
+    ] {
+        // Put the injected field first and require that exact parser error;
+        // an intentionally incomplete nested plan must not make this pass.
+        let value = format!(
+            r#"{{"{field}":true,"service_user":"zxs","external_writers_stopped":true,"plan":{{}},"confirmation":"decide-chain-io-epoch-without-activation","acknowledge_irreversible_decision_without_activation":true}}"#
+        );
+        let error = match json_codec::from_str::<crate::disk_removal::chain_target::IoDecisionInput>(
+            &value,
+        ) {
+            Ok(_) => panic!("injected field was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unknown field"));
+        assert!(error.to_string().contains(field));
     }
 }

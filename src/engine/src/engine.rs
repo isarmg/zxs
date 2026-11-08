@@ -135,12 +135,12 @@ pub use membership_transition::{
 };
 pub use membership_transition::{
     TerminalChainActivationPlanReport, TerminalChainFirstPublication,
-    TerminalChainPublishedCurrent, TerminalChainPublishedCurrentReport,
-    TerminalChainReadmissionActivation, TerminalChainReadmissionPhase,
-    TerminalChainReadmissionStatus, TerminalMetadataResume, TerminalMetadataResumeAdmission,
-    TerminalMetadataResumeCancelOutcome, TerminalMetadataResumeCancellationPhase,
-    TerminalMetadataResumePhase, TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus,
-    TerminalReadmissionPreview,
+    TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
+    TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
+    TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalMetadataResume,
+    TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
+    TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
+    TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };
 mod recovery;
 use recovery::RecoveryMode;

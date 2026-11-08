@@ -180,6 +180,12 @@
           <label class="ack"><input id="chain-epoch-ack" type="checkbox" required> 确认只保存原请求后继计划，不能把计划中的新 epoch 当作已启用；保留原证据，失败只续作原请求，不换盘或清理。</label>
           <button type="submit">确认选择 / 复核原后继计划</button>
         </form>
+        <form id="chain-io-decision-form" hidden>
+          <h4>在原盘作出准确 epoch 决定，尚不启用活动存储</h4>
+          <p class="warning">本步不只是保存计划。将重读原目标实际日志及完整已发布材料，把已选 epoch/Stop 后继计划和真实不可改写的原生决定保存在原盘及 SYSTEM。无取消、换盘或另选 epoch；中断可能已经决定，只能按原请求续作。仍不改 locator/head、不消费 Stop、不启用 writer 或启动服务。</p>
+          <label class="ack"><input id="chain-io-decision-ack" type="checkbox" required> 确认在原盘作出不可撤销的准确 epoch 决定，保留全部原证据；它不是接纳完成或启动许可。</label>
+          <button type="submit">确认原 epoch 决定 / 续作原决定</button>
+        </form>
         <form id="chain-publish-form" hidden>
           <h4>写入真实首笔 Publication，仍不激活服务</h4>
           <p class="warning">只有原两根完整首笔输入才可执行。将在原目标专属首槽写入真实 ACCEPT、FINALIZE、Publication 并保存两根 seal/证据。这不是可撤销预览；无取消或换盘，错误也可能已经发布。当前仍不接纳活动 Current/writer，不消费 Stop、不启动服务，不能据此宣布重新接纳完成。</p>

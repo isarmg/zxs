@@ -219,3 +219,37 @@ impl TerminalChainPublishedCurrent<'_> {
         .map_err(crate::engine::disk_lifecycle::bootstrap::runtime::management_error)
     }
 }
+
+impl TerminalChainPublishedCurrent<'_> {
+    pub(super) fn selection(&self) -> &Selection {
+        &self.selection
+    }
+    pub(super) fn held_target(&self) -> &target::Held {
+        &self.held
+    }
+    /// A decision boundary rereads the actual first-slot log and all immutable
+    /// dependencies; the previously admitted in-memory Current is not a receipt.
+    pub(super) fn recheck_publication(&self) -> Result<()> {
+        self.recheck()?;
+        let certificate = activation::certificate(self.management, &self.selection)?;
+        let prepared = first::Prepared::new(
+            &self.selection,
+            &certificate,
+            self.management.verified_authority(),
+        )?;
+        let actual =
+            publication::read_existing(self.management, &self.selection, &prepared, &self.held)?;
+        activation::exact(actual.manifest(), self.proof.manifest())?;
+        let actual = actual.report()?;
+        let expected = self.proof.report()?;
+        if actual.publication_hash != expected.publication_hash
+            || actual.seal_hash != expected.seal_hash
+        {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "epoch decision lost the original actual Publication/seal",
+            ));
+        }
+        self.recheck()
+    }
+}

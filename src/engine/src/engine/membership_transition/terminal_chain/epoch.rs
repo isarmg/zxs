@@ -110,7 +110,7 @@ enum PlanFormat {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct SelectedPlan {
+pub(super) struct SelectedPlan {
     format: PlanFormat,
     intent: EpochIntent,
     planned_epoch: String,
@@ -138,7 +138,29 @@ pub struct TerminalChainActivationPlanReport {
     pub active_writer_admitted: bool,
 }
 impl SelectedPlan {
-    fn verify_source(&self, source: &ChainEpochSource<'_>) -> Result<()> {
+    pub(super) fn object(&self) -> Result<PreparedMetadataObject> {
+        PreparedMetadataObject::new("terminal-chain-activation-plan", self, MAX_METADATA)
+    }
+    pub(super) fn inspect(
+        &self,
+        source: &ChainEpochSource<'_>,
+        management: &TerminalManagement,
+    ) -> Result<()> {
+        self.verify_source(source)?;
+        open_store(management.system_root().path())?
+            .inspect_chain_root_extension(&self.bootstrap, source)?;
+        Ok(())
+    }
+    pub(super) fn epoch(&self) -> &str {
+        &self.planned_epoch
+    }
+    pub(super) fn publication_hash(&self) -> &str {
+        &self.intent.publication_hash
+    }
+    pub(super) fn seal_hash(&self) -> &str {
+        &self.intent.seal_hash
+    }
+    pub(super) fn verify_source(&self, source: &ChainEpochSource<'_>) -> Result<()> {
         if self.planned_epoch != source.epoch
             || canonical_json(&self.intent)? != canonical_json(&source.intent)?
         {
@@ -169,14 +191,29 @@ impl SelectedPlan {
         }
     }
 }
+pub(super) fn selected_plan(
+    management: &TerminalManagement,
+    source: &ChainEpochSource<'_>,
+) -> Result<SelectedPlan> {
+    let plan: SelectedPlan = load(management.system_root(), &operation(management).join(FILE))?
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "select the original exact epoch plan before its target decision",
+            )
+        })?;
+    plan.inspect(source, management)?;
+    Ok(plan)
+}
 pub(super) fn owns_initial_entry(name: &str) -> bool {
-    name == FILE
+    name == FILE || super::epoch_decision::owns_initial_entry(name)
 }
 pub(super) fn started(management: &TerminalManagement) -> Result<bool> {
     Ok(management
         .system_root()
         .optional_metadata(&operation(management).join(FILE))?
-        .is_some())
+        .is_some()
+        || super::epoch_decision::started(management)?)
 }
 pub(super) fn require_absent(management: &TerminalManagement) -> Result<()> {
     if started(management)? {
@@ -196,6 +233,7 @@ pub(super) fn observe(
     let Some(plan): Option<SelectedPlan> =
         load(management.system_root(), &operation(management).join(FILE))?
     else {
+        super::epoch_decision::require_absent(management)?;
         return Ok(());
     };
     let publication = status.publication.as_ref().ok_or_else(|| {
@@ -210,7 +248,8 @@ pub(super) fn observe(
     let info = store.inspect_chain_root_extension(&plan.bootstrap, &source)?;
     status.phase = TerminalChainReadmissionPhase::ActivationPlanSelected;
     status.activation_plan = Some(plan.report(info, false));
-    Ok(())
+    drop(store);
+    super::epoch_decision::observe(management, &plan, &source, status)
 }
 impl TerminalManagement {
     /// Explicitly persists only the exact future epoch and locator record.

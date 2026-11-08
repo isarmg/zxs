@@ -67,12 +67,12 @@ pub use engine::{
 pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub use engine::{
     TerminalChainActivationPlanReport, TerminalChainFirstPublication,
-    TerminalChainPublishedCurrent, TerminalChainPublishedCurrentReport,
-    TerminalChainReadmissionActivation, TerminalChainReadmissionPhase,
-    TerminalChainReadmissionStatus, TerminalMetadataResume, TerminalMetadataResumeAdmission,
-    TerminalMetadataResumeCancelOutcome, TerminalMetadataResumeCancellationPhase,
-    TerminalMetadataResumePhase, TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus,
-    TerminalReadmissionPreview,
+    TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
+    TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
+    TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalMetadataResume,
+    TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
+    TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
+    TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };
 pub mod file_deletion;
 pub use file_deletion::{

@@ -4,6 +4,7 @@ use super::*;
 use pending::MemberIdentity;
 use platform_io::fs_safety::{AtomicFile, EntryName, linux::FileIdentity};
 use std::path::PathBuf;
+mod terminal_chain_io;
 
 const DECISION_KIND: &str = "membership-decision";
 const BINDING_FILE: &str = "binding.json";
@@ -54,6 +55,10 @@ enum Choice {
         core_hash: String,
         acceptance_hash: String,
     },
+    TerminalChainIoAdmission {
+        core_hash: String,
+        acceptance_hash: String,
+    },
     TerminalResumeCancel {
         core_hash: String,
         acceptance_hash: String,
@@ -97,6 +102,10 @@ impl DecisionRecord {
                 acceptance_hash,
             }
             | Choice::TerminalResumeCancel {
+                core_hash,
+                acceptance_hash,
+            }
+            | Choice::TerminalChainIoAdmission {
                 core_hash,
                 acceptance_hash,
             }

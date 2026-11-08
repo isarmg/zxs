@@ -40,6 +40,15 @@ pub(crate) struct ActivationPlanInput {
 }
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
+pub(crate) struct IoDecisionInput {
+    service_user: String,
+    external_writers_stopped: bool,
+    plan: Plan,
+    confirmation: String,
+    acknowledge_irreversible_decision_without_activation: bool,
+}
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct CurrentInput {
     service_user: String,
     external_writers_stopped: bool,
@@ -69,6 +78,7 @@ enum Action {
     PublishFirst { plan: Plan },
     InspectPublished { plan: Plan },
     PrepareActivation { plan: Plan },
+    DecideIo { plan: Plan },
 }
 impl crate::service_worker::Request for Request {
     type Output = Status;
@@ -82,6 +92,24 @@ impl crate::service_worker::Request for Request {
         let mut published_current = None;
         let native = match self.action {
             Action::Status => target.control.terminal_chain_readmission_status()?,
+            Action::DecideIo { plan } => {
+                if plan.context != self.context
+                    || plan.credential != target.credential_revision()?
+                {
+                    return Err(
+                        "chain I/O decision host or primary credential revision changed".into(),
+                    );
+                }
+                let preparation = plan.preparation;
+                Some(target.control.decide_terminal_chain_io_admission(
+                    storage_contract::storage_readmission::ReadmissionRequest {
+                        operation_id: preparation.operation_id,
+                        slot_id: preparation.target.slot_id,
+                        expected_disk_id: preparation.target.disk_id,
+                    },
+                    &preparation.proposal_digest,
+                )?)
+            }
             Action::PrepareActivation { plan } => {
                 if plan.context != self.context
                     || plan.credential != target.credential_revision()?
@@ -205,7 +233,8 @@ fn run(input: InventoryInput, action: Action) -> Result<Status> {
     | Action::PrepareFirst { plan }
     | Action::PublishFirst { plan }
     | Action::InspectPublished { plan }
-    | Action::PrepareActivation { plan } = &action
+    | Action::PrepareActivation { plan }
+    | Action::DecideIo { plan } = &action
         && plan.context != context
     {
         return Err("chain target no longer matches its original host/account/layout".into());
@@ -294,5 +323,21 @@ pub(crate) fn prepare_activation(input: ActivationPlanInput) -> Result<Status> {
             external_writers_stopped: input.external_writers_stopped,
         },
         Action::PrepareActivation { plan: input.plan },
+    )
+}
+
+/// Actual immutable native choice, still not a Stop/writer activation API.
+pub(crate) fn decide_io(input: IoDecisionInput) -> Result<Status> {
+    if input.confirmation != "decide-chain-io-epoch-without-activation"
+        || !input.acknowledge_irreversible_decision_without_activation
+    {
+        return Err("explicitly acknowledge the irreversible original-target epoch decision; no cancellation, replacement, Stop consumption, active writer or completed readmission".into());
+    }
+    run(
+        InventoryInput {
+            service_user: input.service_user,
+            external_writers_stopped: input.external_writers_stopped,
+        },
+        Action::DecideIo { plan: input.plan },
     )
 }

@@ -52,3 +52,5 @@ source-only 状态查询重新验证完整来源首槽证据、计划身份、�
 仍需专属活动 generation 与受信冷启动 selector、全部必要资源/实际 locator/活动数据库、完整 Current/写者的原子接线和恢复。不能为了完成一个按钮先消费 Stop 再把系统留在无法安全启动或恢复的状态。本片保留严格拒绝；外来多级 H03 仍须其独立完整低级链及最终权威证明，不得用本原盘计划替代。
 
 成本沿用完整 Current/源链验证，加一轮严格 bootstrap 历史链读取和一个有界 SYSTEM 原子文件同步。预算为元数据对象上限、实际计划 bytes 的两倍加 1 MiB 新写余量；无性能/锁等待或掉电测试结果。
+
+后续[真实 epoch 决定](terminal-chain-io-decision.md)已提供原目标实际 native choice 和双端证据；仍不是本计划的 locator/Stop 执行，不改变本页计划阶段的限制。

@@ -2262,3 +2262,330 @@ fn chain_epoch_plan_refuses_other_actor_and_never_mints_an_active_probe() {
     assert!(!path.exists());
     assert!(fixture.terminal.operation(operation).is_none());
 }
+
+fn planned_chain_io_fixture() -> (
+    Fixture,
+    OperationId,
+    crate::TerminalChainReadmissionProposal,
+    crate::TerminalChainReadmissionStatus,
+) {
+    let (mut fixture, operation, proposal, _) = published_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .prepare_chain_activation_plan(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    (fixture, operation, proposal, status)
+}
+
+#[test]
+fn chain_io_decision_is_actual_native_choice_but_preserves_stop_log_and_live_state() {
+    let (mut fixture, operation, proposal, planned) = planned_chain_io_fixture();
+    let root = fixture.config.disks[0].root.clone();
+    let original_vote = root
+        .join("metadata/membership-decisions")
+        .join(&planned.selection_hash)
+        .join("decision.json");
+    let original_vote_bytes = fs::read(&original_vote).unwrap();
+    let journal = chain_first_target(&fixture, &planned).join("first-publication/journal.bin");
+    let journal_bytes = fs::read(&journal).unwrap();
+    let seal = fs::read(root.join("disk.json")).unwrap();
+    let locator = locator_bytes(&fixture.system());
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .decide_chain_io_admission(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::IoDecisionPreserved
+    );
+    let report = status.io_decision.unwrap();
+    let plan = planned.activation_plan.unwrap();
+    assert_eq!(report.io_epoch, plan.planned_io_epoch);
+    assert_eq!(report.publication_hash, plan.publication_hash);
+    assert!(report.target_reverified_this_call);
+    assert!(!report.locator_installed && !report.stop_consumed && !report.active_writer_admitted);
+    assert!(!status.active_writer_admitted && !status.metadata_resumption_supported);
+    let actual: json_codec::Value = crate::decode_strict(
+        &fs::read(
+            root.join("metadata/membership-decisions")
+                .join(&report.io_epoch)
+                .join("decision.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(actual["choice"]["kind"], "TerminalChainIoAdmission");
+    assert_eq!(actual["choice"]["core_hash"], report.plan_hash);
+    assert_eq!(actual["transition_hash"], report.io_epoch);
+    assert_eq!(fs::read(&original_vote).unwrap(), original_vote_bytes);
+    assert_eq!(fs::read(&journal).unwrap(), journal_bytes);
+    assert_eq!(fs::read(root.join("disk.json")).unwrap(), seal);
+    assert_eq!(locator_bytes(&fixture.system()), locator);
+    assert!(fixture.terminal.operation(operation).is_none());
+    assert!(fixture.terminal.writer_locks().is_err());
+}
+
+#[test]
+fn chain_io_decision_cold_status_does_not_probe_and_exact_retry_keeps_vote() {
+    let (mut fixture, operation, proposal, _) = planned_chain_io_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .decide_chain_io_admission(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let report = status.io_decision.unwrap();
+    let root = fixture.config.disks[0].root.clone();
+    let disk = fixture.config.disks[0].disk_id.clone();
+    let vote = root
+        .join("metadata/membership-decisions")
+        .join(&report.io_epoch)
+        .join("decision.json");
+    let bytes = fs::read(&vote).unwrap();
+    let system = fixture.system();
+    let locator = locator_bytes(&system);
+    drop(fixture.terminal);
+    fs::rename(&root, root.with_extension("io-decided-held")).unwrap();
+    fs::write(&root, b"source-only status must not probe this replacement").unwrap();
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    let status = cold.chain_readmission_status().unwrap().unwrap();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::IoDecisionPreserved
+    );
+    assert!(!status.io_decision.unwrap().target_reverified_this_call);
+    fs::remove_file(&root).unwrap();
+    fs::rename(root.with_extension("io-decided-held"), &root).unwrap();
+    let repeated = cold
+        .decide_chain_io_admission(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id: disk,
+                directory: fs::File::open(&root).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        repeated.io_decision.unwrap().decision_hash,
+        report.decision_hash
+    );
+    assert_eq!(fs::read(&vote).unwrap(), bytes);
+    assert_eq!(locator_bytes(&system), locator);
+    assert!(cold.operation(operation).is_none());
+    drop(cold);
+    assert!(Engine::open(&system).is_err());
+}
+
+#[test]
+fn chain_io_decision_cold_retry_finishes_only_the_missing_source_receipt() {
+    let (mut fixture, operation, proposal, _) = planned_chain_io_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .decide_chain_io_admission(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let report = status.io_decision.unwrap();
+    let complete = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join("chain-io-decision.json");
+    let expected = fs::read(&complete).unwrap();
+    fs::remove_file(&complete).unwrap();
+    let root = fixture.config.disks[0].root.clone();
+    let disk = fixture.config.disks[0].disk_id.clone();
+    let vote = root
+        .join("metadata/membership-decisions")
+        .join(&report.io_epoch)
+        .join("decision.json");
+    let bytes = fs::read(&vote).unwrap();
+    let system = fixture.system();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    let status = cold.chain_readmission_status().unwrap().unwrap();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::IoDecisionPending
+    );
+    assert!(status.io_decision.is_none());
+    assert!(!complete.exists());
+    cold.decide_chain_io_admission(
+        "admin",
+        operation,
+        &proposal.preparation().proposal_digest,
+        crate::PendingMemberDirectory {
+            disk_id: disk,
+            directory: fs::File::open(&root).unwrap(),
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read(&complete).unwrap(), expected);
+    assert_eq!(fs::read(&vote).unwrap(), bytes);
+}
+
+#[test]
+fn chain_io_decision_completed_missing_evidence_is_not_recreated_or_revoted() {
+    for missing in [
+        "target-plan",
+        "target-completion",
+        "native-vote",
+        "published-log",
+    ] {
+        let (mut fixture, operation, proposal, _) = planned_chain_io_fixture();
+        let directory = retained_chain_directory(&fixture);
+        let status = fixture
+            .terminal
+            .decide_chain_io_admission(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .unwrap();
+        let report = status.io_decision.as_ref().unwrap();
+        let root = fixture.config.disks[0].root.clone();
+        let parent = root
+            .join("metadata/membership-pending")
+            .join(&status.selection_hash);
+        let missing = match missing {
+            "target-plan" => parent.join("io-admission-plan.json"),
+            "target-completion" => parent.join("io-admission-decision.json"),
+            "native-vote" => root
+                .join("metadata/membership-decisions")
+                .join(&report.io_epoch)
+                .join("decision.json"),
+            "published-log" => {
+                chain_first_target(&fixture, &status).join("first-publication/journal.bin")
+            }
+            _ => unreachable!(),
+        };
+        fs::remove_file(&missing).unwrap();
+        let locator = locator_bytes(&fixture.system());
+        let directory = retained_chain_directory(&fixture);
+        assert!(
+            fixture
+                .terminal
+                .decide_chain_io_admission(
+                    "admin",
+                    operation,
+                    &proposal.preparation().proposal_digest,
+                    directory,
+                )
+                .is_err()
+        );
+        assert!(!missing.exists());
+        assert_eq!(locator_bytes(&fixture.system()), locator);
+        let historical = fixture
+            .terminal
+            .chain_readmission_status()
+            .unwrap()
+            .unwrap();
+        assert!(!historical.io_decision.unwrap().target_reverified_this_call);
+    }
+}
+
+#[test]
+fn chain_io_decision_requires_original_plan_and_actor_and_rejects_mixed_vote_kind() {
+    let (mut fixture, operation, proposal, _) = published_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .decide_chain_io_admission(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(
+        !fixture
+            .terminal
+            .store
+            .operation()
+            .path()
+            .join("chain-io-decision-request.json")
+            .exists()
+    );
+    drop(fixture);
+    let (mut fixture, operation, proposal, _) = planned_chain_io_fixture();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .decide_chain_io_admission(
+                "other",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(
+        !fixture
+            .terminal
+            .store
+            .operation()
+            .path()
+            .join("chain-io-decision-request.json")
+            .exists()
+    );
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .decide_chain_io_admission(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let report = status.io_decision.unwrap();
+    let vote = fixture.config.disks[0]
+        .root
+        .join("metadata/membership-decisions")
+        .join(&report.io_epoch)
+        .join("decision.json");
+    let mut body: json_codec::Value = crate::decode_strict(&fs::read(&vote).unwrap()).unwrap();
+    body["choice"]["kind"] = "TerminalChainReadmission".into();
+    let wrong = crate::canonical_json(&body).unwrap();
+    fs::write(&vote, &wrong).unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .decide_chain_io_admission(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read(&vote).unwrap(), wrong);
+}
