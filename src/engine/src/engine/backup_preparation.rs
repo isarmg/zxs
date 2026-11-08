@@ -29,9 +29,10 @@ pub use native_control::{
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
     BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
     BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
-    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
-    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupRegistryRecoveryReport, BackupRootDatabasesReport, BackupServingContent,
+    BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
+    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -143,6 +144,10 @@ pub enum BackupPreparationPhase {
     /// The same published database set resolves by typed identity on all
     /// participants. Normal active aliases/writer and source fence are unchanged.
     GenerationDatabaseAliasesInstalled,
+    /// Ordinary current/history names on every original disk now hold the
+    /// published pair, with displaced files retained. The source pool stays
+    /// stopped; SYSTEM, active Current and target writers are not switched.
+    GenerationOrdinaryRootDatabasesInstalled,
     Blocked,
     SourceChanged,
 }

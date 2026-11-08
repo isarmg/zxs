@@ -320,3 +320,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### Backup 已发布数据库范围别名
 
 原后台从同一实际 Publication/Current 证明生成 SYSTEM、全部原盘与所有目标的精确数据库范围表，先落 SYSTEM 意图再无覆盖保存全参与方同一记录。`inspect_backup_database_aliases` 与 `read_backup_database_range` 仅按原 actor/task 和类型化身份读取实际库，完整同 fd 验存及前后全体证明成立才返回有界字节；没有调用方路径、其他副本 fallback 或普通活动库替换。`GenerationDatabaseAliasesInstalled` 仍不安装 target writer 或解除源 fence。名称、原请求恢复和预算见[已发布范围别名](../design/backup-published-database-aliases.md)。未审查/编译/测试/CI，未操作真实盘。
+
+### Backup 普通盘根名称安装
+
+整体备份的同一原决定后台现接[普通盘根数据库安装](../design/backup-ordinary-root-databases.md)：全体验存后，在每个原盘真实普通名称保留式交换 current/history，旧库及安装封套全部保留；共同选择先于交换，旧 State 的本盘查询/重建被明确围栏，冷态按原任务续作。SYSTEM 活动别名、普通 Current/目标 writer 和源解围栏仍未完成。按要求本片没有审查、编译、测试或 CI。
+

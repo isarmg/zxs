@@ -161,6 +161,22 @@ impl Sources {
         }
         Ok(())
     }
+    /// Original held disk roots, not their metadata children and not target
+    /// paths read from a descriptor. The caller cannot change this source set.
+    pub(in super::super) fn for_each_disk(
+        &self,
+        stop: &AtomicBool,
+        mut action: impl FnMut(&DiskRoot, &DiskRegistrationIdentity) -> Result<()>,
+        pool_id: &str,
+    ) -> Result<()> {
+        for source in &self.disks {
+            preparation_checkpoint(stop)?;
+            source.recheck()?;
+            action(&source.root, &identity(pool_id, &source.disk))?;
+            source.recheck()?;
+        }
+        Ok(())
+    }
     pub(in super::super) fn require_capacity_before_choice(&self, system: &DiskRoot) -> Result<()> {
         self.recheck(system)?;
         // At most one 64 MiB SYSTEM or two 32 MiB local SQLite files plus

@@ -217,7 +217,7 @@ fn validate_header(history: &DiskHistorySnapshot) -> Result<()> {
 
 /// Checks the *complete* supplied event log, not just the last row for each ID.
 /// A locally recomputed digest cannot hide a broken predecessor transition.
-fn fold(
+pub(in crate::engine::disk_catalog) fn fold(
     history: &DiskHistorySnapshot,
     current: Option<&DiskCatalogSnapshot>,
 ) -> Result<DiskCatalogSnapshot> {

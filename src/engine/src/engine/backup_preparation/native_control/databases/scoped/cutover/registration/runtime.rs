@@ -11,8 +11,10 @@ impl Engine {
     /// The same background task now reserves and finalizes its exact first
     /// native candidate on every original metadata member, never on new voters.
     /// It then verifies every actual routed payload and writes the first native
-    /// Publication/seal in that reserved generation. Serving activation remains
-    /// separate: the original pool stays fenced even after this stage succeeds.
+    /// Publication/seal in that reserved generation. The same original task now
+    /// preserves displaced disk databases while installing the published pair
+    /// at all original ordinary root names. Old-State catalog access is fenced.
+    /// SYSTEM and serving activation remain separate: the original pool stays fenced even after this stage succeeds.
     /// Hosts must authenticate this separate, explicit request. Ordinary settings
     /// and helper admission do not call it automatically.
     pub fn start_backup_registry_placement_decision(
@@ -323,6 +325,26 @@ fn run(
             "decision {hash} resolves {} exact published database aliases in set {}; generation-local reads only, no ordinary active alias/writer switch or source fence release",
             aliases.aliases.len(),
             aliases.aliases_hash,
+        );
+    })?;
+    let roots = root_databases::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationOrdinaryRootDatabasesInstalled;
+        status.detail = format!(
+            "decision {hash} installed published current/history pairs at all {} original ordinary disk roots and observed all {} target root pairs in set {}; displaced old files are retained, old catalog access is fenced; SYSTEM alias, active Current/writer and source release remain unavailable",
+            roots.original_disks.len(),
+            roots.selected_targets,
+            roots.installation_hash,
         );
     })
 }

@@ -12,6 +12,7 @@ use std::sync::Arc;
 mod database;
 mod history;
 mod maintenance;
+pub(in crate::engine) mod root_install;
 pub(in crate::engine) use history::preparation::PreparedDiskScopes;
 pub use history::{
     DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange,
@@ -185,6 +186,10 @@ impl Engine {
             ));
         }
         let handle = Arc::clone(self.disk_resources.get(&disk)?);
+        // A preserved Backup root-name switch is not the old Engine's State.
+        // Its selection only fences these disposable reads/maintenance paths;
+        // it cannot select an authority or grant a successor writer.
+        root_install::require_unselected(&handle.root)?;
         Ok((disk, identity, handle))
     }
 

@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 mod database;
 mod maintenance;
 mod offline;
+pub(super) use offline::fold as fold_prepared;
 pub(in crate::engine::disk_catalog) mod preparation;
 mod replay;
 pub(super) use maintenance::Maintenance;
@@ -18,6 +19,15 @@ pub use offline::{
 
 const MAX_PUBLICATIONS: usize = 2048;
 const MAX_CHANGES: usize = 65_536;
+
+/// Decode only this exact disk's retained representation. The installer owner
+/// separately authenticates the new bytes from the native publication.
+pub(super) fn read_for_root_install(
+    bytes: &[u8],
+    identity: &DiskRegistrationIdentity,
+) -> Result<DiskHistorySnapshot> {
+    database::read(bytes, identity)
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]

@@ -957,6 +957,17 @@ impl Engine {
         )
     }
 
+    /// Freshly observe the completed ordinary disk-root pair installation on
+    /// every original disk and every selected target. This is not an ordinary
+    /// Engine catalog read, a repair, SYSTEM switch or target writer permit.
+    pub fn inspect_backup_root_databases(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupRootDatabasesReport> {
+        self.with_backup_database_aliases(operation, principal, root_databases::observe)
+    }
+
     fn with_backup_database_aliases<T>(
         &mut self,
         operation: OperationId,
