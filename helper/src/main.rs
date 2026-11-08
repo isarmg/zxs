@@ -4,6 +4,7 @@ mod authority;
 mod configuration;
 mod console;
 mod deployment;
+mod disk_databases;
 mod host;
 mod initialization;
 mod installation;
@@ -22,6 +23,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
     after_help = "restore-system requires a majority of the configured original metadata members (one for a single-disk pool).
 Recovery preview/commit only accepts decided, unpublished operations with all original disks accessible. It requires a reviewed digest and explicit permanent-loss acknowledgement; it is not a reset or missing-disk replacement.
 Offline export validates one published version, not the entire pool or current permissions.
+Disk-databases reads selected local SQLite inventories without SYSTEM; local consistency is not publication authority or content health.
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
 The matching release helper can install only its embedded ZXS executable at /usr/local/bin/zxs without overwriting different bytes.
 Engine recovery commands require the current-daemon /zxs lifetime lease; host preview/prepare can create that root without initializing the system.
@@ -111,6 +113,8 @@ enum Command {
     OfflineCheck {
         disk: PathBuf,
     },
+    /// Inspect current/history SQLite with explicit disk identity; never restores authority.
+    DiskDatabases(disk_databases::Options),
     OfflineExport {
         disk: PathBuf,
         version: String,
@@ -244,6 +248,7 @@ fn run(args: Args) -> Result<()> {
         Command::Deployment { command } => deployment::run(command),
         Command::Configuration { command } => configuration::run(command),
         Command::Authority { command } => authority::run(command),
+        Command::DiskDatabases(options) => disk_databases::run(options),
         Command::Package { command } => match command {
             PackageCommand::Check { package } => {
                 print(storage_engine::offline_check_history_package(&package)?)
@@ -288,12 +293,7 @@ fn run(args: Args) -> Result<()> {
                 retained_workspace_limits,
             )?;
             report_recovery_warnings(&mut engine);
-            let pool = &engine.config().pool_id;
-            let repositories = engine.state().repositories.len();
-            let credentials_available = engine.auth_state().is_some();
-            print(
-                json!({"restored":true,"pool_id":pool,"repositories":repositories,"credential_recovery_snapshot_available":credentials_available}),
-            )
+            disk_databases::report_restored(&engine)
         }
         Command::RecoveryPreview { operation, reason } => {
             let mut engine =
@@ -373,6 +373,7 @@ fn run(args: Args) -> Result<()> {
 fn requires_service_exclusion(command: &Command) -> bool {
     match command {
         Command::RestoreSystem { .. }
+        | Command::DiskDatabases(_)
         | Command::RecoveryPreview { .. }
         | Command::Scrub
         | Command::Package {

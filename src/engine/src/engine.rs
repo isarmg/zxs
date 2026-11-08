@@ -47,16 +47,17 @@ mod disk_catalog;
 pub use disk_catalog::{
     DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
     DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
-    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskHistoryChange,
-    DiskHistoryFailure, DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation,
-    DiskHistoryReceipt, DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus,
+    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskDatabaseMaterial,
+    DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
+    DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation, DiskHistoryReceipt,
+    DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus, inspect_disk_database_material,
 };
 mod history_move_recovery;
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 mod history_move_decision;
 pub use history_move_decision::{
-    FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation,
-    FileHistoryMoveNativePreparation,
+    FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,
+    FileHistoryMoveDecisionObligation, FileHistoryMoveNativePreparation,
 };
 mod history_move_target;
 pub use history_move_target::FileHistoryMoveTargetReport;
@@ -1095,6 +1096,11 @@ impl Engine {
         engine.retire_published_readmission_plan()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
+        // Restoring SYSTEM has admitted the original authority. Reconstruct its
+        // disposable disk projections only now, never elect authority from them.
+        // Their individual failure states remain observable on the returned Engine.
+        engine.refresh_published_disk_catalogs(None);
+        engine.restore_published_disk_histories();
         Ok(engine)
     }
     pub(crate) fn require_recovery_locks(&self) -> Result<()> {

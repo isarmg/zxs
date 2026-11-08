@@ -34,6 +34,7 @@ pub use directory_conversion::{
 mod disk;
 pub mod disk_authority;
 mod engine;
+pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
     BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
     BackupObjectDatabasePreparationReport, BackupPreparationBatchReport, BackupPreparationPhase,
@@ -41,12 +42,11 @@ pub use engine::{
     offline_check_backup_native_preparation, offline_check_backup_object_databases,
     offline_check_backup_preparation, offline_check_backup_preparation_batch,
 };
-pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
-pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
-    FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation,
-    FileHistoryMoveNativePreparation,
+    FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,
+    FileHistoryMoveDecisionObligation, FileHistoryMoveNativePreparation,
 };
+pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub use engine::{
     TerminalMetadataResume, TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
@@ -117,9 +117,10 @@ pub use engine::{
     ContentMatchRead, ContentReadPlan, CoupledNodeRetirement, DiskCatalogFailure,
     DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
     DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
-    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskHistoryChange,
-    DiskHistoryFailure, DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation,
-    DiskHistoryReceipt, DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus, DiskObservation,
+    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskDatabaseMaterial,
+    DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
+    DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation, DiskHistoryReceipt,
+    DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus, DiskObservation,
     DiskObservationFailure, DiskObservationPlan, DiskObservationStage, Engine,
     FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead, IndexFailure,
     IndexFailureStage, IndexHealth, IntegrityScrubArea, IntegrityScrubBatch,
@@ -137,7 +138,7 @@ pub use engine::{
     RemovalReplicaCleanupState, RetainedWorkspaceLimits, SharedHistoryRead, SystemCatalogKind,
     SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor, SystemChangePage,
     SystemChangeReadError, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
-    WorkspaceReadPlan, verify_membership_control_archive,
+    WorkspaceReadPlan, inspect_disk_database_material, verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

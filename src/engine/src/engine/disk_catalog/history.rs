@@ -6,9 +6,14 @@ use std::collections::BTreeMap;
 
 mod database;
 mod maintenance;
+mod offline;
 mod replay;
 pub(super) use maintenance::Maintenance;
 pub use maintenance::{DiskHistoryFailure, DiskHistoryMaintenanceState, DiskHistoryStatus};
+pub use offline::{
+    DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRelation,
+    inspect_disk_database_material,
+};
 
 const MAX_PUBLICATIONS: usize = 2048;
 const MAX_CHANGES: usize = 65_536;

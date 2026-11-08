@@ -21,6 +21,12 @@ zxs-helper --root /srv/zxs/new-system restore-system \
 
 输出中的 `credential_recovery_snapshot_available` 只表示恢复后的池中存在凭据灾备快照，不表示已创建或替换管理面权威凭据。工具不写旧 `auth.json` 缓存，也不覆盖独立系统目录中的 `management-auth.json`。随后启动守护进程或重试存储发现都不会自动导入该快照，无论是否已有权威标记。有效的本机管理凭据继续作为唯一权威；凭据缺失或损坏时保持认证关闭。需要恢复管理凭据时，保留此次恢复目录作为核验依据，停止相关服务，并在另行准备的干净系统状态目录中走受本机 bootstrap 授权保护、明确接受旧凭据风险的恢复流程。不要删除或覆盖现有管理凭据、权威标记或部分恢复目录来绕过保护；工具不提供凭据重置命令。
 
+`restore-system` 的 `restored:true` 只表示原权威 State 恢复。新增 `restored_scope:authoritative-system-state`、`all_database_scopes_restored:false` 和逐盘当前/历史派生状态，避免把某一可选库失败或尚未实现的三范围恢复报告为全部完成。权威恢复后才维护派生盘库；错误不授权删除恢复材料或重复原决定。
+
+## 无 SYSTEM 的盘根数据库清单
+
+`zxs-helper disk-databases SELECTION [--scope both|current|history] [--records]` 根据明确物理登记读取同一盘的当前/历史 SQLite，严格折叠历史前后行，并在覆盖范围内比较当前清单。支持明确仅读仍完好的一份，另一份保留且不访问；`--records` 将已经完整读取的清单按 JSON 行输出 stdout。它不打开 SYSTEM，不写源盘，不是独立发布证明或恢复权威，不检查正文可用性；原始材料缺失/损坏不被解释为空盘。该源码尚未编译或运行。身份选择、CLI 与边界见[离线数据库材料](../design/offline-disk-database-material.md)。
+
 ## 受限降级恢复
 
 ```sh

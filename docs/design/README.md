@@ -15,3 +15,5 @@
 
 - [盘根当前范围目录副本](disk-current-catalog.md)：只从正式盘的当前精确 binding 派生版本/路径义务；不是过去全时序日志，新增实现尚未运行验证。
 - [盘根本盘发布变更副本](disk-local-publication-history.md)：从完整固定 genesis 发布链逐次派生本盘版本和 owner 路径变更；代际归档及完整三范围恢复未完成，新增实现未编译/测试。
+
+- [离线盘根数据库材料与恢复结果](offline-disk-database-material.md)：无需 SYSTEM 的受限本地清单提取、历史折叠和明确来源/权威边界；恢复后逐盘派生结果，新增代码未运行验证。

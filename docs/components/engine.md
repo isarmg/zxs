@@ -219,3 +219,5 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 盘根历史维护 API `rebuild_disk_history` / `disk_history_observation` 从完整固定 genesis 发布链的相邻 State 重新计算本盘版本/owner 路径变化，保存到独立历史伴随索引，见[本盘发布变更副本](../design/disk-local-publication-history.md)。不从当前 route 推断旧归属，未支持代际归档、全部标签/目录审计或独立恢复；本片未编译/测试/审查/CI。
 
 `disk_catalog_statuses` 是无 I/O 的逐盘维护事实，不是健康准入。当前库刷新失败与已发布业务结果分离；离线 PreservePending 不自动写库。历史伴随库新增 `disk_history_statuses` 和正常冷开/发布连续维护：完整来源建立前缀证明，后续从准确前后 State 追加本盘差异；不相关发布不重写，但持久覆盖和进程内观察覆盖分别显示。失败保留原来源，不回滚权威回执；此后继也未编译、测试、审查或运行 CI。
+
+离线 `inspect_disk_database_material` 不创建 Engine、不打开 SYSTEM，只在明确选定的盘根及准确登记下解析/折叠当前和历史材料；本地自洽不等于已认证来源或恢复权威。原 `restore_from_disks*` 则在真实权威恢复完成后维护这两份派生索引并保留各自错误；辅助工具不再把该维护误称全部三范围恢复。见[离线数据库材料](../design/offline-disk-database-material.md)。本片未编译、测试、审查或运行 CI。
