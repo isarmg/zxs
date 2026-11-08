@@ -488,7 +488,8 @@ async fn helper_deregistration_input_has_no_planned_offline_or_force_lane() {
 }
 
 #[tokio::test]
-async fn capabilities_distinguish_final_voter_from_new_terminal_registry_mutation() {
+async fn capabilities_distinguish_retained_readmission_from_retirement_chain_and_foreign_admission()
+{
     let response = http::router(state())
         .oneshot(
             Request::builder()
@@ -509,7 +510,18 @@ async fn capabilities_distinguish_final_voter_from_new_terminal_registry_mutatio
             .contains(&json!("final_voter_terminal_deregistration"))
     );
     for capability in [
-        "new_deregistration_after_terminal_authority",
+        "sequential_terminal_registration_retirement",
+        "retained_terminal_metadata_readmission",
+    ] {
+        assert!(
+            value["implemented"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(capability))
+        );
+    }
+    for capability in [
+        "metadata_readmission_after_terminal_retirement",
         "foreign_admission",
         "complete_first_run_setup",
     ] {
@@ -532,4 +544,69 @@ async fn terminal_inspection_has_no_operation_or_force_input() {
             "external_writers_stopped":true,"operation_id":"op_11111111111111111111111111111111","force":true}),
     )).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn readmission_routes_enforce_origin_csrf_busy_and_shutdown_before_native_io() {
+    for path in [
+        "/api/disks/readmission-preview",
+        "/api/disks/readmission-original",
+        "/api/disks/readmission-commit",
+    ] {
+        let mut request = post(path, json!({}));
+        request
+            .headers_mut()
+            .insert("origin", "http://untrusted.invalid:9040".parse().unwrap());
+        assert_eq!(
+            http::router(state())
+                .oneshot(request)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let mut request = post(path, json!({}));
+        request.headers_mut().remove("x-zxs-helper-csrf");
+        assert_eq!(
+            http::router(state())
+                .oneshot(request)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let busy = state();
+        let permit = busy.jobs.clone().try_acquire_owned().unwrap();
+        let response = http::router(busy)
+            .oneshot(post(path, json!({})))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(json_body(response).await["error"]["code"], "helper_busy");
+        drop(permit);
+        let stopped = state();
+        stopped.stopping.send_replace(true);
+        let response = http::router(stopped)
+            .oneshot(post(path, json!({})))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            json_body(response).await["error"]["code"],
+            "helper_stopping"
+        );
+    }
+}
+#[tokio::test]
+async fn readmission_input_refuses_replacement_or_foreign_force_before_system_access() {
+    for field in ["root_path", "force", "foreign_chain", "action"] {
+        let mut input = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
+            "slot_id":"P01","expected_disk_id":"disk_original","external_writers_stopped":true});
+        input[field] = "untrusted".into();
+        let response = http::router(state())
+            .oneshot(post("/api/disks/readmission-preview", input))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }

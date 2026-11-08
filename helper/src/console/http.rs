@@ -90,6 +90,18 @@ pub(super) fn router(state: State) -> Router {
             "/api/disks/terminal-retirement-commit",
             post(terminal_retirement_commit),
         )
+        .route(
+            "/api/disks/readmission-preview",
+            post(disk_readmission_preview),
+        )
+        .route(
+            "/api/disks/readmission-original",
+            post(disk_readmission_original),
+        )
+        .route(
+            "/api/disks/readmission-commit",
+            post(disk_readmission_commit),
+        )
         .route("/api/disks/add-preview", post(disk_addition_preview))
         .route("/api/disks/add-original", post(disk_addition_original))
         .route("/api/disks/add-commit", post(disk_addition_commit))
@@ -199,8 +211,8 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "first_storage_initialization":"confirmed_empty_existing_roots_only", "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset","active_empty_directory_addition","nonterminal_disk_deregistration","final_voter_terminal_deregistration","terminal_remaining_registration_inspection"],
-        "not_implemented":["complete_first_run_setup","general_disk_add","new_deregistration_after_terminal_authority","foreign_admission","device_formatting_and_mounting","full_system_rebuild","other_samba_backends_and_account_creation","program_repair","systemd_smb_activation"]
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset","active_empty_directory_addition","nonterminal_disk_deregistration","final_voter_terminal_deregistration","terminal_remaining_registration_inspection","sequential_terminal_registration_retirement","retained_terminal_metadata_readmission"],
+        "not_implemented":["complete_first_run_setup","general_disk_add","metadata_readmission_after_terminal_retirement","foreign_admission","device_formatting_and_mounting","full_system_rebuild","other_samba_backends_and_account_creation","program_repair","systemd_smb_activation"]
     }))
 }
 
@@ -1113,6 +1125,87 @@ async fn terminal_retirement_commit(
         Failure::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "terminal_retirement_worker",
+            error,
+        )
+    })??;
+    Ok(Json(result).into_response())
+}
+
+async fn disk_readmission_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_readmission::Input = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_readmission::preview(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "terminal_readmission",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "readmission_worker",
+            error,
+        )
+    })??;
+    Ok(Json(result).into_response())
+}
+
+async fn disk_readmission_original(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_readmission::Original = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_readmission::original(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "terminal_readmission",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "readmission_worker",
+            error,
+        )
+    })??;
+    Ok(Json(result).into_response())
+}
+
+async fn disk_readmission_commit(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_readmission::Commit = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_readmission::commit(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "terminal_readmission",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "readmission_worker",
             error,
         )
     })??;

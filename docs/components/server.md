@@ -480,3 +480,8 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 ## 终态链状态语义
 
 `completed_retirement` 是最近已完成的原操作，可与不同 ID 的 `pending_retirement` 同时出现：前者仍有永久结果，后者仍保留在当前登记中。相同 ID 同时未决/完成是无效 wire 状态。`ExclusiveExit` 原结果/确认按 native 历史 Plan 与当前身份核对，下一笔的新预览不能替代前一未决操作；metadata resume 仍拒绝。未审查/编译/测试/CI，见[终态链](../design/terminal-retirement-chain.md)。
+
+
+## 离线保留终态 readmission 的原生 owner
+
+`management::storage_readmission::ExclusiveTerminalReadmission` 为同步调用方提供准确预览、原操作状态和显式续作，复用原服务持久记录、终态 source/preview/archive 绑定和原生永久结果校验。调用方持续持有主 AuthStore 与 host 排他租约；owner 自身保留统一 lifecycle 锁，拒绝其他未决生命周期/不同原操作及非 production 来源。查询未决 selector 不打开待接纳目标或自动激活，只有确认路径供应原目录、签发新 epoch 与完成原生发布；正常已准入 Engine 打开仍可能进行已有恢复同步。此 API 不引入终态移除链后的 ResumeCore，不注册外来 writer，也不启动服务。专用 root/账户/页面逻辑在 helper。未审查/编译/测试/CI，见[边界](../design/helper-terminal-retained-readmission.md)。

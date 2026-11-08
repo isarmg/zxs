@@ -34,7 +34,7 @@ mod integrity_scrub;
 pub mod storage_addition;
 pub(crate) mod storage_configuration;
 pub mod storage_lifecycle;
-pub(crate) mod storage_readmission;
+pub mod storage_readmission;
 use integrity_scrub::IntegrityScrubService;
 mod setup_command;
 use setup_command::SetupCommand;

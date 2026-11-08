@@ -151,6 +151,21 @@
       <pre id="terminal-retire-result" hidden></pre>
     </section>
     <section class="card">
+      <h2>终态管理：重新接纳保留的原元数据目录</h2>
+      <p class="warning">仅支持仍登记为 Disabled、具有完整原 Stop/历史元数据角色证明的原盘，并且没有开始任何逐笔终态移除。先在上方读取并选择准确终态登记。已注销、外来盘、替换目录、缺失证明或已有终态移除链均拒绝。此操作会核验并重新打开原目录，签发新 I/O epoch、提交真实元数据恢复决定；不会启动 ZXS 或保证全池健康，也不是新“计划下线”功能。</p>
+      <button id="disk-readmit-preview" type="button">按上方选择预览原元数据目录重新接纳</button>
+      <label>中断后 readmission 原摘要 <input id="disk-readmit-digest" maxlength="64" autocomplete="off" spellcheck="false"></label>
+      <button id="disk-readmit-original" class="secondary" type="button">核对原重新接纳计划 / 真实发布回执</button>
+      <pre id="disk-readmit-plan" hidden></pre>
+      <button id="disk-readmit-save" class="secondary" type="button" hidden>保存原重新接纳计划</button>
+      <form id="disk-readmit-commit" hidden>
+        <label class="ack"><input id="disk-readmit-epoch" type="checkbox" required> 已核对原盘、slot、绑定、停止证明与摘要，确认重新打开原目录并签发新 I/O epoch；接受恢复第一个元数据 voter，不代表全部数据、认证副本或服务已就绪。</label>
+        <button type="submit">确认原目录重新接纳 / 继续同一原操作</button>
+      </form>
+      <pre id="disk-readmit-result" hidden></pre>
+      <p class="muted">只有原生永久 disk-readmit 回执、新 epoch 和准确原决定核验后才返回完成。中断或失败可能已写入，先用原摘要查询，不删除原证据、清盘或另建操作。查询不代替显式续作，不主动打开待接纳目标，也不激活待完成的恢复。服务始终保持停止，须另行确认启动门禁和健康情况。</p>
+    </section>
+    <section class="card">
       <h2>准备与安装 systemd / SMB 配置文件</h2>
       <p>生成与内置版本绑定的未激活配置包，存于已存在、root 所有且其他用户不可写的 <code>/zxs/.zxs-helper-deployment-摘要/</code>。不会写入 <code>/etc</code>、合并现有 Samba 共享、创建账户、设置密码，或执行服务 reload / start / enable。</p>
       <form id="deployment-form">

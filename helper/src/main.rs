@@ -7,6 +7,7 @@ mod credentials;
 mod deployment;
 mod disk_addition;
 mod disk_databases;
+mod disk_readmission;
 mod disk_removal;
 mod host;
 mod initialization;
@@ -74,6 +75,8 @@ enum Command {
     InternalAdditionWorker,
     #[command(hide = true)]
     InternalRemovalWorker,
+    #[command(hide = true)]
+    InternalReadmissionWorker,
     /// Manually serve the independent maintenance console; no login or autostart.
     Serve(console::Options),
     /// Inspect or install the matching embedded ZXS program only; no service setup.
@@ -263,6 +266,7 @@ fn run(args: Args) -> Result<()> {
     };
     match command {
         Command::InternalRemovalWorker => disk_removal::worker_entry(),
+        Command::InternalReadmissionWorker => disk_readmission::worker_entry(),
         Command::InternalAdditionWorker => disk_addition::worker_entry(),
         Command::InternalStorageWorker => initialization::storage::process::entry(),
         Command::Serve(options) => console::run(options),
@@ -407,7 +411,8 @@ fn requires_service_exclusion(command: &Command) -> bool {
             accept_permanent_loss,
             ..
         } => *accept_permanent_loss,
-        Command::InternalRemovalWorker
+        Command::InternalReadmissionWorker
+        | Command::InternalRemovalWorker
         | Command::InternalAdditionWorker
         | Command::InternalStorageWorker
         | Command::Serve(_)

@@ -8,6 +8,9 @@ use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{EntryName, PrivateDirectory};
 use storage_contract::{Config, ErrorCode, OperationId, OperationResult, storage_readmission::*};
 
+mod exclusive;
+pub use exclusive::ExclusiveTerminalReadmission;
+
 const DIRECTORY: &str = "storage-readmissions";
 
 #[derive(Clone, Serialize, Deserialize)]

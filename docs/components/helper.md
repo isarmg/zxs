@@ -218,3 +218,8 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 终态原结果的命名空间证明
 
 原独立 Web 的逐笔移除/续作现由核心强制核完整 mask 和准确 Detached successor，原永久结果显示 mask hash 与 namespace_projection_verified。预览只告知这一必需条件，不是准备完成；所有 metadata/活动存储恢复标志仍 false。无新登录、自启或实际系统操作，无编译/测试/审查/CI，见[边界](../design/terminal-retirement-namespace-closure.md)。
+
+
+## 保留终态元数据目录的重新接纳
+
+独立 Web 新增原 terminal authority 下仍登记 Disabled 元数据目录的预览、明确新 epoch 确认及原操作查询/续作。helper 专用 root 计划/降权 worker/页面留在 helper，共用 native 记录、resume selector 与实际 Publication/永久回执；不启动服务，不称全池健康或安装就绪。任何已开始终态逐笔移除链、Detached/外来/替换根或缺证明均拒绝，不新增计划下线。未审查/编译/测试/CI，无真实系统操作，见[可执行范围与限制](../design/helper-terminal-retained-readmission.md)。

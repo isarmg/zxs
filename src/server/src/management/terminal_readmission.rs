@@ -90,7 +90,7 @@ fn project_preview(
     Ok(preview)
 }
 
-fn require_preview(
+pub(super) fn require_preview(
     terminal: &TerminalManagement,
     principal: &str,
     intent: &StoredReadmission,
@@ -125,7 +125,10 @@ fn require_admission(
     Ok(())
 }
 
-fn bind_archive(intent: &mut StoredReadmission, binding: ArchiveBinding) -> Result<(), ApiError> {
+pub(super) fn bind_archive(
+    intent: &mut StoredReadmission,
+    binding: ArchiveBinding,
+) -> Result<(), ApiError> {
     if intent
         .archive
         .as_ref()
@@ -139,7 +142,7 @@ fn bind_archive(intent: &mut StoredReadmission, binding: ArchiveBinding) -> Resu
     Ok(())
 }
 
-fn pending_binding(
+pub(super) fn pending_binding(
     pending: &TerminalMetadataResume,
     intent: &StoredReadmission,
 ) -> Result<ArchiveBinding, ApiError> {
@@ -175,7 +178,7 @@ fn pending_binding(
     Ok(binding)
 }
 
-fn recovery_binding(
+pub(super) fn recovery_binding(
     proof: &TerminalMetadataResumeRecovery,
     intent: &StoredReadmission,
 ) -> Result<ArchiveBinding, ApiError> {

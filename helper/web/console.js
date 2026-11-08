@@ -13,11 +13,12 @@ let firstAdministratorPreview = null;
 let firstStoragePreview = null;
 let diskAdditionPreview = null;
 let diskRemovalPreview = null;
+let diskReadmissionPreview = null;
 let sambaPasswordPreview = null;
 let sambaPasswordOriginal = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -705,4 +706,66 @@ byId("terminal-retire-commit").addEventListener("submit",async event => {
     byId("disk-remove-target").replaceChildren(new Option("请重新读取实际登记", ""));
   } catch(e) { error(`${e.message} 原终态摘要：${retained.input.request_digest}。可能已部分或全部完成，不删证据或换编号；先核对同一原操作。`); }
   finally { terminalRetirementPreview = null; byId("terminal-retire-commit").hidden = true; setBusy(false); }
+});
+
+
+function resetDiskReadmission() {
+  diskReadmissionPreview = null;
+  for (const id of ["disk-readmit-plan","disk-readmit-save","disk-readmit-commit","disk-readmit-result"]) byId(id).hidden = true;
+  byId("disk-readmit-epoch").checked = false;
+}
+function showDiskReadmission(service_user, preview) {
+  diskReadmissionPreview = {input:{service_user,request_digest:preview.request_digest,external_writers_stopped:true},plan:preview.plan};
+  byId("disk-readmit-digest").value = preview.request_digest;
+  byId("disk-readmit-plan").textContent = JSON.stringify(preview,null,2);
+  for (const id of ["disk-readmit-plan","disk-readmit-save"]) byId(id).hidden = false;
+  byId("disk-readmit-commit").hidden = preview.original_status !== null && preview.original_status.state === "completed";
+}
+for (const id of ["disk-remove-user","disk-remove-target","disk-remove-writers","disk-readmit-digest"]) byId(id).addEventListener("input",resetDiskReadmission);
+byId("disk-remove-load").addEventListener("click",resetDiskReadmission);
+for (const id of ["disk-remove-commit-form","terminal-retire-commit","disk-add-commit-form"]) byId(id).addEventListener("submit",resetDiskReadmission);
+byId("disk-readmit-preview").addEventListener("click",async () => {
+  if (busy || stopping) return;
+  if (byId("disk-remove-target").dataset.authority !== "terminal_management" || !byId("disk-remove-target").value) {
+    error("先在上方读取并选择仍登记的原终态元数据盘；不能根据旧配置、外来材料或已注销身份推断可重新接纳。"); return;
+  }
+  const target = JSON.parse(byId("disk-remove-target").value);
+  const service_user = byId("disk-remove-user").value;
+  const operation_id = "op_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
+  resetDiskReadmission(); resetDiskRemoval(); resetTerminalRetirement(); error(""); setBusy(true);
+  try { showDiskReadmission(service_user,await (await post("/api/disks/readmission-preview",{service_user,operation_id,...target,external_writers_stopped:byId("disk-remove-writers").checked})).json()); }
+  catch(e) { error(e.message); } finally { setBusy(false); }
+});
+byId("disk-readmit-original").addEventListener("click",async () => {
+  if (busy || stopping) return;
+  const service_user = byId("disk-remove-user").value;
+  const request_digest = byId("disk-readmit-digest").value;
+  resetDiskReadmission(); resetDiskRemoval(); resetTerminalRetirement(); error(""); setBusy(true);
+  try { showDiskReadmission(service_user,await (await post("/api/disks/readmission-original",{service_user,request_digest,external_writers_stopped:byId("disk-remove-writers").checked})).json()); }
+  catch(e) { error(e.message); } finally { setBusy(false); }
+});
+byId("disk-readmit-save").addEventListener("click",() => {
+  if (diskReadmissionPreview) save(new Blob([JSON.stringify(diskReadmissionPreview,null,2)],{type:"application/json"}),`zxs-terminal-readmission-${diskReadmissionPreview.input.request_digest}.json`);
+});
+byId("disk-readmit-commit").addEventListener("submit",async event => {
+  event.preventDefault(); if (busy || stopping || !diskReadmissionPreview) return;
+  const retained = diskReadmissionPreview;
+  const native = retained.plan.readmission;
+  if (!confirm(`重新接纳原目录 ${native.target.slot_id} / ${native.target.disk_id} 并签发新 I/O epoch？只继续 ${native.request.operation_id}。不会启动服务，也不代表全池健康。`)) return;
+  setBusy(true); error("");
+  try {
+    const result = await (await post("/api/disks/readmission-commit",{...retained,confirmation:"readmit-retained-terminal-metadata",acknowledge_original_directory_and_new_epoch:byId("disk-readmit-epoch").checked})).json();
+    byId("disk-readmit-result").textContent = JSON.stringify(result,null,2);
+    byId("disk-readmit-result").hidden = false;
+  } catch(e) { error(`${e.message} 原 readmission 摘要：${retained.input.request_digest}。可能已部分或全部发布，请先核对同一原操作，不换盘或编号重做。`); }
+  finally {
+    diskReadmissionPreview = null;
+    byId("disk-readmit-commit").hidden = true;
+    byId("disk-readmit-save").hidden = true;
+    resetDiskRemoval(); resetTerminalRetirement(); resetDiskAddition();
+    byId("disk-remove-target").replaceChildren(new Option("请重新读取实际登记", ""));
+    delete byId("disk-remove-target").dataset.authority;
+    byId("disk-remove-inventory").hidden = true;
+    setBusy(false);
+  }
 });
