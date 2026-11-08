@@ -3,6 +3,7 @@
 use super::*;
 use crate::engine::{Prepared, ReadSource};
 use crate::journal::Candidate;
+use crate::protection::RecursiveBackupMode;
 use crate::{
     CommitState, CurrentHealth, Event, FileVersion, HistoricalDiskDefinition, OperationId,
     OperationResult, Placement, ProtectionAtPublish, RecursiveBackupCapture,
@@ -13,10 +14,8 @@ use json_codec::{Value, json};
 use storage_contract::{MapChanges, SequenceChanges, TrackedMap, TrackedOperations};
 
 const KIND: &str = "backup.configure";
-const RECURSIVE_KIND: &str = "backup.configure-recursive";
-
 fn native_backup_kind(kind: &str) -> bool {
-    matches!(kind, KIND | RECURSIVE_KIND)
+    kind == KIND || RecursiveBackupMode::from_kind(kind).is_some()
 }
 
 fn invalid() -> Error {
@@ -405,7 +404,8 @@ impl CurrentNamespaces {
                 )?;
                 (input.repository_id, plan)
             }
-            RECURSIVE_KIND => {
+            kind => {
+                let mode = RecursiveBackupMode::from_kind(kind).ok_or_else(invalid)?;
                 let input: RecursiveBackupInput =
                     json_codec::from_value(receipt.result["backup_request"].clone())?;
                 let plan = self.plan_recursive_backup_configuration(
@@ -420,11 +420,11 @@ impl CurrentNamespaces {
                         principal,
                         operation_id: receipt.operation_id,
                     },
+                    mode,
                     || ids.next().cloned().ok_or_else(invalid),
                 )?;
                 (input.repository_id, plan)
             }
-            _ => return Err(invalid()),
         };
         if ids.next().is_some() {
             return Err(invalid());

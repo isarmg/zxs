@@ -5,7 +5,37 @@ use data_serialization::{Deserialize, Serialize};
 use name_policy::PortablePath;
 
 pub(crate) const KIND: &str = "backup.configure-recursive";
+pub(crate) const TREE_KIND: &str = "backup.configure-recursive-tree";
 const FORMAT: &str = "recursive-backup-source-paths";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecursiveBackupMode {
+    Files,
+    DirectoryTree,
+}
+
+impl RecursiveBackupMode {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Files => KIND,
+            Self::DirectoryTree => TREE_KIND,
+        }
+    }
+
+    pub(crate) fn from_kind(kind: &str) -> Option<Self> {
+        match kind {
+            KIND => Some(Self::Files),
+            TREE_KIND => Some(Self::DirectoryTree),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RecursivePaths<'a> {
+    pub(super) capture: &'a RecursiveBackupCapture,
+    pub(super) mode: RecursiveBackupMode,
+}
 
 /// Transport/persisted request evidence, not a write capability. The live
 /// boundary rechecks every identity and name before a new operation is planned.
@@ -37,9 +67,10 @@ fn required_upstream<'de, D: data_serialization::Deserializer<'de>>(
     Option::<String>::deserialize(deserializer)
 }
 
-/// Explicitly re-protect the current selected files using full source paths.
-/// Empty selected directory scopes are published on metadata-member targets.
-/// Automatic later rename propagation remains a separate capability.
+/// Frozen input for explicit recursive re-protection using full source paths.
+/// `configure_recursive_backups` retains its file-only/nonempty scope semantics;
+/// `configure_recursive_backup_tree` explicitly captures current directories too.
+/// Published directory snapshots require metadata-member targets in both modes.
 #[derive(Clone, Copy, Debug)]
 pub struct RecursiveBackupConfigurationRequest<'a> {
     pub repository_id: &'a str,
@@ -131,9 +162,35 @@ impl Engine {
         &mut self,
         request: RecursiveBackupConfigurationRequest<'_>,
     ) -> Result<OperationResult> {
+        self.configure_recursive_snapshot(request, RecursiveBackupMode::Files)
+    }
+
+    /// Explicitly publish one current directory snapshot, including its files
+    /// and empty descendants, through the same full-copy transaction.
+    /// Independent child policies retain their own snapshots and placements.
+    ///
+    /// This is separate from `configure_recursive_backups`: directory targets
+    /// require metadata-member publication evidence, whereas ordinary file
+    /// backups may use data-only targets. Old operation receipts are unchanged.
+    ///
+    /// # Errors
+    /// Rejects file scopes, non-metadata directory targets, stale captures and
+    /// ordinary backup-policy, copy, namespace and publication failures.
+    pub fn configure_recursive_backup_tree(
+        &mut self,
+        request: RecursiveBackupConfigurationRequest<'_>,
+    ) -> Result<OperationResult> {
+        self.configure_recursive_snapshot(request, RecursiveBackupMode::DirectoryTree)
+    }
+
+    fn configure_recursive_snapshot(
+        &mut self,
+        request: RecursiveBackupConfigurationRequest<'_>,
+        mode: RecursiveBackupMode,
+    ) -> Result<OperationResult> {
         let input = request_json(request);
         self.mutate(
-            KIND,
+            mode.kind(),
             request.principal,
             request.operation_id,
             input,
@@ -147,10 +204,12 @@ impl Engine {
                 let current = engine
                     .admitted_current_namespaces()?
                     .ok_or_else(unavailable)?;
-                let plan =
-                    current.plan_recursive_backup_configuration(engine.state(), request, || {
-                        Ok(new_id("policy")?)
-                    })?;
+                let plan = current.plan_recursive_backup_configuration(
+                    engine.state(),
+                    request,
+                    mode,
+                    || Ok(new_id("policy")?),
+                )?;
                 apply_current_plan(engine, state, pending, plan)
             },
         )
@@ -339,6 +398,7 @@ impl CurrentNamespaces {
         &self,
         state: &State,
         request: RecursiveBackupConfigurationRequest<'_>,
+        mode: RecursiveBackupMode,
         fresh_policy: impl FnMut() -> Result<String>,
     ) -> Result<CurrentBackupConfigurationPlan> {
         self.verify_recursive_backup_capture(state, request.capture)?;
@@ -355,7 +415,10 @@ impl CurrentNamespaces {
                 principal: request.principal,
                 operation_id: request.operation_id,
             },
-            Some(request.capture),
+            Some(RecursivePaths {
+                capture: request.capture,
+                mode,
+            }),
             fresh_policy,
         )?;
         plan.result["backup_request"] = request_json(request);

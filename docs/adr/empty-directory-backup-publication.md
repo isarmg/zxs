@@ -1,6 +1,6 @@
 # ADR：递归备份的空 scope 目录发布
 
-状态：有限实现，发行格式未冻结。只实现以前明确拒绝的“选定文件集合为空”的目录 scope；有文件的递归配置、文件正文及其收据表示保持原逻辑。Web 配置和备份列表消费同一已发布目录快照；后续 native rename/move 以新收据发布精确跟随结果，不改写旧收据。
+状态：有限实现，发行格式未冻结。原入口实现以前明确拒绝的“选定文件集合为空”的目录 scope；有文件的既有递归配置、文件正文及其收据表示保持原逻辑。[显式全目录快照入口](#mixed-directory-snapshot)另行选择同时发布非空目录的文件与目录行，不默认扩大旧请求。Web 配置和备份列表消费同一已发布目录快照；后续 native rename/move 以新收据发布精确跟随结果，不改写旧收据。
 
 ## 持久权威与决定点
 
@@ -51,3 +51,17 @@ Web 移除 file_count 为零的硬拒绝，沿现有 scope、capture、会话和
 逻辑读取与同目标物理预检按 `(repository, history, directory_id, normalized_path)`（目标内投影省略共同的仓库/历史）合并重复行后计条目预算。不同身份的同路径不合并，仍交既有冲突检查；隐式祖先仍由 Server 的逻辑节点预算覆盖。`PublishedBackupDirectory::operation_id` 是相同逻辑行的最新 sequence 发布代表，不是唯一来源证明，所有被合并的永久 receipt 保留不动。完整 receipt canonical bytes 仍受 metadata 大小上限，不删除资源保护。
 
 后续按实际保留路由的 rename/move 使用 `*.recursive-routes` 新 kind，并完整继承本文目录快照验证。前述 `*.recursive-directories` 仍是旧收据的固定语义，不被追溯改变；详细区别见[路径跟随 ADR](recursive-namespace-follow.md#retained-route-follow)。
+
+<a id="mixed-directory-snapshot"></a>
+
+## 显式混合目录快照
+
+`Engine::configure_recursive_backup_tree` 接受原有冻结 `RecursiveBackupConfigurationRequest`，但仅接受目录 scope，使用独立原生 kind `backup.configure-recursive-tree`。它在同一完整副本事务中回填所选文件的可用保留版本，并捕获当前 scope 内的目录 Entry ID 与各层完整路径，包含非空目录下的空子目录。独立子策略继续拥有自己的目录快照与路由，不被父 scope 吞并；未选定历史视图中的目录及发布后新增目录不会自动加入快照。每一级仍只按直接上游磁盘名加前缀，再继承上一层完整路径；不按全局绝对挂载点拼接。
+
+保留 `configure_recursive_backups` 和 `backup.configure-recursive` 的原语义是兼容性决定，而不是自动回退。原文件模式的非空 scope 仍可使用数据专用备份目标；新全树模式的目录目标必须有现行元数据成员发布证明。任一目标不支持时整笔明确拒绝，不可悄悄省略目录；文件 scope 也明确拒绝。相同 operation ID 在两种模式间切换属于不同原生请求，成功后的永久重试必须使用原模式、原捕获和原参数。
+
+新 kind 复用现行 typed 规划器、精确 State/Prepared/Candidate 验证、容量门禁和全成员决定流程。目录行、目录 ID、目标绑定与所需文件 payload 都是闭合证明的一部分；目录证据不能代替文件正文复制，旧 kind 不能通过携带目录字段获得新能力。决定后 I/O 失败仍保持 InDoubt，冷恢复在原有可写准入门禁后完成文件与目录投影，不改旧 receipt，不新增 State/HistoryManifest 表，也不迁移旧格式。
+
+已验证的新配置进入现有稳定 ID 索引，后续 `*.recursive-routes` 以新收据共同跟随已捕获的文件与目录。最终冷修复和 `published_backup_directories` 继续只消费现行策略快照。Server 备份读取可复用这些目录行，活动分类认识新 kind；本片不新增 HTTP 写入路由或 Web 全树选择，现有界面仍保持原文件/空 scope 入口，不将 Engine 能力冒充端到端已接线。
+
+定向定义见[混合目录公开回归](../../test/engine/integration/recursive_backup_mixed_directories.rs)与[精确原生证明回归](../../test/engine/unit/engine/current_recursive_tree_tests.rs)：前者覆盖保留正文、双跳真实目录、旧模式、独立子策略、数据专用目标/文件 scope 拒绝、改名后冷修复和永久重试、决定后真实 I/O 阻塞；后者覆盖目录伪造/遗漏、模式降级以及缺少或改变文件 payload。测试定义不代表运行通过，临时目录 I/O 不代表生产硬件或物理掉电认证。

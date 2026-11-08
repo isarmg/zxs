@@ -13,7 +13,7 @@ pub use backup_paths::{
     BackupConfigurationRequest, PublishedBackupDirectory, RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };
-pub(crate) use backup_paths::{apply_backup_paths, prune_retained_policies};
+pub(crate) use backup_paths::{RecursiveBackupMode, apply_backup_paths, prune_retained_policies};
 pub use placement_configuration::PlacementConfigurationRequest;
 
 /// A conditional placement update, including its authenticated actor and replay identity.

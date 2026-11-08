@@ -1,6 +1,9 @@
 //! Actual native publication, physical file-container and cold-replay tests.
 use super::*;
 
+#[path = "current_recursive_tree_tests.rs"]
+mod directory_tree;
+
 #[test]
 fn recursive_follow_replay_binds_request_and_rejects_omission_or_extra_paths() {
     let mut fixture = ready();

@@ -483,7 +483,7 @@ fn backup_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
     for operation in engine.state().operations.values().filter(|op| {
         matches!(
             op.kind.as_str(),
-            "backup.configure" | "backup.configure-recursive"
+            "backup.configure" | "backup.configure-recursive" | "backup.configure-recursive-tree"
         )
     }) {
         if !history_sequence_may_fit(events, operation.sequence) {

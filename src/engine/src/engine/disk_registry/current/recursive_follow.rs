@@ -3,7 +3,8 @@
 use super::*;
 use crate::protection::{
     BATCH_FOLLOW_KIND, BATCH_ROUTE_KIND, DirectoryFollowChange, DirectoryFollowPlan,
-    DirectoryNamespace, FILE_FOLLOW_KIND, FILE_ROUTE_KIND, follows_directories, follows_routes,
+    DirectoryNamespace, FILE_FOLLOW_KIND, FILE_ROUTE_KIND, RecursiveBackupMode,
+    follows_directories, follows_routes,
 };
 use crate::{OperationId, OperationResult, ProtectionPolicy, RecursiveBackupCapture};
 use data_serialization::{Deserialize, Serialize};
@@ -43,6 +44,7 @@ pub(in crate::engine::disk_registry) struct PolicyIndex {
 #[derive(Clone)]
 struct BoundPolicy {
     policy: ProtectionPolicy,
+    mode: RecursiveBackupMode,
     authority: OperationId,
     capture: RecursiveBackupCapture,
     roots: BTreeMap<String, String>,
@@ -193,7 +195,10 @@ impl CurrentNamespaces {
                         self.recursive_policies
                             .policies
                             .get(policy)
-                            .is_some_and(|bound| bound.directory_namespace.is_none())
+                            .is_some_and(|bound| {
+                                bound.directory_namespace.is_none()
+                                    || bound.mode == RecursiveBackupMode::DirectoryTree
+                            })
                     })
             {
                 return Err(invalid());
@@ -237,9 +242,11 @@ impl CurrentNamespaces {
                 Arc::make_mut(&mut index).insert(bound);
             }
         }
-        // Both protocols derive authority only after complete backup admission.
-        // Old namespace kinds still ignore empty snapshot bindings.
-        if let Some(receipt) = backup.filter(|receipt| receipt.kind == "backup.configure-recursive")
+        // Recursive protocols derive authority only after complete admission.
+        // The source mode survives follows, preserving old empty-scope semantics
+        // while protecting mixed snapshots against downgraded namespace writes.
+        if let Some(receipt) = backup
+            && let Some(mode) = RecursiveBackupMode::from_kind(&receipt.kind)
         {
             let policy: ProtectionPolicy =
                 json_codec::from_value(receipt.result["policy"].clone())?;
@@ -252,6 +259,7 @@ impl CurrentNamespaces {
             let roots = capture.follow_roots(repository, policy.backup_prefixes.keys())?;
             Arc::make_mut(&mut index).insert(BoundPolicy {
                 policy,
+                mode,
                 authority: receipt.operation_id,
                 capture,
                 roots,

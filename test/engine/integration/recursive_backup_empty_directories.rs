@@ -1,6 +1,9 @@
 //! Real public Engine/native I/O and cold recovery, not power-loss certification.
 use super::*;
 
+#[path = "recursive_backup_mixed_directories.rs"]
+mod mixed;
+
 fn mkdir(fixture: &mut Fixture, path: &str) {
     fixture
         .engine

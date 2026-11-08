@@ -235,16 +235,17 @@ pub(super) fn capture(
     Ok(json_codec::to_value(result)?)
 }
 
-fn empty_namespace_receipt(receipt: &OperationResult) -> bool {
-    receipt.kind == recursive::KIND
-        && receipt.result["scope"]["kind"] == "directory"
-        && receipt.result["file_count"] == "0"
+fn directory_namespace_receipt(receipt: &OperationResult) -> bool {
+    receipt.kind == recursive::TREE_KIND
+        || (receipt.kind == recursive::KIND
+            && receipt.result["scope"]["kind"] == "directory"
+            && receipt.result["file_count"] == "0")
 }
 
 pub(crate) fn captured_directory_namespace(
     receipt: &OperationResult,
 ) -> Result<Option<DirectoryNamespace>> {
-    if !empty_namespace_receipt(receipt) {
+    if !directory_namespace_receipt(receipt) {
         return Ok(None);
     }
     let value = receipt.result.get("directory_namespace").ok_or_else(|| {

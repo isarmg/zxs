@@ -1415,7 +1415,9 @@ impl Engine {
                 |_, next, prepared| change(self, next, prepared),
             );
         }
-        if matches!(kind, "backup.configure" | "backup.configure-recursive") {
+        if kind == "backup.configure"
+            || crate::protection::RecursiveBackupMode::from_kind(kind).is_some()
+        {
             return context.plan_backup_configuration_mutation(
                 kind,
                 principal,

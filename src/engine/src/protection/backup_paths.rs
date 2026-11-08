@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) mod directory_namespaces;
 mod recursive;
 pub use directory_namespaces::PublishedBackupDirectory;
+pub(crate) use recursive::RecursiveBackupMode;
 pub use recursive::{RecursiveBackupCapture, RecursiveBackupConfigurationRequest};
 
 /// Backup placement for a path, fenced by the current policy generation.
@@ -866,11 +867,19 @@ impl CurrentNamespaces {
         &self,
         state: &State,
         request: ScopedBackupConfigurationRequest<'_>,
-        recursive: Option<&RecursiveBackupCapture>,
+        recursive: Option<recursive::RecursivePaths<'_>>,
         mut fresh_policy: impl FnMut() -> Result<String>,
     ) -> Result<CurrentBackupConfigurationPlan> {
         let repository = request.repository_id;
         let mut scope = source_scope(state, Some(self), repository, request.path)?;
+        if recursive.is_some_and(|paths| paths.mode == RecursiveBackupMode::DirectoryTree)
+            && scope.kind != NamespaceEntryKind::Directory
+        {
+            return Err(Error::new(
+                ErrorCode::OperationUnsupported,
+                "a complete recursive backup snapshot requires a directory scope",
+            ));
+        }
         let repo = &state.repositories[repository];
         let head = namespace(state, repository)?;
         let entries = self.branch_entries(&repo.main_branch_id, &head.commit_id)?;
@@ -966,8 +975,10 @@ impl CurrentNamespaces {
         }
         for primary in primaries {
             let route = self.backup_configuration_route(primary, request.target_copies)?;
-            if let Some(capture) = recursive {
-                capture.extend_prefixes(repo, &scope, &route, &mut prefixes)?;
+            if let Some(paths) = recursive {
+                paths
+                    .capture
+                    .extend_prefixes(repo, &scope, &route, &mut prefixes)?;
             }
             for slot in route.into_iter().skip(1) {
                 if !prefixes.contains_key(&slot) {
@@ -1064,7 +1075,10 @@ impl CurrentNamespaces {
             }
         }
         let directory_namespace = recursive
-            .filter(|_| scope.kind == NamespaceEntryKind::Directory && scope.files.is_empty())
+            .filter(|paths| {
+                scope.kind == NamespaceEntryKind::Directory
+                    && (paths.mode == RecursiveBackupMode::DirectoryTree || scope.files.is_empty())
+            })
             .map(|_| directory_namespaces::capture(self, state, repo, &scope, &policy, &prefixes))
             .transpose()?;
         let mut result = json!({
