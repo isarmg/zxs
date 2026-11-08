@@ -5,6 +5,8 @@ use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
+mod generation_authority;
+pub use generation_authority::BackupGenerationAuthorityReport;
 mod generation_control;
 pub use generation_control::BackupGenerationControlReport;
 mod generation_inputs;
@@ -57,7 +59,7 @@ impl Task {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(in crate::engine) struct BackupRegistryProjection {
     format: String,
@@ -70,7 +72,59 @@ pub(in crate::engine) struct BackupRegistryProjection {
     retained_original_disks: Vec<DiskConfig>,
     targets: Vec<TargetProjection>,
 }
-#[derive(Serialize, Deserialize)]
+impl BackupRegistryProjection {
+    /// Pure cold closure of the selected topology and physical target bindings.
+    /// This grants no filesystem I/O: actual image admission remains required.
+    pub(in crate::engine) fn verify_frozen_selection(
+        &self,
+        evidence: &BackupSourceFenceEvidence,
+        fence_hash: &str,
+    ) -> Result<()> {
+        let frozen = &evidence.task;
+        let jobs = frozen.selection().jobs();
+        if self.format != FORMAT
+            || self.source_fence_hash != fence_hash
+            || self.original_state_hash != evidence.state_hash()
+            || self.original_configuration_hash != frozen.selection().first().configuration_hash
+            || self.source != frozen.topology.source
+            || self.replaced_terminal != frozen.topology.replaced
+            || canonical_json(&self.retained_original_disks)?
+                != canonical_json(&frozen.original.disks)?
+            || self.targets.len() != jobs.len()
+            || self.targets.len() != frozen.topology.nodes.len()
+        {
+            return Err(invalid(
+                "Backup authority registry differs from its original frozen task",
+            ));
+        }
+        let mut units = None;
+        for ((target, node), job) in self.targets.iter().zip(&frozen.topology.nodes).zip(jobs) {
+            if target.node != *node
+                || target.physical != job.target
+                || target.root != job.request.target_paths[0]
+                || target.image_manifest_hash.len() != 64
+                || !target
+                    .image_manifest_hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(invalid(
+                    "Backup authority substitutes a selected target or entity image",
+                ));
+            }
+            let relative = target.entities.relative_to(&node.source_prefix)?;
+            if units.as_ref().is_some_and(|first| first != &relative) {
+                return Err(invalid(
+                    "Backup authority splits whole units across selected targets",
+                ));
+            }
+            units = Some(relative);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct TargetProjection {
     node: BackupPreparedTopologyNode,

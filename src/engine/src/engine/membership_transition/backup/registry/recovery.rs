@@ -18,7 +18,7 @@ impl BackupRegistryDecisionHash {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct StoredCore {
     format: String,
@@ -27,9 +27,9 @@ struct StoredCore {
     registry_placement: BackupRegistryProjection,
     original_members: BTreeMap<String, OriginalMember>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct StoredCertificate {
+pub(in crate::engine::membership_transition) struct BackupDecisionCertificate {
     format: String,
     core_hash: String,
     core: StoredCore,
@@ -39,7 +39,7 @@ struct StoredCertificate {
 /// This admits only the exact frozen choice. It cannot be converted to an
 /// active Generation or used to clear membership_fence/blocked.
 pub(in crate::engine) struct AdmittedBackupDecision {
-    stored: StoredCertificate,
+    stored: BackupDecisionCertificate,
     core: PreparedMetadataObject,
     certificate: PreparedMetadataObject,
 }
@@ -51,7 +51,18 @@ impl AdmittedBackupDecision {
                 "backup decision exceeds 32 MiB",
             ));
         }
-        let stored: StoredCertificate = crate::journal::decode_proof(bytes)?;
+        let stored: BackupDecisionCertificate = crate::journal::decode_proof(bytes)?;
+        let admitted = Self::from_certificate(stored)?;
+        if admitted.certificate.bytes() != bytes {
+            return Err(invalid(
+                "backup decision bytes are not the exact selected canonical object",
+            ));
+        }
+        Ok(admitted)
+    }
+    pub(in crate::engine::membership_transition) fn from_certificate(
+        stored: BackupDecisionCertificate,
+    ) -> Result<Self> {
         if stored.format != CERTIFICATE_KIND || stored.core.format != CORE_KIND {
             return Err(invalid("unsupported backup registry decision"));
         }
@@ -63,14 +74,16 @@ impl AdmittedBackupDecision {
         if stored.core.transition_hash != object_hash(INTENT_KIND, &stored.core.transition)? {
             return Err(invalid("backup registry decision has another native fence"));
         }
+        let Origin::BackupCutover { evidence, .. } = &stored.core.transition.origin else {
+            unreachable!("invariant: verified Backup transition");
+        };
+        stored
+            .core
+            .registry_placement
+            .verify_frozen_selection(evidence, &stored.core.transition_hash)?;
         verify_original_members(&stored)?;
         let certificate =
             PreparedMetadataObject::new(CERTIFICATE_KIND, &stored, MAX_DECISION_BYTES)?;
-        if certificate.bytes() != bytes {
-            return Err(invalid(
-                "backup decision bytes are not the exact selected canonical object",
-            ));
-        }
         Ok(Self {
             stored,
             core,
@@ -139,11 +152,18 @@ impl AdmittedBackupDecision {
         }
         Ok(())
     }
-    pub(super) fn transition(&self) -> &TransitionIntent {
+    pub(in crate::engine::membership_transition) fn transition(&self) -> &TransitionIntent {
         &self.stored.core.transition
     }
-    pub(super) fn original_members(&self) -> &BTreeMap<String, OriginalMember> {
+    pub(in crate::engine::membership_transition) fn original_members(
+        &self,
+    ) -> &BTreeMap<String, OriginalMember> {
         &self.stored.core.original_members
+    }
+    pub(in crate::engine::membership_transition) fn certificate(
+        &self,
+    ) -> BackupDecisionCertificate {
+        self.stored.clone()
     }
     fn bind_prepared(&self, prepared: &PreparedBackupRegistry) -> Result<()> {
         self.bind_source(prepared.source_fence_hash(), prepared.source_evidence())?;
@@ -158,7 +178,7 @@ impl AdmittedBackupDecision {
     }
 }
 
-fn verify_original_members(certificate: &StoredCertificate) -> Result<()> {
+fn verify_original_members(certificate: &BackupDecisionCertificate) -> Result<()> {
     let core = &certificate.core;
     let original = core.transition.origin.config();
     if core.original_members.len() != original.metadata_members().len()

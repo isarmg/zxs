@@ -2,6 +2,7 @@
 //! successors carry each immutable predecessor node exactly once.
 use super::*;
 use crate::engine::membership_transition::abort::{AbortAuthorityEvidence, AbortCore};
+use crate::engine::membership_transition::backup::BackupCore;
 use crate::engine::membership_transition::terminal_resume::ResumeCore;
 use std::collections::BTreeSet;
 
@@ -25,6 +26,7 @@ enum AuthorityCore {
     Exit(exit::ExitCore),
     TerminalResume(Box<ResumeCore>),
     Readmission(Box<super::super::super::readmission::ReadmissionCore>),
+    Backup(Box<BackupCore>),
 }
 
 pub(in crate::engine::membership_transition) trait AuthorityResolver {
@@ -46,7 +48,7 @@ impl AuthorityCore {
         match self {
             Self::Exit(_) => Some(intent),
             Self::TerminalResume(core) => Some(core.terminal().intent()),
-            Self::Add(_) | Self::Abort(_) | Self::Readmission(_) => None,
+            Self::Add(_) | Self::Abort(_) | Self::Readmission(_) | Self::Backup(_) => None,
         }
     }
     fn archive(&self) -> &ArchiveRoot {
@@ -56,6 +58,7 @@ impl AuthorityCore {
             Self::Exit(core) => &core.archive,
             Self::TerminalResume(core) => core.archive(),
             Self::Readmission(core) => core.archive(),
+            Self::Backup(core) => core.archive(),
         }
     }
     fn intent(&self, evidence: Option<&AbortAuthorityEvidence>) -> Result<TransitionIntent> {
@@ -64,6 +67,7 @@ impl AuthorityCore {
             (Self::Exit(core), None) => core.intent(),
             (Self::TerminalResume(core), None) => core.intent(),
             (Self::Readmission(core), None) => core.intent(),
+            (Self::Backup(core), None) => core.intent(),
             (Self::Abort(core), Some(evidence)) => evidence.verify(core),
             _ => Err(Error::new(
                 ErrorCode::ObjectCorrupt,
@@ -71,12 +75,13 @@ impl AuthorityCore {
             )),
         }
     }
-    fn effective_config<'a>(&self, intent: &'a TransitionIntent) -> &'a ValidatedConfig {
+    fn effective_config<'a>(&self, intent: &'a TransitionIntent) -> Result<&'a ValidatedConfig> {
         match self {
             Self::Add(_) | Self::Exit(_) | Self::TerminalResume(_) | Self::Readmission(_) => {
-                &intent.target
+                Ok(&intent.target)
             }
-            Self::Abort(_) => intent.origin.config(),
+            Self::Abort(_) => Ok(intent.origin.config()),
+            Self::Backup(_) => Err(BackupCore::activation_required()),
         }
     }
 }
@@ -282,7 +287,8 @@ impl PortableAuthority {
             AuthorityCore::Exit(core) => Ok(&core.joint),
             AuthorityCore::Abort(_)
             | AuthorityCore::TerminalResume(_)
-            | AuthorityCore::Readmission(_) => Err(Error::new(
+            | AuthorityCore::Readmission(_)
+            | AuthorityCore::Backup(_) => Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "this authority has no Joint addition certificate",
             )),
@@ -313,7 +319,8 @@ impl PortableAuthority {
             AuthorityCore::Add(_)
             | AuthorityCore::Exit(_)
             | AuthorityCore::TerminalResume(_)
-            | AuthorityCore::Readmission(_) => Err(Error::new(
+            | AuthorityCore::Readmission(_)
+            | AuthorityCore::Backup(_) => Err(Error::new(
                 ErrorCode::ConfigConflict,
                 "expected Abort authority",
             )),
@@ -340,6 +347,7 @@ impl PortableAuthority {
             AuthorityCore::Exit(core) => Ok(Some(core.registry())),
             AuthorityCore::TerminalResume(core) => Ok(Some(core.registry())),
             AuthorityCore::Readmission(core) => Ok(Some(core.registry())),
+            AuthorityCore::Backup(_) => Err(BackupCore::activation_required()),
             AuthorityCore::Abort(_) => {
                 let hash = object_hash(AUTHORITY_KIND, node)?;
                 let intent = node.intent(self.evidence.get(&hash))?;
@@ -374,6 +382,7 @@ impl PortableAuthority {
             AuthorityCore::Exit(core) => core.verified_registry().map(Some),
             AuthorityCore::TerminalResume(core) => core.verified_registry().map(Some),
             AuthorityCore::Readmission(core) => core.verified_registry().map(Some),
+            AuthorityCore::Backup(_) => Err(BackupCore::activation_required()),
             AuthorityCore::Abort(_) => {
                 let hash = object_hash(AUTHORITY_KIND, node)?;
                 let intent = node.intent(self.evidence.get(&hash))?;
@@ -396,6 +405,7 @@ impl PortableAuthority {
             }
             AuthorityCore::TerminalResume(core) => core.verify_source(source)?,
             AuthorityCore::Readmission(core) => core.verify_source(source)?,
+            AuthorityCore::Backup(core) => core.verify_source(source)?,
             AuthorityCore::Abort(_) => (),
         }
         Ok(())
@@ -405,6 +415,9 @@ impl PortableAuthority {
         &self,
         config: ValidatedConfig,
     ) -> Result<ValidatedConfig> {
+        if self.is_backup() {
+            return Err(BackupCore::activation_required());
+        }
         let forbidden = self.forbidden_disk_ids()?;
         if forbidden.is_empty() {
             return Ok(config);
@@ -422,6 +435,9 @@ impl PortableAuthority {
         source: &State,
         previous: Option<&crate::engine::disk_registry::current::CurrentNamespaces>,
     ) -> Result<crate::engine::disk_registry::current::PreparedCurrentNamespaces> {
+        if self.is_backup() {
+            return Err(BackupCore::activation_required());
+        }
         let intent = self.intent()?;
         if let AuthorityCore::TerminalResume(core) = &self.head {
             return core.current_namespaces(source, previous);
@@ -777,6 +793,9 @@ impl PortableAuthority {
         ))
     }
 
+    pub(in crate::engine::membership_transition) fn is_backup(&self) -> bool {
+        matches!(self.head, AuthorityCore::Backup(_))
+    }
     pub(in crate::engine::membership_transition) fn is_abort(&self) -> bool {
         matches!(self.head, AuthorityCore::Abort(_))
     }
@@ -784,7 +803,7 @@ impl PortableAuthority {
         &self,
     ) -> Result<ValidatedConfig> {
         let intent = self.intent()?;
-        Ok(self.head.effective_config(&intent).clone())
+        Ok(self.head.effective_config(&intent)?.clone())
     }
 
     pub(super) fn workspace_root_aliases(&self) -> Result<WorkspaceRootAliases> {
@@ -794,7 +813,7 @@ impl PortableAuthority {
         for (hash, intent) in self.lineage()? {
             for config in [
                 intent.origin.config(),
-                self.node(&hash)?.effective_config(&intent),
+                self.node(&hash)?.effective_config(&intent)?,
             ] {
                 for disk in &config.disks {
                     roots
@@ -926,6 +945,18 @@ impl PortableAuthority {
             }),
             predecessors,
             evidence,
+        };
+        authority.lineage()?;
+        Ok(authority)
+    }
+
+    /// The fixed-Genesis Backup core is a separate native kind. Parsing or
+    /// hashing it does not admit Config, Current namespaces or writer resources.
+    pub(in crate::engine::membership_transition) fn new_backup(core: BackupCore) -> Result<Self> {
+        let authority = Self {
+            head: AuthorityCore::Backup(Box::new(core)),
+            predecessors: BTreeMap::new(),
+            evidence: BTreeMap::new(),
         };
         authority.lineage()?;
         Ok(authority)
@@ -1064,7 +1095,7 @@ impl PortableAuthority {
                 .last()
                 .expect("invariant: current authority appended")
                 .1;
-            if !same_config_projection(current.origin.config(), node.effective_config(&previous))
+            if !same_config_projection(current.origin.config(), node.effective_config(&previous)?)
                 || current
                     .boundary
                     .as_ref()
@@ -1098,6 +1129,7 @@ impl PortableAuthority {
                     .and_then(PortableAuthority::exit_registry),
                 AuthorityCore::Abort(_) => previous,
                 AuthorityCore::Readmission(core) => Some(core.registry_parent()),
+                AuthorityCore::Backup(_) => None,
             };
             if carried != previous {
                 return Err(Error::new(
@@ -1249,7 +1281,7 @@ impl PortableAuthority {
     pub(super) fn matches_metadata_projection(&self, config: &ValidatedConfig) -> Result<bool> {
         for (hash, intent) in self.lineage()? {
             if config.same_metadata_membership(intent.origin.config())
-                || config.same_metadata_membership(self.node(&hash)?.effective_config(&intent))
+                || config.same_metadata_membership(self.node(&hash)?.effective_config(&intent)?)
             {
                 return Ok(true);
             }
@@ -1286,7 +1318,7 @@ impl PortableAuthority {
                 match self.registry_for_node(node)? {
                     Some(registry) => registry.verify_lifecycle_candidate(candidate, hash),
                     None => node
-                        .effective_config(intent)
+                        .effective_config(intent)?
                         .verify_original_candidate_membership(candidate),
                 }
             }
@@ -1323,7 +1355,7 @@ impl PortableAuthority {
                 "candidate does not bind this generation authority",
             ));
         }
-        let config = self.head.effective_config(&intent);
+        let config = self.head.effective_config(&intent)?;
         match self.registry_for_node(&self.head)? {
             Some(registry) => registry.verify_lifecycle_candidate(candidate, &self.hash()?)?,
             None => config.verify_original_candidate_membership(candidate)?,

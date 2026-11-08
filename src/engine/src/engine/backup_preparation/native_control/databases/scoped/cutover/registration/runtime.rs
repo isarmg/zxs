@@ -157,6 +157,15 @@ fn run(
             "decision {hash} retains normal native control archive {} including all original fenced journals on {} targets; no successor publication or target writer exists; source remains stopped",
             control.native_control_root, control.targets,
         );
+    })?;
+    let authority = generation_authority::prepare(&prepared, &decision, stop)?;
+    choices.observe_decision(&prepared, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationAuthorityPrepared;
+        status.detail = format!(
+            "decision {hash} retains strict native Backup authority {} on {} isolated targets; first publication, active Current/Config, target writer and source release remain unavailable",
+            authority.authority_hash, authority.targets,
+        );
     })
 }
 fn spawn(

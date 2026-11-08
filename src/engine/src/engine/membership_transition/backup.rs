@@ -2,8 +2,11 @@
 //! The effective Config remains the original one. No target is a voter or an
 //! active member, and ordinary Add/Joint activation cannot consume this origin.
 use super::*;
+mod generation;
 mod registry;
 use crate::engine::backup_preparation::BackupSourceFenceEvidence;
+pub(in crate::engine::membership_transition) use generation::BackupCore;
+pub(in crate::engine) use generation::PreparedBackupAuthority;
 pub use registry::BackupRegistryDecisionHash;
 pub(in crate::engine) use registry::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl,

@@ -243,12 +243,17 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 ### Backup generation 前的路由与激活边界
 
-真实 `PlanningContext` 和 current backup 规划现共用结构路由解析：副本数只能表达唯一链前缀，遇分叉不得任取一个盘或自动扩大副本数；显式路由材料要求完整祖先集合；旧按副本数的历史 copy 冷态准入必须重建同一唯一前缀和准确 Enabled binding，不能用结果向量伪造分叉选择。递归前缀按每个目标自身父链生成，不把兄弟盘当相邻跳。原已决定准备集合也使用同一闭包。普通 Add promotion 与普通首个 Candidate 显式拒绝 Backup 选择，认证 Abort 恢复仍保留。活动 Config 的单链约束没有放宽，没有新 Backup Generation、目标 writer 或源解围栏。见[准确范围](../design/backup-generation-route-admission.md)。本片未审查、编译、测试或 CI。
+真实 `PlanningContext` 和 current backup 规划现共用结构路由解析：副本数只能表达唯一链前缀，遇分叉不得任取一个盘或自动扩大副本数；显式路由材料要求完整祖先集合；旧按副本数的历史 copy 冷态准入必须重建同一唯一前缀和准确 Enabled binding，不能用结果向量伪造分叉选择。递归前缀按每个目标自身父链生成，不把兄弟盘当相邻跳。原已决定准备集合也使用同一闭包。普通 Add promotion 与普通首个 Candidate 显式拒绝 Backup 选择，认证 Abort 恢复仍保留。活动 Config 的单链约束没有放宽，没有活动 Backup Generation、目标 writer 或源解围栏。见[准确范围](../design/backup-generation-route-admission.md)。本片未审查、编译、测试或 CI。
 
 ### 已决定备份的 native 路由快照材料
 
-[未发布路由快照](../design/backup-generation-routing-snapshot.md)将已决定完整目标集的下一步写集编码为真实 native snapshot/map 对象，原后台任务无覆盖补缺；每个目标由自身完整源快照推导，保留所有旧 receipt/生命周期/私有 State 字段。显式离线原决定续作可在原源/SYSTEM 不可用时仅补隔离材料。`GenerationInputsPrepared` 不是已发布 generation：不发成功回执、不启用目标 writer、不清源围栏；真正 Backup authority、首个 publication、新范围历史库与 serving locator 仍缺。按要求本片未编译/测试/审查/CI。
+[未发布路由快照](../design/backup-generation-routing-snapshot.md)将已决定完整目标集的下一步写集编码为真实 native snapshot/map 对象，原后台任务无覆盖补缺；每个目标由自身完整源快照推导，保留所有旧 receipt/生命周期/私有 State 字段。显式离线原决定续作可在原源/SYSTEM 不可用时仅补隔离材料。`GenerationInputsPrepared` 不是已发布 generation：不发成功回执、不启用目标 writer、不清源围栏；原生 Backup 选择身份见后续切片；首个 publication、新范围历史库与 serving locator 仍缺。按要求本片未编译/测试/审查/CI。
 
 ### 已决定备份的原生围栏控制归档
 
 [原围栏控制归档](../design/backup-generation-control-archive.md)把实际原成员配置/封印/完整 fenced journals 与每个目标自己的完整 native 前缀组合为现有 membership-control-archive 字节，并接原后台任务、全目标读回及离线只读重验。`GenerationControlPrepared` 不授予新 generation、target writer 或源围栏解除。未审查、编译、测试或 CI；不是完整迁移完成声明。
+
+
+### 原生 Backup generation 选择身份
+
+[原生 authority 边界](../design/backup-native-generation-authority.md)新增严格 Backup core，绑定原全成员决定、真实 fenced archive、完整路由快照和闭合目标集合。后台逐目标推导/无覆盖安装/原生读回后进入 `GenerationAuthorityPrepared`，离线视图可只读重验或显式续写同一隔离材料。有效 Config、CurrentRegistry 与 I/O 转换仍硬拒绝 Backup，不能落一份 core 就套用旧 Config 或普通 Add 启用 writer；首笔 publication、目标激活及源解围栏尚未实现。未审查、编译、测试或 CI。

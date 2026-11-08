@@ -16,6 +16,7 @@ mod control;
 pub(in crate::engine) use control::BackupFrozenControl;
 mod recovery;
 pub(in crate::engine) use recovery::AdmittedBackupDecision;
+pub(in crate::engine::membership_transition) use recovery::BackupDecisionCertificate;
 pub use recovery::BackupRegistryDecisionHash;
 
 const CORE_KIND: &str = "backup-registry-placement-core";

@@ -30,9 +30,9 @@ pub use native_control::{
 };
 pub use native_control::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
-    BackupRegistryRecoveryReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub(in crate::engine) use native_control::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
@@ -97,6 +97,9 @@ pub enum BackupPreparationPhase {
     /// Normal native predecessor archives including actual original fenced
     /// journals on every target. No successor authority or writer activation.
     GenerationControlPrepared,
+    /// Strict native Backup authority object on every isolated target. It is
+    /// not a first publication or an active Config/Current/writer installation.
+    GenerationAuthorityPrepared,
     Blocked,
     SourceChanged,
 }

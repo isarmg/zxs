@@ -64,6 +64,21 @@ impl BackupDecidedTargets {
         generation_control::observe(&self.prepared, &self.decision, &AtomicBool::new(false))
     }
 
+    /// Read the native Backup core from every target after independently
+    /// reconstructing the original fenced archive and unpublished routing
+    /// input. This report cannot be used to activate an ordinary Engine writer.
+    pub fn inspect_generation_authority(&self) -> Result<BackupGenerationAuthorityReport> {
+        generation_authority::observe(&self.prepared, &self.decision, &AtomicBool::new(false))
+    }
+
+    /// Explicit no-clobber writes of this original task's native authority
+    /// material only. Missing fenced control bytes remain an error, not a new
+    /// synthesized source. The caller must authorize target writes. No source
+    /// root, active marker, journal, receipt or fence is changed.
+    pub fn resume_authority_preparation(&mut self) -> Result<BackupGenerationAuthorityReport> {
+        generation_authority::prepare(&self.prepared, &self.decision, &AtomicBool::new(false))
+    }
+
     /// Explicit offline continuation of the already chosen task's isolated
     /// materials. An independently retained decision digest was required at
     /// open. No source/SYSTEM root is probed, no new choice is issued, and no

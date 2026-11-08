@@ -12,6 +12,7 @@ const MAX_BYTES: usize = 256 * 1024 * 1024;
 
 pub(in crate::engine) struct PreparedBackupControl {
     root_hash: String,
+    archive: ArchiveRoot,
     transition_hash: String,
     files: BTreeMap<PathBuf, Vec<u8>>,
     journals: Vec<MembershipJournalInspection>,
@@ -148,7 +149,8 @@ impl PreparedBackupControl {
             members: files.map(members)?,
             publication_seals: files.map(seals)?,
         };
-        let root = PreparedMetadataObject::new(ROOT_KIND, &root, MAX_METADATA)?;
+        let archive = root;
+        let root = PreparedMetadataObject::new(ROOT_KIND, &archive, MAX_METADATA)?;
         let root_hash = root.hash.clone();
         files.insert(PathBuf::from(ROOT_FILE), root.bytes().to_vec())?;
         files.prepared(root)?;
@@ -161,10 +163,14 @@ impl PreparedBackupControl {
         )?;
         Ok(Self {
             root_hash,
+            archive,
             transition_hash: transition,
             files: files.values,
             journals,
         })
+    }
+    pub(in crate::engine::membership_transition) fn archive(&self) -> &ArchiveRoot {
+        &self.archive
     }
     pub(in crate::engine) fn root_hash(&self) -> &str {
         &self.root_hash

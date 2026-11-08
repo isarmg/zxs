@@ -262,3 +262,25 @@ pub(super) fn observe(
     prepared.recheck_names()?;
     Ok(report.expect("invariant: decided targets contains at least one complete target"))
 }
+
+/// Return this target's independently replayed native archive, not just its
+/// stored root hash. The caller still owns the complete selected target set.
+pub(super) fn read_authority_input(
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    generation: &BackupGenerationPreparationReport,
+    index: usize,
+    stop: &AtomicBool,
+) -> Result<(PreparedBackupControl, BackupGenerationControlReport)> {
+    preparation_checkpoint(stop)?;
+    let target = &prepared.targets[index];
+    let local = target
+        .root
+        .private_child(&target.root.path().join(DIRECTORY).join("archive"))?;
+    let frozen = BackupFrozenControl::read_target(decision, &local, stop)?;
+    let plan = Plan::capture(prepared, decision, &frozen, generation, index, stop)?;
+    let inspection = plan.verify(&target.root, stop)?;
+    plan.require_completion(&target.root)?;
+    let report = plan.report(decision, prepared.targets.len(), &inspection);
+    Ok((plan.archive, report))
+}

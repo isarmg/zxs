@@ -12,6 +12,7 @@ pub(super) enum Namespace {
     Scopes,
     BackupGeneration,
     GenerationControl,
+    GenerationAuthority,
 }
 impl Namespace {
     fn name(self) -> &'static str {
@@ -20,6 +21,7 @@ impl Namespace {
             Self::Scopes => "scoped-databases",
             Self::BackupGeneration => "backup-generation-inputs",
             Self::GenerationControl => "backup-generation-control",
+            Self::GenerationAuthority => "backup-generation-authority",
         }
     }
 }
@@ -109,8 +111,10 @@ fn inventory(
         for entry in held.entries(&held.path().join(&relative))? {
             preparation_checkpoint(stop)?;
             let name = entry.map_err(fs_error)?;
-            if matches!(prepared.namespace, Namespace::GenerationControl)
-                && platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
+            if matches!(
+                prepared.namespace,
+                Namespace::GenerationControl | Namespace::GenerationAuthority
+            ) && platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
             {
                 // Preserve interrupted private atomic writes, never promote,
                 // count as evidence, overwrite or remove them. Bound hostile
