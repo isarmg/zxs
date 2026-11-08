@@ -28,6 +28,8 @@ pub mod storage_directories;
 pub use shutdown::ShutdownSignal;
 #[cfg(feature = "core")]
 pub mod setup_recovery;
+#[cfg(feature = "core")]
+pub mod startup_admission;
 pub use http_boundary::ApiError;
 mod periodic_worker;
 mod smb_account_binding;

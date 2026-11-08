@@ -62,6 +62,7 @@ impl State {
 struct Inner {
     data_root: PathBuf,
     management_root: PathBuf,
+    authority_preparation: AuthorityPreparation,
     state: Mutex<State>,
     auth: Mutex<Option<Arc<Mutex<AuthStore>>>>,
     recovering: AtomicBool,
@@ -182,6 +183,64 @@ pub fn open_service_with_options(
     management_root: &Path,
     options: ManagementOptions,
 ) -> Result<(Arc<ManagementBackend>, AuthStore), ApiError> {
+    open_service_inner(
+        data_root,
+        management_root,
+        options,
+        Preparation::ExplicitLibraryRecovery,
+    )
+}
+
+/// Normal executable entry: consumes existing prepared directory capabilities,
+/// never creates system roots or repairs/claims an absent authority marker.
+/// Existing authentication faults remain closed and available for diagnosis.
+pub fn open_prepared_service_with_options(
+    prepared: &crate::startup_admission::PreparedService,
+    options: ManagementOptions,
+) -> Result<(Arc<ManagementBackend>, AuthStore), ApiError> {
+    prepared.recheck().map_err(preparation_error)?;
+    let (data_root, management_root) = prepared.roots();
+    let result = open_service_inner(
+        data_root,
+        management_root,
+        options,
+        Preparation::Existing(prepared),
+    )?;
+    prepared.recheck().map_err(preparation_error)?;
+    Ok(result)
+}
+fn preparation_error(source: crate::startup_admission::Error) -> ApiError {
+    ApiError::io(std::io::Error::other(source))
+}
+enum Preparation<'a> {
+    ExplicitLibraryRecovery,
+    Existing(&'a crate::startup_admission::PreparedService),
+}
+// Explicit local library initialization/recovery retains its own authority
+// transition. Ordinary startup/background recovery can only check the captured
+// existing marker, including after credentials or directories are damaged.
+enum AuthorityPreparation {
+    ExplicitLibraryRecovery,
+    Existing(platform_io::fs_safety::PrivateDirectory),
+}
+impl AuthorityPreparation {
+    fn require(&self, data_root: &Path) -> Result<(), ApiError> {
+        match self {
+            Self::ExplicitLibraryRecovery => claim_authority(data_root),
+            Self::Existing(directory) => {
+                crate::startup_admission::require_existing_authority(directory)
+                    .map_err(preparation_error)
+            }
+        }
+    }
+}
+
+fn open_service_inner(
+    data_root: &Path,
+    management_root: &Path,
+    options: ManagementOptions,
+    preparation: Preparation<'_>,
+) -> Result<(Arc<ManagementBackend>, AuthStore), ApiError> {
     let ManagementOptions {
         scrub_policy,
         setup_disks,
@@ -195,22 +254,44 @@ pub fn open_service_with_options(
     if let Some(limits) = retained_workspace_limits {
         limits.validate().map_err(ApiError::invalid_source)?;
     }
-    // These are system state directories, never data-disk mountpoints.
-    create_private_directory(data_root)?;
-    create_private_directory(management_root)?;
-    let mut auth = AuthStore::open_management(management_root).unwrap_or_else(|error| {
+    let opened_auth = match &preparation {
+        Preparation::ExplicitLibraryRecovery => {
+            // Retained for explicit low-level setup/recovery callers, not the
+            // normal executable's startup policy.
+            create_private_directory(data_root)?;
+            create_private_directory(management_root)?;
+            AuthStore::open_management(management_root)
+        }
+        Preparation::Existing(prepared) => AuthStore::open_system_management_directory(
+            prepared.credential_directory().map_err(preparation_error)?,
+        ),
+    };
+    let mut auth = opened_auth.unwrap_or_else(|error| {
         tracing::warn!(code = %error.code, error = %StartupDiagnostic(&error), "management credentials require recovery");
         AuthStore::unavailable()
     });
     if auth.is_available() {
         // Record local authority before accepting any credential mutation,
         // including when the data pool itself cannot be opened.
-        let claim = create_private_directory(data_root).and_then(|_| claim_authority(data_root));
+        let claim = match &preparation {
+            Preparation::ExplicitLibraryRecovery => {
+                create_private_directory(data_root).and_then(|_| claim_authority(data_root))
+            }
+            Preparation::Existing(prepared) => prepared
+                .require_current_authority()
+                .map_err(preparation_error),
+        };
         if let Err(error) = claim {
             tracing::warn!(code = %error.code, error = %StartupDiagnostic(&error), "cannot durably establish management authority");
             auth = AuthStore::unavailable();
         }
     }
+    let authority_preparation = match preparation {
+        Preparation::ExplicitLibraryRecovery => AuthorityPreparation::ExplicitLibraryRecovery,
+        Preparation::Existing(prepared) => {
+            AuthorityPreparation::Existing(prepared.system_directory().map_err(preparation_error)?)
+        }
+    };
     let backend = Arc::new(ManagementBackend {
         scrub: IntegrityScrubService::new(scrub_policy),
         observer: crate::periodic_worker::PeriodicWorker::new(),
@@ -218,6 +299,7 @@ pub fn open_service_with_options(
         inner: Arc::new(Inner {
             data_root: data_root.into(),
             management_root: management_root.into(),
+            authority_preparation,
             state: Mutex::new(State {
                 backend: BackendState::Unopened,
                 status: StorageState::Unavailable,
@@ -569,7 +651,7 @@ impl Inner {
                     "system credentials require explicit local recovery",
                 ));
             }
-            claim_authority(&self.data_root)?;
+            self.authority_preparation.require(&self.data_root)?;
             let mut initial = auth.snapshot()?;
             initial["sessions"] = json!({});
             let last = Mutex::new(initial);
@@ -1360,22 +1442,34 @@ impl Backend for ManagementBackend {
             .default_directory_branch(identity, repository_id)
     }
     fn preview_node_retirement(
-        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        &self,
+        identity: &Identity,
+        request: storage_contract::node_retirement::Selection,
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::node_retirement::Preview, crate::ApiError> {
-        self.inner.backend()?.preview_node_retirement(identity, request, cancellation)
+        self.inner
+            .backend()?
+            .preview_node_retirement(identity, request, cancellation)
     }
     fn retire_file_nodes(
-        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        &self,
+        identity: &Identity,
+        request: storage_contract::node_retirement::Selection,
         operation: storage_contract::OperationId,
     ) -> Result<storage_contract::node_retirement::Outcome, crate::ApiError> {
-        self.inner.backend()?.retire_file_nodes(identity, request, operation)
+        self.inner
+            .backend()?
+            .retire_file_nodes(identity, request, operation)
     }
     fn resume_node_retirement(
-        &self, identity: &Identity, file: storage_contract::history_window::HistoryFileId,
+        &self,
+        identity: &Identity,
+        file: storage_contract::history_window::HistoryFileId,
         operation: storage_contract::OperationId,
     ) -> Result<storage_contract::node_retirement::Outcome, crate::ApiError> {
-        self.inner.backend()?.resume_node_retirement(identity, file, operation)
+        self.inner
+            .backend()?
+            .resume_node_retirement(identity, file, operation)
     }
     fn shared_history(
         &self,

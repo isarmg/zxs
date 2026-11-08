@@ -36,18 +36,48 @@ fn daemon_does_not_dispatch_management_or_rescue_subcommands() {
     }
 }
 #[test]
-fn no_subcommand_is_required_to_start_daemon_runtime() {
-    let output = daemon(&[]);
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("TOKIO_WORKER_THREADS"),
-        "{output:?}"
-    );
+fn ordinary_entry_requires_preparation_before_starting_the_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs"))
+        .current_dir(directory.path())
+        .env("TOKIO_WORKER_THREADS", "0")
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("TOKIO_WORKER_THREADS"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("helper"));
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+// Current configuration evidence admits established fault diagnostics without
+// pretending the Engine can recover it. No helper/host system is changed here.
+fn existing_fault_roots(root: &std::path::Path, management: &std::path::Path) {
+    use std::{
+        io::Write,
+        os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    };
+    for path in [root, management] {
+        std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(root.join("config.json"))
+        .unwrap()
+        .write_all(b"damaged current configuration")
+        .unwrap();
 }
 
 #[test]
 fn absent_empty_and_valid_log_filters_reach_runtime_with_the_selected_level() {
     for (value, logs_info) in [(None, false), (Some(""), false), (Some("zxs=info"), true)] {
         let directory = tempfile::tempdir().unwrap();
+        existing_fault_roots(
+            &directory.path().join("zxs-data"),
+            &directory.path().join("zxs-data/management"),
+        );
         let mut command = Command::new(env!("CARGO_BIN_EXE_zxs"));
         command
             .current_dir(directory.path())
@@ -77,7 +107,13 @@ fn absent_empty_and_valid_log_filters_reach_runtime_with_the_selected_level() {
             logs_info,
             "{value:?}: {output:?}"
         );
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("zxs-data/management"))
+                .unwrap()
+                .count(),
+            0
+        );
     }
 }
 
@@ -145,6 +181,7 @@ fn malformed_setup_identifiers_fail_before_creating_state() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("pool");
         let management = directory.path().join("management");
+        existing_fault_roots(&root, &management);
         let output = Command::new(env!("CARGO_BIN_EXE_zxs"))
             .arg("--root")
             .arg(&root)
@@ -162,8 +199,8 @@ fn malformed_setup_identifiers_fail_before_creating_state() {
         assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
             "{flag} ID must contain 1–64 ASCII letters, digits, '_' or '-'"
         )));
-        assert!(!root.exists());
-        assert!(!management.exists());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&management).unwrap().count(), 0);
     }
 }
 
@@ -189,23 +226,19 @@ fn response(port: u16, path: &str) -> std::io::Result<String> {
     Ok(value)
 }
 #[test]
-fn daemon_serves_web_and_liveness_with_missing_or_corrupt_pool() {
+fn daemon_preserves_web_and_liveness_for_existing_corrupt_pool() {
     use std::os::unix::fs::DirBuilderExt;
-    for (corrupt, auxiliary_failure) in [(false, false), (true, false), (true, true)] {
+    for auxiliary_failure in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("pool");
         let management = directory.path().join("management");
         let web = directory.path().join("web");
         let runtime = directory.path().join("runtime");
         let socket = runtime.join("smb.sock");
-        for path in [&root, &management, &web] {
-            std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
-        }
+        existing_fault_roots(&root, &management);
+        std::fs::DirBuilder::new().mode(0o700).create(&web).unwrap();
         let preset = directory.path().join("preset.json");
-        if corrupt {
-            std::fs::write(root.join("config.json"), "not a valid pool configuration").unwrap();
-            std::fs::write(&preset, "not a valid setup preset").unwrap();
-        }
+        std::fs::write(&preset, "not a valid setup preset").unwrap();
         if auxiliary_failure {
             std::fs::write(management.join("api-spool"), "keep this evidence").unwrap();
             std::fs::write(management.join("smb-spool"), "keep SMB evidence").unwrap();
@@ -316,37 +349,19 @@ fn daemon_serves_web_and_liveness_with_missing_or_corrupt_pool() {
 }
 
 #[test]
-fn default_state_directory_remains_private_for_later_web_setup() {
-    use std::os::unix::fs::PermissionsExt;
+fn empty_default_state_is_not_created_for_online_first_setup() {
     let directory = tempfile::tempdir().unwrap();
-    let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = reservation.local_addr().unwrap().port();
-    drop(reservation);
-    let child = Command::new(env!("CARGO_BIN_EXE_zxs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs"))
         .current_dir(directory.path())
-        .args(["--listen", &format!("127.0.0.1:{port}")])
-        .env("TOKIO_WORKER_THREADS", "1")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .args(["--listen", "127.0.0.1:0"])
+        .env("TOKIO_WORKER_THREADS", "0")
+        .env_remove("RUST_LOG")
+        .output()
         .unwrap();
-    let mut child = ChildGuard(child);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        assert!(child.0.try_wait().unwrap().is_none());
-        if response(port, "/healthz").is_ok_and(|reply| reply.starts_with("HTTP/1.1 200")) {
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-    for path in ["zxs-data", "zxs-data/management"] {
-        let permissions = std::fs::metadata(directory.path().join(path))
-            .unwrap()
-            .permissions();
-        assert_eq!(permissions.mode() & 0o777, 0o700, "{path}");
-    }
-    assert!(!directory.path().join("zxs-data/config.json").exists());
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(!directory.path().join("zxs-data").exists());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("TOKIO_WORKER_THREADS"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("helper"));
 }
 
 #[test]
@@ -403,6 +418,12 @@ fn repeated_normal_daemon_stops_release_same_address_and_socket() {
         )
         .unwrap(),
     );
+    // Explicit fixture preparation, never normal daemon creation.
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&management)
+        .unwrap();
     let configuration = std::fs::read(root.join("config.json")).unwrap();
     let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = reservation.local_addr().unwrap();
@@ -500,6 +521,8 @@ fn repeated_normal_daemon_stops_release_same_address_and_socket() {
 fn incoherent_scrub_host_policy_fails_before_creating_management_state() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("system");
+    let management = root.join("management");
+    existing_fault_roots(&root, &management);
     let output = Command::new(env!("CARGO_BIN_EXE_zxs"))
         .arg("--root")
         .arg(&root)
@@ -520,5 +543,6 @@ fn incoherent_scrub_host_policy_fails_before_creating_management_state() {
     assert!(diagnostic.contains("InvalidScrubPolicy"), "{output:?}");
     assert!(diagnostic.contains("interval_seconds: 2"), "{output:?}");
     assert!(diagnostic.contains("max_age_seconds: 1"), "{output:?}");
-    assert!(!root.exists());
+    assert_eq!(std::fs::read_dir(&management).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
 }

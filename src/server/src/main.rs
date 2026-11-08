@@ -28,7 +28,7 @@ fn log_filter_from_env() -> std::result::Result<EnvFilter, LogFilterError> {
     name = "zxs",
     version,
     about = "ZXS storage and Web management daemon",
-    after_help = "The current daemon requires an existing root-owned /zxs maintenance root and holds its exclusive OS lease until all runtime workers exit. Prepare the root with zxs-helper host preview/prepare. The root is not proof of completed system initialization. Stop older or nonparticipating writers separately; no service manager is invoked."
+    after_help = "The current daemon requires an existing root-owned /zxs maintenance root and holds its exclusive OS lease until all runtime workers exit. Prepare the root with zxs-helper host preview/prepare. The root is not proof of completed system initialization. Before any listener or automatic directory creation, normal startup requires existing private SYSTEM/management directories, storage configuration and completed initial activation; finish first preparation with the independent zxs-helper. Existing storage/authentication faults remain faults, never a fresh account setup. Stop older or nonparticipating writers separately; no service manager is invoked."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
@@ -138,7 +138,7 @@ impl Args {
 }
 
 fn main() -> std::process::ExitCode {
-    let args = Args::parse();
+    let mut args = Args::parse();
     let log_filter = match log_filter_from_env() {
         Ok(filter) => filter,
         Err(error) => {
@@ -164,7 +164,21 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut result = run_with_runtime(args);
+    let prepared = match prepare_normal_start(&mut args) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("zxs: {error}; no runtime, listener or initialization was started");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let mut result = run_with_runtime(args, &prepared);
+    if let Err(error) = prepared.recheck() {
+        eprintln!(
+            "zxs: prepared system path changed: {error}; preserve state and inspect before restarting"
+        );
+        result = std::process::ExitCode::FAILURE;
+    }
+    drop(prepared);
     if let Err(error) = lease.recheck() {
         eprintln!("zxs: service lease root changed: {error}; inspect the host before restarting");
         result = std::process::ExitCode::FAILURE;
@@ -176,8 +190,36 @@ fn main() -> std::process::ExitCode {
     result
 }
 
+/// Resolve only host configuration and admit existing preparation before Tokio
+/// can spawn management work or before any listener/spool directory is created.
+fn prepare_normal_start(
+    args: &mut Args,
+) -> Result<storage_server::startup_admission::PreparedService> {
+    let current = std::env::current_dir()?;
+    if !args.root.is_absolute() {
+        args.root = current.join(&args.root);
+    }
+    let management = args
+        .management_root
+        .take()
+        .unwrap_or_else(|| args.root.join("management"));
+    let management = if management.is_absolute() {
+        management
+    } else {
+        current.join(management)
+    };
+    let prepared =
+        storage_server::startup_admission::PreparedService::open(&args.root, &management)?;
+    args.management_root = Some(management);
+    prepared.recheck()?;
+    Ok(prepared)
+}
+
 #[tokio::main]
-async fn run_with_runtime(args: Args) -> std::process::ExitCode {
+async fn run_with_runtime(
+    args: Args,
+    prepared: &storage_server::startup_admission::PreparedService,
+) -> std::process::ExitCode {
     // Let runtime teardown join admitted blocking work, including on errors.
     // Force-exiting here would skip its durability and recovery cleanup.
     let shutdown = match storage_server::ShutdownSignal::install() {
@@ -187,7 +229,7 @@ async fn run_with_runtime(args: Args) -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    match run(args, shutdown).await {
+    match run(args, shutdown, prepared).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             // Report the error before runtime teardown, which may need to wait.
@@ -197,7 +239,11 @@ async fn run_with_runtime(args: Args) -> std::process::ExitCode {
     }
 }
 
-async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()> {
+async fn run(
+    args: Args,
+    shutdown: storage_server::ShutdownSignal,
+    prepared: &storage_server::startup_admission::PreparedService,
+) -> Result<()> {
     let retained_workspace_limits = args.workspace_limits()?;
     let scrub_policy = storage_server::integrity_scrub::IntegrityScrubPolicy::periodic(
         args.scrub_interval_seconds,
@@ -276,9 +322,8 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
             additional_users: smb_allowed_users,
         });
     }
-    let (backend, auth) = storage_server::management::open_service_with_options(
-        &root,
-        &management_root,
+    let (backend, auth) = storage_server::management::open_prepared_service_with_options(
+        prepared,
         storage_server::management::ManagementOptions {
             scrub_policy,
             setup_disks: parse_setup_map(setup_disks, "--setup-disk")?,

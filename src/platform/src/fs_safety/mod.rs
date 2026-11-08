@@ -204,6 +204,20 @@ impl PrivateDirectory {
     pub fn path(&self) -> &Path {
         &self.path
     }
+    /// Duplicate this admitted directory capability without reopening its path.
+    /// The copy keeps the same ownership policy and independently owns its fd.
+    ///
+    /// # Errors
+    /// Rejects a rebound or unsafe named directory and preserves descriptor
+    /// duplication errors. A successful clone is not a namespace lock.
+    pub fn try_clone(&self) -> Result<Self, Error> {
+        self.verify_identity()?;
+        Ok(Self {
+            path: self.path.clone(),
+            directory: self.directory.try_clone()?,
+            administration_owner: self.administration_owner,
+        })
+    }
     /// Held directory descriptor for ZXS's streaming payload publisher.
     /// Callers never reconstruct an untrusted absolute payload path.
     pub(crate) fn directory_handle(&self) -> &File {

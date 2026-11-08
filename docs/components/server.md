@@ -31,7 +31,7 @@ spool、管理及初始化恢复直接使用 Unix 权限与链接检查，不保
 
 ## 启动
 
-从项目根目录构建 `CARGO_TARGET_DIR=target/native cargo build --locked --offline -p storage-server -p storage-helper`。下面是已有池或诊断模式的最小启动样例。首次安装预置引导密钥并创建管理员，登录后在固定发现父目录的直接子目录中运行磁盘向导；创建管理员不依赖数据盘白名单：
+从项目根目录构建 `CARGO_TARGET_DIR=target/native cargo build --locked --offline -p storage-server -p storage-helper`。下面是已有池或诊断模式的最小启动样例。首次安装先运行独立辅助工具完成账户与首批存储；普通二进制不再替空系统创建管理目录或账号。完整系统安装交接仍未完成，见[首启准备门禁](../design/helper-normal-start-prerequisites.md)：
 
 ```sh
 target/native/debug/zxs --root /srv/zxs/system \
@@ -49,11 +49,11 @@ HTTP 默认监听 `0.0.0.0:7400`，可通过 `--listen` 指定其他 IPv4 或 IP
 
 ## 初始化与故障启动
 
-`zxs --root SYSTEM_STATE --management-root SYSTEM_MANAGEMENT --web-dir WEB_ROOT` 直接提供 Web/API，不分发管理子命令。系统盘管理目录与数据成员分离，HTTP 先监听，再打开数据引擎；数据故障不自动初始化、清空池、放宽授权或接受损失。systemd 不要求数据成员挂载成功，也不创建、挂载或格式化设备；Samba/smbd 是独立网络服务。
+`zxs --root SYSTEM_STATE --management-root SYSTEM_MANAGEMENT --web-dir WEB_ROOT` 直接提供 Web/API，不分发管理子命令。系统盘管理目录与数据成员分离；已通过现有私有目录/配置/初始激活前置门禁后，HTTP 先监听，再打开数据引擎。缺配置或首次激活未完成在 runtime/监听前退出并提示辅助工具；数据故障不自动初始化、清空池、放宽授权或接受损失。systemd 不要求数据成员挂载成功，也不创建、挂载或格式化设备；Samba/smbd 是独立网络服务。
 
 启用 SMB 时，其完整工作副本、未确认操作证据和预算记录固定保存在 `--management-root/smb-spool`，与可清理的 `--smb-socket` 运行目录分离。管理目录必须位于持久系统盘；spool 不可用只停止 SMB 桥接，不阻止管理 HTTP。旧 socket 旁的 spool 不自动迁移，部署与升级边界见 [SMB 本机 RPC](smb.md#smb-local-rpc)。
 
-首次 `POST /api/setup/initialize` 只接收管理员 `username/password`，建立系统盘管理权威，返回 `initialized:true,storage_pending:true`，不创建零成员 Engine。首次账户无需授权密钥；仅在无账户且无历史权威时公开准入，并在锁内保证唯一创建。已有或损坏权威不能匿名重置。灾备恢复保留独立 bootstrap 授权。
+底层共享恢复路由仍保留以下受限能力，不能理解为普通空系统仍可在线首启；其替代/归属迁移尚未全部完成。首次 `POST /api/setup/initialize` 只接收管理员 `username/password`，建立系统盘管理权威，返回 `initialized:true,storage_pending:true`，不创建零成员 Engine。首次账户无需授权密钥；仅在无账户且无历史权威时公开准入，并在锁内保证唯一创建。已有或损坏权威不能匿名重置。灾备恢复保留独立 bootstrap 授权。
 
 登录后，管理员使用 `/api/admin/storage/status`、`/discovered-disks` 查询首次存储状态和直接候选，在磁盘向导中检查并明确确认。发现父目录由 systemd 的 `--storage-discovery-root` 固定，不提供网页修改、任意路径浏览或递归发现；未接纳候选仅列在磁盘树 -1 层。空目标须已存在、由服务账号拥有且权限为 0700；`/activate` 只初始化选择过的空目录，`/complete-activation` 只补全有持久证明的原意图。首次多个目录各自成为一级根，不按目录顺序形成备份链；底层仍使用现有共同元数据协议。挂载路径保留作物理校验，操作不挂载、格式化或 chmod。仅本地开发测试可显式设置 `--allow-development-setup` 使用目录模拟盘，模拟盘不证明设备独立性或断电安全。
 

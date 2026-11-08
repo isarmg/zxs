@@ -1057,3 +1057,22 @@ fn administrative_handle_admission_preserves_identity_without_reopening_replacem
     assert!(directory.verify_identity().is_err());
     assert!(!path.join("wrong").exists());
 }
+
+#[test]
+fn cloned_private_capability_keeps_its_descriptor_and_rejects_path_replacement() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("private");
+    let directory = PrivateDirectory::create(&path).unwrap();
+    let cloned = directory.try_clone().unwrap();
+    drop(directory);
+    let name = EntryName::new("entry").unwrap();
+    AtomicFile::create(&cloned, &name, b"original").unwrap();
+    assert_eq!(cloned.read_bounded(&name, 64).unwrap(), b"original");
+    fs::rename(&path, temp.path().join("original")).unwrap();
+    let replacement = PrivateDirectory::create(&path).unwrap();
+    AtomicFile::create(&replacement, &name, b"replacement").unwrap();
+    assert!(cloned.verify_identity().is_err());
+    assert!(cloned.try_clone().is_err());
+    assert_eq!(cloned.read_bounded(&name, 64).unwrap(), b"original");
+    assert_eq!(replacement.read_bounded(&name, 64).unwrap(), b"replacement");
+}
