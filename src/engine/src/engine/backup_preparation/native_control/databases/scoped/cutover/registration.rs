@@ -9,6 +9,7 @@ mod common_databases;
 mod current_read;
 mod database_aliases;
 mod root_databases;
+mod system_database;
 pub use common_databases::{BackupCommonDatabasesReport, BackupOriginalDatabaseReport};
 pub use current_read::BackupCurrentReadReport;
 pub use database_aliases::{
@@ -16,6 +17,7 @@ pub use database_aliases::{
     BackupDatabaseRead, BackupDatabaseScope,
 };
 pub use root_databases::BackupRootDatabasesReport;
+pub use system_database::BackupSystemDatabaseReport;
 mod published_scopes;
 pub use published_scopes::{BackupPublishedScopeTargetReport, BackupPublishedScopesReport};
 mod serving;

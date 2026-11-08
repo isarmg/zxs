@@ -16,8 +16,8 @@ pub use databases::{
     BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
     BackupRegistryRecoveryReport, BackupRootDatabasesReport, BackupServingContent,
     BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 mod runtime;
 pub use archive::BackupNativeControlReport;

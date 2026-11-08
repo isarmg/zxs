@@ -8,6 +8,7 @@ pub(crate) struct OwnedScopeRead {
     failure: Mutex<Option<Error>>,
     sequence: u64,
     generation: Arc<()>,
+    _read_lease: Arc<()>,
     file: String,
     history: String,
     expected: [usize; 6],
@@ -153,6 +154,7 @@ impl Engine {
                 failure: Mutex::new(None),
                 sequence: self.state.sequence,
                 generation: Arc::clone(&proof.read_generation),
+                _read_lease: Arc::clone(&proof.read_leases),
                 file: file.to_owned(),
                 history: history.to_owned(),
                 expected: proof

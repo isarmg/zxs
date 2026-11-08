@@ -325,3 +325,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 整体备份的同一原决定后台现接[普通盘根数据库安装](../design/backup-ordinary-root-databases.md)：全体验存后，在每个原盘真实普通名称保留式交换 current/history，旧库及安装封套全部保留；共同选择先于交换，旧 State 的本盘查询/重建被明确围栏，冷态按原任务续作。SYSTEM 活动别名、普通 Current/目标 writer 和源解围栏仍未完成。按要求本片没有审查、编译、测试或 CI。
 
+
+### Backup 普通 SYSTEM 索引的静默安装
+
+同一原决定后台继续[普通 SYSTEM 安装](../design/backup-ordinary-system-database.md)：跨 rebuild 的读租约阻止旧快照漏算，关闭真实 SQLite writer 后保留 main/WAL/SHM/journal 整组，凭全体原生/目标/原盘证明无覆盖安装新的 `index.sqlite`。选择标记先于改名，冷开不让旧 State 重建或打开已选普通名；原操作分类实际资源续作，完成后缺字节不修造。普通索引查询仍 unavailable；活动 Config/Current/writer、下一笔发布与源解围栏未完成，H03 不放行。按要求本片未审查、编译、测试或 CI。

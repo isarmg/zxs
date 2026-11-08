@@ -31,8 +31,8 @@ pub use native_control::{
     BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
     BackupRegistryRecoveryReport, BackupRootDatabasesReport, BackupServingContent,
     BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -148,6 +148,10 @@ pub enum BackupPreparationPhase {
     /// published pair, with displaced files retained. The source pool stays
     /// stopped; SYSTEM, active Current and target writers are not switched.
     GenerationOrdinaryRootDatabasesInstalled,
+    /// The ordinary SYSTEM index now holds its published bytes after all old
+    /// SQLite readers/writer closed and old main/sidecars were retained. Query
+    /// admission stays suspended; no active Current/writer or source release.
+    GenerationOrdinarySystemDatabaseInstalled,
     Blocked,
     SourceChanged,
 }

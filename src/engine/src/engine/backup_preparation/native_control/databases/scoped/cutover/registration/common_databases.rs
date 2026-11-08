@@ -1,6 +1,7 @@
 //! Complete published databases at SYSTEM and every original root. These are
 //! immutable generation-local copies, not active aliases or a Current permit.
-//! The old source index and disk databases stay usable under their old State.
+//! This stage alone leaves old aliases alone. Later ordinary-alias installation
+//! explicitly suspends old-State consumers before replacing any alias.
 use super::*;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,

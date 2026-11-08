@@ -968,6 +968,17 @@ impl Engine {
         self.with_backup_database_aliases(operation, principal, root_databases::observe)
     }
 
+    /// Inspect the original ordinary SYSTEM installation and retained old
+    /// main/WAL/SHM/journal set. Never opens SQLite, repairs a completed set,
+    /// changes Current or grants a target writer/source-release capability.
+    pub fn inspect_backup_system_database(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupSystemDatabaseReport> {
+        self.with_backup_database_aliases(operation, principal, system_database::observe)
+    }
+
     fn with_backup_database_aliases<T>(
         &mut self,
         operation: OperationId,

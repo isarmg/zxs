@@ -41,3 +41,5 @@
 最多 32 个原盘和 8 个明确目标。每个本盘库最多 32 MiB，逐盘仅处理一对输入，不把所有数据库同时复制到安装计划；SQLite 解码及既有完整 native 重放仍有额外内存，不宣称热路径或峰值已优化。全体描述最多 128 KiB，各根先保留 1 MiB 加四份描述余量；新操作合计检查一对数据库的现有 installer 256 MiB/8192 项保留预算以及配置的 metadata reserve。已决定恢复可复用自身封套，不因原尝试重复计费而自动丢弃旧数据；实际磁盘容量不足仍阻塞，空间检查不是物理 reservation。
 
 SYSTEM 活动库存在独立 SQLite 连接、WAL 和保留读快照，不能只复制 main 文件后接旧 WAL。因此本片**没有交换 SYSTEM 活动别名**。完整 writer 还需要普通 generation 对 Backup 首笔证明的真实消费、活动 Current/serving locator、资源生命周期和下一笔发布闭包。现有 Backup 拒绝分支、目标隔离和源全池停写保持；盘根完成后普通 catalog 暂不可用，这是未完成切换的显式状态，不伪装成可用或隐藏故障。
+
+后继 [SYSTEM 静默安装](backup-ordinary-system-database.md) 已增加真实普通 `index.sqlite` 的保留式改名，但仍未开放活动查询/Current/writer 或源解围栏；本页所述原盘独立阶段不因此获得这些权限。

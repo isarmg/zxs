@@ -18,8 +18,8 @@ pub use backup_preparation::{
     BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
     BackupRegistryRecoveryReport, BackupRootDatabasesReport, BackupServingContent,
     BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use backup_preparation::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,

@@ -14,7 +14,10 @@ impl Engine {
     /// Publication/seal in that reserved generation. The same original task now
     /// preserves displaced disk databases while installing the published pair
     /// at all original ordinary root names. Old-State catalog access is fenced.
-    /// SYSTEM and serving activation remain separate: the original pool stays fenced even after this stage succeeds.
+    /// The same task closes old SYSTEM SQLite workers and retains the complete
+    /// old main/sidecar set before installing the published ordinary index.
+    /// Query admission and serving activation remain separate: the original
+    /// pool stays fenced even after this stage succeeds.
     /// Hosts must authenticate this separate, explicit request. Ordinary settings
     /// and helper admission do not call it automatically.
     pub fn start_backup_registry_placement_decision(
@@ -108,15 +111,21 @@ pub(in crate::engine::backup_preparation) fn resume(
     });
     Ok(true)
 }
+struct SystemResources {
+    sources: common_databases::Sources,
+    index: crate::engine::index::backup_install::QuiescentIndex,
+}
+
 fn run(
     task: Task,
     system: &DiskRoot,
     targets: Vec<Target>,
     choices: BackupChoiceContext,
-    sources: common_databases::Sources,
+    resources: SystemResources,
     progress: &Mutex<BackupPreparationStatus>,
     stop: &AtomicBool,
 ) -> Result<()> {
+    let SystemResources { sources, index } = resources;
     update(system, progress, |status| {
         status.phase = BackupPreparationPhase::Verifying;
         status.detail = "verifying every installed whole-unit image before one native registry/placement choice; original writes remain fenced".into();
@@ -346,6 +355,27 @@ fn run(
             roots.selected_targets,
             roots.installation_hash,
         );
+    })?;
+    let installed_system = system_database::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        &index,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationOrdinarySystemDatabaseInstalled;
+        status.detail = format!(
+            "decision {hash} installed exact ordinary SYSTEM database {} under selection {}, retaining all {} old main/sidecar files after SQLite quiescence; ordinary query admission, active Current/writer, next publication and source release remain unavailable",
+            installed_system.system_database_hash,
+            installed_system.installation_hash,
+            installed_system.retained_old_files,
+        );
     })
 }
 fn spawn(
@@ -357,6 +387,8 @@ fn spawn(
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
     let sources = common_databases::Sources::capture(engine, &system)?;
+    let index = engine.quiesce_backup_system_index()?;
+    let resources = SystemResources { sources, index };
     let mut initial = task.selection().status();
     initial.phase = BackupPreparationPhase::Verifying;
     initial.detail = "recovering only the original native registry/placement task; no resampling or source release".into();
@@ -370,7 +402,7 @@ fn spawn(
         .spawn(move || {
             let _locks = locks;
             if let Err(error) = run(
-                frozen, &system, targets, choices, sources, &progress, &cancel,
+                frozen, &system, targets, choices, resources, &progress, &cancel,
             ) && let Err(persistence) = update(&system, &progress, |status| {
                 status.phase = BackupPreparationPhase::Blocked;
                 status.error_code = Some(error.code());

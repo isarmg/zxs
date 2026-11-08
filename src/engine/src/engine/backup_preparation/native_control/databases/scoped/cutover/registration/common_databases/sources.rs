@@ -138,10 +138,10 @@ impl Sources {
             })
             .collect()
     }
-    pub(super) fn system_binding(&self) -> &PhysicalBinding {
+    pub(in super::super) fn system_binding(&self) -> &PhysicalBinding {
         &self.system
     }
-    pub(super) fn system_writer_binding(&self) -> &PhysicalBinding {
+    pub(in super::super) fn system_writer_binding(&self) -> &PhysicalBinding {
         &self.system_writer
     }
     pub(in super::super) fn for_each(

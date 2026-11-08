@@ -13,6 +13,7 @@ use sqlite_access::{Connection, Executor, Row};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 use storage_contract::{MapChanges, TrackedRecords};
 
+pub(in crate::engine) mod backup_install;
 pub(in crate::engine) mod preparation;
 mod scope;
 mod snapshot;
@@ -44,6 +45,10 @@ pub(super) struct QueryProof {
     scope_counts: BTreeMap<(String, String), [usize; 6]>,
     system_order: system_changes::Order,
     read_generation: Arc<()>,
+    // Unlike cursor generations, this lease domain survives every rebuild.
+    // All escaped SQLite snapshots must close before a SYSTEM alias exchange.
+    read_leases: Arc<()>,
+    backup_quiesced: bool,
     availability: IndexAvailability,
     #[cfg(test)]
     indexed_reads: usize,
@@ -489,7 +494,7 @@ fn project_delta(
 
 // Move every journal before the main database. A partial quarantine must never
 // leave old WAL bytes next to a missing database that a later open could create.
-const INDEX_FILES: [&str; 4] = [
+pub(in crate::engine) const INDEX_FILES: [&str; 4] = [
     "index.sqlite-wal",
     "index.sqlite-shm",
     "index.sqlite-journal",
@@ -582,6 +587,9 @@ impl Engine {
             .history_query_proof
             .lock()
             .expect("invariant: history query proof lock poisoned");
+        if backup_install::preserve_selected(&self.root, &mut proof, self.state.sequence)? {
+            return Ok(());
+        }
         match std::mem::take(&mut proof.availability) {
             IndexAvailability::Ready(mut writer) => writer.close().map_err(Error::from)?,
             unavailable @ IndexAvailability::Unavailable(_) => proof.availability = unavailable,
