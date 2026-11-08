@@ -236,3 +236,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### 已决定备份目标恢复
 
 `inspect_backup_registry_decision` 读取原成员真实共同选择和全部完整目标，供宿主独立保存决定摘要；`open_decided_backup_targets` 仅在该摘要与完整原目标集合均满足时提供有界、同次全正文校验的冻结恢复读取。原决定恢复不补缺票，读入口不生成 active Config/Generation、不开放 writer、不解除源围栏。见[具体边界](../design/backup-decided-target-recovery.md)。本片未审查、编译、测试或 CI。
+
+### 已选完整 writer 路由材料
+
+同一 registry decision 后台 worker 在重新读取全部原真实选择后，生成并在全部目标持久化完整扇出与整单位路由，冷开仍只续原任务。`WriterRoutesPrepared` 表示 `backup-writer-routes` 两份材料已读回，不是活动 writer；`BackupDecidedTargets::{inspect_writer_routes,file_writer_route,directory_writer_route}` 逐次重核全目标证据并解析完整明确目标集合，不按线性 `.find` 任选一个下级。父子目录和整文件所有版本共享完整目标集合。活动 Config/Current/Generation、普通写入口与源围栏不变。见[路由材料边界](../design/backup-selected-writer-routes.md)。本片未审查、编译、测试或 CI。

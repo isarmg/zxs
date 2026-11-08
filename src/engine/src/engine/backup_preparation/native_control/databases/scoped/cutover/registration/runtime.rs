@@ -125,6 +125,21 @@ fn run(
         status.detail = format!(
             "all original members selected registry/placement decision {hash}; every target retains the same certificate; final active route/writer is absent and source remains stopped"
         );
+    })?;
+    // Never derive a writer route from the planned receipt vector or cached
+    // progress. This read gate observes every original real decision slot.
+    let decision = choices.observe_decision(&prepared, stop)?;
+    let routes = writer_routes::prepare(&prepared, &decision, stop)?;
+    // Source locks are retained throughout, but exact native source evidence is
+    // still checked before the observable preparation result advances.
+    choices.observe_decision(&prepared, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::WriterRoutesPrepared;
+        status.detail = format!(
+            "decision {hash} retains complete whole-unit fanout material {} on all {} selected targets; no generation publication or writer activation exists, source remains stopped",
+            routes.material_hash,
+            routes.targets.len(),
+        );
     })
 }
 fn spawn(

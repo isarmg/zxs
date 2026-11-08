@@ -7,8 +7,9 @@ mod materials;
 mod runtime;
 mod scoped;
 pub use scoped::{
-    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    open_decided_backup_targets,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 mod store;
 pub(in crate::engine::backup_preparation) use scoped::resume_fenced;

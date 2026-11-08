@@ -2,31 +2,68 @@
 //! each initialized directory repository has one home on this complete target.
 use super::*;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct EntityPlacement {
-    files: Vec<FileHome>,
-    directories: Vec<DirectoryHome>,
+    pub(crate) files: Vec<FileHome>,
+    pub(crate) directories: Vec<DirectoryHome>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct FileHome {
-    history_tree_id: String,
-    file_id: String,
-    path: PathBuf,
-    directory_id: Option<String>,
-    version_ids: BTreeSet<String>,
+pub(crate) struct FileHome {
+    pub(crate) history_tree_id: String,
+    pub(crate) file_id: String,
+    pub(crate) path: PathBuf,
+    pub(crate) directory_id: Option<String>,
+    pub(crate) version_ids: BTreeSet<String>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct DirectoryHome {
-    history_tree_id: String,
-    directory_id: String,
-    outer_repository_id: String,
-    parent_directory_id: Option<String>,
-    path: PathBuf,
+pub(crate) struct DirectoryHome {
+    pub(crate) history_tree_id: String,
+    pub(crate) directory_id: String,
+    pub(crate) outer_repository_id: String,
+    pub(crate) parent_directory_id: Option<String>,
+    pub(crate) path: PathBuf,
 }
 impl EntityPlacement {
+    /// Strip only this target's already-admitted hop prefix. This exposes the
+    /// common whole-unit addresses for comparison across siblings, never a
+    /// writable path or an active layout locator. Original image bytes stay
+    /// unchanged; in particular no sibling is treated as the preceding hop.
+    pub(crate) fn relative_to(&self, prefix: &[String]) -> Result<Self> {
+        let base = Self::image_base(prefix);
+        let relative = |path: &Path| -> Result<PathBuf> {
+            let path = path
+                .strip_prefix(&base)
+                .map_err(|_| invalid("whole entity lies outside its exact target hop prefix"))?;
+            if path.as_os_str().is_empty()
+                || path
+                    .components()
+                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(invalid("whole entity has no safe history-relative home"));
+            }
+            Ok(path.to_owned())
+        };
+        let mut result = self.clone();
+        for file in &mut result.files {
+            file.path = relative(&file.path)?;
+        }
+        for directory in &mut result.directories {
+            directory.path = relative(&directory.path)?;
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn image_base(prefix: &[String]) -> PathBuf {
+        let mut base = Path::new(ROOT).join("tree");
+        for name in prefix {
+            base.push(name);
+        }
+        base.join("histories")
+    }
+
     pub(super) fn empty() -> Self {
         Self {
             files: Vec::new(),

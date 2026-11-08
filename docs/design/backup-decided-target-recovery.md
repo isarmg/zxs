@@ -44,3 +44,7 @@
 共同 core/证书各最多 32 MiB；继承完整 snapshot/原生前缀/图片与数据库既有预算。读取区间最多 4 MiB，正文流式块 64 KiB；每次重新验完整集合并完整扫描所选正文，成本随原材料大小及目标数增长，不是常规读热路径。底层 I/O 仍可能阻塞，无任意故障下硬完成时限。
 
 下一步仍必须将同一已选决定接入实际新 scope、完整活动 registry/locator、原生 generation 的发布和读取，才能合法解除源围栏。不能把本片的 `AdmittedBackupDecision` 或冻结 reader 当作该最后一步已完成。
+
+## 后继路由材料阶段
+
+[已选 writer 路由材料](backup-selected-writer-routes.md)接在同一明确 decision task 内：真实选择读回后自动准备完整扇出路由，全部目标保存相同材料并逐个验存，再报告 `WriterRoutesPrepared`。此前的 `RegistryPlacementDecided` 及旧证书字节不改，不从新 marker 推断新权限。冻结 reader 新增路由观察，不安装 writer、不解除源围栏。

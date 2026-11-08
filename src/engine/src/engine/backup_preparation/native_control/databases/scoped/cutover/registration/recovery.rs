@@ -41,6 +41,38 @@ impl BackupDecidedTargets {
     pub fn report(&self) -> &BackupRegistryRecoveryReport {
         &self.report
     }
+
+    /// Re-read every decided image and the exact prepared fanout on all
+    /// targets. A completion file by itself never authorizes an active writer.
+    pub fn inspect_writer_routes(&self) -> Result<BackupWriterRoutesReport> {
+        Ok(
+            writer_routes::observe(&self.prepared, &self.decision, &AtomicBool::new(false))?
+                .report(),
+        )
+    }
+
+    /// Resolve one complete file to the full explicitly selected set. The
+    /// caller cannot supply a subset of its versions or choose a sibling as a
+    /// linear next hop. These frozen addresses carry no I/O/write admission.
+    pub fn file_writer_route(&self, history: &str, file: &str) -> Result<BackupFileWriterRoute> {
+        validate_id(history, "history")?;
+        validate_id(file, "file")?;
+        writer_routes::observe(&self.prepared, &self.decision, &AtomicBool::new(false))?
+            .file(history, file)
+    }
+
+    /// Resolve a directory repository, including its actual enclosing parent,
+    /// to the same complete target set as its children and retained files.
+    pub fn directory_writer_route(
+        &self,
+        history: &str,
+        directory: &str,
+    ) -> Result<BackupDirectoryWriterRoute> {
+        validate_id(history, "history")?;
+        crate::container_storage::validate_database_directory_id(directory)?;
+        writer_routes::observe(&self.prepared, &self.decision, &AtomicBool::new(false))?
+            .directory(history, directory)
+    }
     /// Rechecks the complete target set and selected decision on every call.
     /// Content is then read from the selected image inode in one full hashing
     /// pass, buffering only this <=4 MiB range. No fallback to another target or
@@ -170,7 +202,7 @@ pub fn open_decided_backup_targets(
     })
 }
 
-fn require_isolated(targets: &[Target]) -> Result<()> {
+pub(super) fn require_isolated(targets: &[Target]) -> Result<()> {
     for target in targets {
         // A future native activation must use its own admitted live reader. An
         // old frozen capability cannot bypass active lifecycle/retirement gates.

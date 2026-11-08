@@ -7,11 +7,16 @@ use installation::{Target, Task as InstallationTask};
 
 mod recovery;
 mod runtime;
+mod writer_routes;
 pub use recovery::{
     BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
     open_decided_backup_targets,
 };
 pub(super) use runtime::resume;
+pub use writer_routes::{
+    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupWriterDestination,
+    BackupWriterRoutesReport,
+};
 const FORMAT: &str = "zxs-backup-registry-placement";
 const TASK: &str = "backup-preparation/registry-placement.json";
 const DIRECTORY: &str = "backup-registry-placement";

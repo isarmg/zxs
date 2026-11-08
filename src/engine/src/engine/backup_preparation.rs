@@ -28,8 +28,9 @@ pub use native_control::{
     offline_check_backup_object_databases, offline_check_backup_scoped_databases,
 };
 pub use native_control::{
-    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    open_decided_backup_targets,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub(in crate::engine) use native_control::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
@@ -85,6 +86,9 @@ pub enum BackupPreparationPhase {
     /// Exact registry and whole-unit placements selected in every original
     /// native decision slot. No active writer/route or source fence release.
     RegistryPlacementDecided,
+    /// Exact complete fanout and whole-unit writer-route material exists on
+    /// every selected target. No native generation publication or writer lease.
+    WriterRoutesPrepared,
     Blocked,
     SourceChanged,
 }

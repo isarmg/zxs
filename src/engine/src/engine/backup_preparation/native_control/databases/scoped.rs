@@ -9,8 +9,9 @@ pub use cutover::{
     BackupTopologyTarget, offline_check_backup_cutover_inputs,
 };
 pub use cutover::{
-    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    open_decided_backup_targets,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub(in crate::engine) use cutover::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,

@@ -19,8 +19,9 @@ pub use backup_preparation::{
     offline_check_backup_preparation_batch, offline_check_backup_scoped_databases,
 };
 pub use backup_preparation::{
-    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    open_decided_backup_targets,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use membership_transition::BackupRegistryDecisionHash;
 mod config;

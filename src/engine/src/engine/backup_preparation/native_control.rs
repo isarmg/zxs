@@ -6,8 +6,9 @@ use std::path::{Component, Path};
 mod archive;
 mod databases;
 pub use databases::{
-    BackupDecidedTargets, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    open_decided_backup_targets,
+    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
+    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 mod runtime;
 pub use archive::BackupNativeControlReport;
