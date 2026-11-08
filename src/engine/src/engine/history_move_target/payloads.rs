@@ -111,7 +111,7 @@ pub(super) fn verify(
     target: &store::Target,
     version: &FileVersion,
     cancellation: &HistoryWindowCancellation,
-) -> Result<()> {
+) -> Result<String> {
     checkpoint(cancellation)?;
     let root = &target.root;
     let directory = target.version_directory(version);
@@ -127,5 +127,6 @@ pub(super) fn verify(
     {
         return Err(Error::new(ErrorCode::PreparationStale, "move target body changed during complete verification"));
     }
-    target.check_names()
+    target.check_names()?;
+    Ok(blake3::hash(&stamp).to_hex().to_string())
 }

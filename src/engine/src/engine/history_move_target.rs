@@ -14,6 +14,8 @@ const DIRECTORY: &str = "file-history-move-target";
 const LOGICAL: &str = "joint-metadata.json";
 const DATABASE: &str = ".zxs-file.sqlite";
 
+pub(super) type CopyIdentities = BTreeMap<String, BTreeMap<String, String>>;
+
 /// An observation after complete target-file-material verification. This is
 /// deliberately not an OperationResult, a publication permit or a three-scope
 /// database receipt. Later consumers must read and verify the material again.
@@ -26,6 +28,7 @@ pub struct FileHistoryMoveTargetReport {
     versions_per_slot: usize,
     body_bytes_per_slot: u64,
     file_database_records_hash: String,
+    copy_identities: CopyIdentities,
 }
 
 impl FileHistoryMoveTargetReport {
@@ -36,6 +39,7 @@ impl FileHistoryMoveTargetReport {
     pub fn versions_per_slot(&self) -> usize { self.versions_per_slot }
     pub fn body_bytes_per_slot(&self) -> u64 { self.body_bytes_per_slot }
     pub fn file_database_records_hash(&self) -> &str { &self.file_database_records_hash }
+    pub(super) fn copy_identities(&self) -> &CopyIdentities { &self.copy_identities }
 }
 
 #[derive(Serialize)]
@@ -99,6 +103,7 @@ impl Materials {
         &self,
         projection: &FileHistoryMoveProjection,
         reviewed: &FileHistoryMoveRecoveryDigest,
+        copy_identities: CopyIdentities,
     ) -> FileHistoryMoveTargetReport {
         FileHistoryMoveTargetReport {
             operation: projection.operation_id(),
@@ -108,6 +113,7 @@ impl Materials {
             versions_per_slot: self.versions.len(),
             body_bytes_per_slot: self.body_bytes,
             file_database_records_hash: self.database.records_hash().into(),
+            copy_identities,
         }
     }
 }
@@ -125,7 +131,7 @@ impl Engine {
     ) -> Result<FileHistoryMoveTargetReport> {
         self.verify_file_history_move_recovery(projection, reviewed, cancellation)?;
         let materials = Materials::capture(projection)?;
-        let prepare = || -> Result<()> {
+        let prepare = || -> Result<CopyIdentities> {
             for slot in projection.capture().target_slots() {
                 checkpoint(cancellation)?;
                 let target = store::Target::open(self, projection, reviewed, &materials, slot, store::Mode::Prepare)?;
@@ -139,11 +145,11 @@ impl Engine {
             // Do not use copy-loop progress as the final independent proof.
             self.verify_move_target_materials(projection, reviewed, &materials, cancellation)
         };
-        prepare().map_err(|error| error.context(
+        let identities = prepare().map_err(|error| error.context(
             ErrorCode::RecoveryRequired,
             "move target materials may be partially retained; source and target namespaces are unchanged, resume the same original operation",
         ))?;
-        Ok(materials.report(projection, reviewed))
+        Ok(materials.report(projection, reviewed, identities))
     }
 
     /// Read-only, complete target-file verification. A cold caller first resumes
@@ -157,8 +163,8 @@ impl Engine {
     ) -> Result<FileHistoryMoveTargetReport> {
         self.verify_file_history_move_recovery(projection, reviewed, cancellation)?;
         let materials = Materials::capture(projection)?;
-        self.verify_move_target_materials(projection, reviewed, &materials, cancellation)?;
-        Ok(materials.report(projection, reviewed))
+        let identities = self.verify_move_target_materials(projection, reviewed, &materials, cancellation)?;
+        Ok(materials.report(projection, reviewed, identities))
     }
 
     fn verify_move_target_materials(
@@ -167,16 +173,20 @@ impl Engine {
         reviewed: &FileHistoryMoveRecoveryDigest,
         materials: &Materials,
         cancellation: &HistoryWindowCancellation,
-    ) -> Result<()> {
+    ) -> Result<CopyIdentities> {
+        let mut identities = BTreeMap::new();
         for slot in projection.capture().target_slots() {
             checkpoint(cancellation)?;
             let target = store::Target::open(self, projection, reviewed, materials, slot, store::Mode::Read)?;
             target.verify_metadata(materials)?;
+            let mut versions = BTreeMap::new();
             for version in materials.versions.values() {
-                payloads::verify(&target, version, cancellation)?;
+                versions.insert(version.version_id.clone(), payloads::verify(&target, version, cancellation)?);
             }
             target.check_names()?;
+            identities.insert(slot.clone(), versions);
         }
-        self.verify_file_history_move_recovery(projection, reviewed, cancellation)
+        self.verify_file_history_move_recovery(projection, reviewed, cancellation)?;
+        Ok(identities)
     }
 }

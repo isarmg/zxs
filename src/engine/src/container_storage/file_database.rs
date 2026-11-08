@@ -179,8 +179,8 @@ fn encode_records(
     Ok(Prepared { bytes })
 }
 
-/// Only a logical target database. Its constructor receives the typed joint
-/// projection's copied audit, not a forged copy/delete operation receipt.
+/// Only a logical staging database. Its constructors receive the typed joint
+/// projection's audit, not a forged copy/delete operation receipt.
 pub(crate) struct PreparedMoveFile {
     bytes: Vec<u8>,
     file: String,
@@ -229,6 +229,49 @@ pub(crate) fn prepare_move(
         file: audit.file_id.clone(),
         history: audit.history_tree_id.clone(),
         sequence: state.sequence,
+        records_hash,
+    })
+}
+
+/// Preserve the complete source audit prefix and append the proposed move's
+/// own D. The normal published-State decoder still requires a real receipt;
+/// this narrowly scoped encoder does not relax that admission rule.
+pub(crate) fn prepare_move_source(
+    previous: &crate::State,
+    next: &crate::State,
+    node: &crate::FileDeletionNode,
+) -> Result<PreparedMoveFile> {
+    use crate::file_deletion::retained::{DeletionAction, LifecycleRow};
+    if previous.file_deletions.contains_key(&node.file_id)
+        || previous.operations.contains_key(&node.operation_id)
+        || next.operations.contains_key(&node.operation_id)
+        || node.sequence != next.sequence
+        || node.sequence <= previous.sequence
+    {
+        return Err(invalid("move source database has no fresh unpublished deletion"));
+    }
+    let mut events = capture_copy(previous, &node.file_id, &node.history_tree_id)?.events;
+    events.push(LifecycleRow {
+        operation_id: node.operation_id,
+        action: DeletionAction::Delete,
+        sequence: node.sequence,
+        author: node.author.clone(),
+        node: node.into(),
+    });
+    let transition = crate::state_projection::ProjectionTransition::new(next, next, None)?;
+    let view = transition.previous();
+    validate_owner(view, &node.file_id, &node.history_tree_id)?;
+    let records = projection::move_source_records(view, node, &events)?;
+    validate_records(&records, &node.file_id, &node.history_tree_id, next.sequence)?;
+    let records_hash = storage_contract::object_hash("file-local-records", &records)?;
+    let prepared = encode_records(
+        records, &node.file_id, &node.history_tree_id, next.sequence, &records_hash,
+    )?;
+    Ok(PreparedMoveFile {
+        bytes: prepared.bytes,
+        file: node.file_id.clone(),
+        history: node.history_tree_id.clone(),
+        sequence: next.sequence,
         records_hash,
     })
 }

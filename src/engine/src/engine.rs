@@ -52,6 +52,10 @@ pub use disk_catalog::{
 };
 mod history_move_recovery;
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
+mod history_move_decision;
+pub use history_move_decision::{
+    FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation,
+};
 mod history_move_target;
 pub use history_move_target::FileHistoryMoveTargetReport;
 mod index;

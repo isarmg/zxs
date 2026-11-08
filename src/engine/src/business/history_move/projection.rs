@@ -129,6 +129,24 @@ impl FileHistoryMoveProjection {
             &self.writes.lifecycle,
         )
     }
+
+    pub(crate) fn source_file_database(
+        &self,
+        previous: &State,
+    ) -> Result<crate::container_storage::file_database::PreparedMoveFile> {
+        crate::container_storage::file_database::prepare_move_source(
+            previous,
+            &self.writes.next,
+            self.proposed_source_deletion(),
+        )
+    }
+
+    /// Exact complete proposal, intentionally still without a published move
+    /// receipt/event. Its bytes are only copied to existing metadata owners.
+    pub(crate) fn unaccepted_state_bytes(&self) -> Result<Vec<u8>> {
+        history_copy::retained::bounded(&self.writes.next)?;
+        crate::disk::encode_metadata(&self.writes.next, 12 * 1024 * 1024)
+    }
 }
 
 /// A same-owner, same-slot metadata observation. It grants no body, database,

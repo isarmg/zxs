@@ -44,6 +44,9 @@ pub use engine::{
 pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
+    FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation,
+};
+pub use engine::{
     TerminalMetadataResume, TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,

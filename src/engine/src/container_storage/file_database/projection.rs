@@ -49,6 +49,19 @@ pub(super) fn move_records(
     with_events(view, file, events)
 }
 
+/// The same retained source graph with its proposed all-frontier D and one
+/// appended native move audit row. This is staging, not a published receipt.
+pub(super) fn move_source_records(
+    view: StateProjection<'_>,
+    node: &crate::FileDeletionNode,
+    events: &[LifecycleRow],
+) -> Result<Vec<Record>> {
+    if view.state().file_deletions.get(&node.file_id) != Some(node) {
+        return Err(invalid("move source database requires its exact proposed deletion"));
+    }
+    with_events(view, &node.file_id, events)
+}
+
 fn with_events(
     view: StateProjection<'_>,
     file: &str,
