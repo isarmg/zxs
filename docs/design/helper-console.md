@@ -77,3 +77,7 @@ POST 输入最大 64 KiB，正文读取期限 15 秒；磁盘读取只允许一�
 ### 首次管理账户后继
 
 `/api/initialization/administrator-preview`、`administrator-create` 和 `administrator-recover-preview` 将新空布局内的管理账户创建和同原请求续作接入 Web；手动秘密输入与已有管理员重置共用受保护 HTTP 解码，不新增登录、URL/argv 密码或自启。仅形成 management-without-storage，完整首批磁盘/数据库/干净启动交接仍缺；源码未运行，见[准确边界](helper-first-management-administrator.md)。
+
+## 首批存储工作进程
+
+首批空目录预览/初始化/原计划恢复已接 `storage-preview`、`storage-create`、`storage-recover-preview`，放在首次管理员之后。使用受限同二进制 service UID/GID 子进程，不放宽 root 对 Engine 的权限规则；父任务等待子进程结束，响应丢失保留原请求。当前仍无登录、默认 0.0.0.0、手动 root，无 helper 自启。入口和不代表完整首次安装的边界见[首批存储](helper-first-storage-batch.md)；源码尚未编译/测试/审查或运行 CI。

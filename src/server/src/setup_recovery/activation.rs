@@ -30,7 +30,7 @@ pub fn management_initialization_record() -> Vec<u8> {
     .expect("invariant: current management initialization record serializes")
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct StorageActivationRequest {
     pub selections: Vec<storage_contract::storage_directories::CandidateSelection>,
@@ -344,14 +344,72 @@ impl SetupRecovery {
     pub fn complete_activation(
         &self,
         identity: &Identity,
+        revalidate: impl FnMut(&Identity) -> Result<(), ApiError>,
+        install: impl FnOnce(Engine) -> Result<(), ApiError>,
+    ) -> Result<(), ApiError> {
+        self.complete_activation_inner(identity, None, revalidate, install)
+    }
+
+    /// A retained offline request may only complete its exact original disk
+    /// selection and mode. The comparison is repeated under the setup lock;
+    /// completed evidence still runs the caller's required durability checks.
+    pub fn complete_activation_exact(
+        &self,
+        identity: &Identity,
+        expected: &StorageActivationRequest,
+        revalidate: impl FnMut(&Identity) -> Result<(), ApiError>,
+        install: impl FnOnce(Engine) -> Result<(), ApiError>,
+    ) -> Result<(), ApiError> {
+        self.complete_activation_inner(identity, Some(expected), revalidate, install)
+    }
+
+    /// Read-only correlation, not authorization or permission to reset a pool.
+    /// False means no activation intent, not that the system is proven empty.
+    pub fn initial_activation_matches(
+        &self,
+        expected: &StorageActivationRequest,
+    ) -> Result<bool, ApiError> {
+        if !present(&self.data_root.join(ACTIVATION_INTENT))? {
+            if present(&self.data_root.join(ACTIVATION_COMPLETE))? {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::SetupProofInvalid,
+                    "activation completion is missing its original intent",
+                ));
+            }
+            return Ok(false);
+        }
+        let intent: StorageActivationIntent = self.read_durable_control(ACTIVATION_INTENT)?;
+        if intent.selections != expected.selections || intent.config.mode != expected.mode {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::SetupProofInvalid,
+                "retained activation belongs to a different exact selection or mode",
+            ));
+        }
+        Ok(true)
+    }
+
+    fn complete_activation_inner(
+        &self,
+        identity: &Identity,
+        expected: Option<&StorageActivationRequest>,
         mut revalidate: impl FnMut(&Identity) -> Result<(), ApiError>,
         install: impl FnOnce(Engine) -> Result<(), ApiError>,
     ) -> Result<(), ApiError> {
         revalidate(identity)?;
         let _lock = self.lock()?;
+        if let Some(expected) = expected {
+            if !self.initial_activation_matches(expected)? {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::SetupProofInvalid,
+                    "exact activation recovery requires its original intent",
+                ));
+            }
+        }
         if present(&self.data_root.join(ACTIVATION_COMPLETE))? {
             self.activation_admitted()?;
-            return Ok(());
+            if expected.is_none() {
+                return Ok(());
+            }
         }
         let proof = self.activation_proof()?;
         let directories = self.activation_directories(&proof.intent)?;

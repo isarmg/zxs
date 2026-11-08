@@ -376,3 +376,13 @@ async fn installation_payload_is_explicit_and_wrong_confirmation_never_opens_a_t
             .contains("no installation was attempted")
     );
 }
+
+#[tokio::test]
+async fn first_storage_routes_require_the_same_origin_before_initialization() {
+    for route in ["/api/initialization/storage-preview","/api/initialization/storage-recover-preview","/api/initialization/storage-create"] {
+        let mut request=post(route,json!({}));
+        request.headers_mut().insert("origin","http://foreign.example".parse().unwrap());
+        let response=http::router(state()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(),StatusCode::FORBIDDEN);
+    }
+}

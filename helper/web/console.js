@@ -10,9 +10,10 @@ let layoutPreview = null;
 let configurationPreview = null;
 let administratorResetPreview = null;
 let firstAdministratorPreview = null;
+let firstStoragePreview = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -376,3 +377,52 @@ byId("first-administrator-password-form").addEventListener("submit", async event
   finally { body.password = ""; body.repeat_password = ""; clearFirstAdministratorPasswords(); setBusy(false); }
 });
 window.addEventListener("pagehide", clearFirstAdministratorPasswords);
+
+function resetFirstStoragePlan() {
+  firstStoragePreview = null;
+  for (const id of ["first-storage-plan","first-storage-save","first-storage-commit-form","first-storage-receipt"]) byId(id).hidden = true;
+  byId("first-storage-writers").checked = false;
+}
+function showFirstStoragePlan(service_user, preview) {
+  firstStoragePreview = {input:{service_user,request_digest:preview.request_digest},plan:preview.plan};
+  byId("first-storage-plan").textContent = JSON.stringify(preview,null,2);
+  for (const id of ["first-storage-plan","first-storage-save","first-storage-commit-form"]) byId(id).hidden = false;
+}
+for (const id of ["first-storage-user","first-storage-roots","first-storage-digest"]) byId(id).addEventListener("input",resetFirstStoragePlan);
+byId("first-storage-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping) return;
+  const service_user = byId("first-storage-user").value;
+  const roots = byId("first-storage-roots").value.split(/\r?\n/).filter(line => line.length > 0);
+  resetFirstStoragePlan(); error(""); setBusy(true);
+  try { showFirstStoragePlan(service_user, await (await post("/api/initialization/storage-preview", {service_user,roots})).json()); }
+  catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("first-storage-recover").addEventListener("click", async () => {
+  if (busy || stopping) return;
+  const service_user = byId("first-storage-user").value;
+  const request_digest = byId("first-storage-digest").value;
+  if (!/^[0-9a-f]{64}$/.test(request_digest)) { error("请输入原首批存储请求的完整摘要。"); return; }
+  resetFirstStoragePlan(); error(""); setBusy(true);
+  try { showFirstStoragePlan(service_user, await (await post("/api/initialization/storage-recover-preview", {service_user,request_digest})).json()); }
+  catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("first-storage-save").addEventListener("click", () => {
+  if (!firstStoragePreview) return;
+  save(new Blob([JSON.stringify(firstStoragePreview,null,2)],{type:"application/json"}),`zxs-first-storage-${firstStoragePreview.input.request_digest}.json`);
+});
+byId("first-storage-commit-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping || !firstStoragePreview) return;
+  const roots = firstStoragePreview.plan.selections.map(selection => selection.root_path);
+  if (!window.confirm(`确认把以下全部现有空目录初始化为新的生产池独立一级盘？\n${roots.join("\n")}\n不格式化、不启动服务；失败后保留证据并只续作原请求。`)) return;
+  const body = {...firstStoragePreview,confirmation:"initialize-first-storage-batch",external_writers_stopped:byId("first-storage-writers").checked};
+  error(""); setBusy(true);
+  try {
+    const receipt = await (await post("/api/initialization/storage-create",body)).json();
+    byId("first-storage-receipt").textContent = JSON.stringify(receipt,null,2);
+    byId("first-storage-receipt").hidden = false;
+    firstStoragePreview = null;
+    byId("first-storage-commit-form").hidden = true;
+    byId("first-storage-save").hidden = true;
+  } catch (failure) { error(`${failure.message}。存储可能已部分或全部初始化。保留原计划及摘要，不删除磁盘或控制文件、不换请求清盘重做。`); }
+  finally { setBusy(false); }
+});

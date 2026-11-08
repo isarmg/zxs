@@ -6,7 +6,7 @@
 
 已确定将**磁盘添加、注销/移除、外来磁盘接入和磁盘初始化**移入此工具，并取消用户发起的“计划下线”动作。失联、不可用和既有 Disabled 状态仍须如实展示。这是职责决策，不表示四项操作已经迁完；分项现状、原操作恢复及切换门槛见[辅助工具磁盘管理](../design/helper-disk-management.md)和[架构决策](../adr/0017-helper-disk-management.md)。当前可执行命令以下述各节及 `--help` 为准，不注册只会假报成功的磁盘管理占位命令。
 
-所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；当前尚未实现管理员或 SMB 密码重置；计划中的重置必须由用户手动输入新密码并有独立确认及持久恢复证明。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
+所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；独立 Web 已有管理员密码重置，需手动输入和独立确认；实际 SMB 密码重置尚未实现。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
 
 需要打开或恢复池的命令支持[四项保留证据运行期上限](../19-capacity-and-performance.md#runtime-retained-workspace-limits)，作为全局参数同时提供；不带时使用原配置基线。`offline-check` / `offline-export` 直接核验单盘，不借这些参数改变证明或载荷规则。恢复前应配置足够额度，不能通过删除已提交清单释放名额。
 
@@ -178,3 +178,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 首次管理账户阶段
 
 独立 Web 在准确新空私有布局中可显式创建首个 ZXS 管理员，并以原摘要/同一初始密码恢复中断操作。共用当前管理意图、凭据与权威 marker 格式，保留真实 setup/auth/主服务生命周期锁、服务文件所有权和无覆盖发布。状态仅是 ManagementReady，无首批磁盘、数据库或完整系统就绪；不创建 Unix/Samba 账户，不启动服务。源码未编译/测试/审查/CI，见[首次管理账户边界](../design/helper-first-management-administrator.md)。
+
+## 首批空目录存储初始化
+
+独立 Web 可在已完成管理账户后，预览并明确初始化 `/zxs/data/disks` 下全部已存在的空直接子目录。root 编排通过同一二进制的非 root 服务身份工作进程使用现有 activation/Engine 协议，完成前发布凭据灾备快照并核系统及逐盘 current/history SQLite。它不挂载、格式化、创建 Unix 账户或启动服务，不接纳外来盘；完整安装就绪与正常运行最终门禁仍未完成。原计划、生命周期交接、部分失败及未运行验证见[首批存储](../design/helper-first-storage-batch.md)。

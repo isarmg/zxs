@@ -1,5 +1,6 @@
-//! First-installation prerequisites, not administrator or storage genesis.
+//! Staged offline first installation: layout, administrator, and initial storage.
 pub(crate) mod administrator;
+pub(crate) mod storage;
 mod layout;
 use crate::{
     Result,

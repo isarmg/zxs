@@ -32,7 +32,8 @@ A selected existing non-root local account can receive an empty private data lay
 Systemd/Samba configuration can be prepared as an inactive bundle or installed at fixed paths without overwriting different files, reloading, starting or enabling services.
 The independent Web console can create the first management-only administrator in the exact new empty private layout; no storage is initialized.
 The independent Web console can reset an existing ZXS administrator password with exact confirmation; it revokes ZXS sessions but does not update disaster-recovery credential replicas or Samba passwords.
-Complete first-run storage setup, disk addition/removal, foreign admission, Samba password reset, program repair and systemd/SMB activation are not yet implemented. No planned-offline action is offered."
+The Web console can initialize the exact first production batch of existing empty primary roots through a non-root worker; it neither mounts/formats devices nor starts a service.
+Complete installation readiness/clean-start gating, later disk addition/removal, foreign admission, Samba password reset, program repair and systemd/SMB activation are not yet implemented. No planned-offline action is offered."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
@@ -56,6 +57,9 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Internal privilege-separated worker, never an alternate public initializer.
+    #[command(hide = true)]
+    InternalStorageWorker,
     /// Manually serve the independent maintenance console; no login or autostart.
     Serve(console::Options),
     /// Inspect or install the matching embedded ZXS program only; no service setup.
@@ -244,6 +248,7 @@ fn run(args: Args) -> Result<()> {
         None
     };
     match command {
+        Command::InternalStorageWorker => initialization::storage::process::entry(),
         Command::Serve(options) => console::run(options),
         Command::Install { command } => installation::run(command),
         Command::Initialization { command } => initialization::run(command),
@@ -386,7 +391,8 @@ fn requires_service_exclusion(command: &Command) -> bool {
             accept_permanent_loss,
             ..
         } => *accept_permanent_loss,
-        Command::Serve(_)
+        Command::InternalStorageWorker
+        | Command::Serve(_)
         | Command::Install { .. }
         | Command::Host { .. }
         | Command::Initialization { .. }
