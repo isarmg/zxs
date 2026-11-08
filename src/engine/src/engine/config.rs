@@ -85,6 +85,36 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    /// A deterministic configuration projection of the exact admitted Backup
+    /// choice, not a Genesis admission of the new targets. Only the native
+    /// Backup verifier supplies this closed projection. Original I/O and voter
+    /// authority are retained; no newly configured root receives an I/O lease.
+    pub(in crate::engine) fn for_backup_projection(
+        original: &Self,
+        projection: &super::backup_preparation::BackupRegistryProjection,
+    ) -> Result<Self> {
+        if original.generation().is_some() {
+            return Err(Error::new(
+                ErrorCode::UnsupportedOperation,
+                "Backup configuration projection requires its fixed original Genesis",
+            ));
+        }
+        let config = projection.configuration(original)?;
+        validate_config_shape(&config, true)?;
+        let mut result = original.clone();
+        let admitted = Arc::make_mut(&mut result.admitted);
+        admitted.config = config;
+        // The original prefix and its immutable metadata indexes are unchanged.
+        // Never create a fresh GenesisIoAuthority from these selected roots.
+        admitted.io_disks = Some(
+            original
+                .io_disks()
+                .map(|disk| disk.disk_id.clone())
+                .collect(),
+        );
+        Ok(result)
+    }
+
     /// The latest authenticated readmission defines only this directory's I/O
     /// lifetime. It is never part of Config serialization or historical binding.
     pub(crate) fn io_admission_epoch(&self, disk_id: &str) -> Result<Option<String>> {
@@ -354,6 +384,12 @@ fn acquire_writer(f: &File) -> Result<()> {
     Ok(())
 }
 fn validate_config(c: &Config) -> Result<()> {
+    validate_config_shape(c, false)
+}
+
+// Fanout is admitted only through the exact native Backup projection above.
+// Public Config/TryFrom/initialization keeps its legacy linear restriction.
+fn validate_config_shape(c: &Config, native_backup: bool) -> Result<()> {
     validate_id(&c.pool_id, "pool")?;
     if !c.disks.iter().any(|d| d.metadata_member)
         || c.max_file_bytes == 0
@@ -419,7 +455,7 @@ fn validate_config(c: &Config) -> Result<()> {
                     )
                 })?;
             if source.level.checked_add(1) != Some(d.level)
-                || !successors.insert(up.to_ascii_lowercase())
+                || (!native_backup && !successors.insert(up.to_ascii_lowercase()))
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::TopologyInvalid,

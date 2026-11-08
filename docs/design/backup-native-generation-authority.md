@@ -139,3 +139,17 @@ SYSTEM 保留的原任务在冷开重建旧权威和旧 fence 后，可重复同
 这些 API 不创建目标 runtime seal、CurrentRegistry、有效 fanout Config 或 writer 租约，不修改活动 State，不解除源围栏，不删除旧数据或缩减原副本义务。离线验读证明的是原保留代际已独立留存和当前目标材料完整，不证明已离线原源的当前健康。Serving locator、最终绑定范围数据库、未来策略和完整运行态切换仍未完成；H03 外来一次性全低级链不得由此放行。普通设置和 helper 不自动调用不可逆原决定接口。
 
 本片按当前指示未审查、编译、测试或运行 CI，代码和声明均不能替代实际故障验收。
+
+<a id="backup-effective-configuration"></a>
+
+## 原首笔 Publication 下的有效配置语义与原生注册图
+
+本片将原生 `BackupCore` 的配置推导从“返回不支持”改为**原决定精确选择的实际扇出配置**，不是把旧配置当新配置，也不是放宽公共配置加载。推导只接受已认证 Backup certificate 中的原完整 Config 和一次选择的目标/物理根：全部原盘按原顺序保留，原身份、级别、容量、metadata voter 和 Genesis I/O authority 不变；新目标只追加绑定代数 1、原指定直接上游和级别，不成为 metadata voter、不凭数量猜副本策略。新目标不在推导对象的 I/O 准入集合中。
+
+普通 `Config` 的 API/文件解码与初始化仍执行原单后继校验，不能靠写配置文件绕过原生决定加入多个盘。只有原生 Backup 内部推导允许完整无跳级扇出；下一步活动 writer 准入还需独立原生许可。旧末端即使退出新的数据 route，也仍是保留的登记盘；如果它是原 metadata voter，其票不能顺便删除、Disabled 或 Stop。后续更改 metadata membership 必须走自己的协议。
+
+后台原任务在 `GenerationFirstPublicationRetained` 后自动继续配置解析。新增 live `inspect_backup_published_configuration` 与离线 `BackupDecidedTargets::inspect_published_configuration`：先读原实际 Publication/全目标公共证据及逐目标真实正文证明，再从目标自己的完整原源快照和确定性首笔 native snapshot 生成配置。所有保留版本，包括 Retired/Purged/Migrated 的无正文历史，placement 都必须等于同一完整显式 route、绑定和拓扑代数；缺低级祖先、跨 primary 或分拆整单元均拒绝。
+
+新生成的 `PreparedDiskRegistry` 包含真实原生编码的 Genesis 父图及精确后继图，保留所有原登记与固定 voter，只加入原决定的新目标；其 source 绑定原首笔 snapshot、sequence、topology generation 和 Backup authority，不从磁盘目录数量或完成标记猜登记。图预算为 4,096 个对象/64 MiB。`BackupConfigurationReport` 说明配置摘要、完整盘定义、明确数据 route 和注册图根；`GenerationConfigurationResolved` 仅是此闭包已解析，不等于图已安装到 Current。
+
+**尚未开放活动 CurrentRegistry、target writer、serving locator/最终绑定数据库安装和源解围栏。** 注册图可从原精确已出版材料确定性重建，不是已写到活动根的声明，第一笔旧 Candidate/Publication/receipt 一字不改。原生 Backup 的普通 registry/writer/I/O 激活门禁保留，不能把返回的配置定义另存成新 Genesis 来启动。当前新增分支只涉及固定 Genesis 源，复杂旧注册生命周期/旧分叉和正式外来一次完整链接纳仍拒绝。没有真实磁盘操作；按要求未审查、编译、测试或 CI。

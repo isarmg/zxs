@@ -98,6 +98,21 @@ impl BackupDecidedTargets {
         )
     }
 
+    /// Resolve the actual multi-target Config and native registry graph from
+    /// the original independently authenticated Publication and full State.
+    /// This does not admit target I/O or install an active CurrentRegistry.
+    pub fn inspect_published_configuration(
+        &self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupConfigurationReport> {
+        configuration::inspect(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
     /// Explicit, no-clobber continuation of the ORIGINAL publication copy to
     /// all original selected targets. Requires a complete authenticated witness
     /// on at least one selected target and all prior target-local body/proofs.
@@ -488,6 +503,50 @@ impl Engine {
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
         let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
         first_publication::observe(&prepared, &decision, &expected, &stop)
+    }
+
+    /// Fresh original-member Publication plus all target-local proof admission,
+    /// followed by exact selected Config and native registry derivation. The
+    /// source stays fenced; the returned projection is not a writer capability.
+    pub fn inspect_backup_published_configuration(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupConfigurationReport> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let task = Task::read(&DiskRoot::open(&self.root)?)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "first Backup Publication inspection belongs to another actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the retained worker before first Publication inspection",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
+        configuration::inspect(&prepared, &decision, &expected, &stop)
     }
 
     /// Observe actual native ACCEPT/FINALIZE from every original member. This

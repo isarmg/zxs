@@ -70,6 +70,17 @@ impl BackupCore {
         }
         Ok(intent.clone())
     }
+    /// Exact selected fanout, preserving every original disk and voter. This
+    /// supplies configuration semantics only; ordinary Backup registry/writer
+    /// activation remains separately fenced and cannot borrow Genesis I/O.
+    pub(in crate::engine::membership_transition) fn effective_config(
+        &self,
+    ) -> Result<ValidatedConfig> {
+        let intent = self.intent()?;
+        let decision = AdmittedBackupDecision::from_certificate(self.decision.clone())?;
+        ValidatedConfig::for_backup_projection(intent.origin.config(), decision.projection())
+    }
+
     pub(in crate::engine::membership_transition) fn archive(&self) -> &ArchiveRoot {
         &self.archive
     }

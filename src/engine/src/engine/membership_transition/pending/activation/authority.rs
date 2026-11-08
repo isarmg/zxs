@@ -75,13 +75,13 @@ impl AuthorityCore {
             )),
         }
     }
-    fn effective_config<'a>(&self, intent: &'a TransitionIntent) -> Result<&'a ValidatedConfig> {
+    fn effective_config(&self, intent: &TransitionIntent) -> Result<ValidatedConfig> {
         match self {
             Self::Add(_) | Self::Exit(_) | Self::TerminalResume(_) | Self::Readmission(_) => {
-                Ok(&intent.target)
+                Ok(intent.target.clone())
             }
-            Self::Abort(_) => Ok(intent.origin.config()),
-            Self::Backup(_) => Err(BackupCore::activation_required()),
+            Self::Abort(_) => Ok(intent.origin.config().clone()),
+            Self::Backup(core) => core.effective_config(),
         }
     }
 }
@@ -803,7 +803,7 @@ impl PortableAuthority {
         &self,
     ) -> Result<ValidatedConfig> {
         let intent = self.intent()?;
-        Ok(self.head.effective_config(&intent)?.clone())
+        self.head.effective_config(&intent)
     }
 
     pub(super) fn workspace_root_aliases(&self) -> Result<WorkspaceRootAliases> {
@@ -811,10 +811,8 @@ impl PortableAuthority {
         // These names are authenticated historical locators, not permissions to
         // open an old root. Consumers must project onto the current held binding.
         for (hash, intent) in self.lineage()? {
-            for config in [
-                intent.origin.config(),
-                self.node(&hash)?.effective_config(&intent)?,
-            ] {
+            let effective = self.node(&hash)?.effective_config(&intent)?;
+            for config in [intent.origin.config(), &effective] {
                 for disk in &config.disks {
                     roots
                         .entry((
@@ -1095,7 +1093,7 @@ impl PortableAuthority {
                 .last()
                 .expect("invariant: current authority appended")
                 .1;
-            if !same_config_projection(current.origin.config(), node.effective_config(&previous)?)
+            if !same_config_projection(current.origin.config(), &node.effective_config(&previous)?)
                 || current
                     .boundary
                     .as_ref()
@@ -1281,7 +1279,7 @@ impl PortableAuthority {
     pub(super) fn matches_metadata_projection(&self, config: &ValidatedConfig) -> Result<bool> {
         for (hash, intent) in self.lineage()? {
             if config.same_metadata_membership(intent.origin.config())
-                || config.same_metadata_membership(self.node(&hash)?.effective_config(&intent)?)
+                || config.same_metadata_membership(&self.node(&hash)?.effective_config(&intent)?)
             {
                 return Ok(true);
             }
@@ -1360,7 +1358,7 @@ impl PortableAuthority {
             Some(registry) => registry.verify_lifecycle_candidate(candidate, &self.hash()?)?,
             None => config.verify_original_candidate_membership(candidate)?,
         }
-        Ok(config.clone())
+        Ok(config)
     }
 
     fn node(&self, hash: &str) -> Result<&AuthorityCore> {

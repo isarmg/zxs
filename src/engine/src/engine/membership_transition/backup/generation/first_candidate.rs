@@ -338,6 +338,14 @@ impl PreparedBackupFirstCandidate {
     /// snapshot resolver and complete State admission. Every decode is charged,
     /// including repeats, before returning a prepared-material observation.
     pub(in crate::engine) fn verify_at(&self, held: &DiskRoot, stop: &AtomicBool) -> Result<()> {
+        self.read_state_at(held, stop).map(|_| ())
+    }
+
+    pub(in crate::engine) fn read_state_at(
+        &self,
+        held: &DiskRoot,
+        stop: &AtomicBool,
+    ) -> Result<crate::history_package::AdmittedState> {
         let mut budget = ReadBudget::default();
         let candidate = budget.read(held, "candidate", self.hash(), stop)?;
         let decoded: Candidate = crate::journal::decode_proof(candidate.bytes())?;
@@ -367,7 +375,7 @@ impl PreparedBackupFirstCandidate {
                 return Err(invalid("first candidate native dependency differs"));
             }
         }
-        Ok(())
+        Ok(state)
     }
 }
 

@@ -17,6 +17,7 @@ use crate::{
 use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod backup;
 pub(in crate::engine) mod continuation;
 pub(in crate::engine) mod occurrence;
 mod readmission;

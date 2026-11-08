@@ -288,3 +288,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ## 终态移除的 namespace 准备证明
 
 每笔管理 successor 必需完整 occurrence mask/Detached 分区，原 terminal archive 解析保留未激活投影，随后逐笔来源匹配/语义核对/Stop/D3/永久结果冷重建。准备态保留既有隐藏项、身份和不可用版本，不安装活动 Engine 或取消 resume 门禁。旧无 mask successor 拒绝，缺页/错误来源不自动补空。源码未审查/编译/测试/CI，见[闭包](../design/terminal-retirement-namespace-closure.md)。
+
+### Backup 精确 Config 与注册图解析
+
+`BackupCore::effective_config` 现在从原证书推出真正的完整扇出配置，原 voter/盘绑定和 Genesis I/O 身份保留，新目标不获得 I/O。公共 Config 加载不放开分叉。后台及 live/离线 `inspect_*published_configuration` 在真实首笔 Publication/全目标正文证明后读取完整源与首笔 State，核所有历史版本的完整 route，并生成带父图的原生注册后继，阶段 `GenerationConfigurationResolved`。图尚未安装活动 Current、writer/serving locator 和源解围栏仍拒绝。详见[配置与原生注册图边界](../design/backup-native-generation-authority.md#backup-effective-configuration)。本片未审查、编译、测试或 CI。

@@ -22,18 +22,18 @@ mod inspection;
 mod native_control;
 pub(in crate::engine) use native_control::BackupNativeObjects;
 pub use native_control::{
+    BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
+    BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
+    BackupRegistryRecoveryReport, BackupTargetPublicationReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
+};
+pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
     BackupNativePreparationReport, BackupNativeTargetReport, BackupObjectDatabasePreparationReport,
     BackupPreparedTopologyNode, BackupScopedDatabasePreparationReport, BackupTopologyTarget,
     offline_check_backup_cutover_inputs, offline_check_backup_native_preparation,
     offline_check_backup_object_databases, offline_check_backup_scoped_databases,
-};
-pub use native_control::{
-    BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
-    BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
 };
 pub(in crate::engine) use native_control::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
@@ -114,6 +114,9 @@ pub enum BackupPreparationPhase {
     /// readback, retained on every selected target (including empty histories).
     /// Still no active Config/Current, target writer or source fence release.
     GenerationFirstPublicationRetained,
+    /// Actual selected Config and exact native registry graph reconstructed
+    /// after full Publication admission. No serving Current or target I/O.
+    GenerationConfigurationResolved,
     Blocked,
     SourceChanged,
 }

@@ -211,6 +211,19 @@ fn run(
             "decision {hash} retains actual Publication {} and complete payload proofs on all {} selected targets, including empty histories; detached inspection requires independently retained decision and publication hashes; no active Config/Current, target writer or source release",
             retained.publication.publication_hash, retained.targets,
         );
+    })?;
+    let expected =
+        crate::BackupFirstPublicationHash::parse(&retained.publication.publication_hash)?;
+    let configured = configuration::inspect(&prepared, &decision, &expected, stop)?;
+    choices.observe_first_publication(&prepared, &candidate, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationConfigurationResolved;
+        status.detail = format!(
+            "decision {hash} resolves complete fanout Config {} and exact native registry {} from actual Publication {}; all original voters/data remain, target I/O/Current/writer and source fence release are not installed",
+            configured.config_hash,
+            configured.registry.root_hash(),
+            configured.publication.publication.publication_hash,
+        );
     })
 }
 fn spawn(

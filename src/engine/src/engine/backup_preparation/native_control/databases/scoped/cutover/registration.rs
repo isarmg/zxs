@@ -5,6 +5,8 @@ use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
+mod configuration;
+pub use configuration::BackupConfigurationReport;
 mod first_publication;
 pub use first_publication::BackupTargetPublicationReport;
 mod first_candidate;
@@ -77,6 +79,44 @@ pub(in crate::engine) struct BackupRegistryProjection {
     targets: Vec<TargetProjection>,
 }
 impl BackupRegistryProjection {
+    /// Exact metadata-only Config projection. The retained old terminal stays
+    /// registered (including any original metadata vote); replacement of data
+    /// routes never silently becomes a membership removal or a disk Stop.
+    pub(in crate::engine) fn configuration(
+        &self,
+        original: &crate::ValidatedConfig,
+    ) -> Result<storage_contract::Config> {
+        if self.original_configuration_hash != object_hash("backup-preparation-config", original)?
+            || canonical_json(&self.retained_original_disks)? != canonical_json(&original.disks)?
+        {
+            return Err(invalid(
+                "Backup Config projection changes its original fixed disks",
+            ));
+        }
+        let mut config: storage_contract::Config = (**original).clone();
+        for target in &self.targets {
+            let identity = &target.node.identity;
+            if identity.pool_id != original.pool_id || identity.binding_generation != 1 {
+                return Err(invalid(
+                    "Backup Config target is not a fresh original selected binding",
+                ));
+            }
+            config.disks.push(DiskConfig {
+                slot_id: identity.slot_id.clone(),
+                disk_id: identity.disk_id.clone(),
+                root: target.root.clone(),
+                level: target.node.level,
+                upstream_slot_id: Some(target.node.upstream_slot_id.clone()),
+                metadata_member: false,
+                binding_generation: identity.binding_generation,
+                // Physical free space is admitted separately by actual target
+                // verification. No unrequested logical capacity is invented.
+                capacity_bytes: None,
+            });
+        }
+        Ok(config)
+    }
+
     /// Deterministic metadata recipe, not I/O admission or published State.
     /// Both the pre-decision routing snapshot and the first native candidate
     /// use the same complete whole-unit projection.
