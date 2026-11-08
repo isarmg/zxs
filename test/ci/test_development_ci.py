@@ -54,6 +54,23 @@ class DevelopmentCiPolicy(unittest.TestCase):
         POLICY.check_workflows(ROOT)
         POLICY.check_workflows(self.root)
 
+    def test_only_manual_and_reusable_entrypoints_remain(self):
+        for name, trigger in (('ci.yml', 'workflow_dispatch'),
+                              ('release.yml', 'workflow_dispatch'),
+                              ('smb-sdk.yml', 'workflow_call')):
+            source = (ROOT / '.github/workflows' / name).read_text()
+            events = source.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
+            self.assertEqual(re.findall(r'^  ([a-z_]+):', events, flags=re.MULTILINE),
+                             [trigger])
+        self.assertFalse(POLICY.receipt()['automatic_triggers'])
+
+    def test_automatic_triggers_cannot_be_reintroduced_silently(self):
+        for name in ('ci.yml', 'release.yml', 'smb-sdk.yml'):
+            for event in ('push', 'pull_request', 'schedule', 'workflow_run',
+                          'repository_dispatch'):
+                with self.subTest(workflow=name, event=event):
+                    self.reject_edit(name, 'on:\n', f'on:\n  {event}:\n')
+
     def test_actual_workflow_command_emits_exact_seven_with_no_reuse(self):
         source = (ROOT / '.github/workflows/ci.yml').read_text()
         static = jobs(source)['static']

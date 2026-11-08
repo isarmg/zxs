@@ -2,8 +2,7 @@
 name: CI
 
 on:
-  push:
-  pull_request:
+  # Automatic runs paused by user request; restore explicitly before re-enabling.
   workflow_dispatch:
 
 permissions:

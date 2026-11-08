@@ -2,8 +2,7 @@
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  # Automatic runs paused by user request; restore explicitly before re-enabling.
   workflow_dispatch: # Build-only rehearsal. Never creates or publishes a Release.
 
 permissions:

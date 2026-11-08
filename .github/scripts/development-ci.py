@@ -33,6 +33,13 @@ HEADER = '# Development short CI: long checks are paused, not passed. See docs/c
 def development_workflow(name, original):
     """The complete original jobs remain; only these reviewed edits are allowed."""
     source = HEADER + original
+    # Preserve jobs and history while disabling every automatic entrypoint.
+    if name == 'ci.yml':
+        source = source.replace('on:\n  push:\n  pull_request:\n',
+                                'on:\n  # Automatic runs paused by user request; restore explicitly before re-enabling.\n')
+    elif name == 'release.yml':
+        source = source.replace("on:\n  push:\n    tags: ['v*']\n",
+                                'on:\n  # Automatic runs paused by user request; restore explicitly before re-enabling.\n')
     if name in ('ci.yml', 'release.yml'):
         source = source.replace('    timeout-minutes: 10\n', '    timeout-minutes: 5\n', 1)
     if name == 'ci.yml':
@@ -74,6 +81,7 @@ def check_workflows(root):
 def receipt():
     return {
         'mode': 'development-short-ci',
+        'automatic_triggers': False,
         'suites': list(SHORT_SUITES),
         'paused_suites': list(PAUSED_SUITES),
         'paused_jobs': {name: list(jobs) for name, jobs in PAUSED_JOBS.items()},
