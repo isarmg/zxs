@@ -2,6 +2,10 @@
 //! Owner restart coverage below is not a physical-power-loss certification.
 #[path = "backup_preparation_progress_io.rs"]
 mod progress_io;
+#[path = "backup_preparation_snapshot.rs"]
+mod snapshot;
+#[path = "backup_preparation_target_admission.rs"]
+mod target_admission;
 use std::{
     fs,
     os::unix::fs::DirBuilderExt,
@@ -456,6 +460,11 @@ fn preparation_uses_current_registry_without_reviving_a_retired_primary() {
     )
     .unwrap();
     assert!(report.full_files >= 1);
+    let complete = storage_engine::offline_check_backup_preparation(&destination).unwrap();
+    assert_eq!(
+        complete.state_hash,
+        storage_engine::object_hash("backup-prepared-state", fixture.engine.state()).unwrap()
+    );
     assert_eq!(
         storage_engine::canonical_json(fixture.engine.state()).unwrap(),
         before

@@ -368,3 +368,26 @@ impl PreparedHistoryPackage {
         Ok(report)
     }
 }
+
+/// Cross-check a target-local history against the complete admitted snapshot.
+/// A valid but older/partial history package cannot stand in for this task's unit.
+pub(crate) fn verify_prepared_history_state(
+    root: &DiskRoot,
+    state: &AdmittedState,
+    history: &str,
+    pool: &str,
+    stop: &AtomicBool,
+) -> Result<HistoryPackageReport> {
+    let (manifest, proof, report) = load_package_at(root, &mut |_| preparation_checkpoint(stop))?;
+    let expected = HistoryManifest::project_state(state.state(), history)?;
+    if proof.candidate.pool_id != pool
+        || proof.candidate.sequence > state.state().sequence
+        || canonical_json(&manifest)? != canonical_json(&expected)?
+    {
+        return Err(Error::new(
+            ErrorCode::HistoryPackageInvalid,
+            "prepared history does not match the frozen complete snapshot",
+        ));
+    }
+    Ok(report)
+}

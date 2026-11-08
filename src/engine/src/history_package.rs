@@ -22,7 +22,7 @@ mod state_read;
 pub use manifest::HistoryManifest;
 pub(crate) use preparation::{
     PreparedHistoryPackage, install_preparation_bytes, preparation_checkpoint,
-    preparation_path_exists,
+    preparation_path_exists, verify_prepared_history_state,
 };
 pub(crate) use state_read::{AdmittedState, RawState, SharedAdmittedState};
 use std::{
