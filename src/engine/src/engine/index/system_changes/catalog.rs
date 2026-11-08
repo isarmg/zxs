@@ -1,6 +1,6 @@
-//! The global namespace/location projection. Mutable rows describe the captured
-//! State; retained commits and directory trees preserve their own historical
-//! compositions. Current placement never reassigns an old event to a disk.
+//! Complete global business-map rows, including retained content/metadata
+//! nodes and current lifecycle/placement state. Mutable rows describe the
+//! captured State, never an invented sequence of their previous values.
 use super::*;
 use data_serialization::Deserialize;
 use std::collections::BTreeMap;
@@ -24,18 +24,18 @@ struct RecordRef<'a> {
 /// durable discriminator and typed result. No field-name reflection or JSON
 /// filtering determines scope.
 macro_rules! catalog_families {
-    ($( $variant:ident => ($number:literal, $field:ident, $value:ty) ),+ $(,)?) => {
+    ($( $variant:ident => ($number:literal, $field:ident, $(#[$codec:meta])* $value:ty) ),+ $(,)?) => {
         /// Catalog families are independent of operation/path event families.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
         pub enum SystemCatalogKind { $( $variant ),+ }
 
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
         #[serialization(tag = "kind", content = "record", rename_all = "kebab-case", deny_unknown_fields)]
-        pub enum SystemCatalogValue { $( $variant($value) ),+ }
+        pub enum SystemCatalogValue { $( $variant($(#[$codec])* $value) ),+ }
 
         #[derive(Serialize)]
         #[serialization(tag = "kind", content = "record", rename_all = "kebab-case")]
-        enum ValueRef<'a> { $( $variant(&'a $value) ),+ }
+        enum ValueRef<'a> { $( $variant($(#[$codec])* &'a $value) ),+ }
 
         impl SystemCatalogKind {
             pub(super) fn sql(self) -> i64 {
@@ -54,6 +54,23 @@ macro_rules! catalog_families {
         }
 
         fn changes(before: Option<&State>, after: &State) -> Vec<FamilyDelta> {
+            // Assign every State field either to this complete business-map
+            // projection or to an explicit separate scope. New State fields
+            // cannot silently disappear from the system-database decision.
+            let State {
+                $( $field: _, )+
+                sequence: _,
+                business_generation: _,
+                topology_generation: _,
+                // Existing event families have their own sequence ordering.
+                operations: _,
+                file_path_nodes: _,
+                // Not exposed by this catalog: private authentication,
+                // global event stream and operation-principal audit map.
+                control_auth: _,
+                events: _,
+                operation_principals: _,
+            } = after;
             vec![$( FamilyDelta {
                 kind: SystemCatalogKind::$variant,
                 keys: changed_keys!(before, after, $field),
@@ -108,6 +125,25 @@ catalog_families! {
     DirectoryTreeSelection => (14, directory_tree_selections, String),
     FileContext => (15, file_contexts, FileContext),
     FileWriteOrigin => (16, file_write_origins, String),
+    FileVersion => (17, versions, FileVersion),
+    FileMetadataNode => (18, file_metadata_nodes, FileMetadataNode),
+    FileDeletion => (19, file_deletions, FileDeletionNode),
+    FileBranchMerge => (20, file_branch_merges, FileBranchMerge),
+    FileBranchAlias => (21, file_branch_aliases, String),
+    FileNodeParents => (22, file_node_parents, Vec<String>),
+    FilePathNote => (23, file_path_notes, String),
+    FileBackupPolicy => (24, file_backup_policies, String),
+    DirectorySelectionGeneration => (25, directory_selection_generations, #[serialization(with = "storage_contract::u64_string")] u64),
+    FileSelectionGeneration => (26, file_selection_generations, #[serialization(with = "storage_contract::u64_string")] u64),
+    FileNote => (27, file_notes, String),
+    VersionNote => (28, version_notes, String),
+    FileName => (29, file_names, String),
+    MergeLink => (30, merge_links, MergeLink),
+    HistoryBoundary => (31, history_boundaries, HistoryBoundary),
+    ContentState => (32, content_states, ContentState),
+    Plan => (33, plans, Plan),
+    PlacementRule => (34, placement_rules, PlacementRule),
+    ProtectionPolicy => (35, protection_policies, ProtectionPolicy),
 }
 
 pub(super) struct FamilyDelta {
@@ -175,10 +211,12 @@ impl CatalogOrder {
 }
 
 impl Engine {
-    /// Read one complete retained catalog family from the system SQLite cache.
-    /// Mutable values describe this captured State, not a chronological event
-    /// stream. Pages are ordered by canonical map key and bound to State and
-    /// projection instance. The caller must authorize global metadata access.
+    /// Read one complete global business-map family from the system SQLite
+    /// cache, including versions, tags, lifecycle and policy state. Mutable
+    /// values describe this captured State, not a chronological event stream.
+    /// Pages are ordered by canonical map key and bound to State and projection
+    /// instance. The caller must authorize global metadata access; this does
+    /// not grant access to a file's body or authority to restore these rows.
     pub fn system_catalog_records(
         &self,
         kind: SystemCatalogKind,

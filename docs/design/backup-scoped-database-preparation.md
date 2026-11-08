@@ -20,7 +20,7 @@ scoped-databases/
   original-disks/<原 disk_id>/.zxs-disk-history.sqlite
 ```
 
-- SYSTEM 库复用现有系统索引 schema、历史成员投影及完整保留操作／路径／catalog 行编码。输入是该目标原生前缀所认证的完整 State，不复制正在打开的 `index.sqlite`。**它仍是当前系统投影，不是所有过去 metadata／标签状态的完整时间线。**
+- SYSTEM 库复用现有系统索引 schema、历史成员投影及完整保留操作／路径／catalog 行编码。 catalog 的三十四个业务族含完整版本、标签/元数据节点、D、内容退役及规则等真实 State 行；与运行 SYSTEM 库共用声明，不在备份路径另做过滤。输入是该目标原生前缀所认证的完整 State，不复制正在打开的 `index.sqlite`。**它仍是当前系统投影，不是所有过去 metadata／标签状态的完整时间线。**
 - 每个原盘的 current 库复用本盘版本／owner path／内容状态投影。
 - 每个原盘的 history 库从 genesis 的每个准确 Candidate／Publication／原收据及 State 流式折叠，记录版本进入／变化／移出，非本盘操作不凭今日路径归属。保留原 disk／slot／binding identity，使用现有两种盘根 SQLite 编码和读取器。
 
@@ -43,3 +43,5 @@ scoped-databases/
 新无覆盖持久安装继续文件／目录同步，正常中断重跑相同任务；错误与进度可查询，锁外进行进度磁盘同步。停止只在受控检查点生效，不承诺任意 I/O 故障时硬实时退出。SQL 投影不是普通操作热路径，不宣称常数成本或已测吞吐。
 
 **最终权威切换仍未实现**：还需完整历史范围／增量追平、目标活动容器及三范围正式安装、代际控制归档、最终源写围栏、真实多下级活动路由、完整低级链 helper 接纳与一个不可分割的联合决定及冷恢复。当前代码不放宽这些拒绝条件。见[整体迁移 ADR](../adr/backup-target-replacement.md)及根 [TASKS](../../TASKS.md)。
+
+SYSTEM 派生表扩展到 `kind=0..35` 后，旧隔离任务的 SYSTEM-current 文件若与新编码不同，仍按无覆盖协议拒绝并保留，不双读、不将旧副本当缺失后覆盖；新任务从认证原生前缀重编码。该组合尚未运行验证。

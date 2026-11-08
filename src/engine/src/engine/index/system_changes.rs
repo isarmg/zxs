@@ -1,4 +1,4 @@
-//! Complete retained receipt/path rows for the system-wide SQLite projection.
+//! Retained receipt/path rows and global business maps in the system SQLite projection.
 //! This is rebuilt from admitted State, never a publication or recovery authority.
 use super::*;
 use data_serialization::{Serialize, de::DeserializeOwned};
@@ -8,7 +8,7 @@ mod catalog;
 mod read;
 pub use catalog::{SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue};
 
-pub(super) const TABLE: &str = "CREATE TABLE system_changes(kind INTEGER NOT NULL CHECK(kind BETWEEN 0 AND 16),id TEXT NOT NULL COLLATE BINARY,sequence_key BLOB NOT NULL CHECK(length(sequence_key)=8),payload TEXT NOT NULL,PRIMARY KEY(kind,id)) STRICT";
+pub(super) const TABLE: &str = "CREATE TABLE system_changes(kind INTEGER NOT NULL CHECK(kind BETWEEN 0 AND 35),id TEXT NOT NULL COLLATE BINARY,sequence_key BLOB NOT NULL CHECK(length(sequence_key)=8),payload TEXT NOT NULL,PRIMARY KEY(kind,id)) STRICT";
 pub(super) const LOOKUP: &str =
     "CREATE INDEX system_change_order ON system_changes(kind,sequence_key,id)";
 const MAX_PAGE_ROWS: usize = 100;

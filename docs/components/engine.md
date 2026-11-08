@@ -74,6 +74,8 @@ SQLite、容器 container.json 及当前名称是可重建投影，不能替代�
 
 `Engine::system_operation_records` 与 `system_file_path_nodes` 分页读取系统盘 `index.sqlite` 的完整保留结果和明确文件路径事件，范围不按当前磁盘位置过滤。每页最多 100 行、64 MiB 规范正文；游标绑定当前 State 序号、记录族和本次已准入投影实例，不能跨重建/重开复用。调用者负责外部授权，本片未增加 HTTP/Web 入口。完整行、严格模式、可信有序键及边界行一起校验，丢行/插行/错序/载荷替换均拒绝；读取失败共享现有索引健康状态，保留首个具体来源。
 
+`system_catalog_records` 现包含三十四个完整业务 map 族，新增十九族保留版本声明、标签/元数据节点、D、合并/父边/别名、备注、u64 选择代数、内容退役状态与计划/规则。正常增量、冷重建和隔离备份 SYSTEM-current 复用同一声明；现有当前行删除不裁剪永久操作回执，catalog 页不是时间线，也不含私有认证控制。新增代码按要求未编译/测试/审查/CI。
+
 永久性属于 State 中原有回执保留契约，不属于可丢弃 SQLite 本身。`OperationResult.current_health` 是存储快照，不替代实时 `operation_record`。文件路径行保留外部旧/新路径，但不是所有内容/目录/分支事实的总日志。复杂度和恢复边界见[系统盘全局变更库基础](../design/system-change-database.md)。
 
 ## 完整巡检（过渡实现）
