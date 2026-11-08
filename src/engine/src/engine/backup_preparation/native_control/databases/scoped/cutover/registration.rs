@@ -10,6 +10,8 @@ mod current_read;
 mod database_aliases;
 mod root_databases;
 mod system_database;
+mod native_metadata;
+pub use native_metadata::BackupNativeMetadataReport;
 pub use common_databases::{BackupCommonDatabasesReport, BackupOriginalDatabaseReport};
 pub use current_read::BackupCurrentReadReport;
 pub use database_aliases::{

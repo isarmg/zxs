@@ -31,3 +31,5 @@ Backup 仍使用原 `BackupCore::first_state` 和 `first_candidate`：从原决�
 精确首槽重放复用已有完整编码预算：每个原生对象遵守原 metadata 上限，准备集合最多 8,192 个对象／128 MiB。来源 State 的扫描、路由投影、snapshot／历史根编码仍按完整冻结单位处理，不宣称增量复杂度、低峰值或硬时限；语义消费者不做 I/O 或持久化。正常后续槽不会重复这项展开，因为当前仍被明确拒绝。
 
 下一阶段仍需共同的普通活动 locator／Current、全部目标 writer 生命周期、第二笔 publication 与源围栏安全解除。只有原决定和实际全体材料重新成立之后才能接入，不能把本片的通用语义支持当作它们已实现或已验证。
+
+后继[普通原生对象安装](backup-ordinary-native-metadata.md)已把同一首笔和 registry／Publication 安装到各原盘／目标的普通不可变地址，并从目标实物重放只读 Current；它仍不接活动 selector／writer、第二笔或源解围栏。

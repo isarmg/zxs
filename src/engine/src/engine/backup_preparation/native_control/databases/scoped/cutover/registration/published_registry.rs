@@ -269,38 +269,18 @@ impl Plan {
         let published = self.state_at(target, stop)?;
         let publication =
             first_publication::read_at(prepared, self.candidate(), expected, target, stop)?;
-        let mut replay = crate::engine::disk_registry::current::backup::BackupNamespaceReplay::new(
-            self.candidate(),
-        )?;
-        let (control, _) =
-            crate::engine::backup_preparation::native_control::archive::read_observed(
-                &target.root,
-                job,
-                &prepared
-                    .task
-                    .installation
-                    .evidence
-                    .task
-                    .scoped
-                    .objects
-                    .native
-                    .archive_hash,
-                stop,
-                &mut |_, candidate, _, state| replay.observe(candidate, state),
-            )?;
-        if control.state_hash != prepared.source_evidence().state_hash()
-            || self.candidate().candidate().previous_snapshot.as_deref()
-                != Some(control.snapshot_hash.as_str())
-        {
-            return Err(invalid(
-                "Backup Current archive does not bind the original complete source",
-            ));
-        }
-        let view = replay.finish(&publication, self.candidate(), &graph, &published)?;
-        let result = action(&view)?;
-        preparation_checkpoint(stop)?;
-        named_target(&target.root, job)?;
-        Ok(result)
+        with_archive_namespaces(
+            prepared,
+            index,
+            NamespaceInputs {
+                candidate: self.candidate(),
+                registry: &graph,
+                published: &published,
+                publication: &publication,
+            },
+            stop,
+            action,
+        )
     }
 
     fn report(&self, state: &State) -> BackupPublishedRegistryReport {
@@ -311,6 +291,66 @@ impl Plan {
             directory_scopes: state.directory_branches.len(),
         }
     }
+}
+
+/// Both isolated and ordinary immutable stores feed the same full native
+/// namespace replay. Neither a store location nor a descriptor grants writes.
+pub(super) struct NamespaceInputs<'a> {
+    pub(super) candidate: &'a crate::engine::membership_transition::PreparedBackupFirstCandidate,
+    pub(super) registry: &'a crate::VerifiedDiskRegistry,
+    pub(super) published: &'a crate::history_package::AdmittedState,
+    pub(super) publication: &'a crate::engine::membership_transition::PreparedBackupFirstPublication,
+}
+
+pub(super) fn with_archive_namespaces<T>(
+    prepared: &PreparedBackupRegistry,
+    index: usize,
+    inputs: NamespaceInputs<'_>,
+    stop: &AtomicBool,
+    action: impl FnOnce(
+        &crate::engine::disk_registry::current::backup::BackupNamespaceAdmission<'_>,
+    ) -> Result<T>,
+) -> Result<T> {
+    let target = &prepared.targets[index];
+    let job = &prepared.task.selection().jobs()[index];
+    named_target(&target.root, job)?;
+    let mut replay = crate::engine::disk_registry::current::backup::BackupNamespaceReplay::new(
+        inputs.candidate,
+    )?;
+    let (control, _) =
+        crate::engine::backup_preparation::native_control::archive::read_observed(
+            &target.root,
+            job,
+            &prepared
+                .task
+                .installation
+                .evidence
+                .task
+                .scoped
+                .objects
+                .native
+                .archive_hash,
+            stop,
+            &mut |_, candidate, _, state| replay.observe(candidate, state),
+        )?;
+    if control.state_hash != prepared.source_evidence().state_hash()
+        || inputs.candidate.candidate().previous_snapshot.as_deref()
+            != Some(control.snapshot_hash.as_str())
+    {
+        return Err(invalid(
+            "Backup Current archive does not bind the original complete source",
+        ));
+    }
+    let view = replay.finish(
+        inputs.publication,
+        inputs.candidate,
+        inputs.registry,
+        inputs.published,
+    )?;
+    let result = action(&view)?;
+    preparation_checkpoint(stop)?;
+    named_target(&target.root, job)?;
+    Ok(result)
 }
 
 /// This is called only after the real first Publication, under the same held

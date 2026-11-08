@@ -45,3 +45,5 @@ SYSTEM 先持久保存 `backup-system-index-selected.json`，再按 WAL、SHM、
 读快照对象未释放会阻塞开始；关闭、完整验存、同步和普通 I/O 可能耗时，不承诺取消或 Drop 的硬时限。任务在正式 SYSTEM 改名之前就暂停该 Engine 的可选索引，因此上游失败后也会保持 unavailable，需同原任务继续或原冷恢复，不能把此状态当普通索引损坏后自动修复。
 
 本片**没有安装活动 Engine Config/Current、普通 generation locator、目标 writer 或下一笔 publication，也没有解除源全池围栏**。普通 SYSTEM 文件虽然是新字节，正常查询仍被静默状态隔离，不能让旧内存 State 消费新库。后续必须在同一真实原生决定下完成这些活动资源的共同切换，不能凭此完成标记开放 H03、外来占位链或部分父子仓库。旧 source 和全部永久收据继续保留。
+
+后继[普通原生对象安装](backup-ordinary-native-metadata.md)继续同一原任务，将完整首笔／registry／Publication 放入全部原盘及目标的普通不可变地址，并让目标 Current 重放消费这些实物；本页的 SYSTEM 静默和原全池停写保持，活动 Config／writer 仍未安装。

@@ -463,19 +463,11 @@ pub fn open_decided_backup_targets(
 
 pub(super) fn require_isolated(targets: &[Target]) -> Result<()> {
     for target in targets {
-        // A future native activation must use its own admitted live reader. An
-        // old frozen capability cannot bypass active lifecycle/retirement gates.
-        for name in ["disk.json", "metadata"] {
-            if preparation_path_exists(&target.root, &target.root.path().join(name))? {
-                return Err(Error::new(
-                    ErrorCode::UnsupportedOperation,
-                    "decided recovery reader cannot open a runtime/admission target",
-                ));
-            }
-        }
+        native_metadata::require_unselected_target(&target.root)?;
     }
     Ok(())
 }
+
 fn report(
     decision: &AdmittedBackupDecision,
     prepared: &PreparedBackupRegistry,
@@ -977,6 +969,17 @@ impl Engine {
         principal: &str,
     ) -> Result<BackupSystemDatabaseReport> {
         self.with_backup_database_aliases(operation, principal, system_database::observe)
+    }
+
+    /// Observe native State/registry/Publication objects at every ordinary disk
+    /// address and replay target Current from those bytes. This performs no
+    /// repair, active generation selection, target writer or source release.
+    pub fn inspect_backup_native_metadata(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupNativeMetadataReport> {
+        self.with_backup_database_aliases(operation, principal, native_metadata::observe)
     }
 
     fn with_backup_database_aliases<T>(

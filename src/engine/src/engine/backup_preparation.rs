@@ -31,8 +31,8 @@ pub use native_control::{
     BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
     BackupRegistryRecoveryReport, BackupRootDatabasesReport, BackupServingContent,
     BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
-    BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupNativeMetadataReport, BackupSystemDatabaseReport, BackupTargetPublicationReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -152,6 +152,9 @@ pub enum BackupPreparationPhase {
     /// SQLite readers/writer closed and old main/sidecars were retained. Query
     /// admission stays suspended; no active Current/writer or source release.
     GenerationOrdinarySystemDatabaseInstalled,
+    /// Exact native objects exist at all ordinary disk addresses and target
+    /// Current replays those bytes. No active Config/locator/writer or unfence.
+    GenerationOrdinaryNativeMetadataInstalled,
     Blocked,
     SourceChanged,
 }

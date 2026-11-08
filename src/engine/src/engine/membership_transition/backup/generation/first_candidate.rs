@@ -255,6 +255,20 @@ impl PreparedBackupFirstCandidate {
             .iter()
             .map(|(path, value)| (path, value.bytes.as_slice()))
     }
+    /// Exact immutable native objects, including the unchanged generation
+    /// envelope. This is metadata installation input, never writer authority.
+    pub(in crate::engine) fn native_objects(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &str, &[u8])> {
+        std::iter::once((
+            self.authority.kind(),
+            self.authority.hash.as_str(),
+            self.authority.bytes(),
+        ))
+        .chain(self.files.values().map(|value| {
+            (value.kind, value.hash.as_str(), value.bytes.as_slice())
+        }))
+    }
     pub(in crate::engine) fn bytes(&self) -> usize {
         self.bytes
     }

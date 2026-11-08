@@ -16,6 +16,8 @@ impl Engine {
     /// at all original ordinary root names. Old-State catalog access is fenced.
     /// The same task closes old SYSTEM SQLite workers and retains the complete
     /// old main/sidecar set before installing the published ordinary index.
+    /// It then installs exact native State/registry/Publication objects at all
+    /// ordinary disk addresses and replays target Current from those bytes.
     /// Query admission and serving activation remain separate: the original
     /// pool stays fenced even after this stage succeeds.
     /// Hosts must authenticate this separate, explicit request. Ordinary settings
@@ -375,6 +377,24 @@ fn run(
             installed_system.system_database_hash,
             installed_system.installation_hash,
             installed_system.retained_old_files,
+        );
+    })?;
+    let native = native_metadata::install(
+        &common_databases::Context { system, sources: &sources, choices: &choices },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationOrdinaryNativeMetadataInstalled;
+        status.detail = format!(
+            "decision {hash} installed exact ordinary native set {} with {} objects/{} bytes per disk on all {} original disks and {} selected targets; target Current replay reads actual ordinary objects, but active Config/generation locator, writer, next publication and source release remain unavailable",
+            native.installation_hash,
+            native.objects_per_disk,
+            native.bytes_per_disk,
+            native.original_disks,
+            native.selected_targets,
         );
     })
 }

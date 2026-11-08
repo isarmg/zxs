@@ -333,3 +333,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### Backup 原首笔的通用冷重放
 
 通用 generation／冻结归档消费现在复用 Backup 原决定的完整首笔 State/Candidate 配方，精确核原 metadata、操作／边界、不可变 envelope 及完整正文路由；旧首笔不补 registry 字段，也不误用 Add 空正文结果或重复 topology 增量。较晚槽及普通资源提升／完成显式拒绝，活动 Current/writer/locator、SYSTEM 解静默和安全解源围栏仍未完成，不开放 H03。见[首笔冷重放及边界](../design/backup-generation-first-replay.md)。本片未审查、编译、测试或 CI，无真实盘操作。
+
+### Backup 普通原生对象与未激活 Current
+
+原 registry/placement 任务在普通 SYSTEM 安装后继续[普通原生对象安装](../design/backup-ordinary-native-metadata.md)：全体原盘／目标用生产不可变写者安装完整首笔、registry 图和实际 Publication/seal，目标从自身普通 metadata 实物消费同一 Current 归档重放。目标未激活选择记录只允许对象／seal 命名空间，仍拒绝 disk.json、活动 locator 和 writer；全体完成后缺失不补造。活动 Engine Current、下一笔发布、SYSTEM 解静默及源解围栏未完成，不开放 H03。本片六项临时目录测试源码未运行，无审查／编译／测试／CI或真实盘操作。
