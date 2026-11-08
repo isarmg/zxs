@@ -341,3 +341,38 @@ async fn shutdown_requires_exact_confirmation_and_stops_new_disk_admission() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+#[tokio::test]
+async fn installation_payload_is_explicit_and_wrong_confirmation_never_opens_a_target() {
+    let app = http::router(state());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/install/payload")
+                .header("host", "127.0.0.1:9040")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let metadata = json_body(response).await;
+    assert_eq!(metadata["destination"], "/usr/local/bin/zxs");
+    assert_eq!(metadata["repair_available"], false);
+    assert_eq!(metadata["network_download"], false);
+    let response = app
+        .oneshot(post(
+            "/api/install/commit",
+            json!({"request_digest":"unused","confirmation":"not-confirmed"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        json_body(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no installation was attempted")
+    );
+}

@@ -102,11 +102,23 @@ def main():
     compiler = os.environ.get("RUSTC", os.environ.get("CARGO_BUILD_RUSTC", "rustc"))
     rustc = subprocess.check_output([compiler, "-vV"], text=True)
     default_cpu, default_cfg = target_defaults(compiler)
-    subprocess.run(["python3", ".github/scripts/check-rust-diagnostics.py", "--",
-                    "cargo", "build", "--locked", "--offline", "--release",
-                    "--target", TARGET, "--target-dir", "target/native",
-                    "--package", "storage-server", "--package", "storage-helper",
-                    "--message-format=json"], check=True, env=build_environment)
+    build_command = ["python3", ".github/scripts/check-rust-diagnostics.py", "--",
+                     "cargo", "build", "--locked", "--offline", "--release",
+                     "--target", TARGET, "--target-dir", "target/native"]
+    # Build ZXS first, then embed exactly that executable into the helper.
+    # Never embed a bundle containing the helper itself or download a payload.
+    subprocess.run([*build_command, "--package", "storage-server", "--message-format=json"],
+                   check=True, env=build_environment)
+    payload_path = root / OUTPUT / "zxs"
+    payload_sha256 = digest(payload_path)
+    helper_environment = dict(build_environment, ZXS_HELPER_PAYLOAD=str(payload_path),
+                              ZXS_HELPER_PAYLOAD_COMMIT=commit, ZXS_HELPER_PAYLOAD_TREE=tree,
+                              ZXS_HELPER_PAYLOAD_VERSION=version,
+                              ZXS_HELPER_PAYLOAD_SHA256=payload_sha256)
+    subprocess.run([*build_command, "--package", "storage-helper", "--message-format=json"],
+                   check=True, env=helper_environment)
+    if digest(payload_path) != payload_sha256:
+        raise RuntimeError("embedded helper ZXS payload changed during build")
     if commit != subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip():
         raise RuntimeError("native release source commit changed during build")
     require_clean_source()
@@ -122,6 +134,8 @@ def main():
         "native-web-tree": tree, "native-web-manifest-sha256": web_manifest_sha256,
         "version": version, "commit": commit, "native-target": TARGET,
         "native-profile": "release", "native-rustc": json.dumps(rustc),
+        "native-helper-embedded-zxs": "true",
+        "native-helper-payload-sha256": payload_sha256,
         "native-rust-target-default-cpu": default_cpu,
         "native-rust-target-default-cfg": json.dumps(default_cfg),
         "native-isa-attestation": "not-attested; target-default-query-only; excludes-effective-Rust-C-asm-flags",

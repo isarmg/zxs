@@ -67,3 +67,7 @@ Python 3 校验源码清单；安全扫描独立管理 cargo-audit，并在线�
 ## 发布故障回归
 
 `bash test/ci/release-publish.sh` 在临时仓库使用假的 `gh` 离线检查新建、草稿续传、503/403 拒绝创建、已公开版本拒绝覆盖、远端额外文件、校验后本地输入变化以及下载损坏拒绝公开。它纳入 `build-tools` suite，不会写入 GitHub。
+
+## 辅助工具内置程序首装后继
+
+当前 native 构建源码已改为先 ZXS、后将其准确输出嵌入 helper，并校验匹配版本、来源与 SHA-256；开发 helper 明确无载荷，不运行时下载。见[程序首装及未完成范围](design/helper-program-installation.md)。此后继未实际构建或安装，也不表示四类公开资产、VFS/依赖安装或完整修复已完成。

@@ -1,4 +1,5 @@
-//! Independent read-only HTTP owner. No Engine or disk writer is opened here.
+//! Independent maintenance HTTP owner. Source-disk access remains read-only;
+//! program installation is a separate fixed-path, no-overwrite operation.
 mod boundary;
 mod http;
 mod work;
@@ -10,7 +11,7 @@ use tokio::sync::{Semaphore, watch};
 
 const DEFAULT_PORT: u16 = 9040;
 pub(super) const MAX_REQUEST_BYTES: usize = 64 * 1024;
-const WARNING: &str = "WARNING: unauthenticated root helper console over plain HTTP. Any reachable person can inspect/export selected disk data or stop this helper. Use only a trusted isolated network/firewall; exit after use. This program does not change your firewall, install systemd or enable autostart.";
+const WARNING: &str = "WARNING: unauthenticated root helper console over plain HTTP. Any reachable person can inspect/export selected disk data, install its embedded ZXS program or stop this helper. Use only a trusted isolated network/firewall; exit after use. This program does not change your firewall, install systemd or enable autostart.";
 
 #[derive(Args, Clone, Debug)]
 pub(crate) struct Options {
@@ -76,7 +77,7 @@ async fn serve(options: Options) -> Result<()> {
     let state = State::new(listen, csrf, stopping.clone());
     eprintln!("zxs-helper: {WARNING}");
     eprintln!(
-        "zxs-helper: listening on {listen}; open http://<host-IP>:{} . Read-only independent-disk checks/downloads only. Stop all source writers first; no whole-service exclusion has been established.",
+        "zxs-helper: listening on {listen}; open http://<host-IP>:{} . Independent-disk checks/downloads are read-only; embedded program installation is fixed-path and never replaces different bytes. Stop all source writers first; no whole-service exclusion has been established.",
         listen.port()
     );
     http_routing::serve(listener, http::router(state))

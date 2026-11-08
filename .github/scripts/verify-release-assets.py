@@ -51,6 +51,9 @@ def build_identity(build, version, commit=None):
     for key in ("native-environment-sha256", "native-inputs-sha256", "native-zxs-sha256", "native-zxs-helper-sha256"):
         if not re.fullmatch(r"[0-9a-f]{64}", fields.get(key, "")):
             raise ValueError(f"missing or invalid native build identity: {key}")
+    if (fields.get("native-helper-embedded-zxs") != "true"
+            or fields.get("native-helper-payload-sha256") != fields["native-zxs-sha256"]):
+        raise ValueError("helper must embed the exact standalone ZXS build payload")
     if fields.get("native-baseline") != "debian13-amd64" or fields.get("native-web-embedded") != "true":
         raise ValueError("native release requires Debian 13 and embedded Web")
     if fields.get("native-web-commit") != fields["commit"] or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", fields.get("native-web-tree", "")):

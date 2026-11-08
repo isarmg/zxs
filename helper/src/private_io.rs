@@ -205,6 +205,16 @@ fn write_atomic_at(
     bytes: &[u8],
     replace: bool,
 ) -> Result<()> {
+    write_atomic_at_mode(root, target, bytes, replace, 0o600)
+}
+
+fn write_atomic_at_mode(
+    root: &OpenAt2Root,
+    target: &EntryName,
+    bytes: &[u8],
+    replace: bool,
+    mode: u32,
+) -> Result<()> {
     use platform_io::fs_safety::Error;
     let directory = root.directory();
     if replace {
@@ -233,8 +243,8 @@ fn write_atomic_at(
         armed: true,
     };
     let result: Result<()> = (|| {
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         file.write_all(bytes)?;
+        file.set_permissions(std::fs::Permissions::from_mode(mode))?;
         file.sync_all()?;
         let identity = SingleLinkRequirement::check(&file)?;
         // A failed reply (including EEXIST) is not proof that rename did not
@@ -291,3 +301,113 @@ fn write_atomic_at(
 #[cfg(test)]
 #[path = "../../test/helper/unit/private_io/tests.rs"]
 mod tests;
+
+/// Program-only publication into an already trusted parent. Callers choose a
+/// fixed installation path, not an arbitrary browser-supplied destination.
+/// Existing nonmatching files, links, modes or owners are never replaced.
+pub(crate) struct ProgramDestination {
+    parent_path: std::path::PathBuf,
+    target: AnchoredPath,
+    _lock: AdvisoryLock,
+}
+impl ProgramDestination {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
+        let target = AnchoredPath::open(path)?;
+        let metadata = target.directory.directory().metadata()?;
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
+            return Err("program parent must belong to this user and not be writable by another user or group".into());
+        }
+        let lock = AdvisoryLock::directory(target.directory.directory())?;
+        let parent_path = path
+            .parent()
+            .ok_or("program parent path is required")?
+            .to_owned();
+        let result = Self {
+            parent_path,
+            target,
+            _lock: lock,
+        };
+        result.recheck_parent()?;
+        Ok(result)
+    }
+    fn recheck_parent(&self) -> Result<()> {
+        let current = OpenAt2Root::open(&self.parent_path, MountPolicy::AllowNestedMounts)?;
+        if current.identity() != self.target.directory.identity() {
+            return Err(format!("program parent path changed; retain and inspect publication under parent device {} inode {}", self.target.directory.identity().device, self.target.directory.identity().inode).into());
+        }
+        let metadata = current.directory().metadata()?;
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
+            return Err(
+                "program parent permissions changed; no successful installation is claimed".into(),
+            );
+        }
+        Ok(())
+    }
+    pub(crate) fn parent_identity(&self) -> FileIdentity {
+        self.target.directory.identity()
+    }
+    pub(crate) fn matches_or_absent(&self, expected: &[u8]) -> Result<bool> {
+        self.recheck_parent()?;
+        let file = match self
+            .target
+            .directory
+            .open_file(&self.target.name.as_relative(), false)
+        {
+            Ok(file) => file,
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata()?;
+        if metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o7022 != 0
+            || metadata.mode() & 0o555 != 0o555
+            || metadata.len() != expected.len() as u64
+        {
+            return Err("existing program does not have the exact safe owner, executable mode and expected size; replacement/repair is not implemented".into());
+        }
+        let identity = SingleLinkRequirement::check(&file)?;
+        let mut bytes = Vec::new();
+        (&file)
+            .take(expected.len() as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes != expected {
+            return Err("existing program differs from the embedded payload; it was not overwritten, and repair is not implemented".into());
+        }
+        let named = statat(
+            self.target.directory.directory(),
+            self.target.name.as_os_str(),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )?;
+        if (named.st_dev, named.st_ino) != (identity.device, identity.inode) {
+            return Err("program identity changed during inspection".into());
+        }
+        self.recheck_parent()?;
+        Ok(true)
+    }
+    pub(crate) fn install(&self, bytes: &[u8]) -> Result<bool> {
+        if self.matches_or_absent(bytes)? {
+            let file = self
+                .target
+                .directory
+                .open_file(&self.target.name.as_relative(), false)?;
+            file.sync_all()?;
+            self.target.directory.directory().sync_all()?;
+            if !self.matches_or_absent(bytes)? {
+                return Err("program disappeared while resolving its existing publication".into());
+            }
+            return Ok(false);
+        }
+        write_atomic_at_mode(
+            &self.target.directory,
+            &self.target.name,
+            bytes,
+            false,
+            0o555,
+        )?;
+        Ok(true)
+    }
+}

@@ -1357,6 +1357,7 @@ dependencies = [
  "platform-io",
  "rustix",
  "service-stack",
+ "sha2",
  "storage-engine",
  "storage-server",
  "tempfile",

@@ -3,15 +3,18 @@ const byId = id => document.getElementById(id);
 let csrf = null;
 let busy = false;
 let stopping = false;
+let installationPreview = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; }
+function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
   if (!response.ok) throw new Error(`无法连接辅助工具（HTTP ${response.status}）。请使用主机的 IP 和实际端口直接打开，不使用 DNS 名称或代理。`);
   const state = await response.json(); csrf = state.csrf; stopping = state.stopping;
-  byId("connection").textContent = stopping ? "辅助工具正在等待已开始的读取结束并退出。" : `${state.name} ${state.version} · 独立只读模式 · 无登录 · ${state.busy ? "已有磁盘读取任务" : "未启动磁盘任务"}`;
+  byId("connection").textContent = stopping ? "辅助工具正在等待已开始的读取结束并退出。" : `${state.name} ${state.version} · 独立维护模式 · 无登录 · ${state.busy ? "已有维护任务" : "没有进行中的维护任务"}`;
+  const embedded = state.program_installation.embedded;
+  byId("payload-status").textContent = embedded ? `内置 ZXS ${embedded.version} · ${embedded.target} · ${embedded.bytes} 字节 · SHA-256 ${embedded.sha256}` : "当前为开发构建，没有内置安装载荷；不能下载替代载荷或假称可安装。请使用匹配版本的正式辅助工具。";
   setBusy(busy);
 }
 async function post(path, body) {
@@ -80,3 +83,27 @@ byId("shutdown").addEventListener("click", async () => {
   try { await post("/api/shutdown", {confirmation:"stop-helper"}); stopping = true; setBusy(busy); byId("shutdown").disabled = true; byId("connection").textContent = "已请求退出。请等启动终端显示进程真正结束，再拔盘或启动写入者。"; } catch (failure) { error(failure.message); }
 });
 setBusy(false); status().catch(failure => error(failure.message));
+
+byId("install-preview").addEventListener("click", async () => {
+  if (busy || stopping || !csrf) return;
+  error(""); setBusy(true); installationPreview = null;
+  byId("install-commit").hidden = true; byId("install-receipt").hidden = true;
+  try {
+    const response = await post("/api/install/preview", {});
+    installationPreview = await response.json();
+    byId("install-plan").textContent = JSON.stringify(installationPreview, null, 2);
+    byId("install-plan").hidden = false; byId("install-commit").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("install-commit").addEventListener("click", async () => {
+  if (busy || stopping || !installationPreview) return;
+  const payload = installationPreview.plan.payload;
+  if (!window.confirm(`仅安装 ZXS ${payload.version} 到 /usr/local/bin/zxs？\nSHA-256: ${payload.sha256}\n不会覆盖不同文件，也不会初始化、配置或启动服务。`)) return;
+  error(""); setBusy(true);
+  try {
+    const response = await post("/api/install/commit", {request_digest:installationPreview.request_digest, confirmation:"install-program-only"});
+    byId("install-receipt").textContent = JSON.stringify(await response.json(), null, 2);
+    byId("install-receipt").hidden = false;
+    installationPreview = null; byId("install-commit").hidden = true;
+  } catch (failure) { error(`${failure.message}\n结果不确定时不要手动覆盖或删除临时材料；重新预览只会核对准确程序，不会替换不同字节。`); } finally { setBusy(false); }
+});

@@ -79498,11 +79498,11 @@
     "16f5b39477c05e0df34e296682097f028f028797f6ed2ecc7e2d1e227a984fe1"
   ],
   "lockfiles_sha256": {
-    "Cargo.lock": "ec3ab84007c450ebf61d99fcb8a397e29f732c790893ea51583fb81dd6f6a67e"
+    "Cargo.lock": "08d9aa93b85de59e70d3722c5943f8166a28a82f5d1f59156677ac97bd23ae68"
   },
   "manifests_sha256": {
     "Cargo.toml": "5654bb35c6dced1e90ce89f5c28fe2d03d05c253188c1ea34c25f3b9c11c736d",
-    "helper/Cargo.toml": "84037caf2dfeede27592b7351364c48482b79da1010a2a1c7f82d242631c29eb",
+    "helper/Cargo.toml": "c662b9fbbc776c014909fb4d367c14533ac6f74abc0be7bf66abb270331b9941",
     "src/auth/Cargo.toml": "f315d7648a6399f68f04ec5e49d9df3f69d9254b68c6f5e8369e87fb1e8282f9",
     "src/client/Cargo.toml": "e52f0f1e11816d9fb28c4b0bfbe607ff3342b30493a92fbb7a75847a1f96b7b6",
     "src/contract/Cargo.toml": "c78a39f40d067f1267d056f0f51c17ada5b2c365556fac2a8c54f9b488f3649f",
@@ -113440,6 +113440,7 @@
         "src/foundation/core-types/hybrid-array": {
           "features": [],
           "roles": [
+            "compile",
             "runtime"
           ]
         },
@@ -113454,6 +113455,7 @@
             "const-generics"
           ],
           "roles": [
+            "compile",
             "runtime"
           ]
         },
@@ -113514,12 +113516,14 @@
         "src/foundation/cryptography/cmov": {
           "features": [],
           "roles": [
+            "compile",
             "runtime"
           ]
         },
         "src/foundation/cryptography/const-oid": {
           "features": [],
           "roles": [
+            "compile",
             "runtime"
           ]
         },
@@ -113540,12 +113544,14 @@
             "oid"
           ],
           "roles": [
+            "compile",
             "runtime"
           ]
         },
         "src/foundation/cryptography/ctutils": {
           "features": [],
           "roles": [
+            "compile",
             "runtime"
           ]
         },
@@ -113593,6 +113599,7 @@
             "oid"
           ],
           "roles": [
+            "compile",
             "runtime"
           ]
         },
@@ -113976,6 +113983,7 @@
         "src/foundation/platform/cpu-feature-detect": {
           "features": [],
           "roles": [
+            "compile",
             "runtime"
           ]
         },
@@ -114186,6 +114194,7 @@
         "src/foundation/tooling/cfg-if": {
           "features": [],
           "roles": [
+            "compile",
             "runtime"
           ]
         },

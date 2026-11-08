@@ -72,6 +72,7 @@ def prepare(root):
               "native-inputs-sha256": "b" * 64}
     for name in ("zxs", "zxs-helper"):
         fields[f"native-{name}-sha256"] = hashlib.sha256((native / name).read_bytes()).hexdigest()
+    fields.update({"native-helper-embedded-zxs": "true", "native-helper-payload-sha256": fields["native-zxs-sha256"]})
     add_runtime_fields(fields)
     (native / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
     for relative in (SPEC, ".github/scripts/release-package.sh", ".github/scripts/verify-web-dist.py",
@@ -81,6 +82,7 @@ def prepare(root):
     fields.update({"native-baseline": "debian13-amd64", "native-web-embedded": "true",
                    "native-web-commit": fields["commit"], "native-web-tree": "b" * 40,
                    "native-web-manifest-sha256": hashlib.sha256((root / "build/web/build-manifest.json").read_bytes()).hexdigest()})
+    fields.update({"native-helper-embedded-zxs": "true", "native-helper-payload-sha256": fields["native-zxs-sha256"]})
     add_runtime_fields(fields)
     (native / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
     vfs = root / "target/smb-debian13/product"
@@ -112,6 +114,7 @@ def write_release_assets(directory, commit, version="0.1.0"):
               "native-baseline": "debian13-amd64", "native-web-embedded": "true",
               "native-web-commit": commit, "native-web-tree": "b" * 40,
               "native-web-manifest-sha256": "c" * 64}
+    fields.update({"native-helper-embedded-zxs": "true", "native-helper-payload-sha256": fields["native-zxs-sha256"]})
     add_runtime_fields(fields)
     (directory / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
     (directory / "VFS-BUILD.json").write_text(json.dumps(vfs_receipt(commit, "b" * 40, elf_fixture(module=True))))

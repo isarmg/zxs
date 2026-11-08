@@ -9,12 +9,21 @@
 </head>
 <body>
   <main>
-    <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>离线检查与文件导出</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
+    <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、导出与程序首装</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
+    <section class="card">
+      <h2>安装内置 ZXS 程序</h2>
+      <p>只将匹配版本可执行文件放到 <code>/usr/local/bin/zxs</code>，已有不同内容、链接或不安全权限一律拒绝，不覆盖数据、配置或凭据。相同文件可重新核验并同步持久化。本片不会安装依赖、设置 systemd/SMB、初始化系统或启动 ZXS。</p>
+      <p id="payload-status">读取内置载荷信息…</p>
+      <button id="install-preview" type="button">预览程序首装</button>
+      <pre id="install-plan" hidden></pre>
+      <button id="install-commit" type="button" hidden>确认仅安装此程序</button>
+      <pre id="install-receipt" hidden></pre>
+    </section>
     <section class="card">
       <h2>选择准确的独立磁盘</h2>
       <p>使用 <code>independent-disk-journal</code> 的磁盘选择 JSON，必须包含绝对路径、来源身份、incarnation 和可选检查点。不自动发现或接纳陌生盘，也不把在线池格式当作此协议。</p>
@@ -34,7 +43,7 @@
       <details><summary>完整报告与来源身份</summary><pre id="report"></pre></details>
     </section>
     <p id="error" class="error" role="alert" hidden></p>
-    <section class="card pending"><h2>尚未完成的能力</h2><p>首次系统初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、密码重置、安装/修复与内置 ZXS 载荷尚未提供。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
+    <section class="card pending"><h2>尚未完成的能力</h2><p>首次系统初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、密码重置、程序覆盖修复、依赖安装及 systemd/SMB 配置尚未提供。内置程序首装不是系统初始化完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
     <footer>手动运行，不注册 systemd，不设置开机自启。关闭页面不会结束进程；请点“退出辅助工具”或在启动终端按 Ctrl+C，并等进程真正退出再移除磁盘。</footer>
   </main>
 </body>

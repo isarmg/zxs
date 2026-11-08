@@ -41,7 +41,11 @@ impl Failure {
 }
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({"error": {"code":self.code, "message":self.message}, "source_write_attempted":false}))).into_response()
+        (
+            self.status,
+            Json(json!({"error": {"code":self.code, "message":self.message}})),
+        )
+            .into_response()
     }
 }
 
@@ -54,6 +58,9 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/authority/check", post(check))
         .route("/api/authority/export", post(export))
         .route("/api/shutdown", post(shutdown))
+        .route("/api/install/payload", get(install_payload))
+        .route("/api/install/preview", post(install_preview))
+        .route("/api/install/commit", post(install_commit))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), security))
         .with_state(state)
@@ -115,12 +122,12 @@ async fn security(
 async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Value> {
     Json(json!({
         "name":"zxs-helper", "version":env!("CARGO_PKG_VERSION"),
-        "mode":"read_only_independent_disk", "authentication":"none",
+        "mode":"program_install_and_independent_check", "authentication":"none",
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
-        "service_exclusion_established":false, "source_writes_available":false,
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown"],
-        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","password_reset","installation_repair","embedded_zxs_payload"]
+        "service_exclusion_established":false, "source_writes_available":false, "program_installation":crate::installation::availability(),
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation"],
+        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","password_reset","program_repair","systemd_smb_configuration"]
     }))
 }
 
@@ -130,7 +137,7 @@ fn admit_job(state: &State, request: &Request) -> Result<OwnedSemaphorePermit, F
         return Err(Failure::message(
             StatusCode::SERVICE_UNAVAILABLE,
             "helper_stopping",
-            "The helper is draining; no new disk read was started.",
+            "The helper is draining; no new maintenance operation was started.",
         ));
     }
     state
@@ -229,5 +236,48 @@ async fn shutdown(
     Ok(
         Json(json!({"stopping":true,"wait_for_process_exit":true,"zxs_stopped_by_helper":false}))
             .into_response(),
+    )
+}
+
+async fn install_payload() -> Json<json_codec::Value> {
+    Json(crate::installation::availability())
+}
+
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct InstallPreviewRequest {}
+async fn install_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let _: InstallPreviewRequest = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::installation::preview().map_err(install_failure)
+    })
+    .await
+    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "install_worker", error))??;
+    Ok(Json(preview).into_response())
+}
+async fn install_commit(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::installation::Commit = input(request).await?;
+    let receipt = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::installation::commit(input).map_err(install_failure)
+    })
+    .await
+    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "install_worker", error))??;
+    Ok(Json(receipt).into_response())
+}
+fn install_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    Failure::message(
+        StatusCode::CONFLICT,
+        "program_installation",
+        &crate::diagnostic_chain(error.as_ref()),
     )
 }

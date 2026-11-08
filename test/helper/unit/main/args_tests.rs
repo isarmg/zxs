@@ -289,3 +289,39 @@ fn no_command_selects_the_manual_console_and_serve_parses_an_explicit_listener()
     assert!(matches!(args.command, Some(Command::Serve(_))));
     assert!(Args::try_parse_from(["zxs-helper", "serve", "--listen", "bad-listener"]).is_err());
 }
+
+#[test]
+fn program_installation_is_explicit_and_does_not_accept_an_arbitrary_destination() {
+    let args = Args::try_parse_from([
+        "zxs-helper",
+        "install",
+        "commit",
+        "--request-digest",
+        "review",
+        "--confirm-program-only",
+    ])
+    .unwrap();
+    assert!(matches!(
+        args.command,
+        Some(Command::Install {
+            command: installation::Command::Commit {
+                confirm_program_only: true,
+                ..
+            }
+        })
+    ));
+    assert!(
+        Args::try_parse_from(["zxs-helper", "install", "commit", "--confirm-program-only"])
+            .is_err()
+    );
+    assert!(
+        Args::try_parse_from([
+            "zxs-helper",
+            "install",
+            "preview",
+            "--destination",
+            "/arbitrary"
+        ])
+        .is_err()
+    );
+}

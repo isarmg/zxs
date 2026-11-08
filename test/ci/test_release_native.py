@@ -60,15 +60,24 @@ class NativeRelease(unittest.TestCase):
     def test_build_uses_explicit_target_and_records_outputs_without_environment_values(self):
         with patch.object(MODULE.subprocess, "run") as run:
             MODULE.main()
-        command = run.call_args.args[0]
+        self.assertEqual(run.call_count, 2)
+        server, helper = run.call_args_list
+        command = helper.args[0]
         self.assertEqual(command[command.index("--target") + 1], MODULE.TARGET)
         self.assertEqual(command[command.index("--target-dir") + 1], "target/native")
-        self.assertIn("storage-server", command)
+        self.assertIn("storage-server", server.args[0])
+        self.assertNotIn("storage-helper", server.args[0])
+        self.assertNotIn("storage-server", command)
         self.assertIn("storage-helper", command)
         self.assertEqual(run.call_args.kwargs["env"]["ZXS_EMBED_WEB"], "1")
         self.assertEqual(run.call_args.kwargs["env"]["ZXS_EMBED_WEB_COMMIT"], self.commit)
         self.assertEqual(run.call_args.kwargs["env"]["ZXS_EMBED_WEB_TREE"], "b" * 40)
+        self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_PAYLOAD"], str(self.output / "zxs"))
+        self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_PAYLOAD_SHA256"], MODULE.digest(self.output / "zxs"))
+        self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_PAYLOAD_VERSION"], "0.1.0")
+        self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_PAYLOAD_COMMIT"], self.commit)
         content = self.receipt.read_text()
+        self.assertIn("native-helper-embedded-zxs=true\n", content)
         self.assertIn("native-target=x86_64-unknown-linux-gnu\n", content)
         self.assertIn("native-zxs-sha256=" + MODULE.digest(self.output / "zxs"), content)
         self.assertIn("native-zxs-helper-sha256=" + MODULE.digest(self.output / "zxs-helper"), content)
@@ -118,7 +127,7 @@ class NativeRelease(unittest.TestCase):
                           setattr(self, "source_status", " M src/server/src/lib.rs\n")) as run:
             with self.assertRaisesRegex(RuntimeError, "clean source checkout"):
                 MODULE.main()
-        run.assert_called_once()
+        self.assertEqual(run.call_count, 2)
         self.assertFalse(self.receipt.exists())
 
     def test_source_commit_changes_do_not_leave_a_receipt(self):

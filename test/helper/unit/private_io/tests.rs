@@ -446,3 +446,46 @@ fn cleanup_failure_keeps_both_typed_causes() {
     assert!(diagnostic.contains("os error 5"));
     assert!(diagnostic.contains("os error 21"));
 }
+
+#[test]
+fn program_only_publication_is_executable_no_clobber_and_retries_exact_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("zxs");
+    let destination = ProgramDestination::open(&path).unwrap();
+    assert!(!destination.matches_or_absent(b"exact executable").unwrap());
+    assert!(destination.install(b"exact executable").unwrap());
+    assert_eq!(fs::read(&path).unwrap(), b"exact executable");
+    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o555);
+    assert!(!destination.install(b"exact executable").unwrap());
+    assert!(destination.install(b"different bytes").is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"exact executable");
+}
+
+#[test]
+fn program_destination_refuses_links_shared_inodes_unsafe_parents_and_competing_owners() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("zxs");
+    let held = ProgramDestination::open(&path).unwrap();
+    assert!(ProgramDestination::open(&path).is_err());
+    drop(held);
+    let other = root.path().join("untouched");
+    fs::write(&other, b"untouched").unwrap();
+    symlink(&other, &path).unwrap();
+    assert!(
+        ProgramDestination::open(&path)
+            .unwrap()
+            .install(b"new")
+            .is_err()
+    );
+    assert_eq!(fs::read(&other).unwrap(), b"untouched");
+    fs::remove_file(&path).unwrap();
+    fs::hard_link(&other, &path).unwrap();
+    assert!(
+        ProgramDestination::open(&path)
+            .unwrap()
+            .install(b"untouched")
+            .is_err()
+    );
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(ProgramDestination::open(&path).is_err());
+}
