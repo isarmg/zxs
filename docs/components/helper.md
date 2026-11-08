@@ -261,3 +261,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 终态链 generation 日志和安装后冻结 Current
 
 `POST /api/disks/terminal-chain-generation-log` 在原目标真实 epoch choice 后，独立保存实际三帧到准确 generation 地址，安装普通不可变对象并从这些实际字节重读冻结 Current。原操作支持目标完成/SYSTEM 未完成的显式续作，完成后缺件不自动补造。**未更换活动代际指针、数据库或 seal，未消费 Stop/启 writer/完成 readmission/H03**。见[安装路径与恢复边界](../design/terminal-chain-generation-log.md)。未审查/编译/测试/CI、无实际系统操作。
+
+### 终态链准确 generation 冷选择与独立读回
+
+`POST /api/disks/terminal-chain-generation-select` 为原请求保存 SYSTEM 选择/完成与原目标 `chain-authority.json`，绑定已完成实际 epoch 决定、完整 generation 日志和普通对象。独立 `terminal-chain-generation-read` 只验读，不补造；返回从安装后对象重建的冻结 Current 统计，来源查询仍不探目标且不返回本次 Current。持有读者遇到普通对象丢失也不能回退隔离材料。**不是通用活动 authority，不更改 locator、Stop、seal 或数据库，不启 writer/服务、不完成 readmission/H03**。见[精确恢复与未完边界](../design/terminal-chain-generation-selector.md)。未审查/编译/测试/CI，无真实系统操作。

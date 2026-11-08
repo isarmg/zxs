@@ -136,9 +136,11 @@ pub use membership_transition::{
 };
 pub use membership_transition::{
     TerminalChainActivationPlanReport, TerminalChainFirstPublication,
-    TerminalChainGenerationLogReport, TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
+    TerminalChainGenerationLogReport, TerminalChainGenerationSelectionReport,
+    TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
     TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
-    TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalMetadataResume,
+    TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalChainSelectedGeneration,
+    TerminalMetadataResume,
     TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,

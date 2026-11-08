@@ -597,3 +597,106 @@ impl ExclusiveExit {
         Ok(status)
     }
 }
+
+enum ChainGenerationAction {
+    Select,
+    Inspect,
+}
+impl ExclusiveExit {
+    /// Select only the complete original generation. This is not an active writer.
+    pub fn select_terminal_chain_generation(
+        &mut self,
+        request: storage_contract::storage_readmission::ReadmissionRequest,
+        proposal_digest: &str,
+    ) -> Result<storage_engine::TerminalChainReadmissionStatus, ApiError> {
+        self.chain_generation(request, proposal_digest, ChainGenerationAction::Select)
+    }
+    /// Read the actual completed cold selector and installed Current without repair.
+    pub fn inspect_terminal_chain_generation(
+        &mut self,
+        request: storage_contract::storage_readmission::ReadmissionRequest,
+        proposal_digest: &str,
+    ) -> Result<storage_engine::TerminalChainReadmissionStatus, ApiError> {
+        self.chain_generation(request, proposal_digest, ChainGenerationAction::Inspect)
+    }
+    fn chain_generation(
+        &mut self,
+        request: storage_contract::storage_readmission::ReadmissionRequest,
+        proposal_digest: &str,
+        action: ChainGenerationAction,
+    ) -> Result<storage_engine::TerminalChainReadmissionStatus, ApiError> {
+        self.check()?;
+        let _owner = acquire_owner(&self.management)?;
+        require_settled(self.management.path())?;
+        let preparation = self
+            .terminal_chain_readmission_status()?
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    ErrorCode::RecoveryRequired,
+                    "generation selection requires its original completed native log",
+                )
+            })?
+            .preparation;
+        if preparation.operation_id != request.operation_id
+            || preparation.proposal_digest != proposal_digest
+            || preparation.target.disk_id != request.expected_disk_id
+            || preparation.target.slot_id != request.slot_id
+            || preparation.principal != self.identity.principal
+        {
+            return Err(ApiError::conflict(
+                ErrorCode::GenerationMismatch,
+                "generation selection differs from the original selected source",
+            ));
+        }
+        self.auth.revalidate_identity(&self.identity)?;
+        let directory =
+            PrivateDirectory::open_existing(&preparation.target_root).map_err(storage_error)?;
+        let directory = platform_io::fs_safety::linux::OpenAt2Root::from_private_directory(
+            directory,
+            platform_io::fs_safety::linux::MountPolicy::SameMount,
+        )
+        .map_err(storage_error)?;
+        let directory = storage_engine::PendingMemberDirectory {
+            disk_id: request.expected_disk_id,
+            directory: directory.into_directory(),
+        };
+        let Source::Terminal(terminal) = &mut self.source else {
+            return Err(terminal_mutation_unavailable());
+        };
+        let status = match action {
+            ChainGenerationAction::Select => terminal
+                .select_chain_generation(
+                    &self.identity.principal,
+                    request.operation_id,
+                    proposal_digest,
+                    directory,
+                )
+                .map_err(crate::engine_backend::error)?,
+            ChainGenerationAction::Inspect => {
+                let reader = terminal
+                    .open_chain_selected_generation(
+                        &self.identity.principal,
+                        request.operation_id,
+                        proposal_digest,
+                        directory,
+                    )
+                    .map_err(crate::engine_backend::error)?;
+                let report = reader.report().map_err(crate::engine_backend::error)?;
+                drop(reader);
+                let mut status = terminal
+                    .chain_readmission_status()
+                    .map_err(crate::engine_backend::error)?
+                    .ok_or_else(|| {
+                        ApiError::conflict(
+                            ErrorCode::RecoveryRequired,
+                            "original selector disappeared after actual read",
+                        )
+                    })?;
+                status.generation_selection = Some(report);
+                status
+            }
+        };
+        self.check()?;
+        Ok(status)
+    }
+}

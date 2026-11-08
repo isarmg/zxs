@@ -731,6 +731,8 @@ async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown(
         "/api/disks/terminal-chain-activation-plan",
         "/api/disks/terminal-chain-io-decide",
         "/api/disks/terminal-chain-generation-log",
+        "/api/disks/terminal-chain-generation-select",
+        "/api/disks/terminal-chain-generation-read",
     ] {
         let mut request = post(path, json!({}));
         request
@@ -980,6 +982,33 @@ fn chain_generation_input_rejects_uploaded_log_or_active_authority_overrides() {
         >(&value)
         {
             Ok(_) => panic!("injected authority field was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unknown field"));
+        assert!(error.to_string().contains(field));
+    }
+}
+
+#[test]
+fn chain_selector_input_rejects_uploaded_authority_and_stop_overrides() {
+    for field in [
+        "selector",
+        "authority",
+        "generation",
+        "io_epoch",
+        "target_root",
+        "consume_stop",
+        "writer",
+        "force",
+    ] {
+        let value = format!(
+            r#"{{"{field}":true,"service_user":"zxs","external_writers_stopped":true,"plan":{{}},"confirmation":"select-chain-generation-without-active-writer","acknowledge_selector_without_active_writer":true}}"#
+        );
+        let error = match json_codec::from_str::<
+            crate::disk_removal::chain_target::GenerationSelectionInput,
+        >(&value)
+        {
+            Ok(_) => panic!("injected selector field was accepted"),
             Err(error) => error,
         };
         assert!(error.to_string().contains("unknown field"));

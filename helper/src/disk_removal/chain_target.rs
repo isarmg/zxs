@@ -58,6 +58,15 @@ pub(crate) struct GenerationLogInput {
 }
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
+pub(crate) struct GenerationSelectionInput {
+    service_user: String,
+    external_writers_stopped: bool,
+    plan: Plan,
+    confirmation: String,
+    acknowledge_selector_without_active_writer: bool,
+}
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct CurrentInput {
     service_user: String,
     external_writers_stopped: bool,
@@ -89,6 +98,8 @@ enum Action {
     PrepareActivation { plan: Plan },
     DecideIo { plan: Plan },
     PrepareGenerationLog { plan: Plan },
+    SelectGeneration { plan: Plan },
+    InspectGeneration { plan: Plan },
 }
 impl crate::service_worker::Request for Request {
     type Output = Status;
@@ -102,6 +113,44 @@ impl crate::service_worker::Request for Request {
         let mut published_current = None;
         let native = match self.action {
             Action::Status => target.control.terminal_chain_readmission_status()?,
+            Action::SelectGeneration { plan } => {
+                if plan.context != self.context
+                    || plan.credential != target.credential_revision()?
+                {
+                    return Err(
+                        "chain generation selector host or primary credential revision changed"
+                            .into(),
+                    );
+                }
+                let preparation = plan.preparation;
+                Some(target.control.select_terminal_chain_generation(
+                    storage_contract::storage_readmission::ReadmissionRequest {
+                        operation_id: preparation.operation_id,
+                        slot_id: preparation.target.slot_id,
+                        expected_disk_id: preparation.target.disk_id,
+                    },
+                    &preparation.proposal_digest,
+                )?)
+            }
+            Action::InspectGeneration { plan } => {
+                if plan.context != self.context
+                    || plan.credential != target.credential_revision()?
+                {
+                    return Err(
+                        "chain generation selector host or primary credential revision changed"
+                            .into(),
+                    );
+                }
+                let preparation = plan.preparation;
+                Some(target.control.inspect_terminal_chain_generation(
+                    storage_contract::storage_readmission::ReadmissionRequest {
+                        operation_id: preparation.operation_id,
+                        slot_id: preparation.target.slot_id,
+                        expected_disk_id: preparation.target.disk_id,
+                    },
+                    &preparation.proposal_digest,
+                )?)
+            }
             Action::PrepareGenerationLog { plan } => {
                 if plan.context != self.context
                     || plan.credential != target.credential_revision()?
@@ -263,7 +312,9 @@ fn run(input: InventoryInput, action: Action) -> Result<Status> {
     | Action::InspectPublished { plan }
     | Action::PrepareActivation { plan }
     | Action::DecideIo { plan }
-    | Action::PrepareGenerationLog { plan } = &action
+    | Action::PrepareGenerationLog { plan }
+    | Action::SelectGeneration { plan }
+    | Action::InspectGeneration { plan } = &action
         && plan.context != context
     {
         return Err("chain target no longer matches its original host/account/layout".into());
@@ -383,5 +434,29 @@ pub(crate) fn prepare_generation_log(input: GenerationLogInput) -> Result<Status
             external_writers_stopped: input.external_writers_stopped,
         },
         Action::PrepareGenerationLog { plan: input.plan },
+    )
+}
+
+pub(crate) fn select_generation(input: GenerationSelectionInput) -> Result<Status> {
+    if input.confirmation != "select-chain-generation-without-active-writer"
+        || !input.acknowledge_selector_without_active_writer
+    {
+        return Err("explicitly acknowledge original immutable cold selector, same-request recovery only, no Stop consumption, active writer or completed readmission".into());
+    }
+    run(
+        InventoryInput {
+            service_user: input.service_user,
+            external_writers_stopped: input.external_writers_stopped,
+        },
+        Action::SelectGeneration { plan: input.plan },
+    )
+}
+pub(crate) fn inspect_generation(input: CurrentInput) -> Result<Status> {
+    run(
+        InventoryInput {
+            service_user: input.service_user,
+            external_writers_stopped: input.external_writers_stopped,
+        },
+        Action::InspectGeneration { plan: input.plan },
     )
 }

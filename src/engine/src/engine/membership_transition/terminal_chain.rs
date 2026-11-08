@@ -17,9 +17,11 @@ mod current;
 mod epoch;
 mod epoch_decision;
 mod generation_log;
+mod selector;
 pub(in crate::engine) use epoch::ChainEpochSource;
 pub use epoch::TerminalChainActivationPlanReport;
 pub use epoch_decision::TerminalChainIoDecisionReport;
+pub use selector::{TerminalChainGenerationSelectionReport, TerminalChainSelectedGeneration};
 pub use generation_log::TerminalChainGenerationLogReport;
 mod first;
 mod publication;
@@ -68,6 +70,8 @@ pub enum TerminalChainReadmissionPhase {
     IoDecisionPreserved,
     GenerationLogPending,
     GenerationLogPreserved,
+    GenerationSelectionPending,
+    GenerationSelected,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -83,6 +87,7 @@ pub struct TerminalChainReadmissionStatus {
     pub activation_plan: Option<TerminalChainActivationPlanReport>,
     pub io_decision: Option<TerminalChainIoDecisionReport>,
     pub generation_log: Option<TerminalChainGenerationLogReport>,
+    pub generation_selection: Option<TerminalChainGenerationSelectionReport>,
     pub active_writer_admitted: bool,
     pub metadata_resumption_supported: bool,
 }
@@ -212,6 +217,7 @@ impl Selection {
             activation_plan: None,
             io_decision: None,
             generation_log: None,
+            generation_selection: None,
             active_writer_admitted: false,
             metadata_resumption_supported: false,
         })

@@ -40,3 +40,5 @@ source-only 状态不打开目标。只有 source completed 才显示 `generatio
 完整原生输入仍受既有 8192 对象、128 MiB 限额；普通地址安装沿用完整材料容量和临时写入预算，SYSTEM 另留实际 manifest 编码四倍加 1 MiB。已完成目标只核验，不要求再次分配完整副本。一次请求会重复完整源链、Publication 和已安装 State 校验，generation 目录最多 64 个条目；这是有界正确性成本，不宣称性能或掉电验证通过。
 
 **仍缺专属通用活动 authority/可信冷启动 selector、完整 serving/数据库闭包以及新 epoch/Stop/活动 Current/writer 的共同切换。** 这些前置未齐时不能仅因日志已在 generation 目录就让普通恢复选举它，更不能先消费 Stop。现有 PortableAuthority、普通 Engine 发现和写者准入没有放宽。H03 外来多级链仍须完整低级链和最终权威，不能用本原保留盘路径代替。
+
+后继[准确 generation 冷选择](terminal-chain-generation-selector.md)已接三份无覆盖 descriptor 及实际安装后冻结读者，独立 Web 可显示本次实际 Current 统计；它仍不是通用活动 authority/冷启动准入，不改变上述活动切换与 H03 边界。

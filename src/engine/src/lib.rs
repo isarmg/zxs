@@ -67,9 +67,11 @@ pub use engine::{
 pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub use engine::{
     TerminalChainActivationPlanReport, TerminalChainFirstPublication,
-    TerminalChainGenerationLogReport, TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
+    TerminalChainGenerationLogReport, TerminalChainGenerationSelectionReport,
+    TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
     TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
-    TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalMetadataResume,
+    TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalChainSelectedGeneration,
+    TerminalMetadataResume,
     TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,

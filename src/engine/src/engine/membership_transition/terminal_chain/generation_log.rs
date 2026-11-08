@@ -12,12 +12,12 @@ enum Format {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct Manifest {
+pub(super) struct Manifest {
     format: Format,
-    native: first::Manifest,
-    plan_hash: String,
-    io_epoch: String,
-    decision_hash: String,
+    pub(super) native: first::Manifest,
+    pub(super) plan_hash: String,
+    pub(super) io_epoch: String,
+    pub(super) decision_hash: String,
     journal: Vec<u8>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,6 +38,9 @@ pub struct TerminalChainGenerationLogReport {
     pub active_writer_admitted: bool,
 }
 impl Manifest {
+    pub(super) fn hash(&self) -> Result<String> {
+        object_hash("terminal-chain-generation-log", self)
+    }
     fn exact(&self, expected: &Self) -> Result<()> {
         if canonical_json(self)? != canonical_json(expected)? {
             return Err(Error::new(
@@ -83,7 +86,7 @@ impl Manifest {
     }
 }
 pub(super) fn owns_initial_entry(name: &str) -> bool {
-    matches!(name, SELECTED | COMPLETE)
+    matches!(name, SELECTED | COMPLETE) || selector::owns_initial_entry(name)
 }
 pub(super) fn started(management: &TerminalManagement) -> Result<bool> {
     for name in [SELECTED, COMPLETE] {
@@ -95,7 +98,7 @@ pub(super) fn started(management: &TerminalManagement) -> Result<bool> {
             return Ok(true);
         }
     }
-    Ok(false)
+    selector::started(management)
 }
 pub(super) fn require_absent(management: &TerminalManagement) -> Result<()> {
     if started(management)? {
@@ -207,6 +210,8 @@ impl<'a, 'm> Install<'a, 'm> {
             let name = name.map_err(fs_error)?;
             if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
                 generation.read_bytes(&self.generation_path.join(name.as_path()), MAX_METADATA)?;
+            } else if name.as_os_str().to_str() == Some(selector::AUTHORITY_FILE) {
+                selector::verify_generation_entry(self.management, generation, &self.manifest)?;
             } else if !matches!(
                 name.as_os_str().to_str(),
                 Some(OWNER | INSTALLED | "journal.bin")
@@ -219,7 +224,10 @@ impl<'a, 'm> Install<'a, 'm> {
         }
         Ok(())
     }
-    fn verify_installed(&self, generation: &DiskRoot) -> Result<()> {
+    fn verify_installed(
+        &self,
+        generation: &DiskRoot,
+    ) -> Result<crate::engine::disk_registry::current::CurrentNamespaces> {
         self.inventory(generation)?;
         let held = self.reader.held_target();
         if held.root.directory_identity(&self.generation_path)?
@@ -261,7 +269,8 @@ impl<'a, 'm> Install<'a, 'm> {
                 "installed generation Current changed the selected registry",
             ));
         }
-        self.recheck()
+        self.recheck()?;
+        Ok(current)
     }
     fn install(&self) -> Result<TerminalChainGenerationLogReport> {
         self.recheck()?;
@@ -358,4 +367,69 @@ impl TerminalManagement {
         status.generation_log = Some(report);
         Ok(status)
     }
+}
+
+/// Source-only historical evidence. This never probes the original disk.
+pub(super) fn completed_source(
+    management: &TerminalManagement,
+    prepared: &first::Prepared,
+    decision: &TerminalChainIoDecisionReport,
+) -> Result<Manifest> {
+    let root = management.system_root();
+    let selected: Manifest = load(root, &operation(management).join(SELECTED))?
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "generation selector requires its original log selection",
+            )
+        })?;
+    selected.verify_source(management, prepared, decision)?;
+    let complete: Manifest = load(root, &operation(management).join(COMPLETE))?
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "generation selector requires completed original log evidence",
+            )
+        })?;
+    complete.exact(&selected)?;
+    Ok(complete)
+}
+
+/// A held actual generation directory and Current decoded from its installed
+/// native bytes. This value carries no writer or Stop-consumption capability.
+pub(super) struct InstalledGeneration {
+    pub(super) root: DiskRoot,
+    pub(super) namespaces: crate::engine::disk_registry::current::CurrentNamespaces,
+    pub(super) manifest: Manifest,
+}
+pub(super) fn open_complete(
+    management: &TerminalManagement,
+    reader: &TerminalChainPublishedCurrent<'_>,
+) -> Result<InstalledGeneration> {
+    let install = Install::new(management, reader)?;
+    let system = management.system_root();
+    if !install.read_marker(system, &operation(management).join(SELECTED))?
+        || !install.read_marker(system, &operation(management).join(COMPLETE))?
+    {
+        return Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "generation reader requires both original completed SYSTEM log records",
+        ));
+    }
+    let root = reader
+        .held_target()
+        .root
+        .private_child(&install.generation_path)?;
+    if !install.read_marker(&root, &install.generation_path.join(INSTALLED))? {
+        return Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "completed generation reader lost its target log completion",
+        ));
+    }
+    let namespaces = install.verify_installed(&root)?;
+    Ok(InstalledGeneration {
+        root,
+        namespaces,
+        manifest: install.manifest,
+    })
 }

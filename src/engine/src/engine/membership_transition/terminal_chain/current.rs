@@ -135,13 +135,21 @@ impl TerminalChainPublishedCurrent<'_> {
     /// This observation requires a live held original target, unlike historical
     /// source-only status. It never asserts content availability or active I/O.
     pub fn report(&self) -> Result<TerminalChainPublishedCurrentReport> {
+        self.namespace_report(&self.namespaces)
+    }
+    /// The selected-generation reader supplies the Current reconstructed from
+    /// ordinary installed objects. Both paths retain the same native proof.
+    pub(super) fn namespace_report(
+        &self,
+        namespaces: &CurrentNamespaces,
+    ) -> Result<TerminalChainPublishedCurrentReport> {
         self.recheck()?;
         let state = self.proof.state();
         let mut files = 0_u64;
         for (id, branch) in &state.branches {
             files = files
                 .checked_add(
-                    self.namespaces
+                    namespaces
                         .branch_entries(id, &branch.head_commit_id)?
                         .len() as u64,
                 )
@@ -156,7 +164,7 @@ impl TerminalChainPublishedCurrent<'_> {
         for (id, branch) in &state.directory_branches {
             directories = directories
                 .checked_add(
-                    self.namespaces
+                    namespaces
                         .directory_entries(id, &branch.head_tree_id)?
                         .len() as u64,
                 )
@@ -174,8 +182,8 @@ impl TerminalChainPublishedCurrent<'_> {
             snapshot_hash: self.proof.snapshot().into(),
             publication_hash: publication.publication_hash,
             seal_hash: publication.seal_hash,
-            registry: self.namespaces.registry().clone(),
-            sequence: self.namespaces.activation_sequence(),
+            registry: namespaces.registry().clone(),
+            sequence: namespaces.activation_sequence(),
             topology_generation: state.topology_generation,
             file_branch_count: state.branches.len(),
             directory_branch_count: state.directory_branches.len(),
@@ -305,5 +313,34 @@ impl TerminalChainPublishedCurrent<'_> {
             .admit_terminal_chain(checkpoint.state(), &proof)?;
         self.recheck()?;
         Ok(namespaces)
+    }
+}
+
+impl TerminalChainPublishedCurrent<'_> {
+    pub(super) fn publication_report(&self) -> Result<TerminalChainFirstPublication> {
+        self.proof.report()
+    }
+    pub(super) fn file_branch_head(&self, branch_id: &str) -> Result<&str> {
+        self.proof
+            .state()
+            .branches
+            .get(branch_id)
+            .map(|branch| branch.head_commit_id.as_str())
+            .ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "selected generation file branch not found")
+            })
+    }
+    pub(super) fn directory_branch_head(&self, branch_id: &str) -> Result<&str> {
+        self.proof
+            .state()
+            .directory_branches
+            .get(branch_id)
+            .map(|branch| branch.head_tree_id.as_str())
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::NotFound,
+                    "selected generation directory branch not found",
+                )
+            })
     }
 }

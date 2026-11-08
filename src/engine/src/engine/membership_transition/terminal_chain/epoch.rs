@@ -250,7 +250,8 @@ pub(super) fn observe(
     status.activation_plan = Some(plan.report(info, false));
     drop(store);
     super::epoch_decision::observe(management, &plan, &source, status)?;
-    super::generation_log::observe(management, prepared, status)
+    super::generation_log::observe(management, prepared, status)?;
+    super::selector::observe(management, selection, prepared, status)
 }
 impl TerminalManagement {
     /// Explicitly persists only the exact future epoch and locator record.
