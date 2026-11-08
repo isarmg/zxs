@@ -157,7 +157,7 @@ histories/<history-id>/file-containers/<file-id>/<当前文件名>/versions/
 | `src/web/src/files/actions/browse.rs`、`mutation.rs`、`operation.rs` | 分别负责代次校验的目录读取、命名空间/分支/备注事务、发布结果轮询 |
 | `src/web/src/files/view.rs`、`detail.rs`、`inline.rs`、`version_tree.rs` | 磁盘列表、独立详情、按名称／分支／备注规则原位编辑、统一历史节点布局及带箭头连接 |
 | `src/web/src/files/merge/`、`tags/`、`backup.rs` | 冻结合并输入与归属、节点标签批量增量、按范围读取及编辑备份策略；均为页面内审阅 |
-| `src/web/src/files/backup/recursive.rs`、`recursive/{capture,view}.rs` | 显式逐级备份来源捕获、逐跳盘名前缀预览及条件保存；完整 capture 不作为浏览器写权限，空目录与后续自动改名传播不在此入口能力内 |
+| `src/web/src/files/backup/recursive.rs`、`recursive/{capture,view}.rs` | 显式逐级备份来源捕获、逐跳盘名前缀预览及条件保存；目录可显式选择文件与目录模式共同捕获空子目录，默认原文件模式。完整 capture 不作为浏览器写权限，元数据成员目标和准确范围仍由核心复核；新增空目录须重读重存 |
 | `src/web/src/files/review.rs` | 共享发布状态：冲突保留草稿、结果未知绑定原操作、成功回执只清除相应草稿 |
 | `src/web/src/monitor.rs`、`monitor/chart.rs`、`history.rs` | 实时监测、范围历史图表及独立文件操作记录 |
 | `src/web/src/format.rs`、`icons.rs` | 容量/时间/字段格式化及统一 SVG 图标 |

@@ -183,7 +183,7 @@ required_slots(v) = route(v)[1:r(v)]
 
 当前 `backup-configuration` 显式回填所覆盖文件的可用历史版本。scope 的现行规则保持原 ID 并推进代数；本次覆盖范围外仍绑定旧规则的文件共用一份 `inheritable:false` 的保留设置，其已绑定份数和备份路径不变。只有 `inheritable:true` 的现行 scope／路径规则参与后续继承；保留设置只由文件绑定使用，父目录重配不能覆盖它。无引用保留设置清理，空 scope 的现行规则保留。通用 `PUT /api/policies/{policy}` 只接受无稳定 scope 的现行路径规则，不回填历史；稳定 scope 与保留设置直接更新会被拒绝。字段与导入／拆分边界见[备份规则](design/file-merge-tags-backup.md#backup-prefix)。
 
-显式 Engine 全目录快照 `configure_recursive_backup_tree` 在一次发布中同时保护所选文件与当前目录行，包括非空目录下的空子目录；独立子策略保留。它使用独立原生 kind，目录目标要求元数据成员证明，不改变既有文件模式的数据专用目标能力。旧收据、固定逐级来源、完整文件副本和恢复准入保持不变。HTTP/Web 尚未提供该全树写入选择；语义与范围见[混合目录快照 ADR](adr/empty-directory-backup-publication.md#mixed-directory-snapshot)。
+显式 Engine 全目录快照 `configure_recursive_backup_tree` 在一次发布中同时保护所选文件与当前目录行，包括非空目录下的空子目录；独立子策略保留。它使用独立原生 kind，目录目标要求元数据成员证明，不改变既有文件模式的数据专用目标能力。旧收据、固定逐级来源、完整文件副本和恢复准入保持不变。HTTP 提供独立 `PUT /api/repositories/{repo}/recursive-backup-tree-configuration`；Web 目录逐级备份面板的“本次保存模式”可显式选择“文件与目录（含空目录）”，默认仍为原有文件模式。语义与范围见[混合目录快照 ADR](adr/empty-directory-backup-publication.md#mixed-directory-snapshot)。
 
 ---
 

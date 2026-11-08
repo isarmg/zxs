@@ -106,11 +106,16 @@ pub(crate) fn routes() -> Router<AppState> {
         );
     #[cfg(feature = "core")]
     {
-        routes.route(
-            "/api/repositories/{repository}/recursive-backup-configuration",
-            get(http_backup_configuration::read_recursive)
-                .put(http_backup_configuration::configure_recursive),
-        )
+        routes
+            .route(
+                "/api/repositories/{repository}/recursive-backup-configuration",
+                get(http_backup_configuration::read_recursive)
+                    .put(http_backup_configuration::configure_recursive),
+            )
+            .route(
+                "/api/repositories/{repository}/recursive-backup-tree-configuration",
+                http_routing::routing::put(http_backup_configuration::configure_recursive_tree),
+            )
     }
     #[cfg(not(feature = "core"))]
     {

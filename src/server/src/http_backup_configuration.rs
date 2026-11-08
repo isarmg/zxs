@@ -222,6 +222,33 @@ pub(crate) async fn configure_recursive(
         .map(Json)
 }
 
+#[cfg(feature = "core")]
+pub(crate) async fn configure_recursive_tree(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(repository): ApiPath<String>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let body = crate::with_id(
+        crate::json_body(request).await?,
+        "repository_id",
+        repository,
+    )?;
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .configure_recursive_backup_tree(&identity, parse_recursive(body)?)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
+        })
+        .await
+        .map(Json)
+}
+
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_backup_configuration/tests.rs"]
 mod tests;

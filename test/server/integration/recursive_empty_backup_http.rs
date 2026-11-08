@@ -425,3 +425,6 @@ async fn initial_pool_file_backups_remain_readable_without_native_directory_auth
     assert_eq!(tree["entries"][0]["backup"], true);
     assert_eq!(tree["writable"], false);
 }
+
+#[path = "recursive_mixed_backup_http.rs"]
+mod mixed;

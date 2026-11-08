@@ -62,6 +62,8 @@ Web 移除 file_count 为零的硬拒绝，沿现有 scope、capture、会话和
 
 新 kind 复用现行 typed 规划器、精确 State/Prepared/Candidate 验证、容量门禁和全成员决定流程。目录行、目录 ID、目标绑定与所需文件 payload 都是闭合证明的一部分；目录证据不能代替文件正文复制，旧 kind 不能通过携带目录字段获得新能力。决定后 I/O 失败仍保持 InDoubt，冷恢复在原有可写准入门禁后完成文件与目录投影，不改旧 receipt，不新增 State/HistoryManifest 表，也不迁移旧格式。
 
-已验证的新配置进入现有稳定 ID 索引，后续 `*.recursive-routes` 以新收据共同跟随已捕获的文件与目录。最终冷修复和 `published_backup_directories` 继续只消费现行策略快照。Server 备份读取可复用这些目录行，活动分类认识新 kind；本片不新增 HTTP 写入路由或 Web 全树选择，现有界面仍保持原文件/空 scope 入口，不将 Engine 能力冒充端到端已接线。
+已验证的新配置进入现有稳定 ID 索引，后续 `*.recursive-routes` 以新收据共同跟随已捕获的文件与目录。最终冷修复和 `published_backup_directories` 继续只消费现行策略快照。Server 备份读取复用这些目录行，活动分类认识新 kind。后续入口切片新增独立 `PUT /api/repositories/{repo}/recursive-backup-tree-configuration`，沿原配置 GET 获取同一冻结来源证据；旧 PUT 保留原文件/空 scope 语义。Web 将“本次保存模式”显式分为原有文件模式与文件/目录模式，默认旧模式，文件 scope 在选择与构造请求两处均不能进入树模式。该选项是本次请求，不伪装成 GET 读回的当前模式。未知结果保留原 operation 并只轮询结果，禁止切模式和双提交；HTTP 取消不保证撤销已运行的事务。
 
 定向定义见[混合目录公开回归](../../test/engine/integration/recursive_backup_mixed_directories.rs)与[精确原生证明回归](../../test/engine/unit/engine/current_recursive_tree_tests.rs)：前者覆盖保留正文、双跳真实目录、旧模式、独立子策略、数据专用目标/文件 scope 拒绝、改名后冷修复和永久重试、决定后真实 I/O 阻塞；后者覆盖目录伪造/遗漏、模式降级以及缺少或改变文件 payload。测试定义不代表运行通过，临时目录 I/O 不代表生产硬件或物理掉电认证。
+
+入口定向定义见[混合目录 HTTP 回归](../../test/server/integration/recursive_mixed_backup_http.rs)和[Web 递归配置回归](../../test/web/unit/files/backup/recursive_tests.rs)。前者使用真实生产 Router oneshot 和临时目录，不依赖 TCP；后者执行原生 UI 状态测试，不冒充浏览器 DOM/WASM 验收。请求继续使用严格原始 capture，没有增加 State 或磁盘格式字段；HTTP 认证、writer 锁内当前身份复核、来源/目标验证和永久重试均沿原核心边界，目录目标不支持时不静默降级。

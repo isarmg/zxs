@@ -447,3 +447,7 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 目录详情树使用 `GET /api/repositories/{repo}/directories/{directory}/history` 与 `/history/branches`。两路只读、禁止自动初始化 scope，使用共享 DTO 校验、取消 token、response 持有 admission permit、查询前后当前权限和 root 重查。默认 64、最大 128 行，1 MiB JSON 上限。目录身份为 entry_id（根为 repo ID），不是显示路径；只读备份也能查看。详见[目录只读历史窗口](../15-api-and-errors.md#目录只读历史窗口)。
 
 目录实体布局提供显式 `POST /api/repositories/{repo}/directory-layout/reconcile`，按执行时整个外层仓库的稳定 main 森林调用 Engine。严格 DTO、锁内当前管理员再准入及外层 HEAD 检查，沿用 HttpBackendJob 保留容量与任务所有权；计数不是正文验证或新业务提交。完整范围与未知结果规则见[实体布局契约](../contracts/README.md#显式实体布局整理)。
+
+### 混合目录逐级备份入口
+
+`PUT /api/repositories/{repo}/recursive-backup-tree-configuration` 只把严格冻结的请求转发到独立 `configure_recursive_backup_tree`，不修改旧 `recursive-backup-configuration` 的永久收据或文件模式语义。两个入口共用原配置 GET、当前会话/管理状态转发和 writer 锁内身份复核。新入口仅接受目录 scope，目录目标须有元数据成员发布证明；不接收正文、自定义前缀或客户端权限。混合文件与空目录的临时磁盘/Router 定向定义见[HTTP 回归](../../test/server/integration/recursive_mixed_backup_http.rs)，不代表真实网络、浏览器或硬件掉电验收。

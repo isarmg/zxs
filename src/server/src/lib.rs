@@ -670,6 +670,14 @@ pub trait Backend: Send + Sync {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         Err(ApiError::unsupported())
     }
+    #[cfg(feature = "core")]
+    fn configure_recursive_backup_tree(
+        &self,
+        _identity: &Identity,
+        _request: ConfigureRecursiveBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn plan(&self, identity: &Identity, plan: &str) -> Result<storage_contract::Plan, ApiError>;
     /// The outer error belongs to the HTTP keys phase, after current admission.
     /// A successful envelope may still carry an operation error for the later
@@ -1368,6 +1376,15 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.backend
             .configure_recursive_backups(&self.current(identity)?, request)
+    }
+    #[cfg(feature = "core")]
+    fn configure_recursive_backup_tree(
+        &self,
+        identity: &Identity,
+        request: ConfigureRecursiveBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .configure_recursive_backup_tree(&self.current(identity)?, request)
     }
     fn plan(&self, identity: &Identity, plan: &str) -> Result<storage_contract::Plan, ApiError> {
         self.backend.plan(&self.current(identity)?, plan)

@@ -1203,6 +1203,15 @@ impl Backend for ManagementBackend {
             .backend()?
             .configure_recursive_backups(identity, request)
     }
+    fn configure_recursive_backup_tree(
+        &self,
+        identity: &Identity,
+        request: crate::ConfigureRecursiveBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner
+            .backend()?
+            .configure_recursive_backup_tree(identity, request)
+    }
     fn plan(
         &self,
         identity: &crate::auth::Identity,

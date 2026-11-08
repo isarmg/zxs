@@ -9166,7 +9166,7 @@
     "/api/repositories/{repo}/recursive-backup-configuration": {
       "get": {
         "operationId": "getRecursiveBackupConfiguration",
-        "description": "只读取得同一Engine状态下的有效scope策略与逐跳来源捕获。需要已接纳的当前登记，未知query字段拒绝。显式保存重保护当前文件与可用历史版本；独立选中且文件集合为空的目录scope可发布目录快照，目标须为原登记及当前配置的元数据成员。含文件scope中的空子目录须独立选择，不自动传播后续移动/改名。",
+        "description": "只读取得同一Engine状态下的有效scope策略与逐跳来源捕获。需要已接纳的当前登记，未知query字段拒绝。供原文件模式或显式目录树模式的独立PUT端点使用；此响应不声称当前策略由哪一种模式建立。",
         "parameters": [
           {
             "name": "repo",
@@ -9210,7 +9210,7 @@
       },
       "put": {
         "operationId": "configureRecursiveBackups",
-        "description": "通过原生完整复制事务，把当前scope所含文件及可用历史版本写入逐跳路径。每级加直接来源盘basename；命名仓库包含仓库名，保留完整祖先路径。拒绝过期capture、停用来源和全空scope；后续改名需显式重新配置。永久重试必须复用原capture和operation_id。",
+        "description": "原有逐级文件模式：通过原生完整复制事务重保护当前scope所含文件及仍可用的历史版本。仅当整个目录scope没有文件时发布目录快照，含文件范围的空子目录不自动纳入。每级加直接来源盘名并保留完整逻辑路径。已捕获路径跟随主逻辑改名或移动；新增空目录和盘名前缀变化需要重新读取后保存。永久重试保留原endpoint、capture和operation_id，不能跨模式复用operation_id。",
         "parameters": [
           {
             "name": "repo",
@@ -9391,6 +9391,150 @@
           },
           "default": {
             "description": "严格字段、当前认证、陈旧HEAD、未初始化、磁盘或恢复要求拒绝；错误不证明从未执行。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repositories/{repo}/recursive-backup-tree-configuration": {
+      "put": {
+        "operationId": "configureRecursiveBackupTree",
+        "description": "显式混合目录树模式，仅接受目录或仓库根scope：同一原生事务发布当前文件、可用历史版本和当前目录（包括空子目录），独立子备份规则保持不变。所有目录目标须为原登记及当前配置元数据成员，不支持时整笔拒绝，不退回文件模式。来源/目标身份、scope代数和capture在writer锁内重新核验。永久重试必须使用原endpoint、capture和operation_id；其他模式同ID拒绝。HTTP取消只结束等待，不声称撤销已运行发布，按原operation_id查询结果。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "target_copies": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "expected_generation": {
+                    "$ref": "#/components/schemas/UInt64"
+                  },
+                  "operation_id": {
+                    "$ref": "#/components/schemas/OperationId"
+                  },
+                  "expected_scope_id": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/RepositoryId"
+                      },
+                      {
+                        "$ref": "#/components/schemas/EntryId"
+                      }
+                    ]
+                  },
+                  "capture": {
+                    "$ref": "#/components/schemas/RecursiveBackupCapture"
+                  }
+                },
+                "required": [
+                  "path",
+                  "target_copies",
+                  "expected_generation",
+                  "operation_id",
+                  "expected_scope_id",
+                  "capture"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "operation_id": {
+                      "$ref": "#/components/schemas/OperationId"
+                    },
+                    "operation_kind": {
+                      "type": "string"
+                    },
+                    "request_digest": {
+                      "$ref": "#/components/schemas/Hash"
+                    },
+                    "state": {
+                      "enum": [
+                        "completed",
+                        "in_doubt"
+                      ]
+                    },
+                    "commit_state": {
+                      "type": "string"
+                    },
+                    "protection_at_publish": {
+                      "type": "string"
+                    },
+                    "publication_sequence": {
+                      "$ref": "#/components/schemas/UInt64"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "operation_id",
+                    "operation_kind",
+                    "request_digest",
+                    "state",
+                    "commit_state",
+                    "result",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；不确定结果使用原 operation_id 查询或重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "捕获来源或策略代数发生变化，或原operation_id用于不同请求。",
             "content": {
               "application/json": {
                 "schema": {

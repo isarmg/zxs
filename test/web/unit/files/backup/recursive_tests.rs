@@ -7,6 +7,7 @@ fn draft() -> Draft {
         repository: "repo".into(),
         path: "docs".into(),
         expected_scope: Some("scope".into()),
+        mode: Mode::Files,
         load: Load::Pending,
     }
 }
@@ -334,10 +335,12 @@ fn pending_publication_blocks_close_reload_new_modes_count_changes_and_double_su
             start(state, "other".into(), "".into(), None);
             super::super::start(state, "other".into(), "".into());
             select_copies(state, "1".into());
+            select_mode(state, "directory-tree".into());
             submit(state);
             state.with_untracked(|s| {
                 let d = s.files.recursive_backup.as_ref().unwrap();
                 assert_eq!(d.id, "draft");
+                assert!(d.mode == Mode::Files);
                 assert_eq!(request(d).unwrap()["target_copies"], 3);
                 assert!(s.files.backup.is_none());
                 assert!(s.files.publications.is_empty());
@@ -451,4 +454,114 @@ fn definitive_publication_closes_the_recursive_panel_but_unknown_and_rejected_pr
             matches!(status, SaveStatus::Published | SaveStatus::Degraded)
         );
     }
+}
+
+#[test]
+fn mixed_mode_is_explicit_and_keeps_the_exact_capture() {
+    Owner::new().with(|| {
+        let mut initial = State {
+            authenticated: true,
+            ..Default::default()
+        };
+        initial.management.storage = crate::management::Storage::Ready;
+        initial.files.writable = true;
+        initial.files.recursive_backup = Some(ready());
+        let state = RwSignal::new(initial);
+        let before = state.with_untracked(|s| {
+            let draft = s.files.recursive_backup.as_ref().unwrap();
+            assert!(draft.mode == Mode::Files);
+            assert!(
+                draft
+                    .mode
+                    .endpoint(&draft.repository)
+                    .ends_with("/recursive-backup-configuration")
+            );
+            request(draft).unwrap()
+        });
+        select_mode(state, "directory-tree".into());
+        state.with_untracked(|s| {
+            let draft = s.files.recursive_backup.as_ref().unwrap();
+            assert!(draft.mode == Mode::DirectoryTree);
+            assert!(
+                draft
+                    .mode
+                    .endpoint(&draft.repository)
+                    .ends_with("/recursive-backup-tree-configuration")
+            );
+            assert_eq!(request(draft).unwrap(), before);
+        });
+        select_mode(state, "unknown".into());
+        assert!(state.with_untracked(
+            |s| s.files.recursive_backup.as_ref().unwrap().mode == Mode::DirectoryTree
+        ));
+        select_mode(state, "files".into());
+        assert!(
+            state
+                .with_untracked(|s| s.files.recursive_backup.as_ref().unwrap().mode == Mode::Files)
+        );
+    });
+}
+
+#[test]
+fn mixed_mode_rejects_file_scopes_at_selection_and_request_boundaries() {
+    Owner::new().with(|| {
+        let mut draft = draft();
+        let mut value = response();
+        value["configuration"]["scope"]["kind"] = json!("file");
+        draft.load = Load::Ready(Box::new(read_response(value, &draft).unwrap()));
+        let mut initial = State {
+            authenticated: true,
+            ..Default::default()
+        };
+        initial.management.storage = crate::management::Storage::Ready;
+        initial.files.writable = true;
+        initial.files.recursive_backup = Some(draft.clone());
+        let state = RwSignal::new(initial);
+        select_mode(state, "directory-tree".into());
+        assert!(
+            state
+                .with_untracked(|s| s.files.recursive_backup.as_ref().unwrap().mode == Mode::Files)
+        );
+        draft.mode = Mode::DirectoryTree;
+        assert!(request(&draft).is_err());
+    });
+}
+
+#[test]
+fn scope_kind_is_required_and_typed_before_offering_mixed_mode() {
+    for kind in [json!(null), json!("unknown"), json!(4)] {
+        let mut value = response();
+        value["configuration"]["scope"]["kind"] = kind;
+        assert!(read_response(value, &draft()).is_err());
+    }
+    let mut value = response();
+    value["configuration"]["scope"]
+        .as_object_mut()
+        .unwrap()
+        .remove("kind");
+    assert!(read_response(value, &draft()).is_err());
+}
+
+#[test]
+fn mixed_mode_cannot_change_while_pending_or_unknown_in_either_direction() {
+    Owner::new().with(|| {
+        for mode in [Mode::Files, Mode::DirectoryTree] {
+            for unknown in [false, true] {
+                let mut initial = State { authenticated: true, ..Default::default() };
+                initial.management.storage = crate::management::Storage::Ready;
+                initial.files.writable = true;
+                let mut draft = ready();
+                draft.mode = mode;
+                initial.files.recursive_backup = Some(draft);
+                if unknown { initial.files.operations.push(FileOperation::unknown("original")); }
+                else { initial.files.mutation_pending = true; }
+                let state = RwSignal::new(initial);
+                select_mode(state, if mode == Mode::Files { "directory-tree" } else { "files" }.into());
+                submit(state);
+                close(state);
+                assert!(state.with_untracked(|s|s.files.recursive_backup.as_ref().unwrap().mode == mode));
+                assert!(state.with_untracked(|s|s.files.publications.is_empty()));
+            }
+        }
+    });
 }

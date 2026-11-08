@@ -318,3 +318,40 @@ fn a_receipt_for_another_operation_kind_cannot_settle_the_frozen_tag_request() {
         assert!(!state.with_untracked(actions::pending));
     });
 }
+
+#[test]
+fn mixed_backup_submission_freezes_endpoint_body_and_operation_before_unknown_outcome() {
+    Owner::new().with(|| {
+        let mut initial = State {
+            authenticated: true,
+            ..Default::default()
+        };
+        initial.management.storage = crate::management::Storage::Ready;
+        initial.files.writable = true;
+        let endpoint = "/api/repositories/repo/recursive-backup-tree-configuration";
+        let body = json_codec::json!({"path":"docs", "capture":{"source_sequence":"7"}});
+        assert!(can_start(&initial, Kind::Backup));
+        let attempt = begin_submission(
+            &mut initial,
+            Kind::Backup,
+            "original-tree".into(),
+            "PUT",
+            endpoint.into(),
+            body.clone(),
+        );
+        let state = RwSignal::new(initial);
+        complete(state, Kind::Backup, &attempt, Err(failure(0)));
+        assert_eq!(attempt.request.endpoint, endpoint);
+        assert_eq!(attempt.request.body["capture"], body["capture"]);
+        assert_eq!(attempt.request.body["operation_id"], "original-tree");
+        assert!(!state.with_untracked(|s| can_start(s, Kind::Backup)));
+        state.with_untracked(|s| {
+            assert_eq!(
+                s.files.publications[&Kind::Backup].operation_id.as_deref(),
+                Some("original-tree")
+            );
+            assert_eq!(s.files.operations[0].id(), "original-tree");
+            assert_eq!(s.files.operations[0].status(), SaveStatus::Unknown);
+        });
+    });
+}

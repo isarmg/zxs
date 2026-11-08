@@ -48,6 +48,40 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 .unwrap_or_default()
         })
     });
+    let mode_options = Signal::derive(move || {
+        state.with(|s| {
+            let mut options = vec![SelectOption::new(
+                Mode::Files.value(),
+                t("文件（原有模式）", "Files (existing behavior)"),
+            )];
+            if s.files
+                .recursive_backup
+                .as_ref()
+                .and_then(Draft::response)
+                .is_some_and(|r| {
+                    r.configuration.scope.kind == storage_contract::NamespaceEntryKind::Directory
+                })
+            {
+                options.push(SelectOption::new(
+                    Mode::DirectoryTree.value(),
+                    t(
+                        "文件与目录（含空目录）",
+                        "Files and directories (including empty folders)",
+                    ),
+                ));
+            }
+            options
+        })
+    });
+    let mode = Signal::derive(move || {
+        state.with(|s| {
+            s.files
+                .recursive_backup
+                .as_ref()
+                .map(|draft| draft.mode.value().to_owned())
+                .unwrap_or_default()
+        })
+    });
     let target = Signal::derive(move || {
         state.with(|s| {
             s.files
@@ -97,11 +131,14 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             </div>
             <p class="zxs-row">{move ||state.with(|s|s.files.recursive_backup.as_ref().map(|draft|if draft.path.is_empty(){"/".into()}else{draft.path.clone()}).unwrap_or_default())}</p>
             <p class="zxs-row">{t("保存会替换本范围的自定义备份前缀。每级保留直接来源磁盘的完整逻辑路径，并在前面加该来源盘名。例如：二级 磁盘A/目录/文件，三级 磁盘B/磁盘A/目录/文件。主盘路径不变。","Saving replaces custom backup prefixes for this scope. Each level prefixes its immediate source disk’s name to that source’s full logical path. For example: level 2 DiskA/folder/file; level 3 DiskB/DiskA/folder/file. Primary paths stay unchanged.")}</p>
-            <p class="zxs-row">{t("这次保存重保护当前范围内的文件和仍可用的历史版本。独立选中的无文件范围可发布空目录；含文件范围中的空子目录须另行选择。递归文件路径和已捕获的空目录会跟随主逻辑路径重命名或移动；更新盘名前缀或纳入新增空目录仍须重新读取并保存。","Saving re-protects current files and their still-available history. A separately selected scope with no files publishes its empty directories; select empty subdirectories separately from scopes containing files. Recursive file paths and captured empty directories follow primary logical renames and moves. Reload and save again to update disk-name prefixes or capture new empty directories.")}</p>
+            <p class="zxs-row">{t("保存重保护当前文件与仍可用的历史版本。原有文件模式仅在整个范围无文件时发布空目录；目录可显式选择“文件与目录”，一次捕获当前文件和空子目录。独立子备份规则保持不变。已捕获路径跟随主逻辑改名或移动；盘名前缀变化或新增空目录仍须重新读取并保存。","Saving re-protects current files and still-available history. Existing file mode publishes empty directories only when the whole scope has no files. For a directory, explicitly choose Files and directories to capture files and empty descendants together. Independent child backup rules remain unchanged. Captured paths follow primary renames and moves; reload and save to update disk-name prefixes or capture newly created empty directories.")}</p>
             <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().is_some_and(|d|matches!(d.load,Load::Pending)))><LoadingState/></Show>
             <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().and_then(Draft::response).is_some())>
                 <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().and_then(Draft::response).is_some_and(|r|r.configuration.inherited))><p class="zxs-row">{t("当前继承上级规则；保存会为此范围单独设置逐级规则。","This scope inherits its parent’s rule. Saving sets recursive protection for this scope.")}</p></Show>
                 <p class="zxs-row">{t("前缀预览不包含主盘完整路径；有名称的仓库保留仓库名，磁盘根仓库不添加仓库名。来源变化时服务器会拒绝旧依据，请重新读取后复核。","The preview below shows prefixes, not the full primary path. Named repositories retain their name; disk-root repositories do not add one. If sources change, the server rejects the old baseline. Reload and review before saving.")}</p>
+                <Select label=t("本次保存模式","Mode for this save") options=mode_options value=mode disabled=disabled on_change=Callback::new(move |value:String|select_mode(state,value))/>
+                <p class="zxs-row">{t("此选项控制新的保存请求，不表示服务器已配置的模式。重新读取会恢复原有文件模式。","This choice controls the new request; it does not identify the server’s configured mode. Reloading resets it to existing file mode.")}</p>
+                <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().is_some_and(|d|d.mode==Mode::DirectoryTree))><p class="zxs-row" role="status">{t("文件与目录模式要求所有目录备份目标均为元数据成员。不满足时整笔请求拒绝，不会静默退回只备份文件。","Files and directories mode requires every directory backup target to be a metadata member. If unsupported, the entire request is rejected, never silently reduced to files only.")}</p></Show>
                 <Select label=t("目标份数","Target copy count") options=options value=target disabled=disabled on_change=Callback::new(move |value:String|select_copies(state,value))/>
                 <Show when=move ||state.with(|s|s.files.recursive_backup.as_ref().and_then(Draft::response).is_some_and(|r|r.configuration.file_count==0))><p class="zxs-row" role="status">{t("此范围没有文件。保存将发布当前目录及其空子目录；目标须为元数据成员，服务器会复核来源和目标。","This scope has no files. Saving publishes this directory and its empty descendants. Targets must be metadata members; the server rechecks sources and targets.")}</p></Show>
                 <div class="zxs-stack" aria-label=t("逐级前缀预览","Recursive prefix preview")>

@@ -1,4 +1,4 @@
-//! Explicit recursive protection of current files or an independently empty scope.
+//! Explicit recursive file protection or a mixed file/directory snapshot.
 mod capture;
 mod view;
 use crate::{
@@ -18,7 +18,28 @@ pub(crate) struct Draft {
     repository: String,
     path: String,
     expected_scope: Option<String>,
+    mode: Mode,
     load: Load,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Files,
+    DirectoryTree,
+}
+impl Mode {
+    fn value(self) -> &'static str {
+        match self {
+            Self::Files => "files",
+            Self::DirectoryTree => "directory-tree",
+        }
+    }
+    fn endpoint(self, repository: &str) -> String {
+        let route = match self {
+            Self::Files => "recursive-backup-configuration",
+            Self::DirectoryTree => "recursive-backup-tree-configuration",
+        };
+        format!("/api/repositories/{}/{route}", api::segment(repository))
+    }
 }
 #[derive(Clone)]
 enum Load {
@@ -65,6 +86,7 @@ struct Configuration {
 }
 #[derive(Clone, Deserialize)]
 struct Scope {
+    kind: storage_contract::NamespaceEntryKind,
     id: String,
     path: String,
 }
@@ -149,6 +171,7 @@ fn start(state: RwSignal<State>, repository: String, path: String, expected_scop
         repository,
         path,
         expected_scope,
+        mode: Mode::Files,
         load: Load::Pending,
     };
     review::reset(state, review::Kind::Backup);
@@ -236,6 +259,27 @@ fn select_copies(state: RwSignal<State>, value: String) {
         }
     });
 }
+fn select_mode(state: RwSignal<State>, value: String) {
+    if !state.with_untracked(actions::write_allowed) {
+        return;
+    }
+    let mode = match value.as_str() {
+        "files" => Mode::Files,
+        "directory-tree" => Mode::DirectoryTree,
+        _ => return,
+    };
+    state.update(|s| {
+        if let Some(draft) = s.files.recursive_backup.as_mut()
+            && draft.response().is_some_and(|response| {
+                mode == Mode::Files
+                    || response.configuration.scope.kind
+                        == storage_contract::NamespaceEntryKind::Directory
+            })
+        {
+            draft.mode = mode;
+        }
+    });
+}
 fn request(draft: &Draft) -> Result<Value, String> {
     let Some(response) = draft.response() else {
         return Err(t(
@@ -244,6 +288,14 @@ fn request(draft: &Draft) -> Result<Value, String> {
         ));
     };
     let configuration = &response.configuration;
+    if draft.mode == Mode::DirectoryTree
+        && configuration.scope.kind != storage_contract::NamespaceEntryKind::Directory
+    {
+        return Err(t(
+            "文件与目录模式只能用于目录范围。",
+            "Files and directories mode requires a directory scope.",
+        ));
+    }
     if configuration.target_copies == 0
         || configuration.target_copies as usize > configuration.capacity()
     {
@@ -268,10 +320,7 @@ fn submit(state: RwSignal<State>) {
             state,
             review::Kind::Backup,
             "PUT",
-            format!(
-                "/api/repositories/{}/recursive-backup-configuration",
-                api::segment(&draft.repository)
-            ),
+            draft.mode.endpoint(&draft.repository),
             body,
         ),
         Err(error) => review::error(state, review::Kind::Backup, error),
