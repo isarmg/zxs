@@ -21,6 +21,15 @@ struct ManagementInitialization {
     format: ManagementFormat,
 }
 
+/// Encode the current management-without-storage intent. This is not a storage
+/// readiness marker and never authorizes a backend to admit a half-built pool.
+pub fn management_initialization_record() -> Vec<u8> {
+    json_codec::to_vec(&ManagementInitialization {
+        format: ManagementFormat::WithoutStorage,
+    })
+    .expect("invariant: current management initialization record serializes")
+}
+
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct StorageActivationRequest {

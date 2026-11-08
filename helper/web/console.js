@@ -9,9 +9,10 @@ let hostPreview = null;
 let layoutPreview = null;
 let configurationPreview = null;
 let administratorResetPreview = null;
+let firstAdministratorPreview = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -311,3 +312,67 @@ byId("administrator-reset-recover").addEventListener("click", async () => {
     byId("administrator-reset-save-plan").hidden = false;
   } catch (failure) { error(failure.message); } finally { setBusy(false); }
 });
+
+function clearFirstAdministratorPasswords() {
+  byId("first-administrator-password").value = "";
+  byId("first-administrator-repeat-password").value = "";
+}
+function resetFirstAdministratorPlan() {
+  firstAdministratorPreview = null; clearFirstAdministratorPasswords();
+  byId("first-administrator-plan").hidden = true;
+  byId("first-administrator-save-plan").hidden = true;
+  byId("first-administrator-password-form").hidden = true;
+  byId("first-administrator-receipt").hidden = true;
+  byId("first-writers-stopped").checked = false;
+}
+function firstAdministratorInput() {
+  return {service_user:byId("first-service-user").value,administrator:byId("first-administrator-name").value};
+}
+function showFirstAdministratorPlan(input, preview) {
+  firstAdministratorPreview = {input,request_digest:preview.request_digest};
+  byId("first-administrator-plan").textContent = JSON.stringify(preview, null, 2);
+  byId("first-administrator-plan").hidden = false;
+  byId("first-administrator-save-plan").hidden = false;
+  byId("first-administrator-password-form").hidden = false;
+}
+for (const id of ["first-service-user","first-administrator-name","first-original-digest"]) {
+  byId(id).addEventListener("input", resetFirstAdministratorPlan);
+}
+byId("first-administrator-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping) return;
+  const input = firstAdministratorInput(); resetFirstAdministratorPlan(); error(""); setBusy(true);
+  try { showFirstAdministratorPlan(input, await (await post("/api/initialization/administrator-preview", input)).json()); }
+  catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("first-administrator-recover").addEventListener("click", async () => {
+  if (busy || stopping) return;
+  const request_digest = byId("first-original-digest").value;
+  if (!/^[0-9a-f]{64}$/.test(request_digest)) { error("请输入原初始化请求的完整摘要。"); return; }
+  const input = firstAdministratorInput(); resetFirstAdministratorPlan(); error(""); setBusy(true);
+  try { showFirstAdministratorPlan(input, await (await post("/api/initialization/administrator-recover-preview", {input,request_digest})).json()); }
+  catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("first-administrator-save-plan").addEventListener("click", () => {
+  if (!firstAdministratorPreview) return;
+  save(new Blob([JSON.stringify(firstAdministratorPreview, null, 2)], {type:"application/json"}),
+    `zxs-first-administrator-${firstAdministratorPreview.request_digest}.json`);
+});
+byId("first-administrator-password-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping || !firstAdministratorPreview) return;
+  if (byId("first-administrator-password").value !== byId("first-administrator-repeat-password").value) { error("两次初始密码不一致。"); return; }
+  if (!window.confirm("确认只在准确新空布局中创建所示 ZXS 管理员？不创建 Unix/Samba 账户，不初始化磁盘，不表示完整系统或存储服务已就绪。失败时只按原请求和同一密码续作，不清空未知数据。")) return;
+  const body = {...firstAdministratorPreview,confirmation:"initialize-first-management-administrator",
+    external_writers_stopped:byId("first-writers-stopped").checked,password:byId("first-administrator-password").value,
+    repeat_password:byId("first-administrator-repeat-password").value};
+  clearFirstAdministratorPasswords(); error(""); setBusy(true);
+  try {
+    const receipt = await (await post("/api/initialization/administrator-create", body)).json();
+    byId("first-administrator-receipt").textContent = JSON.stringify(receipt, null, 2);
+    byId("first-administrator-receipt").hidden = false;
+    firstAdministratorPreview = null;
+    byId("first-administrator-password-form").hidden = true;
+    byId("first-administrator-save-plan").hidden = true;
+  } catch (failure) { error(`${failure.message}。管理员可能已创建；保留原请求，使用相同密码续作，不删除记录或改成新的初始化。`); }
+  finally { body.password = ""; body.repeat_password = ""; clearFirstAdministratorPasswords(); setBusy(false); }
+});
+window.addEventListener("pagehide", clearFirstAdministratorPasswords);

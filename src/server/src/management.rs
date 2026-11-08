@@ -101,6 +101,9 @@ pub struct ManagementOptions {
     pub retained_workspace_limits: Option<storage_engine::RetainedWorkspaceLimits>,
 }
 
+/// Current marker bytes shared by normal management and authorized offline setup.
+pub const MANAGEMENT_AUTHORITY_BYTES: &[u8] = b"{\"authority\":\"system-management-auth\"}\n";
+
 /// Marks the old engine snapshot as a replica, never an automatic admission source.
 pub fn claim_authority(data_root: &Path) -> Result<(), ApiError> {
     let path = data_root.join("management-authority.json");
@@ -108,7 +111,7 @@ pub fn claim_authority(data_root: &Path) -> Result<(), ApiError> {
     options.write(true).create_new(true).mode(0o600);
     match options.open(&path) {
         Ok(mut file) => {
-            file.write_all(b"{\"authority\":\"system-management-auth\"}\n")
+            file.write_all(MANAGEMENT_AUTHORITY_BYTES)
                 .map_err(ApiError::io)?;
             file.sync_all().map_err(ApiError::io)?;
             fs::File::open(data_root)

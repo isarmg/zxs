@@ -174,3 +174,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 已存在管理员密码重置
 
 独立 Web 新增精确预览/确认后的固定系统管理员密码重置，持有当前 daemon 生命周期租约与管理凭据锁，验证真实服务身份和原管理权威，原子发布前先保留受保护的原操作。用户手动输入新密码，撤销全部 ZXS 会话；同一原请求可通过重新输入同一新密码核对或续作，绝不以失败响应推断未改密。没有创建管理员/磁盘，没有 Samba passdb 改密或灾备副本同步，没有服务启动。源码未编译/测试/审查/CI，详见[准确边界](../design/helper-administrator-password-reset.md)。
+
+## 首次管理账户阶段
+
+独立 Web 在准确新空私有布局中可显式创建首个 ZXS 管理员，并以原摘要/同一初始密码恢复中断操作。共用当前管理意图、凭据与权威 marker 格式，保留真实 setup/auth/主服务生命周期锁、服务文件所有权和无覆盖发布。状态仅是 ManagementReady，无首批磁盘、数据库或完整系统就绪；不创建 Unix/Samba 账户，不启动服务。源码未编译/测试/审查/CI，见[首次管理账户边界](../design/helper-first-management-administrator.md)。

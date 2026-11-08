@@ -81,6 +81,18 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/host/prepare", post(host_prepare))
         .route("/api/initialization/layout-preview", post(layout_preview))
         .route("/api/initialization/layout-prepare", post(layout_prepare))
+        .route(
+            "/api/initialization/administrator-preview",
+            post(first_administrator_preview),
+        )
+        .route(
+            "/api/initialization/administrator-create",
+            post(first_administrator_create),
+        )
+        .route(
+            "/api/initialization/administrator-recover-preview",
+            post(first_administrator_recover_preview),
+        )
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), security))
         .with_state(state)
@@ -146,8 +158,8 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset"],
-        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","samba_password_reset","program_repair","systemd_smb_activation"]
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization"],
+        "not_implemented":["complete_first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","samba_password_reset","program_repair","systemd_smb_activation"]
     }))
 }
 
@@ -507,35 +519,7 @@ async fn administrator_reset(
     request: Request,
 ) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
-    let bytes = tokio::time::timeout(
-        Duration::from_secs(15),
-        to_bytes(request.into_body(), MAX_REQUEST_BYTES),
-    )
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::REQUEST_TIMEOUT,
-            "credential_request_timeout",
-            error,
-        )
-    })?
-    .map_err(|error| Failure::new(StatusCode::BAD_REQUEST, "credential_request_body", error))?;
-    let decoded = json_codec::from_slice::<crate::credentials::Reset>(&bytes);
-    // Clear the HTTP allocation when ownership permits it. SecretString clears
-    // the admitted password values on drop; transport/library copies are not a
-    // claim that every copy in process or browser memory can be erased.
-    if let Ok(mut owned) = bytes.try_into_mut() {
-        owned.fill(0);
-    }
-    // Parser errors may quote attacker-supplied fields. Do not expose them for
-    // this secret-bearing route or log the request/decoded value.
-    let input = decoded.map_err(|_| {
-        Failure::message(
-            StatusCode::BAD_REQUEST,
-            "credential_request_json",
-            "Invalid credential request; password values and parser details are not returned.",
-        )
-    })?;
+    let input: crate::credentials::Reset = secret_input(request).await?;
     let receipt = tokio::task::spawn_blocking(move || {
         let _owner = permit;
         crate::credentials::reset(input).map_err(credential_failure)
@@ -579,4 +563,101 @@ async fn administrator_reset_recover_preview(
         )
     })??;
     Ok(Json(preview).into_response())
+}
+
+async fn secret_input<T: DeserializeOwned>(request: Request) -> Result<T, Failure> {
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(15),
+        to_bytes(request.into_body(), MAX_REQUEST_BYTES),
+    )
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::REQUEST_TIMEOUT,
+            "credential_request_timeout",
+            error,
+        )
+    })?
+    .map_err(|error| Failure::new(StatusCode::BAD_REQUEST, "credential_request_body", error))?;
+    let decoded = json_codec::from_slice::<T>(&bytes);
+    // Clear the transport allocation when uniquely owned, while admitted
+    // SecretString fields clear on drop. No claim covers all library copies.
+    if let Ok(mut owned) = bytes.try_into_mut() {
+        owned.fill(0);
+    }
+    decoded.map_err(|_| {
+        Failure::message(
+            StatusCode::BAD_REQUEST,
+            "credential_request_json",
+            "Invalid credential request; password values and parser details are not returned.",
+        )
+    })
+}
+async fn first_administrator_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::initialization::administrator::Input = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::initialization::administrator::preview(input).map_err(first_administrator_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "administrator_initialization_worker",
+            error,
+        )
+    })??;
+    Ok(Json(preview).into_response())
+}
+async fn first_administrator_recover_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::initialization::administrator::RecoverPreview = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::initialization::administrator::recover_preview(input)
+            .map_err(first_administrator_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "administrator_initialization_worker",
+            error,
+        )
+    })??;
+    Ok(Json(preview).into_response())
+}
+async fn first_administrator_create(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::initialization::administrator::Create = secret_input(request).await?;
+    let receipt = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::initialization::administrator::create(input).map_err(first_administrator_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "administrator_initialization_worker",
+            error,
+        )
+    })??;
+    Ok(Json(receipt).into_response())
+}
+fn first_administrator_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    Failure::message(
+        StatusCode::CONFLICT,
+        "first_management_administrator",
+        &error.to_string(),
+    )
 }

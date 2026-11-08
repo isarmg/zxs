@@ -137,6 +137,20 @@ impl PrivateDirectory {
     pub fn open_for_administration(path: impl AsRef<Path>) -> Result<Self, Error> {
         unix::open_administrative_directory(path.as_ref())
     }
+    /// Admit an already-held directory for authorized offline administration,
+    /// without reopening a potentially replaced name. The diagnostic absolute
+    /// path is checked by `verify_identity` before publication. Requires the
+    /// actual owner or effective uid 0 and exact 0700; new files preserve uid/gid.
+    ///
+    /// # Errors
+    /// Rejects unsupported paths, non-directories, unsafe modes or ownership.
+    pub fn from_directory_for_administration(
+        directory: File,
+        path: PathBuf,
+    ) -> Result<Self, Error> {
+        unix::administrative_directory_from_handle(directory, path)
+    }
+
     /// Create missing private directories and synchronize the entire absolute chain.
     /// Existing ancestors need only be directories without symbolic links, matching
     /// [`Self::create`]; only newly created components and the leaf must be private.

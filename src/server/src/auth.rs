@@ -18,6 +18,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod initial;
+pub use initial::{InitialManagementOutcome, PreparedInitialAdministrator};
 mod replacement;
 pub use replacement::{
     CredentialRevision, PasswordReplacementOutcome, PreparedPasswordReplacement,
@@ -583,18 +585,7 @@ impl AuthStore {
         }
         let directory = PrivateDirectory::create_trusted(root).map_err(ApiError::invalid_source)?;
         let auth_lock = Self::acquire_lock(&directory)?;
-        let username = primitives::normalize_administrator_username(username)
-            .map_err(ApiError::invalid_source)?;
-        let hash =
-            primitives::hash_password(password).map_err(ApiError::authentication_operation)?;
-        let db = Database {
-            administrator: Administrator {
-                username,
-                password_hash: hash,
-                generation: 1,
-            },
-            sessions: BTreeMap::new(),
-        };
+        let db = PreparedInitialAdministrator::new(username, password)?.database;
         let store = Self {
             directory: Some(directory),
             name,

@@ -1036,3 +1036,24 @@ fn staged_atomic_owner_cancels_and_publishes_only_into_held_directory() {
     assert_eq!(fs::read(moved.join("record")).unwrap(), b"new");
     assert_eq!(fs::read_dir(&moved).unwrap().count(), 1);
 }
+
+#[test]
+fn administrative_handle_admission_preserves_identity_without_reopening_replacement() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("original-name");
+    std::fs::create_dir(&path).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let held = std::fs::File::open(&path).unwrap();
+    let owner = held.metadata().unwrap();
+    let directory =
+        PrivateDirectory::from_directory_for_administration(held, path.clone()).unwrap();
+    AtomicFile::create(&directory, &EntryName::new("record").unwrap(), b"owned").unwrap();
+    let metadata = std::fs::metadata(path.join("record")).unwrap();
+    assert_eq!((metadata.uid(), metadata.gid()), (owner.uid(), owner.gid()));
+    std::fs::rename(&path, temp.path().join("old")).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(directory.verify_identity().is_err());
+    assert!(!path.join("wrong").exists());
+}

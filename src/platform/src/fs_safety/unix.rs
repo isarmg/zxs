@@ -75,14 +75,32 @@ pub(super) fn private_directory_from_handle(
 }
 
 pub(super) fn open_administrative_directory(path: &Path) -> Result<PrivateDirectory, Error> {
-    let directory = open_directory(path)?;
+    administrative_directory_from_handle(open_directory(path)?, path.to_path_buf())
+}
+
+pub(super) fn administrative_directory_from_handle(
+    directory: File,
+    path: PathBuf,
+) -> Result<PrivateDirectory, Error> {
+    if !path.is_absolute() {
+        return Err(Error::AbsolutePathRequired(path));
+    }
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(Error::UnsafeRelativePath(path));
+    }
     let stat = fstat(&directory).map_err(io::Error::from)?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Directory {
+        return Err(Error::UnsafeFileType(path));
+    }
     let caller = geteuid().as_raw();
     if (caller != 0 && caller != stat.st_uid) || stat.st_mode & 0o7777 != 0o700 {
-        return Err(Error::UnsafePermissions(path.to_path_buf()));
+        return Err(Error::UnsafePermissions(path));
     }
     Ok(PrivateDirectory {
-        path: path.to_path_buf(),
+        path,
         directory,
         administration_owner: Some((stat.st_uid, stat.st_gid)),
     })

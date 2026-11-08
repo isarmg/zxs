@@ -12,7 +12,7 @@
     <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、首装与部署准备</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、重置已存在的 ZXS 管理员密码或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、在新空布局创建 ZXS 管理员、重置其密码或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
     <section class="card">
@@ -44,6 +44,31 @@
       <pre id="layout-plan" hidden></pre>
       <button id="layout-prepare" type="button" hidden>确认仅准备这棵空目录</button>
       <pre id="layout-receipt" hidden></pre>
+    </section>
+    <section class="card">
+      <h2>首次初始化：只创建系统管理员</h2>
+      <p>在前一步准备的准确空 <code>/zxs/data/{state,management,disks}</code> 中创建唯一 ZXS 管理员。必须已有正确的本机服务账户。原子写入当前管理凭据、管理初始化意图和系统管理权威标记，不创建 Unix/Samba 账户，不初始化磁盘或存储数据库。</p>
+      <form id="first-administrator-form">
+        <div class="fields">
+          <label>已存在的本机服务账户 <input id="first-service-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label>
+          <label>新 ZXS 管理员名称 <input id="first-administrator-name" required value="admin" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <button id="first-administrator-preview" type="submit">核对空布局与首次管理员计划</button>
+        <label>中断恢复：原请求摘要 <input id="first-original-digest" maxlength="64" autocomplete="off" spellcheck="false" placeholder="仅续作原操作时填写"></label>
+        <button id="first-administrator-recover" type="button" class="secondary">读取原初始化恢复预览</button>
+      </form>
+      <pre id="first-administrator-plan" hidden></pre>
+      <button id="first-administrator-save-plan" type="button" class="secondary" hidden>保存无密码的原请求信息</button>
+      <form id="first-administrator-password-form" hidden autocomplete="off">
+        <div class="fields">
+          <label>手动输入初始密码 <input id="first-administrator-password" type="password" autocomplete="new-password" required></label>
+          <label>再次输入初始密码 <input id="first-administrator-repeat-password" type="password" autocomplete="new-password" required></label>
+        </div>
+        <label class="ack"><input id="first-writers-stopped" type="checkbox" required> 我已停止旧版和其他写入者，确认只创建管理账户；这个确认不是所有外部写者的 OS 锁。</label>
+        <p class="muted">这是管理账户阶段，不是完整系统初始化。首批磁盘/三范围数据库初始化、完整就绪交接仍未提供；不要把这里的成功当作可以启动完整存储服务。无认证且明文 HTTP，只能在可信隔离网络使用。密码不进 URL、日志或回执，提交即清空输入框。</p>
+        <button id="first-administrator-create" type="submit">确认仅创建首次管理账户</button>
+      </form>
+      <pre id="first-administrator-receipt" hidden></pre>
     </section>
     <section class="card">
       <h2>准备与安装 systemd / SMB 配置文件</h2>
@@ -115,7 +140,7 @@
       <details><summary>完整报告与来源身份</summary><pre id="report"></pre></details>
     </section>
     <p id="error" class="error" role="alert" hidden></p>
-    <section class="card pending"><h2>尚未完成的能力</h2><p>首次系统初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、实际 Samba 密码重置、程序覆盖修复、依赖安装、已有配置的替换和 systemd/SMB 的加载/启动/启用尚未提供。程序首装、空布局和固定配置文件安装都不是系统初始化或服务启用完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
+    <section class="card pending"><h2>尚未完成的能力</h2><p>完整首次系统/磁盘初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、实际 Samba 密码重置、程序覆盖修复、依赖安装、已有配置的替换和 systemd/SMB 的加载/启动/启用尚未提供。程序首装、空布局和固定配置文件安装都不是系统初始化或服务启用完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
     <footer>手动运行，不注册 systemd，不设置开机自启。关闭页面不会结束进程；请点“退出辅助工具”或在启动终端按 Ctrl+C，并等进程真正退出再移除磁盘。</footer>
   </main>
 </body>

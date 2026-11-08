@@ -81,7 +81,7 @@ pub enum PasswordReplacementOutcome {
     Published,
     ExistingDurablyVerified,
 }
-fn revision(database: &Database) -> Result<CredentialRevision, ApiError> {
+pub(super) fn revision(database: &Database) -> Result<CredentialRevision, ApiError> {
     database.validate()?;
     let bytes = json_codec::to_vec(database)
         .expect("invariant: credential database serialization succeeds");
@@ -176,7 +176,7 @@ impl AuthStore {
         Ok(PasswordReplacementOutcome::Published)
     }
 
-    fn synchronize_current_credentials(&self) -> Result<(), ApiError> {
+    pub(super) fn synchronize_current_credentials(&self) -> Result<(), ApiError> {
         let result = (|| {
             let directory = self
                 .directory

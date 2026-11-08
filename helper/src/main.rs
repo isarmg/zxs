@@ -30,8 +30,9 @@ The matching release helper can install only its embedded ZXS executable at /usr
 Engine recovery commands require the current-daemon /zxs lifetime lease; host preview/prepare can create that root without initializing the system.
 A selected existing non-root local account can receive an empty private data layout; this creates no administrator, database or disk.
 Systemd/Samba configuration can be prepared as an inactive bundle or installed at fixed paths without overwriting different files, reloading, starting or enabling services.
+The independent Web console can create the first management-only administrator in the exact new empty private layout; no storage is initialized.
 The independent Web console can reset an existing ZXS administrator password with exact confirmation; it revokes ZXS sessions but does not update disaster-recovery credential replicas or Samba passwords.
-First-run setup, disk addition/removal, foreign admission, Samba password reset, program repair and systemd/SMB activation are not yet implemented. No planned-offline action is offered."
+Complete first-run storage setup, disk addition/removal, foreign admission, Samba password reset, program repair and systemd/SMB activation are not yet implemented. No planned-offline action is offered."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.

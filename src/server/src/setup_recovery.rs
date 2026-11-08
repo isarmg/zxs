@@ -16,7 +16,10 @@ use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits, ValidatedCon
 
 mod activation;
 mod discovery;
-pub use activation::{StorageActivationRequest, StorageActivationState, StorageActivationStatus};
+pub use activation::{
+    StorageActivationRequest, StorageActivationState, StorageActivationStatus,
+    management_initialization_record,
+};
 mod http;
 pub(crate) use http::{protected_routes, public_routes};
 

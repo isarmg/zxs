@@ -1,4 +1,5 @@
 //! First-installation prerequisites, not administrator or storage genesis.
+pub(crate) mod administrator;
 mod layout;
 use crate::{
     Result,

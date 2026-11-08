@@ -16,7 +16,7 @@ use storage_server::auth::AuthStore;
 const DATA: &str = "/zxs/data";
 const STATE: &str = "/zxs/data/state";
 const MANAGEMENT: &str = "/zxs/data/management";
-const AUTHORITY: &[u8] = b"{\"authority\":\"system-management-auth\"}\n";
+use storage_server::management::MANAGEMENT_AUTHORITY_BYTES as AUTHORITY;
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Identity {
@@ -63,7 +63,10 @@ impl Target {
         let state = child(&data, "state", account.owner())?;
         let management = child(&data, "management", account.owner())?;
         let marker = authority_marker(&state, account.owner())?;
-        let directory = PrivateDirectory::open_for_administration(MANAGEMENT)?;
+        let directory = PrivateDirectory::from_directory_for_administration(
+            management.directory().try_clone()?,
+            MANAGEMENT.into(),
+        )?;
         let auth = AuthStore::open_system_management_directory(directory)?;
         let context = Context {
             host: host.identity().into(),
