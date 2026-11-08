@@ -101,7 +101,11 @@ pub(crate) fn store_history_manifests_bounded_at(
 /// A new graph-producing writer must pass the same complete logical closure
 /// used by cold readers before preparing any new payloads.
 pub(crate) fn validate_history_copy(state: &State, history: &str) -> Result<()> {
-    HistoryManifest::from_state(state, history).map(|_| ())
+    capture_history_copy(state, history).map(|_| ())
+}
+
+pub(crate) fn capture_history_copy(state: &State, history: &str) -> Result<HistoryManifest> {
+    HistoryManifest::from_state(state, history)
 }
 
 pub(crate) fn prepare_history_manifests(

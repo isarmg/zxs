@@ -51,7 +51,7 @@ impl CopyKind {
 
 /// First online slice: one saved file into an empty, uninitialized repository
 /// on another primary. Both exact namespace heads are part of the request.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct FileHistoryCopyRequest {
     pub source_repository_id: String,
@@ -62,7 +62,7 @@ pub struct FileHistoryCopyRequest {
     pub expected_target_head: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct CopyRoute {
     #[serialization(with = "storage_contract::u64_string")]

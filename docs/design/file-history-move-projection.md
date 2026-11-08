@@ -18,6 +18,8 @@
 
 公有投影只能读原 capture、原 operation／actor、拟用 sequence、拟议源 D、目标 file ID、完整 version／branch 映射和冻结的逻辑 binding generations。没有可变 State、payload、operation receipt 或发布权限。不能把其中拟议的 D 当成当前已经删除。
 
+后继[联合恢复准备封套](file-history-move-recovery.md)可把原来源与完整联合逻辑摘要保存到系统根及全部配置元数据成员，并在冷重开按原时间／slot／route 重新捕获、比较及补齐准备。该入口不反序列化本类型，不把持久准备当作 journal 决定或目标完整证明；本类型仍没有发布权限。
+
 ## 精确重验而非重新规划
 
 `recheck_file_history_move_projection` 重用 capture 的完整元数据／双端工作区围栏，并核对原 decision slot。State 未变但未发布槽位已经推进也拒绝；更换任一来源、目标、配置或冷重开后，不会用今日数据悄悄替换原投影。

@@ -20,6 +20,15 @@ struct WriteSet {
     lifecycle: CopiedLifecycle,
 }
 
+/// Frozen inputs recovered only after checking the original source envelope.
+/// Construction alone grants no authority; replay checks current admission.
+pub(crate) struct FileHistoryMoveReplay {
+    pub(crate) principal: String,
+    pub(crate) operation: OperationId,
+    pub(crate) sequence: u64,
+    pub(crate) route: CopyRoute,
+}
+
 /// Proposed target graph and source deletion, held together and never exposed
 /// as a writable State. This is deliberately not serializable, not a permanent
 /// operation receipt and not accepted by any publication or SMB entry point.
@@ -77,6 +86,33 @@ impl FileHistoryMoveProjection {
     /// D belongs to the source and is not imported into the target as a live D.
     pub fn retained_lifecycle_events(&self) -> usize {
         self.writes.lifecycle.events.len()
+    }
+
+    pub(crate) fn recovery_route(&self) -> &CopyRoute {
+        &self.route
+    }
+
+    /// Exact bounded logical target graph, imported audit and the same source
+    /// D. This digest does not certify physical bodies or any SQLite database.
+    pub(crate) fn recovery_records_hash(&self) -> Result<String> {
+        #[derive(data_serialization::Serialize)]
+        struct Closure<'a> {
+            target: crate::HistoryManifest,
+            imported_lifecycle: &'a CopiedLifecycle,
+            source_deletion: &'a FileDeletionNode,
+        }
+        let history = &self.writes.next.repositories
+            [&self.capture.namespace.target_repository_id]
+            .history_tree_id;
+        let closure = Closure {
+            target: crate::history_package::capture_history_copy(&self.writes.next, history)?,
+            imported_lifecycle: &self.writes.lifecycle,
+            source_deletion: self.proposed_source_deletion(),
+        };
+        // Count before canonical Value/byte allocation. The entire joint
+        // logical envelope, not each fragment separately, is limited to 12 MiB.
+        history_copy::retained::bounded(&closure)?;
+        Ok(object_hash("file-history-move-joint-projection", &closure)?)
     }
 }
 
@@ -233,23 +269,66 @@ impl Engine {
                 .map(|slot| Ok((slot.clone(), self.disk(slot)?.binding_generation)))
                 .collect::<Result<_>>()?,
         };
+        self.compose_file_history_move_projection(
+            capture,
+            FileHistoryMoveReplay {
+                principal: principal.into(),
+                operation,
+                sequence: self.next_slot,
+                route,
+            },
+            cancellation,
+        )
+    }
+
+    pub(crate) fn replay_file_history_move_projection(
+        &self,
+        capture: FileHistoryMoveCapture,
+        replay: FileHistoryMoveReplay,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<FileHistoryMoveProjection> {
+        checkpoint(cancellation)?;
+        Self::require_actor(&replay.principal)?;
+        require_unused(self, replay.operation)?;
+        self.recheck_file_history_move(&capture, cancellation)?;
+        let bindings = capture
+            .target_slots
+            .iter()
+            .map(|slot| Ok((slot.clone(), self.disk(slot)?.binding_generation)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        if replay.sequence != self.next_slot
+            || replay.route.slots != capture.target_slots
+            || replay.route.bindings != bindings
+        {
+            return Err(changed());
+        }
+        self.compose_file_history_move_projection(capture, replay, cancellation)
+    }
+
+    // Both callers above establish the same-owner source and exact route/slot.
+    fn compose_file_history_move_projection(
+        &self,
+        capture: FileHistoryMoveCapture,
+        replay: FileHistoryMoveReplay,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<FileHistoryMoveProjection> {
         let writes = compose(
             self.state(),
             self.admitted_current_namespaces()?,
             &ProjectionInput {
                 capture: &capture,
-                route: &route,
-                principal,
-                operation,
-                sequence: self.next_slot,
+                route: &replay.route,
+                principal: &replay.principal,
+                operation: replay.operation,
+                sequence: replay.sequence,
             },
         )?;
         checkpoint(cancellation)?;
         Ok(FileHistoryMoveProjection {
             capture,
-            principal: principal.into(),
-            operation,
-            route,
+            principal: replay.principal,
+            operation: replay.operation,
+            route: replay.route,
             writes,
         })
     }

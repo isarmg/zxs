@@ -688,3 +688,6 @@ mod file_databases;
 
 #[path = "file_history_copy/move_capture.rs"]
 mod move_capture;
+
+#[path = "file_history_copy/move_recovery.rs"]
+mod move_recovery;

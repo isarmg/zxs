@@ -18,6 +18,7 @@ pub use history_move::{
     CurrentFileHistoryMove, CurrentFileHistoryMoveProjection, FileHistoryMoveCapture,
     FileHistoryMoveProjection, FileHistoryMoveRequest, FileHistoryMoveSourceDigest,
 };
+pub(crate) use history_move::FileHistoryMoveReplay;
 pub(crate) mod file_ancestry;
 mod file_history_merges;
 pub(crate) mod file_merges;

@@ -49,6 +49,8 @@ pub use disk_catalog::{
     DiskHistoryFailure, DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation,
     DiskHistoryReceipt, DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus,
 };
+mod history_move_recovery;
+pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 mod index;
 pub use index::{
     IndexFailure, IndexFailureStage, IndexHealth, SystemCatalogKind, SystemCatalogRecord,

@@ -6,7 +6,7 @@ use crate::file_deletion::retained::LifecycleRow;
 const FIELD: &str = "retained_lifecycle";
 const MAX_BYTES: usize = 12 * 1024 * 1024;
 
-fn bounded<T: Serialize + ?Sized>(value: &T) -> Result<()> {
+pub(in crate::business) fn bounded<T: Serialize + ?Sized>(value: &T) -> Result<()> {
     // Count compact serialized bytes without allocating an output/Value copy.
     // Object key ordering does not change this encoded-length limit.
     struct Limit {

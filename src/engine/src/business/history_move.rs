@@ -9,6 +9,7 @@ use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 mod projection;
 pub use projection::{CurrentFileHistoryMoveProjection, FileHistoryMoveProjection};
+pub(crate) use projection::FileHistoryMoveReplay;
 
 /// Exact source identity in addition to the two namespace heads. The history
 /// copy address contract is reused, not its source-retaining operation semantics.
