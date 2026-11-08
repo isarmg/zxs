@@ -621,6 +621,9 @@ pub(crate) fn create_file_branch_change(
                 "selected version does not belong to this file",
             )
         })?;
+    if crate::node_retirement::is_retired(state, &source.version_id) {
+        return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound, "source node is permanently retired"));
+    }
     let repo = engine.repository_for_history(&source.history_tree_id)?;
 
     let main = state

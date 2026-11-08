@@ -147,8 +147,11 @@ impl Engine {
                 "version not found",
             )
         })?;
+        if crate::node_retirement::is_retired(&self.state, version) {
+            return Err(Error::new(storage_contract::ErrorCode::VersionNotFound, "version is permanently retired"));
+        }
         if let Some(state) = self.state.content_states.get(version)
-            && (*state == ContentState::Purged || *state == ContentState::Migrated)
+            && matches!(state, ContentState::Purged | ContentState::Migrated)
         {
             return Ok("PURGED".into());
         }

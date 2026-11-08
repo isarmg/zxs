@@ -355,6 +355,23 @@ impl SharedHistoryRead {
     /// Index and scan budgets bound CPU and additional storage. An oversized
     /// component fails rather than presenting a partial graph as complete.
     pub fn graph(&self) -> Result<storage_contract::shared_history::SharedHistoryGraph> {
+        self.with_query(|query| super::shared_history::project(query, &self.request))
+    }
+
+    /// Analyze a hypothetical coupled body/event retirement, not authorize it.
+    /// Requires the same final recheck as graph(). Current immutable references,
+    /// leases, publication/recovery and physical cleanup are NOT discharged.
+    pub fn permanent_removal_analysis(
+        &self,
+        selection: &super::PermanentNodeRemovalSelection,
+    ) -> Result<super::PermanentNodeRemovalAnalysis> {
+        self.with_query(|query| {
+            let graph = super::shared_history::project(query, &self.request)?;
+            super::permanent_removal::analyze(query, &graph, selection)
+        })
+    }
+
+    fn with_query<T>(&self, project: impl FnOnce(&query::Query<'_>) -> Result<T>) -> Result<T> {
         self.read.cancellation.checkpoint()?;
         let preparation = self
             .read
@@ -371,7 +388,7 @@ impl SharedHistoryRead {
             &self.read.cancellation,
             Some(&self.read.owner_version),
         )?;
-        super::shared_history::project(&query, &self.request)
+        project(&query)
     }
 }
 impl Engine {
@@ -390,5 +407,115 @@ impl Engine {
     /// Authentication is rechecked separately by the service under this lock.
     pub fn recheck_shared_history(&self, read: &SharedHistoryRead) -> Result<()> {
         self.recheck_history_window(&read.read)
+    }
+
+    /// Inspect authenticated body cleanup on the exact root's current routes.
+    /// This bounded synchronous read performs disk I/O, not cleanup or retirement.
+    /// The caller supplies current authorization and keeps the Engine owner alive.
+    /// Offline, malformed, missing-evidence and residual-body copies never certify
+    /// absence. An observation does not cover retired disks or external copies.
+    pub fn inspect_permanent_removal_cleanup(
+        &self,
+        read: &SharedHistoryRead,
+        selection: &super::PermanentNodeRemovalSelection,
+    ) -> Result<super::PermanentRemovalCleanupObservation> {
+        self.recheck_shared_history(read)?;
+        let analysis = read.permanent_removal_analysis(selection)?;
+        let result =
+            super::permanent_removal_cleanup::inspect(self, &analysis, &read.read.cancellation)?;
+        self.recheck_shared_history(read)?;
+        Ok(result)
+    }
+}
+
+/// Publication and body cleanup have separate outcomes. A published retirement
+/// is permanent even when an offline current replica needs later cleanup.
+#[derive(Debug)]
+pub struct PermanentNodeRetirementOutcome {
+    publication: crate::OperationResult,
+    cleanup: Result<super::PermanentRemovalCleanupObservation>,
+}
+impl PermanentNodeRetirementOutcome {
+    pub fn publication(&self) -> &crate::OperationResult { &self.publication }
+    pub fn cleanup(&self) -> std::result::Result<&super::PermanentRemovalCleanupObservation, &Error> {
+        self.cleanup.as_ref()
+    }
+}
+
+impl Engine {
+    /// Permanently retire an explicit selection from one complete, current
+    /// shared component. Old immutable descriptions remain authentication
+    /// evidence, not live nodes. Trusted callers supply current authorization.
+    /// No HTTP/UI command is exposed by this core-only slice.
+    pub fn retire_file_nodes(
+        &mut self,
+        read: &SharedHistoryRead,
+        selection: &super::PermanentNodeRemovalSelection,
+        principal: &str,
+        operation_id: crate::OperationId,
+    ) -> Result<PermanentNodeRetirementOutcome> {
+        let request = crate::node_retirement::Request {
+            history_tree_id: read.read.context.history_tree_id.as_str().into(),
+            history_root: read.request.history_root.to_string(),
+            origin_file_id: read.request.file_id.as_str().into(),
+            version_ids: selection.versions().iter().map(|id| id.as_str().to_owned()).collect(),
+        };
+        let publication = self.mutate(
+            crate::node_retirement::KIND, principal, operation_id, json_codec::to_value(&request)?,
+            |engine, next, _| {
+                engine.recheck_shared_history(read)?;
+                let analysis = read.permanent_removal_analysis(selection)?;
+                if !analysis.affected_branch_heads().is_empty() || !analysis.frozen_files().is_empty() {
+                    return Err(Error::new(storage_contract::ErrorCode::ContentPinned, "retirement selection has a retained HEAD or frozen file"));
+                }
+                engine.repository_for_history(&request.history_tree_id)?;
+                engine.check_purge(&request.history_tree_id, &request.version_ids)?;
+                // Open workspaces may hold source selections not yet present in
+                // their base commit. Conservatively close this entire history.
+                if engine.workspaces.values().any(|workspace| {
+                    matches!(workspace.state, crate::WorkspaceState::Open | crate::WorkspaceState::Sealed)
+                        && engine.state.branches.get(&workspace.branch_id)
+                            .is_some_and(|branch| branch.history_tree_id == request.history_tree_id)
+                }) {
+                    return Err(Error::new(storage_contract::ErrorCode::WorkspaceBusy, "retirement history has an open workspace"));
+                }
+                let decision = crate::node_retirement::decide(&engine.state, request.clone())?;
+                for id in &request.version_ids { next.content_states.insert(id.clone(), crate::ContentState::Retired); }
+                Ok(json_codec::json!({"retirement": decision}))
+            },
+        )?;
+        Ok(self.finish_node_retirement(publication, &read.read.cancellation))
+    }
+
+    /// Resume the exact authenticated decision after interruption/restart. No
+    /// fresh selection, stale root, new operation ID or duplicate receipt is used.
+    pub fn resume_file_node_retirement(
+        &mut self, operation_id: crate::OperationId, principal: &str,
+    ) -> Result<PermanentNodeRetirementOutcome> {
+        Self::require_actor(principal)?;
+        self.require_write()?;
+        let publication = self.state.operations.get(&operation_id)
+            .filter(|receipt| receipt.kind == crate::node_retirement::KIND)
+            .ok_or_else(|| Error::new(storage_contract::ErrorCode::InvalidRequest, "retirement operation not found"))?;
+        if self.operation_owner(operation_id)?.as_deref() != Some(principal) {
+            return Err(Error::new(storage_contract::ErrorCode::IdempotencyKeyReused, "retirement operation belongs to another actor"));
+        }
+        Ok(self.finish_node_retirement(publication.clone(), &HistoryWindowCancellation::default()))
+    }
+
+    fn finish_node_retirement(
+        &mut self, publication: crate::OperationResult, cancel: &HistoryWindowCancellation,
+    ) -> PermanentNodeRetirementOutcome {
+        let cleanup = (|| {
+            let decision = crate::node_retirement::decision(&publication)?;
+            self.cleanup_purged()?;
+            let view = self.metadata_view();
+            let root = HistoryRoot::parse(view.history_root(&decision.request.history_tree_id)?)?;
+            let versions = decision.request.version_ids.iter()
+                .map(|id| HistoryVersionId::parse(id))
+                .collect::<storage_contract::Result<Vec<_>>>()?;
+            super::permanent_removal_cleanup::inspect_selected(self, root, &versions, cancel)
+        })();
+        PermanentNodeRetirementOutcome { publication, cleanup }
     }
 }

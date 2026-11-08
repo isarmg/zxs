@@ -510,7 +510,7 @@ pub(crate) fn content_path(directory: &Path, version: &FileVersion) -> Result<Pa
             .strip_prefix(history)
             .expect("invariant: version directory is below its history"),
     );
-    content_path_inner(&root, &directory, version, &mut |_| Ok(()))
+    Ok(content_location_at(&root, &directory, version, &mut |_| Ok(()))?.into_path())
 }
 
 /// Missing bodies return their expected path so repair can retain its existing
@@ -521,6 +521,29 @@ pub(crate) fn content_path_at(
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<PathBuf> {
+    Ok(content_location_at(root, directory, version, observe)?.into_path())
+}
+
+/// Preserve positive presence observed during lookup. A later stat of the chosen
+/// path cannot prove absence at another supported location that was not visited.
+pub(crate) enum ContentLocation {
+    Present(PathBuf),
+    Absent(PathBuf),
+}
+impl ContentLocation {
+    fn into_path(self) -> PathBuf {
+        match self {
+            Self::Present(path) | Self::Absent(path) => path,
+        }
+    }
+}
+
+pub(crate) fn content_location_at(
+    root: &DiskRoot,
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<ContentLocation> {
     validate_version(version)?;
     observe(0)?;
     content_path_inner(root, directory, version, observe)
@@ -540,11 +563,13 @@ fn content_path_inner(
     directory: &Path,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<PathBuf> {
+) -> Result<ContentLocation> {
     let prepared = directory.join("content").join(&version.creation_name);
     let history = history_root(directory)?;
     if !path_directory_exists_at(root, root.path(), history)? {
-        return Ok(expected_content_path(history, version));
+        return Ok(ContentLocation::Absent(expected_content_path(
+            history, version,
+        )));
     }
     let container = container_at(
         root,
@@ -558,7 +583,7 @@ fn content_path_inner(
             let versions = named.join("versions");
             let target = versions.join(&version.storage_name);
             if directory_exists_at(root, &versions)? && file_exists_at(root, &target)? {
-                return Ok(target);
+                return Ok(ContentLocation::Present(target));
             }
             target
         }
@@ -569,9 +594,9 @@ fn content_path_inner(
     if path_exists_at(root, history, &directory.join("content"))?
         && file_exists_at(root, &prepared)?
     {
-        return Ok(prepared);
+        return Ok(ContentLocation::Present(prepared));
     }
-    Ok(target)
+    Ok(ContentLocation::Absent(target))
 }
 
 fn verify_body(root: &DiskRoot, path: &Path, version: &FileVersion) -> Result<ReadFile> {

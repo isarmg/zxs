@@ -864,6 +864,7 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
                     Some(storage_contract::ContentState::Available)=>t("正文记录可用","Content recorded as available"),
                     Some(storage_contract::ContentState::Purged)=>t("正文已清除","Content purged"),
                     Some(storage_contract::ContentState::Migrated)=>t("正文已迁移","Content migrated"),
+                    Some(storage_contract::ContentState::Retired)=>t("节点已永久退役","Node permanently retired"),
                     None=>String::new(),
                 })}</span>
             </Show>

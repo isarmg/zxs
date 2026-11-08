@@ -194,3 +194,139 @@ fn shared_history_contract_preserves_valid_aliases_and_rejects_cycles_or_false_a
     bad.branches[1].merged_into = Some(bad.branches[0].branch_id.clone());
     assert!(bad.validate(&request()).is_err());
 }
+
+// Response fixtures exercise only the production contract validator. They are
+// not a node-removal transaction or a proof that a disk record was deleted.
+fn retained_version_fixture(graph: &mut SharedHistoryGraph, number: u16, owner: u16, bytes: &[u8]) {
+    let version_id = HistoryVersionId::parse(&id("ver", number)).unwrap();
+    let file_id = HistoryFileId::parse(&id("file", owner)).unwrap();
+    graph.versions.push(SharedHistoryVersion {
+        version_id: version_id.clone(),
+        file_id: file_id.clone(),
+        creation_name: format!("file-{owner}"),
+        logical_size: bytes.len() as u64,
+        content_hash: ContentHash::from_digest(blake3::hash(bytes)),
+        content_state: Some(ContentState::Available),
+    });
+    graph.nodes.push(SharedHistoryNode {
+        node_id: SharedHistoryNodeId::parse(version_id.as_str()).unwrap(),
+        file_id,
+        kind: SharedHistoryNodeKind::Content,
+        version_id: Some(version_id),
+        sequence: u64::from(number),
+        parent_node_ids: Vec::new(),
+    });
+    graph
+        .versions
+        .sort_by(|a, b| a.version_id.cmp(&b.version_id));
+    graph.nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+}
+fn shared_group_fixture(bytes: &[u8], versions: &[u16]) -> SharedContent {
+    SharedContent {
+        logical_size: bytes.len() as u64,
+        content_hash: ContentHash::from_digest(blake3::hash(bytes)),
+        version_ids: versions
+            .iter()
+            .map(|number| HistoryVersionId::parse(&id("ver", *number)).unwrap())
+            .collect(),
+    }
+}
+fn remove_version_fixture(graph: &mut SharedHistoryGraph, number: u16) {
+    let version = id("ver", number);
+    graph
+        .versions
+        .retain(|row| row.version_id.as_str() != version);
+    graph.nodes.retain(|row| row.node_id.as_str() != version);
+}
+fn order_shared_group_fixtures(graph: &mut SharedHistoryGraph) {
+    graph
+        .shared_contents
+        .sort_by_key(|group| (group.content_hash, group.logical_size));
+}
+
+#[test]
+fn shared_history_contract_keeps_parallel_links_until_the_final_cross_file_key_is_absent() {
+    let mut retained = graph();
+    retained_version_fixture(&mut retained, 3, 1, b"def");
+    retained_version_fixture(&mut retained, 4, 2, b"def");
+    retained_version_fixture(&mut retained, 5, 1, b"only-left");
+    retained_version_fixture(&mut retained, 6, 2, b"only-right");
+    retained
+        .shared_contents
+        .push(shared_group_fixture(b"def", &[3, 4]));
+    order_shared_group_fixtures(&mut retained);
+    retained.validate(&request()).unwrap();
+
+    let mut one_connection = retained;
+    remove_version_fixture(&mut one_connection, 1);
+    one_connection.shared_contents = vec![shared_group_fixture(b"def", &[3, 4])];
+    one_connection.validate(&request()).unwrap();
+    assert_eq!(one_connection.files.len(), 2);
+
+    remove_version_fixture(&mut one_connection, 3);
+    one_connection.shared_contents.clear();
+    assert!(one_connection.validate(&request()).is_err());
+    // Only the residual response shape is checked here; publishing either
+    // component still requires an authoritative removal/replay protocol.
+    for owner in [1, 2] {
+        let file = HistoryFileId::parse(&id("file", owner)).unwrap();
+        let mut separate = one_connection.clone();
+        separate.origin_file_id = file.clone();
+        separate.files.retain(|row| row.file_id == file);
+        separate.versions.retain(|row| row.file_id == file);
+        separate.nodes.retain(|row| row.file_id == file);
+        let request = SharedHistoryRequest::parse(file.as_str(), &"a".repeat(64)).unwrap();
+        separate.validate(&request).unwrap();
+    }
+}
+
+#[test]
+fn shared_history_contract_removing_file_local_metadata_keeps_shared_membership() {
+    let mut retained = graph();
+    let metadata = SharedHistoryNodeId::parse(&id("fmeta", 1)).unwrap();
+    retained.nodes.push(SharedHistoryNode {
+        node_id: metadata.clone(),
+        file_id: retained.files[0].file_id.clone(),
+        kind: SharedHistoryNodeKind::Tags,
+        version_id: Some(retained.versions[0].version_id.clone()),
+        sequence: 3,
+        parent_node_ids: vec![retained.nodes[0].node_id.clone()],
+    });
+    retained.nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    retained.validate(&request()).unwrap();
+    let files = retained.files.clone();
+    let shared = retained.shared_contents.clone();
+    retained.nodes.retain(|row| row.node_id != metadata);
+    retained.validate(&request()).unwrap();
+    assert_eq!(retained.files, files);
+    assert_eq!(retained.shared_contents, shared);
+}
+
+#[test]
+fn shared_history_contract_preserves_the_alternative_path_after_one_cycle_link_is_absent() {
+    let mut retained = graph();
+    retained.files.push(SharedHistoryFile {
+        file_id: HistoryFileId::parse(&id("file", 3)).unwrap(),
+        creation_name: "file-3".into(),
+    });
+    retained_version_fixture(&mut retained, 3, 2, b"def");
+    retained_version_fixture(&mut retained, 4, 3, b"def");
+    retained_version_fixture(&mut retained, 5, 3, b"ghi");
+    retained_version_fixture(&mut retained, 6, 1, b"ghi");
+    retained
+        .shared_contents
+        .push(shared_group_fixture(b"def", &[3, 4]));
+    retained
+        .shared_contents
+        .push(shared_group_fixture(b"ghi", &[5, 6]));
+    order_shared_group_fixtures(&mut retained);
+    retained.validate(&request()).unwrap();
+    remove_version_fixture(&mut retained, 1);
+    retained.shared_contents = vec![
+        shared_group_fixture(b"def", &[3, 4]),
+        shared_group_fixture(b"ghi", &[5, 6]),
+    ];
+    order_shared_group_fixtures(&mut retained);
+    retained.validate(&request()).unwrap();
+    assert_eq!(retained.files.len(), 3);
+}

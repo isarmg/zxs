@@ -44,6 +44,7 @@ impl Engine {
         };
         if id != node
             || owner != file
+            || crate::node_retirement::is_retired(state, version)
             || !state.versions.get(version).is_some_and(|body| {
                 body.version_id == *version
                     && body.file_id == file

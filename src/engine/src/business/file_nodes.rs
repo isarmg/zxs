@@ -42,6 +42,9 @@ pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<Stri
                 "node does not belong to this file",
             )
         })?;
+    if crate::node_retirement::is_retired(state, &version) {
+        return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound, "node is permanently retired"));
+    }
     let body = state
         .versions
         .get(&version)
@@ -83,6 +86,17 @@ pub(crate) fn node_parents(state: &State, node: &str) -> Vec<String> {
         }
     }
     parents
+}
+
+fn display_parents(state: &State, parents: &[String]) -> Result<Vec<String>> {
+    let mut remaining = 1_048_576usize;
+    crate::node_retirement::live_parents(state, parents, || {
+        if remaining == 0 {
+            return Err(Error::new(storage_contract::ErrorCode::ResourceLimit, "retired ancestry traversal exceeds its complete-result budget"));
+        }
+        remaining -= 1;
+        Ok(())
+    }).map(|parents| parents.into_iter().map(str::to_owned).collect())
 }
 
 pub(crate) fn belongs_to_branch(state: &State, branch: &str, head: &str, source: &str) -> bool {
@@ -228,7 +242,7 @@ impl<'a> NodeProjection<'a> {
             summaries.entry((*node).to_owned()).or_insert_with(|| {
                 node_version(self.state, request.file_id, node)?;
                 Ok(FileNodeSummary {
-                    parent_node_ids: self.parents(node),
+                    parent_node_ids: display_parents(self.state, &self.parents(node))?,
                     tags: self.tags(node).clone(),
                 })
             });
@@ -306,7 +320,7 @@ impl Engine {
     }
     pub fn file_node_parents(&self, file: &str, node: &str) -> Result<Vec<String>> {
         node_version(&self.state, file, node)?;
-        Ok(node_parents(&self.state, node))
+        display_parents(&self.state, &node_parents(&self.state, node))
     }
     pub fn file_branch_head(&self, branch: &str) -> Result<String> {
         branch_head(&self.state, branch)

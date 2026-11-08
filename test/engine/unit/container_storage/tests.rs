@@ -1270,6 +1270,28 @@ fn rooted_container_lookup_keeps_nested_markers_and_body_on_the_held_disk() {
 }
 
 #[test]
+fn cleanup_presence_observation_never_upgrades_after_selected_body_disappears() {
+    let (_temporary, disk, item, directory) = verified_existing_fixture();
+    let installed = install_existing(&directory, &item).unwrap();
+    let prepared = directory.join("content").join(&item.creation_name);
+    write_atomic(&prepared, b"verified existing body", false).unwrap();
+    let root = DiskRoot::open(&disk.root).unwrap();
+    let observed = content_location_at(&root, &directory, &item, &mut |_| Ok(())).unwrap();
+    fs::remove_file(&installed).unwrap();
+    assert!(matches!(observed, ContentLocation::Present(path) if path == installed));
+    assert!(prepared.is_file());
+    assert!(matches!(
+        content_location_at(&root, &directory, &item, &mut |_| Ok(())).unwrap(),
+        ContentLocation::Present(path) if path == prepared
+    ));
+    fs::remove_file(prepared).unwrap();
+    assert!(matches!(
+        content_location_at(&root, &directory, &item, &mut |_| Ok(())).unwrap(),
+        ContentLocation::Absent(path) if path == installed
+    ));
+}
+
+#[test]
 fn rooted_container_lookup_still_rejects_ambiguity_after_root_replacement() {
     let (_temporary, disk, item, directory) = verified_existing_fixture();
     let installed = install_existing(&directory, &item).unwrap();

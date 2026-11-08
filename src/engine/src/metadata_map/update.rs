@@ -60,7 +60,9 @@ pub(super) fn tombstone_tail<'a>(
         let status: storage_contract::ContentState = json_codec::from_value(value.clone())?;
         if matches!(
             status,
-            storage_contract::ContentState::Purged | storage_contract::ContentState::Migrated
+            storage_contract::ContentState::Purged
+                | storage_contract::ContentState::Migrated
+                | storage_contract::ContentState::Retired
         ) {
             let tail = add(
                 summary.page_bytes(),

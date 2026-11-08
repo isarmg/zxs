@@ -41,6 +41,7 @@ fn content_state(state: Option<storage_contract::ContentState>) -> String {
             "Body purged, relationship metadata retained",
         ),
         Some(storage_contract::ContentState::Migrated) => t("正文已迁出", "Body migrated"),
+        Some(storage_contract::ContentState::Retired) => t("节点已永久退役", "Node permanently retired"),
         None => t("正文状态未知", "Body state unknown"),
     }
 }

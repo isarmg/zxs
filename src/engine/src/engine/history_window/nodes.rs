@@ -96,6 +96,7 @@ pub(super) fn node<'a>(state: &'a State, scope: Scope<'_>, id: &str) -> Option<N
                 .filter(|node| node.file_id == scope.file && node.history_tree_id == scope.history)
                 .map(Node::Metadata)
         })
+        .filter(|node| !crate::node_retirement::is_retired(state, &node.version(state).version_id))
 }
 
 pub(super) fn all_nodes<'a>(
@@ -118,7 +119,9 @@ pub(super) fn all_nodes<'a>(
                 Node::Path(node) => (&node.file_id, &node.history_tree_id),
                 Node::Metadata(node) => (&node.file_id, &node.history_tree_id),
             };
-            (file == scope.file && history == scope.history).then_some(Ok(candidate))
+            (file == scope.file && history == scope.history
+                && !crate::node_retirement::is_retired(state, &candidate.version(state).version_id))
+                .then_some(Ok(candidate))
         })
 }
 
@@ -394,11 +397,17 @@ pub(super) fn visit_parents_from<'a>(
     merges: impl Iterator<Item = Result<&'a crate::FileBranchMerge>>,
     mut visit: impl FnMut(&'a str) -> Result<()>,
 ) -> Result<()> {
-    for parent in base_parents(state, id) {
+    let mut remaining = 1_048_576usize;
+    let parents = crate::node_retirement::live_parents(state, base_parents(state, id), || {
         cancel.checkpoint()?;
-        if node(state, scope, parent).is_some() {
-            visit(parent)?;
+        if remaining == 0 {
+            return Err(Error::new(storage_contract::ErrorCode::ResourceLimit, "retired ancestry traversal exceeds its complete-result budget"));
         }
+        remaining -= 1;
+        Ok(())
+    })?;
+    for parent in parents {
+        if node(state, scope, parent).is_some() { visit(parent)?; }
     }
     for merge in merges {
         let merge = merge?;

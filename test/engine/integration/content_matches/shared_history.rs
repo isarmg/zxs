@@ -319,3 +319,85 @@ fn shared_history_oversized_component_fails_instead_of_claiming_incomplete_membe
         before
     );
 }
+
+fn undo_deletion(pool: &mut Pool, entry: &Entry) {
+    let node = pool.engine.file_deletion(&entry.file_id).unwrap().clone();
+    pool.engine
+        .undo_file_deletion(storage_engine::UndoFileDeletionRequest {
+            file_id: &HistoryFileId::parse(&entry.file_id).unwrap(),
+            deletion_node_id: &node.node_id,
+            principal: "admin",
+            operation_id: OperationId::generate().unwrap(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn shared_history_undoing_one_file_deletion_keeps_both_parallel_content_connections() {
+    let mut pool = Pool::new();
+    pool.save(&[("a", b"x"), ("b", b"x")]);
+    pool.save(&[("a", b"y"), ("b", b"y")]);
+    let a = pool.entry("a");
+    let b = pool.entry("b");
+    let before = graph(&pool, &a.file_id);
+    assert_eq!(before.shared_contents.len(), 2);
+    let versions = pool.engine.state().versions.clone();
+    delete(&mut pool, &a);
+    let deleted = graph(&pool, &b.file_id);
+    assert_eq!(members(&deleted), members(&before));
+    assert_eq!(deleted.shared_contents, before.shared_contents);
+    assert!(deleted.nodes.iter().any(|node| {
+        node.file_id.as_str() == a.file_id && node.kind == SharedHistoryNodeKind::Deletion
+    }));
+    undo_deletion(&mut pool, &a);
+    let restored = graph(&pool, &a.file_id);
+    assert_eq!(members(&restored), members(&before));
+    assert_eq!(restored.shared_contents, before.shared_contents);
+    assert_eq!(pool.engine.state().versions, versions);
+    assert!(!restored.nodes.iter().any(|node| {
+        node.file_id.as_str() == a.file_id && node.kind == SharedHistoryNodeKind::Deletion
+    }));
+    assert!(pool.engine.file_deletion(&b.file_id).is_none());
+}
+
+#[test]
+fn shared_history_internal_undo_keeps_transitive_members_and_invalidates_the_old_root() {
+    let mut pool = Pool::new();
+    pool.save(&[("a", b"x"), ("b", b"x")]);
+    let a = pool.entry("a");
+    pool.save(&[("b", b"y"), ("c", b"y")]);
+    let b = pool.entry("b");
+    let c = pool.entry("c");
+    delete(&mut pool, &b);
+    let before = graph(&pool, &a.file_id);
+    let frozen = pool
+        .engine
+        .capture_shared_history(
+            graph_request(&pool, &a.file_id),
+            HistoryWindowCancellation::new(),
+        )
+        .unwrap();
+    frozen.graph().unwrap();
+    undo_deletion(&mut pool, &b);
+    assert_eq!(
+        pool.engine
+            .recheck_shared_history(&frozen)
+            .unwrap_err()
+            .code(),
+        ErrorCode::HistoryChanged
+    );
+    drop(frozen);
+    for file in [&a.file_id, &b.file_id, &c.file_id] {
+        let current = graph(&pool, file);
+        assert_eq!(members(&current), members(&before));
+        assert_eq!(current.shared_contents, before.shared_contents);
+    }
+    let root = pool.root.clone();
+    drop(pool.engine);
+    pool.engine = Engine::open(&root).unwrap();
+    for file in [&a.file_id, &b.file_id, &c.file_id] {
+        let reopened = graph(&pool, file);
+        assert_eq!(members(&reopened), members(&before));
+        assert_eq!(reopened.shared_contents, before.shared_contents);
+    }
+}

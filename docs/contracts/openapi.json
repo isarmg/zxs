@@ -983,6 +983,7 @@
                               "AVAILABLE",
                               "PURGED",
                               "MIGRATED",
+                              "RETIRED",
                               "UNAVAILABLE"
                             ]
                           },
@@ -1347,6 +1348,7 @@
                                 "AVAILABLE",
                                 "PURGED",
                                 "MIGRATED",
+                                "RETIRED",
                                 "UNAVAILABLE"
                               ]
                             },
@@ -2909,6 +2911,7 @@
                               "AVAILABLE",
                               "PURGED",
                               "MIGRATED",
+                              "RETIRED",
                               "UNAVAILABLE"
                             ]
                           },
@@ -10896,6 +10899,7 @@
               "AVAILABLE",
               "PURGED",
               "MIGRATED",
+              "RETIRED",
               "UNAVAILABLE"
             ]
           },
@@ -10921,6 +10925,7 @@
               "AVAILABLE",
               "PURGED",
               "MIGRATED",
+              "RETIRED",
               "UNAVAILABLE"
             ]
           },
@@ -13593,7 +13598,8 @@
                 "enum": [
                   "AVAILABLE",
                   "PURGED",
-                  "MIGRATED"
+                  "MIGRATED",
+                  "RETIRED"
                 ]
               },
               {
@@ -13803,7 +13809,8 @@
                 "enum": [
                   "AVAILABLE",
                   "PURGED",
-                  "MIGRATED"
+                  "MIGRATED",
+                  "RETIRED"
                 ]
               },
               {
@@ -13940,7 +13947,8 @@
                 "enum": [
                   "AVAILABLE",
                   "PURGED",
-                  "MIGRATED"
+                  "MIGRATED",
+                  "RETIRED"
                 ]
               },
               {
@@ -19622,7 +19630,8 @@
                 "enum": [
                   "AVAILABLE",
                   "PURGED",
-                  "MIGRATED"
+                  "MIGRATED",
+                  "RETIRED"
                 ]
               },
               {
@@ -19670,7 +19679,8 @@
                 "enum": [
                   "AVAILABLE",
                   "PURGED",
-                  "MIGRATED"
+                  "MIGRATED",
+                  "RETIRED"
                 ]
               },
               {
@@ -19772,7 +19782,8 @@
                 "enum": [
                   "AVAILABLE",
                   "PURGED",
-                  "MIGRATED"
+                  "MIGRATED",
+                  "RETIRED"
                 ]
               },
               {

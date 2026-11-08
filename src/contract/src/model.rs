@@ -900,6 +900,9 @@ pub enum ContentState {
     Purged,
     #[serialization(rename = "MIGRATED")]
     Migrated,
+    /// Removed from the live node domain; immutable authentication evidence remains.
+    #[serialization(rename = "RETIRED")]
+    Retired,
 }
 impl<'de> Deserialize<'de> for ContentState {
     fn deserialize<D: data_serialization::Deserializer<'de>>(
@@ -912,7 +915,7 @@ impl<'de> Deserialize<'de> for ContentState {
             type Value = ContentState;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("AVAILABLE, PURGED or MIGRATED as a string")
+                formatter.write_str("AVAILABLE, PURGED, MIGRATED or RETIRED as a string")
             }
 
             fn visit_str<E: data_serialization::de::Error>(
@@ -923,9 +926,10 @@ impl<'de> Deserialize<'de> for ContentState {
                     "AVAILABLE" => Ok(ContentState::Available),
                     "PURGED" => Ok(ContentState::Purged),
                     "MIGRATED" => Ok(ContentState::Migrated),
+                    "RETIRED" => Ok(ContentState::Retired),
                     _ => Err(E::unknown_variant(
                         token,
-                        &["AVAILABLE", "PURGED", "MIGRATED"],
+                        &["AVAILABLE", "PURGED", "MIGRATED", "RETIRED"],
                     )),
                 }
             }
@@ -940,6 +944,7 @@ impl ContentState {
             Self::Available => "AVAILABLE",
             Self::Purged => "PURGED",
             Self::Migrated => "MIGRATED",
+            Self::Retired => "RETIRED",
         }
     }
 }

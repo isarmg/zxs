@@ -52,7 +52,7 @@ impl<'a> VersionIndex<'a> {
         let mut count = 0;
         for version in state.versions.values() {
             scan.record()?;
-            if version.history_tree_id != history {
+            if version.history_tree_id != history || crate::node_retirement::is_retired(state, &version.version_id) {
                 continue;
             }
             if count == MAX_INDEX_VERSIONS {
@@ -275,7 +275,8 @@ fn metadata_events(
 ) -> Result<()> {
     for node in state.file_path_nodes.values() {
         scan.record()?;
-        if node.history_tree_id == history && files.contains(node.file_id.as_str()) {
+        if node.history_tree_id == history && files.contains(node.file_id.as_str())
+            && !crate::node_retirement::is_retired(state, &node.version_id) {
             events.insert(
                 &node.node_id,
                 &node.file_id,
@@ -287,7 +288,8 @@ fn metadata_events(
     }
     for node in state.file_metadata_nodes.values() {
         scan.record()?;
-        if node.history_tree_id == history && files.contains(node.file_id.as_str()) {
+        if node.history_tree_id == history && files.contains(node.file_id.as_str())
+            && !crate::node_retirement::is_retired(state, &node.version_id) {
             let kind = match node.kind {
                 crate::FileMetadataKind::Tags => SharedHistoryNodeKind::Tags,
                 crate::FileMetadataKind::Merge => SharedHistoryNodeKind::Merge,
@@ -326,6 +328,7 @@ fn ancestry(state: &State, history: &str, events: &mut Events, scan: &mut Scan<'
         } else {
             nodes::base_parents(state, id)
         };
+        let parents = crate::node_retirement::live_parents(state, parents, || scan.record())?;
         for parent in parents {
             events.parent(id, parent, scan)?;
         }

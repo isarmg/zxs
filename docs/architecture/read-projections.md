@@ -105,7 +105,7 @@ HTTP `/api/branches/{branch}/write-sessions` 在 bounded strict JSON/path-body �
 
 ## 冻结文件版本元数据与读句柄准入
 
-HTTP `GET /api/versions/{version}` 通过 required `Backend::version_snapshot` 获取同一锁内的 FileVersion 与 ContentState。响应字段由 VersionResponse 穷尽解构，保留原字符串 u64、所有公开版本字段与 AVAILABLE/PURGED/MIGRATED token；不把本机路径混入元数据。query 继续由 ApiQuery<BTreeMap<String,String>> 在入口解析并允许原有未使用参数。稀疏 content_states 中不存在的记录明确表示 Available（与核心读及原 wire 一致），不是授权失败或缺失版本的默认值。
+HTTP `GET /api/versions/{version}` 通过 required `Backend::version_snapshot` 获取同一锁内的 FileVersion 与 ContentState。响应字段由 VersionResponse 穷尽解构，保留原字符串 u64、所有公开版本字段与 AVAILABLE/PURGED/MIGRATED token（RETIRED 仍可在认证审计中保存，但真实 Engine backend 的版本准入拒绝该身份）；不把本机路径混入元数据。query 继续由 ApiQuery<BTreeMap<String,String>> 在入口解析并允许原有未使用参数。稀疏 content_states 中不存在的记录明确表示 Available（与核心读及原 wire 一致），不是授权失败或缺失版本的默认值。
 
 SMB 冻结只读句柄走 required `authorize_version`，同锁重新验证身份／绑定、版本存在与历史仓库归属后返回 unit；不复制 FileVersion，也不构造随后丢弃的 JSON。写句柄与目录仍走 authorize_current；不存在的 handle 不调用任一后台准入。Version action 删除，Placement 使用相同的借用版本归属解析，保持版本不存在→历史/仓库→placement不存在的错误顺序。版本元数据只捕获一次领域记录、HTTP 出口序列化一次，存储与永久幂等格式不变。
 

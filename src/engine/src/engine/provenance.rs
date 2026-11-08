@@ -165,12 +165,21 @@ pub(crate) fn validate_owned_seal(
     disk: &crate::DiskConfig,
     integrity: &MetadataIntegrity,
 ) -> Result<()> {
+    validate_owned_seal_observed(resources, disk, integrity, &mut |_| Ok(()))
+}
+
+pub(crate) fn validate_owned_seal_observed(
+    resources: &crate::disk::DiskResources,
+    disk: &crate::DiskConfig,
+    integrity: &MetadataIntegrity,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<()> {
     let result = (|| {
         let handle = resources.get(disk)?;
         let stored = crate::disk::decode_seal(&handle.root.read_bytes_observed(
             &disk.root.join("disk.json"),
             crate::disk::MAX_METADATA,
-            &mut |_| Ok(()),
+            observe,
         )?)?;
         crate::disk::validate_stored_seal(&stored, &handle.seal)
     })();

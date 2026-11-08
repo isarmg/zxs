@@ -196,5 +196,6 @@ fn validate(state: &State) -> Result<()> {
             .map_err(|error| error.context(ErrorCode::StateInvalid, "invalid snapshot history"))?;
         covered.include(&manifest)?;
     }
-    covered.finish(state)
+    covered.finish(state)?;
+    crate::node_retirement::admit_current(state)
 }

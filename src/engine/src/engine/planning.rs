@@ -148,7 +148,7 @@ impl<'a> PlanningContext<'a> {
                 self.state
                     .content_states
                     .get(&p.version_id)
-                    .is_none_or(|s| *s != ContentState::Purged && *s != ContentState::Migrated)
+                    .is_none_or(|s| *s == ContentState::Available)
             })
             .map(|p| {
                 self.state
@@ -619,6 +619,7 @@ impl<'a> PlanningContext<'a> {
                 .or_else(|| op.history_tree_id.clone())
                 .unwrap_or_else(|| operation_id.to_string()),
         });
+        crate::node_retirement::verify(self.state, &next)?;
         crate::file_deletion::publication::verify(
             self.state,
             &next,

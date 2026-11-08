@@ -368,7 +368,7 @@ impl Engine {
         self.cleanup_purged()?;
         Ok(result)
     }
-    fn check_purge(&self, history: &str, versions: &[String]) -> Result<()> {
+    pub(crate) fn check_purge(&self, history: &str, versions: &[String]) -> Result<()> {
         let selected = versions.iter().collect::<BTreeSet<_>>();
         let reads = self
             .reads
@@ -471,7 +471,7 @@ impl Engine {
             .state
             .content_states
             .values()
-            .any(|s| *s == ContentState::Purged || *s == ContentState::Migrated)
+            .any(|s| matches!(s, ContentState::Purged | ContentState::Migrated | ContentState::Retired))
         {
             return Ok(());
         }
@@ -553,7 +553,7 @@ impl Engine {
         // for every version, retaining the existing unavailable-target skip.
         let mut cleanup_slots = BTreeMap::new();
         for (id, state) in &self.state.content_states {
-            if *state != ContentState::Purged && *state != ContentState::Migrated {
+            if *state == ContentState::Available {
                 continue;
             }
             let v = self
@@ -625,11 +625,17 @@ impl Engine {
                     Err(error) => return Err(error),
                 }
                 root.write_json(&dir.join("purged.json"), &tombstone, true)?;
-                let content =
-                    crate::container_storage::content_path_at(root, &dir, v, &mut |_| Ok(()))?;
-                // Unlink and its parent-directory sync share one admission;
-                // cancellation cannot retire the writer before durability.
-                root.remove_file_if_present_synced(&content)?;
+                // Both supported locations may coexist after interruption. Each
+                // unlink includes its parent-directory sync. Do not certify a
+                // single chosen path as complete cleanup of both locations.
+                for _ in 0..2 {
+                    match crate::container_storage::content_location_at(root, &dir, v, &mut |_| Ok(()))? {
+                        crate::container_storage::ContentLocation::Present(content) => {
+                            root.remove_file_if_present_synced(&content)?;
+                        }
+                        crate::container_storage::ContentLocation::Absent(_) => break,
+                    }
+                }
             }
         }
         Ok(())
@@ -643,6 +649,7 @@ impl Engine {
         plan: &Plan,
     ) -> Result<OperationResult> {
         self.check_directory_split(history)?;
+        crate::node_retirement::require_portable_history(&self.state, history)?;
         self.mutate(
             "history.split", principal, operation,
             json!({"plan_id":plan.plan_id,"digest":plan.digest}),

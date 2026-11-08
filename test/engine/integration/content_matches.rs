@@ -1,4 +1,10 @@
 //! Real publication and cold-read cases, without creating shared identities.
+#[path = "content_matches/permanent_removal.rs"]
+mod permanent_removal;
+#[path = "content_matches/permanent_removal_cleanup.rs"]
+mod permanent_removal_cleanup;
+#[path = "content_matches/permanent_retirement.rs"]
+mod permanent_retirement;
 #[path = "content_matches/rename.rs"]
 mod rename;
 #[path = "content_matches/shared_history.rs"]

@@ -1420,7 +1420,7 @@ fn verify_tombstone_content_with(
         .content_state_proof
         .verify(&t.snapshot.maps["content_states"], &t.version_id)?;
     if t.version_id != version.version_id
-        || !matches!(t.state, ContentState::Purged | ContentState::Migrated)
+        || !matches!(t.state, ContentState::Purged | ContentState::Migrated | ContentState::Retired)
         || t.candidate.pool_id != seal.pool_id
         || t.publication.candidate_hash != object_hash("candidate", &t.candidate)?
         || object_hash("snapshot", &t.snapshot)? != t.candidate.snapshot_hash

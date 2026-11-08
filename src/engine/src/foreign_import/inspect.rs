@@ -558,6 +558,10 @@ fn availability_at(
     match disposition {
         ContentState::Purged => return Ok(RecordedPurged),
         ContentState::Migrated => return Ok(RecordedMigrated),
+        ContentState::Retired => return Err(Error::new(
+            storage_contract::ErrorCode::HistoryPackageInvalid,
+            "retired-node history requires its full native retirement receipts",
+        )),
         ContentState::Available => {}
     }
     let directory = version_dir(

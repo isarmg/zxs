@@ -12,6 +12,7 @@ pub(super) struct HistoryMetadata {
 impl Engine {
     pub(super) fn history_package_metadata(&self, history: &str) -> Result<HistoryMetadata> {
         self.repository_for_history(history)?;
+        crate::node_retirement::require_portable_history(&self.state, history)?;
         let manifest = HistoryManifest::project_state(&self.state, history)?;
         let mut proof = None;
         let mut graph_objects = Vec::new();

@@ -346,7 +346,7 @@ fn result_available(node: &FileNode) -> bool {
     node.visible_content()
         && !matches!(
             node.content_state(),
-            Some(storage_contract::ContentState::Purged | storage_contract::ContentState::Migrated)
+            Some(storage_contract::ContentState::Purged | storage_contract::ContentState::Migrated | storage_contract::ContentState::Retired)
         )
 }
 

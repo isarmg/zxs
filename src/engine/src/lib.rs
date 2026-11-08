@@ -79,6 +79,7 @@ mod journal;
 #[cfg(feature = "fault-injection")]
 pub use journal::JournalFault;
 mod maintenance;
+mod node_retirement;
 mod metadata_budget;
 mod metadata_map;
 mod protection;
@@ -101,7 +102,7 @@ pub use disk::{
 #[cfg(feature = "fault-injection")]
 pub use engine::DiskQuiesceFault;
 pub use engine::{
-    ContentMatchRead, ContentReadPlan, DiskCatalogReceipt, DiskCatalogRole, DiskCatalogSnapshot,
+    ContentMatchRead, ContentReadPlan, CoupledNodeRetirement, DiskCatalogReceipt, DiskCatalogRole, DiskCatalogSnapshot,
     DiskCatalogVersion, DiskObservation, DiskObservationFailure, DiskObservationPlan,
     DiskObservationStage, Engine, FileHistorySourceRead, HistoryWindowCancellation,
     HistoryWindowRead, IndexFailure, IndexFailureStage, IndexHealth, IntegrityScrubArea,
@@ -112,7 +113,10 @@ pub use engine::{
     MembershipFenceStatus, MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
     MembershipJournalInspection, MetadataMemberProbe, MetadataView, ObservedDiskStatus,
     OpenedContent, OperationReadObservation, OperationReadPlan, OperationRecord,
-    PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus, RangeContent,
+    PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
+    PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection, PermanentNodeRetirementOutcome,
+    PermanentRemovalCleanupObservation,
+    RemovalParentProjection, RemovalReplicaCleanup, RemovalReplicaCleanupState, RangeContent,
     ReadFile, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
     RetainedWorkspaceLimits, SharedHistoryRead, SystemCatalogKind, SystemCatalogRecord,
     SystemCatalogValue, SystemChangeCursor, SystemChangePage, SystemChangeReadError,

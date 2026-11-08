@@ -158,7 +158,7 @@ fn content(fields: &mut Object, backup: bool) -> Result<(Option<String>, Ownersh
     let visible = fields.text("visible_content_state")?;
     if !matches!(
         visible.as_str(),
-        "LIVE" | "AVAILABLE" | "PURGED" | "MIGRATED"
+        "LIVE" | "AVAILABLE" | "PURGED" | "MIGRATED" | "RETIRED"
     ) {
         return Err(field_error(
             "visible_content_state",

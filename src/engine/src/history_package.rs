@@ -686,6 +686,9 @@ fn load_package_at(
         )
     })?;
     manifest.validate()?;
+    if manifest.content_states.values().any(|state| *state == ContentState::Retired) {
+        return Err(Error::new(ErrorCode::HistoryPackageInvalid, "portable history lacks permanent retirement receipts"));
+    }
     verify_publication_seal(
         &proof.candidate,
         &proof.publication,
@@ -789,6 +792,7 @@ impl Engine {
             proof,
             graph_objects,
         } = self.history_package_metadata(history)?;
+        crate::node_retirement::require_portable_history(&self.state, history)?;
         let parent = destination
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -1069,3 +1073,10 @@ mod history_changes_oracle_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/history_package/prepared_dedup_tests.rs"]
 mod prepared_dedup_tests;
+
+/// Deterministic source binding for the infrequent retirement publication.
+/// Uses the format's fixed partitioning, never a caller-selected page layout.
+pub(crate) fn retirement_history_root(state: &State, history: &str) -> Result<String> {
+    let manifest = HistoryManifest::from_state(state, history)?;
+    Ok(graph::prepare_encoded(&manifest, usize::MAX)?.binding.hash)
+}

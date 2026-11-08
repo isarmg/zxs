@@ -315,7 +315,7 @@ pub(in crate::engine) fn logical_used_bytes(state: &State) -> BTreeMap<String, u
         if state
             .content_states
             .get(&placement.version_id)
-            .is_some_and(|state| *state == ContentState::Purged || *state == ContentState::Migrated)
+            .is_some_and(|state| matches!(state, ContentState::Purged | ContentState::Migrated | ContentState::Retired))
         {
             continue;
         }

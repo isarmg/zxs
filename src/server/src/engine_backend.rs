@@ -291,7 +291,9 @@ fn authorized_version<'a>(
     engine: &'a Engine,
     id: &str,
 ) -> Result<&'a storage_contract::FileVersion, ApiError> {
-    let version = engine.state().versions.get(id).ok_or_else(|| {
+    let version = engine.state().versions.get(id)
+        .filter(|version| engine.state().content_states.get(&version.version_id) != Some(&storage_contract::ContentState::Retired))
+        .ok_or_else(|| {
         ApiError::new(
             ::http::StatusCode::NOT_FOUND,
             storage_contract::ErrorCode::NotFound,

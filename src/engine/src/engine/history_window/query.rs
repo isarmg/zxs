@@ -404,6 +404,7 @@ impl<'a> Query<'a> {
                 self.cancel.checkpoint()?;
                 if version.file_id == self.scope().file
                     && version.history_tree_id == self.scope().history
+                    && !crate::node_retirement::is_retired(self.state, &version.version_id)
                 {
                     selector.offer(
                         (version.version_sequence, version.version_id.as_str()),

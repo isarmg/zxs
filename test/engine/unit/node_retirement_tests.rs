@@ -1,0 +1,55 @@
+//! Reverse closure rejects missing evidence and state resurrection.
+use crate::*;
+
+fn fixture() -> (tempfile::TempDir, Engine, State, OperationId, String) {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(&temp.path().join("system"), Config::development([temp.path().join("disk")]).unwrap()).unwrap();
+    let repository = engine.create_disk_root("P01", "admin", OperationId::generate().unwrap()).unwrap();
+    let save = |engine: &mut Engine, bytes: &[u8]| {
+        let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+        engine.stage_bytes(&workspace.workspace_id, "a", bytes).unwrap();
+        engine.commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id, operation_id: OperationId::generate().unwrap(), principal: "admin".into(),
+            expected_head: workspace.base_head, fencing_token: workspace.fencing_token, message: "retirement closure".into(), request_digest: None,
+        }).unwrap();
+    };
+    save(&mut engine, b"old");
+    let entry = engine.namespace_tree(&repository.main_branch_id).unwrap().get("a").unwrap().clone();
+    save(&mut engine, b"new");
+    let before = engine.state().clone();
+    let read = engine.capture_shared_history(storage_contract::shared_history::SharedHistoryRequest::parse(
+        &entry.file_id, engine.metadata_view().history_root(&repository.history_tree_id).unwrap()).unwrap(),
+        storage_contract::history_window::HistoryWindowCancellation::new()).unwrap();
+    let selected = PermanentNodeRemovalSelection::new(vec![storage_contract::history_window::HistoryVersionId::parse(&entry.version_id).unwrap()]).unwrap();
+    let operation = OperationId::generate().unwrap();
+    engine.retire_file_nodes(&read, &selected, "admin", operation).unwrap();
+    (temp, engine, before, operation, entry.version_id)
+}
+
+#[test]
+fn retirement_snapshot_requires_receipt_actor_exact_event_and_current_retired_state() {
+    let (_temp, engine, before, operation, version) = fixture();
+    let state = engine.state();
+    crate::node_retirement::admit_current(state).unwrap();
+    crate::node_retirement::verify(&before, state).unwrap();
+    let mut missing = state.clone();
+    missing.operations.remove(&operation);
+    assert!(crate::node_retirement::admit_current(&missing).is_err());
+    let mut missing = state.clone();
+    missing.operation_principals.remove(&operation);
+    assert!(crate::node_retirement::admit_current(&missing).is_err());
+    let mut revived = state.clone();
+    revived.content_states.insert(version.clone(), ContentState::Available);
+    assert!(crate::node_retirement::admit_current(&revived).is_err());
+    let mut tampered = state.clone();
+    tampered.version_notes.insert(version, "changed archived evidence".into());
+    assert!(crate::node_retirement::admit_current(&tampered).is_err());
+    assert!(crate::node_retirement::verify(state, &before).is_err(), "an old full state cannot replace a retained retirement");
+}
+
+#[test]
+fn retirement_never_accepts_bare_state_token_as_authority() {
+    let (_temp, _engine, mut before, _operation, version) = fixture();
+    before.content_states.insert(version, ContentState::Retired);
+    assert!(crate::node_retirement::admit_current(&before).is_err());
+}

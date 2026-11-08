@@ -23,12 +23,21 @@ use storage_contract::history_window::*;
 mod content_matches;
 mod merge_source;
 mod nodes;
+mod permanent_removal;
+mod permanent_removal_cleanup;
 mod projection;
 mod query;
 mod read;
 mod shared_history;
 use super::history_selection as selection;
-pub use read::{ContentMatchRead, FileHistorySourceRead, HistoryWindowRead, SharedHistoryRead};
+pub use permanent_removal::{
+    CoupledNodeRetirement, PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection,
+    RemovalParentProjection,
+};
+pub use permanent_removal_cleanup::{
+    PermanentRemovalCleanupObservation, RemovalReplicaCleanup, RemovalReplicaCleanupState,
+};
+pub use read::{ContentMatchRead, FileHistorySourceRead, HistoryWindowRead, PermanentNodeRetirementOutcome, SharedHistoryRead};
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/history_window_oracle_tests.rs"]

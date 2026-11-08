@@ -108,6 +108,9 @@ impl Engine {
         file: &str,
         history: &str,
     ) -> Result<Option<OwnedScopeRead>> {
+        if crate::node_retirement::history_has_retirements(&self.state, history) {
+            return Ok(None);
+        }
         let mut proof = self
             .history_query_proof
             .lock()
