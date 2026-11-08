@@ -268,6 +268,22 @@ impl Record {
         )
     }
 
+    pub(super) fn terminal_retirement(
+        previous: &LoadedLocator,
+        target: &DiskRegistrationIdentity,
+        operation: OperationId,
+        digest: IntentDigest,
+    ) -> Result<Self> {
+        previous.require_terminal_retirement_target(target)?;
+        Self::stop_with_format(
+            previous,
+            target,
+            operation,
+            digest,
+            RecordFormat::TerminalLocator,
+        )
+    }
+
     fn stop_with_format(
         previous: &LoadedLocator,
         target: &DiskRegistrationIdentity,
@@ -276,7 +292,7 @@ impl Record {
         format: RecordFormat,
     ) -> Result<Self> {
         let source = &previous.record;
-        if source.is_terminal() {
+        if source.is_terminal() && format != RecordFormat::TerminalLocator {
             return Err(BootstrapError::ManagementOnly(
                 "terminal locator cannot accept an unrelated stop",
             ));
@@ -593,7 +609,11 @@ impl Record {
         if self.recovered_readmissions != older.record.recovered_readmissions
             || self.previous.as_ref() != Some(&older.head)
             || (older.record.is_terminal()
-                && (self.is_terminal() || !(updates_roots || readmits) || self.retained.is_empty()))
+                && if self.is_terminal() {
+                    !adds_stop
+                } else {
+                    !(updates_roots || readmits) || self.retained.is_empty()
+                })
             || (self.is_terminal() && !adds_stop)
             || !preserves_roots
             || !(adds_stop || updates_roots || readmits)

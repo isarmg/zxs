@@ -128,6 +128,9 @@ impl TerminalStore {
                     | "resume-attempts"
                     | super::super::retirement::INTENT
                     | super::super::retirement::SELECTED
+                    | "retirement-successor.json"
+                    | "retirement-stop.json"
+                    | "retirement-complete.json"
             ) {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,

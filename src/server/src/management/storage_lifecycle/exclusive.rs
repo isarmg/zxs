@@ -2,6 +2,7 @@
 //! threads or borrowed business handles: core still proves actual descriptor
 //! closure, and only the admitted terminal authority replaces the Engine.
 use super::*;
+mod retirement;
 use crate::auth::AuthReader;
 use storage_contract::storage_readmission::RegistrationSnapshot;
 use storage_engine::{Engine, TerminalManagement};

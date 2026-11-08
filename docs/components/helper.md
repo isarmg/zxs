@@ -201,8 +201,12 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 
 ## 终态剩余登记检查前置
 
-独立 Web 可对终态剩余登记读取准确 authority/registry/绑定边界及直接依赖，下载明确不可执行的诊断报告。没有新 operation 或意图，`executable:false`；剩余成员的正式终态 successor 写者仍缺。该检查不探测目标，不是完整内容/健康或外来接纳证明，已决定原操作的打开恢复仍可能同步。源码未审查/编译/测试/CI，见[边界](../design/helper-terminal-removal-inspection.md)。
+独立 Web 可对终态剩余登记读取准确 authority/registry/绑定边界及直接依赖，下载明确不可执行的诊断报告。没有新 operation 或意图，`executable:false`；该诊断报告本身仍不可执行；另有下述受限首笔 successor 写入口。该检查不探测目标，不是完整内容/健康或外来接纳证明，已决定原操作的打开恢复仍可能同步。源码未审查/编译/测试/CI，见[边界](../design/helper-terminal-removal-inspection.md)。
 
 ## 终态原生未完成决定
 
-核心增加 SYSTEM-only 的精确剩余登记选择/原请求恢复，现阶段没有最终 registry/Stop/D3 或取消能力，**未接 helper 写按钮**。既有 helper 检查可以显示其真实原 ID/摘要/阶段，仍不可执行。Server/Web 明确报告 recovery_required，metadata resume 被围栏；不是剩余成员已移除。源码未审查/编译/测试/CI，见[决定存储](../design/terminal-retirement-decision-storage.md)。
+核心增加 SYSTEM-only 的精确剩余登记选择/原请求恢复，最初切片只保存未完成选择；下述后继已为符合条件的首笔决定补齐 registry/Stop/D3 与 helper 确认，但仍无取消能力。既有 helper 检查可以显示其真实原 ID/摘要/阶段，仍不可执行。Server/Web 明确报告 recovery_required，metadata resume 被围栏；不是剩余成员已移除。源码未审查/编译/测试/CI，见[决定存储](../design/terminal-retirement-decision-storage.md)。
+
+## 首笔终态登记后继
+
+独立 Web 单独提供终态原生预览、明确确认、原计划查询/续作，覆盖已记录且尚未 Stop 的绑定在原终态权威下的第一笔移除。SYSTEM 原选择、精确 registry successor、Stop 计划、进程 I/O 排除及永久回执缺一不可；不从 root 计划或缓存状态推断完成。服务仍关闭，不读取退役盘路径，不擦除字节。第二笔、已 Stop/Disabled 生命周期、metadata resume、新活动命名空间和外来正式接纳均拒绝；页面须单独确认这一限制。源码未审查/编译/测试/CI，见[生产边界与恢复](../design/terminal-retirement-successor.md)。

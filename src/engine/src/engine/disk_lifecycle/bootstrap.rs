@@ -160,6 +160,19 @@ pub(crate) struct LoadedLocator {
     record: Record,
 }
 impl LoadedLocator {
+    pub(in crate::engine) fn require_terminal_retirement_target(
+        &self,
+        identity: &DiskRegistrationIdentity,
+    ) -> Result<()> {
+        self.recorded_admission_epoch(identity)?;
+        if !self.record.is_terminal() || self.record.is_stopped(&identity.disk_id) {
+            return Err(BootstrapError::ManagementOnly(
+                "terminal successor requires a recorded, not-already-stopped registration",
+            ));
+        }
+        Ok(())
+    }
+
     pub(in crate::engine) fn recorded_admission_epoch(
         &self,
         identity: &DiskRegistrationIdentity,

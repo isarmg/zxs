@@ -39,6 +39,7 @@ impl TerminalRegistry {
         target: &ValidatedConfig,
         identity: &DiskRegistrationIdentity,
     ) -> Result<RegistryState> {
+        self.require_resumable()?;
         digest(boundary.authority)?;
         digest(boundary.snapshot)?;
         let previous = self.verified_registry();

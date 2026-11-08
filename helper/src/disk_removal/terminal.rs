@@ -30,7 +30,7 @@ struct Source {
 #[derive(Serialize, Deserialize)]
 #[serialization(rename_all = "snake_case")]
 enum Blocker {
-    TerminalRegistrySuccessorUnavailable,
+    ExplicitSuccessorPreviewRequired,
     OriginalTerminalRetirementPending,
 }
 #[derive(Serialize, Deserialize)]
@@ -125,7 +125,7 @@ fn inspect(
     let blocker = if boundary.pending_retirement.is_some() {
         Blocker::OriginalTerminalRetirementPending
     } else {
-        Blocker::TerminalRegistrySuccessorUnavailable
+        Blocker::ExplicitSuccessorPreviewRequired
     };
     let selection = Selection {
         source: Source {

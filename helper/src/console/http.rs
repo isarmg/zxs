@@ -78,6 +78,18 @@ pub(super) fn router(state: State) -> Router {
             "/api/disks/terminal-removal-inspect",
             post(terminal_removal_inspect),
         )
+        .route(
+            "/api/disks/terminal-retirement-preview",
+            post(terminal_retirement_preview),
+        )
+        .route(
+            "/api/disks/terminal-retirement-original",
+            post(terminal_retirement_original),
+        )
+        .route(
+            "/api/disks/terminal-retirement-commit",
+            post(terminal_retirement_commit),
+        )
         .route("/api/disks/add-preview", post(disk_addition_preview))
         .route("/api/disks/add-original", post(disk_addition_original))
         .route("/api/disks/add-commit", post(disk_addition_commit))
@@ -1020,6 +1032,87 @@ async fn terminal_removal_inspect(
         Failure::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "deregistration_worker",
+            error,
+        )
+    })??;
+    Ok(Json(result).into_response())
+}
+
+async fn terminal_retirement_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_removal::Input = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_removal::terminal_action::preview(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "terminal_retirement",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "terminal_retirement_worker",
+            error,
+        )
+    })??;
+    Ok(Json(result).into_response())
+}
+
+async fn terminal_retirement_original(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_removal::Original = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_removal::terminal_action::original(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "terminal_retirement",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "terminal_retirement_worker",
+            error,
+        )
+    })??;
+    Ok(Json(result).into_response())
+}
+
+async fn terminal_retirement_commit(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_removal::terminal_action::Commit = input(request).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::disk_removal::terminal_action::commit(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "terminal_retirement",
+                &error.to_string(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "terminal_retirement_worker",
             error,
         )
     })??;

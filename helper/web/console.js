@@ -597,7 +597,7 @@ byId("disk-remove-load").addEventListener("click", async () => {
     byId("disk-remove-inventory").textContent = JSON.stringify(inventory,null,2);
     byId("disk-remove-inventory").hidden = false;
     if (inventory.authority === "terminal_management") {
-      error("当前为终态管理权威，没有活动存储。可以选择剩余登记检查其准确权威边界，但目前不能执行新的注销；原摘要查询/续作仍单独保留。");
+      error("当前为终态管理权威，没有活动存储。可以选择剩余登记检查其准确权威边界，下方可另行预览受限的首笔终态后继；原摘要查询/续作仍单独保留。");
     }
   } catch (e) { error(e.message); } finally { setBusy(false); }
 });
@@ -616,7 +616,7 @@ byId("disk-remove-form").addEventListener("submit", async event => {
       byId("disk-remove-plan").hidden = false;
       byId("disk-remove-save").textContent = "保存不可执行的终态检查报告";
       byId("disk-remove-save").hidden = false;
-      error("检查完成，但没有创建注销操作。缺少终态登记后继发布协议，不能提交、擦盘或据此拔盘；该摘要不是操作/准入令牌。");
+      error("检查完成，但没有创建注销操作。此检查不能提交、擦盘或据此拔盘；下方首笔后继须重新预览和确认，该检查摘要不是操作/准入令牌。");
     } else {
       const operation_id = "op_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
       showDiskRemoval(service_user, await (await post("/api/disks/deregister-preview",{service_user,operation_id,...target,external_writers_stopped:byId("disk-remove-writers").checked})).json());
@@ -650,4 +650,59 @@ byId("disk-remove-commit-form").addEventListener("submit", async event => {
     byId("disk-remove-target").replaceChildren(new Option("注销后请重新读取当前登记", ""));
   } catch (e) { error(`${e.message} 原摘要：${retained.input.request_digest}。结果不明时不要拔盘或换编号重做，先核对原操作。`); }
   finally { diskRemovalPreview = null; byId("disk-remove-commit-form").hidden = true; setBusy(false); }
+});
+
+// This is UI state only. Native SYSTEM owns decision, Stop and final receipts.
+let terminalRetirementPreview = null;
+function resetTerminalRetirement() {
+  terminalRetirementPreview = null;
+  for (const id of ["terminal-retire-plan","terminal-retire-save","terminal-retire-commit","terminal-retire-result"]) byId(id).hidden = true;
+  byId("terminal-retire-loss").checked = false;
+  byId("terminal-retire-restart").checked = false;
+}
+function showTerminalRetirement(service_user, preview) {
+  terminalRetirementPreview = {input:{service_user,request_digest:preview.request_digest,external_writers_stopped:true},plan:preview.plan};
+  byId("terminal-retire-digest").value = preview.request_digest;
+  byId("terminal-retire-plan").textContent = JSON.stringify(preview,null,2);
+  for (const id of ["terminal-retire-plan","terminal-retire-save"]) byId(id).hidden = false;
+  byId("terminal-retire-commit").hidden = preview.original_result !== null;
+}
+for (const id of ["disk-remove-user","disk-remove-target","disk-remove-writers","terminal-retire-digest"]) byId(id).addEventListener("input",resetTerminalRetirement);
+byId("disk-remove-load").addEventListener("click",resetTerminalRetirement);
+byId("terminal-retire-preview").addEventListener("click",async () => {
+  if (busy || stopping) return;
+  if (byId("disk-remove-target").dataset.authority !== "terminal_management" || !byId("disk-remove-target").value) {
+    error("先在上方读取并选择准确终态登记，不从配置或旧报告推断登记。"); return;
+  }
+  const target = JSON.parse(byId("disk-remove-target").value);
+  const service_user = byId("disk-remove-user").value;
+  const operation_id = "op_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
+  resetTerminalRetirement(); error(""); setBusy(true);
+  try { showTerminalRetirement(service_user,await (await post("/api/disks/terminal-retirement-preview",{service_user,operation_id,...target,external_writers_stopped:byId("disk-remove-writers").checked})).json()); }
+  catch(e) { error(e.message); } finally { setBusy(false); }
+});
+byId("terminal-retire-original").addEventListener("click",async () => {
+  if (busy || stopping) return;
+  const service_user = byId("disk-remove-user").value;
+  const request_digest = byId("terminal-retire-digest").value;
+  resetTerminalRetirement(); error(""); setBusy(true);
+  try { showTerminalRetirement(service_user,await (await post("/api/disks/terminal-retirement-original",{service_user,request_digest,external_writers_stopped:byId("disk-remove-writers").checked})).json()); }
+  catch(e) { error(e.message); } finally { setBusy(false); }
+});
+byId("terminal-retire-save").addEventListener("click",() => {
+  if (terminalRetirementPreview) save(new Blob([JSON.stringify(terminalRetirementPreview,null,2)],{type:"application/json"}),`zxs-terminal-retirement-${terminalRetirementPreview.input.request_digest}.json`);
+});
+byId("terminal-retire-commit").addEventListener("submit",async event => {
+  event.preventDefault(); if (busy || stopping || !terminalRetirementPreview) return;
+  const retained = terminalRetirementPreview;
+  const native = retained.plan.retirement;
+  if (!confirm(`移除终态登记 ${native.target.slot_id} / ${native.target.disk_id}？只继续 ${native.request.operation_id}。保留物理字节；本阶段完成后不支持元数据重启或第二笔终态移除。`)) return;
+  setBusy(true); error("");
+  try {
+    const result = await (await post("/api/disks/terminal-retirement-commit",{...retained,confirmation:"retire-terminal-member-without-metadata-restart",acknowledge_current_view_loss:byId("terminal-retire-loss").checked,acknowledge_no_metadata_resumption:byId("terminal-retire-restart").checked})).json();
+    byId("terminal-retire-result").textContent = JSON.stringify(result,null,2);
+    byId("terminal-retire-result").hidden = false;
+    byId("disk-remove-target").replaceChildren(new Option("请重新读取实际登记", ""));
+  } catch(e) { error(`${e.message} 原终态摘要：${retained.input.request_digest}。可能已部分或全部完成，不删证据或换编号；先核对同一原操作。`); }
+  finally { terminalRetirementPreview = null; byId("terminal-retire-commit").hidden = true; setBusy(false); }
 });

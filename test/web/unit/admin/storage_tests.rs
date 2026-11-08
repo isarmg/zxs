@@ -165,7 +165,7 @@ fn terminal_management_allows_fresh_resume_but_never_initial_activation() {
         "terminal": {
             "pool_id":"pool_00000000000000000000000000000001", "operation_id":"op_00000000000000000000000000000001",
             "authority_hash":"a".repeat(64), "registrations":"retained_registrations",
-            "registered_directories":1, "original_metadata_members":1, "original_metadata_quorum":1, "pending_retirement":null
+            "registered_directories":1, "original_metadata_members":1, "original_metadata_quorum":1, "pending_retirement":null,"completed_retirement":null
         }
     });
     let snapshot = storage_snapshot(value.clone()).unwrap();
@@ -189,7 +189,7 @@ fn terminal_pending_retirement_is_recovery_not_initialization_or_completed_remov
         "completion_available":false,"allow_development":false,"terminal":{
         "pool_id":"pool_00000000000000000000000000000001","operation_id":"op_00000000000000000000000000000001",
         "authority_hash":"a".repeat(64),"registrations":"retained_registrations","registered_directories":1,
-        "original_metadata_members":1,"original_metadata_quorum":1,"pending_retirement":{
+        "original_metadata_members":1,"original_metadata_quorum":1,"completed_retirement":null,"pending_retirement":{
         "operation_id":"op_00000000000000000000000000000002","principal":"admin",
         "pool_id":"pool_00000000000000000000000000000001","disk_id":"disk_retained","slot_id":"P02",
         "binding_generation":"1","intent_digest":"b".repeat(64),"phase":"decision_stored"}}});

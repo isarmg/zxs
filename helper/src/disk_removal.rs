@@ -1,6 +1,7 @@
 //! Root-owned offline deregistration intent. Never walks a target after D3;
 //! retained bytes and historical registration definitions are not deleted.
 pub(crate) mod terminal;
+pub(crate) mod terminal_action;
 mod worker;
 use crate::{
     Result,
@@ -82,6 +83,15 @@ struct WorkerRequest {
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
+    TerminalPreview {
+        request: storage_contract::storage_lifecycle::ExitRequest,
+    },
+    TerminalOriginal {
+        plan: terminal_action::Plan,
+    },
+    TerminalCommit {
+        plan: terminal_action::Plan,
+    },
     Inventory,
     InspectTerminal {
         slot_id: String,
@@ -102,11 +112,27 @@ enum Action {
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Output {
-    Inventory { inventory: worker::Inventory },
-    TerminalInspection { inspection: terminal::Inspection },
-    Preview { plan: Plan },
-    Original { status: Option<ExitStatus> },
-    Status { status: ExitStatus },
+    TerminalPreview {
+        plan: terminal_action::Plan,
+    },
+    TerminalResult {
+        result: Option<storage_contract::OperationResult>,
+    },
+    Inventory {
+        inventory: worker::Inventory,
+    },
+    TerminalInspection {
+        inspection: terminal::Inspection,
+    },
+    Preview {
+        plan: Plan,
+    },
+    Original {
+        status: Option<ExitStatus>,
+    },
+    Status {
+        status: ExitStatus,
+    },
 }
 impl crate::service_worker::Request for WorkerRequest {
     type Output = Output;

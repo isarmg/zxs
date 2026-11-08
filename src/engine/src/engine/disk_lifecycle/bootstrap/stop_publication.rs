@@ -13,6 +13,8 @@ enum StopFormat {
     Exit,
     #[serialization(rename = "prepared-terminal-exit-stop")]
     Terminal,
+    #[serialization(rename = "prepared-terminal-retirement-stop")]
+    Retirement,
 }
 
 /// This is a bounded immutable plan, not an authorization token. Its optional
@@ -38,6 +40,51 @@ pub(in crate::engine) struct AdmittedStopPublication<'a> {
 }
 
 impl BootstrapStore {
+    pub(in crate::engine) fn prepare_retirement_stop(
+        &self,
+        previous: &LoadedLocator,
+        source: &crate::engine::disk_lifecycle::terminal::retirement::VerifiedRetirementStopSource,
+    ) -> Result<PreparedStop> {
+        self.prepare_stop(
+            previous,
+            source.identity(),
+            source.operation_id(),
+            source.digest(),
+            StopFormat::Retirement,
+            Vec::new(),
+        )
+    }
+    pub(in crate::engine) fn admit_retirement_stop<'a>(
+        &self,
+        plan: &'a PreparedStop,
+        source: &crate::engine::disk_lifecycle::terminal::retirement::VerifiedRetirementStopSource,
+    ) -> Result<AdmittedStopPublication<'a>> {
+        if !matches!(plan.format, StopFormat::Retirement)
+            || &plan.target != source.identity()
+            || plan.operation_id != source.operation_id()
+            || plan.intent_digest != source.digest()
+        {
+            return Err(BootstrapError::ManagementOnly(
+                "retirement stop differs from selected SYSTEM successor",
+            ));
+        }
+        let (stopped, current) = self.check_stop_plan(plan)?;
+        if locator(&plan.stopped)?
+            .recorded_admission_epoch(&plan.target)?
+            .as_deref()
+            != source.epoch()
+        {
+            return Err(BootstrapError::ManagementOnly(
+                "retirement stop closes another I/O epoch",
+            ));
+        }
+        Ok(AdmittedStopPublication {
+            plan,
+            stopped,
+            current,
+        })
+    }
+
     pub(in crate::engine) fn prepare_exit_stop(
         &self,
         previous: &LoadedLocator,
@@ -342,6 +389,7 @@ fn stop_record(
     match format {
         StopFormat::Exit => Record::stop(previous, target, operation, digest),
         StopFormat::Terminal => Record::terminal_stop(previous, target, operation, digest),
+        StopFormat::Retirement => Record::terminal_retirement(previous, target, operation, digest),
     }
 }
 fn terminal_digest(verified: &VerifiedTerminalAuthority) -> Result<IntentDigest> {

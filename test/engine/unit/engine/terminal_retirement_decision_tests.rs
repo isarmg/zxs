@@ -239,3 +239,124 @@ fn stale_source_and_other_pending_selection_cannot_reserve_a_new_operation() {
         plan.operation_id()
     );
 }
+
+#[test]
+fn first_terminal_successor_completes_stop_and_receipt_without_any_target_probe() {
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    let old = fixture.terminal.registry().commitment().clone();
+    for disk in &fixture.config.disks {
+        fs::rename(&disk.root, disk.root.with_extension("unplugged")).unwrap();
+        fs::write(&disk.root, b"do not resolve this as a directory").unwrap();
+    }
+    let receipt = fixture
+        .terminal
+        .complete_terminal_retirement(&plan)
+        .unwrap();
+    assert_eq!(receipt.request_digest, plan.digest());
+    assert_eq!(receipt.result["registration"], "detached");
+    assert_eq!(receipt.result["target_io"], "closed");
+    assert_eq!(fixture.terminal.registered_disks().len(), 1);
+    assert_eq!(fixture.terminal.registry().historical_topology().len(), 3);
+    assert_ne!(fixture.terminal.registry().commitment(), &old);
+    assert_eq!(
+        fixture.terminal.operation(plan.operation_id()),
+        Some(&receipt)
+    );
+    assert!(
+        fixture
+            .terminal
+            .terminal_retirement_status()
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        fixture
+            .terminal
+            .preview_terminal_retirement(
+                &fixture.config.disks[2].disk_id,
+                "admin",
+                OperationId::generate().unwrap()
+            )
+            .is_err()
+    );
+    assert!(fixture.terminal.writer_locks().is_err());
+    let root = fixture.system();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&root).unwrap();
+    assert_eq!(cold.registered_disks().len(), 1);
+    let original = cold
+        .original_terminal_retirement("admin", plan.operation_id(), plan.digest())
+        .unwrap();
+    assert_eq!(
+        cold.complete_terminal_retirement(&original).unwrap(),
+        receipt
+    );
+    assert_eq!(
+        cold.terminal_retirement_result("admin", plan.operation_id(), plan.digest())
+            .unwrap(),
+        Some(receipt)
+    );
+    drop(cold);
+    assert!(TerminalManagement::open_for_resume(&root).is_err());
+    for disk in &fixture.config.disks {
+        assert_eq!(
+            fs::read(&disk.root).unwrap(),
+            b"do not resolve this as a directory"
+        );
+    }
+}
+
+#[test]
+fn stop_without_final_marker_keeps_registration_until_exact_same_original_completion() {
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    let receipt = fixture
+        .terminal
+        .complete_terminal_retirement(&plan)
+        .unwrap();
+    let complete_path = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join(completion::COMPLETE);
+    // Model a final marker that did not survive. The exact original Stop/plan
+    // remain durable, so a cold retry must not invent another ledger operation.
+    fs::remove_file(&complete_path).unwrap();
+    let root = fixture.system();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&root).unwrap();
+    assert_eq!(cold.registered_disks().len(), 2);
+    assert!(cold.operation(plan.operation_id()).is_none());
+    let original = cold
+        .original_terminal_retirement("admin", plan.operation_id(), plan.digest())
+        .unwrap();
+    assert_eq!(
+        cold.complete_terminal_retirement(&original).unwrap(),
+        receipt
+    );
+    assert_eq!(cold.registered_disks().len(), 1);
+}
+
+#[test]
+fn final_marker_without_its_native_stop_is_corruption_not_completed_or_empty() {
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&plan)
+        .unwrap();
+    let stop = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join(completion::STOP);
+    fs::remove_file(&stop).unwrap();
+    let root = fixture.system();
+    drop(fixture.terminal);
+    assert!(TerminalManagement::open(&root).is_err());
+    assert!(TerminalManagement::requires_management(&root).unwrap());
+    assert!(Engine::open(&root).is_err());
+}

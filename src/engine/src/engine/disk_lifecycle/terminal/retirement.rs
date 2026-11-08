@@ -1,7 +1,10 @@
 //! SYSTEM-only selection of one remaining terminal registration. This is a
-//! durable unfinished decision, not a registry successor, Stop, D3 or receipt.
+//! durable selection; completion is a separate SYSTEM successor/Stop/D3 protocol.
+mod completion;
 use super::*;
 use crate::{DiskRegistryCommitment, object_hash};
+pub(super) use completion::Completed;
+pub(in crate::engine) use completion::VerifiedRetirementStopSource;
 use data_serialization::{Deserialize, Serialize};
 
 pub(super) const INTENT: &str = "retirement-intent.json";
@@ -58,6 +61,18 @@ impl TerminalRetirementPlan {
     }
     pub fn target(&self) -> &DiskRegistrationIdentity {
         &self.intent.target
+    }
+    pub fn source_registry(&self) -> &DiskRegistryCommitment {
+        &self.intent.source.registry
+    }
+    pub fn source_sequence(&self) -> u64 {
+        self.intent.source.sequence
+    }
+    pub fn source_topology_generation(&self) -> u64 {
+        self.intent.source.topology_generation
+    }
+    pub fn source_authority_hash(&self) -> &str {
+        &self.intent.source.terminal_authority_hash
     }
     pub fn digest(&self) -> &str {
         &self.digest
@@ -125,6 +140,7 @@ impl TerminalManagement {
             target: target.identity(),
         };
         self.validate_retirement(&intent)?;
+        self.require_retirement_stop_target(&intent.target)?;
         Ok(TerminalRetirementPlan {
             digest: object_hash(DIGEST_KIND, &intent)?,
             intent,
@@ -221,6 +237,9 @@ impl TerminalManagement {
     /// the intent with a selected marker is corruption, never an empty request.
     pub fn terminal_retirement_status(&self) -> Result<Option<TerminalRetirementStatus>> {
         self.store.verify_writer(&self._locks)?;
+        if self.retirement_completion.is_some() {
+            return Ok(None);
+        }
         Ok(self
             .load_terminal_retirement()?
             .map(|pending| pending.status()))
@@ -229,7 +248,7 @@ impl TerminalManagement {
         if self.load_terminal_retirement()?.is_some() {
             return Err(failure(
                 ErrorCode::RecoveryRequired,
-                "an unfinished terminal retirement blocks metadata resumption; preserve and recover its exact original decision",
+                "terminal retirement evidence blocks another retirement and metadata resumption until an explicit successor consumer exists",
             ));
         }
         Ok(())
@@ -242,9 +261,9 @@ impl TerminalManagement {
             pool_id: self.original_configuration().pool_id.clone(),
             terminal_operation_id: self.verified.authority.operation_id(),
             terminal_authority_hash: self.store.authority_hash().into(),
-            registry: self.registry().commitment().clone(),
-            sequence: self.state.sequence,
-            topology_generation: self.state.topology_generation,
+            registry: self.verified.registry.commitment().clone(),
+            sequence: self.retirement_base_state.sequence,
+            topology_generation: self.retirement_base_state.topology_generation,
         }
     }
     fn validate_retirement(&self, intent: &Intent) -> Result<()> {
@@ -255,13 +274,19 @@ impl TerminalManagement {
                 "terminal retirement source differs from the authenticated current authority/registry boundary",
             ));
         }
-        if self.operation(intent.operation_id).is_some() {
+        if self
+            .retirement_base_state
+            .operations
+            .contains_key(&intent.operation_id)
+        {
             return Err(failure(
                 ErrorCode::IdempotencyKeyReused,
                 "terminal retirement ID already belongs to permanent history",
             ));
         }
         let registered = self
+            .verified
+            .registry
             .registered_disks()
             .find(|disk| disk.disk_id == intent.target.disk_id)
             .ok_or_else(|| {
@@ -283,7 +308,7 @@ impl TerminalManagement {
         let intent = store::optional::<Intent>(directory, &directory.path().join(INTENT))?;
         let selected = store::optional::<Selection>(directory, &directory.path().join(SELECTED))?;
         let Some(intent) = intent else {
-            if selected.is_some() {
+            if selected.is_some() || completion::has_material(directory)? {
                 return Err(failure(
                     ErrorCode::ObjectCorrupt,
                     "terminal retirement selection has no exact original intent",
@@ -311,7 +336,13 @@ pub(super) fn require_no_evidence(store: &TerminalStore) -> Result<()> {
     let directory = store.operation();
     // At this early resume gate we must not treat malformed evidence as absent.
     // The ordinary terminal owner performs full semantic validation afterwards.
-    for name in [INTENT, SELECTED] {
+    for name in [
+        INTENT,
+        SELECTED,
+        completion::SUCCESSOR,
+        completion::STOP,
+        completion::COMPLETE,
+    ] {
         if directory
             .open_optional_read_regular(&directory.path().join(name))?
             .is_some()

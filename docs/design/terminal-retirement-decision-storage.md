@@ -2,7 +2,7 @@
 
 [辅助工具](../components/helper.md) · [决策](../adr/terminal-retirement-decisions.md) · [只读检查](helper-terminal-removal-inspection.md) · [任务清单](../../TASKS.md)
 
-本片在 `ea7407e8` 上开发后对齐 `1a778c2e`，仅交付源码，未审查、编译、测试或运行 CI，也未实际调用工具/修改系统。它推进**原生决定与恢复**，不是剩余成员注销完成，更不是外来完整链接纳完成。
+本页记录最初在 `ea7407e8` 上开发、对齐 `1a778c2e` 的决定切片；[首笔后继](terminal-retirement-successor.md)现已补充其受限完成路径。最初切片仅交付源码，未审查、编译、测试或运行 CI，也未实际调用工具/修改系统。它推进**原生决定与恢复**，不是剩余成员注销完成，更不是外来完整链接纳完成。
 
 ## 生产 API 与实际写入
 
@@ -25,11 +25,11 @@
 
 Server 的终态存储状态带必需可空 `pending_retirement` 字段；有未完成选择时为 `recovery_required`，列准确原 operation/actor/target/digest/阶段。当前 Web 接受这一组合并明确告知“登记未移除、元数据恢复被阻断”，不给初始激活或完成移除的假成功。既有 helper 终态检查展示同一未决记录并返回 `original_terminal_retirement_pending`，仍 `executable:false`、不创建新的操作。
 
-**当前没有完成该决定或取消它的能力。** 因此 staging API 未接到无认证 helper Web/CLI 写入口。调用者必须明确选择这个原生开发阶段；不能因为普通状态、检查或前置规划就调用它。最终 writer 补齐前，产品不能宣称“剩余盘已移除”或“可以重新启用存储”。
+**最初决定切片没有完成或取消能力。** 后续已为符合条件的首笔选择加入完整 Stop/D3 与 helper 确认入口，准确限制见[后继协议](terminal-retirement-successor.md)；直接 staging 仍不代表成功。最初切片未接到 helper 写入口。调用者必须明确选择这个原生开发阶段；不能因为普通状态、检查或前置规划就调用它。最终 writer 补齐前，产品不能宣称“剩余盘已移除”或“可以重新启用存储”。
 
 ## 尚缺的闭包
 
-后继仍须实现：完整 terminal registry successor/历史定义保留、逐目标实际 Stop/关闭证明、SYSTEM 最终决定与永久回执、当前投影与冷恢复、metadata-resume 对新后继的消费。这些义务未通过复用最后 voter 的旧权威或当前不可变选择绕过。
+首笔后继已补 SYSTEM registry/历史保留、实际 Stop/进程排除、最终结果与冷恢复；仍缺多笔终态移除、已 Stop 生命周期消费和 metadata-resume 对新后继的消费。这些义务未通过复用最后 voter 的旧权威或当前不可变选择绕过。
 
 外来二级及以上盘仍要求一次完整低级链和最终目标 writer/独立准入。当前 Backup Candidate/隔离材料仍不是可激活权威，不能解除源围栏或让 helper 报加入完成。H03 继续未完成。
 

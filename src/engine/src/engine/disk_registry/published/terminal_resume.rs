@@ -38,6 +38,7 @@ impl TerminalRegistry {
         boundary: RegistryBoundary<'_>,
         target: &ValidatedConfig,
     ) -> Result<RegistryState> {
+        self.require_resumable()?;
         digest(boundary.authority)?;
         digest(boundary.snapshot)?;
         let previous = self.verified_registry();

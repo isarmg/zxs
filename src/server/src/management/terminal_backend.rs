@@ -176,6 +176,9 @@ impl Inner {
                 original_metadata_members: status.original_metadata_members,
                 original_metadata_quorum: status.original_metadata_quorum,
                 pending_retirement,
+                completed_retirement: terminal
+                    .completed_terminal_retirement()
+                    .map(|result| result.operation_id),
             }),
         }))
     }

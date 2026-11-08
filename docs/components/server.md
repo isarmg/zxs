@@ -471,4 +471,8 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 
 ## 终态未完成注销决定状态
 
-终态 `StorageActivationStatus` 包含必需可空 `pending_retirement`。原生剩余成员选择未完成时状态为 RecoveryRequired，带真实操作/主体/目标/摘要/阶段，不改变当前登记数，不构造 Published/永久回执。Web 与 helper 诊断消费该状态；既有终态原回执仍分离。原生 staging 尚未暴露 HTTP 写入口，不能据状态字段声称完整注销。源码未编译/测试/审查/CI，见[决定存储](../design/terminal-retirement-decision-storage.md)。
+终态 `StorageActivationStatus` 包含必需可空 `pending_retirement`。原生剩余成员选择未完成时状态为 RecoveryRequired，带真实操作/主体/目标/摘要/阶段，不改变当前登记数，不构造 Published/永久回执。Web 与 helper 诊断消费该状态；既有终态原回执仍分离。单独的 helper 首笔完成入口不以 staging 状态作为成功；该状态字段仍不代表完整注销。源码未编译/测试/审查/CI，见[决定存储](../design/terminal-retirement-decision-storage.md)。
+
+## 终态首笔 successor 控制适配
+
+`ExclusiveExit` 增加终态专用 preview/result/complete API，持续核对当前主 AuthReader、准确原主体/目标/来源摘要；不复用最后 voter 的旧永久回执当新结果。helper-only HTTP/根计划/确认留在 helper。核心实际完成后，终态状态的必需可空 `completed_retirement` 指向新永久操作，当前登记数来自 successor，保留原固定 N/Q；Web 明示不能恢复 metadata 或执行第二笔。未审查/编译/测试/CI，见[后继边界](../design/terminal-retirement-successor.md)。

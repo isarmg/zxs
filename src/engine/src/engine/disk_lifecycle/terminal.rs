@@ -1,6 +1,6 @@
 //! Explicit no-voter management. Protected system authority and complete old
 //! fixed-quorum evidence replace neither an active pool nor ordinary writes.
-mod retirement;
+pub(in crate::engine) mod retirement;
 mod store;
 use super::bootstrap::{
     IntentDigest,
@@ -52,6 +52,8 @@ pub struct TerminalManagement {
     verified: VerifiedTerminalAuthority,
     state: Arc<State>,
     result: OperationResult,
+    retirement_base_state: Arc<State>,
+    retirement_completion: Option<retirement::Completed>,
     _locks: WriterLocks,
     _target_stop: RecoveredDiskIo,
 }
@@ -230,20 +232,23 @@ impl TerminalManagement {
             Arc::get_mut(&mut state).expect("invariant: a new management projection has one owner"),
             &attempts.cancelled,
         )?;
-        let management = Self {
+        let mut management = Self {
             store,
             verified,
+            retirement_base_state: Arc::clone(&state),
+            retirement_completion: None,
             state,
             result,
             _locks: locks,
             _target_stop: target_stop,
         };
         management.validate_terminal_retirement()?;
+        management.restore_terminal_retirement()?;
         Ok(management)
     }
 
     pub fn status(&self) -> TerminalManagementStatus {
-        let registered_disks = self.verified.registry.registered_disks().len();
+        let registered_disks = self.registry().registered_disks().len();
         let authority = &self.verified.authority;
         TerminalManagementStatus {
             authority_hash: self.store.authority_hash().to_owned(),
@@ -264,10 +269,13 @@ impl TerminalManagement {
     }
 
     pub fn registered_disks(&self) -> impl ExactSizeIterator<Item = RegisteredDisk<'_>> {
-        self.verified.registry.registered_disks()
+        self.registry().registered_disks()
     }
     pub fn registry(&self) -> &TerminalRegistry {
-        &self.verified.registry
+        self.retirement_completion
+            .as_ref()
+            .map(|completed| &completed.registry)
+            .unwrap_or(&self.verified.registry)
     }
     pub fn result(&self) -> &OperationResult {
         &self.result
@@ -342,7 +350,9 @@ impl TerminalManagement {
             Arc::get_mut(&mut state).expect("invariant: a new management projection has one owner"),
             &attempts.cancelled,
         )?;
+        self.retirement_base_state = Arc::clone(&state);
         self.state = state;
+        self.restore_terminal_retirement()?;
         Ok(())
     }
 }

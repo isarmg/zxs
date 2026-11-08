@@ -85,6 +85,8 @@ pub struct TerminalStorageStatus {
     pub original_metadata_quorum: usize,
     #[serialization(deserialize_with = "required_retirement")]
     pub pending_retirement: Option<TerminalRetirementPending>,
+    #[serialization(deserialize_with = "required_completed_retirement")]
+    pub completed_retirement: Option<OperationId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +153,32 @@ pub struct ExitStatusResponse {
 fn required_retirement<'de, D>(
     deserializer: D,
 ) -> Result<Option<TerminalRetirementPending>, D::Error>
+where
+    D: data_serialization::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+/// One no-voter registration successor, not the final-voter handoff or an active
+/// namespace publication. The digest binds the complete native source and actor.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct TerminalRetirementPreview {
+    pub request: ExitRequest,
+    pub target: ExitTarget,
+    pub principal: String,
+    pub intent_digest: String,
+    pub source_authority_hash: String,
+    pub source_registry_hash: String,
+    #[serialization(with = "crate::u64_string")]
+    pub source_registry_generation: u64,
+    #[serialization(with = "crate::u64_string")]
+    pub source_sequence: u64,
+    #[serialization(with = "crate::u64_string")]
+    pub source_topology_generation: u64,
+}
+
+fn required_completed_retirement<'de, D>(deserializer: D) -> Result<Option<OperationId>, D::Error>
 where
     D: data_serialization::Deserializer<'de>,
 {

@@ -1,0 +1,535 @@
+//! One exact management-only registry successor. No active namespace or new
+//! voter is admitted, and no data pathname is touched, including during recovery.
+use super::*;
+use crate::{
+    disk::MAX_METADATA, engine::disk_lifecycle::bootstrap::store::PreparedStop,
+    journal::PreparedMetadataObject,
+};
+use std::collections::BTreeMap;
+
+pub(super) const SUCCESSOR: &str = "retirement-successor.json";
+pub(super) const STOP: &str = "retirement-stop.json";
+pub(super) const COMPLETE: &str = "retirement-complete.json";
+const SUCCESSOR_KIND: &str = "terminal-retirement-registry-successor";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct GraphObject {
+    kind: String,
+    value: json_codec::Value,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct Successor {
+    format: Format,
+    intent_digest: String,
+    registry: DiskRegistryCommitment,
+    objects: BTreeMap<String, GraphObject>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct StopPlan {
+    intent_digest: String,
+    successor_hash: String,
+    stop: PreparedStop,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct Completion {
+    format: Format,
+    intent_digest: String,
+    successor_hash: String,
+    result: OperationResult,
+}
+
+pub(in crate::engine::disk_lifecycle::terminal) struct Completed {
+    pub(in crate::engine::disk_lifecycle::terminal) registry: TerminalRegistry,
+    result: OperationResult,
+    principal: String,
+    // D3 is process ownership too, not a stored assertion that an FD is closed.
+    _stop: RecoveredDiskIo,
+}
+
+/// Constructed only from the held SYSTEM owner, its exact selected request and
+/// the fully reverified immutable successor. Bootstrap bytes alone cannot make it.
+pub(in crate::engine) struct VerifiedRetirementStopSource {
+    target: DiskRegistrationIdentity,
+    operation: OperationId,
+    digest: IntentDigest,
+    epoch: Option<String>,
+}
+impl VerifiedRetirementStopSource {
+    pub(in crate::engine) fn identity(&self) -> &DiskRegistrationIdentity {
+        &self.target
+    }
+    pub(in crate::engine) fn operation_id(&self) -> OperationId {
+        self.operation
+    }
+    pub(in crate::engine) fn digest(&self) -> IntentDigest {
+        self.digest
+    }
+    pub(in crate::engine) fn epoch(&self) -> Option<&str> {
+        self.epoch.as_deref()
+    }
+    fn closed(&self) -> Result<RecoveredDiskIo> {
+        RecoveredDiskIo::admit_terminal(&VerifiedTerminalStop {
+            identity: self.target.clone(),
+            admission_epoch: self.epoch.clone(),
+        })
+    }
+}
+impl Successor {
+    fn read(&self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
+        let object = self.objects.get(hash).ok_or_else(|| {
+            failure(
+                ErrorCode::ObjectCorrupt,
+                "terminal retirement registry object missing",
+            )
+        })?;
+        if object.kind != kind {
+            return Err(failure(
+                ErrorCode::ObjectCorrupt,
+                "retirement registry object kind differs",
+            ));
+        }
+        let prepared = PreparedMetadataObject::new(kind, &object.value, MAX_METADATA)?;
+        if prepared.hash != hash {
+            return Err(failure(
+                ErrorCode::ObjectCorrupt,
+                "retirement registry object hash differs",
+            ));
+        }
+        Ok(prepared.bytes().to_vec())
+    }
+    fn hash(&self) -> Result<String> {
+        Ok(PreparedMetadataObject::new(SUCCESSOR_KIND, self, MAX_METADATA)?.hash)
+    }
+}
+impl TerminalManagement {
+    pub fn completed_terminal_retirement(&self) -> Option<&OperationResult> {
+        self.retirement_completion
+            .as_ref()
+            .map(|completed| &completed.result)
+    }
+
+    pub(super) fn require_retirement_stop_target(
+        &self,
+        target: &DiskRegistrationIdentity,
+    ) -> Result<()> {
+        let bootstrap = open_store(self.store.system().path())?;
+        let locator = bootstrap
+            .reload(&target.pool_id)
+            .map_err(management_error)?;
+        locator
+            .require_terminal_retirement_target(target)
+            .map_err(management_error)?;
+        if locator
+            .recorded_admission_epoch(target)
+            .map_err(management_error)?
+            != self
+                .verified
+                .authority
+                .io_admission_epoch(&target.disk_id)?
+        {
+            return Err(failure(
+                ErrorCode::RecoveryRequired,
+                "retirement locator and authority disagree on I/O epoch",
+            ));
+        }
+        Ok(())
+    }
+    fn selected_retirement(
+        &self,
+        plan: &TerminalRetirementPlan,
+    ) -> Result<VerifiedRetirementStopSource> {
+        self.store.verify_writer(&self._locks)?;
+        let pending = self.load_terminal_retirement()?.ok_or_else(|| {
+            failure(
+                ErrorCode::RecoveryRequired,
+                "retirement lost its original selected request",
+            )
+        })?;
+        if !pending.selected
+            || pending.plan.intent != plan.intent
+            || pending.plan.digest != plan.digest
+        {
+            return Err(failure(
+                ErrorCode::LogFork,
+                "retirement successor differs from the durable original selection",
+            ));
+        }
+        Ok(VerifiedRetirementStopSource {
+            target: plan.target().clone(),
+            operation: plan.operation_id(),
+            digest: IntentDigest::parse(plan.digest()).map_err(management_error)?,
+            epoch: self
+                .verified
+                .authority
+                .io_admission_epoch(&plan.target().disk_id)?,
+        })
+    }
+    fn prepare_retirement_successor(&self, plan: &TerminalRetirementPlan) -> Result<Successor> {
+        let prepared = self
+            .verified
+            .registry
+            .prepare_management_retirement(plan.target())?;
+        let mut objects = BTreeMap::new();
+        for (kind, hash, bytes) in prepared.objects() {
+            objects.insert(
+                hash.to_owned(),
+                GraphObject {
+                    kind: kind.into(),
+                    value: crate::decode_strict(bytes)?,
+                },
+            );
+        }
+        let successor = Successor {
+            format: Format::Retirement,
+            intent_digest: plan.digest.clone(),
+            registry: prepared.commitment().clone(),
+            objects,
+        };
+        successor.hash()?; // Bound the complete immutable envelope before staging.
+        Ok(successor)
+    }
+    fn verify_retirement_successor(
+        &self,
+        plan: &TerminalRetirementPlan,
+        successor: &Successor,
+    ) -> Result<TerminalRegistry> {
+        if successor.intent_digest != plan.digest {
+            return Err(failure(
+                ErrorCode::LogFork,
+                "terminal successor names another retirement",
+            ));
+        }
+        successor.hash()?;
+        self.verified.registry.verify_management_retirement(
+            plan.target(),
+            &successor.registry,
+            |kind, hash| successor.read(kind, hash),
+        )
+    }
+    fn retirement_result_for(
+        &self,
+        plan: &TerminalRetirementPlan,
+        successor: &Successor,
+    ) -> Result<OperationResult> {
+        let sequence = plan.intent.source.sequence.checked_add(1).ok_or_else(|| {
+            failure(
+                ErrorCode::ResourceLimit,
+                "terminal retirement sequence exhausted",
+            )
+        })?;
+        let topology = plan
+            .intent
+            .source
+            .topology_generation
+            .checked_add(1)
+            .ok_or_else(|| {
+                failure(
+                    ErrorCode::ResourceLimit,
+                    "terminal retirement topology exhausted",
+                )
+            })?;
+        Ok(OperationResult {
+            operation_id: plan.operation_id(),
+            kind: "disk-deregister".into(),
+            commit_id: None,
+            history_tree_id: None,
+            branch_id: None,
+            commit_state: storage_contract::CommitState::Published,
+            protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+            current_health: storage_contract::CurrentHealth::Unknown,
+            request_digest: plan.digest.clone(),
+            sequence,
+            result: json_codec::json!({
+                "authority_kind":"terminal-retirement", "authority":successor.hash()?,
+                "disk_id":plan.target().disk_id, "slot_id":plan.target().slot_id,
+                "binding_generation":plan.target().binding_generation.to_string(),
+                "registration":"detached", "target_io":"closed", "active_metadata_members":0,
+                "topology_generation":topology.to_string(), "registry":successor.registry,
+                "active_namespace_admitted":false, "metadata_resumption_supported":false,
+            }),
+        })
+    }
+    /// Complete only the captured original no-voter registration. This first
+    /// successor supports a previously unstopped recorded binding. Existing
+    /// stopped lifetimes, a second successor and metadata restart are rejected.
+    pub fn complete_terminal_retirement(
+        &mut self,
+        plan: &TerminalRetirementPlan,
+    ) -> Result<OperationResult> {
+        self.validate_retirement(&plan.intent)?;
+        if object_hash(DIGEST_KIND, &plan.intent)? != plan.digest {
+            return Err(failure(
+                ErrorCode::ObjectCorrupt,
+                "retirement completion plan digest differs",
+            ));
+        }
+        // All pure successor/budget/overflow checks precede the first intent.
+        let successor = self.prepare_retirement_successor(plan)?;
+        let result = self.retirement_result_for(plan, &successor)?;
+        if self.load_terminal_retirement()?.is_none() {
+            self.require_retirement_stop_target(plan.target())?;
+        }
+        self.stage_terminal_retirement(plan)?;
+        let source = self.selected_retirement(plan)?;
+        let directory = self.store.operation();
+        directory.write_json(&directory.path().join(SUCCESSOR), &successor, false)?;
+        let installed: Successor = store::optional(directory, &directory.path().join(SUCCESSOR))?
+            .ok_or_else(|| {
+            failure(
+                ErrorCode::RecoveryRequired,
+                "retirement successor disappeared",
+            )
+        })?;
+        self.verify_retirement_successor(plan, &installed)?;
+        if installed.hash()? != successor.hash()? {
+            return Err(failure(
+                ErrorCode::LogFork,
+                "installed retirement successor changed",
+            ));
+        }
+        let mut bootstrap = open_store(self.store.system().path())?;
+        let stop = match store::optional::<StopPlan>(directory, &directory.path().join(STOP))? {
+            Some(stop) => stop,
+            None => {
+                let previous = bootstrap
+                    .reload(&plan.target().pool_id)
+                    .map_err(management_error)?;
+                StopPlan {
+                    intent_digest: plan.digest.clone(),
+                    successor_hash: successor.hash()?,
+                    stop: bootstrap
+                        .prepare_retirement_stop(&previous, &source)
+                        .map_err(management_error)?,
+                }
+            }
+        };
+        require_stop(&stop, plan, &successor)?;
+        let admitted = bootstrap
+            .admit_retirement_stop(&stop.stop, &source)
+            .map_err(management_error)?;
+        // Plan durability precedes the first Stop record and head publication.
+        directory.write_json(&directory.path().join(STOP), &stop, false)?;
+        self.store.verify_writer(&self._locks)?;
+        bootstrap.publish_stop(admitted).map_err(management_error)?;
+        drop(bootstrap);
+        let closure = source.closed()?;
+        let complete = Completion {
+            format: Format::Retirement,
+            intent_digest: plan.digest.clone(),
+            successor_hash: successor.hash()?,
+            result: result.clone(),
+        };
+        self.store.verify_writer(&self._locks)?;
+        directory.write_json(&directory.path().join(COMPLETE), &complete, false)?;
+        let completed = self.read_retirement_completion()?.ok_or_else(|| {
+            failure(
+                ErrorCode::RecoveryRequired,
+                "retirement completion disappeared after publication",
+            )
+        })?;
+        self.install_retirement_completion(completed)?;
+        // Keep the first live exclusion until the installed completion owns its
+        // independently admitted stop too. No target stat/open occurs here.
+        drop(closure);
+        Ok(result)
+    }
+    /// Exact permanent receipt, reauthenticated from SYSTEM and live exclusion.
+    /// A root helper plan or saved JSON Completed bit is not a result authority.
+    pub fn terminal_retirement_result(
+        &self,
+        principal: &str,
+        operation: OperationId,
+        digest: &str,
+    ) -> Result<Option<OperationResult>> {
+        Engine::require_actor(principal)?;
+        self.store.verify_writer(&self._locks)?;
+        let Some(pending) = self.load_terminal_retirement()? else {
+            return Ok(None);
+        };
+        if pending.plan.principal() != principal
+            || pending.plan.operation_id() != operation
+            || pending.plan.digest() != digest
+        {
+            return Err(failure(
+                ErrorCode::IdempotencyKeyReused,
+                "retirement query differs from original actor/operation/digest",
+            ));
+        }
+        let complete = self.read_retirement_completion()?;
+        if complete.is_some() && self.retirement_completion.is_none() {
+            return Err(failure(
+                ErrorCode::RecoveryRequired,
+                "retirement marker exists but this owner must recover original durability barriers",
+            ));
+        }
+        Ok(complete.map(|complete| complete.result))
+    }
+    /// Reconstruct the private typed plan, without allowing target/source edits.
+    pub fn original_terminal_retirement(
+        &self,
+        principal: &str,
+        operation: OperationId,
+        digest: &str,
+    ) -> Result<TerminalRetirementPlan> {
+        Engine::require_actor(principal)?;
+        self.store.verify_writer(&self._locks)?;
+        let pending = self
+            .load_terminal_retirement()?
+            .ok_or_else(|| failure(ErrorCode::NotFound, "original retirement not found"))?;
+        if pending.plan.principal() != principal
+            || pending.plan.operation_id() != operation
+            || pending.plan.digest() != digest
+        {
+            return Err(failure(
+                ErrorCode::IdempotencyKeyReused,
+                "original retirement actor/operation/digest differs",
+            ));
+        }
+        Ok(pending.plan)
+    }
+    pub(in crate::engine::disk_lifecycle::terminal) fn restore_terminal_retirement(
+        &mut self,
+    ) -> Result<()> {
+        if let Some(held) = self.read_retirement_completion()? {
+            let pending = self.load_terminal_retirement()?.ok_or_else(|| {
+                failure(
+                    ErrorCode::RecoveryRequired,
+                    "completed retirement lost its original request",
+                )
+            })?;
+            // A visible rename after an uncertain return is not proof of fsync.
+            // Cold admission repeats original barriers, never a cached flag.
+            self.complete_terminal_retirement(&pending.plan)?;
+            drop(held);
+        }
+        Ok(())
+    }
+    fn install_retirement_completion(&mut self, completed: Completed) -> Result<()> {
+        let mut state = (*self.retirement_base_state).clone();
+        state.sequence = completed.result.sequence;
+        state.topology_generation = state.topology_generation.checked_add(1).ok_or_else(|| {
+            failure(
+                ErrorCode::ResourceLimit,
+                "terminal retirement topology exhausted",
+            )
+        })?;
+        state
+            .operations
+            .insert(completed.result.operation_id, completed.result.clone());
+        state
+            .operation_principals
+            .insert(completed.result.operation_id, completed.principal.clone());
+        self.state = Arc::new(state);
+        self.retirement_completion = Some(completed);
+        Ok(())
+    }
+    fn read_retirement_completion(&self) -> Result<Option<Completed>> {
+        let directory = self.store.operation();
+        let successor = store::optional::<Successor>(directory, &directory.path().join(SUCCESSOR))?;
+        let stop = store::optional::<StopPlan>(directory, &directory.path().join(STOP))?;
+        let complete = store::optional::<Completion>(directory, &directory.path().join(COMPLETE))?;
+        let Some(successor) = successor else {
+            if stop.is_some() || complete.is_some() {
+                return Err(failure(
+                    ErrorCode::ObjectCorrupt,
+                    "retirement Stop/completion lacks its successor",
+                ));
+            }
+            return Ok(None);
+        };
+        let pending = self.load_terminal_retirement()?.ok_or_else(|| {
+            failure(
+                ErrorCode::ObjectCorrupt,
+                "retirement successor lacks its original intent",
+            )
+        })?;
+        let plan = &pending.plan;
+        let source = self.selected_retirement(plan)?;
+        let registry = self.verify_retirement_successor(plan, &successor)?;
+        let Some(stop) = stop else {
+            if complete.is_some() {
+                return Err(failure(
+                    ErrorCode::ObjectCorrupt,
+                    "retirement completion lacks its exact Stop plan",
+                ));
+            }
+            return Ok(None);
+        };
+        require_stop(&stop, plan, &successor)?;
+        let bootstrap = open_store(self.store.system().path())?;
+        bootstrap
+            .admit_retirement_stop(&stop.stop, &source)
+            .map_err(management_error)?;
+        let Some(complete) = complete else {
+            return Ok(None);
+        };
+        // Admission validates an interrupted Stop too, but a completion must
+        // also find the exact durable Stop in the CURRENT restricted ledger.
+        let current = bootstrap
+            .reload(&plan.target().pool_id)
+            .map_err(management_error)?;
+        if !current.stop_hints().any(|hint| {
+            hint.disk_id == plan.target().disk_id
+                && hint.slot_id == plan.target().slot_id
+                && hint.binding_generation == plan.target().binding_generation
+                && hint.operation_id == plan.operation_id()
+                && hint.intent_digest == source.digest()
+                && hint
+                    .admission_epoch
+                    .map(|epoch| epoch.to_string())
+                    .as_deref()
+                    == source.epoch()
+        }) {
+            return Err(failure(
+                ErrorCode::RecoveryRequired,
+                "retirement completion has no durable exact Stop",
+            ));
+        }
+        let expected = Completion {
+            format: Format::Retirement,
+            intent_digest: plan.digest.clone(),
+            successor_hash: successor.hash()?,
+            result: self.retirement_result_for(plan, &successor)?,
+        };
+        if complete != expected {
+            return Err(failure(
+                ErrorCode::LogFork,
+                "retirement completion differs from its exact native successor/result",
+            ));
+        }
+        Ok(Some(Completed {
+            registry,
+            result: complete.result,
+            principal: plan.principal().into(),
+            _stop: source.closed()?,
+        }))
+    }
+}
+fn require_stop(
+    stop: &StopPlan,
+    plan: &TerminalRetirementPlan,
+    successor: &Successor,
+) -> Result<()> {
+    if stop.intent_digest != plan.digest || stop.successor_hash != successor.hash()? {
+        return Err(failure(
+            ErrorCode::LogFork,
+            "retirement Stop plan differs from its exact successor",
+        ));
+    }
+    Ok(())
+}
+pub(super) fn has_material(directory: &DiskRoot) -> Result<bool> {
+    for name in [SUCCESSOR, STOP, COMPLETE] {
+        if directory
+            .open_optional_read_regular(&directory.path().join(name))?
+            .is_some()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}

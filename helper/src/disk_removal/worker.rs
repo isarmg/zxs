@@ -126,6 +126,35 @@ fn inventory(control: &ExclusiveExit) -> Result<Inventory> {
 pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
     let mut target = Target::open(&request.context)?;
     match request.action {
+        Action::TerminalPreview { request: selection } => {
+            let retirement = target.control.preview_terminal_retirement(selection)?;
+            target.recheck()?;
+            Ok(Output::TerminalPreview {
+                plan: terminal_action::plan(
+                    request.context,
+                    target.auth.credential_revision()?,
+                    retirement,
+                ),
+            })
+        }
+        Action::TerminalOriginal { plan } => {
+            terminal_original(&target, &plan)?;
+            let result = target
+                .control
+                .terminal_retirement_result(&plan.retirement)?;
+            target.recheck()?;
+            Ok(Output::TerminalResult { result })
+        }
+        Action::TerminalCommit { plan } => {
+            terminal_original(&target, &plan)?;
+            let result = target
+                .control
+                .complete_terminal_retirement(&plan.retirement)?;
+            target.recheck()?;
+            Ok(Output::TerminalResult {
+                result: Some(result),
+            })
+        }
         Action::InspectTerminal {
             slot_id,
             expected_disk_id,
@@ -191,4 +220,16 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             Ok(Output::Status { status })
         }
     }
+}
+
+fn terminal_original(target: &Target, plan: &terminal_action::Plan) -> Result<()> {
+    target.recheck()?;
+    if target.layout.context(target.lease.identity()) != plan.context
+        || target.auth.credential_revision()? != plan.credential
+    {
+        return Err(
+            "terminal retirement original roots/account/primary credentials changed".into(),
+        );
+    }
+    Ok(())
 }

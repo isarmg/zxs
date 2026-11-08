@@ -267,3 +267,6 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ## Backup 原决定的真实首槽定案
 
 原 registry/placement worker 在全目标首笔候选已读回后，现在可用全部原 metadata 成员持有的原 writer lease，在所选 generation 的独立日志真实写入 ACCEPT 和 FINALIZE，且必须全员读回一致才进入 `GenerationFirstCandidateFinalized`。原应用日志和旧回执不变，候选完整依赖先落在每个原成员；尾部只按固定两帧前缀恢复，任何已有 FINALIZE 后丢失原票/出现未知后缀均保留拒绝。`inspect_backup_first_finalize` 是原 fenced Engine 的只读观察，不是离线目标替代投票或返回迁移成功的接口。详见[首槽真实定案与预算](../design/backup-native-generation-authority.md#backup-first-finalize)。Publication、逐路正文 CommitProof、活动 Config/CurrentRegistry、目标 writer 及源解围栏仍未实现。本片未审查、编译、测试或 CI。
+## 受限终态 registry successor
+
+原 terminal authority 不被覆盖。`disk_lifecycle/terminal/retirement/completion.rs` 从其原选定请求发布第一笔管理登记后继，逐步落原生 successor、bootstrap Stop、真实进程 I/O 排除和完成记录，再重建永久结果与当前登记投影。`TerminalRegistry` 的该类型不能被现有 metadata-resume 消费；保留全部历史定义/原 occurrence masks，不伪造新活动 mask。当前仅已记录且未 Stop 绑定的一次后继，第二次和已 Stop 生命周期拒绝。源码未验证，详见[协议与成本](../design/terminal-retirement-successor.md)。

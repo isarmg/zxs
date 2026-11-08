@@ -60,7 +60,7 @@ fn terminal_report_is_bound_metadata_not_an_executable_plan_or_receipt() {
     assert!(!report.physical_bytes_erased);
     assert_eq!(report.inspection_digest.len(), 64);
     let wire = json_codec::to_value(report).unwrap();
-    assert_eq!(wire["blocker"], "terminal_registry_successor_unavailable");
+    assert_eq!(wire["blocker"], "explicit_successor_preview_required");
     assert!(wire.get("operation_id").is_none());
     assert!(wire.get("request_digest").is_none());
     assert!(wire.get("plan").is_none());
