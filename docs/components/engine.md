@@ -292,3 +292,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### Backup 精确 Config 与注册图解析
 
 `BackupCore::effective_config` 现在从原证书推出真正的完整扇出配置，原 voter/盘绑定和 Genesis I/O 身份保留，新目标不获得 I/O。公共 Config 加载不放开分叉。后台及 live/离线 `inspect_*published_configuration` 在真实首笔 Publication/全目标正文证明后读取完整源与首笔 State，核所有历史版本的完整 route，并生成带父图的原生注册后继，阶段 `GenerationConfigurationResolved`。图尚未安装活动 Current、writer/serving locator 和源解围栏仍拒绝。详见[配置与原生注册图边界](../design/backup-native-generation-authority.md#backup-effective-configuration)。本片未审查、编译、测试或 CI。
+
+### Backup 目标原生注册图安装与冻结命名空间
+
+原后台 registry 任务在真实 Publication 之后，把实际原生 registry 父/后继页和精确 Config 无覆盖持久到所有原选定目标，逐盘严格读回后进入 `GenerationRegistryInstalled`。离线显式原任务续存拒绝“已完成但缺页”的盘，读取不修复；新增目标/live 注册图观察及指定目标自身首笔 State 的有界 HEAD 命名空间读取，保留 D 节点和内容退役状态。此安装仍在隔离证据域，没有普通 Engine CurrentRegistry、serving locator/数据库最终绑定、目标 writer 或源解围栏。详见[生产写读和边界](../design/backup-native-generation-authority.md#backup-published-registry)。本片未审查、编译、测试或 CI，未操作真实盘。

@@ -20,12 +20,30 @@ pub struct BackupConfigurationReport {
     pub retained_replaced_terminal: DiskRegistrationIdentity,
 }
 
+/// Internal native encoders and exact candidate. No returned field is an I/O
+/// admission; consumers must read the target's real graph before using it.
+pub(super) struct ResolvedConfiguration {
+    pub(super) report: BackupConfigurationReport,
+    pub(super) config: crate::ValidatedConfig,
+    pub(super) registry: crate::PreparedDiskRegistry,
+    pub(super) candidate: crate::engine::membership_transition::PreparedBackupFirstCandidate,
+}
+
 pub(super) fn inspect(
     prepared: &PreparedBackupRegistry,
     decision: &crate::engine::membership_transition::AdmittedBackupDecision,
     expected: &BackupFirstPublicationHash,
     stop: &AtomicBool,
 ) -> Result<BackupConfigurationReport> {
+    Ok(resolve(prepared, decision, expected, stop)?.report)
+}
+
+pub(super) fn resolve(
+    prepared: &PreparedBackupRegistry,
+    decision: &crate::engine::membership_transition::AdmittedBackupDecision,
+    expected: &BackupFirstPublicationHash,
+    stop: &AtomicBool,
+) -> Result<ResolvedConfiguration> {
     // Actual common Publication and every target's own native proofs/body are
     // required BEFORE returning a newly selected topology or registry digest.
     // No source or SYSTEM root is read by this detached path.
@@ -132,5 +150,10 @@ pub(super) fn inspect(
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
     prepared.recheck_names()?;
-    Ok(report)
+    Ok(ResolvedConfiguration {
+        report,
+        config,
+        registry,
+        candidate,
+    })
 }

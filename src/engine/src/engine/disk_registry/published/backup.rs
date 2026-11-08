@@ -4,6 +4,21 @@ use super::*;
 use crate::history_package::AdmittedState;
 
 impl PreparedDiskRegistry {
+    /// Read both canonical registry generations from the same target. The
+    /// caller's reader has a cumulative budget; no in-memory object is a
+    /// substitute for a missing parent or successor page.
+    pub(in crate::engine) fn verify_backup_with(
+        &self,
+        mut read: impl FnMut(&'static str, &str) -> Result<Vec<u8>>,
+    ) -> Result<VerifiedDiskRegistry> {
+        let parent =
+            self.expected.state.predecessor.as_ref().ok_or_else(|| {
+                invalid("Backup registry lacks its exact original registry parent")
+            })?;
+        load_registry(parent, &mut read)?;
+        self.verify_with(read)
+    }
+
     /// The caller first proves the exact original Backup recipe and its actual
     /// Publication. Both full States are native admitted snapshots, not caller
     /// JSON. This constructor retains all original registrations and voters;

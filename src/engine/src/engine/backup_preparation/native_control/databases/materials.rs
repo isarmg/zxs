@@ -15,6 +15,7 @@ pub(super) enum Namespace {
     GenerationAuthority,
     GenerationFirstCandidate,
     GenerationFirstPublication,
+    PublishedRegistry,
 }
 impl Namespace {
     fn name(self) -> &'static str {
@@ -26,6 +27,7 @@ impl Namespace {
             Self::GenerationAuthority => "backup-generation-authority",
             Self::GenerationFirstCandidate => "backup-generation-first-candidate",
             Self::GenerationFirstPublication => "backup-generation-first-publication",
+            Self::PublishedRegistry => "backup-published-registry",
         }
     }
 }
@@ -121,6 +123,7 @@ fn inventory(
                     | Namespace::GenerationAuthority
                     | Namespace::GenerationFirstCandidate
                     | Namespace::GenerationFirstPublication
+                    | Namespace::PublishedRegistry
             ) && platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
             {
                 // Preserve interrupted private atomic writes, never promote,

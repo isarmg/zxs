@@ -5,6 +5,10 @@ use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
+mod published_registry;
+pub use published_registry::{
+    BackupNamespacePage, BackupNamespaceScope, BackupPublishedRegistryReport,
+};
 mod configuration;
 pub use configuration::BackupConfigurationReport;
 mod first_publication;

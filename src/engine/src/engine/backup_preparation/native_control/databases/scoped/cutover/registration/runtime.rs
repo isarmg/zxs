@@ -224,6 +224,18 @@ fn run(
             configured.registry.root_hash(),
             configured.publication.publication.publication_hash,
         );
+    })?;
+    let installed = published_registry::install(&prepared, &decision, &expected, stop)?;
+    choices.observe_first_publication(&prepared, &candidate, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationRegistryInstalled;
+        status.detail = format!(
+            "decision {hash} retains exact native registry {} and Config on all {} original targets, with {} branch and {} directory scopes; frozen read view only, ordinary Current/target writer and source fence release remain unavailable",
+            installed.configuration.registry.root_hash(),
+            installed.configuration.publication.targets,
+            installed.branch_scopes,
+            installed.directory_scopes,
+        );
     })
 }
 fn spawn(

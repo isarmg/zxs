@@ -153,3 +153,31 @@ SYSTEM 保留的原任务在冷开重建旧权威和旧 fence 后，可重复同
 新生成的 `PreparedDiskRegistry` 包含真实原生编码的 Genesis 父图及精确后继图，保留所有原登记与固定 voter，只加入原决定的新目标；其 source 绑定原首笔 snapshot、sequence、topology generation 和 Backup authority，不从磁盘目录数量或完成标记猜登记。图预算为 4,096 个对象/64 MiB。`BackupConfigurationReport` 说明配置摘要、完整盘定义、明确数据 route 和注册图根；`GenerationConfigurationResolved` 仅是此闭包已解析，不等于图已安装到 Current。
 
 **尚未开放活动 CurrentRegistry、target writer、serving locator/最终绑定数据库安装和源解围栏。** 注册图可从原精确已出版材料确定性重建，不是已写到活动根的声明，第一笔旧 Candidate/Publication/receipt 一字不改。原生 Backup 的普通 registry/writer/I/O 激活门禁保留，不能把返回的配置定义另存成新 Genesis 来启动。当前新增分支只涉及固定 Genesis 源，复杂旧注册生命周期/旧分叉和正式外来一次完整链接纳仍拒绝。没有真实磁盘操作；按要求未审查、编译、测试或 CI。
+
+<a id="backup-published-registry"></a>
+
+## 目标原生注册图的真实安装、原任务续存与冻结命名空间读取
+
+此前 `GenerationConfigurationResolved` 只在内存推导完整原生注册图。本片接原后台决定，在真实首笔 Publication 已留在全部目标后，将**准确 Config 字节和原生注册父/后继图的每一页**无覆盖安装到每个原目标的 `backup-published-registry`；全部实际页和原 Publication/body 重新读回后，才写各自 `published-registry-installed.json` 并报告 `GenerationRegistryInstalled`。此处“安装”是目标私有证据域的实际落盘，不是安装普通 Engine 的活动 CurrentRegistry。
+
+### 不以派生图替代实际盘页
+
+- 同一原 decision/Publication、完整源/首笔 State 和原生 effective Config 共同决定唯一 manifest。目标文件名由已准入 encoder 的 kind/hash 生成；不接受文件内任意路径或从本地 descriptor 自行选择新的权威。
+- manifest 精确列举 Config、原生 registry root、`state-page` 与 `metadata-index`；读取先核完整目录清单与准确字节，再用既有严格 registry/map 解析器解码**同一个目标自己的**父图和后继图。缺父页、缺子页、额外未知文件、不同对象、重复身份或 Config/注册分区不一致均拒绝，不从内存 encoder 或另一盘补成“读成功”。
+- 目标先全量容量预检，再逐盘无覆盖安装。每盘单独保留完整图、目录/原子临时空间和原有 16 MiB 余量；不借其他盘空间。任何原选定目标缺失都不缩小集合；原子临时文件只保留，不提升为证据。
+- `resume_published_registry_installation` 是单独授权的同原任务离线写入，须独立保存的原 decision/Publication 摘要及全部既有真实正文/原生证明先通过。尚未写完成标记的匹配部分可以补缺；**已经声称完成的盘缺页或损坏直接拒绝**，不把它降回未完成来自动修造。所有旧标记、旧 receipt、源字节保持原义，不新增投票或业务操作。
+- `inspect_published_registry` 与 `Engine::inspect_backup_published_registry` 都不写盘；前者只访问原目标，后者额外观察全部原 metadata 成员的真实 Publication，报告后再核同一原证据。系统进度缓存不是完成凭证。
+
+### 冻结命名空间读接口
+
+`BackupDecidedTargets::read_published_namespace(expected, slot, scope, offset, limit)` 读取原决定中指定目标自己的首笔已发布完整 native State。scope 仅允许合法 `br_` 分支 HEAD 或 `dbr_` 目录 HEAD，不接受任意历史 Commit/Tree 或外部 entries。每次都先核全目标真实 Publication、图和完成标记，再从指定目标读全 snapshot；不能用目标零或失联源替代该目标缺页。分页后再次核原 Publication 和全目标图。
+
+返回页绑定真实 Publication hash、registry commitment、目标 slot、准确 HEAD 和 scope；保留同一 State 的软删除 D 节点与内容 Available/Purged/Migrated/Retired 状态，不把删除文件或已退役正文伪装可写/可读内容。无 State/private auth/Config 可变对象或 `CurrentNamespaces` 转换外泄，调用宿主仍须逐请求授权。分页上限 256 项，entry/D 内容最多 4 MiB，另有不超过页项数的有界 ID/状态元数据；offset 不能越过冻结条目末尾。每次是全目标完整性检查，**不是普通目录热读或 O(页大小) 的快速查询**。
+
+原生图独立唯一对象上限 4,096 / 64 MiB，Config、manifest、完成描述各限 4 MiB。父图及后继解码总预算 8,192 次读取 / 128 MiB，重复引用也计费；目录清单/准确字节比较与既有完整 Publication/快照/正文预算另外成立。后台可观察与取消检查点不承诺故障 I/O 的硬时限。
+
+### 未完成，不可解除围栏
+
+本片不安装 runtime `disk.json`、普通 `metadata`、活动 Engine CurrentRegistry 或 writer 资源，不最终绑定 serving locator/范围数据库，不执行源取消或 unfence；既有 `require_isolated`、Backup 普通激活拒绝和 H03 门禁全部保留。目标仍为冻结已发布备份读视图，不是正常业务系统的新成员。固定 Genesis、单 primary 原链、完整显式 1–8 目标、父子同层同盘的支持范围不扩大；复杂旧生命周期、跨旧目标合流与完整外来链正式接纳仍未完成。
+
+按本轮指示未进行审查、编译、测试、静态检查或 CI，也未对真实盘执行这些 API。生产源码存在不代表已通过故障、资源或部署验收。

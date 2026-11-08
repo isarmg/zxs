@@ -40,7 +40,8 @@ pub use engine::{
     BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupFirstFinalizeReport,
     BackupFirstPublicationHash, BackupFirstPublicationReport, BackupGenerationAuthorityReport,
-    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
+    BackupNamespaceScope, BackupPublishedRegistryReport, BackupRecoveredContent,
     BackupRegistryDecisionHash, BackupRegistryRecoveryReport, BackupTargetPublicationReport,
     BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };

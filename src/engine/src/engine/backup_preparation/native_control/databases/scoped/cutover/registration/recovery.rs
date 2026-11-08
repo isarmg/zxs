@@ -113,6 +113,60 @@ impl BackupDecidedTargets {
         )
     }
 
+    /// Read actual native registry parent/successor pages and the exact Config
+    /// from every selected target. Missing pages never use regenerated objects
+    /// as a fallback. This remains a frozen read view, not active membership.
+    pub fn inspect_published_registry(
+        &self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupPublishedRegistryReport> {
+        published_registry::observe(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
+    /// Explicit no-clobber continuation of the original target registry copies.
+    /// The caller must separately authorize writes; inspection never repairs.
+    /// Every target's actual first Publication and payloads are required first.
+    /// A target which already claimed completion must still have every page.
+    pub fn resume_published_registry_installation(
+        &mut self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupPublishedRegistryReport> {
+        published_registry::install(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
+    /// Read a bounded page from one target's exact published HEAD. Neither a
+    /// historical Commit nor caller-supplied entries become a writable Current.
+    /// No source/SYSTEM I/O, missing-target fallback or admission is performed.
+    /// The host must authorize the requested branch/directory independently.
+    pub fn read_published_namespace(
+        &self,
+        expected: &BackupFirstPublicationHash,
+        slot: &str,
+        scope: BackupNamespaceScope,
+        offset: usize,
+        limit: usize,
+    ) -> Result<BackupNamespacePage> {
+        published_registry::read_page(
+            &self.prepared,
+            &self.decision,
+            expected,
+            slot,
+            scope,
+            offset,
+            limit,
+        )
+    }
+
     /// Explicit, no-clobber continuation of the ORIGINAL publication copy to
     /// all original selected targets. Requires a complete authenticated witness
     /// on at least one selected target and all prior target-local body/proofs.
@@ -547,6 +601,52 @@ impl Engine {
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
         let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
         configuration::inspect(&prepared, &decision, &expected, &stop)
+    }
+
+    /// Verify installed target-native registry pages against the actual first
+    /// Publication on every original metadata member. This never repairs or
+    /// installs an Engine namespace/writer and leaves the source fence intact.
+    pub fn inspect_backup_published_registry(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupPublishedRegistryReport> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let task = Task::read(&DiskRoot::open(&self.root)?)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "Backup registry inspection belongs to another actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the retained registry worker",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
+        let report = published_registry::observe(&prepared, &decision, &expected, &stop)?;
+        choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        Ok(report)
     }
 
     /// Observe actual native ACCEPT/FINALIZE from every original member. This

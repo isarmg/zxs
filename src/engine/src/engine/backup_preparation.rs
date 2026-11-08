@@ -24,7 +24,8 @@ pub(in crate::engine) use native_control::BackupNativeObjects;
 pub use native_control::{
     BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
-    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
+    BackupNamespaceScope, BackupPublishedRegistryReport, BackupRecoveredContent,
     BackupRegistryRecoveryReport, BackupTargetPublicationReport, BackupWriterDestination,
     BackupWriterRoutesReport, open_decided_backup_targets,
 };
@@ -117,6 +118,10 @@ pub enum BackupPreparationPhase {
     /// Actual selected Config and exact native registry graph reconstructed
     /// after full Publication admission. No serving Current or target I/O.
     GenerationConfigurationResolved,
+    /// Real native parent/successor registry pages and exact selected Config
+    /// retained on all targets after actual Publication. Frozen namespace reads
+    /// only: no ordinary Current/writer installation or source fence release.
+    GenerationRegistryInstalled,
     Blocked,
     SourceChanged,
 }

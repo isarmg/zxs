@@ -9,7 +9,8 @@ mod databases;
 pub use databases::{
     BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
-    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
+    BackupNamespaceScope, BackupPublishedRegistryReport, BackupRecoveredContent,
     BackupRegistryRecoveryReport, BackupTargetPublicationReport, BackupWriterDestination,
     BackupWriterRoutesReport, open_decided_backup_targets,
 };
