@@ -116,6 +116,52 @@ impl JournalIo {
         })
     }
 
+    /// A reserved first-generation slot has a tiny closed record prefix. This
+    /// limit charges every actual read, even if the file grows during scanning.
+    pub(crate) fn scan_bounded(
+        &mut self,
+        namespace: JournalNamespace,
+        maximum: usize,
+    ) -> Result<Scan> {
+        self.with_files(Access::Scan, |files, observe| {
+            files.file = open_existing_journal(&files.directory, &journal_name())?;
+            match &files.file {
+                Some(file) => {
+                    if file.metadata()?.len() > maximum as u64 {
+                        return Err(Error::new(
+                            ErrorCode::ResourceLimit,
+                            "reserved generation journal exceeds its byte limit",
+                        ));
+                    }
+                    let mut total = 0usize;
+                    let scan =
+                        scan_frames_observed(io::BufReader::new(file), namespace, &mut |bytes| {
+                            total = total.checked_add(bytes).ok_or_else(|| {
+                                Error::new(
+                                    ErrorCode::ResourceLimit,
+                                    "reserved journal read budget overflow",
+                                )
+                            })?;
+                            if total > maximum {
+                                return Err(Error::new(
+                                    ErrorCode::ResourceLimit,
+                                    "reserved generation journal exceeds its byte limit",
+                                ));
+                            }
+                            observe(bytes)
+                        })?;
+                    files.verify_named()?;
+                    Ok(scan)
+                }
+                None => Ok(Scan {
+                    records: Vec::new(),
+                    valid_bytes: 0,
+                    torn_tail: false,
+                }),
+            }
+        })
+    }
+
     pub(crate) fn create(&mut self) -> Result<()> {
         self.with_files(Access::Write, |files, _| {
             files.file = Some(create_journal(&files.directory, &journal_name())?);

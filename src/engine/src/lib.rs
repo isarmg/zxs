@@ -48,10 +48,10 @@ pub use engine::{
 };
 pub use engine::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
-    BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
-    BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryDecisionHash,
-    BackupRegistryRecoveryReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupFirstCandidateReport, BackupFirstFinalizeReport, BackupGenerationAuthorityReport,
+    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupRecoveredContent,
+    BackupRegistryDecisionHash, BackupRegistryRecoveryReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use engine::{
     FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,

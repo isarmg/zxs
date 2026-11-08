@@ -8,6 +8,8 @@ impl Engine {
     /// member decision slots. Once enough slots select this choice, certified
     /// source cancellation may become impossible. This API does NOT activate a
     /// target writer, publish business success or release the original stop.
+    /// The same background task now reserves and finalizes its exact first
+    /// native candidate on every original metadata member, never on new voters.
     /// Hosts must authenticate this separate, explicit request. Ordinary settings
     /// and helper admission do not call it automatically.
     pub fn start_backup_registry_placement_decision(
@@ -174,6 +176,17 @@ fn run(
         status.detail = format!(
             "decision {hash} retains exact native first candidate {} and complete snapshot {} on {} isolated targets; no ACCEPT/FINALIZE/Publication, active target writer or source fence release",
             first.candidate_hash, first.snapshot_hash, first.targets,
+        );
+    })?;
+    let (_, candidate) = first_candidate::read_verified(&prepared, &decision, stop)?;
+    let finalized = choices.finalize_first_candidate(&prepared, &candidate, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationFirstCandidateFinalized;
+        status.detail = format!(
+            "decision {hash} has actual first candidate {} ACCEPT/FINALIZE {} on all {} original members; no Publication, target writer or source fence release",
+            finalized.candidate_hash,
+            finalized.finalize_hash,
+            finalized.original_metadata_members.len(),
         );
     })
 }

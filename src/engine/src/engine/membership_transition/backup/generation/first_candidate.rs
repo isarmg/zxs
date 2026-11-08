@@ -22,12 +22,21 @@ fn budget() -> Error {
 /// Actual native objects for a proposed first slot. In particular, neither the
 /// prospective PUBLISHED result in its snapshot nor the presence of these files
 /// authorizes returning business success. Only actual publication barriers can.
-pub(in crate::engine) struct PreparedBackupFirstCandidate {
+pub(crate) struct PreparedBackupFirstCandidate {
     candidate: Candidate,
     object: PreparedMetadataObject,
-    files: BTreeMap<PathBuf, Vec<u8>>,
+    files: BTreeMap<PathBuf, NativeBytes>,
+    original: ValidatedConfig,
+    decision_hash: BackupRegistryDecisionHash,
+    authority: PreparedMetadataObject,
     bytes: usize,
     state_hash: String,
+}
+
+struct NativeBytes {
+    kind: &'static str,
+    hash: String,
+    bytes: Vec<u8>,
 }
 
 impl BackupCore {
@@ -92,11 +101,12 @@ impl BackupCore {
 
     fn first_candidate(
         &self,
-        authority_hash: &str,
+        authority: &PreparedMetadataObject,
         source: &State,
         stop: &AtomicBool,
     ) -> Result<PreparedBackupFirstCandidate> {
         preparation_checkpoint(stop)?;
+        let authority_hash = authority.hash.as_str();
         let intent = self.intent()?;
         let next = self.first_state(authority_hash, source, stop)?;
         let result = next
@@ -163,6 +173,9 @@ impl BackupCore {
             candidate,
             object,
             files: BTreeMap::new(),
+            original: intent.origin.config().clone(),
+            decision_hash: AdmittedBackupDecision::from_certificate(self.decision.clone())?.hash(),
+            authority: authority.clone(),
             bytes: 0,
             state_hash: object_hash("backup-first-candidate-state", &next)?,
         };
@@ -187,15 +200,15 @@ impl PreparedBackupAuthority {
         source: &State,
         stop: &AtomicBool,
     ) -> Result<PreparedBackupFirstCandidate> {
-        self.core.first_candidate(self.hash(), source, stop)
+        self.core.first_candidate(&self.object, source, stop)
     }
 }
 
 impl PreparedBackupFirstCandidate {
-    fn add(&mut self, kind: &str, hash: &str, bytes: &[u8]) -> Result<()> {
+    fn add(&mut self, kind: &'static str, hash: &str, bytes: &[u8]) -> Result<()> {
         let path = object_path(kind, hash);
         if let Some(saved) = self.files.get(&path) {
-            if saved != bytes {
+            if saved.bytes != bytes {
                 return Err(invalid("first candidate has colliding native object bytes"));
             }
             return Ok(());
@@ -204,16 +217,23 @@ impl PreparedBackupFirstCandidate {
         if self.files.len() == MAX_OBJECTS || self.bytes > MAX_BYTES {
             return Err(budget());
         }
-        self.files.insert(path, bytes.to_vec());
+        self.files.insert(
+            path,
+            NativeBytes {
+                kind,
+                hash: hash.into(),
+                bytes: bytes.to_vec(),
+            },
+        );
         Ok(())
     }
-    pub(in crate::engine) fn hash(&self) -> &str {
+    pub(crate) fn hash(&self) -> &str {
         &self.object.hash
     }
     pub(in crate::engine) fn snapshot_hash(&self) -> &str {
         &self.candidate.snapshot_hash
     }
-    pub(in crate::engine) fn sequence(&self) -> u64 {
+    pub(crate) fn sequence(&self) -> u64 {
         self.candidate.sequence
     }
     pub(in crate::engine) fn available_versions(&self) -> usize {
@@ -225,13 +245,85 @@ impl PreparedBackupFirstCandidate {
     pub(in crate::engine) fn files(&self) -> impl Iterator<Item = (&PathBuf, &[u8])> {
         self.files
             .iter()
-            .map(|(path, bytes)| (path, bytes.as_slice()))
+            .map(|(path, value)| (path, value.bytes.as_slice()))
     }
     pub(in crate::engine) fn bytes(&self) -> usize {
         self.bytes
     }
     pub(in crate::engine) fn objects(&self) -> usize {
         self.files.len()
+    }
+
+    pub(crate) fn authority_hash(&self) -> &str {
+        &self.authority.hash
+    }
+    pub(crate) fn original_config(&self) -> &ValidatedConfig {
+        &self.original
+    }
+    pub(in crate::engine) fn decision_hash(&self) -> &BackupRegistryDecisionHash {
+        &self.decision_hash
+    }
+    pub(in crate::engine) fn require_member_capacity(&self, root: &DiskRoot) -> Result<()> {
+        // All encoder bytes plus a full atomic temporary, Finalize metadata,
+        // journal and directory allocation. No other disk's free space counts.
+        let required = (self.bytes as u64 + self.authority.bytes().len() as u64) * 2
+            + 2 * MAX_METADATA as u64
+            + 16 * 1024 * 1024
+            + self.files.len() as u64 * 8192;
+        if root.available()? < required {
+            return Err(Error::new(
+                ErrorCode::NoSpace,
+                "each original Backup member needs space for the complete first candidate and durable Finalize",
+            ));
+        }
+        Ok(())
+    }
+    pub(in crate::engine) fn install_on_original(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        self.authority.store_at_root(root, disk)?;
+        for value in self.files.values() {
+            preparation_checkpoint(stop)?;
+            // Authenticate one bounded encoded object, then use the ordinary
+            // immutable object store (including unsupported-flat-layout gates).
+            AuthenticatedMetadataObject::authenticate(
+                value.kind,
+                &value.hash,
+                storage_contract::strict_json(&value.bytes)?,
+            )?
+            .into_prepared(MAX_METADATA)?
+            .store_at_root(root, disk)?;
+        }
+        self.verify_on_original(root, disk, stop)
+    }
+    pub(in crate::engine) fn verify_on_original(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        for (kind, hash, bytes) in std::iter::once((
+            self.authority.kind(),
+            self.authority.hash.as_str(),
+            self.authority.bytes(),
+        ))
+        .chain(
+            self.files
+                .values()
+                .map(|value| (value.kind, value.hash.as_str(), value.bytes.as_slice())),
+        ) {
+            preparation_checkpoint(stop)?;
+            let actual = crate::journal::load_authenticated_object_at(root, disk, kind, hash)?;
+            if actual.bytes() != bytes {
+                return Err(invalid(
+                    "original member lost exact first-generation metadata",
+                ));
+            }
+        }
+        self.verify_at(&root.private_child(&disk.root.join("metadata"))?, stop)
     }
 
     /// Disk readback uses the native strict candidate decoder, authenticated
@@ -261,7 +353,7 @@ impl PreparedBackupFirstCandidate {
         for path in self.files.keys() {
             preparation_checkpoint(stop)?;
             let relative = held.path().join(path);
-            let expected = &self.files[path];
+            let expected = &self.files[path].bytes;
             budget.charge(expected.len())?;
             if held.read_bytes(&relative, expected.len())? != *expected {
                 return Err(invalid("first candidate native dependency differs"));

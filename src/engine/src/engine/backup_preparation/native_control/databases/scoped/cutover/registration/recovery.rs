@@ -337,3 +337,49 @@ impl Engine {
         Ok(report(&decision, &prepared))
     }
 }
+
+impl Engine {
+    /// Observe actual native ACCEPT/FINALIZE from every original member. This
+    /// needs the original fenced Engine and complete selected target set; the
+    /// detached target reader cannot manufacture these live acknowledgements.
+    /// It never creates a journal, repairs bytes or returns migration success.
+    pub fn inspect_backup_first_finalize(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<crate::BackupFirstFinalizeReport> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let system = DiskRoot::open(&self.root)?;
+        let task = Task::read(&system)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "first Backup FINALIZE inspection belongs to another actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the retained worker before first-slot inspection",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        choices.observe_first_finalize(&prepared, &candidate, &stop)
+    }
+}

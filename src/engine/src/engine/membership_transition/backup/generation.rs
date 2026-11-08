@@ -11,7 +11,7 @@ use crate::engine::membership_transition::pending::activation::{
 };
 use registry::{AdmittedBackupDecision, BackupDecisionCertificate};
 mod first_candidate;
-pub(in crate::engine) use first_candidate::PreparedBackupFirstCandidate;
+pub(crate) use first_candidate::PreparedBackupFirstCandidate;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum Format {

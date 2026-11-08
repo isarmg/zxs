@@ -6,11 +6,12 @@ mod generation;
 mod registry;
 use crate::engine::backup_preparation::BackupSourceFenceEvidence;
 pub(in crate::engine::membership_transition) use generation::BackupCore;
-pub(in crate::engine) use generation::{PreparedBackupAuthority, PreparedBackupFirstCandidate};
-pub use registry::BackupRegistryDecisionHash;
+pub(in crate::engine) use generation::PreparedBackupAuthority;
+pub(crate) use generation::PreparedBackupFirstCandidate;
 pub(in crate::engine) use registry::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl,
 };
+pub use registry::{BackupFirstFinalizeReport, BackupRegistryDecisionHash};
 
 pub(super) fn verify_intent(intent: &TransitionIntent) -> Result<()> {
     let Origin::BackupCutover { config, evidence } = &intent.origin else {

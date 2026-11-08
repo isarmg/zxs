@@ -10,11 +10,11 @@ mod abort;
 mod archive;
 pub(in crate::engine) use archive::PreparedBackupControl;
 mod backup;
-pub use backup::BackupRegistryDecisionHash;
+pub(crate) use backup::PreparedBackupFirstCandidate;
 pub(in crate::engine) use backup::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl, PreparedBackupAuthority,
-    PreparedBackupFirstCandidate,
 };
+pub use backup::{BackupFirstFinalizeReport, BackupRegistryDecisionHash};
 mod complete_chain;
 pub use abort::MembershipAbortStatus;
 mod decision;

@@ -140,6 +140,9 @@ pub(crate) fn scan_path_at(root: &DiskRoot, path: &Path) -> Result<Scan> {
     }
 }
 
+mod backup_first;
+pub(crate) use backup_first::BackupFirstJournal;
+
 mod pending;
 pub(crate) use pending::PendingJournal;
 
@@ -1420,7 +1423,10 @@ fn verify_tombstone_content_with(
         .content_state_proof
         .verify(&t.snapshot.maps["content_states"], &t.version_id)?;
     if t.version_id != version.version_id
-        || !matches!(t.state, ContentState::Purged | ContentState::Migrated | ContentState::Retired)
+        || !matches!(
+            t.state,
+            ContentState::Purged | ContentState::Migrated | ContentState::Retired
+        )
         || t.candidate.pool_id != seal.pool_id
         || t.publication.candidate_hash != object_hash("candidate", &t.candidate)?
         || object_hash("snapshot", &t.snapshot)? != t.candidate.snapshot_hash
@@ -1534,7 +1540,10 @@ pub(crate) fn verify_retained_version_publication_at(
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<()> {
     verify_local_version_publication(
-        directory, version, &mut |path| root.read_bytes(path, MAX_METADATA), metadata,
+        directory,
+        version,
+        &mut |path| root.read_bytes(path, MAX_METADATA),
+        metadata,
     )
 }
 

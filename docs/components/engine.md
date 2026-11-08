@@ -262,3 +262,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ## Backup 原决定的首笔候选准备
 
 隔离后台链在真实 native Backup 选择身份之后，生成原决定的确定性首笔 `Candidate`、完整 native snapshot/history 依赖和全部 AVAILABLE 保留版本的保护义务，逐目标无覆盖安装并进行真实生产读回。`GenerationFirstCandidatePrepared` 与 `BackupFirstCandidateReport` 只表示候选材料，不返回迁移成功；离线读取和显式原任务续写分别是 `inspect_first_generation_candidate`、`resume_first_candidate_preparation`。完整写集、预算及保留规则见[首笔候选闭包](../design/backup-native-generation-authority.md#backup-first-candidate)。没有 ACCEPT/FINALIZE/PUBLICATION、活动 writer 或源围栏解除；本片未审查/编译/测试/CI。
+
+
+## Backup 原决定的真实首槽定案
+
+原 registry/placement worker 在全目标首笔候选已读回后，现在可用全部原 metadata 成员持有的原 writer lease，在所选 generation 的独立日志真实写入 ACCEPT 和 FINALIZE，且必须全员读回一致才进入 `GenerationFirstCandidateFinalized`。原应用日志和旧回执不变，候选完整依赖先落在每个原成员；尾部只按固定两帧前缀恢复，任何已有 FINALIZE 后丢失原票/出现未知后缀均保留拒绝。`inspect_backup_first_finalize` 是原 fenced Engine 的只读观察，不是离线目标替代投票或返回迁移成功的接口。详见[首槽真实定案与预算](../design/backup-native-generation-authority.md#backup-first-finalize)。Publication、逐路正文 CommitProof、活动 Config/CurrentRegistry、目标 writer 及源解围栏仍未实现。本片未审查、编译、测试或 CI。

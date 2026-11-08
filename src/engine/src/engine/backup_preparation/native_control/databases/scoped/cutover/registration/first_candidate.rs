@@ -228,28 +228,39 @@ pub(super) fn observe(
     decision: &AdmittedBackupDecision,
     stop: &AtomicBool,
 ) -> Result<BackupFirstCandidateReport> {
+    Ok(read_verified(prepared, decision, stop)?.0)
+}
+
+pub(super) fn read_verified(
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    stop: &AtomicBool,
+) -> Result<(BackupFirstCandidateReport, PreparedBackupFirstCandidate)> {
     recovery::require_isolated(&prepared.targets)?;
     decision.verify_targets(prepared, stop)?;
     let inputs = generation_inputs::observe(prepared, decision, stop)?;
-    let mut first: Option<(Vec<u8>, BackupFirstCandidateReport)> = None;
+    let mut manifest: Option<Vec<u8>> = None;
+    let mut final_plan = None;
     for index in 0..prepared.targets.len() {
         preparation_checkpoint(stop)?;
         let plan = Plan::capture(prepared, decision, &inputs, index, stop)?;
         plan.verify(&prepared.targets[index].root, stop)?;
         plan.require_completion(&prepared.targets[index].root)?;
-        if first
+        if manifest
             .as_ref()
-            .is_some_and(|(manifest, _)| *manifest != plan.manifest)
+            .is_some_and(|expected| *expected != plan.manifest)
         {
             return Err(invalid(
                 "recovered targets do not bind one original first candidate",
             ));
         }
-        first = Some((plan.manifest, plan.report));
+        if index + 1 == prepared.targets.len() {
+            final_plan = Some((plan.report, plan.candidate));
+        } else {
+            manifest = Some(plan.manifest);
+        }
     }
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
-    Ok(first
-        .expect("invariant: selected task has one to eight targets")
-        .1)
+    Ok(final_plan.expect("invariant: selected task has one to eight targets"))
 }

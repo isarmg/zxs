@@ -103,6 +103,9 @@ pub enum BackupPreparationPhase {
     /// Exact first native Candidate and complete prospective State, read back
     /// on all isolated targets. No ACCEPT/FINALIZE/Publication or writer grant.
     GenerationFirstCandidatePrepared,
+    /// Real ACCEPT and FINALIZE in every original member's reserved first
+    /// generation journal. No Publication, active target writer or source release.
+    GenerationFirstCandidateFinalized,
     Blocked,
     SourceChanged,
 }
