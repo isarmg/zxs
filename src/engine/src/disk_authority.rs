@@ -6,6 +6,7 @@ mod candidate_session;
 mod candidate_set;
 mod codec;
 mod fault;
+mod inventory;
 mod journal;
 mod location;
 mod model;
@@ -29,6 +30,7 @@ pub use candidate_set::{
     SourceCandidateBatch, SourceCandidateBatchError, SourceCandidateBatchStage,
     SourceCandidateBatchStatus,
 };
+pub use inventory::{RetainedVersion, SourceInventory};
 pub use journal::{
     DiskReport, DiskSelection, FileWrite, IndependentDisk, OperationStatus, ReviewedPublication,
     observe_source_candidates,
@@ -41,7 +43,8 @@ pub use model::{Digest, DiskPublicationReceipt, Identity, Origin, Role, Token};
 pub use projection::rebuild_projection;
 pub use source_reader::IndependentSourceReader;
 pub use source_wire::{
-    SourceObservationEncodingError, encode_source_observation, source_topology_display,
+    SourceObservationEncodingError, encode_source_observation, source_inventory_display,
+    source_topology_display,
 };
 use storage::{Disk, OperationEvidence, PublicationRequest};
 pub use topology::{

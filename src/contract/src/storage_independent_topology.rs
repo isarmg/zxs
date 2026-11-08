@@ -2,6 +2,7 @@
 //! checks shape and references; it never creates disk or registration authority.
 use crate::{
     storage_directories::DirectorySource,
+    storage_independent_history::IndependentHistoryInventory,
     storage_independent_source::{
         IndependentCheckpoint, IndependentIdentity, IndependentRole, InvalidObservation,
         MAX_DISPLAY_PIN_REFERENCES, PublicationId, bounded, canonical_pins, pins,
@@ -19,11 +20,51 @@ pub struct IndependentDiskPreviewRequest {
     pub source: DirectorySource,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
+struct WirePreview {
+    source: DirectorySource,
+    topology: IndependentSourceTopology,
+    inventory: IndependentHistoryInventory,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(try_from = "WirePreview")]
 pub struct IndependentDiskPreview {
     pub source: DirectorySource,
     pub topology: IndependentSourceTopology,
+    pub inventory: IndependentHistoryInventory,
+}
+impl TryFrom<WirePreview> for IndependentDiskPreview {
+    type Error = InvalidObservation;
+    fn try_from(wire: WirePreview) -> Result<Self, Self::Error> {
+        if wire.topology.root() != wire.inventory.root() {
+            return Err(InvalidObservation::History);
+        }
+        // A retired owner can be absent from the current source graph. An
+        // origin that is present must still name the same complete identity.
+        {
+            let known = wire
+                .topology
+                .nodes()
+                .iter()
+                .map(|node| (&node.identity.origin, &node.identity))
+                .collect::<BTreeMap<_, _>>();
+            for version in wire.inventory.versions() {
+                if known
+                    .get(&version.owner.origin)
+                    .is_some_and(|identity| *identity != &version.owner)
+                {
+                    return Err(InvalidObservation::History);
+                }
+            }
+        }
+        Ok(Self {
+            source: wire.source,
+            topology: wire.topology,
+            inventory: wire.inventory,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -35,6 +35,10 @@ pub enum InvalidObservation {
     Topology,
     #[error("source topology exceeds its display budget")]
     TopologyBudget,
+    #[error("retained history inventory is inconsistent")]
+    History,
+    #[error("retained history inventory exceeds its display budget")]
+    HistoryBudget,
 }
 
 fn token(value: &str) -> bool {
@@ -77,6 +81,8 @@ macro_rules! scalar {
 scalar!(IndependentToken, token, Token);
 scalar!(PublicationId, digest, Digest);
 scalar!(Incarnation, digest, Digest);
+scalar!(IndependentCommitId, digest, Digest);
+scalar!(IndependentBodyId, digest, Digest);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BindingGeneration(std::num::NonZeroU64);

@@ -75,6 +75,17 @@ fn authenticated_independent_preview_is_read_only_even_without_body_bytes() {
     let output = preview(&f, source.clone()).unwrap();
     assert_eq!(output.source, source);
     assert_eq!(output.topology.nodes().len(), 1);
+    assert_eq!(output.inventory.root(), output.topology.root());
+    assert_eq!(output.inventory.versions().len(), 1);
+    assert_eq!(
+        output.inventory.versions()[0].history_id.as_str(),
+        "history"
+    );
+    assert_eq!(output.inventory.versions()[0].file_id.as_str(), "file");
+    assert_eq!(
+        output.inventory.versions()[0].owner,
+        output.topology.root().identity
+    );
     assert_eq!(output.topology.root().sequence, 1);
     assert!(output.topology.relations().is_empty());
     assert_eq!(bytes(&path), before);
@@ -239,6 +250,17 @@ async fn actual_http_independent_preview_keeps_source_unchanged_and_auth_boundar
     assert_eq!(output.source, source);
     assert_eq!(output.topology.root().sequence, 1);
     assert_eq!(output.topology.nodes().len(), 1);
+    assert_eq!(output.inventory.root(), output.topology.root());
+    assert_eq!(output.inventory.versions().len(), 1);
+    assert_eq!(
+        output.inventory.versions()[0].history_id.as_str(),
+        "history"
+    );
+    assert_eq!(output.inventory.versions()[0].file_id.as_str(), "file");
+    assert_eq!(
+        output.inventory.versions()[0].owner,
+        output.topology.root().identity
+    );
     let (status, value) = http_preview(&app, ENDPOINT, &authorized, input.clone()).await;
     assert_eq!(status, StatusCode::OK, "{value}");
     assert_eq!(
@@ -304,4 +326,38 @@ async fn actual_http_independent_preview_rejects_replaced_source_without_writes(
     assert_eq!(error["error"]["code"], "DISK_CHANGED", "{error}");
     assert_eq!(bytes(&moved), original);
     assert_eq!(bytes(&replacement), before);
+}
+
+#[test]
+fn replaced_child_identity_requires_rediscovery_and_does_not_leak_paths() {
+    let error = source_error(storage_engine::disk_authority::Error::Filesystem(
+        platform_io::fs_safety::Error::IdentityChanged(std::path::PathBuf::from(
+            "/private/inventory-review/objects",
+        )),
+    ));
+    assert_eq!(error.status, http::StatusCode::CONFLICT);
+    assert_eq!(error.code, storage_contract::ErrorCode::DiskChanged);
+    assert_eq!(error.message, "independent disk source inspection failed");
+    assert!(!error.message.contains("/private/"));
+}
+
+#[test]
+fn disconnect_and_permission_failures_keep_their_distinct_error_classes() {
+    for kind in [std::io::ErrorKind::NotFound, std::io::ErrorKind::Other] {
+        let error = source_error(storage_engine::disk_authority::Error::Filesystem(
+            platform_io::fs_safety::Error::Io(std::io::Error::from(kind)),
+        ));
+        assert_eq!(error.status, http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code, storage_contract::ErrorCode::DiskUnavailable);
+    }
+    let error = source_error(storage_engine::disk_authority::Error::Filesystem(
+        platform_io::fs_safety::Error::UnsafePermissions(std::path::PathBuf::from("private")),
+    ));
+    assert_eq!(error.status, http::StatusCode::FORBIDDEN);
+    assert_eq!(error.code, storage_contract::ErrorCode::PermissionDenied);
+    let error = source_error(storage_engine::disk_authority::Error::Invalid(
+        "corrupt proof",
+    ));
+    assert_eq!(error.status, http::StatusCode::CONFLICT);
+    assert_eq!(error.code, storage_contract::ErrorCode::RecoveryRequired);
 }

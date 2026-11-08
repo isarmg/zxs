@@ -169,5 +169,78 @@ fn published_preview_vectors_use_the_actual_rust_contract() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 5);
+    assert_eq!(checked, 7);
+}
+
+#[test]
+fn preview_requires_same_inventory_checkpoint_and_rejects_old_responses() {
+    let vectors: Value =
+        json_codec::from_str(include_str!("../../../docs/contracts/vectors.json")).unwrap();
+    let sample = vectors["positive"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "independent-preview-exact-graph")
+        .unwrap()["value"]
+        .clone();
+    assert!(json_codec::from_value::<IndependentDiskPreview>(sample.clone()).is_ok());
+    for change in 0..4 {
+        let mut value = sample.clone();
+        match change {
+            0 => {
+                value.as_object_mut().unwrap().remove("inventory");
+            }
+            1 => value["inventory"]["root"]["publication"] = hash(77).into(),
+            2 => value["inventory"]["root"]["sequence"] = "987".into(),
+            3 => value["inventory"]["root"]["identity"]["incarnation"] = hash(77).into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            json_codec::from_value::<IndependentDiskPreview>(value).is_err(),
+            "change {change}"
+        );
+    }
+}
+
+#[test]
+fn preview_cross_checks_inventory_owners_without_forgetting_retired_sources() {
+    let vectors: Value =
+        json_codec::from_str(include_str!("../../../docs/contracts/vectors.json")).unwrap();
+    let mut valid = vectors["positive"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "independent-preview-exact-graph")
+        .unwrap()["value"]
+        .clone();
+    let owner = valid["topology"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["identity"]["role"] == "primary")
+        .unwrap()["identity"]
+        .clone();
+    valid["inventory"]["versions"] = json!([{
+        "owner":owner,"history_id":"history","file_id":"file",
+        "commit":hash(80),"body":hash(81)
+    }]);
+    assert!(json_codec::from_value::<IndependentDiskPreview>(valid.clone()).is_ok());
+    for change in 0..2 {
+        let mut changed = valid.clone();
+        if change == 0 {
+            changed["inventory"]["versions"][0]["owner"]["incarnation"] = hash(77).into();
+        } else {
+            changed["inventory"]["versions"][0]["owner"]["origin"] =
+                changed["topology"]["root"]["identity"]["origin"].clone();
+        }
+        assert!(
+            json_codec::from_value::<IndependentDiskPreview>(changed).is_err(),
+            "conflicting known source owner {change}"
+        );
+    }
+    let mut retired = valid;
+    retired["inventory"]["versions"][0]["owner"]["origin"]["disk_id"] = "retired".into();
+    retired["inventory"]["versions"][0]["owner"]["origin"]["slot_id"] = "retired".into();
+    retired["inventory"]["versions"][0]["owner"]["incarnation"] = hash(77).into();
+    assert!(json_codec::from_value::<IndependentDiskPreview>(retired).is_ok());
 }

@@ -324,6 +324,19 @@ impl Disk {
         self.check_identity()?;
         Ok(topology)
     }
+    pub(super) fn source_inventory(&self) -> Result<SourceInventory> {
+        let verified = self.verify_using(
+            &SelectedContent {
+                disk: self,
+                copy: None,
+            },
+            None,
+        )?;
+        let topology = topology::project(&verified, self.binding.clone())?;
+        let inventory = SourceInventory::capture(&verified, topology);
+        self.check_identity()?;
+        Ok(inventory)
+    }
     pub(super) fn observe_source_node(
         &self,
         node: &SourceNode,
@@ -532,7 +545,15 @@ impl Disk {
             &self.operations,
             &self.publications,
         ] {
-            directory.verify_identity()?;
+            // This check compares an admitted directory's held inode with its
+            // current name. The platform reports a mismatch as UnsafeFileType;
+            // here it is a changed selection, not a device I/O disconnect.
+            directory.verify_identity().map_err(|source| match source {
+                platform_io::fs_safety::Error::UnsafeFileType(path) => {
+                    platform_io::fs_safety::Error::IdentityChanged(path)
+                }
+                other => other,
+            })?;
         }
         let header: Header =
             codec::decode(&self.root.read_bounded(&name("identity.json")?, MAX_BYTES)?)?;

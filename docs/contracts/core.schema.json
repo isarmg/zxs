@@ -9547,7 +9547,8 @@
       "additionalProperties": false,
       "required": [
         "source",
-        "topology"
+        "topology",
+        "inventory"
       ],
       "properties": {
         "source": {
@@ -9555,6 +9556,9 @@
         },
         "topology": {
           "$ref": "#/$defs/IndependentSourceTopology"
+        },
+        "inventory": {
+          "$ref": "#/$defs/IndependentHistoryInventory"
         }
       }
     },
@@ -10273,6 +10277,54 @@
         "shared_contents"
       ],
       "description": "Complete bounded same-history file component automatically derived from retained nonempty content. Equality hubs are non-temporal; original file, event and branch IDs remain distinct. Bodyless deletion nodes and purged metadata remain visible. Cross-file ancestry, missing equality groups, disconnected members and cycles are rejected by semantic validation. This read conveys no write authority, body health or durable association/split publication."
+    },
+    "IndependentRetainedVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "history_id",
+        "file_id",
+        "commit",
+        "body"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/IndependentIdentity"
+        },
+        "history_id": {
+          "$ref": "#/$defs/IndependentToken"
+        },
+        "file_id": {
+          "$ref": "#/$defs/IndependentToken"
+        },
+        "commit": {
+          "$ref": "#/$defs/IndependentDigest"
+        },
+        "body": {
+          "$ref": "#/$defs/IndependentDigest"
+        }
+      }
+    },
+    "IndependentHistoryInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "versions"
+      ],
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/IndependentCheckpoint"
+        },
+        "versions": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/IndependentRetainedVersion"
+          }
+        }
+      }
     }
   }
 }

@@ -2,8 +2,8 @@
 //! IndependentDisk, writer, registration, content read, or membership authority.
 use super::{
     IndependentDisk, Result, SourceCandidateBatch, SourceCandidateBatchError,
-    SourceCandidateBatchStage, SourceNode, SourceTopology, candidate_set::MAX_CANDIDATES,
-    observe_source_candidates, storage::Disk,
+    SourceCandidateBatchStage, SourceInventory, SourceNode, SourceTopology,
+    candidate_set::MAX_CANDIDATES, observe_source_candidates, storage::Disk,
 };
 use platform_io::fs_safety::PrivateDirectory;
 
@@ -26,6 +26,12 @@ impl IndependentSourceReader {
     /// A successful historical capture does not prove current online presence.
     pub fn source_topology(&self) -> Result<SourceTopology> {
         self.disk.source_topology()
+    }
+
+    /// Read all retained version references and the selected source graph from
+    /// one verified metadata capture. No FULL bytes or other disks are opened.
+    pub fn source_inventory(&self) -> Result<SourceInventory> {
+        self.disk.disk.source_inventory()
     }
 }
 

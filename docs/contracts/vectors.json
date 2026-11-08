@@ -5371,6 +5371,23 @@
               }
             }
           ]
+        },
+        "inventory": {
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "versions": []
         }
       }
     },
@@ -19177,7 +19194,24 @@
             }
           ]
         },
-        "online": true
+        "online": true,
+        "inventory": {
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "versions": []
+        }
       }
     },
     {
@@ -19278,6 +19312,23 @@
               }
             }
           ]
+        },
+        "inventory": {
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "versions": []
         }
       }
     },
@@ -19906,6 +19957,274 @@
         "merge_file_ids": true
       },
       "layer": "schema"
+    },
+    {
+      "name": "independent-preview-inventory-known-owner-incarnation-conflict",
+      "schema": "IndependentDiskPreview",
+      "value": {
+        "source": {
+          "path": "/mnt/independent",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "topology": {
+          "protocol": "independent_source_topology",
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "nodes": [
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "primary",
+                  "slot_id": "primary",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "primary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000001"
+              ]
+            },
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "backup",
+                  "slot_id": "backup",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "secondary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000002"
+              ]
+            }
+          ],
+          "relations": [
+            {
+              "source": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "primary",
+                    "slot_id": "primary",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "primary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              "consumer": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "backup",
+                    "slot_id": "backup",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "secondary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000002"
+              }
+            }
+          ]
+        },
+        "inventory": {
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "versions": [
+            {
+              "owner": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "primary",
+                  "slot_id": "primary",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "000000000000000000000000000000000000000000000000000000000000004d",
+                "role": "primary"
+              },
+              "history_id": "history",
+              "file_id": "file",
+              "commit": "0000000000000000000000000000000000000000000000000000000000000050",
+              "body": "0000000000000000000000000000000000000000000000000000000000000051"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "independent-preview-inventory-owner-reuses-observer-origin",
+      "schema": "IndependentDiskPreview",
+      "value": {
+        "source": {
+          "path": "/mnt/independent",
+          "identity": {
+            "device": "2049",
+            "inode": "9007199254740993",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          },
+          "discovery_identity": {
+            "device": "2049",
+            "inode": "2",
+            "ctime_seconds": "1793750000",
+            "ctime_nanoseconds": 12
+          }
+        },
+        "topology": {
+          "protocol": "independent_source_topology",
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "nodes": [
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "primary",
+                  "slot_id": "primary",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "primary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000001"
+              ]
+            },
+            {
+              "identity": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "backup",
+                  "slot_id": "backup",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "secondary"
+              },
+              "pins": [
+                "0000000000000000000000000000000000000000000000000000000000000002"
+              ]
+            }
+          ],
+          "relations": [
+            {
+              "source": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "primary",
+                    "slot_id": "primary",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "primary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              "consumer": {
+                "identity": {
+                  "origin": {
+                    "pool_id": "pool",
+                    "disk_id": "backup",
+                    "slot_id": "backup",
+                    "binding_generation": "18446744073709551615"
+                  },
+                  "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "role": "secondary"
+                },
+                "publication": "0000000000000000000000000000000000000000000000000000000000000002"
+              }
+            }
+          ]
+        },
+        "inventory": {
+          "root": {
+            "identity": {
+              "origin": {
+                "pool_id": "pool",
+                "disk_id": "backup",
+                "slot_id": "backup",
+                "binding_generation": "18446744073709551615"
+              },
+              "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "role": "secondary"
+            },
+            "publication": "0000000000000000000000000000000000000000000000000000000000000002",
+            "sequence": "9007199254740993"
+          },
+          "versions": [
+            {
+              "owner": {
+                "origin": {
+                  "pool_id": "pool",
+                  "disk_id": "backup",
+                  "slot_id": "backup",
+                  "binding_generation": "18446744073709551615"
+                },
+                "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "role": "primary"
+              },
+              "history_id": "history",
+              "file_id": "file",
+              "commit": "0000000000000000000000000000000000000000000000000000000000000050",
+              "body": "0000000000000000000000000000000000000000000000000000000000000051"
+            }
+          ]
+        }
+      }
     }
   ],
   "canonical": [

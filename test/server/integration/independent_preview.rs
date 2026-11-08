@@ -271,6 +271,17 @@ async fn independent_preview_over_tcp_reads_metadata_without_body_bytes_or_write
     assert_eq!(output.source, source);
     assert_eq!(output.topology.root().sequence, 1);
     assert_eq!(output.topology.nodes().len(), 1);
+    assert_eq!(output.inventory.root(), output.topology.root());
+    assert_eq!(output.inventory.versions().len(), 1);
+    assert_eq!(
+        output.inventory.versions()[0].history_id.as_str(),
+        "history"
+    );
+    assert_eq!(output.inventory.versions()[0].file_id.as_str(), "file");
+    assert_eq!(
+        output.inventory.versions()[0].owner,
+        output.topology.root().identity
+    );
     assert!(output.topology.relations().is_empty());
     assert_eq!(bytes(&f.source), before);
     assert_eq!(bytes(&f.known), known);
@@ -421,5 +432,30 @@ async fn independent_preview_over_tcp_rejects_replaced_out_of_scope_and_corrupt_
     );
     assert_eq!(bytes(&f.source), corrupted);
     assert_eq!(bytes(&moved), original);
+    f.finish().await;
+}
+
+#[tokio::test]
+async fn independent_preview_after_rediscovery_of_moved_disk_retains_portable_history() {
+    let mut f = Fixture::start().await;
+    let old_source = f.observed().await;
+    let (status, value) = f.preview(old_source.clone()).await;
+    assert_eq!(status, 200, "{value}");
+    let original: IndependentDiskPreview = json_codec::from_value(value).unwrap();
+    let moved = f.source.with_extension("new-host-mount");
+    fs::rename(&f.source, &moved).unwrap();
+    f.source = moved;
+    let before = bytes(&f.source);
+    let known = bytes(&f.known);
+    assert_ne!(f.preview(old_source).await.0, 200);
+    let observed = f.observed().await;
+    let (status, value) = f.preview(observed.clone()).await;
+    assert_eq!(status, 200, "{value}");
+    let output: IndependentDiskPreview = json_codec::from_value(value).unwrap();
+    assert_eq!(output.source, observed);
+    assert_eq!(output.inventory, original.inventory);
+    assert_eq!(output.topology, original.topology);
+    assert_eq!(bytes(&f.source), before);
+    assert_eq!(bytes(&f.known), known);
     f.finish().await;
 }

@@ -126,6 +126,7 @@ fn identity_label(identity: &IndependentIdentity) -> String {
 }
 fn review(preview: IndependentDiskPreview) -> impl IntoView {
     let graph = preview.topology;
+    let inventory = preview.inventory;
     let root = graph.root();
     let checkpoint = root.publication.as_ref().map_or_else(
         || t("尚无发布", "No publication yet"),
@@ -136,6 +137,18 @@ fn review(preview: IndependentDiskPreview) -> impl IntoView {
             <p class="zxs-row">{identity_label(&root.identity)}</p>
             <p class="zxs-row">{format!("{} {} · {checkpoint}", t("本盘发布序列", "Local publication sequence"), root.sequence)}</p>
             <p class="zxs-row" role="status">{t("这是所选盘保存的来源图，不代表来源盘当前在线、候选完整或唯一，也不授予迁入、降级或写权限。本次不读取正文，不据此判断正文可用性。", "This is the source graph retained by the selected disk. It does not prove that sources are online, uniquely matched or completely discovered, and grants no import, tier-conversion or write permission. Contents are not read and their availability is not inferred.")}</p>
+            <section class="zxs-frame zxs-stack" data-independent-history-inventory="">
+                <h3 class="zxs-row">{format!("{}: {}", t("本盘保留的文件版本", "File versions retained on this disk"), inventory.versions().len())}</h3>
+                <p class="zxs-row">{t("以下是本盘已发布元数据中保留的版本引用，使用原一级盘身份及稳定历史／文件标识，不是当前文件路径或正文健康报告。旧发布保留的来源可以不在当前来源图中。检查无需原系统、上游或下游磁盘在线。", "These version references come from this disk's published metadata and retain the original primary identity and stable history/file identifiers. They are not current paths or a content-health report. Retained earlier sources may be absent from the current source graph. Inspection does not need the original system, upstream or downstream disks.")}</p>
+                {inventory.versions().iter().map(|version| view! {
+                    <details class="zxs-stack" data-independent-retained-version=version.commit.as_str().to_owned()>
+                        <summary>{format!("{} · {} · {}", identity_label(&version.owner), version.history_id.as_str(), version.file_id.as_str())}</summary>
+                        <p class="zxs-row">{format!("incarnation: {}", version.owner.incarnation.as_str())}</p>
+                        <p class="zxs-row">{format!("{}: {}", t("不可变版本", "Immutable version"), version.commit.as_str())}</p>
+                        <p class="zxs-row">{format!("{}: {}", t("声明的正文摘要（未核验正文）", "Declared content digest (contents not verified)"), version.body.as_str())}</p>
+                    </details>
+                }).collect_view()}
+            </section>
             {graph.nodes().iter().map(|node| {
                 let tier = match node.identity.role {
                     IndependentRole::Primary => 1,

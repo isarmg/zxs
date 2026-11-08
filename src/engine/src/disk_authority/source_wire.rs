@@ -16,6 +16,39 @@ use storage_contract::storage_independent_topology::{
     TopologyPoint, TopologyRelation,
 };
 
+/// Display retained metadata only. In particular, absence of body reads must
+/// never be converted into Available or TemporarilyUnavailable observations.
+pub fn source_inventory_display(
+    inventory: &super::SourceInventory,
+) -> Result<
+    storage_contract::storage_independent_history::IndependentHistoryInventory,
+    InvalidObservation,
+> {
+    use storage_contract::{
+        storage_independent_history::{
+            IndependentHistoryInventory, MAX_RETAINED_VERSIONS, RetainedVersion,
+        },
+        storage_independent_source::{IndependentBodyId, IndependentCommitId},
+    };
+    if inventory.versions().len() > MAX_RETAINED_VERSIONS {
+        return Err(InvalidObservation::HistoryBudget);
+    }
+    let versions = inventory
+        .versions()
+        .iter()
+        .map(|version| {
+            Ok(RetainedVersion {
+                owner: identity(version.owner())?,
+                history_id: IndependentToken::parse(version.history_id().as_str())?,
+                file_id: IndependentToken::parse(version.file_id().as_str())?,
+                commit: IndependentCommitId::parse(&version.commit().to_string())?,
+                body: IndependentBodyId::parse(&version.body().to_string())?,
+            })
+        })
+        .collect::<Result<_, InvalidObservation>>()?;
+    IndependentHistoryInventory::new(checkpoint(inventory.topology().binding())?, versions)
+}
+
 /// Project every exact source/publication edge from the real held-disk capture.
 /// This is historical display data, not current presence or an import permit.
 pub fn source_topology_display(

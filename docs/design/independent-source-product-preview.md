@@ -4,7 +4,7 @@
 
 ## 实际调用链
 
-`foreign/independent.rs` → `POST /api/admin/storage/independent/preview` → `ManagementBackend::setup_operation` → `independent_disk_preview` → `reopen_source` → `PrivateDirectory` → `IndependentSourceReader` → 原完整元数据 verifier → `SourceTopology` → `source_topology_display` → 类型化显示契约。
+`foreign/independent.rs` → `POST /api/admin/storage/independent/preview` → `ManagementBackend::setup_operation` → `independent_disk_preview` → `reopen_source` → `PrivateDirectory` → `IndependentSourceReader` → 原完整元数据 verifier → 单次 `SourceInventory` 捕获 → `source_topology_display`／`source_inventory_display` → 类型化显示契约。
 
 请求仅包含原发现得到的 `DirectorySource`。认证、CSRF/origin 和有界阻塞任务复用已有管理入口；目录生命周期 gate 在整个同步检查中持有，不允许与当前池选择切换并行。SYSTEM、管理目录、当前成员和停止目录仍由服务端排除。检查前后重新核验发现父目录和直接孩子的物理观察，读取只来自原持有 FD，不从第二次打开替换来源。结果（包括失败）返回前再次验证当前登录会话，撤销优先。
 
@@ -33,3 +33,13 @@ Web 先处理 401，再判断会话 epoch、请求 generation 与原 `DirectoryS
 对齐 main `1add67b0` 后，完整 Contract、Engine、Server、SMB 和 Client 源码已在复用固定基础依赖的窄构建图中代码生成，Engine 按 Server 测试 manifest 启用 fault-injection。3项 TCP 集成和42项独立来源契约通过；Web 生产/测试及 Server 全部单元测试源码的 metadata 检查通过。Server 与新增 TCP 目标的 Clippy 通过。以上不代表完整 Cargo 依赖重建、release 配置或 WASM 构建通过。
 
 全 Server libtest 代码生成受到3GiB地址空间上限限制，分配失败后停止；没有运行其中的新私有单元测试或旧路由矩阵，不能把 metadata 检查算作运行通过。TCP 目标独立覆盖真实认证、Cookie CSRF、Origin、会话注销、查询/未知字段/重复键/请求体上限、替换目录、受保护及越界目录、损坏拒绝，以及缺失正文时源盘和已登记盘字节不变。真实浏览器、取消/换盘交互和物理盘验收仍未运行。
+
+## 本盘保留版本的在线只读消费者
+
+同一 `independent/preview` 响应现在必须同时携带 `inventory`。held-directory reader 只运行一次完整元数据核验，然后从该捕获同时投影当前来源图和全部已保留版本引用，响应解码要求二者 root 身份、checkpoint 与序号完全一致。缺少清单的旧响应明确拒绝，不补空清单或兼容默认值。清单所有者与当前图出现相同 origin 时，incarnation 和角色也须一致；不要求已退出当前图的历史来源重新出现。已识别的根或已持有子目录 inode 身份变更返回 `409 DISK_CHANGED`，真实失联／I/O 保留 `503 DISK_UNAVAILABLE`，不把两者混为同一恢复动作。
+
+每行保留原一级身份、history/file 稳定标识、不可变 commit 和声明的正文摘要。相同正文、相同 history/file 文本但不同来源不会归并。清单覆盖本盘以前发布仍保留的历史，因此旧来源即使不在当前来源图中，仍可能出现在清单；不把当前图当作所有历史来源集合。一级只展示本盘所有权记录，不扫描二级或系统；备份盘只消费本盘已发布的来源闭包，不打开原一级、其他上游或下游目录。已发布目录搬到新路径后可重新发现读取，旧发现选择仍须拒绝，便携身份不替换成当前系统身份。
+
+Web 独立盘预览展示版本清单及明确的只读说明。稳定标识不是当前文件路径；这不是当前产品分支树、目录 Git、正文导出、内容健康、迁入或写入能力。读取不打开 FULL 正文，损坏或缺失正文不产生可用／不可用判断；元数据损坏仍拒绝，保留原字节。没有新增磁盘写入、fsync、writer 锁或系统缓存。
+
+额外投影与校验为 O(V log V)，版本行最多4096，仍受完整响应1MiB上限约束，超限拒绝，不截断成完整清单。原4096对象／16MiB元数据预算和源盘身份复核继续生效。在线 Engine 权威、系统盘汇总接线、目录／文件数据库、自动保护任务和在线恢复依然未切换；本次临时目录搬迁测试不等于跨主机或实盘验收。

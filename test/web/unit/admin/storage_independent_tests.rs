@@ -13,20 +13,24 @@ fn preview() -> Value {
     json!({"source":observed(),"topology":{
         "protocol":"independent_source_topology",
         "root":{"identity":identity.clone(),"publication":null,"sequence":"0"},
-        "nodes":[{"identity":identity,"pins":[]}],"relations":[]
-    }})
+        "nodes":[{"identity":identity.clone(),"pins":[]}],"relations":[]
+    },"inventory":{"root":{"identity":identity,"publication":null,"sequence":"0"},"versions":[]}})
 }
 
 #[test]
 fn independent_preview_binds_exact_source_and_rejects_extra_authority() {
     assert!(read(preview(), &observed()).is_ok());
-    for change in 0..4 {
+    for change in 0..6 {
         let mut value = preview();
         match change {
             0 => value["source"]["path"] = "/mnt/other".into(),
             1 => value["source"]["identity"]["inode"] = "999".into(),
             2 => value["topology"]["writable"] = true.into(),
             3 => value["topology"]["root"]["sequence"] = "1".into(),
+            4 => value["inventory"]["root"]["identity"]["incarnation"] = "b".repeat(64).into(),
+            5 => {
+                value.as_object_mut().unwrap().remove("inventory");
+            }
             _ => unreachable!(),
         }
         assert!(read(value, &observed()).is_err());

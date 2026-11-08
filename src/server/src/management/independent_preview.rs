@@ -5,7 +5,9 @@ use platform_io::fs_safety::PrivateDirectory;
 use storage_contract::storage_independent_topology::{
     IndependentDiskPreview, IndependentDiskPreviewRequest,
 };
-use storage_engine::disk_authority::{self, IndependentSourceReader, source_topology_display};
+use storage_engine::disk_authority::{
+    self, IndependentSourceReader, source_inventory_display, source_topology_display,
+};
 
 impl ManagementBackend {
     pub(super) fn independent_disk_preview(
@@ -27,8 +29,9 @@ impl ManagementBackend {
                 .map_err(disk_authority::Error::Filesystem)
                 .map_err(source_error)?;
             let reader = IndependentSourceReader::from_directory(root).map_err(source_error)?;
-            let topology = reader.source_topology().map_err(source_error)?;
-            let topology = source_topology_display(&topology).map_err(display_error)?;
+            let capture = reader.source_inventory().map_err(source_error)?;
+            let topology = source_topology_display(capture.topology()).map_err(display_error)?;
+            let inventory = source_inventory_display(&capture).map_err(display_error)?;
             // This is a comparison with the original discovery observation, not a
             // second source from which to read. The lifecycle gate remains held by
             // setup_operation, and revoked sessions win before releasing any result.
@@ -42,6 +45,7 @@ impl ManagementBackend {
             let output = IndependentDiskPreview {
                 source: request.source,
                 topology,
+                inventory,
             };
             crate::history_window_encode::encode_bounded(
                 &output,
@@ -59,7 +63,9 @@ fn display_error(
 ) -> ApiError {
     use storage_contract::{ErrorCode, storage_independent_source::InvalidObservation};
     let (status, code) = match source {
-        InvalidObservation::TopologyBudget | InvalidObservation::PinBudget => (
+        InvalidObservation::TopologyBudget
+        | InvalidObservation::PinBudget
+        | InvalidObservation::HistoryBudget => (
             http::StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::ResourceLimit,
         ),
@@ -83,7 +89,10 @@ fn source_error(source: disk_authority::Error) -> ApiError {
             http::StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::ResourceLimit,
         ),
-        disk_authority::Error::Identity => (http::StatusCode::CONFLICT, ErrorCode::DiskChanged),
+        disk_authority::Error::Identity
+        | disk_authority::Error::Filesystem(platform_io::fs_safety::Error::IdentityChanged(_)) => {
+            (http::StatusCode::CONFLICT, ErrorCode::DiskChanged)
+        }
         disk_authority::Error::Filesystem(platform_io::fs_safety::Error::UnsafePermissions(_)) => {
             (http::StatusCode::FORBIDDEN, ErrorCode::PermissionDenied)
         }
