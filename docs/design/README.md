@@ -9,4 +9,6 @@
 
 - [逐盘权威的离线存储切片](independent-disk-journal.md)：独立新格式、本盘发布和 SQLite 重建；不代表当前在线池已切换。
 
+- [系统盘全局变更库基础](system-change-database.md)：完整保留回执与明确文件路径事件、有界读取及可重建边界。
+
 这些文件说明当前产品行为和设计约束；可用能力与限制见[当前支持范围](../23-delivery-and-decisions.md)及对应[组件说明](../components/README.md)。

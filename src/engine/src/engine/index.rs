@@ -1,11 +1,12 @@
 //! Rebuildable SQLite projection; never an authority for publication.
 //!
 //! Startup rebuilds from recovered durable evidence, replacing disposable
-//! full-snapshot and generic entity projections without reading their data. Only file-history candidate
-//! fields and the publication sequence are stored. Shared, untouched version
+//! full-snapshot and generic entity projections without reading their data. It
+//! stores history candidates/memberships and complete retained receipt/path rows
+//! with the publication sequence. Shared, untouched version
 //! maps need no comparison; exact transaction write sets compare only changed
 //! keys. Cold rebuilds and unknown lineage retain the complete ordered merge.
-//! Business objects come from State.
+//! State remains authoritative; complete stored rows are checked against it.
 use super::Engine;
 use crate::*;
 use sqlite_access::{Connection, Executor, Row};
@@ -14,10 +15,12 @@ use storage_contract::{MapChanges, TrackedRecords};
 
 mod scope;
 mod snapshot;
+mod system_changes;
 pub(crate) use scope::{ScopeNode, ScopeReader};
 #[cfg(test)]
 pub(crate) use scope::{reset_scope_read_metrics, scope_read_metrics};
 pub(crate) use snapshot::OwnedScopeRead;
+pub use system_changes::{SystemChangeCursor, SystemChangePage, SystemChangeReadError};
 
 const HISTORY_INDEX_MIN_VERSIONS: usize = 300_000;
 const HISTORY_INDEX_MAX_CANDIDATES: usize = 100;
@@ -34,6 +37,7 @@ pub(super) struct QueryProof {
     sequence: u64,
     counts: BTreeMap<String, usize>,
     scope_counts: BTreeMap<(String, String), [usize; 6]>,
+    system_order: system_changes::Order,
     read_generation: Arc<()>,
     availability: IndexAvailability,
     #[cfg(test)]
@@ -326,6 +330,7 @@ impl IndexConnection {
             .as_mut()
             .expect("invariant: admitted index worker is open");
         let scope_delta = scope::Delta::between(before, after);
+        let system_delta = system_changes::Delta::between(before, after);
         let result = platform_io::sqlite::block_on_sqlite_connection(async {
             // Preserve the former reopen boundary for disk reads. Cached b-tree
             // pages must not hide in-place damage behind a valid schema cookie.
@@ -337,6 +342,7 @@ impl IndexConnection {
             if let Some(before) = before {
                 check_projection_marker(&mut tx, before.sequence).await?;
                 scope::check_schema(&mut tx).await?;
+                system_changes::check_schema(&mut tx).await?;
             } else {
                 recreate_projection(&mut tx).await?;
             }
@@ -354,6 +360,7 @@ impl IndexConnection {
                 .execute(&mut *tx).await.map_err(ProjectionFailure::from)?;
             }
             scope_delta.project(&mut tx, after).await?;
+            system_delta.project(&mut tx, after).await?;
             // Metadata-only publications still advance the marker in this transaction.
             sqlite_access::query("INSERT INTO current_state VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET sequence=excluded.sequence")
             .bind(after.sequence.to_string()).execute(&mut *tx).await.map_err(ProjectionFailure::from)?;
@@ -447,6 +454,7 @@ async fn recreate_projection(
         .execute(HISTORY_INDEX)
         .await
         .map_err(ProjectionFailure::from)?;
+    system_changes::recreate(connection).await?;
     Ok(())
 }
 
@@ -594,6 +602,8 @@ impl Engine {
             }
         };
         proof.read_generation = Arc::new(());
+        proof.system_order = system_changes::Order::default();
+        proof.system_order.update(None, &self.state);
         proof.scope_counts.clear();
         scope::Delta::between(None, &self.state).apply_counts(
             &mut proof.scope_counts,
@@ -643,6 +653,7 @@ impl Engine {
             Some(previous),
             &self.state,
         );
+        proof.system_order.update(Some(previous), &self.state);
         // Reuse the changed-version delta, including replacements/moves.
         for id in delta.deletes.iter().chain(&delta.upserts) {
             if let Some(old) = previous.versions.get(*id) {

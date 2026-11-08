@@ -1076,6 +1076,7 @@ fn runtime_linked_cache_falls_back_and_preserves_publication_without_touching_ta
         for hard_link in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let mut engine = engine(&temp);
+            let admitted = Arc::clone(&engine.state);
             populate(&mut engine);
             let path = engine.root.join(name);
             if path.exists() {
@@ -1091,6 +1092,11 @@ fn runtime_linked_cache_falls_back_and_preserves_publication_without_touching_ta
             assert!(engine.indexed_file_history("file").is_none());
             assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
             assert!(!index_ready(&engine));
+            // populate supplies isolated index rows, not an admitted business
+            // State (it deliberately has no placements). Restore the actual
+            // admitted state before publishing; keep the same disabled index
+            // and hostile filesystem entries throughout the real operation.
+            engine.state = admitted;
             let operation = storage_contract::OperationId::generate().unwrap();
             let repository = engine
                 .create_repository(
@@ -1183,6 +1189,8 @@ fn startup_removes_obsolete_snapshot_and_entity_projections() {
                     ("file_history_versions".into(), HISTORY_TABLE.into()),
                     ("history_scope_lookup".into(), scope::LOOKUP.into()),
                     ("history_scope_members".into(), scope::TABLE.into()),
+                    ("system_change_order".into(), system_changes::LOOKUP.into()),
+                    ("system_changes".into(), system_changes::TABLE.into()),
                 ]
             );
             c.close().await.unwrap();

@@ -15,7 +15,7 @@
 | `publication_evidence.rs` | 只读选择精确摘要的对象、完整快照及发布 seal；查询不执行磁盘修复 |
 | `engine/workspace_storage.rs` | 工作区清单的双位置持久化与重启协调 |
 | `engine/workspace_limits.rs` | 独立于持久配置的本机运行期保留证据上限 |
-| `engine/index.rs` | 可重建 SQLite 投影 |
+| `engine/index.rs`、`engine/index/system_changes/` | 可重建 SQLite 历史索引及系统全局回执/路径行投影 |
 | `directory_conversion/` | [磁盘向导普通目录转换](engine/src/directory_conversion.md)：只读预览、非覆盖导入和显式当前视图导出，不接纳外来 ZXS 历史 |
 | `foreign_import/migration/` | [外来历史离线迁入包](engine/src/foreign_migration.md)：精确来源分组、完整独立副本、非覆盖发布和断点恢复；不是活动池接纳 |
 | `business/` | 仓库、命名空间、上传、文件分支、目录批量分支与历史查询 |
@@ -63,11 +63,17 @@ SQLite、容器 container.json 及当前名称是可重建投影，不能替代�
 
 ## 派生索引不可用与发布结果
 
-权威日志、证明及 State/快照安装完成之后，SQLite 更新失败不改变原 `OperationResult`、永久幂等收据或已完成成员元数据的 epoch。`QueryProof` 用单一 `Unbuilt / Ready / Unavailable` 状态持有连接或首个具体故障；故障保留 Read/Update 阶段、当时发布序号和完整 source，关闭失败附在原失败之后，不能覆盖首要原因或授权隔离替换。停用后不再执行增量 SQL／差分，历史读取从 State 扫描；完整重建成功才回到 Ready。失败状态不是内容副本的 `current_health`，也不授予写权限。
+权威日志、证明及 State/快照安装完成之后，SQLite 更新失败不改变原 `OperationResult`、永久幂等收据或已完成成员元数据的 epoch。`QueryProof` 用单一 `Unbuilt / Ready / Unavailable` 状态持有连接或首个具体故障；故障保留 Read/Update 阶段、当时发布序号和完整 source，关闭失败附在原失败之后，不能覆盖首要原因或授权隔离替换。停用后不再执行增量 SQL／差分，原历史候选读取从 State 扫描；新增系统变更库读取明确返回 `SystemChangeReadError::Unavailable`，不能静默变成空页或其它数据源。完整重建成功才回到 Ready。失败状态不是内容副本的 `current_health`，也不授予写权限。
 
 `Engine::index_health` 是不做 I/O 的类型化观察。HTTP `/readyz` 在引擎和管理模式都投影独立 `history_index` 状态及安全错误码，不输出内部路径、SQL 或完整错误；仅派生索引失效不把已有可写服务说成不可用。停用转换保留内部具体错误供应用诊断；核心不在库内新增请求日志。重复写、查询或健康轮询不重复访问故障索引，也不重复创建失败记录。
 
 正常更新没有新增文件/目录同步，仍执行原 SQLite FULL 事务；失效后省去索引差分及 SQL，State 扫描成本不变，不能据此声称吞吐提升。启动／重开／显式恢复的重建错误继续直接传播，只有已识别 SQLite 损坏才按原规则隔离，不将权限、I/O 或不安全路径伪装成可替换损坏。工作区终态镜像失败是独立错误窗口，具体限制见[发布证据与错误边界](../10-transactions-and-recovery.md#s10-10)。
+
+## 系统全局变更库基础
+
+`Engine::system_operation_records` 与 `system_file_path_nodes` 分页读取系统盘 `index.sqlite` 的完整保留结果和明确文件路径事件，范围不按当前磁盘位置过滤。每页最多 100 行、64 MiB 规范正文；游标绑定当前 State 序号、记录族和本次已准入投影实例，不能跨重建/重开复用。调用者负责外部授权，本片未增加 HTTP/Web 入口。完整行、严格模式、可信有序键及边界行一起校验，丢行/插行/错序/载荷替换均拒绝；读取失败共享现有索引健康状态，保留首个具体来源。
+
+永久性属于 State 中原有回执保留契约，不属于可丢弃 SQLite 本身。`OperationResult.current_health` 是存储快照，不替代实时 `operation_record`。文件路径行保留外部旧/新路径，但不是所有内容/目录/分支事实的总日志。复杂度和恢复边界见[系统盘全局变更库基础](../design/system-change-database.md)。
 
 ## 完整巡检（过渡实现）
 

@@ -40,7 +40,10 @@ pub use disk_registry::published::terminal::TerminalRegistry;
 mod planning;
 pub(crate) use planning::PlanningContext;
 mod index;
-pub use index::{IndexFailure, IndexFailureStage, IndexHealth};
+pub use index::{
+    IndexFailure, IndexFailureStage, IndexHealth, SystemChangeCursor, SystemChangePage,
+    SystemChangeReadError,
+};
 mod integrity_scrub;
 pub use integrity_scrub::{
     IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
