@@ -12,7 +12,7 @@ const MAX_SET_BYTES: usize = 64 * 1024 * 1024;
 
 struct DiskScope {
     header: DiskHistoryHeader,
-    previous: Vec<DiskCatalogVersion>,
+    previous: DiskCatalogSnapshot,
     changes: Changes,
     record_bytes: usize,
 }
@@ -45,7 +45,12 @@ impl PreparedDiskScopes {
                         through_snapshot: None,
                         publications: 0,
                     },
-                    previous: Vec::new(),
+                    previous: DiskCatalogSnapshot::empty(DiskRegistrationIdentity {
+                        pool_id: config.pool_id.clone(),
+                        disk_id: disk.disk_id.clone(),
+                        slot_id: disk.slot_id.clone(),
+                        binding_generation: disk.binding_generation,
+                    }),
                     changes: Changes {
                         rows: Vec::new(),
                         bytes: 0,
@@ -82,7 +87,7 @@ impl PreparedDiskScopes {
             }
             let next = snapshot(admitted.state(), disk.header.identity.clone())?;
             disk.changes
-                .append(candidate, hash, &disk.previous, &next.versions)?;
+                .append(candidate, hash, &disk.previous, &next)?;
             let current_bytes = crate::disk::encode_metadata(&next, MAX_RECORD_BYTES)?.len();
             let replacement = disk
                 .changes
@@ -96,7 +101,7 @@ impl PreparedDiskScopes {
                 return Err(budget());
             }
             disk.record_bytes = replacement;
-            disk.previous = next.versions;
+            disk.previous = next;
             disk.header.through_sequence = candidate.sequence;
             disk.header.through_snapshot = Some(candidate.snapshot_hash.clone());
             disk.header.publications += 1;
@@ -116,7 +121,7 @@ impl PreparedDiskScopes {
             preparation_checkpoint(stop)?;
             let current = snapshot(admitted.state(), disk.header.identity.clone())?;
             if disk.header.through_sequence != admitted.state().sequence
-                || current.versions != disk.previous
+                || !current.same_rows(&disk.previous)
             {
                 return Err(invalid(
                     "prepared disk prefix differs from the admitted frozen State",

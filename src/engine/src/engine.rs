@@ -69,7 +69,8 @@ mod disk_catalog;
 pub use disk_catalog::{
     DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
     DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
-    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskDatabaseMaterial,
+    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskCatalogDirectory,
+    DiskDatabaseMaterial,
     DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
     DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation, DiskHistoryReceipt,
     DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus, inspect_disk_database_material,

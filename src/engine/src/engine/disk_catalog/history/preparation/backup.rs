@@ -55,9 +55,7 @@ impl PreparedDiskScopes {
                     .disks
                     .iter()
                     .any(|old| old.slot_id == disk.slot_id || old.disk_id == disk.disk_id)
-                || !snapshot(source.state(), identity.clone())?
-                    .versions
-                    .is_empty()
+                || !snapshot(source.state(), identity.clone())?.is_empty()
             {
                 return Err(invalid(
                     "new Backup binding already owns source data or history",
@@ -65,12 +63,12 @@ impl PreparedDiskScopes {
             }
             self.disks.push(DiskScope {
                 header: DiskHistoryHeader {
-                    identity,
+                    identity: identity.clone(),
                     through_sequence: boundary.through_sequence,
                     through_snapshot: boundary.through_snapshot.clone(),
                     publications: boundary.publications,
                 },
-                previous: Vec::new(),
+                previous: DiskCatalogSnapshot::empty(identity),
                 changes: Changes {
                     rows: Vec::new(),
                     bytes: 0,

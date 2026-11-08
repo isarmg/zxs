@@ -10,6 +10,8 @@ use data_serialization::{Deserialize, Serialize};
 use std::sync::Arc;
 
 mod database;
+mod directories;
+pub use directories::DiskCatalogDirectory;
 mod history;
 mod maintenance;
 pub(in crate::engine) mod root_install;
@@ -53,6 +55,26 @@ pub struct DiskCatalogSnapshot {
     #[serialization(with = "storage_contract::u64_string")]
     pub source_sequence: u64,
     pub versions: Vec<DiskCatalogVersion>,
+    pub backup_directories: Vec<DiskCatalogDirectory>,
+}
+
+impl DiskCatalogSnapshot {
+    fn empty(identity: DiskRegistrationIdentity) -> Self {
+        Self {
+            identity,
+            source_sequence: 0,
+            versions: Vec::new(),
+            backup_directories: Vec::new(),
+        }
+    }
+
+    fn same_rows(&self, other: &Self) -> bool {
+        self.versions == other.versions && self.backup_directories == other.backup_directories
+    }
+
+    fn is_empty(&self) -> bool {
+        self.versions.is_empty() && self.backup_directories.is_empty()
+    }
 }
 
 /// Distinguish when the bytes were materialized from the admitted State used
@@ -88,6 +110,7 @@ pub struct DiskCatalogReceipt {
     pub identity: DiskRegistrationIdentity,
     pub source_sequence: u64,
     pub versions: usize,
+    pub backup_directories: usize,
     pub records_hash: String,
     pub database_bytes: usize,
 }
@@ -143,10 +166,12 @@ fn snapshot(state: &State, identity: DiskRegistrationIdentity) -> Result<DiskCat
         }
         versions.push(row);
     }
+    let backup_directories = directories::snapshot(state, &identity, versions.len(), &mut bytes)?;
     Ok(DiskCatalogSnapshot {
         identity,
         source_sequence: state.sequence,
         versions,
+        backup_directories,
     })
 }
 
@@ -193,7 +218,7 @@ impl Engine {
         Ok((disk, identity, handle))
     }
 
-    /// Explicitly materialize this disk's current version/path obligations.
+    /// Explicitly materialize this disk's current version and recursive-directory obligations.
     /// Requires exclusive Engine ownership and an already admitted pool/disk.
     /// It neither adds/initializes a disk nor certifies local body availability.
     /// The caller must authorize a global maintenance write. An interrupted
@@ -244,6 +269,7 @@ impl Engine {
             identity,
             source_sequence: captured.source_sequence,
             versions: captured.versions.len(),
+            backup_directories: captured.backup_directories.len(),
             records_hash,
             database_bytes,
         };
@@ -273,7 +299,7 @@ impl Engine {
         let stored = database::read(&bytes, &identity)?;
         if stored.source_sequence > expected.source_sequence
             || stored.identity != expected.identity
-            || stored.versions != expected.versions
+            || !stored.same_rows(&expected)
         {
             return Err(invalid(
                 "disk catalog local rows differ from admitted State or claim a future sequence; explicitly rebuild it",
@@ -333,3 +359,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/disk_catalog_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/disk_catalog_directory_tests.rs"]
+mod directory_tests;

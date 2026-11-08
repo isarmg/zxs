@@ -226,6 +226,7 @@ pub(in crate::engine::disk_catalog) fn fold(
         current.filter(|current| current.source_sequence <= history.header.through_sequence);
     let mut compared = false;
     let mut active = BTreeMap::<&str, &DiskCatalogVersion>::new();
+    let mut directories = BTreeMap::<(&str, &str, &str, &str), &DiskCatalogDirectory>::new();
     let mut previous = None::<&DiskHistoryRecord>;
     let mut operations = std::collections::BTreeSet::new();
     let mut groups = 0u32;
@@ -238,7 +239,7 @@ pub(in crate::engine::disk_catalog) fn fold(
             && let Some(current) = covered_current
             && record.sequence > current.source_sequence
         {
-            compare_current(&active, current)?;
+            compare_current(&active, &directories, current)?;
             compared = true;
         }
         match previous {
@@ -261,30 +262,45 @@ pub(in crate::engine::disk_catalog) fn fold(
                 groups += 1; // bounded by MAX_CHANGES during SQLite decode
             }
         }
-        let id = record.change.version_id();
         match &record.change {
+            DiskHistoryChange::BackupDirectoryEntered { after } => {
+                if directories.insert(after.key(), after).is_some() {
+                    return Err(invalid("disk history enters an already-present backup directory"));
+                }
+            }
+            DiskHistoryChange::BackupDirectoryChanged { before, after } => {
+                if directories.get(&before.key()).copied() != Some(before) {
+                    return Err(invalid("disk directory change has no exact retained predecessor"));
+                }
+                directories.insert(after.key(), after);
+            }
+            DiskHistoryChange::BackupDirectoryDeparted { before } => {
+                if directories.remove(&before.key()) != Some(before) {
+                    return Err(invalid("disk directory departure has no exact retained predecessor"));
+                }
+            }
             DiskHistoryChange::Entered { after } => {
-                if active.insert(id, after).is_some() {
+                if active.insert(&after.version.version_id, after).is_some() {
                     return Err(invalid("disk history enters an already-present version"));
                 }
             }
             DiskHistoryChange::Changed { before, after } => {
-                if active.get(id).copied() != Some(before) {
+                if active.get(before.version.version_id.as_str()).copied() != Some(before) {
                     return Err(invalid(
                         "disk history change has no exact retained predecessor",
                     ));
                 }
-                active.insert(id, after);
+                active.insert(&after.version.version_id, after);
             }
             DiskHistoryChange::Departed { before } => {
-                if active.remove(id) != Some(before) {
+                if active.remove(before.version.version_id.as_str()) != Some(before) {
                     return Err(invalid(
                         "disk history departure has no exact retained predecessor",
                     ));
                 }
             }
         }
-        if active.len() > MAX_ROWS {
+        if active.len() + directories.len() > MAX_ROWS {
             return Err(budget());
         }
         previous = Some(record);
@@ -303,7 +319,7 @@ pub(in crate::engine::disk_catalog) fn fold(
         ));
     }
     if !compared && let Some(current) = covered_current {
-        compare_current(&active, current)?;
+        compare_current(&active, &directories, current)?;
     }
     let mut bytes = 0;
     let mut versions = Vec::with_capacity(active.len());
@@ -315,18 +331,31 @@ pub(in crate::engine::disk_catalog) fn fold(
         bytes += length;
         versions.push(row.clone());
     }
+    let mut backup_directories = Vec::with_capacity(directories.len());
+    for row in directories.into_values() {
+        let length = crate::disk::encode_metadata(row, MAX_RECORD_BYTES)?.len();
+        if length > MAX_RECORD_BYTES - bytes {
+            return Err(budget());
+        }
+        bytes += length;
+        backup_directories.push(row.clone());
+    }
     Ok(DiskCatalogSnapshot {
         identity: history.header.identity.clone(),
         source_sequence: history.header.through_sequence,
         versions,
+        backup_directories,
     })
 }
 
 fn compare_current(
     active: &BTreeMap<&str, &DiskCatalogVersion>,
+    directories: &BTreeMap<(&str, &str, &str, &str), &DiskCatalogDirectory>,
     current: &DiskCatalogSnapshot,
 ) -> Result<()> {
-    if !current.versions.iter().eq(active.values().copied()) {
+    if !current.versions.iter().eq(active.values().copied())
+        || !current.backup_directories.iter().eq(directories.values().copied())
+    {
         return Err(invalid(
             "current disk catalog differs from its complete local historical fold",
         ));

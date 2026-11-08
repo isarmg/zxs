@@ -203,6 +203,9 @@ impl Engine {
 /// are dirtied even when no current placement references them. Binding numbers
 /// prevent a reused slot from inheriting an earlier physical disk's facts.
 pub(super) fn changed_bindings(before: &State, after: &State) -> Option<BTreeSet<(String, u64)>> {
+    if crate::protection::directory_catalog_changed(before, after) {
+        return None;
+    }
     macro_rules! keys {
         ($field:ident) => {
             match after.$field.changes_since(&before.$field) {

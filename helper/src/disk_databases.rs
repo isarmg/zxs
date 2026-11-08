@@ -43,8 +43,10 @@ struct Selection {
 #[serialization(tag = "record", content = "value", rename_all = "kebab-case")]
 enum Record<'a> {
     CurrentVersion(&'a storage_engine::DiskCatalogVersion),
+    CurrentBackupDirectory(&'a storage_engine::DiskCatalogDirectory),
     HistoryChange(&'a storage_engine::DiskHistoryRecord),
     HistoryInventoryVersion(&'a storage_engine::DiskCatalogVersion),
+    HistoryInventoryBackupDirectory(&'a storage_engine::DiskCatalogDirectory),
 }
 
 pub(crate) fn run(options: Options) -> Result<()> {
@@ -72,6 +74,7 @@ pub(crate) fn run(options: Options) -> Result<()> {
         "current":material.current().map(|current| json!({
             "source_sequence":current.source_sequence.to_string(),
             "versions":current.versions.len(),
+            "backup_directories":current.backup_directories.len(),
         })),
         "history":material.history().map(|history| json!({
             "header":history.header,
@@ -80,6 +83,7 @@ pub(crate) fn run(options: Options) -> Result<()> {
         "history_inventory":material.history_inventory().map(|inventory| json!({
             "source_sequence":inventory.source_sequence.to_string(),
             "versions":inventory.versions.len(),
+            "backup_directories":inventory.backup_directories.len(),
         })),
         "system_root_opened":false,
         "source_publications_verified":false,
@@ -106,6 +110,11 @@ pub(crate) fn run(options: Options) -> Result<()> {
             )?;
         }
     }
+    if let Some(current) = material.current() {
+        for row in &current.backup_directories {
+            writeln!(output, "{}", json_codec::to_string(&Record::CurrentBackupDirectory(row))?)?;
+        }
+    }
     if let Some(history) = material.history() {
         for row in &history.changes {
             writeln!(
@@ -122,6 +131,11 @@ pub(crate) fn run(options: Options) -> Result<()> {
                 "{}",
                 json_codec::to_string(&Record::HistoryInventoryVersion(row))?
             )?;
+        }
+    }
+    if let Some(inventory) = material.history_inventory() {
+        for row in &inventory.backup_directories {
+            writeln!(output, "{}", json_codec::to_string(&Record::HistoryInventoryBackupDirectory(row))?)?;
         }
     }
     writeln!(

@@ -32,6 +32,16 @@ pub(super) fn read_for_root_install(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum DiskHistoryChange {
+    BackupDirectoryEntered {
+        after: DiskCatalogDirectory,
+    },
+    BackupDirectoryChanged {
+        before: DiskCatalogDirectory,
+        after: DiskCatalogDirectory,
+    },
+    BackupDirectoryDeparted {
+        before: DiskCatalogDirectory,
+    },
     Entered {
         after: DiskCatalogVersion,
     },
@@ -44,10 +54,30 @@ pub enum DiskHistoryChange {
     },
 }
 impl DiskHistoryChange {
-    pub fn version_id(&self) -> &str {
+    /// File changes have a version identity; directory-only changes never
+    /// manufacture a zero-byte version or borrow a descendant's identity.
+    pub fn version_id(&self) -> Option<&str> {
         match self {
-            Self::Entered { after } | Self::Changed { after, .. } => &after.version.version_id,
-            Self::Departed { before } => &before.version.version_id,
+            Self::Entered { after } | Self::Changed { after, .. } => Some(&after.version.version_id),
+            Self::Departed { before } => Some(&before.version.version_id),
+            Self::BackupDirectoryEntered { .. } | Self::BackupDirectoryChanged { .. }
+            | Self::BackupDirectoryDeparted { .. } => None,
+        }
+    }
+
+    fn key(&self) -> (u8, &str, &str, &str, &str) {
+        match self {
+            Self::Entered { after } | Self::Changed { after, .. } =>
+                (1, &after.version.version_id, "", "", ""),
+            Self::Departed { before } => (1, &before.version.version_id, "", "", ""),
+            Self::BackupDirectoryEntered { after } | Self::BackupDirectoryChanged { after, .. } => {
+                let (repository, history, directory, path) = after.key();
+                (0, repository, history, directory, path)
+            }
+            Self::BackupDirectoryDeparted { before } => {
+                let (repository, history, directory, path) = before.key();
+                (0, repository, history, directory, path)
+            }
         }
     }
 }
@@ -102,7 +132,7 @@ pub struct DiskHistoryReceipt {
 
 fn digest(snapshot: &DiskHistorySnapshot) -> Result<String> {
     Ok(storage_contract::object_hash(
-        "disk-local-publication-changes",
+        "disk-local-inventory-changes",
         snapshot,
     )?)
 }
@@ -128,14 +158,38 @@ impl Changes {
         &mut self,
         candidate: &crate::journal::Candidate,
         hash: &str,
-        before: &[DiskCatalogVersion],
-        after: &[DiskCatalogVersion],
+        before: &DiskCatalogSnapshot,
+        after: &DiskCatalogSnapshot,
     ) -> Result<()> {
+        let mut directories = BTreeMap::new();
+        for row in &before.backup_directories {
+            directories.insert(row.key(), (Some(row), None));
+        }
+        for row in &after.backup_directories {
+            directories.entry(row.key()).or_insert((None, None)).1 = Some(row);
+        }
+        for (before, after) in directories.into_values() {
+            let change = match (before, after) {
+                (Some(before), Some(after)) if before == after => continue,
+                (Some(before), Some(after)) => DiskHistoryChange::BackupDirectoryChanged {
+                    before: before.clone(),
+                    after: after.clone(),
+                },
+                (Some(before), None) => DiskHistoryChange::BackupDirectoryDeparted {
+                    before: before.clone(),
+                },
+                (None, Some(after)) => DiskHistoryChange::BackupDirectoryEntered {
+                    after: after.clone(),
+                },
+                (None, None) => unreachable!("invariant: every union entry has a local row"),
+            };
+            self.push(candidate, hash, change)?;
+        }
         let mut rows = BTreeMap::new();
-        for row in before {
+        for row in &before.versions {
             rows.insert(row.version.version_id.as_str(), (Some(row), None));
         }
-        for row in after {
+        for row in &after.versions {
             rows.entry(row.version.version_id.as_str())
                 .or_insert((None, None))
                 .1 = Some(row);
@@ -155,20 +209,30 @@ impl Changes {
                 },
                 (None, None) => unreachable!("invariant: every union entry has a local row"),
             };
-            let record = DiskHistoryRecord {
-                sequence: candidate.sequence,
-                operation_id: candidate.operation_id,
-                candidate_hash: hash.into(),
-                snapshot_hash: candidate.snapshot_hash.clone(),
-                change,
-            };
-            let bytes = crate::disk::encode_metadata(&record, MAX_RECORD_BYTES)?.len();
-            if self.rows.len() == MAX_CHANGES || bytes > MAX_RECORD_BYTES - self.bytes {
-                return Err(budget());
-            }
-            self.bytes += bytes;
-            self.rows.push(record);
+            self.push(candidate, hash, change)?;
         }
+        Ok(())
+    }
+
+    fn push(
+        &mut self,
+        candidate: &crate::journal::Candidate,
+        hash: &str,
+        change: DiskHistoryChange,
+    ) -> Result<()> {
+        let record = DiskHistoryRecord {
+            sequence: candidate.sequence,
+            operation_id: candidate.operation_id,
+            candidate_hash: hash.into(),
+            snapshot_hash: candidate.snapshot_hash.clone(),
+            change,
+        };
+        let bytes = crate::disk::encode_metadata(&record, MAX_RECORD_BYTES)?.len();
+        if self.rows.len() == MAX_CHANGES || bytes > MAX_RECORD_BYTES - self.bytes {
+            return Err(budget());
+        }
+        self.bytes += bytes;
+        self.rows.push(record);
         Ok(())
     }
 }

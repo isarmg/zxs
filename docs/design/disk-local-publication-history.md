@@ -8,7 +8,7 @@
 
 本片保存 **版本进入本盘、版本离开本盘，以及其在本盘期间 owner 路径、主/备角色、逻辑内容状态或版本记录的变化**。每条记录含前后本盘行、原操作 ID、序号、candidate/snapshot 摘要。移出的版本仍保留本盘过去行。其他盘的行和全局 OperationResult 内容不复制进来；相同名称的不同 file/history 不合并。路径是已准入 State 中的本盘 owner 路径，不是所有分支 alias 的完整列表；逻辑内容状态不是实时正文可读证明。
 
-这是真实落盘的派生历史，而不是观察当前 placement 后筛选全部旧 FilePathNode。还没有覆盖全部本盘目录事件、空目录仓库、标签/分支审计及磁盘代际切换，也不是完整三范围数据库或独立恢复权威。
+这是真实落盘的派生历史，而不是观察当前 placement 后筛选全部旧 FilePathNode。新增准确原生递归目录副本事件，见[目录范围规范](disk-backup-directory-catalog.md)；还没有覆盖全部本盘目录事件、完整空目录仓库、标签/分支审计及磁盘代际切换，也不是完整三范围数据库或独立恢复权威。
 
 ## 来源闭合与时序
 
@@ -24,7 +24,7 @@
 
 本片使用盘根伴随文件 `.zxs-disk-history.sqlite`，与当前目录文件 `.zxs-disk.sqlite` 共属一个本盘范围：前者是发布变化、后者是当前义务。分开存放是为了不让当前目录刷新抹去历史，也不隐式升级既有当前目录格式；**不能把增加这个文件说成用户要求的三个完整数据库已全部实现**。后续物理格式收敛须另行明确，不能删除已保留历史。
 
-SQLite 在内存中构造/解码，盘上字节只经持有盘根和 I/O lease 读取。格式 `disk-local-publication-changes` 只有严格闭集合的 `identity` 和 `changes` 两张表，无附加 schema 对象。变化按 publication sequence/version ID 排序，SQL ordinal 必须从 0 连续；首次读取不使用空键哨兵。规范 JSON、整库摘要、精确 scope 和声明覆盖均须一致，不能凭摘要授权修复或恢复。
+SQLite 在内存中构造/解码，盘上字节只经持有盘根和 I/O lease 读取。格式 `disk-local-inventory-changes` 只有严格闭集合的 `identity` 和 `changes` 两张表，无附加 schema 对象。变化按 publication sequence/实体类型/稳定身份和路径排序，SQL ordinal 必须从 0 连续；首次读取不使用空键哨兵。规范 JSON、整库摘要、精确 scope 和声明覆盖均须一致，不能凭摘要授权修复或恢复。
 
 共用 `database_install`，增加独立 `DiskHistory` scope 和固定叶名，避免同盘当前快照与历史材料交叉恢复。安装仍持有目标根身份，首次 no-clobber，替换保留旧对象，未知/损坏/别盘对象拒绝且保留。持久暂存位于同一盘根 `.zxs-layout/database-installs`，复用累计保留额度；安装前检查空间及元数据恢复余量，安装后读回核对完整生成内容并再次核具名盘 seal。中断可重新显式调用；不会修改业务 State、永久回执或发布决定。
 
@@ -59,3 +59,7 @@ SQLite 在内存中构造/解码，盘上字节只经持有盘根和 I/O lease �
 ## 不依赖 SYSTEM 的材料读取
 
 新增离线只读入口可在明确所选盘上检查 SQLite 内部格式与 Entered/Changed/Departed 前后闭合，恢复覆盖边界的本地清单表示，并与所选当前库比较。它不读取原 publication，不替代本文件的已认证来源读取，也不在源盘安装结果，见[完整边界](offline-disk-database-material.md)。原 SYSTEM 恢复路径现在于权威恢复完成后调用盘根维护，逐盘失败保持可见。
+
+## 目录副本变化
+
+完整前缀和连续维护现同时计算版本及已发布递归目录副本；Entered/Changed/Departed 的目录变体保留旧路径及准确身份，没有文件版本也产生目录变化。原始 publication 链规则不变，SYSTEM-free fold 仅恢复本地表示。新格式拒绝并保留不支持旧字节，四条回归仅源码未运行；详见[目录范围规范](disk-backup-directory-catalog.md)。

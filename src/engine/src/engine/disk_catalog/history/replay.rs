@@ -73,7 +73,7 @@ pub(super) fn capture(
         rows: Vec::new(),
         bytes: 0,
     };
-    let mut previous = Vec::new();
+    let mut previous = DiskCatalogSnapshot::empty(identity.clone());
     for (sequence, source) in sources {
         let candidate: Candidate = verified_object_observed_at(
             &engine.disk_resources,
@@ -128,8 +128,8 @@ pub(super) fn capture(
             ));
         }
         let next = snapshot(state, identity.clone())?;
-        changes.append(&candidate, source.candidate, &previous, &next.versions)?;
-        previous = next.versions;
+        changes.append(&candidate, source.candidate, &previous, &next)?;
+        previous = next;
         header.through_sequence = sequence;
         header.through_snapshot = Some(candidate.snapshot_hash.clone());
         header.publications += 1;
@@ -141,7 +141,7 @@ pub(super) fn capture(
     }
     if through == engine.state.sequence
         && (header.through_snapshot != engine.snapshot
-            || previous != snapshot(&engine.state, identity)?.versions)
+            || !previous.same_rows(&snapshot(&engine.state, identity)?))
     {
         return Err(invalid(
             "disk history prefix differs from the admitted current snapshot",

@@ -281,13 +281,13 @@ impl Engine {
         let identity = &coverage.observed.identity;
         let before = snapshot(previous, identity.clone())?;
         let after = snapshot(&self.state, identity.clone())?;
-        if before.versions == after.versions {
+        if before.same_rows(&after) {
             self.record_history_coverage(coverage);
             return Ok(());
         }
         let retained = self.read_tracked_disk_history(&coverage)?;
         let mut changes = Changes::retained(retained.changes)?;
-        changes.append(candidate, candidate_hash, &before.versions, &after.versions)?;
+        changes.append(candidate, candidate_hash, &before, &after)?;
         let slot = identity.slot_id.clone();
         let captured = DiskHistorySnapshot {
             header: coverage.observed,

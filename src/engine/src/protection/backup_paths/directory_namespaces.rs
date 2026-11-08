@@ -508,60 +508,14 @@ impl Engine {
         if current.is_none() {
             return Ok(Vec::new());
         }
-        let mut entries = BTreeMap::new();
-        for receipt in self.state().operations.values() {
-            for (policy, namespace) in current_namespaces(self.state(), receipt)? {
-                let Some(replica) = namespace.replicas.get(&disk.slot_id) else {
-                    continue;
-                };
-                if replica.identity.pool_id != self.config().pool_id
-                    || replica.identity.disk_id != disk.disk_id
-                    || replica.identity.binding_generation != disk.binding_generation
-                {
-                    continue;
-                }
-                let history_tree_id = receipt.history_tree_id.as_ref().ok_or_else(|| {
-                    Error::new(
-                        ErrorCode::PublicationInvalid,
-                        "published directory history is missing",
-                    )
-                })?;
-                for row in &replica.directories {
-                    let key = (
-                        policy.repository_id.clone(),
-                        history_tree_id.clone(),
-                        row.entry_id.clone(),
-                        row.path.key().to_owned(),
-                    );
-                    if let Some((sequence, _)) = entries.get(&key) {
-                        if *sequence >= receipt.sequence {
-                            continue;
-                        }
-                    } else if entries.len() >= self.config().max_entries {
-                        return Err(Error::new(
-                            ErrorCode::ResourceLimit,
-                            "published directory read exceeds its distinct-entry budget",
-                        ));
-                    }
-                    // This is a logical listing, not a proof inventory. Keep the
-                    // newest representative; every source receipt stays permanent.
-                    entries.insert(
-                        key,
-                        (
-                            receipt.sequence,
-                            PublishedBackupDirectory {
-                                repository_id: policy.repository_id.clone(),
-                                history_tree_id: history_tree_id.clone(),
-                                directory_id: row.entry_id.clone(),
-                                path: row.path.clone(),
-                                operation_id: receipt.operation_id,
-                            },
-                        ),
-                    );
-                }
-            }
-        }
-        let mut entries: Vec<_> = entries.into_values().map(|(_, entry)| entry).collect();
+        let identity = crate::DiskRegistrationIdentity {
+            pool_id: self.config().pool_id.clone(),
+            disk_id: disk.disk_id.clone(),
+            slot_id: disk.slot_id.clone(),
+            binding_generation: disk.binding_generation,
+        };
+        let mut entries =
+            published_directories_at(self.state(), &identity, self.config().max_entries)?;
         entries.sort_by(|a, b| {
             a.path.key().cmp(b.path.key()).then_with(|| {
                 (&a.repository_id, &a.history_tree_id, &a.directory_id).cmp(&(
@@ -573,4 +527,86 @@ impl Engine {
         });
         Ok(entries)
     }
+}
+
+/// Pure per-State projection shared with disk catalogs. The caller supplies an
+/// admitted historical State; today's policy, slot or Engine view is never used
+/// to assign an older publication to a disk. This grants no serving authority.
+pub(crate) fn published_directories_at(
+    state: &State,
+    identity: &crate::DiskRegistrationIdentity,
+    maximum: usize,
+) -> Result<Vec<PublishedBackupDirectory>> {
+    let mut entries = BTreeMap::new();
+    for receipt in state.operations.values() {
+        for (policy, namespace) in current_namespaces(state, receipt)? {
+            let Some(replica) = namespace.replicas.get(&identity.slot_id) else {
+                continue;
+            };
+            if replica.identity != *identity {
+                continue;
+            }
+            let history_tree_id = receipt.history_tree_id.as_ref().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "published directory history is missing",
+                )
+            })?;
+            for row in &replica.directories {
+                let key = (
+                    policy.repository_id.clone(),
+                    history_tree_id.clone(),
+                    row.entry_id.clone(),
+                    row.path.key().to_owned(),
+                );
+                if let Some((sequence, _)) = entries.get(&key) {
+                    if *sequence >= receipt.sequence {
+                        continue;
+                    }
+                } else if entries.len() >= maximum {
+                    return Err(Error::new(
+                        ErrorCode::ResourceLimit,
+                        "published directory read exceeds its distinct-entry budget",
+                    ));
+                }
+                // This is a logical listing, not a proof inventory. Keep the
+                // newest representative; every source receipt stays permanent.
+                entries.insert(
+                    key,
+                    (
+                        receipt.sequence,
+                        PublishedBackupDirectory {
+                            repository_id: policy.repository_id.clone(),
+                            history_tree_id: history_tree_id.clone(),
+                            directory_id: row.entry_id.clone(),
+                            path: row.path.clone(),
+                            operation_id: receipt.operation_id,
+                        },
+                    ),
+                );
+            }
+        }
+    }
+    Ok(entries.into_values().map(|(_, entry)| entry).collect())
+}
+
+/// Only changes that can alter the directory projection invalidate its disk
+/// catalogs. Unknown map lineage is not an empty write set.
+pub(crate) fn directory_catalog_changed(before: &State, after: &State) -> bool {
+    match after.protection_policies.changes_since(&before.protection_policies) {
+        storage_contract::MapChanges::Keys(keys) if keys.is_empty() => (),
+        _ => return true,
+    }
+    let storage_contract::MapChanges::Keys(keys) =
+        after.operations.changes_since(&before.operations)
+    else {
+        return true;
+    };
+    keys.iter().any(|id| {
+        [before, after].iter().any(|state| {
+            state.operations.get(id).is_some_and(|receipt| {
+                directory_namespace_receipt(receipt) || follows_directories(&receipt.kind)
+            })
+        })
+    })
 }

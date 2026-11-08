@@ -7,10 +7,14 @@ use sqlite_access::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
 };
 
-const FORMAT: &str = "disk-current-version-catalog";
+mod directories;
+
+const FORMAT: &str = "disk-current-local-catalog";
 const IDENTITY: &str = "CREATE TABLE identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,scope TEXT NOT NULL,source_sequence TEXT NOT NULL,records_hash TEXT NOT NULL) STRICT";
 const VERSIONS: &str =
     "CREATE TABLE versions(version_id TEXT PRIMARY KEY COLLATE BINARY,body TEXT NOT NULL) STRICT";
+
+const DIRECTORIES: &str = "CREATE TABLE backup_directories(ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),body TEXT NOT NULL) STRICT";
 
 async fn finish<T>(result: Result<T>, connection: SqliteConnection) -> Result<T> {
     match (result, connection.close().await) {
@@ -36,6 +40,7 @@ pub(super) fn encode(snapshot: &DiskCatalogSnapshot, hash: &str) -> Result<Vec<u
             let mut tx = connection.begin().await?;
             tx.execute(IDENTITY).await?;
             tx.execute(VERSIONS).await?;
+            tx.execute(DIRECTORIES).await?;
             let scope = json_codec::to_string(&snapshot.identity)?;
             sqlite_access::query("INSERT INTO identity VALUES(1,?,?,?,?)")
                 .bind(FORMAT)
@@ -50,6 +55,14 @@ pub(super) fn encode(snapshot: &DiskCatalogSnapshot, hash: &str) -> Result<Vec<u
                 sqlite_access::query("INSERT INTO versions VALUES(?,?)")
                     .bind(&row.version.version_id)
                     .bind(body)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            for (ordinal, row) in snapshot.backup_directories.iter().enumerate() {
+                let bytes = crate::disk::encode_metadata(row, MAX_RECORD_BYTES)?;
+                sqlite_access::query("INSERT INTO backup_directories VALUES(?,?)")
+                    .bind(ordinal as i64)
+                    .bind(std::str::from_utf8(&bytes).expect("invariant: metadata is UTF-8"))
                     .execute(&mut *tx)
                     .await?;
             }
@@ -102,14 +115,15 @@ async fn read_connection(
     identity: &DiskRegistrationIdentity,
 ) -> Result<DiskCatalogSnapshot> {
     let schema = sqlite_access::query(
-        "SELECT name,type,tbl_name,sql FROM sqlite_schema ORDER BY name LIMIT 4",
+        "SELECT name,type,tbl_name,sql FROM sqlite_schema ORDER BY name LIMIT 5",
     )
     .fetch_all(&mut *connection)
     .await?;
-    if schema.len() != 3 {
+    if schema.len() != 4 {
         return Err(invalid("disk catalog has unexpected schema objects"));
     }
     for (row, (name, kind, table, sql)) in schema.into_iter().zip([
+        ("backup_directories", "table", "backup_directories", Some(DIRECTORIES)),
         ("identity", "table", "identity", Some(IDENTITY)),
         ("sqlite_autoindex_versions_1", "index", "versions", None),
         ("versions", "table", "versions", Some(VERSIONS)),
@@ -193,10 +207,12 @@ async fn read_connection(
         total += length;
         versions.push(value);
     }
+    let backup_directories = directories::read(connection, versions.len(), &mut total).await?;
     let snapshot = DiskCatalogSnapshot {
         identity: stored_identity,
         source_sequence: sequence,
         versions,
+        backup_directories,
     };
     if storage_contract::object_hash("disk-current-catalog", &snapshot)?
         != header.try_get::<String, _>("records_hash")?

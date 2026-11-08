@@ -27,7 +27,7 @@ zxs-helper disk-databases selected-disk.json --scope history --records
 
 默认 `--scope both` 读取盘根 `.zxs-disk.sqlite` 和 `.zxs-disk-history.sqlite`。可明确选择 `current` 或 `history` 以读取仍完好的一份，另一份不访问、不判断缺失、不修复。被选择的文件只允许真实缺失，不把损坏、权限或 I/O 错误当作没有文件；所有所选文件均缺失时拒绝，不返回“空盘已恢复”。
 
-默认输出清单摘要。`--records` 在整个受限读取成功后输出 JSON 行，包括摘要、当前版本行、历史变化行和由历史折叠重建的版本行，最后才写 `complete:true`。写 stdout 失败保留错误；输出不是持久恢复收据，也不会在服务器/源盘写文件。可保留此材料用于后续明确的救援判断，不能直接拿它覆盖运行目录。
+默认输出清单摘要。`--records` 在整个受限读取成功后输出 JSON 行，包括摘要、当前版本/目录行、历史变化行和由历史折叠重建的版本/目录行，最后才写 `complete:true`。写 stdout 失败保留错误；输出不是持久恢复收据，也不会在服务器/源盘写文件。可保留此材料用于后续明确的救援判断，不能直接拿它覆盖运行目录。
 
 ## 精确范围与内部一致性
 
@@ -54,3 +54,7 @@ zxs-helper disk-databases selected-disk.json --scope history --records
 每个 SQLite 文件最多 32 MiB、规范行最多 24 MiB；历史最多 65,536 条变化、2,048 个 publication。离线折叠 O(变化数 × log 当前版本数)，保留完整有界变化、当前/重建清单以及最多两组 SQLite 解析瞬态，不是总 RSS 上限。文件重核会再次读取有界字节；没有并发快照/所有外部写者已停止的额外保证。
 
 2026-11-08：仅写入生产源码、CLI 和文档；按用户要求未进行审查、编译、测试、静态检查或 CI。源码中的调用/协议边界不是运行通过证据。
+
+## 空目录材料
+
+当前新格式和历史 fold 同时保留已发布原生递归目录副本，版本数为零不再等于没有本盘目录。helper 的摘要增加 `backup_directories` 计数，`--records` 输出 `current-backup-directory` 及 `history-inventory-backup-directory`；身份、路径、来源代表与当前覆盖一起返回，不在源盘建目录。完整范围、旧字节保全及未验证状态见[目录范围规范](disk-backup-directory-catalog.md)。本片没有扩大正式恢复或 authority-restored 保证。

@@ -7,7 +7,7 @@ use sqlite_access::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
 };
 
-const FORMAT: &str = "disk-local-publication-changes";
+const FORMAT: &str = "disk-local-inventory-changes";
 const MAX_HEADER_BYTES: usize = 8192;
 const IDENTITY: &str = "CREATE TABLE identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,body TEXT NOT NULL,records_hash TEXT NOT NULL) STRICT";
 const CHANGES: &str =
@@ -200,11 +200,11 @@ async fn read_changes(
         }
         validate_record(&value, through)?;
         if changes.last().is_some_and(|previous| {
-            (previous.sequence, previous.change.version_id())
-                >= (value.sequence, value.change.version_id())
+            (previous.sequence, previous.change.key())
+                >= (value.sequence, value.change.key())
         }) {
             return Err(invalid(
-                "disk history changes are not in publication/version order",
+                "disk history changes are not in publication/entity order",
             ));
         }
         total += length;
@@ -229,6 +229,15 @@ fn validate_record(record: &DiskHistoryRecord, through: u64) -> Result<()> {
         Ok(())
     };
     match &record.change {
+        DiskHistoryChange::BackupDirectoryEntered { after } => after.validate()?,
+        DiskHistoryChange::BackupDirectoryDeparted { before } => before.validate()?,
+        DiskHistoryChange::BackupDirectoryChanged { before, after } => {
+            before.validate()?;
+            after.validate()?;
+            if before.key() != after.key() || before == after {
+                return Err(invalid("disk directory change has no exact same-identity/path transition"));
+            }
+        }
         DiskHistoryChange::Entered { after } => row(after)?,
         DiskHistoryChange::Departed { before } => row(before)?,
         DiskHistoryChange::Changed { before, after } => {
