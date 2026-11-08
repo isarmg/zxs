@@ -21,19 +21,20 @@
     "C01"
   ],
   "effective_generation": "1",
-  "effective_policy_id": "policy_ba0a88c70dcd4fa68ee6af82364bec2d",
+  "effective_mode": "unverified",
+  "effective_policy_id": "policy_5733d893e12544a9b281a9b940c21133",
   "file_count": "1",
   "generation": "1",
   "inherited": false,
   "max_copies": 3,
-  "policy_id": "policy_ba0a88c70dcd4fa68ee6af82364bec2d",
+  "policy_id": "policy_5733d893e12544a9b281a9b940c21133",
   "route_slot_ids": [
     "P01",
     "B01",
     "C01"
   ],
   "scope": {
-    "id": "entry_aef5671ca2814024b05018447cf79b1f",
+    "id": "entry_575dbe9ca72c4ce2ab50cfd65fa6fa9e",
     "kind": "directory",
     "path": "docs"
   },

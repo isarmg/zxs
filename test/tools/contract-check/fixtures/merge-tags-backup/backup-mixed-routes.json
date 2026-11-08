@@ -28,18 +28,19 @@
     "C01"
   ],
   "effective_generation": "1",
-  "effective_policy_id": "policy_c1f78c72e099479fb20befbbad96e7f1",
+  "effective_mode": "unverified",
+  "effective_policy_id": "policy_c52bf6e1a3eb49568932e6dbf143e327",
   "file_count": "1",
   "generation": "1",
   "inherited": false,
   "max_copies": 2,
-  "policy_id": "policy_c1f78c72e099479fb20befbbad96e7f1",
+  "policy_id": "policy_c52bf6e1a3eb49568932e6dbf143e327",
   "route_slot_ids": [
     "P02",
     "B02"
   ],
   "scope": {
-    "id": "file_cb78bbf9a84e4f8da200a64f78629093",
+    "id": "file_a423d2a3ac374bd4ab2e83c7d9a154be",
     "kind": "file",
     "path": "a.txt"
   },

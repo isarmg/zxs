@@ -24,7 +24,8 @@
     "C01"
   ],
   "effective_generation": "1",
-  "effective_policy_id": "policy_7e24289aa4864b6d81eb017b413d9235",
+  "effective_mode": "unverified",
+  "effective_policy_id": "policy_a7e15c64cda5411d884b03e203204083",
   "file_count": "1",
   "generation": "0",
   "inherited": true,
@@ -36,7 +37,7 @@
     "C01"
   ],
   "scope": {
-    "id": "file_476f42f14c9f4306b199f131a961916f",
+    "id": "file_65f85b608c2844a58503678cf90f367b",
     "kind": "file",
     "path": "docs/nested/report.txt"
   },

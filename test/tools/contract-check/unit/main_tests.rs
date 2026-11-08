@@ -900,10 +900,20 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
         schema["allOf"] = json!([
             api["paths"][route]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
         ]);
-        validator(&schema)
-            .unwrap()
+        let response = validator(&schema).unwrap();
+        response
             .validate(&wire)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
+        if route == "/api/repositories/{repo}/backup-configuration" {
+            let mut missing = wire.clone();
+            missing.as_object_mut().unwrap().remove("effective_mode");
+            assert!(!response.is_valid(&missing), "{name}: mode is mandatory");
+            for mode in [json!(null), json!("unknown")] {
+                let mut invalid = wire.clone();
+                invalid["effective_mode"] = mode;
+                assert!(!response.is_valid(&invalid), "{name}: mode must be typed");
+            }
+        }
     }
 }
 
