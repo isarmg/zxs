@@ -25,10 +25,11 @@ pub use native_control::{
     BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupPublishedRegistryReport, BackupRecoveredContent,
-    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
-    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupNamespaceScope, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
+    BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
+    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -127,6 +128,9 @@ pub enum BackupPreparationPhase {
     /// locators on all selected targets. Still no ordinary Current/writer,
     /// final SYSTEM/disk scope installation or source fence release.
     GenerationServingImagesInstalled,
+    /// Final published scoped SQLite retained on all targets, with exact own
+    /// root copies. Active SYSTEM/Current/writers and source release are absent.
+    GenerationPublishedScopesInstalled,
     Blocked,
     SourceChanged,
 }

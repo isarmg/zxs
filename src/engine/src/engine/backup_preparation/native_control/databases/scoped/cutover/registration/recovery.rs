@@ -174,6 +174,34 @@ impl BackupDecidedTargets {
         )
     }
 
+    /// Inspect all final scoped databases and the two exact per-target root
+    /// copies. No source access, repair, active SYSTEM or Current installation.
+    pub fn inspect_published_scoped_databases(
+        &self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupPublishedScopesReport> {
+        published_scopes::observe(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
+    /// Explicit no-clobber continuation of this same decided target set. This
+    /// cannot replace a conflicting database or repair a claimed complete set.
+    pub fn resume_published_scoped_databases(
+        &mut self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupPublishedScopesReport> {
+        published_scopes::install(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
     /// Resolve an exact published HEAD/entry/version and read its own target
     /// serving container. Soft-deleted/unavailable nodes never yield content;
     /// a namespace listing or locator alone is not a read or writer permit.
@@ -733,6 +761,52 @@ impl Engine {
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
         let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
         let report = serving::observe(&prepared, &decision, &expected, &stop)?;
+        choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        Ok(report)
+    }
+
+    /// Verify final published SYSTEM/disk scopes and target-root SQLite against
+    /// the original live Publication. Never repairs or replaces active SYSTEM,
+    /// grants a target writer, or releases the original source fence.
+    pub fn inspect_backup_published_scoped_databases(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupPublishedScopesReport> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let task = Task::read(&DiskRoot::open(&self.root)?)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "Backup scoped database inspection belongs to another actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the retained scoped database worker",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
+        let report = published_scopes::observe(&prepared, &decision, &expected, &stop)?;
         choices.observe_first_publication(&prepared, &candidate, &stop)?;
         Ok(report)
     }

@@ -254,6 +254,15 @@ fn run(
                 .publication
                 .publication_hash,
         );
+    })?;
+    let scopes = published_scopes::install(&prepared, &decision, &expected, stop)?;
+    choices.observe_first_publication(&prepared, &candidate, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationPublishedScopesInstalled;
+        status.detail = format!(
+            "decision {hash} retains published SYSTEM/current-history scopes and each target's own root databases on all {} targets; old histories remain bound to their own disks, source SYSTEM and original disks are unchanged; ordinary Current/writer and source fence release remain unavailable",
+            scopes.targets.len(),
+        );
     })
 }
 fn spawn(

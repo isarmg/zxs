@@ -16,6 +16,7 @@ pub(super) enum Namespace {
     GenerationFirstCandidate,
     GenerationFirstPublication,
     PublishedRegistry,
+    PublishedScopes,
 }
 impl Namespace {
     fn name(self) -> &'static str {
@@ -28,6 +29,7 @@ impl Namespace {
             Self::GenerationFirstCandidate => "backup-generation-first-candidate",
             Self::GenerationFirstPublication => "backup-generation-first-publication",
             Self::PublishedRegistry => "backup-published-registry",
+            Self::PublishedScopes => "published-scoped-databases",
         }
     }
 }
@@ -124,6 +126,7 @@ fn inventory(
                     | Namespace::GenerationFirstCandidate
                     | Namespace::GenerationFirstPublication
                     | Namespace::PublishedRegistry
+                    | Namespace::PublishedScopes
             ) && platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
             {
                 // Preserve interrupted private atomic writes, never promote,
@@ -165,11 +168,11 @@ fn inventory(
     Ok(())
 }
 
-pub(super) fn require_capacity(
+pub(super) fn required_capacity(
     root: &DiskRoot,
     prepared: &PreparedFiles<'_>,
     stop: &AtomicBool,
-) -> Result<()> {
+) -> Result<u64> {
     inventory(root, prepared, false, stop)?;
     let base = root.path().join(prepared.namespace.name());
     let manifest = prepared.manifest();
@@ -204,7 +207,15 @@ pub(super) fn require_capacity(
         .checked_add(overhead)
         .and_then(|bytes| bytes.checked_add(RESERVE))
         .ok_or_else(capacity_overflow)?;
-    if root.available()? < needed {
+    Ok(needed)
+}
+
+pub(super) fn require_capacity(
+    root: &DiskRoot,
+    prepared: &PreparedFiles<'_>,
+    stop: &AtomicBool,
+) -> Result<()> {
+    if root.available()? < required_capacity(root, prepared, stop)? {
         return Err(Error::new(
             ErrorCode::NoSpace,
             "one selected target cannot retain all prepared databases",

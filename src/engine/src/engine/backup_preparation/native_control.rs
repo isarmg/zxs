@@ -10,10 +10,11 @@ pub use databases::{
     BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupPublishedRegistryReport, BackupRecoveredContent,
-    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
-    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupNamespaceScope, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
+    BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
+    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
+    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 mod runtime;
 pub use archive::BackupNativeControlReport;

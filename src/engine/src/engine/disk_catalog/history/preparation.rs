@@ -5,6 +5,8 @@ use crate::history_package::{AdmittedState, preparation_checkpoint};
 use crate::journal::Candidate;
 use std::sync::atomic::AtomicBool;
 
+mod backup;
+
 const MAX_DISKS: usize = 32;
 const MAX_SET_BYTES: usize = 64 * 1024 * 1024;
 

@@ -171,6 +171,14 @@ impl Plan {
     pub(super) fn configuration(&self) -> &BackupConfigurationReport {
         &self.resolved.report
     }
+    pub(super) fn candidate(
+        &self,
+    ) -> &crate::engine::membership_transition::PreparedBackupFirstCandidate {
+        &self.resolved.candidate
+    }
+    pub(super) fn effective_config(&self) -> &crate::ValidatedConfig {
+        &self.resolved.config
+    }
     fn files(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
             Namespace::PublishedRegistry,

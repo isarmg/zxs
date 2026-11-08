@@ -219,7 +219,14 @@ pub(super) fn require_capacity_before_choice(
 ) -> Result<()> {
     let required = crate::container_storage::backup_entities::capacity_before_choice(
         prepared.task.selection().first().total_bytes,
-    )?;
+    )?
+    .checked_add(published_scopes::PRE_CHOICE_BYTES)
+    .ok_or_else(|| {
+        Error::new(
+            ErrorCode::ResourceLimit,
+            "complete published serving/scoped capacity overflow",
+        )
+    })?;
     for target in &prepared.targets {
         preparation_checkpoint(stop)?;
         if target.root.available()? < required {

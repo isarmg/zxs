@@ -300,3 +300,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### 已发布目标实体与 serving locator
 
 原 Backup 后台决定在目标注册图实际安装后，继续将每个目标自身已发布完整 State 编码为独立 FILE/目录 SQLite、完整实体和绑定原 Publication/registry 的 locator；源码接线到 `GenerationServingImagesInstalled`。指定目标的 HEAD/entry/version 范围读取实际打开这个实体，拒绝 D 与不可用正文，不从旧源或别盘回退；原任务可显式续存，声称完成的损坏拒绝自动补造。完整容量、原子边界与 API 见[已发布实体闭包](../design/backup-native-generation-authority.md#backup-published-serving-images)。仍未安装活动 Current/writer、最终 SYSTEM/盘根或解除源围栏；H03 不放行。本片未审查、编译、测试或运行 CI，无真实盘操作。
+
+
+### 已发布 SYSTEM/盘根作用域与目标根数据库
+
+原 Backup 后台在完整已发布 serving image 后，按每目标自身原生前缀和真实首笔 State 编码最终 SYSTEM-current 与全部原/新盘 current/history；原历史不改变物理归属，新目标只在本次 Publication 首次记入。私有完整集和目标自己的两份根库合计容量预检、独立无覆盖写入/读回后到 `GenerationPublishedScopesInstalled`。目标/live 只读观察与明确同原任务续存保留原公共证据，完成后缺损不自动补造。源 SYSTEM、原盘库、普通 Current/writer 和源围栏保持不变，H03 不放行。范围、预算、恢复 API 和未完成活动绑定见[已发布作用域](../design/backup-native-generation-authority.md#backup-published-scopes)。按要求未审查、编译、测试或 CI，未操作真实盘。

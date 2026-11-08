@@ -211,3 +211,34 @@ SYSTEM 保留的原任务在冷开重建旧权威和旧 fence 后，可重复同
 本片补齐已发布 FILE/目录对象库与真实实体 locator 的读取前置，仍不安装普通 Engine CurrentRegistry、活动 `metadata`/`disk.json`、目标 writer 或最终 SYSTEM/盘根绑定，不安装未来写入策略或解除原源围栏。原生 Backup 激活拒绝、原 voter/副本义务和 helper H03 门禁保持；固定 Genesis、完整单 primary 原链与原明确 1–8 目标的支持范围未扩展。原源池仍可能停写，不能在生产池试运行这些未完成切换接口。
 
 按本轮要求仅编写生产代码与文档，未审查、编译、测试、运行静态检查/CI，也未对真实盘执行 API。未验证源码和阶段完成标记不构成最终安全切换验收。
+
+
+<a id="backup-published-scopes"></a>
+
+## 已发布 SYSTEM 与盘根范围的真实编码、目标安装
+
+在 `GenerationServingImagesInstalled` 之后，原后台任务继续生成**同一实际首笔 Backup Publication 的最终范围**，不是把原冻结前的 SQLite 更换标签。`published_scopes` 对每个目标分别重放其自身保存的完整固定 Genesis 前缀，再读取该目标自己的真实首笔候选完整 State、已安装原生 registry 和 Publication。源配置、前驱 snapshot、完整 State、原 decision、全部目标与物理根身份必须相同；不读源 SYSTEM、别的目标或旧 SQLite 补缺。
+
+### 原盘过去不归给新盘
+
+- 用既有 `PreparedDiskScopes` 保持所有原绑定的完整已认证本盘版本变化。原 terminal 的历史保持自己的 disk/slot/binding identity；首笔 Backup 只追加本次实际 placement 变化，不能把旧记录搬成新盘的过去。
+- 新目标必须是 effective Config 原样保留全部原定义后追加的明确 1–8 个 fresh binding，且原 State 没有它的版本。已认证原前缀在这些身份下没有本盘行，本次实际 Candidate 才产生各自 `Entered`。没有借一个目标的库冒充另一个目标，也不以今天 placement 倒推源盘过去。
+- SYSTEM 使用现有真实内存 SQLite encoder，从已发布 State 写完整当前业务族、原 operations/principals/events 和 State 代数；本盘 current/history 同样使用现有生产 encoder，并严格解码与类型对象比较。盘历史仍是既有本盘版本进入/变化/移出范围，不声称全部过去标签或目录事件数据库已经闭合。
+
+### 真实独立写入与原决定恢复
+
+每个目标私有 `published-scoped-databases` 保留 `system/index.sqlite` 和按真实 disk identity 分隔的全部配置盘 current/history 库，manifest 绑定 source fence、decision、实际 Publication、snapshot、registry 与该物理目标。随后仅将**该目标自己的** `.zxs-disk.sqlite`、`.zxs-disk-history.sqlite` 作为独立字节副本无覆盖写到其持有根；没有硬链接、复制源盘身份、打开 SQLite 路径写入或清理旧文件。
+
+所有目标先做原证明、完整实体、精确范围/同名冲突与**私有集合 + 两份根副本合计**容量预检，然后逐盘写入、完整读回。全目标再次读回后才持久 `published-scoped-databases-installed.json`，绑定整批各自 manifest 和实体清单；原 live worker 再核全原 metadata 成员的实际 Publication 后报告 `GenerationPublishedScopesInstalled`。落盘异常保留此前字节，下一次只按同原任务续存匹配的缺项。已声称完成的目标缺库/异内容是故障，不降级为未完成自动修造；既有冲突文件/原子临时文件不删不覆。
+
+`BackupDecidedTargets::inspect_published_scoped_databases` 为目标独立只读观察；`resume_published_scoped_databases` 是宿主须单独授权的同原任务写入，不能自行重选 decision 或接纳成员。两者都要求独立保存的原 decision/Publication 与原完整目标集。`Engine::inspect_backup_published_scoped_databases` 另核原 actor/task、持有原锁并在观察前后读取原 metadata 的真实 Publication。进度或完成 JSON 不代替实际 SQLite 和原生证明。
+
+### 边界、成本和未完成事项
+
+最多 32 个原固定绑定加 8 个明确新目标，每目标最多 81 个 SQLite、完整范围集合 128 MiB，单个盘 current/history 仍各受既有 32 MiB 上限，SYSTEM encoder 64 MiB；原历史 replay 的 2,048 publication、65,536 change 行和 64 MiB 中间范围上限不放宽。新首笔也占该 publication 预算，超限拒绝保留，不丢前缀。manifest/整批完成记录各最多 64 KiB。新不可逆选择前增加保守的最终 scope/根副本容量；之后实际每盘检查缺失字节与目录/临时文件余量，容量不是 filesystem reservation。
+
+为不在内存保存所有目标的整套库，重建/预检/安装/验读逐目标执行；多轮会重复完整原生前缀和 SQLite 编码，成本与目标数、保留 publication 和配置盘数相关，**不是热查询复杂度或吞吐承诺**。同步 I/O 取消只在明确检查点响应。
+
+本片不替换源 `index.sqlite`、原盘根库，不写目标 `disk.json`/活动 `metadata`，不安装普通 CurrentRegistry、runtime target writer、未来放置策略，也不解除源围栏。SYSTEM 与其他盘的最终活动绑定必须等待同一原生权威/Current 安装闭包，不能在内存仍是旧 State 时提前替换活动库。目标根数据库仍只是已发布状态的派生投影，无 disk seal/准入证明不能被独立读取器当正式成员；helper H03 完整外来低级链仍关闭。旧数据、原 receipts、原 image 与原冻结 scoped 数据均保持不变。
+
+按本轮要求未审查、编译、测试、运行静态检查或 CI，未操作真实盘；上述为生产源码接线，不是已验最终迁移成功。

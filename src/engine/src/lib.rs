@@ -41,11 +41,11 @@ pub use engine::{
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupFirstFinalizeReport,
     BackupFirstPublicationHash, BackupFirstPublicationReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupPublishedRegistryReport, BackupRecoveredContent,
-    BackupRegistryDecisionHash, BackupRegistryRecoveryReport, BackupServingContent,
-    BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupNamespaceScope, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
+    BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryDecisionHash,
+    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
+    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use engine::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
