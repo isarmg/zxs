@@ -238,7 +238,7 @@ fn details_remove_return_row_and_its_exclusive_code() {
 }
 
 #[test]
-fn main_navigation_has_no_separate_health_page() {
+fn main_navigation_splits_administration_and_keeps_health_in_diagnostics() {
     let ui = include_str!("../../../src/web/src/ui.rs");
     let navigation = ui
         .split("<HeaderNavigation ")
@@ -247,15 +247,47 @@ fn main_navigation_has_no_separate_health_page() {
         .split("</HeaderNavigation>")
         .next()
         .unwrap();
-    assert!(!navigation.contains("Page::Health"));
-    let admin = include_str!("../../../src/web/src/admin/mod.rs");
-    assert!(admin.contains("crate::management::recovery(state)"));
+    assert!(!ui.contains("Page::Health"));
+    let (main_navigation, management_navigation) = navigation
+        .split_once("administration_pages().into_iter()")
+        .expect("the declared management pages must actually render in the main navigation");
     let mut last = 0;
-    for page in ["Files", "Details", "Status", "History", "Admin"] {
-        let position = navigation.find(&format!("Page::{page}")).unwrap();
+    for page in ["Files", "Details", "Status", "History"] {
+        let position = main_navigation.find(&format!("Page::{page}")).unwrap();
         assert!(position > last, "{page} is not in the requested DOM order");
         last = position;
     }
+    assert!(main_navigation.contains("<Show when=move ||state.with(|s|s.session_active())>"));
+    assert!(management_navigation.contains("data-zxs-management-menu=\"true\""));
+    assert!(management_navigation.contains("navigate(state,page)"));
+
+    let administration = ui
+        .split_once("fn administration_pages()")
+        .unwrap()
+        .1
+        .split_once("fn workspace(")
+        .unwrap()
+        .0;
+    let pages = administration
+        .split("Page::")
+        .skip(1)
+        .map(|page| {
+            page.split(|c: char| !c.is_ascii_alphanumeric())
+                .next()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(pages, ["Admin", "Repositories", "Rules", "Diagnostics"]);
+    for label in ["磁盘与接入", "仓库", "备份与放置", "恢复与检查"] {
+        assert!(
+            administration.contains(label),
+            "missing management label {label}"
+        );
+    }
+    let admin = include_str!("../../../src/web/src/admin/mod.rs");
+    assert!(admin.contains(
+        "(section==Section::Diagnostics).then(move ||crate::management::recovery(state))"
+    ));
 }
 
 #[test]
