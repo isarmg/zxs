@@ -76,7 +76,7 @@ impl std::fmt::Display for BrowserFailure {
 
 impl std::error::Error for BrowserFailure {}
 
-pub(super) fn js_error(value: JsValue) -> Error {
+pub(crate) fn js_error(value: JsValue) -> Error {
     BrowserFailure::parse(value, FailureKind::Browser).into_error()
 }
 

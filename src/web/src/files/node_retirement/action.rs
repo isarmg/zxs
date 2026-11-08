@@ -5,7 +5,8 @@ pub(super) fn preview(state: RwSignal<State>) {
         if !actions::history_write_allowed(snapshot) { return None; }
         let model = &snapshot.files.node_retirement;
         let target = Target::capture(snapshot)?;
-        if model.loading || model.attempt.is_some() || model.target.as_ref() != Some(&target) { return None; }
+        if model.loading || model.attempt.is_some() || model.target.as_ref() != Some(&target)
+            || !model.recovery.ready_for_new(snapshot) { return None; }
         Some((target, model.selection()?))
     });
     let Some((target, selection)) = captured else { return; };
@@ -41,13 +42,28 @@ pub(super) fn submit(state: RwSignal<State>) {
         let selection = model.selection()?;
         let preview = model.preview.as_ref()?;
         if model.target.as_ref() != Some(&target) || model.loading || model.attempt.is_some() || !model.confirmed
+            || !model.recovery.ready_for_new(snapshot)
             || preview.validate(&selection).is_err() || preview.affected_branch_heads.iter().any(|branch| !preview.archived_branch_heads.contains(branch)) || !preview.frozen_files.is_empty() { return None; }
-        Some((target, selection))
+        Some((target, selection, snapshot.principal.clone()))
     });
-    let Some((target, selection)) = request else { return; };
+    let Some((target, selection, principal)) = request else { return; };
     let Some(operation) = crate::ui::file_operation_id(state) else { return; };
-    let attempt = Attempt { target, selection, operation: operation.clone(), in_flight: false, uncertain: false, cleanup: None, separation: None };
+    let attempt = Attempt {
+        target, principal, selection, operation: operation.clone(), in_flight: false,
+        uncertain: false, restored: false, retry_confirmed: false, cleanup: None, separation: None,
+    };
+    let record = match recovery::save(&attempt) {
+        Ok(record) => record,
+        Err(error) => {
+            state.update(|s| {
+                s.files.node_retirement.recovery.error = Some(error);
+                s.notices.clear_operation_notice(&operation);
+            });
+            return;
+        }
+    };
     state.update(|s| {
+        recovery::saved(&mut s.files.node_retirement, record);
         s.files.node_retirement.attempt = Some(attempt); s.files.node_retirement.confirmed = false;
         s.notices.operation_success(t("节点退役已发布；正文清理请查看逐副本结果，旧认证证据仍保留。", "Node retirement was published. See per-replica body cleanup results; old authentication evidence remains."));
     });
@@ -55,10 +71,10 @@ pub(super) fn submit(state: RwSignal<State>) {
     send(state, false, true);
 }
 
-pub(super) fn retry(state: RwSignal<State>) {
+pub(super) fn retry(state: RwSignal<State>, operation: &str, epoch: u64) {
     let resume = state.with_untracked(|s| {
         let attempt = s.files.node_retirement.attempt.as_ref()?;
-        if !attempt.target.same_file(s) || !s.management.storage.writable() || s.files.mutation_pending || attempt.in_flight { return None; }
+        if attempt.operation != operation || attempt.target.epoch != epoch || !attempt.retry_allowed(s) { return None; }
         let status = status(s, attempt);
         (status == SaveStatus::Unknown || published(status)).then_some(published(status))
     });
@@ -66,6 +82,7 @@ pub(super) fn retry(state: RwSignal<State>) {
 }
 fn send(state: RwSignal<State>, resume: bool, first: bool) {
     let attempt = state.try_update(|s| {
+        if !s.files.node_retirement.attempt.as_ref()?.owned_by(s) { return None; }
         let attempt = s.files.node_retirement.attempt.as_mut()?;
         if attempt.in_flight { return None; }
         attempt.in_flight = true;
@@ -156,10 +173,20 @@ fn receive(state: RwSignal<State>, attempt: &Attempt, value: Value) {
         model.preview = None; model.selected.clear(); model.confirmed = false;
     });
 }
-pub(super) fn dismiss(state: RwSignal<State>) {
-    let can_close = state.with_untracked(|s| s.files.node_retirement.attempt.as_ref().is_some_and(|attempt| {
-        !attempt.in_flight && (status(s, attempt) == SaveStatus::Rejected
-            || published(status(s, attempt)) && attempt.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent))
-    }));
-    if can_close { state.update(|s| { s.files.node_retirement.attempt = None; s.files.node_retirement.error = None; }); }
+pub(super) fn dismiss(state: RwSignal<State>, operation: &str, epoch: u64) {
+    let attempt = state.with_untracked(|s| s.files.node_retirement.attempt.as_ref().filter(|attempt| {
+        attempt.operation == operation && attempt.target.epoch == epoch && attempt.owned_by(s) && !attempt.in_flight
+            && (status(s, attempt) == SaveStatus::Rejected
+                || published(status(s, attempt)) && attempt.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent))
+    }).cloned());
+    let Some(attempt) = attempt else { return; };
+    match recovery::remove(&attempt) {
+        Ok(()) => state.update(|s| {
+            let model = &mut s.files.node_retirement;
+            recovery::removed(model, operation);
+            model.attempt = None;
+            model.error = None;
+        }),
+        Err(error) => state.update(|s| s.files.node_retirement.recovery.error = Some(error)),
+    }
 }

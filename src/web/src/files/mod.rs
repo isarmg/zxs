@@ -24,6 +24,7 @@ mod version_tree;
 mod view;
 pub(crate) use actions::{load_disks, load_entries, pending, poll};
 pub(crate) use detail::page as details;
+pub(crate) use node_retirement::recovery_view as node_retirement_recovery;
 pub use directory_history::DecodeError as DirectoryHistoryError;
 pub use history::DecodeError as FileHistoryError;
 pub(crate) use model::{FileOperation, Model, SaveStatus, publication_notice};

@@ -10,8 +10,8 @@ use web_sys::{RequestCredentials, RequestInit, RequestMode, RequestRedirect, Res
 mod browser;
 mod read_queue;
 mod response;
-pub(crate) use browser::ReadCancellation;
-use browser::{AbortOnDrop, js_error};
+pub(crate) use browser::{ReadCancellation, js_error};
+use browser::AbortOnDrop;
 
 // Token and CSRF belong to one credential generation. A response from a
 // previous login may not clear or replace the current login's credentials.
@@ -73,6 +73,8 @@ pub enum ErrorSource {
     AdminResponse(#[source] crate::admin::ResponseError),
     #[error("invalid activity history: {0}")]
     ActivityHistory(#[source] json_codec::Error),
+    #[error("invalid node retirement recovery record: {0}")]
+    RetirementRecovery(#[source] json_codec::Error),
     #[error("invalid file-history branches: {0}")]
     FileHistory(#[source] crate::files::FileHistoryError),
     #[error("invalid directory repository status: {0}")]

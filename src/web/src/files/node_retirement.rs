@@ -1,4 +1,4 @@
-//! Detail-only irreversible workflow. Keep the exact original request through uncertainty.
+//! Detail-only irreversible admission with account-scoped original-request recovery.
 use super::{actions, history::DecodeError, model::{FileOperation, SaveStatus}};
 use crate::{api, ui::{State, ErrorContext, current_session, fail_in}};
 use json_codec::{Value, json};
@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use storage_contract::{history_window::{HistoryFileId, HistoryRoot, HistoryVersionId}, node_retirement::{self as wire, Cleanup, Preview, Selection}};
 use web_interface::{i18n::t, prelude::*, tasks::spawn_local};
 mod action;
+mod recovery;
 mod view;
+pub(crate) use recovery::view as recovery_view;
 pub(crate) use view::view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,13 +20,30 @@ impl Target {
         if entry.kind() != storage_contract::NamespaceEntryKind::File { return None; }
         Some(Self { epoch: state.session_epoch, file: entry.file_id().into(), entry: entry.entry_id().into(), path: entry.path().into(), slot: state.files.slot.clone(), root: state.files.file_history.root()?.into() })
     }
-    fn same_file(&self, state: &State) -> bool {
-        state.session_active() && state.session_epoch == self.epoch
-            && state.files.selected.as_ref().is_some_and(|entry| entry.file_id() == self.file)
-    }
 }
 #[derive(Clone)]
-struct Attempt { target: Target, selection: Selection, operation: String, in_flight: bool, uncertain: bool, cleanup: Option<Cleanup>, separation: Option<wire::Separation> }
+struct Attempt {
+    target: Target,
+    principal: String,
+    selection: Selection,
+    operation: String,
+    in_flight: bool,
+    uncertain: bool,
+    restored: bool,
+    retry_confirmed: bool,
+    cleanup: Option<Cleanup>,
+    separation: Option<wire::Separation>,
+}
+impl Attempt {
+    fn owned_by(&self, state: &State) -> bool {
+        state.session_active() && state.session_epoch == self.target.epoch && state.principal == self.principal
+    }
+    fn retry_allowed(&self, state: &State) -> bool {
+        self.owned_by(state) && state.management.storage.writable() && !state.files.mutation_pending
+            && !self.in_flight && status(state, self) != SaveStatus::Rejected
+            && (!self.restored || published(status(state, self)) || self.retry_confirmed)
+    }
+}
 #[derive(Clone, Default)]
 pub(crate) struct Model {
     target: Option<Target>,
@@ -35,6 +54,7 @@ pub(crate) struct Model {
     loading: bool,
     attempt: Option<Attempt>,
     error: Option<api::Error>,
+    recovery: recovery::Queue,
 }
 impl Model {
     fn retarget(&mut self, target: Option<Target>) {
@@ -61,12 +81,18 @@ fn published(status: SaveStatus) -> bool { matches!(status, SaveStatus::Publishe
 pub(crate) fn in_flight(state: &State, id: &str) -> bool {
     state.files.node_retirement.attempt.as_ref().is_some_and(|attempt| attempt.operation == id && attempt.in_flight)
 }
-pub(crate) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool {
-    let Some(attempt) = state.files.node_retirement.attempt.as_ref().filter(|attempt| attempt.operation == id) else { return true; };
+fn matches_request(file: &HistoryFileId, root: HistoryRoot, versions: &[HistoryVersionId], receipt: &Value) -> bool {
     receipt["operation_kind"].as_str() == Some("file.nodes.retire")
-        && receipt["result"]["retirement"]["request"]["origin_file_id"].as_str() == Some(attempt.selection.file_id().as_str())
-        && receipt["result"]["retirement"]["request"]["history_root"].as_str() == Some(attempt.selection.history_root().to_string().as_str())
-        && receipt["result"]["retirement"]["request"]["version_ids"] == json!(attempt.selection.version_ids())
+        && receipt["result"]["retirement"]["request"]["origin_file_id"].as_str() == Some(file.as_str())
+        && receipt["result"]["retirement"]["request"]["history_root"].as_str() == Some(root.to_string().as_str())
+        && receipt["result"]["retirement"]["request"]["version_ids"] == json!(versions)
+}
+pub(crate) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool {
+    recovery::receipt_matches(state, id, receipt)
+        && state.files.node_retirement.attempt.as_ref().filter(|attempt| attempt.operation == id)
+            .is_none_or(|attempt| attempt.owned_by(state) && matches_request(
+                attempt.selection.file_id(), attempt.selection.history_root(), attempt.selection.version_ids(), receipt,
+            ))
 }
 fn malformed(message: &'static str) -> api::Error {
     DecodeError::Relation(message).into()
@@ -74,6 +100,7 @@ fn malformed(message: &'static str) -> api::Error {
 fn checkbox(state: RwSignal<State>, target: &Target, version: &str, label: &str, checked: bool) {
     state.update(|state| {
         if !actions::history_write_allowed(state) || Target::capture(state).as_ref() != Some(target) { return; }
+        if !state.files.node_retirement.recovery.ready_for_new(state) { return; }
         let model = &mut state.files.node_retirement;
         if model.loading || model.attempt.is_some() || model.target.as_ref() != Some(target) { return; }
         if checked {

@@ -14,6 +14,7 @@ fn choices(state: &State) -> Vec<(Target, String, String, bool)> {
 }
 fn can_edit(state: &State) -> bool {
     actions::history_write_allowed(state) && !state.files.node_retirement.loading && state.files.node_retirement.attempt.is_none()
+        && state.files.node_retirement.recovery.ready_for_new(state)
 }
 fn can_submit(state: &State) -> bool {
     let model = &state.files.node_retirement;
@@ -61,6 +62,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             <summary class="zxs-row">{t("永久退役历史节点", "Permanently retire historical nodes")}</summary>
             <p class="zxs-row">{t("此操作不可撤销：移除所选正文及复用它的事件，并清理正文。旧节点描述和提交证明仍保留作认证。只有跨文件共享关系全部消失才拆分联合图；单文件内部不拆分。", "This cannot be undone: selected bodies and their coupled events leave the live history, and their payloads are cleaned up. Old descriptors and commit proofs remain for authentication. Files separate only after all cross-file sharing paths disappear; internal deletion never splits a file.")}</p>
             <p class="zxs-row">{t("当前 namespace、D、目录/Git、工作区或读取租约仍会阻止执行。已经脱离这些引用的文件可把完整保留分支 HEAD/合并前沿永久归档，与最后节点一起终止；原 file_id 不可复活。预览不是执行许可或擦除证明。", "Current namespace, D, directory/Git references, workspaces and read leases still block execution. A detached file can permanently archive its complete branch HEAD/merge frontier with its last nodes; its original file_id cannot revive. Preview is not execution permission or erasure proof.")}</p>
+            <p class="zxs-row">{t("提交前会在本浏览器保存账号、文件名、准确版本和原操作 ID，用于刷新后的恢复。记录无法保存时不会发送永久操作；未解决的记录请在上方恢复面板处理。", "Before submitting, this browser saves the account, file label, exact versions and original operation ID for recovery after reload. No permanent request is sent if the record cannot be saved. Resolve retained records in the recovery panel above.")}</p>
             <Show when=move ||state.with(|s|s.files.node_retirement.attempt.is_none())>
                 <fieldset class="zxs-stack" disabled=move ||!state.with(can_edit)>
                     <legend class="zxs-row">{t("从当前历史页显式选择正文版本", "Explicitly select body versions from this history page")}</legend>
@@ -100,6 +102,19 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 <button class="zxs-button" data-zxs-confirm-node-retirement="true" disabled=move ||!state.with(can_submit) on:click=move |_|action::submit(state)>{t("确认永久退役并清理正文", "Confirm permanent retirement and body cleanup")}</button>
             </Show>
             <Show when=move ||state.with(|s|s.files.node_retirement.loading)><p class="zxs-row" role="status">{t("正在计算当前根的完整条件影响…", "Computing complete conditional impact at the current root…")}</p></Show>
+            {move ||state.with(|s|s.files.node_retirement.error.clone()).map(|error|view!{<p class="zxs-row" role="alert">{error.to_string()}</p>})}
+        </details>
+    }
+}
+
+/// Mounted outside file navigation, so a terminal/unlisted file never strands
+/// its original operation. Controls carry the operation they were rendered for.
+pub(super) fn attempt_view(state: RwSignal<State>) -> impl IntoView {
+    view! {
+        <For each=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().map(|a|(a.target.epoch,a.operation.clone())).into_iter().collect::<Vec<_>>()) key=|id|id.clone() children=move |(epoch,id)| {
+            let operation = StoredValue::new(id);
+            view! {
+                <div class="zxs-stack">
             {move ||state.with(summary).map(|message|view!{<p class="zxs-row" role="status">{message}</p>})}
             {move ||state.with(|s|s.files.node_retirement.attempt.as_ref().and_then(|a|a.separation.clone())).map(|partition|match partition {
                 wire::Separation::Published { history_root, original_files, terminated_files, file_components } => view! {
@@ -118,12 +133,29 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 Cleanup::Unverified{error_code}=>view!{<p class="zxs-row">{format!("{}: {}",t("正文清理未核验", "Body cleanup unverified"),error_code)}</p>}.into_any(),
             })}
             <Show when=move ||state.with(|s|s.files.node_retirement.attempt.is_some())>
-                <p class="zxs-row">{t("请保留上方原操作 ID。整页刷新或重新登录会清空本页队列，但不会撤销已发布退役；之后只能用原操作查询/恢复。", "Keep the original operation ID above. Reloading or signing in again clears this page queue, not a published retirement; query or resume only the original operation.")}</p>
+                <p class="zxs-row">{t("原请求已保存在本浏览器。刷新或重新登录后仍只使用这个原操作；清除网站数据、换浏览器或换设备不会转移恢复记录，请另外保留原操作 ID。", "The original request is retained in this browser. Reloading or signing in again keeps the same operation. Clearing site data, changing browsers or changing devices does not transfer recovery records; keep the operation ID separately.")}</p>
+                <Show when=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_some_and(|a|a.restored && status(s,a)==SaveStatus::Unknown))>
+                    <details class="zxs-stack"><summary class="zxs-row">{t("核对本机保存的准确版本", "Review the exact locally saved versions")}</summary>
+                        <p class="zxs-row">{move ||state.with(|s|s.files.node_retirement.attempt.as_ref().map(|a|a.selection.history_root().to_string()).unwrap_or_default())}</p>
+                        {move ||state.with(|s|s.files.node_retirement.attempt.as_ref().map(|a|a.selection.version_ids().to_vec()).unwrap_or_default()).into_iter().map(|id|view!{<p class="zxs-row">{id.to_string()}</p>}).collect_view()}
+                    </details>
+                    <label class="zxs-row zxs-flow"><input type="checkbox" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|a.in_flight||!a.owned_by(s)))
+                        prop:checked=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_some_and(|a|a.retry_confirmed))
+                        on:change=move |event|{let checked=event_target_checked(&event);operation.with_value(|id|state.update(|s|{
+                            let principal=s.principal.clone();let active=s.session_active()&&s.session_epoch==epoch;
+                            if let Some(a)=&mut s.files.node_retirement.attempt
+                                && active&&a.target.epoch==epoch&&a.principal==principal&&a.operation==*id&&!a.in_flight {a.retry_confirmed=checked;}
+                        }));}/><span>{t("本机记录不是服务器回执。我已核对上述文件、原根及全部版本，确认只重发同一原操作的不可撤销退役请求。", "A local record is not a server receipt. I reviewed the file, original root and all versions, and confirm resubmitting only this original irreversible retirement request.")}</span>
+                    </label>
+                </Show>
                 <div class="zxs-flow">
-                <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|a.in_flight||!a.target.same_file(s)||!s.management.storage.writable()||s.files.mutation_pending||status(s,a)==SaveStatus::Rejected)) on:click=move |_|action::retry(state)>{t("重试原操作 / 继续正文清理", "Retry original operation / continue body cleanup")}</button>
-                <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|a.in_flight||!(status(s,a)==SaveStatus::Rejected||published(status(s,a))&&a.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent)))) on:click=move |_|action::dismiss(state)>{t("关闭已确认结果", "Close confirmed result")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|!a.retry_allowed(s))) on:click=move |_|operation.with_value(|id|action::retry(state,id,epoch))>{t("重试原操作 / 继续正文清理", "Retry original operation / continue body cleanup")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().is_none_or(|a|a.in_flight||!(status(s,a)==SaveStatus::Rejected||published(status(s,a))&&a.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent)))) on:click=move |_|operation.with_value(|id|action::dismiss(state,id,epoch))>{t("关闭已确认结果", "Close confirmed result")}</button>
             </div></Show>
-            {move ||state.with(|s|s.files.node_retirement.error.clone()).map(|error|view!{<p class="zxs-row" role="alert">{error.to_string()}</p>})}
-        </details>
+
+                    {move ||state.with(|s|s.files.node_retirement.error.clone()).map(|error|view!{<p class="zxs-row" role="alert">{error.to_string()}</p>})}
+                </div>
+            }
+        }/>
     }
 }
