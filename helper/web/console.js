@@ -4,9 +4,10 @@ let csrf = null;
 let busy = false;
 let stopping = false;
 let installationPreview = null;
+let deploymentPreview = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -106,4 +107,40 @@ byId("install-commit").addEventListener("click", async () => {
     byId("install-receipt").hidden = false;
     installationPreview = null; byId("install-commit").hidden = true;
   } catch (failure) { error(`${failure.message}\n结果不确定时不要手动覆盖或删除临时材料；重新预览只会核对准确程序，不会替换不同字节。`); } finally { setBusy(false); }
+});
+
+function resetDeployment() {
+  deploymentPreview = null; byId("deployment-prepare").hidden = true;
+  byId("deployment-plan").hidden = true; byId("deployment-receipt").hidden = true;
+}
+byId("deployment-form").addEventListener("input", resetDeployment);
+byId("smb-enabled").addEventListener("change", () => {
+  const enabled = byId("smb-enabled").checked;
+  byId("smb-fields").hidden = !enabled;
+  byId("smb-account").required = enabled; byId("smb-peer-uid").required = enabled;
+  resetDeployment();
+});
+byId("deployment-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping) return;
+  const input = {service_user:byId("service-user").value,service_group:byId("service-group").value,
+    listen:byId("service-listen").value,smb:byId("smb-enabled").checked ? {
+      account:byId("smb-account").value,peer_uid:Number(byId("smb-peer-uid").value)} : null};
+  resetDeployment(); error(""); setBusy(true);
+  try {
+    const preview = await (await post("/api/deployment/preview", input)).json();
+    deploymentPreview = {input,request_digest:preview.request_digest};
+    byId("deployment-plan").textContent = JSON.stringify(preview, null, 2);
+    byId("deployment-plan").hidden = false; byId("deployment-prepare").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("deployment-prepare").addEventListener("click", async () => {
+  if (busy || stopping || !deploymentPreview) return;
+  if (!window.confirm("确认仅将预览中的未激活配置保存到 /zxs 下的新专用目录？不会安装或启用服务，也不会修改当前 Samba 配置和密码。已有不同内容不会被覆盖。")) return;
+  error(""); setBusy(true);
+  try {
+    const receipt = await (await post("/api/deployment/prepare", {...deploymentPreview,confirmation:"prepare-inactive-configuration"})).json();
+    byId("deployment-receipt").textContent = JSON.stringify(receipt, null, 2);
+    byId("deployment-receipt").hidden = false;
+  } catch (failure) { error(`${failure.message}。如果连接中断，不要删除 pending 材料；保留准确预览并重试同一请求。`); }
+  finally { setBusy(false); }
 });

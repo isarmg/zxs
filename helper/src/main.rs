@@ -2,6 +2,7 @@
 mod authority;
 mod configuration;
 mod console;
+mod deployment;
 mod installation;
 mod private_io;
 mod scrub;
@@ -20,7 +21,8 @@ Recovery preview/commit only accepts decided, unpublished operations with all or
 Offline export validates one published version, not the entire pool or current permissions.
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
 The matching release helper can install only its embedded ZXS executable at /usr/local/bin/zxs without overwriting different bytes.
-First-run setup, disk addition/removal, foreign admission, password reset, program repair and systemd/SMB configuration are not yet implemented. No planned-offline action is offered."
+Systemd/Samba configuration can be prepared as an inactive bundle, never installed or activated.
+First-run setup, disk addition/removal, foreign admission, password reset, program repair and active systemd/SMB installation are not yet implemented. No planned-offline action is offered."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
@@ -50,6 +52,11 @@ enum Command {
     Install {
         #[command(subcommand)]
         command: installation::Command,
+    },
+    /// Prepare an inactive, version-bound systemd/Samba bundle, never activate it.
+    Deployment {
+        #[command(subcommand)]
+        command: deployment::Command,
     },
     /// Explicit independent disk journal, separate from online pools. Stop all writers first.
     Authority {
@@ -212,6 +219,7 @@ fn run(args: Args) -> Result<()> {
     {
         Command::Serve(options) => console::run(options),
         Command::Install { command } => installation::run(command),
+        Command::Deployment { command } => deployment::run(command),
         Command::Configuration { command } => configuration::run(command),
         Command::Authority { command } => authority::run(command),
         Command::Package { command } => match command {

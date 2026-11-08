@@ -1,0 +1,45 @@
+# Inactive helper-generated bundle. No service has been installed or enabled.
+[Unit]
+Description=ZXS Web management and storage daemon
+After=local-fs.target network.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+UMask=0077
+# Prepared only. Verify initialization, ownership and service exclusion before activation.
+Environment=HOME=/zxs/home TMPDIR=/zxs/tmp TMP=/zxs/tmp TEMP=/zxs/tmp
+Environment=XDG_CACHE_HOME=/zxs/cache XDG_CONFIG_HOME=/zxs/config XDG_DATA_HOME=/zxs/data XDG_STATE_HOME=/zxs/data/state XDG_RUNTIME_DIR=/zxs/run
+StandardOutput=append:/zxs/log/zxs.log
+StandardError=append:/zxs/log/zxs.log
+WorkingDirectory=/zxs
+ExecStart=/usr/local/bin/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen @LISTEN@@SMB_ARGS@
+KillSignal=SIGINT
+# Do not kill admitted durability/recovery work during normal shutdown.
+# A stuck kernel I/O requires an explicit operator force-stop and crash recovery.
+TimeoutStopSec=infinity
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateMounts=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/zxs/data /zxs/config /zxs/log /zxs/run /zxs/tmp /zxs/cache /zxs/home
+DevicePolicy=closed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

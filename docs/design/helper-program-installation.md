@@ -42,3 +42,5 @@ sudo zxs-helper install commit --request-digest REVIEWED_DIGEST --confirm-progra
 由于本片不替换不同既有文件，也不修改运行池，不能把它当作已取得主服务停服围栏。**现有程序修复／升级仍不得开放**，直到真实服务互斥、程序文件备份、版本转换决定和中断替换恢复全部完成。程序的系统依赖检查／安装、VFS 和完整许可材料内置、首次账户／存储初始化也仍是后续工作。
 
 公开发行资产四类收敛仍未完成；本片只改变 native 构建顺序和载荷绑定，不新增第五类资产，也不宣称已把现有七资产脚本收敛为四类。安装载荷未实际生成，所有新增测试只是源码。
+
+后继[部署配置准备](helper-deployment-preparation.md)只生成并原子保存未激活的 systemd/Samba 文件，不改变本程序首装的 `service_configured=false` 或将准备包当成运行条件已满足。

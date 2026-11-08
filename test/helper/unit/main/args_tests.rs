@@ -325,3 +325,26 @@ fn program_installation_is_explicit_and_does_not_accept_an_arbitrary_destination
         .is_err()
     );
 }
+
+#[test]
+fn deployment_requires_complete_smb_parameters_and_has_no_activation_flag() {
+    let base = [
+        "zxs-helper",
+        "deployment",
+        "preview",
+        "--service-user",
+        "zxs",
+        "--service-group",
+        "zxs",
+    ];
+    assert!(matches!(
+        Args::try_parse_from(base).unwrap().command,
+        Some(Command::Deployment { .. })
+    ));
+    let mut incomplete = base.to_vec();
+    incomplete.extend(["--smb-account", "zxs-owner"]);
+    assert!(Args::try_parse_from(incomplete).is_err());
+    let mut activate = base.to_vec();
+    activate.push("--activate");
+    assert!(Args::try_parse_from(activate).is_err());
+}

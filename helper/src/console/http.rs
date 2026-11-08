@@ -61,6 +61,8 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/install/payload", get(install_payload))
         .route("/api/install/preview", post(install_preview))
         .route("/api/install/commit", post(install_commit))
+        .route("/api/deployment/preview", post(deployment_preview))
+        .route("/api/deployment/prepare", post(deployment_prepare))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), security))
         .with_state(state)
@@ -126,8 +128,8 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "source_writes_available":false, "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation"],
-        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","password_reset","program_repair","systemd_smb_configuration"]
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle"],
+        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","password_reset","program_repair","active_systemd_smb_installation"]
     }))
 }
 
@@ -278,6 +280,54 @@ fn install_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
     Failure::message(
         StatusCode::CONFLICT,
         "program_installation",
+        &crate::diagnostic_chain(error.as_ref()),
+    )
+}
+
+async fn deployment_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::deployment::Input = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::deployment::preview(input).map_err(deployment_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "deployment_worker",
+            error,
+        )
+    })??;
+    Ok(Json(preview).into_response())
+}
+async fn deployment_prepare(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::deployment::Prepare = input(request).await?;
+    let receipt = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::deployment::prepare(input).map_err(deployment_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "deployment_worker",
+            error,
+        )
+    })??;
+    Ok(Json(receipt).into_response())
+}
+fn deployment_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    Failure::message(
+        StatusCode::CONFLICT,
+        "inactive_deployment_preparation",
         &crate::diagnostic_chain(error.as_ref()),
     )
 }

@@ -148,3 +148,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 报告的 scope 为 `local-retained-published-content`，绑定捕获的本盘 checkpoint/sequence；它不是全盘未知文件/孤儿扫描、未发布操作清单、最新全局状态、三范围数据库一致性或完整系统恢复证明。检查仍受独立格式的对象、深度与 16 MiB 材料读取预算约束；元数据只捕获一次供本轮正文检查使用，逐份正文读完即释放，不为每个版本重新遍历整条证明链。打开选择本身仍执行原有 pin 准入，失败不产生检查报告。
 
 救援专用的检查流程、逐项诊断、输出及退出策略位于 `helper/src/authority/check.rs`；通用协议解析、身份约束与可验证正文读取复用 Engine 的只读 `ContentSnapshot`，既有单版本导出也使用同一读取路径。构建依赖 ZXS 代码，运行不需要启动 ZXS 服务或管理面。此组织不表示完整自含依赖包，也不为已存在的普通池协议增加旧格式双读。
+
+## 未激活部署配置包
+
+`deployment preview` / `deployment prepare` 与独立 Web 现有源码可准备匹配版本的 systemd/Samba 配置，精确摘要确认后仅发布到 `/zxs` 下独立新目录，不覆盖现用配置、不执行系统命令、不启动或启用服务。部署包不是已初始化交接。源码未构建或运行，实际激活仍缺全生命周期停服互斥与完整初始化证明。见[配置准备边界](../design/helper-deployment-preparation.md)。

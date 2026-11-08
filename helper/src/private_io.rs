@@ -1,7 +1,9 @@
 //! Descriptor-anchored CLI files. Output parents may be public (for example
 //! /tmp); files are owner-only and single-linked. Existing outputs are never
 //! clobbered; draft replacements require a held transaction.
+mod bundle;
 use crate::Result;
+pub(crate) use bundle::{BundleDestination, BundlePublication};
 use platform_io::fs_safety::{
     AtomicCommitError, EntryName,
     linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},

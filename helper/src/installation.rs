@@ -1,6 +1,10 @@
 //! Embedded program-only first installation. It never configures or starts a
 //! service, initializes storage, or replaces a different existing program.
 mod payload;
+pub(crate) use payload::Metadata as PayloadMetadata;
+pub(crate) fn verified_payload_metadata() -> Result<PayloadMetadata> {
+    Ok(payload::required()?.metadata())
+}
 use crate::{Result, print, private_io::ProgramDestination};
 use command_line::Subcommand;
 use data_serialization::{Deserialize, Serialize};
