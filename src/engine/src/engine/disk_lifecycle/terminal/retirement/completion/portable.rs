@@ -51,7 +51,7 @@ struct Boundary {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct Wire {
+pub(in crate::engine) struct RetirementCheckpointProof {
     format: ArchiveFormat,
     cancelled: Vec<ResumeCancellation>,
     frames: Vec<Frame>,
@@ -92,6 +92,27 @@ impl TerminalRetirementArchive {
     }
     pub fn checkpoint(&self) -> &TerminalRetirementCheckpoint {
         &self.checkpoint
+    }
+}
+
+/// Only the complete original-source replay constructs this token. It grants
+/// graph preparation, never a voter decision, namespace admission or live D3.
+pub(in crate::engine) struct VerifiedRetirementCheckpoint {
+    projection: Projection,
+    digest: String,
+}
+impl VerifiedRetirementCheckpoint {
+    pub(in crate::engine) fn registry(&self) -> &TerminalRegistry {
+        &self.projection.registry
+    }
+    pub(in crate::engine) fn state(&self) -> &State {
+        &self.projection.state
+    }
+    pub(in crate::engine) fn namespaces(&self) -> &PreparedCurrentNamespaces {
+        &self.projection.namespaces
+    }
+    pub(in crate::engine) fn digest(&self) -> &str {
+        &self.digest
     }
 }
 struct Projection {
@@ -242,8 +263,11 @@ impl StopSnapshot {
         }
     }
 }
-impl Wire {
-    fn verify(&self, source: &VerifiedTerminalAuthority) -> Result<()> {
+impl RetirementCheckpointProof {
+    pub(in crate::engine) fn verify(
+        &self,
+        source: &VerifiedTerminalAuthority,
+    ) -> Result<VerifiedRetirementCheckpoint> {
         if self.frames.is_empty() {
             return Err(failure(
                 ErrorCode::PublicationInvalid,
@@ -260,9 +284,12 @@ impl Wire {
                 "retirement checkpoint differs from its complete frozen-source projection",
             ));
         }
-        Ok(())
+        Ok(VerifiedRetirementCheckpoint {
+            projection,
+            digest: object_hash(KIND, self)?,
+        })
     }
-    fn report(&self, digest: String) -> TerminalRetirementCheckpoint {
+    pub(in crate::engine) fn report(&self, digest: String) -> TerminalRetirementCheckpoint {
         TerminalRetirementCheckpoint {
             digest,
             terminal_authority_hash: self.checkpoint.terminal_authority_hash.clone(),
@@ -284,6 +311,17 @@ impl TerminalManagement {
     /// Capture only the complete current chain. Unfinished links/operations fail;
     /// there is no prefix-as-latest fallback and no data-root open in this method.
     pub fn export_retirement_archive(&self) -> Result<TerminalRetirementArchive> {
+        let (wire, _) = self.current_retirement_checkpoint()?;
+        let object = PreparedMetadataObject::new(KIND, &wire, MAX_METADATA)?;
+        Ok(TerminalRetirementArchive {
+            checkpoint: wire.report(object.hash.clone()),
+            bytes: object.bytes().to_vec(),
+        })
+    }
+
+    pub(in crate::engine::disk_lifecycle::terminal) fn current_retirement_checkpoint(
+        &self,
+    ) -> Result<(RetirementCheckpointProof, VerifiedRetirementCheckpoint)> {
         self.store.verify_writer(&self._locks)?;
         self.require_no_pending_retirement()?;
         let completed = self.retirement_completion.as_ref().ok_or_else(|| {
@@ -308,7 +346,7 @@ impl TerminalManagement {
             sequence: self.state.sequence,
             topology_generation: self.state.topology_generation,
         };
-        let mut wire = Wire {
+        let mut wire = RetirementCheckpointProof {
             format: ArchiveFormat::CompletedChain,
             cancelled: attempts.cancelled,
             frames: Vec::new(),
@@ -373,13 +411,10 @@ impl TerminalManagement {
                 }
             }
         }
-        wire.verify(&self.verified)?;
+        let verified = wire.verify(&self.verified)?;
         self.store.verify_writer(&self._locks)?;
-        let object = PreparedMetadataObject::new(KIND, &wire, MAX_METADATA)?;
-        Ok(TerminalRetirementArchive {
-            checkpoint: wire.report(object.hash.clone()),
-            bytes: object.bytes().to_vec(),
-        })
+        PreparedMetadataObject::new(KIND, &wire, MAX_METADATA)?;
+        Ok((wire, verified))
     }
     /// Verify portable checkpoint bytes against this already authenticated frozen
     /// original archive and an independently retained digest. Does not assert
@@ -404,7 +439,7 @@ impl TerminalManagement {
                 "retirement checkpoint exceeds metadata budget",
             ));
         }
-        let wire: Wire = crate::decode_strict(bytes)?;
+        let wire: RetirementCheckpointProof = crate::decode_strict(bytes)?;
         let object = PreparedMetadataObject::new(KIND, &wire, MAX_METADATA)?;
         if object.hash != expected_digest {
             return Err(failure(

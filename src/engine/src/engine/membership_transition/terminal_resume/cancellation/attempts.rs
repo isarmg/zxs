@@ -258,10 +258,10 @@ fn inspect_inventory(root: &DiskRoot, initial: bool) -> Result<()> {
             continue;
         }
         if initial
-            && matches!(
+            && (matches!(
                 name,
                 "authority.json" | "complete.json" | "bootstrap-stop.json" | ATTEMPTS
-            )
+            ) || crate::engine::disk_lifecycle::terminal::retirement::owns_initial_entry(name))
         {
             continue;
         }

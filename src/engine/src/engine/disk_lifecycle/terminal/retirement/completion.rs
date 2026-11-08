@@ -10,6 +10,7 @@ use crate::{
     engine::disk_registry::published::occurrence::{FrozenDetachSource, ProjectionError},
     journal::PreparedMetadataObject,
 };
+pub(in crate::engine) use portable::{RetirementCheckpointProof, VerifiedRetirementCheckpoint};
 pub use portable::{TerminalRetirementArchive, TerminalRetirementCheckpoint};
 use std::collections::BTreeMap;
 pub(super) use stopped::EXISTING;

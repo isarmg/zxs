@@ -72,6 +72,10 @@ pub(super) fn router(state: State) -> Router {
             "/api/disks/terminal-chain-export",
             post(terminal_chain_export),
         )
+        .route(
+            "/api/disks/terminal-chain-readmission-proposal",
+            post(terminal_chain_readmission_proposal),
+        )
         .route("/api/disks/deregister-preview", post(disk_removal_preview))
         .route(
             "/api/disks/deregister-original",
@@ -215,7 +219,7 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "first_storage_initialization":"confirmed_empty_existing_roots_only", "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset","active_empty_directory_addition","nonterminal_disk_deregistration","final_voter_terminal_deregistration","terminal_remaining_registration_inspection","sequential_terminal_registration_retirement","retained_terminal_metadata_readmission","completed_terminal_chain_checkpoint_export"],
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset","active_empty_directory_addition","nonterminal_disk_deregistration","final_voter_terminal_deregistration","terminal_remaining_registration_inspection","sequential_terminal_registration_retirement","retained_terminal_metadata_readmission","completed_terminal_chain_checkpoint_export","terminal_chain_retained_readmission_proposal"],
         "not_implemented":["complete_first_run_setup","general_disk_add","metadata_readmission_after_terminal_retirement","foreign_admission","device_formatting_and_mounting","full_system_rebuild","other_samba_backends_and_account_creation","program_repair","systemd_smb_activation"]
     }))
 }
@@ -1237,6 +1241,33 @@ async fn terminal_chain_export(
         Failure::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "terminal_checkpoint_worker",
+            error,
+        )
+    })??;
+    Ok(Json(output))
+}
+
+async fn terminal_chain_readmission_proposal(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Json<crate::disk_removal::chain_readmission::Export>, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::disk_removal::Input = input(request).await?;
+    let output = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        crate::disk_removal::chain_readmission::export(input).map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "terminal_chain_readmission_proposal",
+                &crate::diagnostic_chain(error.as_ref()),
+            )
+        })
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "chain_readmission_proposal_worker",
             error,
         )
     })??;

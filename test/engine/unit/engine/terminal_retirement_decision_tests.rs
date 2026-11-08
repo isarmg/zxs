@@ -9,6 +9,11 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_action(MembershipExitAction::Deregister)
+    }
+    // Historical PlannedOffline evidence remains a valid recovery fixture;
+    // this does not add a new user-facing planned-offline action.
+    fn with_action(action: MembershipExitAction) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
             Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
@@ -28,7 +33,7 @@ impl Fixture {
         engine
             .begin_disk_exit(
                 &config.disks[0].disk_id,
-                MembershipExitAction::Deregister,
+                action,
                 "admin",
                 OperationId::generate().unwrap(),
             )
@@ -743,4 +748,234 @@ fn portable_checkpoint_rejects_rehashed_mask_loss_and_conflicting_stop_binding()
             .verify_retirement_archive(&json_codec::to_vec(&changed).unwrap(), &digest)
             .is_err()
     );
+}
+
+#[test]
+fn complete_retirement_chain_prepares_retained_graph_without_root_io_or_admission() {
+    let mut fixture = Fixture::with_action(MembershipExitAction::PlannedOffline);
+    for index in [1, 2] {
+        let plan = fixture
+            .terminal
+            .preview_terminal_retirement(
+                &fixture.config.disks[index].disk_id,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        fixture
+            .terminal
+            .complete_terminal_retirement(&plan)
+            .unwrap();
+    }
+    let operation = OperationId::generate().unwrap();
+    let original = fixture.terminal.registry().commitment().clone();
+    for disk in &fixture.config.disks {
+        fs::rename(&disk.root, disk.root.with_extension("proposal-held")).unwrap();
+        fs::write(&disk.root, b"proposal must not open any data root").unwrap();
+    }
+    let proposal = fixture
+        .terminal
+        .prepare_chain_readmission_proposal(&fixture.config.disks[0].disk_id, "admin", operation)
+        .unwrap();
+    let report = proposal.preparation();
+    assert_eq!(report.source.completed_retirements, 2);
+    assert_eq!(report.source.registry, original);
+    assert_ne!(report.proposed_registry, original);
+    assert!(report.complete_namespace_projection_prepared);
+    assert!(!report.target_directory_verified);
+    assert!(!report.target_decision_recorded);
+    assert!(!report.active_namespace_admitted);
+    assert!(!report.metadata_resumption_supported);
+    assert!(fixture.terminal.operation(operation).is_none());
+    assert_eq!(*fixture.terminal.registry().commitment(), original);
+    assert_eq!(fixture.terminal.registered_disks().len(), 1);
+    assert!(fixture.terminal.require_no_terminal_retirement().is_err());
+    fixture
+        .terminal
+        .verify_chain_readmission_proposal(proposal.bytes(), &report.proposal_digest)
+        .unwrap();
+    let system = fixture.system();
+    drop(fixture.terminal);
+    let cold = TerminalManagement::open(&system).unwrap();
+    let repeated = cold
+        .prepare_chain_readmission_proposal(&fixture.config.disks[0].disk_id, "admin", operation)
+        .unwrap();
+    assert_eq!(repeated.bytes(), proposal.bytes());
+    assert!(Engine::open(&system).is_err());
+}
+
+#[test]
+fn chain_readmission_proposal_requires_complete_chain_and_disabled_metadata_identity() {
+    let mut fixture = Fixture::with_action(MembershipExitAction::PlannedOffline);
+    let target = fixture.config.disks[0].disk_id.clone();
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_readmission_proposal(&target, "admin", OperationId::generate().unwrap(),)
+            .is_err()
+    );
+    let retired = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&retired)
+        .unwrap();
+    for id in [
+        &fixture.config.disks[1].disk_id,
+        &fixture.config.disks[2].disk_id,
+    ] {
+        assert!(
+            fixture
+                .terminal
+                .prepare_chain_readmission_proposal(id, "admin", OperationId::generate().unwrap(),)
+                .is_err()
+        );
+    }
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_readmission_proposal(&target, "admin", retired.operation_id(),)
+            .is_err()
+    );
+    let mut detached = Fixture::new();
+    let retired = detached.plan();
+    detached
+        .terminal
+        .complete_terminal_retirement(&retired)
+        .unwrap();
+    assert!(
+        detached
+            .terminal
+            .prepare_chain_readmission_proposal(
+                &detached.config.disks[0].disk_id,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn chain_proposal_rejects_rehashed_target_stop_configuration_and_graph_changes() {
+    let mut fixture = Fixture::with_action(MembershipExitAction::PlannedOffline);
+    let retired = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&retired)
+        .unwrap();
+    let proposal = fixture
+        .terminal
+        .prepare_chain_readmission_proposal(
+            &fixture.config.disks[0].disk_id,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let original: json_codec::Value = json_codec::from_slice(proposal.bytes()).unwrap();
+    assert!(
+        fixture
+            .terminal
+            .verify_chain_readmission_proposal(proposal.bytes(), &"0".repeat(64))
+            .is_err()
+    );
+    for change in 0..5 {
+        let mut body = original.clone();
+        match change {
+            0 => body["target"]["slot_id"] = "P99".into(),
+            1 => {
+                body["stopped"]["operation_id"] =
+                    OperationId::generate().unwrap().to_string().into()
+            }
+            2 => body["configuration"]["disks"][1]["metadata_member"] = true.into(),
+            3 => {
+                body["objects"].as_object_mut().unwrap().clear();
+            }
+            _ => {
+                body["source"]["frames"].as_array_mut().unwrap().clear();
+            }
+        }
+        let digest = object_hash("terminal-chain-retained-readmission-proposal", &body).unwrap();
+        assert!(
+            fixture
+                .terminal
+                .verify_chain_readmission_proposal(&json_codec::to_vec(&body).unwrap(), &digest,)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn chain_proposal_is_not_latest_or_reserved_after_another_retirement_starts() {
+    let mut fixture = Fixture::with_action(MembershipExitAction::PlannedOffline);
+    let retired = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&retired)
+        .unwrap();
+    let proposal = fixture
+        .terminal
+        .prepare_chain_readmission_proposal(
+            &fixture.config.disks[0].disk_id,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let next = fixture
+        .terminal
+        .preview_terminal_retirement(
+            &fixture.config.disks[2].disk_id,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    fixture.terminal.stage_terminal_retirement(&next).unwrap();
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_readmission_proposal(
+                &fixture.config.disks[0].disk_id,
+                "admin",
+                proposal.preparation().operation_id,
+            )
+            .is_err()
+    );
+    assert!(
+        fixture
+            .terminal
+            .verify_chain_readmission_proposal(
+                proposal.bytes(),
+                &proposal.preparation().proposal_digest,
+            )
+            .is_ok()
+    );
+    assert!(
+        fixture
+            .terminal
+            .terminal_retirement_status()
+            .unwrap()
+            .is_some()
+    );
+    assert!(fixture.terminal.require_no_terminal_retirement().is_err());
+}
+
+#[test]
+fn resume_inventory_recognizes_retirement_ownership_without_accepting_unknown_material() {
+    let mut fixture = Fixture::with_action(MembershipExitAction::PlannedOffline);
+    let retired = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&retired)
+        .unwrap();
+    fixture.terminal.export_retirement_archive().unwrap();
+    let unknown = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join("retirement-unselected.json");
+    fs::write(&unknown, b"{}").unwrap();
+    assert!(fixture.terminal.export_retirement_archive().is_err());
+    let system = fixture.system();
+    drop(fixture.terminal);
+    assert!(TerminalManagement::open(&system).is_err());
+    assert_eq!(fs::read(unknown).unwrap(), b"{}");
 }

@@ -636,3 +636,86 @@ async fn terminal_chain_export_requires_same_origin_and_explicit_stopped_writers
     let response = http::router(state()).oneshot(post("/api/disks/terminal-chain-export", json!({"service_user":"zxs","external_writers_stopped":true,"foreign_chain":"untrusted","activate":true}))).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn chain_readmission_proposal_requires_origin_csrf_and_available_worker() {
+    let path = "/api/disks/terminal-chain-readmission-proposal";
+    let mut request = post(path, json!({}));
+    request
+        .headers_mut()
+        .insert("origin", "http://untrusted.invalid:9040".parse().unwrap());
+    assert_eq!(
+        http::router(state())
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let mut request = post(path, json!({}));
+    request.headers_mut().remove("x-zxs-helper-csrf");
+    assert_eq!(
+        http::router(state())
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let busy = state();
+    let permit = busy.jobs.clone().try_acquire_owned().unwrap();
+    assert_eq!(
+        http::router(busy)
+            .oneshot(post(path, json!({})))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    drop(permit);
+    let stopped = state();
+    stopped.stopping.send_replace(true);
+    assert_eq!(
+        http::router(stopped)
+            .oneshot(post(path, json!({})))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[tokio::test]
+async fn chain_readmission_proposal_does_not_accept_force_or_foreign_roots() {
+    let path = "/api/disks/terminal-chain-readmission-proposal";
+    let input = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
+        "slot_id":"P01","expected_disk_id":"disk_original","external_writers_stopped":true});
+    for key in [
+        "force",
+        "foreign_chain",
+        "root_path",
+        "activate",
+        "checkpoint",
+    ] {
+        let mut changed = input.clone();
+        changed[key] = "untrusted".into();
+        assert_eq!(
+            http::router(state())
+                .oneshot(post(path, changed))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut stopped = input;
+    stopped["external_writers_stopped"] = false.into();
+    assert_eq!(
+        http::router(state())
+            .oneshot(post(path, stopped))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+}

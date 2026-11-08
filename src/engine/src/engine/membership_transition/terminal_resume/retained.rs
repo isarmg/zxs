@@ -121,7 +121,7 @@ fn retained_identity(
     Ok(definition.identity.clone())
 }
 
-pub(in crate::engine::membership_transition) fn stopped_source(
+pub(in crate::engine) fn stopped_source(
     terminal: &TerminalAuthority,
     identity: &DiskRegistrationIdentity,
 ) -> Result<(OperationId, String, DiskSealFormat)> {

@@ -3,7 +3,8 @@
 pub(crate) mod bootstrap;
 pub(in crate::engine) mod terminal;
 pub use terminal::{
-    TerminalDiskExit, TerminalManagement, TerminalManagementStatus, TerminalRegistrationState,
+    TerminalChainReadmissionPreparation, TerminalChainReadmissionProposal, TerminalDiskExit,
+    TerminalManagement, TerminalManagementStatus, TerminalRegistrationState,
     TerminalRetirementArchive, TerminalRetirementCheckpoint, TerminalRetirementPhase,
     TerminalRetirementPlan, TerminalRetirementStatus,
 };

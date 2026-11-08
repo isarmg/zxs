@@ -17,7 +17,8 @@ pub(in crate::engine) mod cancellation;
 use cancellation::ResumeCancellation;
 mod retained;
 pub(in crate::engine) use retained::AdmittedTerminalReadmission;
-pub(in crate::engine::membership_transition) use retained::{ResumeAdmission, stopped_source};
+pub(in crate::engine::membership_transition) use retained::ResumeAdmission;
+pub(in crate::engine) use retained::stopped_source;
 pub use retained::{TerminalMetadataResumeAdmission, TerminalReadmissionPreview};
 
 pub(in crate::engine::membership_transition) const PROPOSAL_KIND: &str = "terminal-resume-proposal";

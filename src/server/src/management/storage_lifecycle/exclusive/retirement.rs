@@ -157,3 +157,30 @@ impl ExclusiveExit {
         Ok(archive)
     }
 }
+
+impl ExclusiveExit {
+    /// Builds a full-source proposal, not a native resume selection. No target
+    /// directory opens and no request is reserved by this method.
+    pub fn prepare_terminal_chain_readmission(
+        &self,
+        request: storage_contract::storage_readmission::ReadmissionRequest,
+    ) -> Result<storage_engine::TerminalChainReadmissionProposal, ApiError> {
+        let proposal = self
+            .retirement_owner()?
+            .prepare_chain_readmission_proposal(
+                &request.expected_disk_id,
+                &self.identity.principal,
+                request.operation_id,
+            )
+            .map_err(crate::engine_backend::error)?;
+        let target = &proposal.preparation().target;
+        if target.disk_id != request.expected_disk_id || target.slot_id != request.slot_id {
+            return Err(ApiError::conflict(
+                ErrorCode::DiskIdentityMismatch,
+                "chain readmission proposal selects another original slot/binding",
+            ));
+        }
+        self.check()?;
+        Ok(proposal)
+    }
+}

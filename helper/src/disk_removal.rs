@@ -1,6 +1,7 @@
 //! Root-owned offline deregistration intent. Never walks a target after D3;
 //! retained bytes and historical registration definitions are not deleted.
 pub(crate) mod chain_archive;
+pub(crate) mod chain_readmission;
 pub(crate) mod terminal;
 pub(crate) mod terminal_action;
 mod worker;

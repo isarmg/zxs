@@ -2,12 +2,15 @@
 //! durable selection; completion is a separate SYSTEM successor/Stop/D3 protocol.
 mod chain;
 mod completion;
+mod readmission;
 use super::*;
 use crate::{DiskRegistryCommitment, object_hash};
 pub(in crate::engine) use completion::VerifiedRetirementStopSource;
 pub(super) use completion::{Completed, HistoricalCompleted};
+pub(in crate::engine) use completion::{RetirementCheckpointProof, VerifiedRetirementCheckpoint};
 pub use completion::{TerminalRetirementArchive, TerminalRetirementCheckpoint};
 use data_serialization::{Deserialize, Serialize};
+pub use readmission::{TerminalChainReadmissionPreparation, TerminalChainReadmissionProposal};
 
 pub(super) const INTENT: &str = "retirement-intent.json";
 pub(super) const SELECTED: &str = "retirement-selected.json";
@@ -399,4 +402,20 @@ fn validate_at(
         ));
     }
     Ok(())
+}
+
+/// File-name ownership only. The terminal owner still verifies every selected
+/// retirement frame and unknown entries remain errors in the resume inventory.
+pub(in crate::engine) fn owns_initial_entry(name: &str) -> bool {
+    matches!(
+        name,
+        INTENT
+            | SELECTED
+            | completion::SUCCESSOR
+            | completion::STOP
+            | completion::EXISTING
+            | completion::COMPLETE
+            | chain::NEXT
+            | chain::OPERATIONS
+    )
 }

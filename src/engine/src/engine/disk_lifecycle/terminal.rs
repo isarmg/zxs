@@ -15,6 +15,7 @@ use crate::{
     engine::membership_transition::terminal::{TerminalAuthority, VerifiedTerminalAuthority},
 };
 pub use retirement::{
+    TerminalChainReadmissionPreparation, TerminalChainReadmissionProposal,
     TerminalRetirementArchive, TerminalRetirementCheckpoint, TerminalRetirementPhase,
     TerminalRetirementPlan, TerminalRetirementStatus,
 };

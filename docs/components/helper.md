@@ -228,3 +228,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 完整终态移除链检查点下载
 
 独立 Web 可在所有逐笔移除均已完成时，通过服务 UID worker 导出准确的完整选择/Stop 快照/registry-mask 图/永久回执检查点，并显示必须另存的可信摘要。未决不导出旧前缀，损坏不补空；原完整控制归档须另外保留。它不支持整链 readmission/外来正式接纳，不转移 live I/O 排除，不启动服务。源码未审查/编译/测试/CI，见[捕获、相对来源核验及容量边界](../design/terminal-retirement-portable-checkpoint.md)。
+
+### 完整终态链后的恢复提案
+
+[原生整链恢复提案](../design/terminal-chain-readmission-proposal.md)将完整 checkpoint 验证类型接到单一原 Disabled metadata 的 registry/namespace 准备，并提供独立 Web 下载。它不保留 operation、不打开目标、没有投票或活动发布能力；正式整链 readmission 与外来完整链接纳仍拒绝。原无移除链 retained readmission 路径保持。此片未编译、测试或 CI。

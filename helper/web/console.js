@@ -18,7 +18,7 @@ let sambaPasswordPreview = null;
 let sambaPasswordOriginal = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -785,3 +785,29 @@ byId("terminal-chain-export").addEventListener("click",async () => {
   finally { setBusy(false); }
 });
 for (const id of ["disk-remove-user","disk-remove-target","disk-remove-writers"]) byId(id).addEventListener("input", () => { byId("terminal-chain-report").hidden = true; });
+
+
+byId("terminal-chain-readmit").addEventListener("click",async () => {
+  if (busy || stopping) return;
+  if (byId("disk-remove-target").dataset.authority !== "terminal_management" || !byId("disk-remove-target").value) {
+    error("先读取并选择准确终态登记；本入口只生成完整来源提案，不执行重新接纳。"); return;
+  }
+  const target = JSON.parse(byId("disk-remove-target").value);
+  const operation_id = "op_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
+  byId("terminal-chain-readmit-report").hidden = true;
+  setBusy(true); error("");
+  try {
+    const archive = await (await post("/api/disks/terminal-chain-readmission-proposal", {
+      service_user:byId("disk-remove-user").value, operation_id, ...target,
+      external_writers_stopped:byId("disk-remove-writers").checked
+    })).json();
+    const {payload,...report} = archive;
+    byId("terminal-chain-readmit-report").textContent = JSON.stringify(report,null,2);
+    byId("terminal-chain-readmit-report").hidden = false;
+    save(new Blob([payload],{type:"application/json"}),`zxs-terminal-chain-readmission-${archive.preparation.proposal_digest}.json`);
+  } catch(e) { error(`${e.message} 未生成完整恢复提案，没有新 readmission 决定。此入口打开来源时仍可重复已有恢复。`); }
+  finally { setBusy(false); }
+});
+for (const id of ["disk-remove-user","disk-remove-target","disk-remove-writers"]) byId(id).addEventListener("input", () => { byId("terminal-chain-readmit-report").hidden = true; });
+byId("disk-remove-load").addEventListener("click", () => { byId("terminal-chain-readmit-report").hidden = true; });
+for (const id of ["terminal-retire-commit","disk-readmit-commit","disk-remove-commit-form"]) byId(id).addEventListener("submit", () => { byId("terminal-chain-readmit-report").hidden = true; });

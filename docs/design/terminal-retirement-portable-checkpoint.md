@@ -46,3 +46,5 @@
 原生读取与完整 mask 验证成本随完整链及冻结历史增长；当前仅保留一份正在投影的 State/namespace 加有界 frame 材料，不给每个历史 frame 再克隆完整 State。不新增 fsync、写者或 source ledger；打开过程仍沿原协议已有同步预算。
 
 后续仍需将完整 checkpoint 纳入新的 resume proposal/target decision、真正 activity Publication、registry/current namespace/serving locator、新 epoch 与冷恢复选择器，同时证明被注销目录不会复活。该接线尚未实现，终态移除链后的 readmission 继续拒绝；新提供的下载不是恢复成功。新增 4 项真实链/变异/冷态回归及 1 项 HTTP 边界测试源码均未执行，不能作为通过证据。
+
+后继：[完整终态链恢复提案](terminal-chain-readmission-proposal.md)现在消费同一次检查点重放所得的私有 State/registry/namespace，生成精确原 Disabled metadata 的拟议图与 Web 下载。它尚不是 target decision/ResumeCore 或正式 readmission；以上活动准入限制保持。
