@@ -1471,6 +1471,12 @@ impl Backend for ManagementBackend {
             .backend()?
             .resume_node_retirement(identity, file, operation)
     }
+    fn detached_history(
+        &self, identity: &Identity, request: storage_contract::detached_history::Request,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::detached_history::Page, crate::ApiError> {
+        self.inner.backend()?.detached_history(identity, request, cancellation)
+    }
     fn shared_history(
         &self,
         identity: &Identity,

@@ -185,9 +185,14 @@ enum Body {
     },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
+enum EntryIdentity {
+    Namespace(String),
+    Retained(storage_contract::history_window::HistoryFileId),
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Entry {
     preview: bool,
-    entry_id: String,
+    entry_id: EntryIdentity,
     path: DisplayPath,
     body: Body,
     location: Option<Location>,
@@ -200,7 +205,25 @@ impl Entry {
         self.preview
     }
     pub(crate) fn entry_id(&self) -> &str {
-        &self.entry_id
+        match &self.entry_id {
+            EntryIdentity::Namespace(entry) => entry,
+            EntryIdentity::Retained(file) => file.as_str(),
+        }
+    }
+    pub(crate) fn retained_history(&self) -> bool {
+        matches!(self.entry_id, EntryIdentity::Retained(_))
+    }
+    pub(super) fn retained(file: &storage_contract::detached_history::File) -> Self {
+        Self {
+            preview: false, entry_id: EntryIdentity::Retained(file.file_id.clone()),
+            path: DisplayPath { text: file.recorded_name.clone(), key: name_policy::path_key(&file.recorded_name) },
+            body: Body::File {
+                file_id: file.file_id.to_string(), size: file.representative_size,
+                version_id: Some(file.representative_version_id.to_string()),
+                node_id: file.representative_version_id.to_string(), ownership: Ownership::Materialized,
+            },
+            location: None, note: None, backup: false, read_only: true,
+        }
     }
     pub(crate) fn name(&self) -> &str {
         self.path

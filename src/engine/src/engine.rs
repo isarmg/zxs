@@ -63,6 +63,8 @@ pub use disk_lifecycle::{
     TerminalRetirementStatus, VersionDeregistrationImpact, VersionImpactScan,
 };
 pub use disk_registry::published::terminal::TerminalRegistry;
+mod detached_history;
+pub use detached_history::DetachedHistoryRead;
 mod planning;
 pub(crate) use planning::PlanningContext;
 mod disk_catalog;

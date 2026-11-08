@@ -1,5 +1,5 @@
 use super::object::{Object, display_path, field_error, portable_path};
-use super::{Body, DecodeError, Entry, Location, Ownership};
+use super::{Body, DecodeError, Entry, EntryIdentity, Location, Ownership};
 use json_codec::Value;
 
 pub(super) fn parse(value: Value) -> Result<Entry, DecodeError> {
@@ -24,7 +24,7 @@ pub(super) fn parse(value: Value) -> Result<Entry, DecodeError> {
     fields.finish()?;
     Ok(Entry {
         preview: false,
-        entry_id,
+        entry_id: EntryIdentity::Namespace(entry_id),
         path,
         body,
         location,

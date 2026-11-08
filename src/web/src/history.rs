@@ -179,6 +179,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     let selected = Signal::derive(move || state.with(|s| s.activity.disk.clone()));
     let visible_events = visible_events(state);
     view! {<section class="zxs-content-stack zxs-history-page zxs-stack" aria-busy=move ||state.with(|s|s.activity.loading).to_string()>
+        {crate::files::retained_history_discovery(state)}
         <p class="zxs-row">{t("显示最近 200 条已提交的文件操作。选择文件可查看它的版本和分支。","The latest 200 committed file operations are shown. Select a file to view its versions and branches.")}</p>
         <div class="zxs-history-toolbar zxs-flow zxs-flow--end zxs-surface-end"><Select label=t("硬盘","Disk") show_label=false options=options value=selected on_change=Callback::new(move |disk:String|state.update(|s|s.activity.disk=disk))/></div>
         {move ||state.with(|s|s.activity.failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}

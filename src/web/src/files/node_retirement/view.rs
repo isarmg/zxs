@@ -2,7 +2,7 @@ use super::*;
 
 fn choices(state: &State) -> Vec<(Target, String, String, bool)> {
     let Some(target) = Target::capture(state) else { return Vec::new(); };
-    let current = state.files.selected.as_ref().and_then(|entry| entry.version_id());
+    let current = state.files.selected.as_ref().filter(|entry| !entry.retained_history()).and_then(|entry| entry.version_id());
     let mut rows = BTreeMap::new();
     for node in state.files.file_history.nodes() {
         let Some(version) = node.version_id() else { continue; };
@@ -13,7 +13,7 @@ fn choices(state: &State) -> Vec<(Target, String, String, bool)> {
     rows.into_values().collect()
 }
 fn can_edit(state: &State) -> bool {
-    actions::history_write_allowed(state) && !state.files.node_retirement.loading && state.files.node_retirement.attempt.is_none()
+    admission_ready(state) && !state.files.node_retirement.loading && state.files.node_retirement.attempt.is_none()
         && state.files.node_retirement.recovery.ready_for_new(state)
 }
 fn can_submit(state: &State) -> bool {

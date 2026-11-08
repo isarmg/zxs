@@ -97,9 +97,19 @@ pub(crate) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool 
 fn malformed(message: &'static str) -> api::Error {
     DecodeError::Relation(message).into()
 }
+fn admission_ready(state: &State) -> bool {
+    if !state.files.selected.as_ref().is_some_and(super::page::Entry::retained_history) {
+        return actions::history_write_allowed(state);
+    }
+    state.session_active() && state.management.storage.writable() && !actions::pending(state)
+        && !state.files.history_loading && state.files.file_history.ready()
+        && state.files.directory_preview.is_none() && state.files.file_preview.is_none()
+        && state.files.file_history.identity().is_some_and(|identity| identity.context.path.is_none()
+            && identity.context.current_node_id.is_none())
+}
 fn checkbox(state: RwSignal<State>, target: &Target, version: &str, label: &str, checked: bool) {
     state.update(|state| {
-        if !actions::history_write_allowed(state) || Target::capture(state).as_ref() != Some(target) { return; }
+        if !admission_ready(state) || Target::capture(state).as_ref() != Some(target) { return; }
         if !state.files.node_retirement.recovery.ready_for_new(state) { return; }
         let model = &mut state.files.node_retirement;
         if model.loading || model.attempt.is_some() || model.target.as_ref() != Some(target) { return; }

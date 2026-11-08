@@ -65,6 +65,7 @@ struct Selection {
     repository: String,
     repository_path: String,
     backup: bool,
+    retained: bool,
 }
 impl Selection {
     fn capture(state: &State) -> Option<Self> {
@@ -82,6 +83,7 @@ impl Selection {
             repository,
             repository_path,
             backup: entry.backup(),
+            retained: entry.retained_history(),
         })
     }
 
@@ -238,9 +240,13 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                 <button class="zxs-button" disabled=move ||state.with(|s|actions::pending(s)||selection.with_value(|key|key.action_entry(s).and_then(super::model::file_context)).is_none()) on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.action_entry(s).cloned())){backup::start_entry(state,entry);}>{t("自定义备份前缀","Custom backup prefixes")}</button>
                 <Show when=move ||can_modify.get()><button class="zxs-button" disabled=move ||mutation_disabled.get() on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){batch::start(state,batch::Kind::Delete,Some(entry));}><FileIcon name="delete"/>{t("删除","Delete")}</button></Show>
             </div></div>
+            <Show when=move ||entry.with(|entry|entry.as_ref().is_some_and(Entry::retained_history))>
+                <p class="zxs-row" role="status">{t("这是按稳定 file_id 打开的保留历史，不是当前目录中的文件。上方名称来自历史版本记录；不授权普通编辑、改名、软删除或设为默认。永久退役仍须准确选择和完整引用检查。", "This is retained history opened by stable file_id, not a current directory file. The displayed name comes from a historical version. It does not permit ordinary editing, rename, soft deletion or setting a default. Permanent retirement still requires an exact selection and complete reference checks.")}</p>
+                <button class="zxs-button" disabled=move ||state.with(|s|!s.session_active()||s.files.history_loading) on:click=move |_|actions::load_file_history(state)>{t("刷新保留历史", "Refresh retained history")}</button>
+            </Show>
             {backup::view(state)}
             {super::placement::view(state)}
-            <dl class="zxs-file-properties"><div><dt class="zxs-row">{t("位置","Location")}</dt><dd class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|join_path(&state.with(|s|s.files.slot.clone()),entry.path())).unwrap_or_default())}</dd></div><div><dt class="zxs-row">{t("类型","Type")}</dt><dd class="zxs-row">{if is_file{t("文件","File")}else{t("文件夹","Folder")}}</dd></div></dl>
+            <dl class="zxs-file-properties"><div><dt class="zxs-row">{move ||entry.with(|entry|if entry.as_ref().is_some_and(Entry::retained_history){t("版本记录名称","Recorded version name")}else{t("位置","Location")})}</dt><dd class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|join_path(&state.with(|s|s.files.slot.clone()),entry.path())).unwrap_or_default())}</dd></div><div><dt class="zxs-row">{t("类型","Type")}</dt><dd class="zxs-row">{if is_file{t("文件","File")}else{t("文件夹","Folder")}}</dd></div></dl>
             {(!is_file).then(move ||view!{
                 {super::directory_history::view(state)}
                 <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录分支与节点","Folder branches and nodes")}</h3><p class="zxs-row">{t("进入此目录的详情，管理独立仓库初始化、分支、暂存和提交。父仓库不会替子仓库提交。", "Open this folder's Details to manage repository initialization, branches, staging and commits. A parent never commits an independent child.")}</p><div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||folder_navigation_disabled.get()||state.with(actions::pending) on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.directory_path(s).map(str::to_owned))){actions::go_directory(state,path);crate::ui::navigate(state,crate::ui::Page::Details);}>{t("管理此目录的分支与提交", "Manage this folder's branches and commits")}</button></div></section>

@@ -91,3 +91,19 @@ fn outcome(file_id: HistoryFileId, result: storage_engine::PermanentNodeRetireme
     };
     Ok(Outcome { file_id, operation: crate::operation_wire::operation_wire(result.publication().clone().into())?, separation, cleanup })
 }
+
+pub(super) fn detached_history(
+    backend: &EngineBackend, caller: &Identity, request: storage_contract::detached_history::Request,
+    cancellation: HistoryWindowCancellation,
+) -> Result<storage_contract::detached_history::Page, ApiError> {
+    let read = {
+        let engine = backend.engine.lock().expect("invariant: service state lock poisoned");
+        identity(&engine, caller)?;
+        engine.capture_detached_history(request, cancellation).map_err(error)?
+    };
+    let page = read.page().map_err(error);
+    let engine = backend.engine.lock().expect("invariant: service state lock poisoned");
+    identity(&engine, caller)?;
+    engine.recheck_detached_history(&read).map_err(error)?;
+    page
+}

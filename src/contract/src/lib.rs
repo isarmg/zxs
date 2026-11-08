@@ -54,6 +54,7 @@ pub use branch_name::{BranchName, validate_branch_name};
 pub use directory_branch_summary::{
     DirectoryBranchScope, DirectoryBranchSummary, directory_branch_summaries,
 };
+pub mod detached_history;
 pub mod model;
 pub use commit_comparison::{CommitChange, CommitComparison};
 mod shared_records;

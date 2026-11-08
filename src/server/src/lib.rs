@@ -56,6 +56,7 @@ mod http_directory_layout;
 mod http_directory_staging;
 mod http_file_history_source;
 mod http_shared_history;
+mod http_detached_history;
 mod http_node_retirement;
 pub use backend_file_history::{
     ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
@@ -790,6 +791,10 @@ pub trait Backend: Send + Sync {
         &self, _identity: &Identity, _file: storage_contract::history_window::HistoryFileId,
         _operation: storage_contract::OperationId,
     ) -> Result<storage_contract::node_retirement::Outcome, ApiError> { Err(ApiError::unsupported()) }
+    fn detached_history(
+        &self, _identity: &Identity, _request: storage_contract::detached_history::Request,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::detached_history::Page, ApiError> { Err(ApiError::unsupported()) }
     fn shared_history(
         &self,
         _identity: &Identity,
@@ -1578,6 +1583,12 @@ impl Backend for AuthorizedBackend {
         operation: storage_contract::OperationId,
     ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
         self.backend.resume_node_retirement(&self.current(identity)?, file, operation)
+    }
+    fn detached_history(
+        &self, identity: &Identity, request: storage_contract::detached_history::Request,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::detached_history::Page, ApiError> {
+        self.backend.detached_history(&self.current(identity)?, request, cancellation)
     }
     fn shared_history(
         &self,

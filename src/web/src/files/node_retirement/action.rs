@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn preview(state: RwSignal<State>) {
     let captured = state.with_untracked(|snapshot| {
-        if !actions::history_write_allowed(snapshot) { return None; }
+        if !admission_ready(snapshot) { return None; }
         let model = &snapshot.files.node_retirement;
         let target = Target::capture(snapshot)?;
         if model.loading || model.attempt.is_some() || model.target.as_ref() != Some(&target)
@@ -36,7 +36,7 @@ pub(super) fn preview(state: RwSignal<State>) {
 
 pub(super) fn submit(state: RwSignal<State>) {
     let request = state.with_untracked(|snapshot| {
-        if !actions::history_write_allowed(snapshot) { return None; }
+        if !admission_ready(snapshot) { return None; }
         let model = &snapshot.files.node_retirement;
         let target = Target::capture(snapshot)?;
         let selection = model.selection()?;
