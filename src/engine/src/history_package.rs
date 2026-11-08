@@ -742,7 +742,7 @@ fn load_package_at(
     Ok((manifest, proof, report))
 }
 
-fn verify_package_payload_at(
+pub(crate) fn verify_package_payload_at(
     root: &DiskRoot,
     directory: &Path,
     version: &FileVersion,

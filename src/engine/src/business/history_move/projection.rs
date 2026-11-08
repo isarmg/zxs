@@ -29,6 +29,13 @@ pub(crate) struct FileHistoryMoveReplay {
     pub(crate) route: CopyRoute,
 }
 
+#[derive(data_serialization::Serialize)]
+pub(crate) struct FileHistoryMoveTargetMetadata<'a> {
+    pub(crate) target: crate::HistoryManifest,
+    pub(crate) imported_lifecycle: &'a CopiedLifecycle,
+    pub(crate) source_deletion: &'a FileDeletionNode,
+}
+
 /// Proposed target graph and source deletion, held together and never exposed
 /// as a writable State. This is deliberately not serializable, not a permanent
 /// operation receipt and not accepted by any publication or SMB entry point.
@@ -95,16 +102,15 @@ impl FileHistoryMoveProjection {
     /// Exact bounded logical target graph, imported audit and the same source
     /// D. This digest does not certify physical bodies or any SQLite database.
     pub(crate) fn recovery_records_hash(&self) -> Result<String> {
-        #[derive(data_serialization::Serialize)]
-        struct Closure<'a> {
-            target: crate::HistoryManifest,
-            imported_lifecycle: &'a CopiedLifecycle,
-            source_deletion: &'a FileDeletionNode,
-        }
+        let closure = self.target_metadata()?;
+        Ok(object_hash("file-history-move-joint-projection", &closure)?)
+    }
+
+    pub(crate) fn target_metadata(&self) -> Result<FileHistoryMoveTargetMetadata<'_>> {
         let history = &self.writes.next.repositories
             [&self.capture.namespace.target_repository_id]
             .history_tree_id;
-        let closure = Closure {
+        let closure = FileHistoryMoveTargetMetadata {
             target: crate::history_package::capture_history_copy(&self.writes.next, history)?,
             imported_lifecycle: &self.writes.lifecycle,
             source_deletion: self.proposed_source_deletion(),
@@ -112,7 +118,16 @@ impl FileHistoryMoveProjection {
         // Count before canonical Value/byte allocation. The entire joint
         // logical envelope, not each fragment separately, is limited to 12 MiB.
         history_copy::retained::bounded(&closure)?;
-        Ok(object_hash("file-history-move-joint-projection", &closure)?)
+        Ok(closure)
+    }
+
+    pub(crate) fn target_file_database(
+        &self,
+    ) -> Result<crate::container_storage::file_database::PreparedMoveFile> {
+        crate::container_storage::file_database::prepare_move(
+            &self.writes.next,
+            &self.writes.lifecycle,
+        )
     }
 }
 

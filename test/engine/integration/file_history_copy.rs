@@ -691,3 +691,6 @@ mod move_capture;
 
 #[path = "file_history_copy/move_recovery.rs"]
 mod move_recovery;
+
+#[path = "file_history_copy/move_target.rs"]
+mod move_target;

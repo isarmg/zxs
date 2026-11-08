@@ -28,6 +28,32 @@ impl Records {
     }
 }
 pub(super) fn records(view: StateProjection<'_>, file: &str) -> Result<Vec<Record>> {
+    let events = crate::file_deletion::retained::events(view, file)?;
+    with_events(view, file, &events)
+}
+
+/// Unpublished copied facts supplied by the exact joint move projection. No
+/// operation receipt is fabricated just to make its derived SQLite rows exist.
+pub(super) fn move_records(
+    view: StateProjection<'_>,
+    file: &str,
+    events: &[LifecycleRow],
+) -> Result<Vec<Record>> {
+    if view.state().file_deletions.contains_key(file)
+        || view.owners().file_rows(file).is_some_and(|rows| {
+            !rows.history_copies.is_empty() || !rows.deletion_operations.is_empty()
+        })
+    {
+        return Err(invalid("move target database requires a fresh undeleted identity"));
+    }
+    with_events(view, file, events)
+}
+
+fn with_events(
+    view: StateProjection<'_>,
+    file: &str,
+    events: &[LifecycleRow],
+) -> Result<Vec<Record>> {
     if view.owners().malformed_deletion_receipts() {
         return Err(invalid(
             "retained deletion receipt has no complete file ownership",
@@ -137,8 +163,8 @@ pub(super) fn records(view: StateProjection<'_>, file: &str) -> Result<Vec<Recor
             )?;
         }
     }
-    for event in crate::file_deletion::retained::events(view, file)? {
-        rows.add("lifecycle", &event.operation_id.to_string(), &event)?;
+    for event in events {
+        rows.add("lifecycle", &event.operation_id.to_string(), event)?;
     }
     if let Some(node) = state.file_deletions.get(file) {
         rows.add("deletion", &node.node_id, &DeletionRow::from(node))?;

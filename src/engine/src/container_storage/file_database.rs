@@ -16,7 +16,7 @@ mod rows;
 pub(crate) const NAME: &str = ".zxs-file.sqlite";
 const FORMAT: &str = "file-local-retained-graph";
 pub(super) const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
-pub(super) const MAX_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ROWS: usize = 65_536;
 const META: &str = "CREATE TABLE identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), format TEXT NOT NULL, file_id TEXT NOT NULL, history_tree_id TEXT NOT NULL, source_sequence TEXT NOT NULL, records_hash TEXT NOT NULL) STRICT";
 const RECORDS: &str = "CREATE TABLE records (kind TEXT NOT NULL CHECK(kind IN ('file','version','branch','anchor','metadata','deletion','lifecycle','merge','merge_link')), id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id)) STRICT";
@@ -55,6 +55,13 @@ async fn finish<T>(result: Result<T>, connection: SqliteConnection) -> Result<T>
 /// must prove publication admission before installation. Neither this projection
 /// nor its self digest grants authority or proves a complete historical copy.
 fn validated_records(view: StateProjection<'_>, file: &str, history: &str) -> Result<Vec<Record>> {
+    validate_owner(view, file, history)?;
+    let records = projection::records(view, file)?;
+    validate_records(&records, file, history, view.state().sequence)?;
+    Ok(records)
+}
+
+fn validate_owner(view: StateProjection<'_>, file: &str, history: &str) -> Result<()> {
     storage_contract::validate_id(file, "file")?;
     storage_contract::validate_id(history, "history")?;
     if !view
@@ -67,13 +74,15 @@ fn validated_records(view: StateProjection<'_>, file: &str, history: &str) -> Re
             "file database requires one exact retained history owner",
         ));
     }
-    let records = projection::records(view, file)?;
-    let mut validation = rows::Validation::new(file, history, view.state().sequence);
-    for record in &records {
+    Ok(())
+}
+
+fn validate_records(records: &[Record], file: &str, history: &str, sequence: u64) -> Result<()> {
+    let mut validation = rows::Validation::new(file, history, sequence);
+    for record in records {
         validation.admit(record.kind, &record.id, &record.body)?;
     }
-    validation.finish()?;
-    Ok(records)
+    validation.finish()
 }
 
 pub(crate) struct CopyCapture {
@@ -120,6 +129,16 @@ pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> R
     let records = validated_records(view, file, history)?;
     let hash = storage_contract::object_hash("file-local-records", &records)?;
     let sequence = view.state().sequence;
+    encode_records(records, file, history, sequence, &hash)
+}
+
+fn encode_records(
+    records: Vec<Record>,
+    file: &str,
+    history: &str,
+    sequence: u64,
+    hash: &str,
+) -> Result<Prepared> {
     let bytes = block_on_sqlite_connection(async {
         let options = SqliteConnectOptions::new()
             .in_memory(true)
@@ -136,7 +155,7 @@ pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> R
                 .bind(file)
                 .bind(history)
                 .bind(sequence.to_string())
-                .bind(&hash)
+                .bind(hash)
                 .execute(&mut *tx)
                 .await?;
             for record in records {
@@ -160,6 +179,60 @@ pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> R
     Ok(Prepared { bytes })
 }
 
+/// Only a logical target database. Its constructor receives the typed joint
+/// projection's copied audit, not a forged copy/delete operation receipt.
+pub(crate) struct PreparedMoveFile {
+    bytes: Vec<u8>,
+    file: String,
+    history: String,
+    sequence: u64,
+    records_hash: String,
+}
+
+impl PreparedMoveFile {
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn records_hash(&self) -> &str {
+        &self.records_hash
+    }
+
+    pub(crate) fn verify(&self, bytes: &[u8]) -> Result<()> {
+        let actual = verify_snapshot(bytes)?;
+        if actual.file != self.file
+            || actual.history != self.history
+            || actual.sequence != self.sequence
+            || actual.records_hash != self.records_hash
+        {
+            return Err(invalid("staged move file database differs from the exact joint projection"));
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn prepare_move(
+    state: &crate::State,
+    audit: &crate::business::history_copy::retained::CopiedLifecycle,
+) -> Result<PreparedMoveFile> {
+    let transition = crate::state_projection::ProjectionTransition::new(state, state, None)?;
+    let view = transition.previous();
+    validate_owner(view, &audit.file_id, &audit.history_tree_id)?;
+    let records = projection::move_records(view, &audit.file_id, &audit.events)?;
+    validate_records(&records, &audit.file_id, &audit.history_tree_id, state.sequence)?;
+    let records_hash = storage_contract::object_hash("file-local-records", &records)?;
+    let prepared = encode_records(
+        records, &audit.file_id, &audit.history_tree_id, state.sequence, &records_hash,
+    )?;
+    Ok(PreparedMoveFile {
+        bytes: prepared.bytes,
+        file: audit.file_id.clone(),
+        history: audit.history_tree_id.clone(),
+        sequence: state.sequence,
+        records_hash,
+    })
+}
+
 /// A pure byte boundary. Resource identity and installation belong to the
 /// common installer; this verifier never reopens a pathname or authorizes I/O.
 pub(super) fn verify_scope(bytes: &[u8], file: &str, history: &str) -> Result<()> {
@@ -176,6 +249,18 @@ pub(super) fn verify_scope(bytes: &[u8], file: &str, history: &str) -> Result<()
 }
 
 fn verify(bytes: &[u8]) -> Result<(String, String)> {
+    let snapshot = verify_snapshot(bytes)?;
+    Ok((snapshot.file, snapshot.history))
+}
+
+struct VerifiedSnapshot {
+    file: String,
+    history: String,
+    sequence: u64,
+    records_hash: String,
+}
+
+fn verify_snapshot(bytes: &[u8]) -> Result<VerifiedSnapshot> {
     if bytes.len() > MAX_BYTES {
         return Err(budget());
     }
@@ -278,7 +363,7 @@ async fn read_records(
     validation.finish()?;
     Ok(records)
 }
-async fn verify_connection(connection: &mut SqliteConnection) -> Result<(String, String)> {
+async fn verify_connection(connection: &mut SqliteConnection) -> Result<VerifiedSnapshot> {
     platform_io::sqlite::enable_defensive(connection)
         .await
         .map_err(|error| {
@@ -318,14 +403,14 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<(String,
     let sequence =
         storage_contract::parse_u64_decimal(&owner.try_get::<String, _>("source_sequence")?)?;
     let records = read_records(connection, &file, &history, sequence).await?;
-    if storage_contract::object_hash("file-local-records", &records)?
-        != owner.try_get::<String, _>("records_hash")?
+    let records_hash = storage_contract::object_hash("file-local-records", &records)?;
+    if records_hash != owner.try_get::<String, _>("records_hash")?
     {
         return Err(invalid(
             "file database records differ from their recorded digest",
         ));
     }
-    Ok((file, history))
+    Ok(VerifiedSnapshot { file, history, sequence, records_hash })
 }
 
 #[cfg(test)]

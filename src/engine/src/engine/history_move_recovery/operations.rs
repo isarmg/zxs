@@ -78,6 +78,43 @@ fn replicate(
 }
 
 impl Engine {
+    /// Read-only original-envelope barrier for target staging. Rechecking the
+    /// proposed State alone cannot substitute for every retained member copy.
+    pub(crate) fn verify_file_history_move_recovery(
+        &self,
+        projection: &FileHistoryMoveProjection,
+        reviewed: &FileHistoryMoveRecoveryDigest,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<()> {
+        checkpoint(cancellation)?;
+        self.require_unfenced_membership()?;
+        self.recheck_file_history_move_projection(projection, cancellation)?;
+        let expected = RecoveryRecord::capture(self, projection)?;
+        if &expected.digest()? != reviewed {
+            return Err(stale("target preparation differs from the reviewed joint envelope"));
+        }
+        let system = persist::Store::system(self)?;
+        let original = system.read()?.ok_or_else(|| {
+            stale("target preparation has no original system recovery envelope")
+        })?;
+        if original.record != expected {
+            return Err(stale("target preparation differs from the original system envelope"));
+        }
+        for member in &expected.metadata_members {
+            checkpoint(cancellation)?;
+            let store = persist::Store::member(self, member)?;
+            let replica = store.read()?.ok_or_else(|| {
+                stale("target preparation requires every original member envelope")
+            })?;
+            if replica.record != expected {
+                return Err(corrupt("target preparation member envelopes disagree"));
+            }
+            replica.check_names(&store)?;
+        }
+        original.check_names(&system)?;
+        Ok(())
+    }
+
     /// Retain the exact joint metadata preparation on the system root and all
     /// configured metadata members. This is not PREPARE/ACCEPT in the journal,
     /// does not reserve the operation/slot and cannot publish either namespace.

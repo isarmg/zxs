@@ -2,6 +2,8 @@
 
 本候选对齐 `main 308e894bd3fef34039ff81fd7d332ba58d7225c8`，承接已发布的 `c53da226` 源捕获与 `7b214fd7` 共同元数据投影。它把原 operation 的准确联合准备保存到真实系统目录和全部配置元数据成员，提供显式冷重建／原准备补齐；**没有建立 move 决定，不发送 ACCEPT，也不发布源 D 或目标 namespace。**
 
+后继[目标文件材料](file-history-move-target.md)使用本封套作为准确原请求前置，在冻结 route 的全部盘实际准备 FULL、完整逻辑材料及目标文件 SQLite，并独立读回。它仍不是系统／盘根完整历史库证明或实际 journal 决定；本封套本身也不变成成功凭据。
+
 ## 原始输入不变
 
 `save_file_history_move_recovery` 消费仍有效的共同投影。严格当前格式 `file-history-move-joint-recovery` 固定：

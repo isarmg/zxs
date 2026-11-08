@@ -40,6 +40,7 @@ pub use engine::{
     offline_check_backup_preparation, offline_check_backup_preparation_batch,
 };
 pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
+pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
     TerminalMetadataResume, TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,

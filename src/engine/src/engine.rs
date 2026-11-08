@@ -51,6 +51,8 @@ pub use disk_catalog::{
 };
 mod history_move_recovery;
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
+mod history_move_target;
+pub use history_move_target::FileHistoryMoveTargetReport;
 mod index;
 pub use index::{
     IndexFailure, IndexFailureStage, IndexHealth, SystemCatalogKind, SystemCatalogRecord,
