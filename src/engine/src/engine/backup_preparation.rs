@@ -26,8 +26,9 @@ pub use native_control::{
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
     BackupNamespaceScope, BackupPublishedRegistryReport, BackupRecoveredContent,
-    BackupRegistryRecoveryReport, BackupTargetPublicationReport, BackupWriterDestination,
-    BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
+    BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,
+    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -122,6 +123,10 @@ pub enum BackupPreparationPhase {
     /// retained on all targets after actual Publication. Frozen namespace reads
     /// only: no ordinary Current/writer installation or source fence release.
     GenerationRegistryInstalled,
+    /// Complete independently copied published entities, object SQLite and
+    /// locators on all selected targets. Still no ordinary Current/writer,
+    /// final SYSTEM/disk scope installation or source fence release.
+    GenerationServingImagesInstalled,
     Blocked,
     SourceChanged,
 }

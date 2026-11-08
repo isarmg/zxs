@@ -121,7 +121,10 @@ fn run(
     let prepared = PreparedBackupRegistry::capture(task, targets, stop)?;
     let hash = match choices.recover_decision_if_present(&prepared, stop)? {
         Some(hash) => hash,
-        None => choices.decide(&prepared, stop)?,
+        None => {
+            serving::require_capacity_before_choice(&prepared, stop)?;
+            choices.decide(&prepared, stop)?
+        }
     };
     update(system, progress, |status| {
         status.phase = BackupPreparationPhase::RegistryPlacementDecided;
@@ -235,6 +238,21 @@ fn run(
             installed.configuration.publication.targets,
             installed.branch_scopes,
             installed.directory_scopes,
+        );
+    })?;
+    let serving = serving::install(&prepared, &decision, &expected, stop)?;
+    choices.observe_first_publication(&prepared, &candidate, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationServingImagesInstalled;
+        status.detail = format!(
+            "decision {hash} independently installed exact published entity/SQLite/locator images on all {} targets after Publication {}; frozen namespace-bound body reads only, ordinary Current/target writer, final SYSTEM/disk installation and source fence release remain unavailable",
+            serving.targets.len(),
+            serving
+                .registry
+                .configuration
+                .publication
+                .publication
+                .publication_hash,
         );
     })
 }

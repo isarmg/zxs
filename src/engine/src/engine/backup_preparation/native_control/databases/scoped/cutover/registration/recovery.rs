@@ -144,6 +144,48 @@ impl BackupDecidedTargets {
         )
     }
 
+    /// Inspect every target's complete published entity image, exact object
+    /// databases and locator binding. Never fills missing files or starts a
+    /// writer. The source-fence input image and old receipts remain unchanged.
+    pub fn inspect_published_serving_images(
+        &self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupServingImagesReport> {
+        serving::observe(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
+    /// Explicit same-original-task target writes. All selected targets and the
+    /// original Publication must be available; full independent entities need
+    /// additional space. Claimed-complete corruption is preserved and rejected.
+    pub fn resume_published_serving_installation(
+        &mut self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupServingImagesReport> {
+        serving::install(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
+    /// Resolve an exact published HEAD/entry/version and read its own target
+    /// serving container. Soft-deleted/unavailable nodes never yield content;
+    /// a namespace listing or locator alone is not a read or writer permit.
+    /// Host authorization is required independently for the requested scope.
+    pub fn read_published_entry_range(
+        &self,
+        expected: &BackupFirstPublicationHash,
+        request: &BackupServingRead,
+    ) -> Result<BackupServingContent> {
+        serving::read_entry(&self.prepared, &self.decision, expected, request)
+    }
+
     /// Read a bounded page from one target's exact published HEAD. Neither a
     /// historical Commit nor caller-supplied entries become a writable Current.
     /// No source/SYSTEM I/O, missing-target fallback or admission is performed.
@@ -645,6 +687,52 @@ impl Engine {
         let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
         let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
         let report = published_registry::observe(&prepared, &decision, &expected, &stop)?;
+        choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        Ok(report)
+    }
+
+    /// Verify complete published serving entities after observing the actual
+    /// Publication on every original source member. Reads every selected target
+    /// and its local SQLite/body/locator; no repair, writer or fence release.
+    pub fn inspect_backup_published_serving_images(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupServingImagesReport> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let task = Task::read(&DiskRoot::open(&self.root)?)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "Backup serving inspection belongs to another actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the retained serving worker",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
+        let report = serving::observe(&prepared, &decision, &expected, &stop)?;
         choices.observe_first_publication(&prepared, &candidate, &stop)?;
         Ok(report)
     }

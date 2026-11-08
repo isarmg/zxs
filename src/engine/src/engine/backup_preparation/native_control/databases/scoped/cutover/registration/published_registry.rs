@@ -57,7 +57,7 @@ struct Completion<'a> {
     targets: usize,
 }
 
-struct Plan {
+pub(super) struct Plan {
     resolved: configuration::ResolvedConfiguration,
     files: BTreeMap<PathBuf, Vec<u8>>,
     manifest: Vec<u8>,
@@ -97,7 +97,7 @@ fn object_path(kind: &str, hash: &str) -> Result<PathBuf> {
 }
 
 impl Plan {
-    fn capture(
+    pub(super) fn capture(
         prepared: &PreparedBackupRegistry,
         decision: &AdmittedBackupDecision,
         expected: &BackupFirstPublicationHash,
@@ -168,6 +168,9 @@ impl Plan {
             bytes: bytes as u64,
         })
     }
+    pub(super) fn configuration(&self) -> &BackupConfigurationReport {
+        &self.resolved.report
+    }
     fn files(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
             Namespace::PublishedRegistry,
@@ -186,7 +189,11 @@ impl Plan {
         }
         materials::require_capacity(&target.root, &self.files()?, stop)
     }
-    fn verify(&self, target: &Target, stop: &AtomicBool) -> Result<crate::VerifiedDiskRegistry> {
+    pub(super) fn verify(
+        &self,
+        target: &Target,
+        stop: &AtomicBool,
+    ) -> Result<crate::VerifiedDiskRegistry> {
         materials::verify(&target.root, &self.files()?, stop)?;
         let held = target
             .root
@@ -222,7 +229,7 @@ impl Plan {
         }
         Ok(())
     }
-    fn state_at(
+    pub(super) fn state_at(
         &self,
         target: &Target,
         stop: &AtomicBool,
@@ -281,7 +288,7 @@ pub(super) fn install(
     observe_with_plan(prepared, decision, &plan, stop)
 }
 
-fn observe_with_plan(
+pub(super) fn observe_with_plan(
     prepared: &PreparedBackupRegistry,
     decision: &AdmittedBackupDecision,
     plan: &Plan,

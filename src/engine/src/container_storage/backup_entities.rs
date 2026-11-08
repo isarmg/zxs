@@ -20,9 +20,11 @@ use std::{
 
 mod placement;
 mod recovery;
+mod serving;
 mod store;
 pub(crate) use placement::EntityPlacement;
 pub(crate) use recovery::MAX_RECOVERY_RANGE;
+pub(crate) use serving::{PublishedImageBinding, capacity_before_choice};
 const ROOT: &str = "activation-image";
 const MANIFEST: &str = "manifest.json";
 const MAX_ENTRIES: usize = 100_000;
@@ -70,6 +72,7 @@ impl Data<'_> {
 /// Borrowed from exactly one target's independently admitted snapshot. This is
 /// not a live DiskResource or a capability to write outside activation-image.
 pub(crate) struct Image<'a> {
+    root_name: &'static str,
     directories: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, Data<'a>>,
     metadata_bytes: usize,
@@ -88,6 +91,36 @@ impl<'a> Image<'a> {
         fence_hash: &str,
         stop: &AtomicBool,
     ) -> Result<Self> {
+        let mut image = Self::build(root, admitted, prefix, ROOT, stop)?;
+        #[derive(Serialize)]
+        struct Manifest<'a> {
+            format: &'static str,
+            source_fence_hash: &'a str,
+            directories: &'a BTreeSet<PathBuf>,
+            files: BTreeMap<&'a PathBuf, Descriptor>,
+        }
+        image.manifest = canonical_json(&Manifest {
+            format: "zxs-backup-target-entity-image",
+            source_fence_hash: fence_hash,
+            directories: &image.directories,
+            files: image
+                .files
+                .iter()
+                .map(|(path, data)| (path, data.descriptor()))
+                .collect(),
+        })?;
+        if image.manifest.len() > MAX_MANIFEST {
+            return Err(budget());
+        }
+        Ok(image)
+    }
+    fn build(
+        root: &DiskRoot,
+        admitted: &'a AdmittedState,
+        prefix: &[String],
+        root_name: &'static str,
+        stop: &AtomicBool,
+    ) -> Result<Self> {
         let state = admitted.state();
         let mut base = PathBuf::from("tree");
         for name in prefix {
@@ -99,6 +132,7 @@ impl<'a> Image<'a> {
         }
         base.push("histories");
         let mut image = Self {
+            root_name,
             directories: BTreeSet::new(),
             files: BTreeMap::new(),
             metadata_bytes: 0,
@@ -110,7 +144,7 @@ impl<'a> Image<'a> {
             body_bytes: 0,
         };
         let paths = Paths::build(state, &base, &mut image, stop)?;
-        image.placement = EntityPlacement::capture(state, &paths, stop)?;
+        image.placement = EntityPlacement::capture(state, &paths, root_name, stop)?;
         let databases = PreparedDatabases::capture(admitted, stop)?;
         for database in databases.into_databases() {
             preparation_checkpoint(stop)?;
@@ -157,26 +191,6 @@ impl<'a> Image<'a> {
             if state.content_states[&version.version_id] == ContentState::Available {
                 image.add_payload(root, directory, version, stop)?;
             }
-        }
-        #[derive(Serialize)]
-        struct Manifest<'a> {
-            format: &'static str,
-            source_fence_hash: &'a str,
-            directories: &'a BTreeSet<PathBuf>,
-            files: BTreeMap<&'a PathBuf, Descriptor>,
-        }
-        image.manifest = canonical_json(&Manifest {
-            format: "zxs-backup-target-entity-image",
-            source_fence_hash: fence_hash,
-            directories: &image.directories,
-            files: image
-                .files
-                .iter()
-                .map(|(path, data)| (path, data.descriptor()))
-                .collect(),
-        })?;
-        if image.manifest.len() > MAX_MANIFEST {
-            return Err(budget());
         }
         Ok(image)
     }

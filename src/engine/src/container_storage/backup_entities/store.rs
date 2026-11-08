@@ -4,7 +4,7 @@ use crate::history_package::{install_preparation_bytes, preparation_path_exists}
 use std::io::Read;
 
 fn inventory(root: &DiskRoot, image: &Image<'_>, complete: bool, stop: &AtomicBool) -> Result<()> {
-    let path = root.path().join(ROOT);
+    let path = root.path().join(image.root_name);
     if !preparation_path_exists(root, &path)? {
         return if complete {
             Err(invalid("target entity image is missing"))
@@ -13,12 +13,29 @@ fn inventory(root: &DiskRoot, image: &Image<'_>, complete: bool, stop: &AtomicBo
         };
     }
     let held = root.private_child(&path)?;
+    let mut retained_staging = 0usize;
     let mut pending = vec![PathBuf::new()];
     let mut seen = BTreeSet::new();
     while let Some(parent) = pending.pop() {
         for entry in held.entries(&held.path().join(&parent))? {
             preparation_checkpoint(stop)?;
-            let child = parent.join(entry.map_err(fs_error)?);
+            let name = entry.map_err(fs_error)?;
+            let child = parent.join(&name);
+            if image.root_name == super::serving::PUBLISHED_ROOT
+                && child != Path::new(MANIFEST)
+                && !image.directories.contains(&child)
+                && !image.files.contains_key(&child)
+                && platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
+            {
+                retained_staging += 1;
+                if retained_staging > 1024 {
+                    return Err(budget());
+                }
+                // Interrupted private writes are not entities or completion
+                // evidence. Keep them, bounded, without promoting or removing.
+                held.open_read_regular(&held.path().join(&parent).join(&name))?;
+                continue;
+            }
             if !seen.insert(child.clone()) || seen.len() > MAX_ENTRIES + 1 {
                 return Err(budget());
             }
@@ -77,7 +94,7 @@ pub(super) fn require_capacity(
     stop: &AtomicBool,
 ) -> Result<()> {
     inventory(root, image, false, stop)?;
-    let base = root.path().join(ROOT);
+    let base = root.path().join(image.root_name);
     let mut missing = 16u64 * 1024 * 1024;
     // Include a bounded conservative directory allocation allowance. It is a
     // preflight, not a promise against concurrent consumers or filesystem ENOSPC.
@@ -132,7 +149,7 @@ impl<R: Read> Read for CopyInput<'_, R> {
 
 pub(super) fn install(root: &DiskRoot, image: &Image<'_>, stop: &AtomicBool) -> Result<()> {
     require_capacity(root, image, stop)?;
-    let base = root.path().join(ROOT);
+    let base = root.path().join(image.root_name);
     root.private_dir(&base)?;
     install_preparation_bytes(root, &base.join(MANIFEST), &image.manifest)?;
     for directory in &image.directories {
@@ -157,7 +174,7 @@ pub(super) fn install(root: &DiskRoot, image: &Image<'_>, stop: &AtomicBool) -> 
 }
 pub(super) fn verify(root: &DiskRoot, image: &Image<'_>, stop: &AtomicBool) -> Result<()> {
     inventory(root, image, true, stop)?;
-    let base = root.path().join(ROOT);
+    let base = root.path().join(image.root_name);
     if root.read_bytes(&base.join(MANIFEST), MAX_MANIFEST)? != image.manifest {
         return Err(invalid(
             "target image manifest differs from the complete original plan",

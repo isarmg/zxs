@@ -44,7 +44,7 @@ impl Image<'_> {
                     "recovery range is outside the frozen version",
                 )
             })?;
-        let mut file = root.open_read_regular(&root.path().join(ROOT).join(relative))?;
+        let mut file = root.open_read_regular(&root.path().join(self.root_name).join(relative))?;
         if file.metadata()?.len() != version.logical_size {
             return Err(Error::new(
                 ErrorCode::ChecksumMismatch,

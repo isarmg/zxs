@@ -181,3 +181,33 @@ SYSTEM 保留的原任务在冷开重建旧权威和旧 fence 后，可重复同
 本片不安装 runtime `disk.json`、普通 `metadata`、活动 Engine CurrentRegistry 或 writer 资源，不最终绑定 serving locator/范围数据库，不执行源取消或 unfence；既有 `require_isolated`、Backup 普通激活拒绝和 H03 门禁全部保留。目标仍为冻结已发布备份读视图，不是正常业务系统的新成员。固定 Genesis、单 primary 原链、完整显式 1–8 目标、父子同层同盘的支持范围不扩大；复杂旧生命周期、跨旧目标合流与完整外来链正式接纳仍未完成。
 
 按本轮指示未进行审查、编译、测试、静态检查或 CI，也未对真实盘执行这些 API。生产源码存在不代表已通过故障、资源或部署验收。
+
+<a id="backup-published-serving-images"></a>
+
+## 已发布实体、对象库与同目标 serving locator
+
+`GenerationRegistryInstalled` 之后，原后台任务现在继续安装 `published-serving-image`。这不是把先前 `activation-image` 改名为成功，也不重写已经决定的 Candidate、Publication、旧 marker 或任何原收据。每个目标以**自己实际保存的首笔已发布完整 native State**重建 FILE/目录 SQLite、全部保留版本描述及内容状态、父子目录森林和相对实体地址，再从自己的已认证历史包复制 AVAILABLE 正文。文件全部版本、对象数据库、备注/标签等仍置于同一个实体和同一个目标盘；嵌套目录仓库维持原同层同盘约束，每一级地址使用原决定的直接上游前缀。
+
+新 image 的严格 manifest 同时绑定 source fence、原 decision、真实 Publication、已发布 snapshot、原生 registry commitment、准确目标身份及完整 `EntityPlacement`。这些值从原生闭包生成，不接收调用者任意物理路径。locator 指向这个目标新实体内的 `.zxs-versions/<ver>/content/<creation_name>`，FILE 与目录 SQLite 也由相同已发布 State 编码，而非照搬旧源序列的数据库。旧准备材料和旧源独立保留，现阶段不尝试覆盖、硬链接、reflink、去重或提前清理以节约空间。
+
+### 自动后台安装、容量和原任务续作
+
+- 选取一项**新**不可逆 native decision 之前，先在所有目标检查额外完整正文副本加图片规划最大元数据/目录分配的保守容量界限；这不预造 Candidate、不变更票数，也不是文件系统空间预留。已有原决定按原任务继续，不能因容量不足重新选目标。
+- 安装前再次针对所有目标做真实缺失文件/容量预检。每盘需要额外一套完整实体，不借其他目标的空闲容量；ENOSPC、掉盘或文件系统错误返回并保留原字节，不假装回滚已发布决定。
+- 每盘无覆盖复制后实际重读全量目录、元数据、对象 SQLite、checksum 和正文；全部目标验证完成后，才写绑定**完整目标清单及每盘 image 摘要**的 `published-serving-images-installed.json`。后台状态随后到 `GenerationServingImagesInstalled`，不报告迁移成功或 writer 已激活。
+- 未完成的同原任务匹配部分可以补缺。已经声称完成却缺失/损坏的 image 直接拒绝，不先降级标记再从旧 image/其他盘修补。旧完成标记不改义。保留受限数量的原子临时文件，但不把它们当实体或完成证据，也不移除它们。
+- 显式 `BackupDecidedTargets::resume_published_serving_installation` 需要独立保留的原 decision/Publication 摘要及宿主对目标写入的授权。`inspect_published_serving_images` 只读，`Engine::inspect_backup_published_serving_images` 另重读全部原 metadata 成员的真实原 Publication。离线续作不访问已失联源或 SYSTEM，更不补造原票。
+
+### 命名空间与实际正文绑定
+
+新增 `read_published_entry_range(expected, request)` 接受 `BackupServingRead`：准确目标 slot、分支或目录 HEAD scope、预期 HEAD、entry ID、version ID 和读取范围。它不接受物理路径或任意历史版本替代当前条目。所有目标闭包先通过，然后只读指定目标自己的已发布快照，精确匹配同一 HEAD/entry/version；软删除 D、非文件条目与 Purged/Migrated/Retired 内容均不得返回正文。
+
+返回 `BackupServingContent` 包含真实 Publication/registry、entry/version 与该目标实体相对 locator。正文从该实体的实际文件 fd 读取，必须同一轮读完整文件并核对长度/散列后才释放不超过 4 MiB 的请求范围，零长度范围也不跳过完整性。完成后重新观察全部 image、原 Publication 和 registry。没有从源盘、target zero、其他副本或旧 `activation-image` 回退。宿主仍须独立认证并逐 scope 授权；此 API 尚未接到普通 HTTP/SMB。
+
+### 资源及未完成边界
+
+同一现有实体规划器限定最多 100,000 项、96 MiB 元数据、16 MiB image manifest；对象 SQLite 完整集合仍受 4,096 库/64 MiB 预算。完成描述最多 64 KiB，保留原子临时文件最多 1,024 项。一次范围读取只缓冲请求范围加 64 KiB 正文块，但会重建并验证完整选定集，**不是普通热路径或 O(页大小) 查询**。同步 I/O 的取消检查点不提供硬关机时限。
+
+本片补齐已发布 FILE/目录对象库与真实实体 locator 的读取前置，仍不安装普通 Engine CurrentRegistry、活动 `metadata`/`disk.json`、目标 writer 或最终 SYSTEM/盘根绑定，不安装未来写入策略或解除原源围栏。原生 Backup 激活拒绝、原 voter/副本义务和 helper H03 门禁保持；固定 Genesis、完整单 primary 原链与原明确 1–8 目标的支持范围未扩展。原源池仍可能停写，不能在生产池试运行这些未完成切换接口。
+
+按本轮要求仅编写生产代码与文档，未审查、编译、测试、运行静态检查/CI，也未对真实盘执行 API。未验证源码和阶段完成标记不构成最终安全切换验收。

@@ -296,3 +296,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### Backup 目标原生注册图安装与冻结命名空间
 
 原后台 registry 任务在真实 Publication 之后，把实际原生 registry 父/后继页和精确 Config 无覆盖持久到所有原选定目标，逐盘严格读回后进入 `GenerationRegistryInstalled`。离线显式原任务续存拒绝“已完成但缺页”的盘，读取不修复；新增目标/live 注册图观察及指定目标自身首笔 State 的有界 HEAD 命名空间读取，保留 D 节点和内容退役状态。此安装仍在隔离证据域，没有普通 Engine CurrentRegistry、serving locator/数据库最终绑定、目标 writer 或源解围栏。详见[生产写读和边界](../design/backup-native-generation-authority.md#backup-published-registry)。本片未审查、编译、测试或 CI，未操作真实盘。
+
+### 已发布目标实体与 serving locator
+
+原 Backup 后台决定在目标注册图实际安装后，继续将每个目标自身已发布完整 State 编码为独立 FILE/目录 SQLite、完整实体和绑定原 Publication/registry 的 locator；源码接线到 `GenerationServingImagesInstalled`。指定目标的 HEAD/entry/version 范围读取实际打开这个实体，拒绝 D 与不可用正文，不从旧源或别盘回退；原任务可显式续存，声称完成的损坏拒绝自动补造。完整容量、原子边界与 API 见[已发布实体闭包](../design/backup-native-generation-authority.md#backup-published-serving-images)。仍未安装活动 Current/writer、最终 SYSTEM/盘根或解除源围栏；H03 不放行。本片未审查、编译、测试或运行 CI，无真实盘操作。

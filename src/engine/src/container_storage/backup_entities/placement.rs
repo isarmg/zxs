@@ -70,7 +70,12 @@ impl EntityPlacement {
             directories: Vec::new(),
         }
     }
-    pub(super) fn capture(state: &State, paths: &Paths, stop: &AtomicBool) -> Result<Self> {
+    pub(super) fn capture(
+        state: &State,
+        paths: &Paths,
+        root_name: &str,
+        stop: &AtomicBool,
+    ) -> Result<Self> {
         let mut directories = Vec::with_capacity(state.directory_git_repositories.len());
         for repository in state.directory_git_repositories.values() {
             preparation_checkpoint(stop)?;
@@ -84,7 +89,7 @@ impl EntityPlacement {
                 directory_id: repository.directory_id.clone(),
                 outer_repository_id: repository.repository_id.clone(),
                 parent_directory_id: None,
-                path: Path::new(ROOT).join(path),
+                path: Path::new(root_name).join(path),
             });
         }
         // Longest strict path ancestor is the actual repository boundary in the
@@ -121,7 +126,7 @@ impl EntityPlacement {
                 .files
                 .get(&(history.clone(), file.clone()))
                 .ok_or_else(|| invalid("retained file has no whole image placement"))?;
-            let path = Path::new(ROOT).join(path);
+            let path = Path::new(root_name).join(path);
             files.push(FileHome {
                 history_tree_id: history,
                 file_id: file,

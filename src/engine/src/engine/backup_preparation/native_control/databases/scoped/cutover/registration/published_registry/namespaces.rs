@@ -25,14 +25,14 @@ pub struct BackupNamespacePage {
 }
 
 impl BackupNamespaceScope {
-    fn validate(&self) -> Result<()> {
+    pub(in super::super) fn validate(&self) -> Result<()> {
         match self {
             Self::BranchHead(id) => validate_id(id, "br")?,
             Self::DirectoryHead(id) => validate_id(id, "dbr")?,
         }
         Ok(())
     }
-    fn entries<'a>(&self, state: &'a State) -> Result<(&'a str, &'a [Entry])> {
+    pub(in super::super) fn entries<'a>(&self, state: &'a State) -> Result<(&'a str, &'a [Entry])> {
         match self {
             Self::BranchHead(id) => {
                 let branch = state.branches.get(id).ok_or_else(|| {
