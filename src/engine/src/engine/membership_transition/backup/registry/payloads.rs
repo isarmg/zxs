@@ -418,7 +418,7 @@ impl<'a> PayloadPlan<'a> {
         self.prepared.recheck_names()
     }
 }
-fn sort(receipts: &mut [PayloadReceipt]) {
+pub(super) fn sort(receipts: &mut [PayloadReceipt]) {
     receipts.sort_by(|a, b| (&a.version_id, &a.disk_id).cmp(&(&b.version_id, &b.disk_id)));
 }
 fn budget() -> Error {
@@ -427,6 +427,65 @@ fn budget() -> Error {
         "Backup first payload proofs exceed the bounded native publication budget",
     )
 }
+/// Read every selected target's own exact body and existing native proofs.
+/// No source-root fallback and no creation of a missing CommitProof.
+pub(super) fn observe_selected(
+    prepared: &PreparedBackupRegistry,
+    candidate: &PreparedBackupFirstCandidate,
+    publication: &Publication,
+    seal: &PublicationSeal,
+    stop: &AtomicBool,
+) -> Result<()> {
+    for node in prepared.projection().selected_nodes() {
+        let (root, identity) = prepared
+            .payload_target(&node.identity.slot_id, node.identity.binding_generation)?
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "Backup Publication target is not in the original selected set",
+                )
+            })?;
+        for evidence in &candidate.candidate().versions {
+            preparation_checkpoint(stop)?;
+            prepared.recheck_names()?;
+            let directory = root
+                .path()
+                .join("histories")
+                .join(&evidence.version.history_tree_id)
+                .join("versions")
+                .join(&evidence.version.version_id);
+            let location = Location {
+                root,
+                source: None,
+                disk_id: &identity.disk_id,
+                slot_id: &identity.slot_id,
+                evidence,
+                directory,
+            };
+            location.verify_body(false, stop)?;
+            let proof = location.proof(candidate, &publication.finalize)?;
+            let directory = location.proof_directory(candidate.hash())?;
+            let local = LocalPublicationRef {
+                candidate: candidate.candidate(),
+                publication,
+                commit_proof: &proof,
+                publication_receipts: &seal.receipts,
+            };
+            if root.read_bytes(&directory.join("commit-proof.json"), MAX_METADATA)?
+                != encode_metadata(&proof, MAX_METADATA)?
+                || root.read_bytes(&directory.join("publication-proof.json"), MAX_METADATA)?
+                    != encode_metadata(&local, MAX_METADATA)?
+            {
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "selected Backup target lost its original local publication proof",
+                ));
+            }
+        }
+    }
+    prepared.recheck_names()
+}
+
 fn read_held(file: &mut ReadFile, maximum: usize, stop: &AtomicBool) -> Result<Vec<u8>> {
     let length = usize::try_from(file.metadata()?.len())
         .ok()

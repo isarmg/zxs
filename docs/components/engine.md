@@ -280,3 +280,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ## 逐笔终态登记链与既有关闭生命周期
 
 终态后继由原完成摘要与下一完整 intent 的不可变链接串行扩展，不替换 selector，不扫描孤立目录来推断操作。冷态按准确链重建 registry/永久回执并持有每个已关闭盘的进程排除；未决下一笔不抹掉前面的已完成结果。Disabled 绑定仅在原 final-voter/历史 portable authority、原 Stop 和当前 epoch 全部匹配后重用关闭屏障，不重复追加 Stop 或执行新 PlannedOffline。metadata resume/活动命名空间仍硬拒绝，详见[协议、恢复和成本](../design/terminal-retirement-chain.md)。未审查/编译/测试/CI。
+
+### Backup 目标公共 Publication 与离线原证据续存
+
+后台原任务在真实首笔出版之后，将同一 native Publication/seal 无覆盖存入所有选定目标，包含零 AVAILABLE 历史；全部本地正文、原 CommitProof/local proof 和候选依赖读回后到 `GenerationFirstPublicationRetained`。新增 `inspect_backup_target_publication`；独立保存 decision 与 `BackupFirstPublicationHash` 的 `BackupDecidedTargets` 可验读、范围恢复或显式续存原公共证据，不访问旧源/SYSTEM，也不补造缺票。没有完整公共见证则要求原任务恢复，任一冲突/损坏保留拒绝。仍无活动 Config/CurrentRegistry、目标 writer、源解围栏或正式 H03 接纳。见[目标公共出版闭包](../design/backup-native-generation-authority.md#backup-target-publication)。未审查、编译、测试或 CI。

@@ -5,6 +5,8 @@ use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
+mod first_publication;
+pub use first_publication::BackupTargetPublicationReport;
 mod first_candidate;
 pub use first_candidate::BackupFirstCandidateReport;
 mod generation_authority;

@@ -6,6 +6,10 @@ use crate::engine::membership_transition::PreparedBackupFirstCandidate;
 use crate::journal::BackupFirstJournal;
 use payloads::{PayloadPlan, VerifiedPayloadReceipts};
 
+mod evidence;
+pub use evidence::BackupFirstPublicationHash;
+pub(in crate::engine) use evidence::PreparedBackupFirstPublication;
+
 #[derive(Clone, Debug)]
 pub struct BackupFirstPublicationReport {
     pub operation_id: OperationId,
@@ -46,7 +50,7 @@ impl BackupChoiceContext {
         prepared: &PreparedBackupRegistry,
         candidate: &PreparedBackupFirstCandidate,
         stop: &AtomicBool,
-    ) -> Result<BackupFirstPublicationReport> {
+    ) -> Result<PreparedBackupFirstPublication> {
         let (finalize, finals) = self.first_finalize_evidence(prepared, candidate, stop)?;
         let mut slots = BTreeMap::new();
         let mut started = false;
@@ -165,7 +169,7 @@ impl BackupChoiceContext {
             )?;
         }
         payloads.local_publications(&published, &seal, true, stop)?;
-        self.observe_first_publication(prepared, candidate, stop)
+        self.read_first_publication(prepared, candidate, stop)
     }
 
     /// Read-only fresh observation. A torn/missing publication or local proof
@@ -176,6 +180,20 @@ impl BackupChoiceContext {
         candidate: &PreparedBackupFirstCandidate,
         stop: &AtomicBool,
     ) -> Result<BackupFirstPublicationReport> {
+        Ok(self
+            .read_first_publication(prepared, candidate, stop)?
+            .report()
+            .clone())
+    }
+
+    /// The owned evidence is produced only after fresh actual journal, object,
+    /// seal and body observation, never from a prospective receipt vector.
+    pub(in crate::engine) fn read_first_publication(
+        &self,
+        prepared: &PreparedBackupRegistry,
+        candidate: &PreparedBackupFirstCandidate,
+        stop: &AtomicBool,
+    ) -> Result<PreparedBackupFirstPublication> {
         let (finalize, finals) = self.first_finalize_evidence(prepared, candidate, stop)?;
         let payloads = PayloadPlan::new(self, prepared, candidate, &finalize)?;
         let receipts = payloads.observe(stop)?;
@@ -222,16 +240,6 @@ impl BackupChoiceContext {
         }
         payloads.local_publications(&published, &seal, false, stop)?;
         self.require_first_candidate(prepared, candidate, stop)?;
-        Ok(BackupFirstPublicationReport {
-            operation_id: self.intent.operation_id,
-            decision_hash: candidate.decision_hash().clone(),
-            authority_hash: candidate.authority_hash().into(),
-            candidate_hash: candidate.hash().into(),
-            snapshot_hash: candidate.snapshot_hash().into(),
-            publication_hash: object.hash,
-            first_sequence: candidate.sequence(),
-            original_metadata_members: candidate.members().to_vec(),
-            payload_receipts: published.payload_receipts.len(),
-        })
+        PreparedBackupFirstPublication::observed(prepared, candidate, published, seal)
     }
 }

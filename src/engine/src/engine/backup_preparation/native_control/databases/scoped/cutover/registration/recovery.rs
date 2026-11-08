@@ -2,7 +2,9 @@
 //! Detached reads require an independently retained decision hash and the entire
 //! original selected set. No old source/SYSTEM path is opened, repaired or used.
 use super::*;
-use crate::engine::membership_transition::{AdmittedBackupDecision, BackupRegistryDecisionHash};
+use crate::engine::membership_transition::{
+    AdmittedBackupDecision, BackupFirstPublicationHash, BackupRegistryDecisionHash,
+};
 
 /// Observation of actual native choice plus complete target readback. Not a
 /// migration-success receipt or permission to release the source fence.
@@ -77,6 +79,67 @@ impl BackupDecidedTargets {
     /// or published and cannot grant writer/source-unfence authority.
     pub fn inspect_first_generation_candidate(&self) -> Result<BackupFirstCandidateReport> {
         first_candidate::observe(&self.prepared, &self.decision, &AtomicBool::new(false))
+    }
+
+    /// Independently authenticate the original reserved Publication on every
+    /// selected target, including the zero-AVAILABLE-version case. `expected`
+    /// must have been retained from the successful live Publication barrier,
+    /// never discovered from these target files. This verifies local payloads
+    /// but does not claim present source health or an active Config/writer.
+    pub fn inspect_first_generation_publication(
+        &self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupTargetPublicationReport> {
+        first_publication::observe(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
+    /// Explicit, no-clobber continuation of the ORIGINAL publication copy to
+    /// all original selected targets. Requires a complete authenticated witness
+    /// on at least one selected target and all prior target-local body/proofs.
+    /// The host must authorize these target writes separately from inspection.
+    /// No source path, member vote, local payload proof, marker or fence changes.
+    pub fn resume_first_publication_replication(
+        &mut self,
+        expected: &BackupFirstPublicationHash,
+    ) -> Result<BackupTargetPublicationReport> {
+        first_publication::resume(
+            &self.prepared,
+            &self.decision,
+            expected,
+            &AtomicBool::new(false),
+        )
+    }
+
+    /// Read a frozen version through the independently authenticated original
+    /// Publication, not merely the earlier choice certificate. Full selected
+    /// publication/body gates run before and after the bounded range read; no
+    /// missing target can be hidden by fallback. This remains a recovery API,
+    /// not normal file access, membership admission or a writer capability.
+    pub fn read_published_version_range(
+        &self,
+        expected: &BackupFirstPublicationHash,
+        slot: &str,
+        version_id: &str,
+        offset: u64,
+        length: usize,
+    ) -> Result<BackupRecoveredContent> {
+        name_policy::validate_slot(slot)?;
+        validate_id(version_id, "ver")?;
+        if length > crate::container_storage::backup_entities::MAX_RECOVERY_RANGE {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "published backup range exceeds 4 MiB",
+            ));
+        }
+        self.inspect_first_generation_publication(expected)?;
+        let content = self.read_version_range(slot, version_id, offset, length)?;
+        self.inspect_first_generation_publication(expected)?;
+        Ok(content)
     }
 
     /// Continue only this selected task's isolated native candidate bytes. The
@@ -380,6 +443,51 @@ impl Engine {
         let decision = choices.observe_decision(&prepared, &stop)?;
         let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
         choices.observe_first_publication(&prepared, &candidate, &stop)
+    }
+
+    /// Observe both the actual all-original native Publication and every
+    /// selected target's complete common evidence and local payload proofs.
+    /// Empty histories still require the same target-local publication capsule.
+    /// Nothing is written or activated; source fence and active Config remain.
+    pub fn inspect_backup_target_publication(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupTargetPublicationReport> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let task = Task::read(&DiskRoot::open(&self.root)?)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "first Backup Publication inspection belongs to another actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the retained worker before first Publication inspection",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
+        first_publication::observe(&prepared, &decision, &expected, &stop)
     }
 
     /// Observe actual native ACCEPT/FINALIZE from every original member. This

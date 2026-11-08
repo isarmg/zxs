@@ -122,3 +122,20 @@ SYSTEM 保留的原任务在冷开重建旧权威和旧 fence 后，可重复同
 - 真实核验成本随保留正文总量 × 完整目标/来源 route 增长；发布前后会重验，普通保存路径未加入此全量扫描。停止检查点仍不承诺任意故障 I/O 的硬关机时限。
 - 没有安装有效 fanout Config/CurrentRegistry、最终绑定范围数据库或 serving locator，没有活动目标 writer、策略延续、source-unfence 或 helper/H03 正式接纳；普通 Backup activation 继续明确拒绝。即使本报告存在，也不能当作运行态完成或把未完成目标注册为普通成员。
 - 按用户要求，本片未审查、编译、测试、静态校验或 CI，未对真实池触发上述操作；仅生产源码、文档和 TASKS 更新。
+
+<a id="backup-target-publication"></a>
+
+## 所有目标保留真实首笔 Publication 与原决定离线续存
+
+本片接在真实首笔 Publication 全员日志及逐 route 正文证明之后。后台原任务将原生 Publication 和全原成员 seal 保存到**每个原选定目标**的 `backup-generation-first-publication` 独立域，最后写 `generation-first-publication-retained.json`。没有 AVAILABLE 版本的历史也必须具备这份公共终态，不能因为没有版本 local proof 就省略 Publication。只有全部目标读回原对象、完整候选和自己的真实正文/CommitProof/local publication 后才到 `GenerationFirstPublicationRetained`。
+
+- Publication 必须等于原确定 Candidate、完整 OperationResult 和所有原成员 ACCEPT→FINALIZE→Publication 链。原成员 slot 与原 Config 绑定，首 ACCEPT 从零前驱开始。payload receipts 必须精确覆盖每个 AVAILABLE 版本的全部保留原链和全部选定目标，绑定不能减少、替换或遗漏；沿用原生确定排序和 65,536 条上限。
+- 两份 native 文件分别限 64 MiB，manifest/完成描述分别限 16 KiB。全部目标先各自验存和容量检查，再做原字节无覆盖写入；未知、冲突或损坏保留拒绝。临时原子文件只保留、不提升为证据。完成标记不单独授权任何后续活动。
+- `Engine::inspect_backup_target_publication` 同时读取原成员真实 Publication 和全部目标公共闭包。原 `inspect_backup_first_publication` 仍仅报告真实保留代际出版，不暗示新公共闭包已齐备。
+- `BackupDecidedTargets::inspect_first_generation_publication` 额外要求独立保存的 `BackupFirstPublicationHash`，并复用打开时独立保存的原 decision hash。摘要解析只检查表示；调用者必须从先前成功的可信 live 观察独立保存，不能从待检查目标发现摘要再自证。每次只走原选定目标持有的 fd，重建完整原 Candidate/State/历史依赖，再验公共文件和该目标自己的真实正文及原 local proof，不访问失联源或 SYSTEM，不用另一副本掩盖损坏。
+- `read_published_version_range` 在原有不超过 4 MiB 范围读取前后执行上述完整门禁。返回的仍是冻结恢复内容，不是活动文件、当前命名空间或普通 SMB/HTTP 读取能力。
+- `resume_first_publication_replication` 是显式授权写入的离线同任务续存，**不是重新决定**。至少一个原选定目标必须已有独立摘要认证的完整公共证据，全部原选定目标的既有正文和 local proof 都必须在；任何声称完整但损坏的目标直接拒绝，不跳过。不补造原成员日志票、早期 CommitProof 或 local proof。若崩溃早于任何公共完成标记，保持 `RecoveryRequired`，由原源任务恢复，不用计划摘要推算“已经投票”。
+
+这些 API 不创建目标 runtime seal、CurrentRegistry、有效 fanout Config 或 writer 租约，不修改活动 State，不解除源围栏，不删除旧数据或缩减原副本义务。离线验读证明的是原保留代际已独立留存和当前目标材料完整，不证明已离线原源的当前健康。Serving locator、最终绑定范围数据库、未来策略和完整运行态切换仍未完成；H03 外来一次性全低级链不得由此放行。普通设置和 helper 不自动调用不可逆原决定接口。
+
+本片按当前指示未审查、编译、测试或运行 CI，代码和声明均不能替代实际故障验收。

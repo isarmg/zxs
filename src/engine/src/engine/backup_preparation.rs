@@ -32,7 +32,8 @@ pub use native_control::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
     BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub(in crate::engine) use native_control::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
@@ -109,6 +110,10 @@ pub enum BackupPreparationPhase {
     /// Actual first Publication, all-original seal and route-local proofs in
     /// the reserved generation. Still no active Config/writer or source release.
     GenerationFirstCandidatePublished,
+    /// Exact real first Publication and seal, with complete payload proof
+    /// readback, retained on every selected target (including empty histories).
+    /// Still no active Config/Current, target writer or source fence release.
+    GenerationFirstPublicationRetained,
     Blocked,
     SourceChanged,
 }

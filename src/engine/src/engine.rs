@@ -22,10 +22,12 @@ pub use backup_preparation::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
     BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub use membership_transition::{
-    BackupFirstFinalizeReport, BackupFirstPublicationReport, BackupRegistryDecisionHash,
+    BackupFirstFinalizeReport, BackupFirstPublicationHash, BackupFirstPublicationReport,
+    BackupRegistryDecisionHash,
 };
 mod config;
 pub use config::ValidatedConfig;

@@ -10,9 +10,11 @@ pub(in crate::engine) use generation::PreparedBackupAuthority;
 pub(crate) use generation::PreparedBackupFirstCandidate;
 pub(in crate::engine) use registry::{
     AdmittedBackupDecision, BackupChoiceContext, BackupFrozenControl,
+    PreparedBackupFirstPublication,
 };
 pub use registry::{
-    BackupFirstFinalizeReport, BackupFirstPublicationReport, BackupRegistryDecisionHash,
+    BackupFirstFinalizeReport, BackupFirstPublicationHash, BackupFirstPublicationReport,
+    BackupRegistryDecisionHash,
 };
 
 pub(super) fn verify_intent(intent: &TransitionIntent) -> Result<()> {

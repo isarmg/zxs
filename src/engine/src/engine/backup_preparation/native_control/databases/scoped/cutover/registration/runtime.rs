@@ -192,7 +192,8 @@ fn run(
             finalized.original_metadata_members.len(),
         );
     })?;
-    let published = choices.publish_first_candidate(&prepared, &candidate, stop)?;
+    let publication = choices.publish_first_candidate(&prepared, &candidate, stop)?;
+    let published = publication.report();
     update(system, progress, |status| {
         status.phase = BackupPreparationPhase::GenerationFirstCandidatePublished;
         status.detail = format!(
@@ -200,6 +201,15 @@ fn run(
             published.publication_hash,
             published.payload_receipts,
             published.original_metadata_members.len(),
+        );
+    })?;
+    let retained = first_publication::prepare(&prepared, &decision, &candidate, publication, stop)?;
+    choices.observe_first_publication(&prepared, &candidate, stop)?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationFirstPublicationRetained;
+        status.detail = format!(
+            "decision {hash} retains actual Publication {} and complete payload proofs on all {} selected targets, including empty histories; detached inspection requires independently retained decision and publication hashes; no active Config/Current, target writer or source release",
+            retained.publication.publication_hash, retained.targets,
         );
     })
 }

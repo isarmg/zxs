@@ -16,7 +16,8 @@ pub use registration::{
     BackupDecidedTargets, BackupDirectoryWriterRoute, BackupFileWriterRoute,
     BackupFirstCandidateReport, BackupGenerationAuthorityReport, BackupGenerationControlReport,
     BackupGenerationPreparationReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub(in crate::engine) use registration::{
     BackupRegistryProjection, MAX_DECISION_BYTES, PreparedBackupRegistry,
