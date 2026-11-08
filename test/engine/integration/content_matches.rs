@@ -1,6 +1,8 @@
 //! Real publication and cold-read cases, without creating shared identities.
 #[path = "content_matches/rename.rs"]
 mod rename;
+#[path = "content_matches/shared_history.rs"]
+mod shared_history;
 use storage_contract::content_matches::{ContentMatchPage, ContentMatchRequest};
 use storage_contract::history_window::HistoryWindowCancellation;
 use storage_engine::{

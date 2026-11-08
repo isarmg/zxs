@@ -53,6 +53,7 @@ mod http_directory_history;
 mod http_directory_layout;
 mod http_directory_staging;
 mod http_file_history_source;
+mod http_shared_history;
 pub use backend_file_history::{
     ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
     HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
@@ -774,6 +775,14 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         repository_id: &str,
     ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
+    fn shared_history(
+        &self,
+        _identity: &Identity,
+        _request: storage_contract::shared_history::SharedHistoryRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::shared_history::SharedHistoryGraph, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn content_matches(
         &self,
         _identity: &Identity,
@@ -1536,6 +1545,15 @@ impl Backend for AuthorizedBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.backend
             .default_directory_branch(&self.current(identity)?, repository_id)
+    }
+    fn shared_history(
+        &self,
+        identity: &Identity,
+        request: storage_contract::shared_history::SharedHistoryRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::shared_history::SharedHistoryGraph, ApiError> {
+        self.backend
+            .shared_history(&self.current(identity)?, request, cancellation)
     }
     fn content_matches(
         &self,

@@ -26,8 +26,9 @@ mod nodes;
 mod projection;
 mod query;
 mod read;
+mod shared_history;
 use super::history_selection as selection;
-pub use read::{ContentMatchRead, FileHistorySourceRead, HistoryWindowRead};
+pub use read::{ContentMatchRead, FileHistorySourceRead, HistoryWindowRead, SharedHistoryRead};
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/history_window_oracle_tests.rs"]

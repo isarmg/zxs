@@ -1558,6 +1558,31 @@ impl Backend for EngineBackend {
             },
         })
     }
+    fn shared_history(
+        &self,
+        identity: &Identity,
+        request: storage_contract::shared_history::SharedHistoryRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::shared_history::SharedHistoryGraph, ApiError> {
+        let read = {
+            let engine = self
+                .engine
+                .lock()
+                .expect("invariant: service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            engine
+                .capture_shared_history(request, cancellation)
+                .map_err(error)?
+        };
+        let page = read.graph().map_err(error);
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        engine.recheck_shared_history(&read).map_err(error)?;
+        page
+    }
     fn content_matches(
         &self,
         identity: &Identity,

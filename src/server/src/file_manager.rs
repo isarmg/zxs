@@ -24,6 +24,10 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_disk_directory::create),
         )
         .route(
+            "/api/file-manager/files/{file}/shared-history",
+            get(http_shared_history::read),
+        )
+        .route(
             "/api/file-manager/files/{file}/content-matches",
             get(http_content_matches::read),
         )

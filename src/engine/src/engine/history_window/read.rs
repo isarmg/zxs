@@ -343,3 +343,52 @@ impl Engine {
         self.recheck_history_window(&read.read)
     }
 }
+
+/// A complete bounded automatic component, retaining separate file/event IDs.
+/// Equality edges do not confer mutation authority or a body-read lease.
+pub struct SharedHistoryRead {
+    read: HistoryWindowRead,
+    request: storage_contract::shared_history::SharedHistoryRequest,
+}
+impl SharedHistoryRead {
+    /// Prepare outside the Engine lock, then recheck before exposing the page.
+    /// Index and scan budgets bound CPU and additional storage. An oversized
+    /// component fails rather than presenting a partial graph as complete.
+    pub fn graph(&self) -> Result<storage_contract::shared_history::SharedHistoryGraph> {
+        self.read.cancellation.checkpoint()?;
+        let preparation = self
+            .read
+            .preparation
+            .lock()
+            .expect("invariant: history preparation lock poisoned");
+        let PagePreparation::Pending { view, .. } = &*preparation else {
+            unreachable!("invariant: shared-history read never prepares an ordinary history page");
+        };
+        let query = query::Query::new_with_owner(
+            view,
+            &self.read.request,
+            &self.read.context,
+            &self.read.cancellation,
+            Some(&self.read.owner_version),
+        )?;
+        super::shared_history::project(&query, &self.request)
+    }
+}
+impl Engine {
+    /// Capture a currently admitted file/history root. The service supplies current
+    /// authentication; no body reads or persistent mutations occur here. Missing
+    /// ownership, stale roots and cancellation retain the history-read errors.
+    pub fn capture_shared_history(
+        &self,
+        request: storage_contract::shared_history::SharedHistoryRequest,
+        cancellation: HistoryWindowCancellation,
+    ) -> Result<SharedHistoryRead> {
+        let read = self.capture_history_window(request.history_request(), cancellation)?;
+        Ok(SharedHistoryRead { read, request })
+    }
+    /// Reject cancellation or a changed current ownership/context/history root.
+    /// Authentication is rechecked separately by the service under this lock.
+    pub fn recheck_shared_history(&self, read: &SharedHistoryRead) -> Result<()> {
+        self.recheck_history_window(&read.read)
+    }
+}

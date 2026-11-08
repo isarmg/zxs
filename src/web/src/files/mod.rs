@@ -16,6 +16,7 @@ mod page;
 mod placement;
 mod review;
 mod rows;
+mod shared_history;
 mod staging;
 mod tags;
 mod version_tree;

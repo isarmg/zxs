@@ -68,6 +68,7 @@ pub use directory_history::DirectoryHistoryRead;
 mod history_window;
 pub use history_window::{
     ContentMatchRead, FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead,
+    SharedHistoryRead,
 };
 pub(crate) mod membership_transition;
 pub use membership_transition::{

@@ -106,8 +106,8 @@ pub use engine::{
     OpenedContent, OperationReadObservation, OperationReadPlan, OperationRecord,
     PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus, RangeContent,
     ReadFile, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
-    RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
-    WorkspaceReadPlan, verify_membership_control_archive,
+    RetainedWorkspaceLimits, SharedHistoryRead, ValidatedConfig, WorkspaceInventory,
+    WorkspaceInventoryRecord, WorkspaceReadPlan, verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

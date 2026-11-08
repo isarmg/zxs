@@ -310,6 +310,15 @@ fn semantics(name: &str, value: &Value) -> Result {
             let _: storage_contract::disk_details::DiskNoteResponse =
                 json_codec::from_value(value.clone())?;
         }
+        "SharedHistoryGraph" => {
+            use storage_contract::shared_history::{SharedHistoryGraph, SharedHistoryRequest};
+            let graph: SharedHistoryGraph = json_codec::from_value(value.clone())?;
+            let request = SharedHistoryRequest::parse(
+                graph.origin_file_id.as_str(),
+                &graph.history_root.to_string(),
+            )?;
+            graph.validate(&request)?;
+        }
         "ContentMatchPage" => {
             use storage_contract::content_matches::{
                 ContentMatchPage, ContentMatchRequest, MAX_CONTENT_MATCHES,
@@ -1022,3 +1031,7 @@ mod placement_configuration_tests;
 #[cfg(test)]
 #[path = "../../../test/tools/contract-check/unit/content_matches_tests.rs"]
 mod content_matches_tests;
+
+#[cfg(test)]
+#[path = "../../../test/tools/contract-check/unit/shared_history_tests.rs"]
+mod shared_history_tests;

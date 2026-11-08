@@ -1356,6 +1356,16 @@ impl Backend for ManagementBackend {
             .backend()?
             .default_directory_branch(identity, repository_id)
     }
+    fn shared_history(
+        &self,
+        identity: &Identity,
+        request: storage_contract::shared_history::SharedHistoryRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::shared_history::SharedHistoryGraph, crate::ApiError> {
+        self.inner
+            .backend()?
+            .shared_history(identity, request, cancellation)
+    }
     fn content_matches(
         &self,
         identity: &Identity,

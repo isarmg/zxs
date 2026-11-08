@@ -10016,6 +10016,263 @@
         "unverified"
       ],
       "description": "当前有效策略来源模式，不是所选条目已被捕获的证明。unconfigured仍使用仓库默认份数；retained不猜原模式；非Current的现行策略为unverified。递归模式仅来自完整已验证Current索引。"
+    },
+    "SharedHistoryNodeId": {
+      "type": "string",
+      "pattern": "^(ver|fnode|fmeta|fdel)_[0-9a-f]{32}$"
+    },
+    "SharedHistoryFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "creation_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        }
+      },
+      "required": [
+        "file_id",
+        "creation_name"
+      ]
+    },
+    "SharedHistoryVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "creation_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "logical_size": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "content_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "AVAILABLE",
+                "PURGED",
+                "MIGRATED"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version_id",
+        "file_id",
+        "creation_name",
+        "logical_size",
+        "content_hash",
+        "content_state"
+      ]
+    },
+    "SharedHistoryNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/SharedHistoryNodeId"
+        },
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "content",
+            "rename",
+            "tags",
+            "merge",
+            "deletion"
+          ]
+        },
+        "version_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "parent_node_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 2048,
+          "items": {
+            "$ref": "#/$defs/SharedHistoryNodeId"
+          }
+        }
+      },
+      "required": [
+        "node_id",
+        "file_id",
+        "kind",
+        "version_id",
+        "sequence",
+        "parent_node_ids"
+      ]
+    },
+    "SharedHistoryBranch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "branch_id": {
+          "$ref": "#/$defs/BranchId"
+        },
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "head_node_id": {
+          "$ref": "#/$defs/SharedHistoryNodeId"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived",
+            "migrated",
+            "merged"
+          ]
+        },
+        "merged_into": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "branch_id",
+        "file_id",
+        "name",
+        "head_node_id",
+        "state",
+        "merged_into"
+      ]
+    },
+    "SharedContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "logical_size": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "version_ids": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/VersionId"
+          }
+        }
+      },
+      "required": [
+        "logical_size",
+        "content_hash",
+        "version_ids"
+      ]
+    },
+    "SharedHistoryGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "origin_file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/SharedHistoryFile"
+          }
+        },
+        "versions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/SharedHistoryVersion"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/SharedHistoryNode"
+          }
+        },
+        "branches": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/SharedHistoryBranch"
+          }
+        },
+        "shared_contents": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/SharedContent"
+          }
+        }
+      },
+      "required": [
+        "origin_file_id",
+        "history_tree_id",
+        "history_root",
+        "files",
+        "versions",
+        "nodes",
+        "branches",
+        "shared_contents"
+      ],
+      "description": "Complete bounded same-history file component automatically derived from retained nonempty content. Equality hubs are non-temporal; original file, event and branch IDs remain distinct. Bodyless deletion nodes and purged metadata remain visible. Cross-file ancestry, missing equality groups, disconnected members and cycles are rejected by semantic validation. This read conveys no write authority, body health or durable association/split publication."
     }
   }
 }

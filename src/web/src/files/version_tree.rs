@@ -734,6 +734,37 @@ pub(super) fn ancestry_graph<N>(
 where
     N: IntoView + 'static,
 {
+    read_only_graph(records, render, ReadOnlyGraphKind::Directory)
+}
+
+pub(super) fn shared_ancestry_graph<N>(
+    records: Memo<Vec<(String, u64, Vec<String>)>>,
+    render: impl Fn(String) -> N + Copy + Send + Sync + 'static,
+) -> impl IntoView
+where
+    N: IntoView + 'static,
+{
+    read_only_graph(records, render, ReadOnlyGraphKind::Shared)
+}
+
+#[derive(Clone, Copy)]
+enum ReadOnlyGraphKind {
+    Directory,
+    Shared,
+}
+
+fn read_only_graph<N>(
+    records: Memo<Vec<(String, u64, Vec<String>)>>,
+    render: impl Fn(String) -> N + Copy + Send + Sync + 'static,
+    kind: ReadOnlyGraphKind,
+) -> impl IntoView
+where
+    N: IntoView + 'static,
+{
+    let marker = match kind {
+        ReadOnlyGraphKind::Shared => "zxs-shared-history-arrow",
+        ReadOnlyGraphKind::Directory => "zxs-directory-arrow",
+    };
     let tree = Memo::new(move |_| {
         let versions = records
             .get()
@@ -751,14 +782,15 @@ where
     let links = NodeRef::<svg::Svg>::new();
     observe(root, links, tree, geometry);
     view! {
-        <div class="zxs-version-tree-scroll" aria-label=t("目录分支树","Folder branch tree")>
+        <div class="zxs-version-tree-scroll" aria-label=if matches!(kind,ReadOnlyGraphKind::Shared) {t("关联文件联合树","Related file history graph")} else {t("目录分支树","Folder branch tree")}>
             <div class="zxs-version-tree-canvas" node_ref=root>
                 <svg node_ref=links class="zxs-version-tree-links" aria-hidden="true" focusable="false"
                     viewBox=move ||geometry.with(|g|format!("0 0 {} {}",g.width.max(1.),g.height.max(1.))) preserveAspectRatio="none">
-                    <defs><marker id="zxs-directory-arrow" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 Z"/></marker></defs>
+                    <defs><marker id=marker markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 Z"/></marker></defs>
                     <For each=move ||geometry.with(|g|g.paths.keys().cloned().collect::<Vec<_>>()) key=|edge|edge.clone() children=move |(parent,child)| {
+                        let relation = matches!(kind,ReadOnlyGraphKind::Shared) && parent.starts_with("shared-content:");
                         let key=StoredValue::new((parent.clone(),child.clone()));
-                        view!{<path class="zxs-version-tree-edge" data-parent-tree=parent data-child-tree=child d=move ||geometry.with(|g|key.with_value(|key|g.path(key))) marker-end="url(#zxs-directory-arrow)" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>}
+                        view!{<path class="zxs-version-tree-edge" data-parent-tree=parent data-child-tree=child d=move ||geometry.with(|g|key.with_value(|key|g.path(key))) data-edge-kind=if relation {"same-content"} else {"ancestry"} marker-end=if relation {"none".to_owned()} else {format!("url(#{marker})")} stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>}
                     }/>
                 </svg>
                 <For each=move ||tree.with(|tree|tree.levels.iter().enumerate().map(|(depth,ids)|(depth,ids.clone())).collect::<Vec<_>>()) key=|level|level.0 children=move |(depth,_)| {

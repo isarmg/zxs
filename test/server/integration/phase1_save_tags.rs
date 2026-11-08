@@ -8,6 +8,8 @@ mod directory_git;
 mod discovery;
 #[path = "phase1_save_tags/rejection.rs"]
 mod rejection;
+#[path = "phase1_save_tags/shared_history.rs"]
+mod shared_history;
 
 use http_routing::{
     Router,

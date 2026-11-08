@@ -590,6 +590,16 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn shared_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::shared_history::SharedHistoryRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::shared_history::SharedHistoryGraph, crate::ApiError> {
+        self.gate.cancellations.lock().unwrap().push(cancellation);
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn content_matches(
         &self,
         _identity: &crate::auth::Identity,
@@ -1256,6 +1266,10 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ),
     (
         "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/shared-history?history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ),
+    (
+        "GET",
         "/api/file-manager/files/file_00000000000000000000000000000000/content-matches?node_id=ver_00000000000000000000000000000000&history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&limit=1",
     ),
     ("POST", "/api/file-manager/files/file/metadata"),
@@ -1856,3 +1870,31 @@ mod retained_management_slots;
 
 #[path = "phase_one_write_admission.rs"]
 mod phase_one_write_admission;
+
+#[tokio::test]
+async fn shared_history_http_cancellation_reaches_the_authorized_backend() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let route = "/api/file-manager/files/file_00000000000000000000000000000000/shared-history?history_root=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let waiter = tokio::spawn(workspace_request(app, "GET", route));
+    tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    {
+        let signals = gate.cancellations.lock().unwrap();
+        assert_eq!(signals.len(), 1);
+        assert!(!signals[0].is_cancelled());
+    }
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(gate.cancellations.lock().unwrap()[0].is_cancelled());
+    assert_eq!(gate.finished.available_permits(), 0);
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(5), gate.finished.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+}

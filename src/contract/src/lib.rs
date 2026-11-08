@@ -12,6 +12,7 @@ pub mod encoding;
 pub mod file_history_merge;
 pub mod history_window;
 mod integer_json;
+pub mod shared_history;
 pub mod smb_account;
 pub mod storage_addition;
 pub mod storage_conversion;

@@ -488,3 +488,9 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 `GET /api/file-manager/files/{file}/content-matches?node_id=...&history_root=...&limit=16[&after_version_id=...]` 返回 `ContentMatchPage`。必填 `limit` 为 1–64，响应上限 64 KiB；未知字段、错误 ID 和不属于当前匹配集合的继续位置返回 400。身份或会话失效为 401，源节点不属于该文件/历史为 404，捕获、翻页或返回前历史根改变为 `HISTORY_CHANGED` (409)，后端槽不足为 429；响应超出字节预算返回 500 / `RESPONSE_TOO_LARGE`，不会发送截断页。当前根校验不提供旧根租约。
 
 匹配只涵盖同一历史域的其他文件，要求非零长度与完整摘要相等。结果按版本 ID 排序，`next_after_version_id` 必须出现，非空表示还有下一页，将其作为下一次请求的 `after_version_id`；第一页省略 `after_version_id`。`creation_name` 是版本创建时的名称，不是当前路径。正文已清除仍保留候选事实；持久内容状态不表示当前可读性。此端点只读，不创建共享身份、永久连接或新的操作收据。精确语义见[文件节点投影及候选查询](design/file-merge-tags-backup.md)。
+
+### 自动关联文件联合图
+
+`GET /api/file-manager/files/{file}/shared-history?history_root=...` 返回 `SharedHistoryGraph`。从来源文件全部保留非空版本自动扩展同域文件连通分量，不需要逐对确认候选；真实文件、分支和事件身份不变。响应分别表示同文件祖先和非时间性等内容关系，包含当前无正文 D 节点及已清除正文的保留元数据，不合并稳定文件 ID，也不修改写入权限。
+
+当前范围限同一历史域。完整分量最多 64 文件、512 事件、256 分支、2048 祖先边、1 MiB JSON；请求索引最多 65,536 同域版本，扫描总计费最多 1,048,576 记录。工作／图超限为 429，不成功返回不完整连通分量；未知或重复查询参数 400、身份失效 401、文件不存在 404、根变化 409、编码超限 500。鉴权和当前根在锁外准备前后复核，槽持续持有到响应缓冲释放。跨域永久关联、解除关系和磁盘退出不由本读接口实现，详见[精确语义与复杂度](design/shared-file-history.md)。
