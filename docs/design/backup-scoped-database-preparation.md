@@ -44,4 +44,6 @@ scoped-databases/
 
 **最终权威切换仍未实现**：还需完整历史范围／增量追平、目标活动容器及三范围正式安装、代际控制归档、最终源写围栏、真实多下级活动路由、完整低级链 helper 接纳与一个不可分割的联合决定及冷恢复。当前代码不放宽这些拒绝条件。见[整体迁移 ADR](../adr/backup-target-replacement.md)及根 [TASKS](../../TASKS.md)。
 
-SYSTEM 派生表扩展到 `kind=0..35` 后，旧隔离任务的 SYSTEM-current 文件若与新编码不同，仍按无覆盖协议拒绝并保留，不双读、不将旧副本当缺失后覆盖；新任务从认证原生前缀重编码。该组合尚未运行验证。
+SYSTEM 派生表扩展到 `kind=0..38` 后，旧隔离任务的 SYSTEM-current 文件若与新编码不同，仍按无覆盖协议拒绝并保留，不双读、不将旧副本当缺失后覆盖；新任务从认证原生前缀重编码。该组合尚未运行验证。
+
+SYSTEM 审计后继共用原投影器，另保留完整 operation-principal 映射、以原 ordinal 定位的 events 数组和 sequence/business/topology 代数；不是只备份回执正文。control-auth 仍不写入派生索引，完整认证状态由原生 State 材料负责。仍未运行本组合，未改变最终切换义务。

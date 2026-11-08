@@ -4,11 +4,13 @@ use super::*;
 use data_serialization::{Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
 
+mod audit;
 mod catalog;
 mod read;
+pub use audit::{SystemAuditEvent, SystemOperationPrincipal, SystemStateMetadata};
 pub use catalog::{SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue};
 
-pub(super) const TABLE: &str = "CREATE TABLE system_changes(kind INTEGER NOT NULL CHECK(kind BETWEEN 0 AND 35),id TEXT NOT NULL COLLATE BINARY,sequence_key BLOB NOT NULL CHECK(length(sequence_key)=8),payload TEXT NOT NULL,PRIMARY KEY(kind,id)) STRICT";
+pub(super) const TABLE: &str = "CREATE TABLE system_changes(kind INTEGER NOT NULL CHECK(kind BETWEEN 0 AND 38),id TEXT NOT NULL COLLATE BINARY,sequence_key BLOB NOT NULL CHECK(length(sequence_key)=8),payload TEXT NOT NULL,PRIMARY KEY(kind,id)) STRICT";
 pub(super) const LOOKUP: &str =
     "CREATE INDEX system_change_order ON system_changes(kind,sequence_key,id)";
 const MAX_PAGE_ROWS: usize = 100;
@@ -19,6 +21,7 @@ enum Kind {
     Operation,
     FilePath,
     Catalog(SystemCatalogKind),
+    Audit(audit::Kind),
 }
 impl Kind {
     fn sql(self) -> i64 {
@@ -26,6 +29,7 @@ impl Kind {
             Self::Operation => 0,
             Self::FilePath => 1,
             Self::Catalog(kind) => kind.sql(),
+            Self::Audit(kind) => kind.sql(),
         }
     }
 }
@@ -62,6 +66,7 @@ pub(super) struct Order {
     operations: BTreeSet<(u64, String)>,
     paths: BTreeSet<(u64, String)>,
     catalog: catalog::CatalogOrder,
+    audit: audit::Order,
 }
 impl Order {
     fn rows(&self, kind: Kind) -> &BTreeSet<(u64, String)> {
@@ -69,6 +74,7 @@ impl Order {
             Kind::Operation => &self.operations,
             Kind::FilePath => &self.paths,
             Kind::Catalog(kind) => self.catalog.rows(kind),
+            Kind::Audit(kind) => self.audit.rows(kind),
         }
     }
     pub(super) fn update(&mut self, before: Option<&State>, after: &State) {
@@ -82,6 +88,7 @@ impl Order {
             }
         }
         delta.catalog.update_order(&mut self.catalog, after);
+        delta.audit.update_order(&mut self.audit, after);
         for id in delta.paths {
             if let Some(old) = before.and_then(|state| state.file_path_nodes.get(&id)) {
                 self.paths.remove(&(old.sequence, id.clone()));
@@ -97,6 +104,7 @@ pub(super) struct Delta {
     operations: Vec<OperationId>,
     paths: Vec<String>,
     catalog: catalog::CatalogDelta,
+    audit: audit::Delta,
 }
 impl Delta {
     pub(super) fn between(before: Option<&State>, after: &State) -> Self {
@@ -136,6 +144,7 @@ impl Delta {
             operations: keys!(operations),
             paths: keys!(file_path_nodes),
             catalog: catalog::CatalogDelta::between(before, after),
+            audit: audit::Delta::new(before, after, keys!(operation_principals)),
         }
     }
     pub(super) async fn project(
@@ -162,6 +171,7 @@ impl Delta {
             .await?;
         }
         self.catalog.project(connection, after).await?;
+        self.audit.project(connection, after).await?;
         Ok(())
     }
 }

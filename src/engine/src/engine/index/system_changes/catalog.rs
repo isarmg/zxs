@@ -59,17 +59,17 @@ macro_rules! catalog_families {
             // cannot silently disappear from the system-database decision.
             let State {
                 $( $field: _, )+
-                sequence: _,
-                business_generation: _,
-                topology_generation: _,
                 // Existing event families have their own sequence ordering.
                 operations: _,
                 file_path_nodes: _,
-                // Not exposed by this catalog: private authentication,
-                // global event stream and operation-principal audit map.
-                control_auth: _,
+                // Audit rows keep their independent identities/order.
                 events: _,
                 operation_principals: _,
+                sequence: _,
+                business_generation: _,
+                topology_generation: _,
+                // Authentication secrets never enter the public read model.
+                control_auth: _,
             } = after;
             vec![$( FamilyDelta {
                 kind: SystemCatalogKind::$variant,

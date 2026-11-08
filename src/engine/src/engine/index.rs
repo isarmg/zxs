@@ -22,8 +22,9 @@ pub(crate) use scope::{ScopeNode, ScopeReader};
 pub(crate) use scope::{reset_scope_read_metrics, scope_read_metrics};
 pub(crate) use snapshot::OwnedScopeRead;
 pub use system_changes::{
-    SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor,
-    SystemChangePage, SystemChangeReadError,
+    SystemAuditEvent, SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue,
+    SystemChangeCursor, SystemChangePage, SystemChangeReadError, SystemOperationPrincipal,
+    SystemStateMetadata,
 };
 
 const HISTORY_INDEX_MIN_VERSIONS: usize = 300_000;

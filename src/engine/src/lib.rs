@@ -139,10 +139,10 @@ pub use engine::{
     PermanentRemovalCleanupObservation, RangeContent, ReadFile, ReadLease, RecoverySealContext,
     RecoverySealFailure, RecoveryWarnings, RemovalCleanupScope, RemovalParentProjection,
     RemovalReplicaCleanup, RemovalReplicaCleanupState, RetainedWorkspaceLimits, SharedHistoryRead,
-    SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor,
-    SystemChangePage, SystemChangeReadError, ValidatedConfig, WorkspaceInventory,
-    WorkspaceInventoryRecord, WorkspaceReadPlan, inspect_disk_database_material,
-    verify_membership_control_archive,
+    SystemAuditEvent, SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue,
+    SystemChangeCursor, SystemChangePage, SystemChangeReadError, SystemOperationPrincipal,
+    SystemStateMetadata, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
+    WorkspaceReadPlan, inspect_disk_database_material, verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

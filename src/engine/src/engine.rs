@@ -66,8 +66,9 @@ mod history_move_target;
 pub use history_move_target::FileHistoryMoveTargetReport;
 mod index;
 pub use index::{
-    IndexFailure, IndexFailureStage, IndexHealth, SystemCatalogKind, SystemCatalogRecord,
-    SystemCatalogValue, SystemChangeCursor, SystemChangePage, SystemChangeReadError,
+    IndexFailure, IndexFailureStage, IndexHealth, SystemAuditEvent, SystemCatalogKind,
+    SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor, SystemChangePage,
+    SystemChangeReadError, SystemOperationPrincipal, SystemStateMetadata,
 };
 mod integrity_scrub;
 pub use integrity_scrub::{

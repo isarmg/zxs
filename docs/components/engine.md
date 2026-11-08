@@ -76,6 +76,8 @@ SQLite、容器 container.json 及当前名称是可重建投影，不能替代�
 
 `system_catalog_records` 现包含三十四个完整业务 map 族，新增十九族保留版本声明、标签/元数据节点、D、合并/父边/别名、备注、u64 选择代数、内容退役状态与计划/规则。正常增量、冷重建和隔离备份 SYSTEM-current 复用同一声明；现有当前行删除不裁剪永久操作回执，catalog 页不是时间线，也不含私有认证控制。新增代码按要求未编译/测试/审查/CI。
 
+`system_operation_principals`、`system_audit_events` 和 `system_state_metadata` 将原操作主体、保持完整位置的事件数组与三项 State 代数接入同一 SQLite 事务、可信精确分页和冷重建。事件同序号/同操作不折叠，只有原 tracked append 证明才更新后缀；其它谱系重写该派生族。目标 SYSTEM-current 编码共用声明，控制认证秘密不输出；新增源码未运行验证。
+
 永久性属于 State 中原有回执保留契约，不属于可丢弃 SQLite 本身。`OperationResult.current_health` 是存储快照，不替代实时 `operation_record`。文件路径行保留外部旧/新路径，但不是所有内容/目录/分支事实的总日志。复杂度和恢复边界见[系统盘全局变更库基础](../design/system-change-database.md)。
 
 ## 完整巡检（过渡实现）

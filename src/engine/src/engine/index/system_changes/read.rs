@@ -51,6 +51,7 @@ fn expected_page(
         }
         let payload = match kind {
             Kind::Catalog(kind) => kind.payload(state, &key.1)?,
+            Kind::Audit(kind) => kind.payload(state, &key.1)?,
             Kind::Operation => {
                 let id = key
                     .1
