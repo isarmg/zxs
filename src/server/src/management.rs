@@ -33,7 +33,7 @@ use terminal_backend::BackendState;
 mod integrity_scrub;
 pub mod storage_addition;
 pub(crate) mod storage_configuration;
-pub(crate) mod storage_lifecycle;
+pub mod storage_lifecycle;
 pub(crate) mod storage_readmission;
 use integrity_scrub::IntegrityScrubService;
 mod setup_command;

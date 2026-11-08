@@ -892,3 +892,63 @@ fn final_voter_resume_revalidates_revocation_and_cold_open_never_probes_stopped_
         ErrorCode::Unauthorized
     );
 }
+
+#[test]
+fn native_deregister_preserves_original_receipt_without_probing_retired_name() {
+    let f = fixture();
+    let identity = crate::lock(&f.auth).sole_identity().unwrap();
+    assert!(identity.admission_session.is_none());
+    let backend = f.backend.inner.addition_backend().unwrap();
+    let parent = PrivateDirectory::open_existing(&f.backend.inner.management_root).unwrap();
+    let control = ActiveExit::open(&backend, &identity, parent).unwrap();
+    let preview = control
+        .preview(request(&f, ExitAction::Deregister))
+        .unwrap();
+    let operation = preview.request.operation_id;
+    let retired = PathBuf::from(&preview.target.root_path);
+    let status = control.commit(ExitCommit { preview }).unwrap();
+    assert_eq!(status.state, ExitState::Completed);
+    let preserved = retired.with_extension("preserved-original-disk");
+    fs::rename(&retired, &preserved).unwrap();
+    fs::write(&retired, b"not a directory and never a replacement member").unwrap();
+    assert_eq!(control.status(operation).unwrap(), status);
+    assert_eq!(control.resume(operation).unwrap(), status);
+    drop(control);
+    let addition = super::super::storage_addition::ActiveAddition::open(
+        &backend,
+        &identity,
+        PrivateDirectory::open_existing(&f.backend.inner.management_root).unwrap(),
+        f.backend.inner.discovery_root.as_str(),
+    )
+    .unwrap();
+    assert!(
+        addition
+            .current_directory_scope()
+            .unwrap()
+            .1
+            .contains(&retired)
+    );
+}
+#[test]
+fn native_final_voter_and_new_planned_offline_cannot_enter_active_exit() {
+    let f = fixture_with_metadata_members(1);
+    let identity = crate::lock(&f.auth).sole_identity().unwrap();
+    let backend = f.backend.inner.addition_backend().unwrap();
+    let control = ActiveExit::open(
+        &backend,
+        &identity,
+        PrivateDirectory::open_existing(&f.backend.inner.management_root).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        control
+            .preview(request(&f, ExitAction::PlannedOffline))
+            .is_err()
+    );
+    let preview = control
+        .preview(request(&f, ExitAction::Deregister))
+        .unwrap();
+    assert_eq!(preview.authority, ExitAuthority::TerminalManagement);
+    assert!(control.commit(ExitCommit { preview }).is_err());
+    assert!(open(&f.backend.inner.management_root).unwrap().is_none());
+}

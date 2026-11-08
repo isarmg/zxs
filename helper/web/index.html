@@ -112,6 +112,29 @@
       <p class="muted">共享原生 fence、控制归档、joint 和 activation 协议，成功仅以准确永久回执为准；中断可能已部分或全部发布，不删盘、不回滚或换编号重试。此片没有注销/移除、新计划下线、外来接纳、新逐盘权威迁移或完整系统就绪认证。可查询原操作，不能保证损坏介质可恢复。</p>
     </section>
     <section class="card">
+      <h2>已有池：注销 / 移除非最终元数据成员</h2>
+      <p>保留磁盘物理字节和历史，不格式化、不擦除、不卸载。不保证剩余池仍能访问目标盘的全部内容：注销会改变当前成员及归属视图，可能使独有文件、历史或路径不可访问。重要内容请先另行备份。最后一个元数据成员的终态退出尚未迁入此工具，明确拒绝，不提供计划下线。</p>
+      <form id="disk-remove-form">
+        <label>现有服务账户 <input id="disk-remove-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        <label class="ack"><input id="disk-remove-writers" type="checkbox" required> 已停止 ZXS、Samba、旧二进制和其他写入者；读取登记与预览会打开既有 Engine，可能执行已有恢复与同步。</label>
+        <button id="disk-remove-load" class="secondary" type="button">读取真实登记集合</button>
+        <label>选择准确当前登记 <select id="disk-remove-target" required><option value="">先读取登记</option></select></label>
+        <button type="submit">预览此成员注销</button>
+        <label>中断后原请求摘要 <input id="disk-remove-digest" maxlength="64" autocomplete="off" spellcheck="false"></label>
+        <button id="disk-remove-original" class="secondary" type="button">核对原注销计划与结果</button>
+      </form>
+      <pre id="disk-remove-inventory" hidden></pre>
+      <p class="muted">登记 Enabled / Disabled 是意图状态，不是设备健康或在线证明。真实读取失败原样报告，不伪装成空池；已注销盘不会仅为查询状态而重新打开。</p>
+      <pre id="disk-remove-plan" hidden></pre>
+      <button id="disk-remove-save" class="secondary" type="button" hidden>保存原注销计划</button>
+      <form id="disk-remove-commit-form" hidden>
+        <label class="ack"><input id="disk-remove-confirm" type="checkbox" required> 已核对盘 ID、slot、绑定代数、发布边界和摘要，确认注销会影响当前归属和访问；已另行保存重要内容。</label>
+        <button type="submit">确认注销并保留盘字节 / 继续原操作</button>
+      </form>
+      <pre id="disk-remove-result" hidden></pre>
+      <p class="muted">只有原生 D3 与永久回执核验后才返回 Completed。失败或断连可能已部分或全部发布，在结果不明时不要拔盘、删证据或换编号重做。只能继续原操作；本片没有失败自动回滚、终态移除、外来完整链接纳或完整系统就绪证明。</p>
+    </section>
+    <section class="card">
       <h2>准备与安装 systemd / SMB 配置文件</h2>
       <p>生成与内置版本绑定的未激活配置包，存于已存在、root 所有且其他用户不可写的 <code>/zxs/.zxs-helper-deployment-摘要/</code>。不会写入 <code>/etc</code>、合并现有 Samba 共享、创建账户、设置密码，或执行服务 reload / start / enable。</p>
       <form id="deployment-form">

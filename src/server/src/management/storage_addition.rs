@@ -605,17 +605,7 @@ impl ManagementBackend {
     }
 
     pub(super) fn require_no_pending_addition(&self) -> Result<(), ApiError> {
-        let directory =
-            match PrivateDirectory::open_existing(self.inner.management_root.join(DIRECTORY)) {
-                Ok(directory) => directory,
-                Err(platform_io::fs_safety::Error::Io(error))
-                    if error.kind() == std::io::ErrorKind::NotFound =>
-                {
-                    return Ok(());
-                }
-                Err(error) => return Err(storage_error(error)),
-            };
-        self.require_settled_addition(&directory)
+        require_no_pending_addition(&self.inner.management_root)
     }
 
     pub(super) fn require_settled_addition(
@@ -961,3 +951,16 @@ pub(super) fn configuration_edges(
 #[cfg(test)]
 #[path = "../../../../test/server/unit/management/storage_addition.rs"]
 mod tests;
+
+pub(super) fn require_no_pending_addition(root: &Path) -> Result<(), ApiError> {
+    let directory = match PrivateDirectory::open_existing(root.join(DIRECTORY)) {
+        Ok(directory) => directory,
+        Err(platform_io::fs_safety::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(storage_error(error)),
+    };
+    require_settled_addition(&directory)
+}

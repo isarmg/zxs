@@ -1,8 +1,10 @@
 //! Durable exit intent is coordination state, never D3 publication authority.
+mod active;
 use super::storage_addition::{
     ArchiveBinding, configuration_digest, digest, latest_name, name, read, storage_error, write,
 };
 use super::*;
+pub use active::ActiveExit;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{EntryName, PrivateDirectory};
 use storage_contract::{
@@ -255,6 +257,16 @@ impl ManagementBackend {
         if record.principal != identity.principal {
             return Err(ApiError::forbidden());
         }
+        let active_backend = crate::lock(&self.inner.state).backend.engine().cloned();
+        if record.status.preview.authority == ExitAuthority::ActiveMembership
+            && record.status.preview.request.action == ExitAction::Deregister
+            && let Some(backend) = active_backend
+        {
+            let control = ActiveExit::open(&backend, identity, parent)?;
+            let status = control.run_admitted(record, admitted)?;
+            crate::lock(&self.inner.disk_observation).take();
+            return Ok(json_codec::to_value(status).expect("invariant: exit status serializes"));
+        }
         if let Some(result) = self.storage_exit_result(identity, &mut record)? {
             finish(&mut record, result);
             save(&directory, &record)?;
@@ -268,74 +280,23 @@ impl ManagementBackend {
                 "saved exit completion has no admitted permanent engine receipt",
             ));
         }
-        self.require_no_pending_addition()?;
-        self.require_no_pending_readmission()?;
-        let latest = read::<OperationId>(&directory, &latest_name())?;
-        if latest.is_some_and(|latest| latest != record.status.operation_id) {
-            self.require_settled_exit()?;
-        }
-        let mut linked = latest == Some(record.status.operation_id);
-        let intent = record.clone();
-        let progress = |phase, archive| {
-            if let Some(archive) = archive {
-                record.archive = Some(archive);
-            }
-            record.status.phase = phase;
-            record.status.state = ExitState::Running;
-            record.status.failure = None;
-            save(&directory, &record)?;
-            admitted = true;
-            if !linked {
-                write(&directory, &latest_name(), &record.status.operation_id)?;
-                linked = true;
-            }
-            Ok(())
-        };
-        let outcome = match intent.status.preview.authority {
-            ExitAuthority::ActiveMembership => self
-                .inner
-                .addition_backend()?
-                .run_storage_exit(identity, &intent, progress),
-            ExitAuthority::TerminalManagement => {
-                self.inner.run_terminal_exit(identity, &intent, progress)
-            }
-        };
-        match outcome {
-            Ok(result) => {
-                let result = crate::engine_backend::storage_lifecycle::exact_result(
-                    result,
-                    &record,
-                    record.archive.as_ref(),
-                )?;
-                finish(&mut record, result);
-                save(&directory, &record)?;
-                crate::lock(&self.inner.disk_observation).take();
-                Ok(json_codec::to_value(record.status).expect("invariant: exit status serializes"))
-            }
-            Err(error) => {
-                if !admitted {
-                    return Err(error);
+        let status = execute_record(
+            &self.inner.management_root,
+            &directory,
+            record,
+            admitted,
+            |intent, progress| match intent.status.preview.authority {
+                ExitAuthority::ActiveMembership => self
+                    .inner
+                    .addition_backend()?
+                    .run_storage_exit(identity, intent, progress),
+                ExitAuthority::TerminalManagement => {
+                    self.inner.run_terminal_exit(identity, intent, progress)
                 }
-                record.status.state = ExitState::RecoveryRequired;
-                record.status.failure = Some(AdditionFailure {
-                    code: error.code,
-                    message: error.message.clone(),
-                });
-                if let Err(persistence) = save(&directory, &record) {
-                    tracing::error!(error = ?error, persistence = ?persistence, "exit failed and its diagnostic could not be synchronized");
-                    return Err(persistence);
-                }
-                Err(ApiError::new(
-                    http::StatusCode::SERVICE_UNAVAILABLE,
-                    ErrorCode::RecoveryRequired,
-                    format!(
-                        "exit {} needs recovery; query and continue the same operation",
-                        record.status.operation_id
-                    ),
-                )
-                .with_source(Arc::new(error)))
-            }
-        }
+            },
+        )?;
+        crate::lock(&self.inner.disk_observation).take();
+        Ok(json_codec::to_value(status).expect("invariant: exit status serializes"))
     }
 
     fn storage_exit_result(
@@ -444,4 +405,75 @@ pub(super) fn require_settled_exit(root: &Path) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+fn execute_record(
+    management_root: &Path,
+    directory: &PrivateDirectory,
+    mut record: StoredExit,
+    mut admitted: bool,
+    run: impl FnOnce(
+        &StoredExit,
+        &mut dyn FnMut(ExitPhase, Option<ArchiveBinding>) -> Result<(), ApiError>,
+    ) -> Result<OperationResult, ApiError>,
+) -> Result<ExitStatus, ApiError> {
+    super::storage_addition::require_no_pending_addition(management_root)?;
+    super::storage_readmission::require_no_pending_readmission(management_root)?;
+    let latest = read::<OperationId>(directory, &latest_name())?;
+    if latest.is_some_and(|latest| latest != record.status.operation_id) {
+        require_settled_exit(management_root)?;
+    }
+    let mut linked = latest == Some(record.status.operation_id);
+    let intent = record.clone();
+    let mut progress = |phase, archive| {
+        if let Some(archive) = archive {
+            record.archive = Some(archive);
+        }
+        record.status.phase = phase;
+        record.status.state = ExitState::Running;
+        record.status.failure = None;
+        save(directory, &record)?;
+        admitted = true;
+        if !linked {
+            write(directory, &latest_name(), &record.status.operation_id)?;
+            linked = true;
+        }
+        Ok(())
+    };
+    let outcome = run(&intent, &mut progress);
+    match outcome {
+        Ok(result) => {
+            let result = crate::engine_backend::storage_lifecycle::exact_result(
+                result,
+                &record,
+                record.archive.as_ref(),
+            )?;
+            finish(&mut record, result);
+            save(directory, &record)?;
+            Ok(record.status)
+        }
+        Err(error) => {
+            if !admitted {
+                return Err(error);
+            }
+            record.status.state = ExitState::RecoveryRequired;
+            record.status.failure = Some(AdditionFailure {
+                code: error.code,
+                message: error.message.clone(),
+            });
+            if let Err(persistence) = save(directory, &record) {
+                tracing::error!(error = ?error, persistence = ?persistence, "exit failed and its diagnostic could not be synchronized");
+                return Err(persistence);
+            }
+            Err(ApiError::new(
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                ErrorCode::RecoveryRequired,
+                format!(
+                    "exit {} needs recovery; query and continue the same operation",
+                    record.status.operation_id
+                ),
+            )
+            .with_source(Arc::new(error)))
+        }
+    }
 }

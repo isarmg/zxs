@@ -460,3 +460,7 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 ## 共享原生 Add 控制 API
 
 `management::storage_addition::ActiveAddition` 同时供当前服务和 helper 调用，保持统一的目标规划、4 MiB 原控制格式、archive 绑定、固定 quorum 与永久回执。现有 HTTP 入口仍要求管理 session；原生入口须有当前主 AuthStore 的弱只读 admission capability，不允许 SMB binding 或仅凭灾备快照。helper 专用停服/进程/页面代码不放服务组件。此次源码抽取未编译/测试/审查/CI，见[辅助 Add 边界](../design/helper-active-disk-addition.md)。
+
+## 共享非终态 Deregister 控制 API
+
+`management::storage_lifecycle::ActiveExit` 在当前服务与 helper 之间共享原生注销控制阶段。过期预览只在 Engine 回调准入后才保存原生意图；Completed 必须有 D3 和永久回执。终态/历史恢复仍走原 owner，不将最后元数据成员交给普通活动退出，也不删除 PlannedOffline 历史格式。源码未编译/测试/审查/CI，见[helper 注销边界](../design/helper-active-disk-deregistration.md)。

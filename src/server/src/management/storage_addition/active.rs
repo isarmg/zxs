@@ -47,6 +47,12 @@ impl<'a> ActiveAddition<'a> {
         self.check()?;
         self.backend.addition_configuration(self.identity)
     }
+    /// Current configuration and historical roots excluded by registration
+    /// authority. Callers must not probe those stopped/retired paths as fresh.
+    pub fn current_directory_scope(&self) -> Result<(Config, Vec<PathBuf>), ApiError> {
+        self.check()?;
+        self.backend.addition_directory_scope(self.identity)
+    }
     fn check(&self) -> Result<(), ApiError> {
         self.management.verify_identity().map_err(storage_error)?;
         if self.backend.addition_root(self.identity)? != self.system {

@@ -152,7 +152,9 @@ impl Root {
         if self.context != plan.context {
             return Err("original addition host/account/layout identity changed; no substitute was selected".into());
         }
-        self.layout.inventory_all(&plan.roots())
+        // Only the service-UID owner, after loading current registration
+        // authority, may choose which data-root handles can be opened.
+        Ok(())
     }
     fn load(&self, digest: &str) -> Result<Plan> {
         request_digest(digest)?;

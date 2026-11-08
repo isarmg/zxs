@@ -190,3 +190,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 已有池的空目录 Add 纵切
 
 独立 Web 可预览、明确添加并初始化当前 production 池的准确空目录批次，或核对/继续原意图。root 计划与服务 UID worker 在 helper，现有服务和工具共用原生 Add 控制记录、archive/joint/activation 及永久回执。只接受固定布局中完整原根集合和本批新空根，不格式化、不接纳外来盘、不提供计划下线；移除、外来完整链接纳及完整就绪仍未完成。源码未编译/测试/审查/CI，无真实系统操作，见[范围与失败语义](../design/helper-active-disk-addition.md)。
+
+## 非最终元数据成员的注销
+
+本片新增独立 Web 的真实登记读取、准确 Deregister 预览/确认和原操作查询/续作，服务与 helper 共用原生持久阶段、D3 与永久回执。不擦盘、不卸载，也不保证剩余池保有全部访问，要求明确承认当前视图影响。成功后不为查结果重新探测退役盘。最后一个元数据成员、外来完整链接纳及完整就绪仍缺；原安全出口保留。源码未编译/测试/审查/CI，无真实系统操作，见[准确边界](../design/helper-active-disk-deregistration.md)。

@@ -1,71 +1,34 @@
 //! Only the non-root service UID touches existing Engine/native membership data.
 use super::*;
-use platform_io::service_lease::ServiceLease;
+use crate::managed_pool::ManagedPool;
 use std::path::PathBuf;
 use storage_contract::{
     storage_addition::{AdditionCommit, AdditionRequest, DirectoryAddition},
     storage_directories::InspectRequest,
 };
-use storage_engine::{Engine, Mode};
-use storage_server::{
-    auth::AuthStore, engine_backend::EngineBackend, management::storage_addition::ActiveAddition,
-    startup_admission::PreparedService, storage_directories,
-};
-struct Target {
-    auth: AuthStore,
-    backend: EngineBackend,
-    layout: Layout,
-    prepared: PreparedService,
-    lease: ServiceLease,
-}
-impl Target {
-    fn open(context: &layout::Context) -> Result<Self> {
-        let lease = ServiceLease::host()?;
-        let layout = Layout::open(context.account.name.as_str().into())?;
-        if layout.context(lease.identity()) != *context {
-            return Err("addition worker rejected changed host/account/layout identities before opening storage".into());
-        }
-        let prepared =
-            PreparedService::open(Path::new(layout::STATE), Path::new(layout::MANAGEMENT))?;
-        let auth = AuthStore::open_system_management_directory(layout.management()?)?;
-        let engine = Engine::open(Path::new(layout::STATE))?;
-        let backend = EngineBackend::new(engine);
-        backend.set_management_auth(auth.reader())?;
-        let target = Self {
-            auth,
-            backend,
-            layout,
-            prepared,
-            lease,
-        };
-        target.recheck()?;
-        Ok(target)
+use storage_server::{management::storage_addition::ActiveAddition, storage_directories};
+fn original(target: &crate::managed_pool::ManagedPool, plan: &Plan) -> Result<()> {
+    target.recheck()?;
+    if target.context() != plan.context || target.auth().credential_revision()? != plan.credential {
+        return Err("original addition no longer matches current roots or primary credentials; no fresh identity/session was invented".into());
     }
-    fn recheck(&self) -> Result<()> {
-        self.lease.recheck()?;
-        self.layout.recheck()?;
-        self.prepared.recheck()?;
-        Ok(())
-    }
-    fn original(&self, plan: &Plan) -> Result<()> {
-        self.recheck()?;
-        if self.layout.context(self.lease.identity()) != plan.context
-            || self.auth.credential_revision()? != plan.credential
-        {
-            return Err("original addition no longer matches its current root identities or primary credentials; no fresh identity/session was invented".into());
-        }
-        self.layout.inventory_all(&plan.roots())
-    }
+    target.layout().inventory_all(&plan.roots())
 }
 pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
-    let target = Target::open(&request.context)?;
-    let identity = target.auth.sole_identity()?;
+    let target = ManagedPool::open(&request.context)?;
+    let identity = target.auth().sole_identity()?;
     let control = ActiveAddition::open(
-        &target.backend,
+        target.backend(),
         &identity,
-        target.layout.management()?,
+        target.layout().management()?,
         layout::DISKS,
     )?;
+    // This bounded helper Add lane does not yet support historical stopped or
+    // retired roots. Refuse before inventory traversal rather than re-opening a
+    // disk whose current registry/D3 excludes I/O after helper deregistration.
+    if !control.current_directory_scope()?.1.is_empty() {
+        return Err("helper Add currently requires all historical configuration roots to remain enabled; stopped/retired roots were not probed; use the dedicated original-operation recovery lane".into());
+    }
     match request.action {
         Action::Preview {
             operation_id,
@@ -74,18 +37,13 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             // Snapshot comes from the admitted Engine, not from client-supplied
             // JSON or a copied SQLite index. No stopped root is implicitly reused.
             let view = control.current_configuration()?;
-            if view.mode != Mode::Production {
-                return Err(
-                    "helper additions currently require an existing production pool".into(),
-                );
-            }
             let registered_roots = root_paths(&view)?;
             let all: Vec<_> = registered_roots
                 .iter()
                 .cloned()
                 .chain(additions.iter().map(|a| a.root_path.clone()))
                 .collect();
-            target.layout.inventory_all(&all)?;
+            target.layout().inventory_all(&all)?;
             let mut excluded: Vec<_> = vec![
                 PathBuf::from(layout::STATE),
                 PathBuf::from(layout::MANAGEMENT),
@@ -119,14 +77,14 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             let plan = Plan {
                 format: Format::Addition,
                 context: request.context,
-                credential: target.auth.credential_revision()?,
+                credential: target.auth().credential_revision()?,
                 registered_roots,
                 addition,
             };
             Ok(Output::Preview { plan })
         }
         Action::Status { plan } => {
-            target.original(&plan)?;
+            original(&target, &plan)?;
             current_roots_match(&plan, &root_paths(&control.current_configuration()?)?)?;
             let status = match control.status(plan.addition.request.operation_id) {
                 Ok(status) => {
@@ -152,7 +110,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             Ok(Output::Original { status })
         }
         Action::Commit { plan } => {
-            target.original(&plan)?;
+            original(&target, &plan)?;
             current_roots_match(&plan, &root_paths(&control.current_configuration()?)?)?;
             let status = control.commit(AdditionCommit {
                 preview: plan.addition,

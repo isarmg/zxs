@@ -440,7 +440,7 @@ async fn existing_pool_addition_routes_reject_cross_origin_before_engine_access(
     }
 }
 #[tokio::test]
-async fn disk_remove_foreign_and_planned_offline_remain_unavailable() {
+async fn erase_alias_foreign_and_planned_offline_remain_unavailable() {
     for path in [
         "/api/disks/remove",
         "/api/disks/foreign-admit",
@@ -452,4 +452,36 @@ async fn disk_remove_foreign_and_planned_offline_remain_unavailable() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
+}
+
+#[tokio::test]
+async fn deregistration_routes_reject_cross_origin_before_native_owner() {
+    for path in [
+        "/api/disks/registrations",
+        "/api/disks/deregister-preview",
+        "/api/disks/deregister-original",
+        "/api/disks/deregister-commit",
+    ] {
+        let mut request = post(path, json!({}));
+        request
+            .headers_mut()
+            .insert("origin", "http://untrusted.invalid:9040".parse().unwrap());
+        let response = http::router(state()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}
+#[tokio::test]
+async fn helper_deregistration_input_has_no_planned_offline_or_force_lane() {
+    let response = http::router(state())
+        .oneshot(post(
+            "/api/disks/deregister-preview",
+            json!({
+                "service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
+                "slot_id":"P01","expected_disk_id":"disk_11111111111111111111111111111111",
+                "external_writers_stopped":true,"action":"planned_offline"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
