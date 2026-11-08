@@ -352,20 +352,31 @@ impl RecursiveBackupCapture {
         route: &[String],
         prefixes: &mut BTreeMap<String, String>,
     ) -> Result<()> {
-        // The native route is nonempty, starts at level one and follows each
-        // exact direct upstream. Only names before the target enter its path.
-        let mut source_prefix: Option<PortablePath> = None;
-        for pair in route.windows(2) {
-            let source = &self.disks[&pair[0]];
-            let name = PortablePath::parse(&source.name)?;
-            source_prefix = Some(match source_prefix {
-                Some(previous) => previous.rebase(0, &name)?,
-                None => name,
-            });
+        let topology = crate::route_topology::Topology::new(self.disks.values().map(|disk| {
+            crate::route_topology::Node {
+                slot: &disk.identity.slot_id,
+                upstream: disk.upstream_slot_id.as_deref(),
+                level: disk.level,
+            }
+        }))?;
+        let primary = route.first().ok_or_else(changed)?;
+        if topology.explicit(primary, route)? != route {
+            return Err(changed());
+        }
+        // Siblings are not successive hops. Reconstruct only each target's
+        // direct ancestor chain from the same immutable captured names.
+        for target in route.iter().skip(1) {
+            let ancestors = topology.upstream_chain(target)?;
+            let mut source_prefix: Option<PortablePath> = None;
+            for source in ancestors.iter().rev() {
+                let name = PortablePath::parse(&self.disks[source.slot].name)?;
+                source_prefix = Some(match source_prefix {
+                    Some(previous) => previous.rebase(0, &name)?,
+                    None => name,
+                });
+            }
             let mut prefix = source_prefix
-                .as_ref()
-                .expect("invariant: each target has a preceding source")
-                .clone();
+                .expect("invariant: admitted explicit backup route includes its primary");
             if !repository.file_manager_root {
                 prefix = PortablePath::parse(&repository.name)?.rebase(0, &prefix)?;
             }
@@ -378,7 +389,7 @@ impl RecursiveBackupCapture {
                 prefix = PortablePath::parse(scope_parent)?.rebase(0, &prefix)?;
             }
             let path = prefix.as_str().to_owned();
-            if let Some(existing) = prefixes.get(&pair[1]) {
+            if let Some(existing) = prefixes.get(target) {
                 if existing != &path {
                     return Err(Error::new(
                         ErrorCode::BackupPathConflict,
@@ -386,7 +397,7 @@ impl RecursiveBackupCapture {
                     ));
                 }
             } else {
-                prefixes.insert(pair[1].clone(), path);
+                prefixes.insert(target.clone(), path);
             }
         }
         Ok(())

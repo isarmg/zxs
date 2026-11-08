@@ -152,20 +152,20 @@ impl CurrentNamespaces {
             .repositories
             .get(&request.target_repository_id)
             .ok_or_else(invalid)?;
-        // Bind the entire target route to the enabled current disk definitions.
-        let mut prior: Option<&crate::HistoricalDiskDefinition> = None;
+        // This legacy request carries a copy count, not an explicit fork
+        // selection. Cold replay must reproduce the SAME live route policy,
+        // not invent selection authority from its stored result vector.
+        if self.backup_configuration_route(&target.primary_slot_id, target.target_copies)?
+            != route.slots
+            || route.bindings.len() != route.slots.len()
+        {
+            return Err(invalid());
+        }
         for slot in &route.slots {
             let disk = self.backup_configuration_disk(slot)?;
-            if route.bindings.get(slot) != Some(&disk.identity.binding_generation)
-                || prior.is_none() && (disk.level != 1 || slot != &target.primary_slot_id)
-                || prior.is_some_and(|prior| {
-                    disk.level != prior.level + 1
-                        || disk.upstream_slot_id.as_deref() != Some(prior.identity.slot_id.as_str())
-                })
-            {
+            if route.bindings.get(slot) != Some(&disk.identity.binding_generation) {
                 return Err(invalid());
             }
-            prior = Some(disk);
         }
         if op.sequence != next.sequence
             || next.sequence <= previous.sequence

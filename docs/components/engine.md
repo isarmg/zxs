@@ -240,3 +240,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### 已选完整 writer 路由材料
 
 同一 registry decision 后台 worker 在重新读取全部原真实选择后，生成并在全部目标持久化完整扇出与整单位路由，冷开仍只续原任务。`WriterRoutesPrepared` 表示 `backup-writer-routes` 两份材料已读回，不是活动 writer；`BackupDecidedTargets::{inspect_writer_routes,file_writer_route,directory_writer_route}` 逐次重核全目标证据并解析完整明确目标集合，不按线性 `.find` 任选一个下级。父子目录和整文件所有版本共享完整目标集合。活动 Config/Current/Generation、普通写入口与源围栏不变。见[路由材料边界](../design/backup-selected-writer-routes.md)。本片未审查、编译、测试或 CI。
+
+### Backup generation 前的路由与激活边界
+
+真实 `PlanningContext` 和 current backup 规划现共用结构路由解析：副本数只能表达唯一链前缀，遇分叉不得任取一个盘或自动扩大副本数；显式路由材料要求完整祖先集合；旧按副本数的历史 copy 冷态准入必须重建同一唯一前缀和准确 Enabled binding，不能用结果向量伪造分叉选择。递归前缀按每个目标自身父链生成，不把兄弟盘当相邻跳。原已决定准备集合也使用同一闭包。普通 Add promotion 与普通首个 Candidate 显式拒绝 Backup 选择，认证 Abort 恢复仍保留。活动 Config 的单链约束没有放宽，没有新 Backup Generation、目标 writer 或源解围栏。见[准确范围](../design/backup-generation-route-admission.md)。本片未审查、编译、测试或 CI。

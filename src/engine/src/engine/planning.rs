@@ -76,43 +76,23 @@ impl<'a> PlanningContext<'a> {
             })
     }
     pub(crate) fn route(&self, primary: &str, copies: u32) -> Result<Vec<String>> {
-        let first = self.disk(primary)?;
-        if first.level != 1 || copies == 0 {
-            return Err(Error::new(
-                storage_contract::ErrorCode::PlacementInvalid,
-                "placement requires a primary slot and at least one copy",
-            ));
-        }
+        let topology =
+            crate::route_topology::Topology::new(self.config.disks.iter().map(|disk| {
+                crate::route_topology::Node {
+                    slot: &disk.slot_id,
+                    upstream: disk.upstream_slot_id.as_deref(),
+                    level: disk.level,
+                }
+            }))?;
+        let route = topology.unique_prefix(primary, copies)?;
         if let Some(view) = self.current_namespaces {
-            view.require_write_slot(&first.slot_id)?;
-        }
-        let mut route = vec![first.slot_id.clone()];
-        let mut current = first;
-        while route.len() < copies as usize {
-            let next = self
-                .config
-                .disks
-                .iter()
-                .find(|d| {
-                    d.level == current.level + 1
-                        && d.upstream_slot_id
-                            .as_deref()
-                            .is_some_and(|s| s.eq_ignore_ascii_case(&current.slot_id))
-                })
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::RouteIncomplete,
-                        "requested copies exceed the configured fixed route",
-                    )
-                })?;
-            if let Some(view) = self.current_namespaces {
-                view.require_write_slot(&next.slot_id)?;
+            for slot in &route {
+                view.require_write_slot(slot)?;
             }
-            route.push(next.slot_id.clone());
-            current = next;
         }
         Ok(route)
     }
+
     pub(crate) fn repository_for_history(&self, history: &str) -> Result<&'a Repository> {
         let h = self.state.histories.get(history).ok_or_else(|| {
             Error::new(

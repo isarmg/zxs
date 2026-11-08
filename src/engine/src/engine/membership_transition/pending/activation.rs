@@ -233,6 +233,13 @@ pub(crate) use recovery::{
 
 impl Generation {
     pub(crate) fn verify_activation_candidate(&self, candidate: &Candidate) -> Result<()> {
+        if matches!(&self.intent.origin, Origin::BackupCutover { .. }) && !self.portable.is_abort()
+        {
+            return Err(Error::new(
+                ErrorCode::UnsupportedOperation,
+                "a backup route decision cannot use the ordinary generation activation candidate",
+            ));
+        }
         self.portable.verify_registry_source(&self.base)?;
         let (state, result) = self.next_state()?;
         let snapshot = prepare_snapshot(&state, MAX_METADATA)?;

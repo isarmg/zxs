@@ -101,6 +101,8 @@ impl Routes {
         stop: &AtomicBool,
     ) -> Result<Self> {
         let projection = &prepared.projection;
+        let source_chain = source_chain(prepared)?;
+        require_complete_selected_topology(prepared, &source_chain)?;
         let first = &projection.targets[0];
         let units = first.entities.relative_to(&first.node.source_prefix)?;
         for target in &projection.targets[1..] {
@@ -119,7 +121,7 @@ impl Routes {
             original_configuration_hash: projection.original_configuration_hash.clone(),
             source_sequence: prepared.task.selection().first().request.expected_sequence,
             source_snapshot: prepared.task.selection().first().snapshot.clone(),
-            retained_source_chain: source_chain(prepared)?,
+            retained_source_chain: source_chain,
             retained_replaced_terminal: projection.replaced_terminal.clone(),
             targets: projection
                 .targets
@@ -219,6 +221,56 @@ impl Routes {
             })
             .collect()
     }
+}
+
+/// The actual native writer and cold path planners use this same structural
+/// closure. No flat request order or sibling adjacency becomes an active hop.
+/// The original single-chain Config restriction remains in force until the
+/// missing Backup generation publication can provide its real authority.
+fn require_complete_selected_topology(
+    prepared: &PreparedBackupRegistry,
+    retained: &[DiskRegistrationIdentity],
+) -> Result<()> {
+    let original = &prepared.task.installation.evidence.task.original;
+    let selected_old = retained
+        .iter()
+        .map(|disk| disk.slot_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let nodes = original
+        .disks
+        .iter()
+        .filter(|disk| selected_old.contains(disk.slot_id.as_str()))
+        .map(|disk| crate::route_topology::Node {
+            slot: &disk.slot_id,
+            upstream: disk.upstream_slot_id.as_deref(),
+            level: disk.level,
+        })
+        .chain(
+            prepared
+                .projection
+                .targets
+                .iter()
+                .map(|target| crate::route_topology::Node {
+                    slot: &target.node.identity.slot_id,
+                    upstream: Some(target.node.upstream_slot_id.as_str()),
+                    level: target.node.level,
+                }),
+        );
+    let topology = crate::route_topology::Topology::new(nodes)?;
+    let selected = retained
+        .iter()
+        .map(|disk| disk.slot_id.clone())
+        .chain(
+            prepared
+                .projection
+                .targets
+                .iter()
+                .map(|target| target.node.identity.slot_id.clone()),
+        )
+        .collect::<Vec<_>>();
+    let primary = &retained[0].slot_id;
+    topology.explicit(primary, &selected)?;
+    Ok(())
 }
 
 fn source_chain(prepared: &PreparedBackupRegistry) -> Result<Vec<DiskRegistrationIdentity>> {

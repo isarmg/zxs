@@ -248,6 +248,13 @@ pub(crate) fn predecessor_seal_matches(
     Ok(())
 }
 
+fn backup_generation_required() -> Error {
+    Error::new(
+        ErrorCode::UnsupportedOperation,
+        "selected backup routes cannot authorize ordinary Add activation; the complete Backup generation, first publication and target writer admission are required; source remains fenced",
+    )
+}
+
 impl Engine {
     /// Complete the pending pure device addition. No payload copies or placement
     /// changes are claimed; original routes and every body remain in place.
@@ -284,6 +291,10 @@ impl Engine {
             return self.complete_generation_activation();
         }
         self.require_no_commit_preparation()?;
+        let backup_fenced = self
+            .membership_fence
+            .as_ref()
+            .is_some_and(|fence| matches!(&fence.intent.origin, Origin::BackupCutover { .. }));
         let previous = self.config.generation_hash().map(str::to_owned);
         let discovered = discover(self.config.clone())?;
         if discovered.generation_hash() != self.config.generation_hash() {
@@ -293,6 +304,9 @@ impl Engine {
             {
                 self.resume_abort_generation(discovered)?;
                 return self.activate_pending_membership();
+            }
+            if backup_fenced {
+                return Err(backup_generation_required());
             }
             let pending = self.pending_membership.take().ok_or_else(|| {
                 Error::new(
@@ -305,6 +319,12 @@ impl Engine {
                 self.pending_membership = Some(pending);
             }
             return result;
+        }
+        if backup_fenced {
+            // A route/registry choice is not ordinary Add authority. Do not
+            // consume pending resources or call the generic promotion path.
+            // An actually certified Abort above retains its existing recovery.
+            return Err(backup_generation_required());
         }
         self.verify_membership_joint_decision()?;
         let mut pending = self.pending_membership.take().ok_or_else(|| {

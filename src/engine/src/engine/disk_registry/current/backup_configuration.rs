@@ -220,34 +220,22 @@ impl CurrentNamespaces {
         primary: &str,
         copies: u32,
     ) -> Result<Vec<String>> {
-        let mut disk = self.backup_configuration_disk(primary)?;
-        if disk.level != 1 || copies == 0 {
-            return Err(Error::new(
-                ErrorCode::PlacementInvalid,
-                "placement requires a primary slot and at least one copy",
-            ));
-        }
-        let mut route = vec![disk.identity.slot_id.clone()];
-        while route.len() < copies as usize {
-            let next =
-                self.registry_state
-                    .historical_topology()
-                    .find(|next| {
-                        next.level == disk.level + 1
-                            && next.upstream_slot_id.as_deref().is_some_and(|slot| {
-                                slot.eq_ignore_ascii_case(&disk.identity.slot_id)
-                            })
-                    })
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorCode::RouteIncomplete,
-                            "requested copies exceed the configured fixed route",
-                        )
-                    })?;
-            disk = self.backup_configuration_disk(&next.identity.slot_id)?;
-            route.push(disk.identity.slot_id.clone());
+        self.backup_configuration_disk(primary)?;
+        let route = self.route_topology()?.unique_prefix(primary, copies)?;
+        for slot in &route {
+            self.backup_configuration_disk(slot)?;
         }
         Ok(route)
+    }
+
+    fn route_topology(&self) -> Result<crate::route_topology::Topology<'_>> {
+        crate::route_topology::Topology::new(self.registry_state.historical_topology().map(
+            |disk| crate::route_topology::Node {
+                slot: &disk.identity.slot_id,
+                upstream: disk.upstream_slot_id.as_deref(),
+                level: disk.level,
+            },
+        ))
     }
 
     pub(crate) fn backup_configuration_placement(
