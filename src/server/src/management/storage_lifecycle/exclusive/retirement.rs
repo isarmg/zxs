@@ -426,3 +426,60 @@ impl ExclusiveExit {
         Ok(report)
     }
 }
+
+impl ExclusiveExit {
+    /// Select an exact future locator/epoch plan, not active Stop consumption.
+    pub fn prepare_terminal_chain_activation_plan(
+        &mut self,
+        request: storage_contract::storage_readmission::ReadmissionRequest,
+        proposal_digest: &str,
+    ) -> Result<storage_engine::TerminalChainReadmissionStatus, ApiError> {
+        self.check()?;
+        let _owner = acquire_owner(&self.management)?;
+        require_settled(self.management.path())?;
+        let preparation = self
+            .terminal_chain_readmission_status()?
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    ErrorCode::RecoveryRequired,
+                    "chain activation plan requires original completed Publication",
+                )
+            })?
+            .preparation;
+        if preparation.operation_id != request.operation_id
+            || preparation.proposal_digest != proposal_digest
+            || preparation.target.disk_id != request.expected_disk_id
+            || preparation.target.slot_id != request.slot_id
+            || preparation.principal != self.identity.principal
+        {
+            return Err(ApiError::conflict(
+                ErrorCode::GenerationMismatch,
+                "chain activation plan differs from original selected source",
+            ));
+        }
+        self.auth.revalidate_identity(&self.identity)?;
+        let directory =
+            PrivateDirectory::open_existing(&preparation.target_root).map_err(storage_error)?;
+        let directory = platform_io::fs_safety::linux::OpenAt2Root::from_private_directory(
+            directory,
+            platform_io::fs_safety::linux::MountPolicy::SameMount,
+        )
+        .map_err(storage_error)?;
+        let Source::Terminal(terminal) = &mut self.source else {
+            return Err(terminal_mutation_unavailable());
+        };
+        let status = terminal
+            .prepare_chain_activation_plan(
+                &self.identity.principal,
+                request.operation_id,
+                proposal_digest,
+                storage_engine::PendingMemberDirectory {
+                    disk_id: request.expected_disk_id,
+                    directory: directory.into_directory(),
+                },
+            )
+            .map_err(crate::engine_backend::error)?;
+        self.check()?;
+        Ok(status)
+    }
+}

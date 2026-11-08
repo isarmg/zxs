@@ -728,6 +728,7 @@ async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown(
         "/api/disks/terminal-chain-first-prepare",
         "/api/disks/terminal-chain-first-publish",
         "/api/disks/terminal-chain-current",
+        "/api/disks/terminal-chain-activation-plan",
     ] {
         let mut request = post(path, json!({}));
         request
@@ -900,6 +901,30 @@ fn chain_current_input_rejects_caller_authority_or_activation_overrides() {
         value[field] = true.into();
         assert!(
             json_codec::from_value::<crate::disk_removal::chain_target::CurrentInput>(value)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn chain_activation_plan_input_has_no_caller_epoch_or_locator_override() {
+    for field in [
+        "new_epoch",
+        "bootstrap",
+        "head",
+        "stop",
+        "force",
+        "activate",
+        "target_writer",
+    ] {
+        let mut value = json_codec::json!({
+            "service_user":"zxs", "external_writers_stopped":true, "plan":{},
+            "confirmation":"prepare-chain-activation-plan-without-consuming-stop",
+            "acknowledge_plan_without_stop_consumption":true
+        });
+        value[field] = true.into();
+        assert!(
+            json_codec::from_value::<crate::disk_removal::chain_target::ActivationPlanInput>(value)
                 .is_err()
         );
     }

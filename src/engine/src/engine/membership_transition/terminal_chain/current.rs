@@ -98,7 +98,7 @@ impl TerminalManagement {
     }
 }
 impl TerminalChainPublishedCurrent<'_> {
-    fn recheck(&self) -> Result<()> {
+    pub(super) fn recheck(&self) -> Result<()> {
         self.held.verify(&self.selection.proposal)?;
         require_selected(self.management, &self.selection)
     }
@@ -187,5 +187,35 @@ impl TerminalChainPublishedCurrent<'_> {
             target_writer_admitted: false,
             stop_consumed: false,
         })
+    }
+}
+
+impl TerminalChainPublishedCurrent<'_> {
+    /// Used while the bootstrap store is already locked. Full source replay
+    /// takes that same lock, so bracket it outside the store owner instead.
+    pub(super) fn recheck_held_target(&self) -> Result<()> {
+        self.management.verify_held_terminal_writer()?;
+        self.held.verify(&self.selection.proposal)
+    }
+    pub(super) fn epoch_source(&self) -> Result<super::epoch::ChainEpochSource<'_>> {
+        self.recheck()?;
+        super::epoch::ChainEpochSource::new(
+            &self.selection,
+            self.proof.manifest(),
+            &self.proof.report()?,
+        )
+    }
+    pub(super) fn target_observation(
+        &self,
+    ) -> Result<crate::engine::disk_lifecycle::bootstrap::RootObservation> {
+        self.recheck()?;
+        let disk = self.selection.proposal.target_disk();
+        crate::engine::disk_lifecycle::bootstrap::RootObservation::capture(
+            self.selection.proposal.target(),
+            &disk.root,
+            &self.held.root.directory(&disk.root)?,
+            true,
+        )
+        .map_err(crate::engine::disk_lifecycle::bootstrap::runtime::management_error)
     }
 }

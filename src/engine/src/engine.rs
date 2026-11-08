@@ -133,12 +133,13 @@ pub use membership_transition::{
     verify_membership_control_archive,
 };
 pub use membership_transition::{
-    TerminalChainFirstPublication, TerminalChainPublishedCurrent,
-    TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
-    TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalMetadataResume,
-    TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
-    TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
-    TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
+    TerminalChainActivationPlanReport, TerminalChainFirstPublication,
+    TerminalChainPublishedCurrent, TerminalChainPublishedCurrentReport,
+    TerminalChainReadmissionActivation, TerminalChainReadmissionPhase,
+    TerminalChainReadmissionStatus, TerminalMetadataResume, TerminalMetadataResumeAdmission,
+    TerminalMetadataResumeCancelOutcome, TerminalMetadataResumeCancellationPhase,
+    TerminalMetadataResumePhase, TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus,
+    TerminalReadmissionPreview,
 };
 mod recovery;
 use recovery::RecoveryMode;

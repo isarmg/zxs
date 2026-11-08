@@ -2,6 +2,8 @@
 //! strict: it never elects an orphan record or treats a saved plan as authority.
 use super::*;
 use data_serialization::{Deserialize, Serialize};
+mod terminal_chain;
+pub(in crate::engine) use terminal_chain::ChainRootPlanInfo;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum ExtensionFormat {

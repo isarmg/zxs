@@ -120,6 +120,7 @@ pub(super) fn observe(
 ) -> Result<()> {
     let Some(manifest) = saved(management)? else {
         super::publication::require_absent(management)?;
+        super::epoch::require_absent(management)?;
         return Ok(());
     };
     let certificate = certificate(management, selection)?;
@@ -139,7 +140,8 @@ pub(super) fn observe(
         TerminalChainReadmissionPhase::ActivationSelected
     };
     status.activation = Some(manifest.report(complete, false));
-    super::publication::observe(management, &prepared, complete, status)
+    super::publication::observe(management, &prepared, complete, status)?;
+    super::epoch::observe(management, selection, &prepared, status)
 }
 pub(super) fn validate_source(
     management: &TerminalManagement,

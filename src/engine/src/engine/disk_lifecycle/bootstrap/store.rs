@@ -1,5 +1,6 @@
 //! Held-control-directory persistence with a bounded immutable stop ledger.
 mod root_extension;
+pub(in crate::engine) use root_extension::ChainRootPlanInfo;
 pub(crate) use root_extension::PreparedRootExtension;
 
 use super::*;

@@ -2002,3 +2002,263 @@ fn chain_published_current_holds_exact_target_and_rejects_other_actor() {
     fs::remove_dir(&root).unwrap();
     fs::rename(root.with_extension("reader-held"), &root).unwrap();
 }
+
+fn locator_bytes(system: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fs::read_dir(system.join("bootstrap-discovery"))
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().into_string().unwrap(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn chain_epoch_plan_selects_exact_new_lifetime_but_never_updates_locator_or_stop() {
+    let (mut fixture, operation, proposal, before) = published_chain_first_fixture();
+    let system = fixture.system();
+    let locator = locator_bytes(&system);
+    let old_seal = fs::read(fixture.config.disks[0].root.join("disk.json")).unwrap();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .prepare_chain_activation_plan(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::ActivationPlanSelected
+    );
+    let plan = status.activation_plan.unwrap();
+    assert_eq!(plan.core_hash, before.activation.unwrap().core_hash);
+    assert_eq!(
+        plan.publication_hash,
+        before.publication.unwrap().publication_hash
+    );
+    assert_ne!(
+        Some(plan.planned_io_epoch.as_str()),
+        plan.previous_io_epoch.as_deref()
+    );
+    assert_eq!(
+        plan.planned_locator_generation,
+        plan.previous_locator_generation + 1
+    );
+    assert_ne!(plan.previous_locator_hash, plan.planned_locator_hash);
+    assert!(plan.target_reverified_this_call);
+    assert!(!plan.locator_installed);
+    assert!(!plan.stop_consumed);
+    assert!(!plan.active_writer_admitted);
+    assert_eq!(locator_bytes(&system), locator);
+    assert_eq!(
+        fs::read(fixture.config.disks[0].root.join("disk.json")).unwrap(),
+        old_seal
+    );
+    assert!(fixture.terminal.operation(operation).is_none());
+    assert!(fixture.terminal.writer_locks().is_err());
+    let selected: json_codec::Value = crate::decode_strict(
+        &fs::read(
+            fixture
+                .terminal
+                .store
+                .operation()
+                .path()
+                .join("chain-activation-plan.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(selected["planned_epoch"], plan.planned_io_epoch);
+    let event = selected["bootstrap"]["next"]["readmissions"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap();
+    assert_eq!(event["intent_digest"], plan.planned_io_epoch);
+    assert_eq!(event["stopped_intent"], plan.stopped_transition);
+}
+
+#[test]
+fn chain_epoch_plan_cold_query_is_source_only_and_exact_target_retry_keeps_bytes() {
+    let (mut fixture, operation, proposal, _) = published_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .prepare_chain_activation_plan(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let path = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join("chain-activation-plan.json");
+    let bytes = fs::read(&path).unwrap();
+    let system = fixture.system();
+    let locator = locator_bytes(&system);
+    let root = fixture.config.disks[0].root.clone();
+    let disk_id = fixture.config.disks[0].disk_id.clone();
+    drop(fixture.terminal);
+    fs::rename(&root, root.with_extension("epoch-plan-held")).unwrap();
+    fs::write(&root, b"source query must not probe").unwrap();
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    let queried = cold.chain_readmission_status().unwrap().unwrap();
+    let report = queried.activation_plan.unwrap();
+    assert_eq!(
+        report.planned_io_epoch,
+        status.activation_plan.unwrap().planned_io_epoch
+    );
+    assert!(!report.target_reverified_this_call);
+    assert!(!report.locator_installed);
+    fs::remove_file(&root).unwrap();
+    fs::rename(root.with_extension("epoch-plan-held"), &root).unwrap();
+    let repeated = cold
+        .prepare_chain_activation_plan(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id,
+                directory: fs::File::open(&root).unwrap(),
+            },
+        )
+        .unwrap();
+    assert!(
+        repeated
+            .activation_plan
+            .unwrap()
+            .target_reverified_this_call
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(locator_bytes(&system), locator);
+    assert!(cold.operation(operation).is_none());
+    drop(cold);
+    assert!(Engine::open(&system).is_err());
+}
+
+#[test]
+fn chain_epoch_plan_needs_actual_publication_and_does_not_recreate_a_missing_target_log() {
+    let (mut fixture, operation, proposal, _) = prepare_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_activation_plan(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(
+        !fixture
+            .terminal
+            .store
+            .operation()
+            .path()
+            .join("chain-activation-plan.json")
+            .exists()
+    );
+    drop(fixture);
+    let (mut fixture, operation, proposal, status) = published_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    fixture
+        .terminal
+        .prepare_chain_activation_plan(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let journal = chain_first_target(&fixture, &status).join("first-publication/journal.bin");
+    fs::remove_file(&journal).unwrap();
+    let locator = locator_bytes(&fixture.system());
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_activation_plan(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(!journal.exists());
+    assert_eq!(locator_bytes(&fixture.system()), locator);
+}
+
+#[test]
+fn chain_epoch_plan_cold_recovery_rejects_changed_old_stops_or_future_epoch() {
+    for field in ["old-stops", "epoch"] {
+        let (mut fixture, operation, proposal, _) = published_chain_first_fixture();
+        let directory = retained_chain_directory(&fixture);
+        fixture
+            .terminal
+            .prepare_chain_activation_plan(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .unwrap();
+        let path = fixture
+            .terminal
+            .store
+            .operation()
+            .path()
+            .join("chain-activation-plan.json");
+        let mut plan: json_codec::Value = crate::decode_strict(&fs::read(&path).unwrap()).unwrap();
+        if field == "old-stops" {
+            plan["bootstrap"]["next"]["stops"] = json_codec::json!([]);
+        } else {
+            plan["planned_epoch"] = "0".repeat(64).into();
+        }
+        let bytes = crate::canonical_json(&plan).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let system = fixture.system();
+        let locator = locator_bytes(&system);
+        drop(fixture.terminal);
+        assert!(TerminalManagement::open(&system).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(locator_bytes(&system), locator);
+    }
+}
+
+#[test]
+fn chain_epoch_plan_refuses_other_actor_and_never_mints_an_active_probe() {
+    let (mut fixture, operation, proposal, _) = published_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_activation_plan(
+                "other",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    let path = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join("chain-activation-plan.json");
+    assert!(!path.exists());
+    assert!(fixture.terminal.operation(operation).is_none());
+}

@@ -249,3 +249,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 终态链已发布冻结 Current 检查
 
 `POST /api/disks/terminal-chain-current` 从原首槽 Publication、完整 checkpoint 和实际原目标日志构造真正 `CurrentNamespaces` 只读消费者，返回经过继承 mask 投影的分支/条目统计。它不修复缺损对象或尾部，不消费 Stop/新 epoch，不安装活动 Engine Current、writer 或启动服务；helper 仍返回 `completed_readmission:false`。网络无认证 root、原 Origin/CSRF/Host、停服和 lifetime owner 边界不变。源码和未运行回归说明见[终态链冻结 Current](../design/terminal-chain-published-current.md)。
+
+### 终态链新 epoch / Stop 后继计划
+
+`POST /api/disks/terminal-chain-activation-plan` 在真实首槽与完整冻结 Current 后，绑定原实际目录、Stop、前次 epoch 和 Publication，保存唯一未来 epoch 及 bootstrap 后继计划。此阶段**不更新活动 locator/head、不消费 Stop、不启用 writer**，仍没有完成 readmission/H03。source-only 查询只显示历史计划，不冒充本次目标核验。单独确认、停服/host owner/Origin/CSRF 与风险提示保留，详见[原生后继计划](../design/terminal-chain-activation-plan.md)。未审查/编译/测试/CI，未操作实际系统。

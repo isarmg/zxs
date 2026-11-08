@@ -31,6 +31,15 @@ pub(crate) struct PublicationInput {
 }
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
+pub(crate) struct ActivationPlanInput {
+    service_user: String,
+    external_writers_stopped: bool,
+    plan: Plan,
+    confirmation: String,
+    acknowledge_plan_without_stop_consumption: bool,
+}
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct CurrentInput {
     service_user: String,
     external_writers_stopped: bool,
@@ -59,6 +68,7 @@ enum Action {
     PrepareFirst { plan: Plan },
     PublishFirst { plan: Plan },
     InspectPublished { plan: Plan },
+    PrepareActivation { plan: Plan },
 }
 impl crate::service_worker::Request for Request {
     type Output = Status;
@@ -72,6 +82,24 @@ impl crate::service_worker::Request for Request {
         let mut published_current = None;
         let native = match self.action {
             Action::Status => target.control.terminal_chain_readmission_status()?,
+            Action::PrepareActivation { plan } => {
+                if plan.context != self.context
+                    || plan.credential != target.credential_revision()?
+                {
+                    return Err(
+                        "chain activation plan host or primary credential revision changed".into(),
+                    );
+                }
+                let preparation = plan.preparation;
+                Some(target.control.prepare_terminal_chain_activation_plan(
+                    storage_contract::storage_readmission::ReadmissionRequest {
+                        operation_id: preparation.operation_id,
+                        slot_id: preparation.target.slot_id,
+                        expected_disk_id: preparation.target.disk_id,
+                    },
+                    &preparation.proposal_digest,
+                )?)
+            }
             Action::InspectPublished { plan } => {
                 if plan.context != self.context
                     || plan.credential != target.credential_revision()?
@@ -176,7 +204,8 @@ fn run(input: InventoryInput, action: Action) -> Result<Status> {
     if let Action::Synchronize { plan }
     | Action::PrepareFirst { plan }
     | Action::PublishFirst { plan }
-    | Action::InspectPublished { plan } = &action
+    | Action::InspectPublished { plan }
+    | Action::PrepareActivation { plan } = &action
         && plan.context != context
     {
         return Err("chain target no longer matches its original host/account/layout".into());
@@ -250,5 +279,20 @@ pub(crate) fn inspect_current(input: CurrentInput) -> Result<Status> {
             external_writers_stopped: input.external_writers_stopped,
         },
         Action::InspectPublished { plan: input.plan },
+    )
+}
+
+pub(crate) fn prepare_activation(input: ActivationPlanInput) -> Result<Status> {
+    if input.confirmation != "prepare-chain-activation-plan-without-consuming-stop"
+        || !input.acknowledge_plan_without_stop_consumption
+    {
+        return Err("explicitly acknowledge an immutable future epoch/locator plan only; original Stop and active discovery remain unchanged, no writer or completed readmission".into());
+    }
+    run(
+        InventoryInput {
+            service_user: input.service_user,
+            external_writers_stopped: input.external_writers_stopped,
+        },
+        Action::PrepareActivation { plan: input.plan },
     )
 }

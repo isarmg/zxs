@@ -14,6 +14,9 @@ use platform_io::fs_safety::linux::FileIdentity;
 use std::path::{Path, PathBuf};
 mod activation;
 mod current;
+mod epoch;
+pub(in crate::engine) use epoch::ChainEpochSource;
+pub use epoch::TerminalChainActivationPlanReport;
 mod first;
 mod publication;
 pub use current::{TerminalChainPublishedCurrent, TerminalChainPublishedCurrentReport};
@@ -56,6 +59,7 @@ pub enum TerminalChainReadmissionPhase {
     FirstCandidatePrepared,
     FirstPublicationPending,
     FirstPublicationPreserved,
+    ActivationPlanSelected,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -68,6 +72,7 @@ pub struct TerminalChainReadmissionStatus {
     pub target_reverified_this_call: bool,
     pub activation: Option<TerminalChainReadmissionActivation>,
     pub publication: Option<TerminalChainFirstPublication>,
+    pub activation_plan: Option<TerminalChainActivationPlanReport>,
     pub active_writer_admitted: bool,
     pub metadata_resumption_supported: bool,
 }
@@ -90,6 +95,7 @@ pub(in crate::engine) fn owns_initial_entry(name: &str) -> bool {
     matches!(name, REQUEST | RECEIPT)
         || activation::owns_initial_entry(name)
         || publication::owns_initial_entry(name)
+        || epoch::owns_initial_entry(name)
 }
 
 impl Selection {
@@ -193,6 +199,7 @@ impl Selection {
             target_reverified_this_call: fresh,
             activation: None,
             publication: None,
+            activation_plan: None,
             active_writer_admitted: false,
             metadata_resumption_supported: false,
         })
@@ -213,6 +220,7 @@ fn selected(management: &TerminalManagement) -> Result<Option<Selection>> {
         }
         activation::require_absent(management)?;
         publication::require_absent(management)?;
+        epoch::require_absent(management)?;
         return Ok(None);
     };
     selection.verify(management.verified_authority())?;
@@ -233,7 +241,8 @@ pub(in crate::engine) fn validate_selection(management: &TerminalManagement) -> 
         Some(selection) => activation::validate_source(management, &selection),
         None => {
             activation::require_absent(management)?;
-            publication::require_absent(management)
+            publication::require_absent(management)?;
+            epoch::require_absent(management)
         }
     }
 }
@@ -241,7 +250,7 @@ pub(in crate::engine) fn validate_selection(management: &TerminalManagement) -> 
 impl TerminalManagement {
     pub(in crate::engine) fn chain_readmission_selected(&self) -> Result<bool> {
         let root = self.system_root();
-        if activation::started(self)? || publication::started(self)? {
+        if activation::started(self)? || publication::started(self)? || epoch::started(self)? {
             return Ok(true);
         }
         for name in [REQUEST, RECEIPT] {

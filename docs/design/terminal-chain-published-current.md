@@ -47,3 +47,5 @@
 沿用完整 native 输入的 8,192 对象/128 MiB 集合、三倍有界读预算和 16 KiB 三帧日志限制。打开消费者需要独立两根输入/目标归档读取和完整 checkpoint 投影，成本随完整 State/历史/终态链增长；报告遍历已验证分支头计数，不扫描正文。没有性能测量或锁等待保证。
 
 仍需专属活动 generation 的完整解析、受信冷启动选定、原 Stop 的精确消费/新 epoch、全部必要资源持有、活动 Current/serving locator/数据库切换及实际目标 writer。不能先消费 Stop 再把不可恢复状态留给下一片；本片保持原状态不变。H03 的外来多级链也不能使用这个保留原盘的冻结视图冒充一次性正式加入。
+
+后继[新 epoch 与 Stop 后继计划](terminal-chain-activation-plan.md)已把本冻结 reader 接到严格原生 bootstrap 记录构造和原请求 SYSTEM 持久选择，但仍不消费 Stop 或开放实际 writer。该计划不能当作本页所述活动闭包已完成的证明。
