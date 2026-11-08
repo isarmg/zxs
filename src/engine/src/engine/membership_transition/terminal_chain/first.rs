@@ -115,6 +115,8 @@ struct NativeObject {
 }
 pub(super) struct Prepared {
     core: Core,
+    candidate: Candidate,
+    result: OperationResult,
     manifest: Manifest,
     files: BTreeMap<PathBuf, NativeObject>,
 }
@@ -178,6 +180,12 @@ impl Prepared {
                 native_bytes: 0,
             },
             core,
+            result: state
+                .operations
+                .get(&proposal.operation())
+                .expect("invariant: prescribed first result")
+                .clone(),
+            candidate,
             files: BTreeMap::new(),
         };
         prepared.add(object.kind(), &object.hash, object.bytes())?;
@@ -230,6 +238,15 @@ impl Prepared {
         self.manifest.native_objects = self.files.len();
         self.manifest.native_bytes = total;
         Ok(())
+    }
+    pub(super) fn disk(&self) -> &DiskConfig {
+        self.core.selection.proposal.target_disk()
+    }
+    pub(super) fn candidate(&self) -> &Candidate {
+        &self.candidate
+    }
+    pub(super) fn result(&self) -> &OperationResult {
+        &self.result
     }
     pub(super) fn manifest(&self) -> &Manifest {
         &self.manifest
@@ -302,7 +319,7 @@ impl Prepared {
         Ok(())
     }
 }
-fn address(kind: &str, hash: &str) -> Result<PathBuf> {
+pub(super) fn address(kind: &str, hash: &str) -> Result<PathBuf> {
     if kind.is_empty()
         || !kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
         || hash.len() != 64

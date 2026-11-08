@@ -726,6 +726,7 @@ async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown(
         "/api/disks/terminal-chain-target-status",
         "/api/disks/terminal-chain-target-synchronize",
         "/api/disks/terminal-chain-first-prepare",
+        "/api/disks/terminal-chain-first-publish",
     ] {
         let mut request = post(path, json!({}));
         request
@@ -847,4 +848,34 @@ async fn chain_first_preparation_requires_exact_plan_and_does_not_accept_activat
             .status(),
         StatusCode::BAD_REQUEST
     );
+}
+
+#[tokio::test]
+async fn chain_publication_rejects_unselected_recipe_and_unsupported_activation_controls() {
+    let path = "/api/disks/terminal-chain-first-publish";
+    for field in [
+        "force",
+        "activate",
+        "root_path",
+        "foreign_chain",
+        "publication",
+        "seal",
+        "journal",
+        "candidate",
+    ] {
+        let mut input = json!({
+            "service_user":"zxs", "external_writers_stopped":true,
+            "confirmation":"publish-chain-first-slot-without-activation",
+            "acknowledge_publication_without_activation":true, "plan":{},
+        });
+        input[field] = "untrusted".into();
+        assert_eq!(
+            http::router(state())
+                .oneshot(post(path, input))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
 }

@@ -140,6 +140,9 @@ pub(crate) fn scan_path_at(root: &DiskRoot, path: &Path) -> Result<Scan> {
     }
 }
 
+mod terminal_chain_first;
+pub(crate) use terminal_chain_first::TerminalChainFirstJournal;
+
 mod backup_first;
 pub(crate) use backup_first::BackupFirstJournal;
 

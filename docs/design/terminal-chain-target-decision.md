@@ -61,3 +61,7 @@
 ## 首笔原生输入后继
 
 后继 [完整终态链首笔原生输入](terminal-chain-first-native-inputs.md) 将本片的真实选择与目标票组合成独立严格 core，并在两根准备确定的全 State/registry/history/Candidate。新增 activation-selected/first-candidate-prepared 阶段；已开始该步骤后，本片同步入口只核对原票，不重建丢失的原证据。它仍没有 PortableAuthority/活动 writer 转换或真实首笔 Publication，本页的正式 readmission/H03 禁止边界不变。
+
+## 真实首笔发布后继
+
+后继[真实首笔 Publication](terminal-chain-first-publication.md)新增独立明确确认入口，以真实受限 native 三帧日志及原生 seal 固定原请求，不把预期 Published 或准备标记当提交。本页的准备入口不会自动执行发布；发布开始后禁止重装首笔输入。活动 Current/writer、新 epoch/Stop 消费和 H03 正式接纳仍未实现。

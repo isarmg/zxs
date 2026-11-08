@@ -2,11 +2,11 @@
 //! Neither root's prepared marker is Publication, an active writer or a locator.
 use super::first::{Manifest, Prepared};
 use super::*;
-const SELECTED: &str = "chain-first-selected.json";
-const PREPARED: &str = "chain-first-prepared.json";
-const DIRECTORY: &str = "chain-first";
-const TARGET_DIRECTORY: &str = "first-candidate";
-const TARGET_PREPARED: &str = "prepared.json";
+pub(super) const SELECTED: &str = "chain-first-selected.json";
+pub(super) const PREPARED: &str = "chain-first-prepared.json";
+pub(super) const DIRECTORY: &str = "chain-first";
+pub(super) const TARGET_DIRECTORY: &str = "first-candidate";
+pub(super) const TARGET_PREPARED: &str = "prepared.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -65,7 +65,10 @@ pub(super) fn require_absent(management: &TerminalManagement) -> Result<()> {
     }
     Ok(())
 }
-fn certificate(management: &TerminalManagement, selection: &Selection) -> Result<Certificate> {
+pub(super) fn certificate(
+    management: &TerminalManagement,
+    selection: &Selection,
+) -> Result<Certificate> {
     let certificate = load(
         management.system_root(),
         &operation(management).join(RECEIPT),
@@ -79,7 +82,7 @@ fn certificate(management: &TerminalManagement, selection: &Selection) -> Result
     selection.verify_certificate(&certificate)?;
     Ok(certificate)
 }
-fn exact(actual: &Manifest, expected: &Manifest) -> Result<()> {
+pub(super) fn exact(actual: &Manifest, expected: &Manifest) -> Result<()> {
     if actual != expected {
         return Err(Error::new(
             ErrorCode::LogFork,
@@ -88,7 +91,7 @@ fn exact(actual: &Manifest, expected: &Manifest) -> Result<()> {
     }
     Ok(())
 }
-fn saved(management: &TerminalManagement) -> Result<Option<Manifest>> {
+pub(super) fn saved(management: &TerminalManagement) -> Result<Option<Manifest>> {
     let root = management.system_root();
     let selected = load(root, &operation(management).join(SELECTED))?;
     if selected.is_none() {
@@ -96,7 +99,10 @@ fn saved(management: &TerminalManagement) -> Result<Option<Manifest>> {
     }
     Ok(selected)
 }
-fn source_prepared(management: &TerminalManagement, expected: &Manifest) -> Result<bool> {
+pub(super) fn source_prepared(
+    management: &TerminalManagement,
+    expected: &Manifest,
+) -> Result<bool> {
     let observed: Option<Manifest> = load(
         management.system_root(),
         &operation(management).join(PREPARED),
@@ -113,6 +119,7 @@ pub(super) fn observe(
     status: &mut TerminalChainReadmissionStatus,
 ) -> Result<()> {
     let Some(manifest) = saved(management)? else {
+        super::publication::require_absent(management)?;
         return Ok(());
     };
     let certificate = certificate(management, selection)?;
@@ -132,7 +139,7 @@ pub(super) fn observe(
         TerminalChainReadmissionPhase::ActivationSelected
     };
     status.activation = Some(manifest.report(complete, false));
-    Ok(())
+    super::publication::observe(management, &prepared, complete, status)
 }
 pub(super) fn validate_source(
     management: &TerminalManagement,
@@ -153,6 +160,7 @@ impl TerminalManagement {
         directory: PendingMemberDirectory,
     ) -> Result<TerminalChainReadmissionStatus> {
         Engine::require_actor(principal)?;
+        super::publication::require_not_started(self)?;
         let selection = selected(self)?.ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,

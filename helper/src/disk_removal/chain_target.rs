@@ -1,4 +1,4 @@
-//! Explicit preparation-only target decision. Native SYSTEM owns the original
+//! Explicit target preparation and first-slot publication. Native SYSTEM owns the original
 //! operation and all recovery evidence; no root cache can certify publication.
 use super::chain_readmission::Plan;
 use super::*;
@@ -20,6 +20,15 @@ pub(crate) struct FirstInput {
     confirmation: String,
     acknowledge_unpublished_inputs: bool,
 }
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct PublicationInput {
+    service_user: String,
+    external_writers_stopped: bool,
+    plan: Plan,
+    confirmation: String,
+    acknowledge_publication_without_activation: bool,
+}
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Status {
@@ -40,6 +49,7 @@ enum Action {
     Status,
     Synchronize { plan: Plan },
     PrepareFirst { plan: Plan },
+    PublishFirst { plan: Plan },
 }
 impl crate::service_worker::Request for Request {
     type Output = Status;
@@ -52,6 +62,24 @@ impl crate::service_worker::Request for Request {
         target.recheck()?;
         let native = match self.action {
             Action::Status => target.control.terminal_chain_readmission_status()?,
+            Action::PublishFirst { plan } => {
+                if plan.context != self.context
+                    || plan.credential != target.credential_revision()?
+                {
+                    return Err(
+                        "chain Publication host or primary credential revision changed".into(),
+                    );
+                }
+                let preparation = plan.preparation;
+                Some(target.control.publish_terminal_chain_first(
+                    storage_contract::storage_readmission::ReadmissionRequest {
+                        operation_id: preparation.operation_id,
+                        slot_id: preparation.target.slot_id,
+                        expected_disk_id: preparation.target.disk_id,
+                    },
+                    &preparation.proposal_digest,
+                )?)
+            }
             Action::PrepareFirst { plan } => {
                 if plan.context != self.context
                     || plan.credential != target.credential_revision()?
@@ -115,7 +143,9 @@ fn run(input: InventoryInput, action: Action) -> Result<Status> {
     stopped(input.external_writers_stopped)?;
     let root = Root::open(input.service_user.clone())?;
     let context = root.context.clone();
-    if let Action::Synchronize { plan } | Action::PrepareFirst { plan } = &action
+    if let Action::Synchronize { plan }
+    | Action::PrepareFirst { plan }
+    | Action::PublishFirst { plan } = &action
         && plan.context != context
     {
         return Err("chain target no longer matches its original host/account/layout".into());
@@ -163,5 +193,20 @@ pub(crate) fn prepare_first(input: FirstInput) -> Result<Status> {
             external_writers_stopped: input.external_writers_stopped,
         },
         Action::PrepareFirst { plan: input.plan },
+    )
+}
+
+pub(crate) fn publish_first(input: PublicationInput) -> Result<Status> {
+    if input.confirmation != "publish-chain-first-slot-without-activation"
+        || !input.acknowledge_publication_without_activation
+    {
+        return Err("explicitly acknowledge actual irreversible native ACCEPT/FINALIZE/Publication for the same operation; no Current/writer or service activation, no cancellation or replacement".into());
+    }
+    run(
+        InventoryInput {
+            service_user: input.service_user,
+            external_writers_stopped: input.external_writers_stopped,
+        },
+        Action::PublishFirst { plan: input.plan },
     )
 }

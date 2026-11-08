@@ -38,9 +38,10 @@ pub use pending::terminal_resume::{
     TerminalMetadataResume, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumeStatus,
 };
+pub(crate) use terminal_chain::FirstSlotOwner;
 pub use terminal_chain::{
-    TerminalChainReadmissionActivation, TerminalChainReadmissionPhase,
-    TerminalChainReadmissionStatus,
+    TerminalChainFirstPublication, TerminalChainReadmissionActivation,
+    TerminalChainReadmissionPhase, TerminalChainReadmissionStatus,
 };
 pub use terminal_resume::{TerminalMetadataResumeAdmission, TerminalReadmissionPreview};
 pub(crate) mod pending;

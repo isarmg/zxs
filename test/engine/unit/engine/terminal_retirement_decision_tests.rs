@@ -1539,3 +1539,250 @@ fn chain_first_changed_source_selection_rejects_cold_recovery_without_overwrite(
     assert!(TerminalManagement::open(&system).is_err());
     assert_eq!(fs::read(selected).unwrap(), bytes);
 }
+
+fn published_chain_first_fixture() -> (
+    Fixture,
+    OperationId,
+    crate::TerminalChainReadmissionProposal,
+    crate::TerminalChainReadmissionStatus,
+) {
+    let (mut fixture, operation, proposal, _) = prepare_chain_first_fixture();
+    let directory = retained_chain_directory(&fixture);
+    let status = fixture
+        .terminal
+        .publish_chain_readmission_first(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    (fixture, operation, proposal, status)
+}
+#[test]
+fn chain_first_publication_uses_actual_native_three_frames_but_not_active_writer() {
+    let (fixture, operation, _, status) = published_chain_first_fixture();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::FirstPublicationPreserved
+    );
+    assert!(
+        status
+            .activation
+            .as_ref()
+            .unwrap()
+            .first_publication_recorded
+    );
+    let publication = status.publication.as_ref().unwrap();
+    assert!(publication.target_reverified_this_call);
+    assert!(!publication.active_current_admitted);
+    assert!(!status.active_writer_admitted);
+    assert!(!status.metadata_resumption_supported);
+    let root = chain_first_target(&fixture, &status);
+    let disk = crate::disk::DiskRoot::open(&root).unwrap();
+    let scan =
+        crate::journal::scan_path_at(&disk, &root.join("first-publication/journal.bin")).unwrap();
+    assert!(!scan.torn_tail);
+    assert_eq!(scan.records.len(), 3);
+    assert_eq!(
+        scan.records[0].0.record_type,
+        crate::journal::RecordType::Accept
+    );
+    assert_eq!(
+        scan.records[1].0.record_type,
+        crate::journal::RecordType::Finalize
+    );
+    assert_eq!(
+        scan.records[2].0.record_type,
+        crate::journal::RecordType::Publication
+    );
+    assert_eq!(scan.records[0].1, publication.accept_frame_hash);
+    assert_eq!(scan.records[1].1, publication.finalize_frame_hash);
+    assert_eq!(scan.records[2].1, publication.publication_frame_hash);
+    assert_eq!(scan.records[2].0.object_hash, publication.publication_hash);
+    assert!(fixture.terminal.operation(operation).is_none());
+    assert!(fixture.terminal.writer_locks().is_err());
+    assert!(
+        !fixture.config.disks[0]
+            .root
+            .join("metadata/membership-generations")
+            .join(&status.activation.unwrap().core_hash)
+            .exists()
+    );
+}
+#[test]
+fn chain_publication_cold_source_status_is_historical_and_original_retry_does_not_append_again() {
+    let (fixture, operation, proposal, status) = published_chain_first_fixture();
+    let system = fixture.system();
+    let target = fixture.config.disks[0].root.clone();
+    let disk_id = fixture.config.disks[0].disk_id.clone();
+    let log_path = chain_first_target(&fixture, &status).join("first-publication/journal.bin");
+    let bytes = fs::read(&log_path).unwrap();
+    let seal = fs::read(target.join("disk.json")).unwrap();
+    drop(fixture.terminal);
+    fs::rename(&target, target.with_extension("published-missing")).unwrap();
+    fs::write(&target, b"publication status must not open target").unwrap();
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    let observed = cold.chain_readmission_status().unwrap().unwrap();
+    assert!(!observed.target_reverified_this_call);
+    assert!(
+        !observed
+            .publication
+            .as_ref()
+            .unwrap()
+            .target_reverified_this_call
+    );
+    assert_eq!(
+        observed.publication.unwrap().publication_hash,
+        status.publication.as_ref().unwrap().publication_hash
+    );
+    fs::remove_file(&target).unwrap();
+    fs::rename(target.with_extension("published-missing"), &target).unwrap();
+    let repeated = cold
+        .publish_chain_readmission_first(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id,
+                directory: fs::File::open(&target).unwrap(),
+            },
+        )
+        .unwrap();
+    assert!(repeated.publication.unwrap().target_reverified_this_call);
+    assert_eq!(fs::read(&log_path).unwrap(), bytes);
+    assert_eq!(fs::read(target.join("disk.json")).unwrap(), seal);
+    assert!(cold.operation(operation).is_none());
+    drop(cold);
+    assert!(Engine::open(&system).is_err());
+}
+#[test]
+fn chain_publication_repairs_only_the_exact_unfinished_third_frame() {
+    let (fixture, operation, proposal, status) = published_chain_first_fixture();
+    let system = fixture.system();
+    let target = fixture.config.disks[0].root.clone();
+    let disk_id = fixture.config.disks[0].disk_id.clone();
+    let target_bundle = chain_first_target(&fixture, &status);
+    let source_operation = fixture.terminal.store.operation().path().to_path_buf();
+    let source_bundle = source_operation.join("chain-first");
+    let log = target_bundle.join("first-publication/journal.bin");
+    let bytes = fs::read(&log).unwrap();
+    let mut reader = crate::journal::JournalFrameReader::new(std::io::Cursor::new(bytes.clone()));
+    reader.next_record().unwrap().unwrap();
+    reader.next_record().unwrap().unwrap();
+    let through_finalize = reader.valid_bytes as usize;
+    // Model a crash during the known third frame, before seal/target/SYSTEM receipts.
+    fs::write(&log, &bytes[..through_finalize + 7]).unwrap();
+    let seal_hash = &status.publication.as_ref().unwrap().seal_hash;
+    for bundle in [&source_bundle, &target_bundle] {
+        fs::remove_file(chain_first_object(bundle, "publication-seal", seal_hash)).unwrap();
+    }
+    fs::remove_file(target_bundle.join("published.json")).unwrap();
+    fs::remove_file(source_operation.join("chain-publication.json")).unwrap();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&system).unwrap();
+    assert_eq!(
+        cold.chain_readmission_status().unwrap().unwrap().phase,
+        crate::TerminalChainReadmissionPhase::FirstPublicationPending
+    );
+    let resumed = cold
+        .publish_chain_readmission_first(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            crate::PendingMemberDirectory {
+                disk_id,
+                directory: fs::File::open(target).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        resumed.publication.unwrap().publication_hash,
+        status.publication.unwrap().publication_hash
+    );
+    assert_eq!(fs::read(log).unwrap(), bytes);
+    assert!(cold.operation(operation).is_none());
+}
+#[test]
+fn completed_chain_publication_missing_journal_is_not_recreated() {
+    let (mut fixture, operation, proposal, status) = published_chain_first_fixture();
+    let log = chain_first_target(&fixture, &status).join("first-publication/journal.bin");
+    fs::remove_file(&log).unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .publish_chain_readmission_first(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(!log.exists());
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_readmission_activation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(!log.exists());
+    let observed = fixture
+        .terminal
+        .chain_readmission_status()
+        .unwrap()
+        .unwrap();
+    assert!(!observed.publication.unwrap().target_reverified_this_call);
+    assert!(fixture.terminal.operation(operation).is_none());
+}
+#[test]
+fn chain_publication_requires_exact_completed_inputs_before_selecting_publication() {
+    let (mut fixture, operation, proposal) = chain_target_fixture();
+    let directory = retained_chain_directory(&fixture);
+    fixture
+        .terminal
+        .synchronize_chain_readmission_target(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    let directory = retained_chain_directory(&fixture);
+    assert!(
+        fixture
+            .terminal
+            .publish_chain_readmission_first(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
+    assert!(
+        !fixture
+            .terminal
+            .store
+            .operation()
+            .path()
+            .join("chain-publication-selected.json")
+            .exists()
+    );
+    assert!(
+        fixture
+            .terminal
+            .chain_readmission_status()
+            .unwrap()
+            .unwrap()
+            .publication
+            .is_none()
+    );
+}

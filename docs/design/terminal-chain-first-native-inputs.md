@@ -49,3 +49,7 @@
 新增五项真实临时根／全 State／冷续作／完成后损坏／原来源替换测试源码，扩展一项 HTTP 边界测试并新增严格输入源码，均未运行。
 
 还需要实际首笔 ACCEPT／FINALIZE／Publication、从完整链 core 到活动代际的专用原生验证、Current／serving locator、目标新 I/O epoch、原 Stop 精确消费与冷态激活完成。整链正式 readmission 及 H03 外来盘一次完整低级链仍拒绝；没有把准备阶段或预期 PUBLISHED 状态当成真实完成。
+
+## 真实首笔发布后继
+
+后继[真实首笔 Publication](terminal-chain-first-publication.md)新增独立明确确认入口，以真实受限 native 三帧日志及原生 seal 固定原请求，不把预期 Published 或准备标记当提交。本页的准备入口不会自动执行发布；发布开始后禁止重装首笔输入。活动 Current/writer、新 epoch/Stop 消费和 H03 正式接纳仍未实现。

@@ -14,6 +14,9 @@ use platform_io::fs_safety::linux::FileIdentity;
 use std::path::{Path, PathBuf};
 mod activation;
 mod first;
+mod publication;
+pub(crate) use publication::FirstSlotOwner;
+pub use publication::TerminalChainFirstPublication;
 mod target;
 pub use activation::TerminalChainReadmissionActivation;
 
@@ -48,6 +51,8 @@ pub enum TerminalChainReadmissionPhase {
     TargetDecisionPreserved,
     ActivationSelected,
     FirstCandidatePrepared,
+    FirstPublicationPending,
+    FirstPublicationPreserved,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -59,6 +64,7 @@ pub struct TerminalChainReadmissionStatus {
     pub target_decision_hash: Option<String>,
     pub target_reverified_this_call: bool,
     pub activation: Option<TerminalChainReadmissionActivation>,
+    pub publication: Option<TerminalChainFirstPublication>,
     pub active_writer_admitted: bool,
     pub metadata_resumption_supported: bool,
 }
@@ -78,7 +84,9 @@ fn load<T: data_serialization::de::DeserializeOwned>(
         .transpose()
 }
 pub(in crate::engine) fn owns_initial_entry(name: &str) -> bool {
-    matches!(name, REQUEST | RECEIPT) || activation::owns_initial_entry(name)
+    matches!(name, REQUEST | RECEIPT)
+        || activation::owns_initial_entry(name)
+        || publication::owns_initial_entry(name)
 }
 
 impl Selection {
@@ -181,6 +189,7 @@ impl Selection {
             target_decision_hash: certificate.map(|c| c.decision.hash().into()),
             target_reverified_this_call: fresh,
             activation: None,
+            publication: None,
             active_writer_admitted: false,
             metadata_resumption_supported: false,
         })
@@ -199,6 +208,8 @@ fn selected(management: &TerminalManagement) -> Result<Option<Selection>> {
                 "chain target certificate lost its source selection",
             ));
         }
+        activation::require_absent(management)?;
+        publication::require_absent(management)?;
         return Ok(None);
     };
     selection.verify(management.verified_authority())?;
@@ -217,14 +228,17 @@ fn selected(management: &TerminalManagement) -> Result<Option<Selection>> {
 pub(in crate::engine) fn validate_selection(management: &TerminalManagement) -> Result<()> {
     match selected(management)? {
         Some(selection) => activation::validate_source(management, &selection),
-        None => activation::require_absent(management),
+        None => {
+            activation::require_absent(management)?;
+            publication::require_absent(management)
+        }
     }
 }
 
 impl TerminalManagement {
     pub(in crate::engine) fn chain_readmission_selected(&self) -> Result<bool> {
         let root = self.system_root();
-        if activation::started(self)? {
+        if activation::started(self)? || publication::started(self)? {
             return Ok(true);
         }
         for name in [REQUEST, RECEIPT] {

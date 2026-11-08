@@ -19,7 +19,7 @@ let sambaPasswordPreview = null;
 let sambaPasswordOriginal = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const input of byId("chain-first-form").elements) input.disabled = value || stopping || !csrf; byId("chain-target-status").disabled = value || stopping || !csrf; for (const input of byId("chain-target-form").elements) input.disabled = value || stopping || !csrf; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const input of byId("chain-publish-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("chain-first-form").elements) input.disabled = value || stopping || !csrf; byId("chain-target-status").disabled = value || stopping || !csrf; for (const input of byId("chain-target-form").elements) input.disabled = value || stopping || !csrf; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -824,6 +824,8 @@ function resetChainTarget() {
   byId("chain-target-result").hidden = true;
   byId("chain-first-form").hidden = true;
   byId("chain-first-ack").checked = false;
+  byId("chain-publish-form").hidden = true;
+  byId("chain-publish-ack").checked = false;
 }
 byId("chain-target-status").addEventListener("click",async () => {
   if (busy || stopping) return;
@@ -836,7 +838,9 @@ byId("chain-target-status").addEventListener("click",async () => {
     byId("chain-target-result").hidden = false;
     chainTargetPlan = result.plan;
     byId("chain-target-form").hidden = !chainTargetPlan;
-    byId("chain-first-form").hidden = !chainTargetPlan || !result.native?.target_decision_hash;
+    const publicationStarted = ["first-publication-pending","first-publication-preserved"].includes(result.native?.phase);
+    byId("chain-first-form").hidden = !chainTargetPlan || !result.native?.target_decision_hash || publicationStarted;
+    byId("chain-publish-form").hidden = !chainTargetPlan || !["first-candidate-prepared","first-publication-pending","first-publication-preserved"].includes(result.native?.phase);
   } catch(e) { error(`${e.message} 状态不明不代表未写入；保留原生证据，不换编号或盘。`); }
   finally { setBusy(false); }
 });
@@ -856,6 +860,7 @@ byId("chain-target-form").addEventListener("submit",async event => {
   finally {
     chainTargetPlan = null; byId("chain-target-form").hidden = true;
     byId("chain-first-form").hidden = true; byId("chain-first-ack").checked = false;
+    byId("chain-publish-form").hidden = true; byId("chain-publish-ack").checked = false;
     byId("chain-target-ack").checked = false;
     byId("terminal-chain-readmit-report").hidden = true;
     byId("terminal-chain-report").hidden = true;
@@ -885,9 +890,35 @@ byId("chain-first-form").addEventListener("submit",async event => {
   finally {
     chainTargetPlan = null;
     byId("chain-first-form").hidden = true; byId("chain-first-ack").checked = false;
+    byId("chain-publish-form").hidden = true; byId("chain-publish-ack").checked = false;
     byId("chain-target-form").hidden = true; byId("chain-target-ack").checked = false;
     byId("terminal-chain-readmit-report").hidden = true;
     byId("terminal-chain-report").hidden = true;
+    resetDiskReadmission(); resetTerminalRetirement(); resetDiskRemoval();
+    setBusy(false);
+  }
+});
+
+byId("chain-publish-form").addEventListener("submit",async event => {
+  event.preventDefault(); if (busy || stopping || !chainTargetPlan) return;
+  const plan = chainTargetPlan;
+  if (!confirm(`真实提交原操作 ${plan.preparation.operation_id} 的首笔 ACCEPT/FINALIZE/Publication？不是仅准备，无取消或换盘；仍不会恢复活动 writer 或服务。目标 ${plan.preparation.target.slot_id} / ${plan.preparation.target.disk_id}。`)) return;
+  setBusy(true); error("");
+  try {
+    const result = await (await post("/api/disks/terminal-chain-first-publish", {
+      service_user:byId("disk-remove-user").value,
+      external_writers_stopped:byId("disk-remove-writers").checked,
+      plan, confirmation:"publish-chain-first-slot-without-activation",
+      acknowledge_publication_without_activation:byId("chain-publish-ack").checked
+    })).json();
+    byId("chain-target-result").textContent = JSON.stringify(result,null,2);
+    byId("chain-target-result").hidden = false;
+  } catch(e) { error(`${e.message} 原生首笔可能已经真实发布；原 operation ${plan.preparation.operation_id} / ${plan.preparation.proposal_digest}，保留全部证据，只查询/恢复原发布，不换盘、清理或换编号。`); }
+  finally {
+    chainTargetPlan = null;
+    for (const id of ["chain-publish-form","chain-first-form","chain-target-form"]) byId(id).hidden = true;
+    for (const id of ["chain-publish-ack","chain-first-ack","chain-target-ack"]) byId(id).checked = false;
+    byId("terminal-chain-readmit-report").hidden = true; byId("terminal-chain-report").hidden = true;
     resetDiskReadmission(); resetTerminalRetirement(); resetDiskRemoval();
     setBusy(false);
   }

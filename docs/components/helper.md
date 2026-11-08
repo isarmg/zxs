@@ -241,3 +241,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 完整终态链首笔原生输入
 
 已有原目标实际决定之后，独立控制台提供明确确认的 `POST /api/disks/terminal-chain-first-prepare`，持原请求在 SYSTEM/原目标分别保存并重验完整 core、State、registry、history 和 Candidate。见[原生输入与冷恢复边界](../design/terminal-chain-first-native-inputs.md)。不是实际 Publication 或活动 writer，不启动服务、不放开 H03；预期 Published 结果只存在隔离快照。SOURCE 查询仍不探目标，完成后材料缺损拒绝自动补造。本片未审查/编译/测试/CI、未操作实际系统。
+
+### 完整终态链真实首笔发布
+
+已有两根完整首笔输入之后，独立 `POST /api/disks/terminal-chain-first-publish` 按原请求执行实际 ACCEPT/FINALIZE/Publication 三帧、原生 seal 与双根证据，见[真实首槽与恢复边界](../design/terminal-chain-first-publication.md)。有单独不可撤销发布确认；不消费 Stop、不启用活动 Current/writer、不启动服务、不完成 H03。已完成证据丢失拒绝重建，source-only 状态不探目标。本片未审查/编译/测试/CI，无实际系统操作。
