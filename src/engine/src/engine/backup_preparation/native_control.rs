@@ -7,7 +7,10 @@ mod archive;
 mod databases;
 mod runtime;
 pub use archive::BackupNativeControlReport;
-pub use databases::{BackupObjectDatabasePreparationReport, offline_check_backup_object_databases};
+pub use databases::{
+    BackupObjectDatabasePreparationReport, BackupScopedDatabasePreparationReport,
+    offline_check_backup_object_databases, offline_check_backup_scoped_databases,
+};
 
 const FORMAT: &str = "zxs-backup-native-preparation";
 const TASK: &str = "backup-preparation/native-control.json";

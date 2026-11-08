@@ -254,3 +254,9 @@
 本片在纯 Add 开始准备、待成员接纳／续作和每个新 Joint 选择前，沿新增盘逐跳核所有必要原祖先的 Enabled 登记、实际 held 根／命名根和 seal。新增祖先必须属于同一 exact-root 批次，不接受 Config 中的 Disabled／Detached 历史条目或待补占位。冷态按原 Add 的认证 registry 核链，不用今日掉盘改写已存在的投票或收据。
 
 这是[完整链生产门禁](../design/membership-complete-backup-chain.md)，不是外来 helper 接纳或迁移最终切换；活动多下级路由、源增量、三范围完整数据库安装与共同决定仍未完成。按当前指令未编译、测试、审查或 CI，不增加旧格式转换或删改原数据。
+
+### 目标原范围数据库材料（后继源码，未验收）
+
+`start_backup_scoped_database_preparation` 在原对象库阶段后，后台向每个原选定目标追加真实 SYSTEM 当前索引与所有原盘 current／history SQLite。每个 peer 独立重放自己的原生出版前缀、编码期望并比对实际字节；原 task 先在 SYSTEM 持久保存，原操作冷开优先续作。所有库仍是隔离材料，保留原 scope，不把候选目标变成原盘身份。
+
+这些已有派生格式不覆盖完整 SYSTEM 时间线和盘根目录／标签全审计，因此 `ScopedDatabasesPrepared` 不是三范围完整迁移或最终切换。详见[目标范围数据库](../design/backup-scoped-database-preparation.md)。当前未编译、测试、审查或 CI，未删除源、改路由、发出 ACCEPT 或接纳待加入盘。

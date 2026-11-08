@@ -82,6 +82,9 @@ pub(in crate::engine::backup_preparation) fn resume(
     engine: &mut Engine,
     system: &DiskRoot,
 ) -> Result<bool> {
+    if scoped::resume(engine, system)? {
+        return Ok(true);
+    }
     if !preparation_path_exists(system, &system.path().join(TASK))? {
         return Ok(false);
     }
@@ -114,7 +117,7 @@ pub(in crate::engine::backup_preparation) fn resume(
     Ok(true)
 }
 
-fn update(
+pub(super) fn update(
     system: &DiskRoot,
     progress: &Mutex<BackupPreparationStatus>,
     action: impl FnOnce(&mut BackupPreparationStatus),

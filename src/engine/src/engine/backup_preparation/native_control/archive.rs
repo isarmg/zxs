@@ -548,6 +548,16 @@ fn verify(
     job: &Job,
     source: &mut impl Source,
 ) -> Result<(BackupNativeControlReport, AdmittedState)> {
+    verify_observed(manifest, bytes, job, source, &mut |_, _, _, _| Ok(()))
+}
+
+fn verify_observed(
+    manifest: &Manifest,
+    bytes: &[u8],
+    job: &Job,
+    source: &mut impl Source,
+    observe: &mut impl FnMut(&crate::ValidatedConfig, &Candidate, &str, &AdmittedState) -> Result<()>,
+) -> Result<(BackupNativeControlReport, AdmittedState)> {
     if manifest.format != FORMAT
         || manifest.publications.is_empty()
         || manifest.publications.len() > MAX_PUBLICATIONS
@@ -622,6 +632,9 @@ fn verify(
             source.object(kind, hash)
         })?;
         verify_payloads(&manifest.config, &candidate, &publication, source)?;
+        // The observer can build bounded in-memory derived material. It must
+        // not install/authorize anything until this entire prefix returns.
+        observe(&config, &candidate, &published.candidate, &admitted)?;
         snapshot = Some(candidate.snapshot_hash.clone());
         previous = Some(admitted);
     }
@@ -813,6 +826,17 @@ pub(super) fn read(
     expected: &str,
     stop: &AtomicBool,
 ) -> Result<BackupNativeControlReport> {
+    let (report, _) = read_observed(root, job, expected, stop, &mut |_, _, _, _| Ok(()))?;
+    Ok(report)
+}
+
+pub(super) fn read_observed(
+    root: &DiskRoot,
+    job: &Job,
+    expected: &str,
+    stop: &AtomicBool,
+    observe: &mut impl FnMut(&crate::ValidatedConfig, &Candidate, &str, &AdmittedState) -> Result<()>,
+) -> Result<(BackupNativeControlReport, AdmittedState)> {
     let bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST)?;
     let manifest: Manifest = decode_proof(&bytes)?;
     if object_hash(FORMAT, &manifest)? != expected {
@@ -823,6 +847,5 @@ pub(super) fn read(
         stop,
         budget: Budget::default(),
     };
-    let (report, _) = verify(&manifest, &bytes, job, &mut source)?;
-    Ok(report)
+    verify_observed(&manifest, &bytes, job, &mut source, observe)
 }

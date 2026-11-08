@@ -21,8 +21,9 @@ mod inspection;
 mod native_control;
 pub use native_control::{
     BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
-    BackupObjectDatabasePreparationReport, offline_check_backup_native_preparation,
-    offline_check_backup_object_databases,
+    BackupObjectDatabasePreparationReport, BackupScopedDatabasePreparationReport,
+    offline_check_backup_native_preparation, offline_check_backup_object_databases,
+    offline_check_backup_scoped_databases,
 };
 mod snapshot;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
@@ -62,6 +63,9 @@ pub enum BackupPreparationPhase {
     /// All selected targets retain file/directory SQLite from complete State.
     /// SYSTEM/disk historical scopes and authoritative cutover remain absent.
     ObjectDatabasesPrepared,
+    /// SYSTEM-current and original disk-current/history SQLite only. Full
+    /// historical scopes, replacement bindings and cutover remain absent.
+    ScopedDatabasesPrepared,
     Blocked,
     SourceChanged,
 }

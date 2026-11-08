@@ -38,9 +38,11 @@ pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
     BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
     BackupObjectDatabasePreparationReport, BackupPreparationBatchReport, BackupPreparationPhase,
-    BackupPreparationReport, BackupPreparationRequest, BackupPreparationStatus, RecoveryDataRoot,
+    BackupPreparationReport, BackupPreparationRequest, BackupPreparationStatus,
+    BackupScopedDatabasePreparationReport, RecoveryDataRoot,
     offline_check_backup_native_preparation, offline_check_backup_object_databases,
     offline_check_backup_preparation, offline_check_backup_preparation_batch,
+    offline_check_backup_scoped_databases,
 };
 pub use engine::{
     FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,
@@ -134,11 +136,12 @@ pub use engine::{
     PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
     PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection, PermanentNodeRetirementOutcome,
     PermanentRemovalCleanupObservation, RangeContent, ReadFile, ReadLease, RecoverySealContext,
-    RecoverySealFailure, RecoveryWarnings, RemovalCleanupScope, RemovalParentProjection, RemovalReplicaCleanup,
-    RemovalReplicaCleanupState, RetainedWorkspaceLimits, SharedHistoryRead, SystemCatalogKind,
-    SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor, SystemChangePage,
-    SystemChangeReadError, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
-    WorkspaceReadPlan, inspect_disk_database_material, verify_membership_control_archive,
+    RecoverySealFailure, RecoveryWarnings, RemovalCleanupScope, RemovalParentProjection,
+    RemovalReplicaCleanup, RemovalReplicaCleanupState, RetainedWorkspaceLimits, SharedHistoryRead,
+    SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor,
+    SystemChangePage, SystemChangeReadError, ValidatedConfig, WorkspaceInventory,
+    WorkspaceInventoryRecord, WorkspaceReadPlan, inspect_disk_database_material,
+    verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

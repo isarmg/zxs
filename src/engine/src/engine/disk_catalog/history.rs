@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 mod database;
 mod maintenance;
 mod offline;
+pub(in crate::engine::disk_catalog) mod preparation;
 mod replay;
 pub(super) use maintenance::Maintenance;
 pub use maintenance::{DiskHistoryFailure, DiskHistoryMaintenanceState, DiskHistoryStatus};

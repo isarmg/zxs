@@ -3,8 +3,11 @@
 use super::*;
 use crate::container_storage::backup_databases::PreparedDatabases;
 
+mod materials;
 mod runtime;
+mod scoped;
 mod store;
+pub use scoped::{BackupScopedDatabasePreparationReport, offline_check_backup_scoped_databases};
 
 const FORMAT: &str = "zxs-backup-object-databases";
 const TASK: &str = "backup-preparation/object-databases.json";
@@ -141,7 +144,15 @@ pub fn offline_check_backup_object_databases(
         ));
     }
     let stop = AtomicBool::new(false);
-    let native = verify_completed(&task.native, &roots.iter().collect::<Vec<_>>(), &stop)?;
+    verify_at(&task, &roots.iter().collect::<Vec<_>>(), &stop)
+}
+
+fn verify_at(
+    task: &DatabaseTask,
+    roots: &[&DiskRoot],
+    stop: &AtomicBool,
+) -> Result<BackupObjectDatabasePreparationReport> {
+    let native = verify_completed(&task.native, roots, stop)?;
     task.check_native(&native)?;
     let intent = task.bytes()?;
     let mut completed = None;
@@ -151,10 +162,10 @@ pub fn offline_check_backup_object_databases(
                 "object database target belongs to a different complete selection",
             ));
         }
-        let state = snapshot::read(root, job, &stop)?;
-        let prepared = PreparedDatabases::capture(&state, &stop)?;
-        store::verify(root, &prepared, &stop)?;
-        let observed = report(&task, native.clone(), &prepared)?;
+        let state = snapshot::read(root, job, stop)?;
+        let prepared = PreparedDatabases::capture(&state, stop)?;
+        store::verify(root, &prepared, stop)?;
+        let observed = report(task, native.clone(), &prepared)?;
         let bytes = completion_bytes(&observed)?;
         if root.read_bytes(&root.path().join(COMPLETE), MAX_TASK)? != bytes {
             return Err(invalid(

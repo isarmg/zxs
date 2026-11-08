@@ -13,6 +13,7 @@ use sqlite_access::{Connection, Executor, Row};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 use storage_contract::{MapChanges, TrackedRecords};
 
+pub(in crate::engine) mod preparation;
 mod scope;
 mod snapshot;
 mod system_changes;

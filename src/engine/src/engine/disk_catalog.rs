@@ -12,6 +12,7 @@ use std::sync::Arc;
 mod database;
 mod history;
 mod maintenance;
+pub(in crate::engine) use history::preparation::PreparedDiskScopes;
 pub use history::{
     DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange,
     DiskHistoryFailure, DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation,

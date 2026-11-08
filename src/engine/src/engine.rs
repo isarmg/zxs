@@ -12,8 +12,9 @@ pub use backup_preparation::{
     BackupNativeControlReport, BackupNativePreparationReport, BackupNativeTargetReport,
     BackupObjectDatabasePreparationReport, BackupPreparationBatchReport, BackupPreparationPhase,
     BackupPreparationReport, BackupPreparationRequest, BackupPreparationStatus,
-    offline_check_backup_native_preparation, offline_check_backup_object_databases,
-    offline_check_backup_preparation, offline_check_backup_preparation_batch,
+    BackupScopedDatabasePreparationReport, offline_check_backup_native_preparation,
+    offline_check_backup_object_databases, offline_check_backup_preparation,
+    offline_check_backup_preparation_batch, offline_check_backup_scoped_databases,
 };
 mod config;
 pub use config::ValidatedConfig;
