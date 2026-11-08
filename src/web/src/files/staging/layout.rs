@@ -112,10 +112,23 @@ fn finish(
     if !current_session(state, target.epoch) {
         return;
     }
-    let same_page = state.try_update(|state| release(state, &target)) == Some(true);
+    let refresh_storage = needs_storage_refresh(&result);
+    let same_page = state.try_update(|state| {
+        if refresh_storage {
+            state.management.invalidate_storage();
+        }
+        release(state, &target)
+    }) == Some(true);
+    if refresh_storage {
+        crate::management::load(state);
+    }
     // Even an obsolete page's 401 revokes its current session, not a newer one.
     let accepted = accept_read_response(state, target.epoch, &result);
     let _ = phase.try_update(|phase| complete(phase, target, result, accepted && same_page));
+}
+fn needs_storage_refresh(result: &Result<DirectoryLayoutResult, api::Error>) -> bool {
+    matches!(result, Err(error) if error.mutation_outcome_unknown()
+        || error.code == storage_contract::ErrorCode::RecoveryRequired)
 }
 fn complete(
     phase: &mut Phase,
@@ -188,7 +201,21 @@ pub(super) fn view(state: RwSignal<State>, model: RwSignal<Model>) -> impl IntoV
             }
             Phase::Running(running) if Some(&running)==target.get().as_ref()=>view!{<p class="zxs-row" role="status">{t("实体布局整理中；离开页面不会取消。", "Reconciling physical layout. Leaving this page does not cancel it.")}</p>}.into_any(),
             Phase::Finished(finished, Ok(result)) if Some(&finished)==target.get().as_ref()=>view!{<div class="zxs-stack" role="status" data-directory-layout-result=""><p class="zxs-row">{outcome(&result)}</p><p class="zxs-row">{summary(&result)}</p></div>}.into_any(),
-            Phase::Finished(finished, Err(error)) if Some(&finished)==target.get().as_ref()=>{let feedback=crate::ui::feedback(&error);view!{<div class="zxs-stack"><ErrorState message=feedback.message request_id=feedback.request_id/><p class="zxs-row" role="status">{t("未收到可确认的整理结果。操作可能已执行或仍在运行，不能假定磁盘未变化。先刷新存储状态及目录；恢复要求须先处理，再明确重新检查。", "No confirmed layout result was received. The repair may have executed or still be running; do not assume the disks are unchanged. Refresh storage status and the folder, resolve any recovery requirement, then explicitly review again.")}</p><button type="button" class="zxs-button" data-refresh-directory-layout="" disabled=move ||state.with(actions::pending) on:click=move |_|actions::load_entries(state)>{t("刷新目录后再检查", "Refresh folder before reviewing again")}</button></div>}.into_any()},
+            Phase::Finished(finished, Err(error)) if Some(&finished)==target.get().as_ref()=>{
+                let feedback=crate::ui::feedback(&error);
+                view!{<div class="zxs-stack">
+                    <ErrorState message=feedback.message request_id=feedback.request_id/>
+                    <p class="zxs-row" role="status">{t(
+                        "未收到可确认的整理结果。操作可能已执行或仍在运行，不能假定磁盘未变化。先刷新存储状态及目录；恢复要求须先处理，再明确重新检查。",
+                        "No confirmed layout result was received. The repair may have executed or still be running; do not assume the disks are unchanged. Refresh storage status and the folder, resolve any recovery requirement, then explicitly review again."
+                    )}</p>
+                    <button type="button" class="zxs-button" data-refresh-directory-layout=""
+                        disabled=move ||state.with(|state|actions::pending(state)||state.files.loading||state.management.loading||state.management.retrying)
+                        on:click=move |_|crate::management::refresh_storage_and_folder(state)>{t(
+                            "检查存储状态并刷新目录", "Check storage status and refresh folder"
+                        )}</button>
+                </div>}.into_any()
+            },
             _ => ().into_any(),
         }}
     </section>}

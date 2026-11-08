@@ -193,3 +193,97 @@ fn layout_async_completion_from_old_epoch_cannot_clear_remounted_pending_or_resu
     assert!(matches!(phase.get_untracked(), Phase::Idle));
     root.cleanup();
 }
+
+#[test]
+fn layout_unknown_completion_invalidates_health_and_keeps_original_error() {
+    let root = Owner::new();
+    let (initial, model) = fixture();
+    let target = review(&initial, &model, &Phase::Idle).unwrap();
+    let state = root.with(|| RwSignal::new(initial));
+    let phase = root.with(|| RwSignal::new(Phase::Running(target.clone())));
+    state.update(|state| {
+        state.files.mutation_pending = true;
+        // A health read admitted before the repair still owns its slot.
+        state.management.loading = true;
+    });
+    let mut error = api::error(
+        storage_contract::ErrorCode::InvalidResponse,
+        "unknown repair result",
+    );
+    error.status = 200;
+    error.request_id = Some("layout-unknown".into());
+    finish(state, phase, target, Err(error));
+    state.with_untracked(|state| {
+        assert!(!state.files.mutation_pending);
+        assert_eq!(
+            state.management.storage,
+            crate::management::Storage::Unknown
+        );
+        assert!(
+            state.management.loading,
+            "old read still owns the single slot"
+        );
+        assert!(!actions::write_allowed(state));
+        assert!(state.files.operations.is_empty());
+    });
+    assert!(
+        matches!(phase.get_untracked(), Phase::Finished(_, Err(error))
+        if error.request_id.as_deref() == Some("layout-unknown"))
+    );
+    root.cleanup();
+}
+
+#[test]
+fn layout_known_rejection_does_not_invalidate_healthy_storage() {
+    let root = Owner::new();
+    let (initial, model) = fixture();
+    let target = review(&initial, &model, &Phase::Idle).unwrap();
+    let state = root.with(|| RwSignal::new(initial));
+    let phase = root.with(|| RwSignal::new(Phase::Running(target.clone())));
+    state.update(|state| state.files.mutation_pending = true);
+    let mut error = api::error(
+        storage_contract::ErrorCode::HeadConflict,
+        "refresh namespace",
+    );
+    error.status = 409;
+    finish(state, phase, target, Err(error));
+    assert_eq!(
+        state.with_untracked(|state| state.management.storage),
+        crate::management::Storage::Ready
+    );
+    assert!(!state.with_untracked(|state| state.management.loading));
+    root.cleanup();
+}
+
+#[test]
+fn old_session_layout_failure_does_not_invalidate_the_replacement_session() {
+    let root = Owner::new();
+    let (initial, model) = fixture();
+    let target = review(&initial, &model, &Phase::Idle).unwrap();
+    let state = root.with(|| RwSignal::new(initial));
+    let phase = root.with(|| RwSignal::new(Phase::Idle));
+    state.update(|state| {
+        state.session_epoch += 1;
+        state.files.mutation_pending = true;
+    });
+    let mut error = api::error(storage_contract::ErrorCode::RecoveryRequired, "old failure");
+    error.status = 503;
+    finish(state, phase, target, Err(error));
+    assert_eq!(
+        state.with_untracked(|state| state.management.storage),
+        crate::management::Storage::Ready
+    );
+    assert!(state.with_untracked(|state| state.files.mutation_pending));
+    assert!(!state.with_untracked(|state| state.management.loading));
+    root.cleanup();
+}
+
+#[test]
+fn layout_recovery_required_refreshes_health_even_when_mapped_as_conflict() {
+    let mut error = api::error(
+        storage_contract::ErrorCode::RecoveryRequired,
+        "recover before writing",
+    );
+    error.status = 409;
+    assert!(needs_storage_refresh(&Err(error)));
+}

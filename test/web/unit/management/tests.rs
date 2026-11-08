@@ -323,3 +323,188 @@ fn global_status_changes_preserve_the_current_page_editors_and_unknown_operation
         }
     }
 }
+
+fn folder_refresh_fixture() -> State {
+    let mut state = State {
+        authenticated: true,
+        session_epoch: 3,
+        page: crate::ui::Page::Files,
+        ..Default::default()
+    };
+    state.management.storage = Storage::Ready;
+    state.files.slot = "slot_00000000000000000000000000000001".into();
+    state.files.generation = 7;
+    state.files.loaded = true;
+    state.files.writable = true;
+    state.files.disks_loaded = true;
+    state
+}
+fn status_response(storage: &str) -> Result<Value, api::Error> {
+    Ok(json!({"authentication":"ready","storage":{
+        "state":storage,"retryable":true,"recovering":false
+    }}))
+}
+
+#[test]
+fn invalidated_health_read_keeps_admission_and_cannot_restore_cached_ready() {
+    let mut state = folder_refresh_fixture();
+    let read = begin_load(&mut state, Refresh::Status).unwrap();
+    state.management.invalidate_storage();
+    assert_eq!(state.management.storage, Storage::Unknown);
+    assert!(state.management.loading);
+    assert!(begin_load(&mut state, Refresh::Status).is_none());
+    assert!(begin_load(&mut state, Refresh::CurrentFolder).is_none());
+    assert_eq!(
+        complete_load(&mut state, &read, status_response("ready")),
+        StatusCompletion::Superseded
+    );
+    assert!(!state.management.loading);
+    assert_eq!(state.management.storage, Storage::Unknown);
+    let fresh = begin_load(&mut state, Refresh::Status).unwrap();
+    assert_eq!(
+        complete_load(&mut state, &fresh, status_response("recovery_required")),
+        StatusCompletion::Accepted {
+            disks: false,
+            folder: false
+        }
+    );
+    assert_eq!(state.management.storage, Storage::RecoveryRequired);
+    assert!(state.management.retryable);
+}
+
+#[test]
+fn explicit_folder_recovery_waits_for_readable_health_without_settling_mutations() {
+    for (storage, readable) in [
+        ("ready", true),
+        ("read_only", true),
+        ("recovery_required", false),
+        ("unavailable", false),
+        ("unconfigured", false),
+        ("terminal_management", false),
+        ("unknown", false),
+    ] {
+        let mut state = folder_refresh_fixture();
+        let read = begin_load(&mut state, Refresh::CurrentFolder).unwrap();
+        assert!(state.management.loading);
+        assert_eq!(state.management.storage, Storage::Unknown);
+        assert!(!state.management.storage.writable());
+        assert!(
+            !state.files.loading,
+            "health must precede the folder request"
+        );
+        assert_eq!(
+            complete_load(&mut state, &read, status_response(storage)),
+            StatusCompletion::Accepted {
+                disks: readable,
+                folder: readable
+            },
+            "{storage}"
+        );
+        assert_eq!(state.management.storage.writable(), storage == "ready");
+        assert!(
+            state.files.operations.is_empty(),
+            "health is not a mutation receipt"
+        );
+        assert!(
+            !state.management.retrying,
+            "checking health never retries storage"
+        );
+    }
+}
+
+#[test]
+fn folder_refresh_failure_preserves_diagnostic_and_does_not_request_entries() {
+    let mut state = folder_refresh_fixture();
+    let read = begin_load(&mut state, Refresh::CurrentFolder).unwrap();
+    let mut error = api::error(
+        storage_contract::ErrorCode::RecoveryRequired,
+        "disk requires recovery",
+    );
+    error.status = 503;
+    error.request_id = Some("health-failure".into());
+    assert_eq!(
+        complete_load(&mut state, &read, Err(error)),
+        StatusCompletion::Accepted {
+            disks: false,
+            folder: false
+        }
+    );
+    assert_eq!(state.management.storage, Storage::Unknown);
+    assert_eq!(
+        state
+            .management
+            .failure
+            .as_ref()
+            .unwrap()
+            .request_id
+            .as_deref(),
+        Some("health-failure")
+    );
+    assert!(!state.management.loading);
+}
+
+#[test]
+fn navigation_or_new_mutation_cancels_only_the_requested_folder_refresh() {
+    for change in 0..4 {
+        let mut state = folder_refresh_fixture();
+        let read = begin_load(&mut state, Refresh::CurrentFolder).unwrap();
+        match change {
+            0 => state.files.generation += 1,
+            1 => state.change_page(crate::ui::Page::Admin),
+            2 => state.files.mutation_pending = true,
+            3 => state.files.loading = true,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            complete_load(&mut state, &read, status_response("ready")),
+            StatusCompletion::Accepted {
+                disks: true,
+                folder: false
+            }
+        );
+        assert_eq!(state.management.storage, Storage::Ready);
+    }
+}
+
+#[test]
+fn stale_session_status_cannot_release_new_read_or_refresh_a_folder() {
+    let mut state = folder_refresh_fixture();
+    let read = begin_load(&mut state, Refresh::CurrentFolder).unwrap();
+    state.session_epoch += 1;
+    state.management.storage = Storage::ReadOnly;
+    assert_eq!(
+        complete_load(&mut state, &read, status_response("ready")),
+        StatusCompletion::Obsolete
+    );
+    assert!(state.management.loading);
+    assert_eq!(state.management.storage, Storage::ReadOnly);
+}
+
+#[test]
+fn explicit_folder_health_refresh_has_single_admission_and_respects_pending_writes() {
+    let mut state = folder_refresh_fixture();
+    state.files.mutation_pending = true;
+    assert!(begin_load(&mut state, Refresh::CurrentFolder).is_none());
+    assert_eq!(state.management.storage, Storage::Ready);
+    state.files.mutation_pending = false;
+    let read = begin_load(&mut state, Refresh::CurrentFolder).unwrap();
+    let generation = state.management.generation;
+    assert!(begin_load(&mut state, Refresh::CurrentFolder).is_none());
+    assert_eq!(state.management.generation, generation);
+    complete_load(&mut state, &read, status_response("ready"));
+    assert!(begin_load(&mut state, Refresh::CurrentFolder).is_some());
+}
+
+#[test]
+fn normal_health_poll_does_not_request_folder_reload_or_disable_known_ready() {
+    let mut state = folder_refresh_fixture();
+    let read = begin_load(&mut state, Refresh::Status).unwrap();
+    assert_eq!(state.management.storage, Storage::Ready);
+    assert_eq!(
+        complete_load(&mut state, &read, status_response("ready")),
+        StatusCompletion::Accepted {
+            disks: false,
+            folder: false
+        }
+    );
+}

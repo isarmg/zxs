@@ -84,6 +84,14 @@ pub(crate) struct Model {
     generation: u64,
 }
 impl Model {
+    /// A mutation can invalidate a health read admitted before it settled.
+    /// Keep the occupied read slot until completion; its response cannot make
+    /// storage writable again and will schedule a fresh observation.
+    pub(crate) fn invalidate_storage(&mut self) {
+        self.storage = Storage::Unknown;
+        self.generation += 1;
+    }
+
     pub(crate) fn needs_attention(&self) -> bool {
         !matches!(self.storage, Storage::Ready | Storage::Unconfigured)
             || self.auth_recovery
@@ -133,57 +141,139 @@ fn accept_status(s: &mut State, value: &Value) -> bool {
     load_files
 }
 
-pub(crate) fn load(state: RwSignal<State>) {
-    let Some((epoch, generation)) = state
-        .try_update(|s| {
-            // Never let a pre-retry snapshot resolve the retry outcome fence.
-            // The completion path starts a fresh status read after the POST settles.
-            if s.management.loading
-                || s.management.retrying
-                || s.logout_pending()
-                || s.logout_unconfirmed()
+#[derive(Clone, Copy)]
+enum Refresh {
+    Status,
+    CurrentFolder,
+}
+#[derive(PartialEq, Eq)]
+struct FolderRefresh {
+    page: crate::ui::Page,
+    generation: u64,
+}
+impl FolderRefresh {
+    fn capture(state: &State) -> Self {
+        Self {
+            page: state.page,
+            generation: state.files.generation,
+        }
+    }
+}
+struct StatusRead {
+    epoch: u64,
+    generation: u64,
+    folder: Option<FolderRefresh>,
+}
+fn begin_load(state: &mut State, refresh: Refresh) -> Option<StatusRead> {
+    // Never let a pre-retry snapshot resolve the retry outcome fence.
+    // The completion path starts a fresh read after the POST settles.
+    if state.management.loading
+        || state.management.retrying
+        || state.logout_pending()
+        || state.logout_unconfirmed()
+    {
+        return None;
+    }
+    let folder = match refresh {
+        Refresh::Status => None,
+        Refresh::CurrentFolder => {
+            if !state.session_active()
+                || !matches!(
+                    state.page,
+                    crate::ui::Page::Files | crate::ui::Page::Details
+                )
+                || state.files.slot.is_empty()
+                || state.files.loading
+                || files::pending(state)
             {
                 return None;
             }
-            s.management.loading = true;
-            s.management.generation += 1;
-            Some((s.session_epoch, s.management.generation))
-        })
+            // A fresh health read, not the cached Ready value, precedes the
+            // requested directory read. This does not settle the prior mutation.
+            state.management.storage = Storage::Unknown;
+            Some(FolderRefresh::capture(state))
+        }
+    };
+    state.management.loading = true;
+    state.management.generation += 1;
+    Some(StatusRead {
+        epoch: state.session_epoch,
+        generation: state.management.generation,
+        folder,
+    })
+}
+#[derive(Debug, PartialEq, Eq)]
+enum StatusCompletion {
+    Obsolete,
+    Superseded,
+    Accepted { disks: bool, folder: bool },
+}
+fn complete_load(
+    state: &mut State,
+    read: &StatusRead,
+    result: Result<Value, api::Error>,
+) -> StatusCompletion {
+    if state.session_epoch != read.epoch || state.logout_pending() || state.logout_unconfirmed() {
+        return StatusCompletion::Obsolete;
+    }
+    state.management.loading = false;
+    if state.management.generation != read.generation {
+        return StatusCompletion::Superseded;
+    }
+    match result {
+        Ok(value) => {
+            let disks = accept_status(state, &value);
+            let folder = read.folder.as_ref() == Some(&FolderRefresh::capture(state))
+                && state.session_active()
+                && state.management.storage.readable()
+                && !state.files.loading
+                && !files::pending(state);
+            StatusCompletion::Accepted { disks, folder }
+        }
+        Err(error) => {
+            state.management.storage = Storage::Unknown;
+            state.management.failure = Some(feedback(&error));
+            StatusCompletion::Accepted {
+                disks: false,
+                folder: false,
+            }
+        }
+    }
+}
+
+pub(crate) fn load(state: RwSignal<State>) {
+    load_with(state, Refresh::Status);
+}
+
+/// Explicit read-only recovery step. Never retries a mutation or opens storage.
+pub(crate) fn refresh_storage_and_folder(state: RwSignal<State>) {
+    load_with(state, Refresh::CurrentFolder);
+}
+
+fn load_with(state: RwSignal<State>, refresh: Refresh) {
+    let Some(read) = state
+        .try_update(|state| begin_load(state, refresh))
         .flatten()
     else {
         return;
     };
     spawn_local(async move {
         let result = api::request("GET", "/api/management/status", None).await;
-        if !state
-            .try_with_untracked(|s| {
-                s.session_epoch == epoch
-                    && s.management.generation == generation
-                    && !s.logout_pending()
-                    && !s.logout_unconfirmed()
-            })
-            .unwrap_or(false)
-        {
-            return;
-        }
-        let mut load_files = false;
-        state.update(|s| {
-            s.management.loading = false;
-            match result {
-                Ok(value) => {
-                    load_files = accept_status(s, &value);
+        match state.try_update(|state| complete_load(state, &read, result)) {
+            Some(StatusCompletion::Superseded) => load(state),
+            Some(StatusCompletion::Accepted { disks, folder }) => {
+                if disks {
+                    files::load_disks(state);
                 }
-                Err(error) => {
-                    s.management.storage = Storage::Unknown;
-                    s.management.failure = Some(feedback(&error));
+                if folder {
+                    files::load_entries(state);
                 }
             }
-        });
-        if load_files {
-            files::load_disks(state);
+            Some(StatusCompletion::Obsolete) | None => {}
         }
     });
 }
+
 fn retry(state: RwSignal<State>) {
     let Some(epoch) = state
         .try_update(|s| {
