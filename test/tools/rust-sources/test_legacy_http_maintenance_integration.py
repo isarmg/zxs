@@ -32,7 +32,7 @@ class HttpMaintenanceManager(unittest.TestCase):
         # links: the test intentionally edits and damages disposable files.
         with tempfile.TemporaryDirectory(prefix='http-maintenance-manager-', dir=ROOT.parent) as temporary:
             root = Path(temporary)
-            for name in ('.cargo', '.github', 'compliance', 'docs', 'src', 'rescue', 'test', 'tools'):
+            for name in ('.cargo', '.github', 'compliance', 'docs', 'src', 'helper', 'test', 'tools'):
                 shutil.copytree(ROOT / name, root / name,
                                 ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'AGENTS.md',

@@ -13,7 +13,7 @@
 | [服务端](server.md) | HTTP API、会话与本机桥接 |
 | [日常管理](daily-management-coverage.md) | 当前管理页面、端点及操作边界 |
 | [客户端](client.md) | 运维客户端的 HTTP 与完整性校验 |
-| [离线救援](rescue.md) | 明确隔离的核验、恢复和历史包命令行工具 |
+| [辅助工具](helper.md) | 离线核验、恢复与历史包；磁盘管理逐项迁入，明确当前未迁边界 |
 | [Web 产品界面](web.md) | 浏览器用户操作与 WASM 构建 |
 | [浏览器基础层](interface.md) | CSR 原语、共享组件、主题、生命周期 |
 | [SMB 桥接](smb.md) | Samba 协议桥接、VFS 与 SDK 边界 |

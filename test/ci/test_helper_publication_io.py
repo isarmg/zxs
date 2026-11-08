@@ -12,14 +12,14 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_NAME = "private_io::tests::publication_faults_preserve_phase_identity_and_evidence"
-artifacts = runpy.run_path(str(ROOT / ".github/scripts/check-rescue-publication-io.py"))["test_artifacts"]
+artifacts = runpy.run_path(str(ROOT / ".github/scripts/check-helper-publication-io.py"))["test_artifacts"]
 
 
-class RescuePublicationArtifactTests(unittest.TestCase):
+class HelperPublicationArtifactTests(unittest.TestCase):
     def test_requires_both_current_artifacts_and_one_successful_build(self):
-        test = {"reason": "compiler-artifact", "target": {"name": "zxs-rescue", "kind": ["bin"]},
-                "profile": {"test": True}, "executable": "/current/rescue-test"}
-        cli = dict(test, profile={"test": False}, executable="/current/zxs-rescue")
+        test = {"reason": "compiler-artifact", "target": {"name": "zxs-helper", "kind": ["bin"]},
+                "profile": {"test": True}, "executable": "/current/helper-test"}
+        cli = dict(test, profile={"test": False}, executable="/current/zxs-helper")
         finished = {"reason": "build-finished", "success": True}
         encode = lambda items: "\n".join(json.dumps(item) for item in items)
         self.assertEqual(artifacts(encode([test, cli, finished])), (test["executable"], cli["executable"]))
@@ -27,7 +27,7 @@ class RescuePublicationArtifactTests(unittest.TestCase):
                       [test, test, cli, finished], [test, cli, cli, finished],
                       [test, cli, finished, finished],
                       [test, cli, dict(finished, success=False)],
-                      [dict(test, target={"name": "zxs-rescue", "kind": ["lib"]}), cli, finished],
+                      [dict(test, target={"name": "zxs-helper", "kind": ["lib"]}), cli, finished],
                       [dict(test, executable=None), cli, finished]):
             with self.subTest(items=items), self.assertRaises(ValueError):
                 artifacts(encode(items))
@@ -37,7 +37,7 @@ class RescuePublicationArtifactTests(unittest.TestCase):
                 artifacts(encode([test, cli, message, finished]))
 
     def test_runner_rejects_missing_test_zero_tests_and_missing_completion(self):
-        with tempfile.TemporaryDirectory(prefix="rescue-publication-runner-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="helper-publication-runner-") as temporary:
             root = Path(temporary)
             tools = root / "bin"
             tools.mkdir()
@@ -67,7 +67,7 @@ class RescuePublicationArtifactTests(unittest.TestCase):
                         f"print({result!r})\n")
                     binary.chmod(0o700)
                     execution = subprocess.run(
-                        ["bash", str(ROOT / "test/rescue/unit/private_io/publication-io.sh"), str(binary), str(binary)],
+                        ["bash", str(ROOT / "test/helper/unit/private_io/publication-io.sh"), str(binary), str(binary)],
                         env=dict(os.environ, PATH=f"{tools}{os.pathsep}{os.environ['PATH']}"),
                         text=True, capture_output=True)
                     self.assertEqual(execution.returncode, 1, execution.stderr)

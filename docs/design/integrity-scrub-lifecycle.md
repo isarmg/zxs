@@ -4,7 +4,7 @@
 
 ## 两个真实入口
 
-`zxs-rescue --root SYSTEM_ROOT scrub` 调用 `Engine::scrub`，适用于显式离线维护。一个命令只有一个专属 native worker；Engine 及 writer lock 保持到真实 I/O 结束。SIGINT / SIGTERM、调用 future 销毁均请求取消并 join，不分离 worker。信号安装、线程创建、panic 和核心错误具有失败出口；完整无故障才返回 0。打开选择 PreservePending，但仍执行现有恢复维护；扫描自身不修复。详见[救援工具](../components/rescue.md#integrity-scrub)。
+`zxs-helper --root SYSTEM_ROOT scrub` 调用 `Engine::scrub`，适用于显式离线维护。一个命令只有一个专属 native worker；Engine 及 writer lock 保持到真实 I/O 结束。SIGINT / SIGTERM、调用 future 销毁均请求取消并 join，不分离 worker。信号安装、线程创建、panic 和核心错误具有失败出口；完整无故障才返回 0。打开选择 PreservePending，但仍执行现有恢复维护；扫描自身不修复。详见[辅助工具](../components/helper.md#integrity-scrub)。
 
 在线 `ManagementBackend` 拥有具体 `IntegrityScrubService`，不是离线整程 Engine 锁的定时包装。daemon 启动 scheduler 后，在存储真正准入时自动开始首轮；管理员也可通过独立 HTTP start/status/cancel 操作。嵌入方的 `ManagementOptions::default()` 只有手动调度，需显式提供 periodic policy 才自动扫描；裸 `EngineBackend` 没有 scheduler owner，明确返回 Unsupported。无 core 构建不编译这些路由。
 

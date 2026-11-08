@@ -5,7 +5,7 @@
     {"manifest": "Cargo.toml", "purpose": "唯一产品与工具工作区", "targets": ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"], "production": true}
   ],
   "profiles": [
-    {"id": "root-native", "manifests": ["src/auth/Cargo.toml", "src/contract/Cargo.toml", "src/naming/Cargo.toml", "src/platform/Cargo.toml", "src/engine/Cargo.toml", "src/server/Cargo.toml", "src/client/Cargo.toml", "rescue/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "runtime", "purpose": "Linux amd64 服务端、业务 API、存储与离线救援工具", "production": true},
+    {"id": "root-native", "manifests": ["src/auth/Cargo.toml", "src/contract/Cargo.toml", "src/naming/Cargo.toml", "src/platform/Cargo.toml", "src/engine/Cargo.toml", "src/server/Cargo.toml", "src/client/Cargo.toml", "helper/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "runtime", "purpose": "Linux amd64 服务端、业务 API、存储与辅助工具", "production": true},
     {"id": "web", "manifests": ["src/web/Cargo.toml"], "targets": ["wasm32-unknown-unknown"], "role": "runtime", "purpose": "正式浏览器界面及整合后的界面内核", "production": true},
     {"id": "smb", "manifests": ["src/smb/Cargo.toml", "src/smb-vfs/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "runtime", "purpose": "Linux amd64 Samba 桥接协议与真实 SDK VFS 模块", "production": true},
     {"id": "build-tools", "manifests": ["tools/web-build/Cargo.toml", "tools/release-tools/Cargo.toml", "tools/web-bindings/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "compile", "purpose": "产品 Web 绑定、构建与发布工具", "production": true},

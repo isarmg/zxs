@@ -107,6 +107,12 @@ impl IndependentDisk {
             copies: verified.rows,
         })
     }
+    /// Capture verified metadata once for bounded reads of retained versions.
+    /// Stop all writers first. This interval observation grants no authority
+    /// and proves neither global freshness nor the state of any other disk.
+    pub fn content_snapshot(&self) -> Result<ContentSnapshot<'_>> {
+        self.disk.content_snapshot()
+    }
     /// Capture the selected publication's source graph after complete metadata
     /// verification. Bodies are not read and no content availability is implied.
     /// This historical observation neither registers a disk nor grants access.

@@ -38,7 +38,7 @@ seed 仍先于 journal：只是独立正文验证的恢复提示。最终 author
 
 启动及系统盘恢复沿用原有健康镜像准入，包括原来允许的单健康镜像；单镜像冷证明明确记录其位置，不能将运行期已知镜像消失当作这一启动策略。系统盘恢复后重复 abort 可以按原持久路径补成双镜像。损坏镜像的幸存记录不冷存；冲突仍失败，不按最大 fence、最新时间或第一份放行。原成员/quorum/OS 单写者锁、完整恢复字节校验均不放宽。
 
-配额超额仍在 journal 修复、配置发布或索引重建之前拒绝启动；诊断不隐式把池改成可写。`zxs-rescue workspace-inventory` 不构造 Engine，也不重放 journal：停止服务后持有原写锁，逐物理镜像输出 JSON 行，最后才输出 `complete:true, authoritative:false`。它不跨镜像去重、不认证发布事实、不把原始 canonical 长度当生命周期计费，遇错误不输出完整成功标记；锁文件可能被创建。迭代器不保存每 ID 索引，因此已有超额池也能只读核对。
+配额超额仍在 journal 修复、配置发布或索引重建之前拒绝启动；诊断不隐式把池改成可写。`zxs-helper workspace-inventory` 不构造 Engine，也不重放 journal：停止服务后持有原写锁，逐物理镜像输出 JSON 行，最后才输出 `complete:true, authoritative:false`。它不跨镜像去重、不认证发布事实、不把原始 canonical 长度当生命周期计费，遇错误不输出完整成功标记；锁文件可能被创建。迭代器不保存每 ID 索引，因此已有超额池也能只读核对。
 
 ## 配额与接口变化
 

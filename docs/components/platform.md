@@ -27,7 +27,7 @@ crate 入口在编译期拒绝非 Linux、非 x86_64 或非 64 位目标；内�
 
 平台库不拥有数据盘路由、产品账户状态、产品 DDL 或跨盘事务真相。SQLite 仅为可重建索引。`payload::Receipt` 证明单文件落盘，不能被当作 ACCEPT、FINALIZE 或 PUBLICATION。
 
-认证算法的唯一实现和对应回归测试在 [authentication](auth.md)。该独立 crate 不依赖 Linux 或 SQLite，服务端和救援工具直接依赖它；平台层不保留兼容导出，避免同一密码/令牌策略维护两份实现。
+认证算法的唯一实现和对应回归测试在 [authentication](auth.md)。该独立 crate 不依赖 Linux 或 SQLite，服务端和辅助工具直接依赖它；平台层不保留兼容导出，避免同一密码/令牌策略维护两份实现。
 
 本项目定制包括：
 

@@ -10,15 +10,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class MaintainedDocs(unittest.TestCase):
-    def test_offline_rescue_has_its_own_root_workspace_path(self):
+    def test_offline_helper_has_its_own_root_workspace_path_without_a_retired_alias(self):
         workspace = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']
-        self.assertIn('rescue', workspace['members'])
-        self.assertIn('rescue', workspace['default-members'])
+        self.assertIn('helper', workspace['members'])
+        self.assertIn('helper', workspace['default-members'])
         self.assertFalse((ROOT / 'src/rescue').exists())
-        manifest = tomllib.loads((ROOT / 'rescue/Cargo.toml').read_text())
-        self.assertEqual(manifest['package']['name'], 'storage-rescue')
+        self.assertFalse((ROOT / 'rescue').exists())
+        self.assertNotIn('rescue', workspace['members'])
+        self.assertNotIn('rescue', workspace['default-members'])
+        manifest = tomllib.loads((ROOT / 'helper/Cargo.toml').read_text())
+        self.assertEqual(manifest['package']['name'], 'storage-helper')
         self.assertNotIn('workspace', manifest)
-        self.assertEqual([binary['name'] for binary in manifest['bin']], ['zxs-rescue'])
+        self.assertEqual([binary['name'] for binary in manifest['bin']], ['zxs-helper'])
 
     def test_samba_export_is_consistent_and_outside_private_service_directories(self):
         samba = configparser.ConfigParser(interpolation=None, delimiters=('=',), strict=False)
@@ -107,13 +110,13 @@ class MaintainedDocs(unittest.TestCase):
         text = (ROOT / 'docs/20-engineering.md').read_text()
         self.assertNotRegex(text, r'\bzxs offline-(?:check|export)\b')
         for command in ('offline-check', 'offline-export'):
-            self.assertIn(f'`zxs-rescue {command} ', text)
+            self.assertIn(f'`zxs-helper {command} ', text)
         self.assertNotIn('`tests/`', text)
         self.assertNotIn('模块测试靠近实现', text)
         self.assertIn('根 `test/`', text)
         self.assertNotIn('admin/', text)
-        self.assertIn('rescue/', text)
-        rescue = (ROOT / 'rescue/src/main.rs').read_text()
+        self.assertIn('helper/', text)
+        rescue = (ROOT / 'helper/src/main.rs').read_text()
         for variant in ('OfflineCheck', 'OfflineExport'):
             self.assertIn(f'    {variant} {{', rescue)
         self.assertNotIn('本机 zxs → 服务启动 / 初始化', text)

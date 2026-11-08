@@ -303,51 +303,32 @@ impl Disk {
         self.verify_using(self, previously_observed)
     }
     pub(super) fn check_metadata(&self, previously_observed: Option<Digest>) -> Result<()> {
-        self.verify_using(
-            &SelectedContent {
-                disk: self,
-                copy: None,
-            },
-            previously_observed,
-        )
-        .map(drop)
+        self.verify_using(&MetadataOnly { disk: self }, previously_observed)
+            .map(drop)
     }
     pub(super) fn source_topology(&self) -> Result<SourceTopology> {
-        let verified = self.verify_using(
-            &SelectedContent {
-                disk: self,
-                copy: None,
-            },
-            None,
-        )?;
+        let verified = self.verify_using(&MetadataOnly { disk: self }, None)?;
         let topology = topology::project(&verified, self.binding.clone())?;
         self.check_identity()?;
         Ok(topology)
     }
     pub(super) fn source_inventory(&self) -> Result<SourceInventory> {
-        let verified = self.verify_using(
-            &SelectedContent {
-                disk: self,
-                copy: None,
-            },
-            None,
-        )?;
+        let verified = self.verify_using(&MetadataOnly { disk: self }, None)?;
         let topology = topology::project(&verified, self.binding.clone())?;
         let inventory = SourceInventory::capture(&verified, topology);
         self.check_identity()?;
         Ok(inventory)
     }
+    pub(super) fn content_snapshot(&self) -> Result<ContentSnapshot<'_>> {
+        let verified = self.verify_using(&MetadataOnly { disk: self }, None)?;
+        self.check_identity()?;
+        Ok(ContentSnapshot::capture(self, verified))
+    }
     pub(super) fn observe_source_node(
         &self,
         node: &SourceNode,
     ) -> Result<SourceCandidateObservation> {
-        let verified = self.verify_using(
-            &SelectedContent {
-                disk: self,
-                copy: None,
-            },
-            None,
-        )?;
+        let verified = self.verify_using(&MetadataOnly { disk: self }, None)?;
         let observation = topology::observe_candidate(node, &verified, self.binding.clone())?;
         self.check_identity()?;
         Ok(observation)
@@ -364,21 +345,7 @@ impl Disk {
         })
     }
     pub(super) fn read_content(&self, copy: Digest) -> Result<Vec<u8>> {
-        let mut verified = self.verify_using(
-            &SelectedContent {
-                disk: self,
-                copy: Some(copy),
-            },
-            None,
-        )?;
-        if !verified.rows.iter().any(|row| row.commit == copy) {
-            return Err(Error::Missing(copy));
-        }
-        verified
-            .bundle
-            .bodies
-            .remove(&copy)
-            .ok_or(Error::ContentUnavailable(copy))
+        self.content_snapshot()?.read_content(copy)
     }
     fn verify_using(
         &self,
@@ -526,7 +493,7 @@ impl Disk {
             _lock: lock,
         })
     }
-    fn check_identity(&self) -> Result<()> {
+    pub(super) fn check_identity(&self) -> Result<()> {
         let selected = location::Location::open(self.root.path())?;
         let current = selected.identity();
         if (current.device, current.inode, selected.mount_root())
@@ -606,22 +573,17 @@ impl Disk {
         Ok(found)
     }
 }
-/// A read-only body scope. Its partial availability view never escapes as a
-/// VerifiedDisk, a source bundle, or a writer input. Metadata is still complete.
-struct SelectedContent<'a> {
+/// Complete metadata capture without a content availability claim. It is
+/// never passed to publication or backup writers as a full-copy observation.
+struct MetadataOnly<'a> {
     disk: &'a Disk,
-    copy: Option<Digest>,
 }
-impl ReadStore for SelectedContent<'_> {
+impl ReadStore for MetadataOnly<'_> {
     fn object(&self, hash: Digest) -> Result<Vec<u8>> {
         self.disk.object(hash)
     }
-    fn body(&self, copy: Digest) -> Result<Option<Vec<u8>>> {
-        if self.copy == Some(copy) {
-            self.disk.body(copy)
-        } else {
-            Ok(None)
-        }
+    fn body(&self, _copy: Digest) -> Result<Option<Vec<u8>>> {
+        Ok(None)
     }
 }
 

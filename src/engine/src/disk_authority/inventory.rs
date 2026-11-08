@@ -1,6 +1,6 @@
 //! Metadata references retained by one captured disk, independent of any
 //! physically present source, downstream disk, or system-disk cache.
-use super::{Digest, Identity, SourceTopology, Token, VerifiedDisk};
+use super::{CopyRow, Digest, Identity, SourceTopology, Token, VerifiedDisk};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RetainedVersion {
@@ -11,6 +11,15 @@ pub struct RetainedVersion {
     body: Digest,
 }
 impl RetainedVersion {
+    pub(super) fn capture(row: &CopyRow) -> Self {
+        Self {
+            owner: row.owner.clone(),
+            history_id: row.history_id.clone(),
+            file_id: row.file_id.clone(),
+            commit: row.commit,
+            body: row.body,
+        }
+    }
     pub fn owner(&self) -> &Identity {
         &self.owner
     }
@@ -37,17 +46,7 @@ impl SourceInventory {
     pub(super) fn capture(verified: &VerifiedDisk, topology: SourceTopology) -> Self {
         Self {
             topology,
-            versions: verified
-                .rows
-                .iter()
-                .map(|row| RetainedVersion {
-                    owner: row.owner.clone(),
-                    history_id: row.history_id.clone(),
-                    file_id: row.file_id.clone(),
-                    commit: row.commit,
-                    body: row.body,
-                })
-                .collect(),
+            versions: verified.rows.iter().map(RetainedVersion::capture).collect(),
         }
     }
     pub fn topology(&self) -> &SourceTopology {

@@ -22,7 +22,7 @@ ZXS $RELEASE_TAG
 
 - Debian 13 amd64：单个 zxs ELF 内嵌正式 Web，无需旁置静态目录。
 - 系统 apt Samba 配套独立 VFS 模块，精确包版本、ABI 与源码身份见 VFS-BUILD.json。
-- 独立资料归档包含许可证、来源、文档与可选离线救援工具，不是运行主程序所需的归档。
+- 独立资料归档包含许可证、来源、文档与可选辅助工具，不是运行主程序所需的归档。
 
 安装前请阅读 INSTALL.md 和 BUILD.txt，并完整校验 SHA256SUMS。上述检查不能替代物理盘与真实 Samba 验收，也不承诺位级可复现。
 EOF

@@ -86,25 +86,25 @@ class SourcePolicy(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             manager.verify(self.root, **options)
 
-    def test_root_rescue_remains_in_manifest_inventory(self):
-        directory = self.root / 'rescue'
+    def test_root_helper_remains_in_manifest_inventory(self):
+        directory = self.root / 'helper'
         directory.mkdir()
         manifest = directory / 'Cargo.toml'
-        manifest.write_text('[package]\nname = "storage-rescue"\nversion = "1.0.0"\n')
-        self.assertIn('rescue/Cargo.toml', manager.project_manifests(self.root))
+        manifest.write_text('[package]\nname = "storage-helper"\nversion = "1.0.0"\n')
+        self.assertIn('helper/Cargo.toml', manager.project_manifests(self.root))
         manager.structure(self.root, self.policy)
         manifest.write_text('[workspace]\n')
         with self.assertRaisesRegex(ValueError, 'nested/independent Cargo workspace'):
             manager.structure(self.root, self.policy)
 
-    def test_root_rescue_rejects_nonlocal_dependencies_and_scattered_material(self):
-        directory = self.root / 'rescue'
+    def test_root_helper_rejects_nonlocal_dependencies_and_scattered_material(self):
+        directory = self.root / 'helper'
         directory.mkdir()
         manifest = directory / 'Cargo.toml'
         manifest.write_text(
-            '[package]\nname = "storage-rescue"\nversion = "1.0.0"\n'
+            '[package]\nname = "storage-helper"\nversion = "1.0.0"\n'
             '[dependencies]\nmini = "1"\n')
-        with self.assertRaisesRegex(ValueError, 'non-path dependency: rescue/Cargo.toml'):
+        with self.assertRaisesRegex(ValueError, 'non-path dependency: helper/Cargo.toml'):
             manager.structure(self.root, self.policy)
         manifest.unlink()
         for filename in ('README.md', 'LICENSE'):

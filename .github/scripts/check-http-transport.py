@@ -81,7 +81,7 @@ def check_retired_dependencies():
                     assert package not in retired, (manifest, key, name)
             else:
                 dependencies(item)
-    for base in ('src', 'tools', 'test', 'rescue'):
+    for base in ('src', 'tools', 'test', 'helper'):
         for manifest in (ROOT / base).rglob('Cargo.toml'):
             dependencies(tomllib.loads(manifest.read_text()))
     dependencies(tomllib.loads((ROOT / 'Cargo.toml').read_text()))

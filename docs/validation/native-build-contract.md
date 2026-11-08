@@ -6,8 +6,8 @@ x86-64-v3，也不把某台机器成功运行外推为所有 amd64 机器通过�
 ## 原生与浏览器分开
 
 `.github/scripts/release-native.py` 以 `--locked --offline --release --target
-x86_64-unknown-linux-gnu` 构建 `storage-server`／`storage-rescue`，交付程序为 `zxs`／
-`zxs-rescue`。浏览器包由独立 `wasm32-unknown-unknown` 构建及 Web manifest 验证；浏览器
+x86_64-unknown-linux-gnu` 构建 `storage-server`／`storage-helper`，交付程序为 `zxs`／
+`zxs-helper`。浏览器包由独立 `wasm32-unknown-unknown` 构建及 Web manifest 验证；浏览器
 WASM 特性或成功不能充当 Linux ISA 证据。归档内容、启动路径及系统要求见
 [安装模板](../templates/release-install.md)与[发行清单](release-checklist.md)。
 
@@ -73,6 +73,6 @@ ZIP SHA256 为 `6c15320a9b2f2e942e16affa61928f1776f565ce3bdefcf3894c750b58aa0baf
 三类 overrides-present 均为 false，并明确保留 `not-attested`／不包含实际 Rust/C/asm flags 的声明。
 已实际读取归档并逐字节核对 native tar
 `36ffe9cba159802f53fdbfb893e0c96e6473676945fc8c70b20dcf9fb0c7fb50`、zxs
-`7992b344779789bb4269ce8c16ee991344127be651519118cbb1d017f9081bc3`、zxs-rescue
+`7992b344779789bb4269ce8c16ee991344127be651519118cbb1d017f9081bc3`、zxs-helper
 `fd19cbd8c637deed3f7b60e793ec4bbed1ec2750d2d4df68b55373b576a71be1` 与 BUILD 一致。
 这是新字段的真实构建／归档证据，不升级为全 ISA 证明、任意发行版支持或实际部署承诺。

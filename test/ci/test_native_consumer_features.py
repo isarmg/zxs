@@ -36,7 +36,7 @@ class NativeConsumerFeaturesTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     GATE["validate"](output, "storage-server", "normal,build")
         with self.assertRaisesRegex(AssertionError, "missing expected graph entries"):
-            GATE["validate"](MINIMAL, "storage-rescue", "normal,build,dev")
+            GATE["validate"](MINIMAL, "storage-helper", "normal,build,dev")
 
     def test_each_consumer_and_dependency_scope_is_selected_separately(self):
         def result(command, **kwargs):

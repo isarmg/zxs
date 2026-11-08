@@ -5,7 +5,7 @@ members = [
     "src/auth",
     "src/client",
     "src/contract",
-    "rescue",
+    "helper",
     "src/engine",
     "src/web",
     "src/smb",
@@ -39,7 +39,7 @@ default-members = [
     "src/engine",
     "src/server",
     "src/client",
-    "rescue",
+    "helper",
     "src/smb",
 ]
 

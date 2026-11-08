@@ -9,7 +9,7 @@ mkdir -p "$fixture/.github/scripts" "$fixture/target/native/x86_64-unknown-linux
   "$fixture/compliance/provenance" "$fixture/docs/components" "$fixture/docs/templates"
 cp .github/scripts/release-package.sh .github/scripts/release-assemble.sh "$fixture/.github/scripts/"
 cp rust-toolchain.toml "$fixture/"
-for name in zxs zxs-rescue; do
+for name in zxs zxs-helper; do
   printf '#!/bin/sh\nexit 0\n' > "$fixture/target/native/x86_64-unknown-linux-gnu/release/$name"
   chmod +x "$fixture/target/native/x86_64-unknown-linux-gnu/release/$name"
 done
@@ -81,7 +81,7 @@ for document in (root / "docs/release.md", root / "docs/components/smb.md"):
         target = (document.parent / relative).resolve()
         assert target.is_relative_to(root.resolve()) and target.is_file(), target
 PY
-  cmp "$fixture/target/native/x86_64-unknown-linux-gnu/release/zxs-rescue" "$output/zxs-rescue"
+  cmp "$fixture/target/native/x86_64-unknown-linux-gnu/release/zxs-helper" "$output/zxs-helper"
   test ! -e "$output/zxs"
   test ! -e "$output/public"
   test "$(find "$output/compliance" -type f | wc -l)" -gt 4096

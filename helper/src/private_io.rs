@@ -30,7 +30,7 @@ impl std::fmt::Display for PublicationFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "rescue publication target {:?}, staging {:?}, directory {:?}, file {:?}",
+            "helper publication target {:?}, staging {:?}, directory {:?}, file {:?}",
             self.target, self.staging, self.directory, self.identity
         )
     }
@@ -182,7 +182,7 @@ impl StagingCleanup<'_> {
 impl Drop for StagingCleanup<'_> {
     fn drop(&mut self) {
         if let Err(error) = self.cleanup() {
-            tracing::error!(%error, "rescue staging cleanup during unwind failed");
+            tracing::error!(%error, "helper staging cleanup during unwind failed");
         }
     }
 }
@@ -214,7 +214,7 @@ fn write_atomic_at(
         }
     }
     let name = format!(
-        ".zxs-rescue-{}.tmp",
+        ".zxs-helper-{}.tmp",
         authentication::random_token().map_err(std::io::Error::other)?
     );
     let mut file = File::from(
@@ -289,5 +289,5 @@ fn write_atomic_at(
 }
 
 #[cfg(test)]
-#[path = "../../test/rescue/unit/private_io/tests.rs"]
+#[path = "../../test/helper/unit/private_io/tests.rs"]
 mod tests;

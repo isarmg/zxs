@@ -1,17 +1,19 @@
-# 离线救援工具
+# 辅助工具
 
-`storage-rescue` 生成 `zxs-rescue`，它是明确命名的命令行救援工具，不是日常管理客户端。正常入口是直接运行的 `zxs` 守护进程，首次初始化、唯一管理员改密及仓库、策略、计划等操作在 Web 管理面进行；不提供多账户或仓库授权管理。SMB 网络服务仍由独立 Samba/smbd 桥接提供。
+`storage-helper` 生成 `zxs-helper`。它是在本机显式运行的离线辅助工具，不是远程管理客户端，不启动 ZXS 守护进程。普通文件访问和日常账户管理仍由主服务 Web 与独立 SMB 提供。辅助工具须配备自身独立 Web 控制台，以 root 手工运行、默认监听 `0.0.0.0`、无需认证直接打开，不依赖 systemd 或自启，退出即停止；并负责首次账户/系统及必要磁盘配置初始化、ZXS 管理员与 SMB 密码重置、一条龙 ZXS 安装及 systemd/SMB 配置。发行物还须内置匹配 ZXS 载荷，用于离线首装或仅程序文件修复。当前改名切片仍只有 CLI，这些控制台、初始化/重置、安装/修复功能尚未实现。
 
-源码独立放在项目根 [`rescue/`](../../rescue/)，与服务源码分开维护，共享根工作区与锁文件；救援测试仍在 `test/rescue/`。在项目根执行 `cargo build --locked --offline -p storage-rescue`，命令名称和救援流程不因目录移动而改变。
+源码放在项目根 [`helper/`](../../helper/)，测试集中在 `test/helper/`；与服务共享根工作区、锁文件及 ZXS 的通用格式、验证和持久化能力。辅助工具专用流程、参数、报告和退出策略在本目录实现。构建命令为 `cargo build --locked --offline -p storage-helper`；当前只生成 `zxs-helper`，不安装旧名称别名。
 
-所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；工具没有管理员重置能力。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
+已确定将**磁盘添加、注销/移除、外来磁盘接入和磁盘初始化**移入此工具，并取消用户发起的“计划下线”动作。失联、不可用和既有 Disabled 状态仍须如实展示。这是职责决策，不表示四项操作已经迁完；分项现状、原操作恢复及切换门槛见[辅助工具磁盘管理](../design/helper-disk-management.md)和[架构决策](../adr/0017-helper-disk-management.md)。当前可执行命令以下述各节及 `--help` 为准，不注册只会假报成功的磁盘管理占位命令。
+
+所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；当前尚未实现管理员或 SMB 密码重置；计划中的重置必须由用户手动输入新密码并有独立确认及持久恢复证明。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
 
 需要打开或恢复池的命令支持[四项保留证据运行期上限](../19-capacity-and-performance.md#runtime-retained-workspace-limits)，作为全局参数同时提供；不带时使用原配置基线。`offline-check` / `offline-export` 直接核验单盘，不借这些参数改变证明或载荷规则。恢复前应配置足够额度，不能通过删除已提交清单释放名额。
 
 ## 恢复系统盘
 
 ```sh
-zxs-rescue --root /srv/zxs/new-system restore-system \
+zxs-helper --root /srv/zxs/new-system restore-system \
   --disks /srv/zxs/old-metadata-1 /srv/zxs/old-metadata-2
 ```
 
@@ -22,8 +24,8 @@ zxs-rescue --root /srv/zxs/new-system restore-system \
 ## 受限降级恢复
 
 ```sh
-zxs-rescue --root /srv/zxs/system recovery-preview OPERATION_ID --reason '经审查的原因'
-zxs-rescue --root /srv/zxs/system recovery-commit RECOVERY_ID \
+zxs-helper --root /srv/zxs/system recovery-preview OPERATION_ID --reason '经审查的原因'
+zxs-helper --root /srv/zxs/system recovery-commit RECOVERY_ID \
   --digest REVIEWED_DIGEST --accept-permanent-loss
 ```
 
@@ -36,7 +38,7 @@ zxs-rescue --root /srv/zxs/system recovery-commit RECOVERY_ID \
 ## 显式完整巡检（第一阶段）
 
 ```sh
-zxs-rescue --root /srv/zxs/system scrub
+zxs-helper --root /srv/zxs/system scrub
 ```
 
 先停止该池服务。此命令是完整巡检执行器的真实离线调用方，不是定期后台调度，也不替换 HTTP `/api/admin/check` 或 `offline-check` 的单盘目录诊断范围。当前 `Engine::scrub` 在整次扫描中持有 Engine 独占借用；不得把本命令改为默认周期在线任务，或据此宣布增量发布免读门禁已经满足。
@@ -52,8 +54,8 @@ SIGINT / SIGTERM 只请求协作取消，不终止或分离 I/O 线程。核心�
 ## 单盘核验与隔离导出
 
 ```sh
-zxs-rescue offline-check /srv/zxs/old-disk
-zxs-rescue offline-export /srv/zxs/old-disk VERSION_ID /srv/rescue/new-file
+zxs-helper offline-check /srv/zxs/old-disk
+zxs-helper offline-export /srv/zxs/old-disk VERSION_ID /srv/helper/new-file
 ```
 
 在停止写入的可信原成员或一致的只读副本上操作。核验或导出只证明被检查的发布证据、单个版本与其数据完整性，不证明整个池可恢复、当前在线认证、最新历史或所有副本健康。导出目标不得已存在；`offline-export` 的输出路径须为有效 UTF-8，以便精确写入 JSON 收据，不可编码的路径在读取源盘或创建目标前拒绝。不要把隔离导出结果直接当作可重新加入池的磁盘。
@@ -61,9 +63,9 @@ zxs-rescue offline-export /srv/zxs/old-disk VERSION_ID /srv/rescue/new-file
 ## 历史恢复包
 
 ```sh
-zxs-rescue --root /srv/zxs/system package export HISTORY_ID /srv/private-rescue/new-package
-zxs-rescue package check /srv/private-rescue/new-package
-zxs-rescue --root /srv/zxs/new-system package restore /srv/private-rescue/new-package \
+zxs-helper --root /srv/zxs/system package export HISTORY_ID /srv/private-helper/new-package
+zxs-helper package check /srv/private-helper/new-package
+zxs-helper --root /srv/zxs/new-system package restore /srv/private-helper/new-package \
   --primary-slot P01 --copies 3
 ```
 
@@ -74,9 +76,9 @@ zxs-rescue --root /srv/zxs/new-system package restore /srv/private-rescue/new-pa
 ## 未初始化拓扑配置草稿
 
 ```sh
-zxs-rescue configuration template --production \
+zxs-helper configuration template --production \
   --disks /srv/zxs/disk1 /srv/zxs/disk2 /srv/zxs/disk3 --output /srv/private-layout/custom.json
-zxs-rescue configuration register-disk --config /srv/private-layout/custom.json \
+zxs-helper configuration register-disk --config /srv/private-layout/custom.json \
   --slot P02 --disk-id REVIEWED_DISK_ID --path /srv/zxs/disk4 --level 1
 ```
 
@@ -92,11 +94,11 @@ zxs-rescue configuration register-disk --config /srv/private-layout/custom.json 
 
 ## 检查
 
-运行 `cargo test --locked --offline -p storage-rescue`。`test/rescue/startup.rs` 覆盖命令边界、损失确认、元数据恢复、历史包字节一致性及拒绝覆盖/损坏证明；`test/rescue/unit` 覆盖草稿拓扑、权限、锁和原子备份，以及巡检的真实信号、取消、future 销毁、线程失败和 Engine 锁释放；巡检集成用例实际运行命令并检查健康、缺盘和准入失败结果。测试不替代真实设备及生产恢复演练。
+运行 `cargo test --locked --offline -p storage-helper`。`test/helper/startup.rs` 覆盖命令边界、损失确认、元数据恢复、历史包字节一致性及拒绝覆盖/损坏证明；`test/helper/unit` 覆盖草稿拓扑、权限、锁和原子备份，以及巡检的真实信号、取消、future 销毁、线程失败和 Engine 锁释放；巡检集成用例实际运行命令并检查健康、缺盘和准入失败结果。测试不替代真实设备及生产恢复演练。
 
 ## 超额工作区只读库存
 
-停止守护进程后运行 `zxs-rescue --root /absolute/private-system-root workspace-inventory`。
+停止守护进程后运行 `zxs-helper --root /absolute/private-system-root workspace-inventory`。
 命令读取现有配置、校验磁盘身份并持有原写锁，但不构造 Engine、检查准入额度、重放 journal 或修复数据。
 每个可用位置的物理 `workspace.json` 单独输出一行 JSON（路径、ID、主体、状态、canonical 长度），
 全部枚举结束才输出 `complete:true, authoritative:false` 和物理清单数。镜像不去重；长度不含生命周期预留，
@@ -115,8 +117,8 @@ zxs-rescue configuration register-disk --config /srv/private-layout/custom.json 
 备份失败携带具名路径/source 上下文且不继续替换草稿；这不表示备份本身未发布。
 CLI 最终诊断遍历完整来源链，并转义控制字符；不打印草稿正文或秘密。
 
-隔离门禁 `test/rescue/unit/private_io/publication-io.sh <rescue-libtest> <zxs-rescue>`
-要求 `cargo test --locked --offline -p storage-rescue --features rustix/use-libc --no-run`
+隔离门禁 `test/helper/unit/private_io/publication-io.sh <helper-libtest> <zxs-helper>`
+要求 `cargo test --locked --offline -p storage-helper --features rustix/use-libc --no-run`
 生成的当前产物。它执行真实 rename 前/后 EIO、真实 EEXIST 及文件/目录同步故障，
 核验阶段、errno、inode、暂存/目标保全、目录权限和屏障；同时核对真实 CLI 备份失败
 的完整来源链和未修改原草稿。libc 测试后端不改变生产后端，也不冒充 NFS/掉电测试。
@@ -126,4 +128,23 @@ fsync 的预算；新增持有文件单链接/身份检查及发布后相对 sta
 
 ## 显式逐盘新格式
 
-`zxs-rescue authority` 是独立新格式的离线存储消费者，提供先审核后确认的文件/备份发布、准确 operation 恢复、只读核验、隔离正文导出和独立 SQLite 重建。它不调用当前池 Engine，也不能转换或接纳运行池磁盘；首次创建必须显式 `--accept-new-format`，写入必须匹配审核摘要并 `--confirm-write`。具体命令、容量与故障范围见[逐盘权威切片](../design/independent-disk-journal.md)。
+`zxs-helper authority` 是独立新格式的离线存储消费者，提供先审核后确认的文件/备份发布、准确 operation 恢复、只读核验、隔离正文导出和独立 SQLite 重建。它不调用当前池 Engine，也不能转换或接纳运行池磁盘；首次创建必须显式 `--accept-new-format`，写入必须匹配审核摘要并 `--confirm-write`。具体命令、容量与故障范围见[逐盘权威切片](../design/independent-disk-journal.md)。
+
+<a id="independent-content-check"></a>
+
+### 新格式逐版本离线检查
+
+```sh
+zxs-helper authority check selection.json
+zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
+```
+
+`selection.json` 显式选择路径、完整原身份和可选已知 checkpoint，不借 `--root` 打开系统池，也不自动判断或兼容其它盘格式。先停止所有相关写者；检查只读本盘已发布元数据与本盘保留 FULL，不打开原一级、下游盘或系统 SQLite，不创建锁文件、不修复或删除材料。
+
+`check` 在完整元数据链、来源和 pin 校验成功后，分别读取各版本正文并核对声明长度及摘要。一份正文缺失或损坏不遮蔽其它版本：JSON 的 `copies` 保留原一级完整身份、history/file、commit、声明 body 摘要及长度，`content.status` 分别为 `verified`、`temporarily_unavailable` 或 `corrupt`。相同正文的不同版本不会合并。可据 verified 项选择另行执行的 `export`，导出仍重新核验，不把先前检查结果当读取许可。
+
+仅无内容问题的报告返回 0；已初始化空盘明确输出 `state:no_published_content`，不声称恢复了文件。缺失或损坏输出 `state:content_issues` 并返回 1。元数据、身份、pin、文件系统安全、I/O 或预算错误不输出成功/部分健康 JSON，保留完整错误链并返回 1。输出本身失败也失败。原 `inspect` 保持原行为，不能用其退出码代替本命令的完整内容检查结果。
+
+报告的 scope 为 `local-retained-published-content`，绑定捕获的本盘 checkpoint/sequence；它不是全盘未知文件/孤儿扫描、未发布操作清单、最新全局状态、三范围数据库一致性或完整系统恢复证明。检查仍受独立格式的对象、深度与 16 MiB 材料读取预算约束；元数据只捕获一次供本轮正文检查使用，逐份正文读完即释放，不为每个版本重新遍历整条证明链。打开选择本身仍执行原有 pin 准入，失败不产生检查报告。
+
+救援专用的检查流程、逐项诊断、输出及退出策略位于 `helper/src/authority/check.rs`；通用协议解析、身份约束与可验证正文读取复用 Engine 的只读 `ContentSnapshot`，既有单版本导出也使用同一读取路径。构建依赖 ZXS 代码，运行不需要启动 ZXS 服务或管理面。此组织不表示完整自含依赖包，也不为已存在的普通池协议增加旧格式双读。

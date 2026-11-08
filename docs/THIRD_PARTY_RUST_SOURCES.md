@@ -16,7 +16,7 @@ runtime 是统一工作区特性图中 normal 边可达的运行候选；compile
 
 | 入口闭包 | 用途 | 目标 |
 | --- | --- | --- |
-| root-native | Linux amd64 服务端、业务 API、存储与离线救援工具 | x86_64-unknown-linux-gnu |
+| root-native | Linux amd64 服务端、业务 API、存储与辅助工具 | x86_64-unknown-linux-gnu |
 | web | 正式浏览器界面及整合后的界面内核 | wasm32-unknown-unknown |
 | smb | Linux amd64 Samba 桥接协议与真实 SDK VFS 模块 | x86_64-unknown-linux-gnu |
 | build-tools | 产品 Web 绑定、构建与发布工具 | x86_64-unknown-linux-gnu |

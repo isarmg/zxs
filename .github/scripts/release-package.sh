@@ -30,7 +30,7 @@ finally:
     os.close(directory)
 fields = validator['build_identity'](receipt, sys.argv[2])
 snapshot = Path(sys.argv[1])
-for name in ('zxs', 'zxs-rescue'):
+for name in ('zxs', 'zxs-helper'):
     with (snapshot / name).open('rb') as source:
         actual = hashlib.file_digest(source, 'sha256').hexdigest()
     if actual != fields[f'native-{name}-sha256']:
@@ -58,7 +58,7 @@ with (snapshot / 'zxs.so').open('rb') as source:
 PYNATIVE
 material=(compliance README.md docs deploy)
 tar --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' -czf "$work/materials.tar.gz" \
-  -C "$work/snapshot/native" zxs-rescue -C "$work/snapshot/material" "${material[@]}"
+  -C "$work/snapshot/native" zxs-helper -C "$work/snapshot/material" "${material[@]}"
 printf 'materials-archive-sha256=%s\n' "$(sha256sum "$work/materials.tar.gz" | cut -d' ' -f1)" >> "$work/snapshot/native/BUILD.txt"
 [[ ! -L release-assets ]]
 mkdir -p release-assets

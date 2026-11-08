@@ -106,8 +106,8 @@
         "web-interface"
       ]
     },
-    "storage-rescue": {
-      "path": "rescue",
+    "storage-helper": {
+      "path": "helper",
       "runtime": [
         "authentication",
         "platform-io",

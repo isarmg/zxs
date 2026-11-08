@@ -2,6 +2,8 @@
 
 # 首次账户与受保护存储管理边界
 
+
+首次账户/系统及磁盘初始化的职责均已改归辅助工具的独立 Web 控制台。当前 `storage/activate` 及原初始化意图/补全实现须在辅助工具具备等价停服互斥、凭据接线和恢复证明后再切换；不能把本文描述的现有 Web 源码当作最终入口。参见[迁移边界](../design/helper-disk-management.md)。
 `storage_server::setup_recovery::SetupRecovery` 是显式首次初始化与隔离恢复的同步服务边界。受管理运行时合并其公开/受保护 HTTP 路由组，并将操作与后端打开、重试、安装串行化。
 
 <a id="local-deployment-inputs"></a>
@@ -72,7 +74,7 @@
 
 ## 已移除的旧首次存储入口
 
-公开 `preset-preview`、`initialize-preset`、`complete-initialization` 路由已删除，首次设置没有选盘或预设分支，不保留旧请求格式兼容。`zxs-rescue configuration` 仍可生成未初始化草稿，但当前 Web 不应用任意 Config 或本机预设；不能用草稿修改已激活池。已激活池在线增删成员仍待实现，见[设计边界](../design/online-disk-management.md)。
+公开 `preset-preview`、`initialize-preset`、`complete-initialization` 路由已删除，首次设置没有选盘或预设分支，不保留旧请求格式兼容。`zxs-helper configuration` 仍可生成未初始化草稿，但当前 Web 不应用任意 Config 或本机预设；不能用草稿修改已激活池。已激活池在线增删成员仍待实现，见[设计边界](../design/online-disk-management.md)。
 
 <a id="rejected-or-interrupted-storage-recovery"></a>
 
@@ -82,4 +84,4 @@ bootstrap 恢复在磁盘恢复后、安装管理凭据前再次核验本地许�
 
 后台存储发现及进程重启从不从引擎快照安装凭据，即使管理凭据文件与权威标记均缺失。缺失/损坏凭据继续失败关闭。有效本地管理凭据保留权威；显式授权恢复成功时，在安装快照前撤销恢复会话。
 
-离线 `zxs-rescue restore-system` 仅恢复存储元数据；`credential_recovery_snapshot_available` 不授权管理登录。保留部分或被拒绝恢复状态供检查。恢复管理凭据须停止相关服务，在另行配置的干净系统状态中明确授权 bootstrap 恢复，并确认凭据可能过时。不得删除或覆盖在线权威、凭据或部分恢复证据，把安装伪装为空。没有自动迁移或 CLI 密码重置回退。
+离线 `zxs-helper restore-system` 仅恢复存储元数据；`credential_recovery_snapshot_available` 不授权管理登录。保留部分或被拒绝恢复状态供检查。恢复管理凭据须停止相关服务，在另行配置的干净系统状态中明确授权 bootstrap 恢复，并确认凭据可能过时。不得删除或覆盖在线权威、凭据或部分恢复证据，把安装伪装为空。没有自动迁移或 CLI 密码重置回退。

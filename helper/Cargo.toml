@@ -1,12 +1,12 @@
 [package]
-name = "storage-rescue"
+name = "storage-helper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "zxs-rescue"
+name = "zxs-helper"
 path = "src/main.rs"
 
 [dependencies]
@@ -25,9 +25,9 @@ storage-server.workspace = true
 tempfile.workspace = true
 
 [[test]]
-name = "rescue_startup"
-path = "../test/rescue/startup.rs"
+name = "helper_startup"
+path = "../test/helper/startup.rs"
 
 [[test]]
 name = "independent_authority"
-path = "../test/rescue/independent_authority.rs"
+path = "../test/helper/independent_authority.rs"

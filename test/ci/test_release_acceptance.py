@@ -70,7 +70,7 @@ class ReleaseAcceptance(unittest.TestCase):
 
     def test_unaccepted_diagnostic_bytes_survive_failed_acceptance(self):
         expected = {'target/native/x86_64-unknown-linux-gnu/release/zxs',
-                    'target/native/x86_64-unknown-linux-gnu/release/zxs-rescue',
+                    'target/native/x86_64-unknown-linux-gnu/release/zxs-helper',
                     'target/native/x86_64-unknown-linux-gnu/release/BUILD.txt',
                     'target/smb-debian13/product/zxs.so',
                     'target/smb-debian13/product/VFS-BUILD.json', 'build/web',

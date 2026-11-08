@@ -39,7 +39,7 @@ zxs/
 │   ├── smb/                     # Samba 协议桥接和 SCM_RIGHTS
 │   ├── smb-vfs/                 # Samba SDK 对接和 Rust C ABI
 │   └── foundation/              # 同仓维护的 Rust 基础实现
-├── rescue/                      # zxs-rescue 本机维护与离线恢复入口
+├── helper/                      # zxs-helper 本机维护与离线恢复入口
 ├── tools/                       # 根工作区中的构建、来源和验收组件
 ├── docs/                        # 所有活动文档和原始上游说明
 │   ├── components/              # 自有组件说明
@@ -58,7 +58,7 @@ zxs/
 └── runtime/                     # 本机运行池、预览和回滚材料
 ```
 
-当前目录和集中维护约定见[单仓库结构](monorepo.md)。自有应用和工具属于根工作区；基础实现作为本地路径依赖接入，只有根 `Cargo.lock` 参与解析。`src/`、`rescue/`、`tools/` 和 `test/` 中没有独立子工作区、活动子锁文件或嵌套 Git 仓库。离线恢复工具独立放在根 `rescue/`，测试继续集中在根 `test/`。来源身份和原始材料由 `compliance/provenance/` 统一保管。
+当前目录和集中维护约定见[单仓库结构](monorepo.md)。自有应用和工具属于根工作区；基础实现作为本地路径依赖接入，只有根 `Cargo.lock` 参与解析。`src/`、`helper/`、`tools/` 和 `test/` 中没有独立子工作区、活动子锁文件或嵌套 Git 仓库。离线恢复工具独立放在根 `helper/`，测试继续集中在根 `test/`。来源身份和原始材料由 `compliance/provenance/` 统一保管。
 
 构建按包和目标选择：默认成员为 Linux 服务及运维工具，Web 使用 `wasm32-unknown-unknown`，VFS 显式使用 Samba SDK。所有路径依赖均位于本仓库，禁止依赖其他项目绝对路径。
 
@@ -77,7 +77,7 @@ zxs/
 
 文档链接检查区分活动规范与原始上游归档。活动规范、schema、固定样例和检查脚本的链接必须存在，路径越界和符号链接越界也必须拒绝。文档允许引用按规则忽略的本地生成验证结果：存在时核对目标，缺失时单独统计，不把源码副本中缺失的生成证据误记为业务验收通过。`docs/upstream/` 保持原始说明字节，由来源映射的哈希校验，不把其中历史链接当作当前手册链接。
 
-认证算法在独立可移植 `authentication` 中只有一个实现；服务端与救援工具直接依赖 `authentication`，服务端与平台均不保留旧认证路径兼容导出，业务会话持久化仍属于服务端。
+认证算法在独立可移植 `authentication` 中只有一个实现；服务端与辅助工具直接依赖 `authentication`，服务端与平台均不保留旧认证路径兼容导出，业务会话持久化仍属于服务端。
 
 核心按责任拆分：business/repository 管仓库与共享绑定，workspace 管完整上传和提交，history 管文件历史和关系，namespace 管路径，file 管共享文件分支与备注，directory 管稳定目录分支、不可变子树、选择及默认视图。container_storage 管普通正文唯一路径、真实容器改名、继承缓存与不支持布局的拒绝，拒绝时保留原字节和目录，不执行旧 stub 清理或迁移；边界见其[README](components/engine/src/container_storage.md)。engine/{publication,recovery,reads,index,workspace_storage} 管发布、恢复、读取、索引和工作区；journal 管状态分页及证明，metadata_budget 管决定前限额，maintenance 管计划、清理与当前支持范围内的历史树拆分（含目录组合、文件节点或独立文件分支时拒绝），不承担旧版本兼容；history_package 管历史包证明、对象图 I/O、导出与恢复导入，history_package/manifest 管历史域 State 投影和纯逻辑闭包校验，history_package/graph 管分页编码和图解析；repair/degraded_recovery 区分可修复与永久损失。入口复用核心规则，不直接操作业务盘。
 
@@ -123,7 +123,7 @@ Web 界面 → web-interface（共享组件、生命周期和直接合入的 CSR
 Web → HTTPS 业务 API
 本机 zxs → storage-server 服务启动
 Web 管理界面 → HTTPS 管理 API（初始化、账户、磁盘和维护）
-本机 zxs-rescue → 未初始化配置草稿 / 系统与历史恢复 / 离线检查与导出
+本机 zxs-helper → 未初始化配置草稿 / 系统与历史恢复 / 离线检查与导出
 保留的 storage-client 库 → HTTPS 业务 API + storage-contract（不再由 zxs 暴露）
 HTTP / 本机 SMB RPC → storage-engine
 Samba VFS → smb-protocol → 受保护 Unix socket
@@ -144,7 +144,7 @@ platform-io → 文件系统 / SQLite / 凭据算法依赖
 | web-app | web-interface、storage-contract、name-policy | 无 |
 | web-interface | view-macros | 无 |
 | view-macros | 无 | web-interface |
-| storage-rescue | authentication、platform-io、storage-engine | storage-server |
+| storage-helper | authentication、platform-io、storage-engine | storage-server |
 | contract-check | storage-contract | 无 |
 | perf-check | storage-engine、platform-io | 无 |
 | browser-smoke | storage-engine、storage-server | 无 |
@@ -166,11 +166,11 @@ API 与 SMB 只映射认证主体、输入、句柄和传输错误。入口认�
 
 ## 20.3 离线工具
 
-离线恢复工具源码位于根 [`rescue/`](../rescue/)，Cargo 包为 `storage-rescue`；它与服务源码分开维护，共享同一工作区和锁文件。救援命令由操作员显式运行，不在服务启动时隐式调用。
+离线恢复工具源码位于根 [`helper/`](../helper/)，Cargo 包为 `storage-helper`；它与服务源码分开维护，共享同一工作区和锁文件。辅助命令由操作员显式运行，不在服务启动时隐式调用。磁盘管理迁移边界见[辅助工具职责](design/helper-disk-management.md)，未迁入功能不能由改名或配置草稿冒充。
 
-`zxs-rescue offline-check <disk>` 验证本盘版本、内容清单、发布回执和带状态页包含证明的内容墓碑；不修改盘数据。`zxs-rescue offline-export <disk> <version> <output>` 独立验证后输出完整文件，拒绝覆盖已有目标。导出不修改目标父目录权限，失败不把未完成复制发布成完整文件。
+`zxs-helper offline-check <disk>` 验证本盘版本、内容清单、发布回执和带状态页包含证明的内容墓碑；不修改盘数据。`zxs-helper offline-export <disk> <version> <output>` 独立验证后输出完整文件，拒绝覆盖已有目标。导出不修改目标父目录权限，失败不把未完成复制发布成完整文件。
 
-`zxs-rescue --root <new-root> restore-system --disks <disk1> …` 从固定配置的至少 Q = floor(N/2)+1 个一致、可信的原元数据成员配置恢复系统目录，随后重放日志、恢复凭据灾备快照及可发现的待提交工作区。该快照不构成管理面认证权威；守护进程启动和后台重试不会自动安装管理凭据。管理凭据恢复必须在另行准备的干净系统状态目录中，通过受当前本机 bootstrap 授权保护的 Web 恢复流程明确确认旧凭据风险；保留已恢复或部分恢复目录作为核验依据，不删除或覆盖现有权威。它不会重新初始化数据盘，也不绕过设备身份核验。N ≥ 1，单成员池须核验唯一原成员；多成员池不能按幸存数降低 Q。正常写入仍须全部配置成员及发布闭包，不因一份 PUBLICATION 就放行。所有新初始化盘均保存配置锚，缺锚旧盘不兼容且不自动迁移。
+`zxs-helper --root <new-root> restore-system --disks <disk1> …` 从固定配置的至少 Q = floor(N/2)+1 个一致、可信的原元数据成员配置恢复系统目录，随后重放日志、恢复凭据灾备快照及可发现的待提交工作区。该快照不构成管理面认证权威；守护进程启动和后台重试不会自动安装管理凭据。管理凭据恢复必须在另行准备的干净系统状态目录中，通过受当前本机 bootstrap 授权保护的 Web 恢复流程明确确认旧凭据风险；保留已恢复或部分恢复目录作为核验依据，不删除或覆盖现有权威。它不会重新初始化数据盘，也不绕过设备身份核验。N ≥ 1，单成员池须核验唯一原成员；多成员池不能按幸存数降低 Q。正常写入仍须全部配置成员及发布闭包，不因一份 PUBLICATION 就放行。所有新初始化盘均保存配置锚，缺锚旧盘不兼容且不自动迁移。
 
 离线工具不依赖在线服务或原服务器 SQLite。实际只恢复本盘持有且证明、字节均有效的版本，不推断全局最新状态。格式、设备或日志冲突必须明确失败；检查命令不得隐式修复或清理。
 

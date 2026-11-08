@@ -56,8 +56,8 @@ class ReleaseIntegrity(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "release-assets").exists())
 
-    def test_missing_rescue_binary_rejects_partial_native_release(self):
-        for name in ("zxs-rescue",):
+    def test_missing_helper_binary_rejects_partial_native_release(self):
+        for name in ("zxs-helper",):
             path = self.root / "target/native/x86_64-unknown-linux-gnu/release" / name
             saved = path.read_bytes()
             path.unlink()

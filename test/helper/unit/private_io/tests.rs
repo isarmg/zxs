@@ -335,7 +335,7 @@ fn publication_faults_preserve_phase_identity_and_evidence() {
                 .unwrap()
                 .to_str()
                 .unwrap()
-                .starts_with(".zxs-rescue-")
+                .starts_with(".zxs-helper-")
         })
         .collect();
     let events = fs::read_to_string(std::env::var_os("ZXS_ATOMIC_LOG").unwrap()).unwrap();

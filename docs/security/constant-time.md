@@ -13,7 +13,7 @@
 
 ## 本项目依赖边界
 
-Linux x86_64 依赖关系中：`authentication → hmac → cryptographic-core` 的 `mac` 功能引入 `ctutils`，并进入服务端和救援工具的依赖闭包。`cryptographic-core` 同时被 SHA-2、Blake2 等组件共享；依赖图存在不证明每个消费者调用了受影响原语。
+Linux x86_64 依赖关系中：`authentication → hmac → cryptographic-core` 的 `mac` 功能引入 `ctutils`，并进入服务端和辅助工具的依赖闭包。`cryptographic-core` 同时被 SHA-2、Blake2 等组件共享；依赖图存在不证明每个消费者调用了受影响原语。
 
 本项目认证代码使用 HMAC-SHA256 派生 CSRF token；共享 MAC 实现包含 `ctutils::CtEq`。未建立秘密相关掩码或 `u128` 比较在产品请求路径中可利用的证明，不将依赖告警扩大成已证实攻击。但既然活动来源受公告覆盖，仍升级完整组件，而非用未发现调用来豁免。
 

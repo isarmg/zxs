@@ -1,9 +1,33 @@
 use super::*;
 
 #[test]
+fn authority_check_requires_an_explicit_selection_and_accepts_no_write_confirmation() {
+    let args =
+        Args::try_parse_from(["zxs-helper", "authority", "check", "/selection.json"]).unwrap();
+    let Command::Authority {
+        command: authority::Command::Check { selection },
+    } = args.command
+    else {
+        panic!("wrong command")
+    };
+    assert_eq!(selection, PathBuf::from("/selection.json"));
+    assert!(Args::try_parse_from(["zxs-helper", "authority", "check"]).is_err());
+    assert!(
+        Args::try_parse_from([
+            "zxs-helper",
+            "authority",
+            "check",
+            "/selection.json",
+            "--confirm-write",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
 fn workspace_inventory_is_an_explicit_read_only_command() {
     let args =
-        Args::try_parse_from(["zxs-rescue", "--root", "/pool", "workspace-inventory"]).unwrap();
+        Args::try_parse_from(["zxs-helper", "--root", "/pool", "workspace-inventory"]).unwrap();
     assert!(matches!(&args.command, Command::WorkspaceInventory));
     assert_eq!(args.root, PathBuf::from("/pool"));
     assert_eq!(args.workspace_limits().unwrap(), None);
@@ -12,12 +36,12 @@ fn workspace_inventory_is_an_explicit_read_only_command() {
 #[test]
 fn restore_system_accepts_one_original_member_but_requires_a_path() {
     let args =
-        Args::try_parse_from(["zxs-rescue", "restore-system", "--disks", "/disk/only"]).unwrap();
+        Args::try_parse_from(["zxs-helper", "restore-system", "--disks", "/disk/only"]).unwrap();
     let Command::RestoreSystem { disks } = args.command else {
         panic!("wrong command")
     };
     assert_eq!(disks, [PathBuf::from("/disk/only")]);
-    assert!(Args::try_parse_from(["zxs-rescue", "restore-system", "--disks"]).is_err());
+    assert!(Args::try_parse_from(["zxs-helper", "restore-system", "--disks"]).is_err());
 }
 
 #[test]
@@ -29,7 +53,7 @@ fn package_restore_defaults_to_one_copy_and_accepts_explicit_backup_policy() {
         (vec!["--copies", "4294967295"], u32::MAX),
     ] {
         let mut argv = vec![
-            "zxs-rescue",
+            "zxs-helper",
             "package",
             "restore",
             "/package",
@@ -51,7 +75,7 @@ fn package_restore_defaults_to_one_copy_and_accepts_explicit_backup_policy() {
 #[test]
 fn package_restore_rejects_zero_copies_as_an_argument_error() {
     let error = Args::try_parse_from([
-        "zxs-rescue",
+        "zxs-helper",
         "package",
         "restore",
         "/package",
@@ -78,7 +102,7 @@ const WORKSPACE_LIMIT_FLAGS: [&str; 4] = [
 
 #[test]
 fn retained_workspace_flags_require_all_positive_values_or_none() {
-    let base = vec!["zxs-rescue", "package", "check", "/missing-package"];
+    let base = vec!["zxs-helper", "package", "check", "/missing-package"];
     assert_eq!(
         Args::try_parse_from(base.clone())
             .unwrap()
@@ -140,7 +164,7 @@ fn retained_workspace_flags_are_global_for_every_engine_command() {
         ],
     ] {
         for before_command in [true, false] {
-            let mut argv = vec!["zxs-rescue"];
+            let mut argv = vec!["zxs-helper"];
             let limits = WORKSPACE_LIMIT_FLAGS
                 .into_iter()
                 .flat_map(|flag| [flag, "1"]);
@@ -169,7 +193,7 @@ fn operation_identifiers_are_parsed_at_the_command_line_boundary() {
         "op_ffffffffffffffffffffffffffffffff",
     ] {
         let args = Args::try_parse_from([
-            "zxs-rescue",
+            "zxs-helper",
             "recovery-preview",
             value,
             "--reason",
@@ -181,7 +205,7 @@ fn operation_identifiers_are_parsed_at_the_command_line_boundary() {
         };
         assert_eq!(operation.to_string(), value);
         let args = Args::try_parse_from([
-            "zxs-rescue",
+            "zxs-helper",
             "package",
             "restore",
             "/package",
@@ -207,14 +231,14 @@ fn operation_identifiers_are_parsed_at_the_command_line_boundary() {
     ] {
         for argv in [
             vec![
-                "zxs-rescue",
+                "zxs-helper",
                 "recovery-preview",
                 value,
                 "--reason",
                 "review",
             ],
             vec![
-                "zxs-rescue",
+                "zxs-helper",
                 "package",
                 "restore",
                 "/package",

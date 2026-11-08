@@ -82,7 +82,7 @@ def check_source_paths(root):
     # Also scan strings: derive bounds are Rust paths embedded in attributes.
     # Underscored external APIs and macro-local aliases are different identities.
     stale = re.compile(r'(?<![A-Za-z0-9_])serde::')
-    for directory in ('src', 'tools', 'rescue'):
+    for directory in ('src', 'tools', 'helper'):
         for path in (root / directory).rglob('*.rs'):
             if stale.search(path.read_text()):
                 raise AssertionError(f'old serialization crate path: {path.relative_to(root)}')

@@ -45,7 +45,7 @@ class CryptographicCoreChecks(unittest.TestCase):
 
     def test_no_retained_imports_use_absorbed_package_names(self):
         obsolete = re.compile(r"\b(?:hash_traits|hash_block_buffer|cryptographic_traits|crypto_common|block_buffer)::")
-        for parent in ('src', 'test', 'rescue'):
+        for parent in ('src', 'test', 'helper'):
             for path in (ROOT / parent).rglob('*.rs'):
                 self.assertIsNone(obsolete.search(path.read_text()), str(path))
                 self.assertIsNone(re.search(r'use\s+(?:crate|cryptographic_core)::\{\s*crate::', path.read_text()), str(path))

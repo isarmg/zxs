@@ -1,6 +1,6 @@
 # Rust 源码治理工具
 
-正式入口为 Web 和 SMB；`zxs` 启动守护进程，`zxs-rescue` 是离线救援与未初始化配置草稿工具。所有 Rust 包共享根 `Cargo.toml` 和根 `Cargo.lock`，活动依赖只使用仓库内 path。
+正式入口为 Web 和 SMB；`zxs` 启动守护进程，`zxs-helper` 是离线救援与未初始化配置草稿工具。所有 Rust 包共享根 `Cargo.toml` 和根 `Cargo.lock`，活动依赖只使用仓库内 path。
 
 - 当前源码、目标闭包、单锁文件与文件摘要：[compliance/rust-sources.json](../../compliance/rust-sources.json)。
 - 不可覆盖的原始 archive 身份、原始文件摘要及材料位置：[origins.json](../../compliance/provenance/origins.json)。

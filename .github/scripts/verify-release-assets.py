@@ -48,7 +48,7 @@ def build_identity(build, version, commit=None):
         raise ValueError("native build target/profile identity mismatch")
     if not fields.get("native-rustc"):
         raise ValueError("missing native compiler identity")
-    for key in ("native-environment-sha256", "native-inputs-sha256", "native-zxs-sha256", "native-zxs-rescue-sha256"):
+    for key in ("native-environment-sha256", "native-inputs-sha256", "native-zxs-sha256", "native-zxs-helper-sha256"):
         if not re.fullmatch(r"[0-9a-f]{64}", fields.get(key, "")):
             raise ValueError(f"missing or invalid native build identity: {key}")
     if fields.get("native-baseline") != "debian13-amd64" or fields.get("native-web-embedded") != "true":
@@ -65,7 +65,7 @@ def build_identity(build, version, commit=None):
             or runtime.get("release") != "13" or runtime.get("architecture") != "amd64"):
         raise ValueError("native runtime dependency receipt target mismatch")
     binaries = runtime.get("binaries", [])
-    if len(binaries) != 2 or {binary.get("name") for binary in binaries} != {"zxs", "zxs-rescue"}:
+    if len(binaries) != 2 or {binary.get("name") for binary in binaries} != {"zxs", "zxs-helper"}:
         raise ValueError("native runtime dependency binary inventory mismatch")
     for binary in binaries:
         if binary.get("sha256") != fields[f"native-{binary['name']}-sha256"] or not binary.get("libraries"):

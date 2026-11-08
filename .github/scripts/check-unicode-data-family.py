@@ -93,7 +93,7 @@ def validate_capability_surface(root):
             raise AssertionError('Unicode supported capability surface drift: ' + name)
     # Historical provenance manifests are immutable records, not retained consumers.
     manifests = [root / 'Cargo.toml']
-    for directory in ('src', 'test', 'tools', 'rescue'):
+    for directory in ('src', 'test', 'tools', 'helper'):
         manifests.extend(path for path in (root / directory).rglob('Cargo.toml')
                          if 'target' not in path.relative_to(root).parts)
     for path in manifests:

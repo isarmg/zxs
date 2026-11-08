@@ -293,10 +293,10 @@ Web“系统状态”的“持久工作区证据配额”及 `GET /api/workspace
 任一维度达到 80% 返回 `near_limit`，达到上限返回 `exhausted`。多会话不获得额外主体额度，
 `ok` 不保证下一次请求一定通过其他活动、长度、磁盘或单清单限制。
 
-超额池仍拒绝打开写 Engine。停止服务后可运行 `zxs-rescue --root /private/pool workspace-inventory`：
+超额池仍拒绝打开写 Engine。停止服务后可运行 `zxs-helper --root /private/pool workspace-inventory`：
 不构造完整 Engine、不重放/修复、不绕过预算，逐物理清单输出有限 JSON 行，末尾完整标记才说明已枚举完。
 这是未经 journal 和双镜像授权核验的诊断库存，非逻辑工作区计数；原始 canonical 字节不含生命周期预留。
-命令持有原单写者锁（锁文件可能创建），不修改配置锚、清单或正文。详见[救援工具](components/rescue.md)。
+命令持有原单写者锁（锁文件可能创建），不修改配置锚、清单或正文。详见[辅助工具](components/helper.md)。
 
 64 MiB 的主体逻辑字节默认值与既有单清单读写上限一致；128 MiB 全局预算最多容纳两份
 满额逻辑清单。这些是准入阈值，不是预分配缓存或实际内存占用保证。计费还包含保守的
@@ -304,9 +304,9 @@ Web“系统状态”的“持久工作区证据配额”及 `GET /api/workspace
 若实际清单或其生命周期预留超过单清单 64 MiB 上限，必须在持久化或发布前拒绝，
 不会把预留截断到 64 MiB 来掩盖提交后的回执超限；提高总配额也不能绕过单清单格式限制。
 
-`zxs-rescue configuration template` 可生成未初始化草稿供审查上述持久基线字段，
+`zxs-helper configuration template` 可生成未初始化草稿供审查上述持久基线字段，
 但当前 Web 首次存储激活不应用高级 Config 草稿，旧本机预设初始化入口已移除。
-草稿边界见[救援工具说明](components/rescue.md#uninitialized-configuration-drafts)。这不是 Web 在线资源配置页。
+草稿边界见[辅助工具说明](components/helper.md#uninitialized-configuration-drafts)。这不是 Web 在线资源配置页。
 已有池的系统目录及各元数据成员均持有配置锚；不得手工改写 `config.json` 或磁盘配置锚来调额，
 也不得删除清单释放名额。运行期的本机调额使用下面的显式启动参数，保留持久基线与全部证据。
 Genesis 发现仍以除可重定位根地址外一致的磁盘配置锚建立固定成员和多数；SYSTEM 投影即使仅把四维保留证据上限
@@ -317,7 +317,7 @@ Genesis 发现仍以除可重定位根地址外一致的磁盘配置锚建立固
 
 ### 本机运行期上限
 
-`zxs` 与 `zxs-rescue` 接受同一组本机参数；四项必须同时指定，或全部省略：
+`zxs` 与 `zxs-helper` 接受同一组本机参数；四项必须同时指定，或全部省略：
 
 | 参数 | 含义 |
 | --- | --- |

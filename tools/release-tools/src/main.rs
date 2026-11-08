@@ -4,7 +4,7 @@ use std::{env, fs, io::Write, path::Path};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const PRODUCT_MANIFESTS: [&str; 12] = [
-    "rescue/Cargo.toml",
+    "helper/Cargo.toml",
     "src/auth/Cargo.toml",
     "src/client/Cargo.toml",
     "src/contract/Cargo.toml",
@@ -42,7 +42,7 @@ fn validate(root: &Path, tag: &str) -> Result<semver::Version> {
         return Err(format!("{tag} differs from workspace version {workspace_version}").into());
     }
     // Upstream-derived foundation and macro components retain upstream version
-    // identities. Product paths are explicit: rescue lives at the workspace root.
+    // identities. Product paths are explicit: helper lives at the workspace root.
     for relative in PRODUCT_MANIFESTS {
         let path = root.join(relative);
         let manifest = toml_file(&path)?;

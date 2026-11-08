@@ -69,21 +69,22 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn root_rescue_is_the_only_current_rescue_manifest() {
-    assert!(PRODUCT_MANIFESTS.contains(&"rescue/Cargo.toml"));
-    assert!(!PRODUCT_MANIFESTS.contains(&"src/rescue/Cargo.toml"));
+fn root_helper_is_the_only_current_helper_manifest() {
+    assert!(PRODUCT_MANIFESTS.contains(&"helper/Cargo.toml"));
+    assert!(!PRODUCT_MANIFESTS.contains(&"src/helper/Cargo.toml"));
+    assert!(!PRODUCT_MANIFESTS.contains(&"rescue/Cargo.toml"));
     let fixture = Fixture::new();
     assert!(!fixture.0.join("src/rescue").exists());
     assert_eq!(validate(&fixture.0, "v1.2.3").unwrap().to_string(), "1.2.3");
 }
 
 #[test]
-fn an_old_rescue_location_cannot_replace_the_missing_root_manifest() {
+fn a_retired_rescue_location_cannot_replace_the_missing_helper_manifest() {
     let fixture = Fixture::new();
-    fs::create_dir_all(fixture.0.join("src/rescue")).unwrap();
+    fs::create_dir_all(fixture.0.join("rescue")).unwrap();
     fs::rename(
+        fixture.0.join("helper/Cargo.toml"),
         fixture.0.join("rescue/Cargo.toml"),
-        fixture.0.join("src/rescue/Cargo.toml"),
     )
     .unwrap();
     let error = validate(&fixture.0, "v1.2.3").unwrap_err();
@@ -111,15 +112,15 @@ fn every_current_product_manifest_is_required() {
 }
 
 #[test]
-fn root_rescue_explicit_version_must_match_the_workspace() {
+fn root_helper_explicit_version_must_match_the_workspace() {
     let fixture = Fixture::new();
-    let manifest = fixture.0.join("rescue/Cargo.toml");
+    let manifest = fixture.0.join("helper/Cargo.toml");
     fs::write(&manifest, "[package]\nversion = \"1.2.3\"\n").unwrap();
     validate(&fixture.0, "v1.2.3").unwrap();
     fs::write(&manifest, "[package]\nversion = \"2.0.0\"\n").unwrap();
     let error = validate(&fixture.0, "v1.2.3").unwrap_err().to_string();
     assert!(
-        error.contains("rescue/Cargo.toml") && error.contains("expected 1.2.3"),
+        error.contains("helper/Cargo.toml") && error.contains("expected 1.2.3"),
         "{error}"
     );
 }

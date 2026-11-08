@@ -42,7 +42,7 @@ def add_runtime_fields(fields):
                              "libraries": [{"soname": "libc.so.6", "path": "/lib/libc.so.6",
                                             "resolved_path": "/usr/lib/libc.so.6", "sha256": "a" * 64,
                                             "package": "libc6:amd64", "version": "fixture-only"}]}
-                            for name in ("zxs", "zxs-rescue")]}
+                            for name in ("zxs", "zxs-helper")]}
     text = json.dumps(runtime, separators=(",", ":"), sort_keys=True)
     fields["native-runtime-dependencies"] = text
     fields["native-runtime-dependencies-sha256"] = hashlib.sha256(text.encode()).hexdigest()
@@ -55,14 +55,14 @@ def prepare(root):
         (root / directory).mkdir(parents=True, exist_ok=True)
     for relative in [*spec["files"], "README.md", "compliance/NOTICE.md", "docs/README.md", "deploy/systemd/zxs.service",
                      "deploy/samba/smb.conf.example",
-                     "target/native/x86_64-unknown-linux-gnu/release/zxs", "target/native/x86_64-unknown-linux-gnu/release/zxs-rescue", "build/web/index.html", "build/web/boot.js",
+                     "target/native/x86_64-unknown-linux-gnu/release/zxs", "target/native/x86_64-unknown-linux-gnu/release/zxs-helper", "build/web/index.html", "build/web/boot.js",
                      "build/web/zxs.css", "build/web/styles/startup.css", "build/web/pkg/zxs.js",
                      "build/web/pkg/zxs_bg.wasm", "build/web/pkg/zxs_bg.wasm.gz"]:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text(f"fixture {relative}\n")
-    for name in ("zxs", "zxs-rescue"):
+    for name in ("zxs", "zxs-helper"):
         (root / "target/native/x86_64-unknown-linux-gnu/release" / name).chmod(0o755)
     native = root / "target/native/x86_64-unknown-linux-gnu/release"
     (native / "zxs").write_bytes(elf_fixture())
@@ -70,7 +70,7 @@ def prepare(root):
               "native-target": "x86_64-unknown-linux-gnu", "native-profile": "release",
               "native-rustc": "fixture compiler", "native-environment-sha256": "a" * 64,
               "native-inputs-sha256": "b" * 64}
-    for name in ("zxs", "zxs-rescue"):
+    for name in ("zxs", "zxs-helper"):
         fields[f"native-{name}-sha256"] = hashlib.sha256((native / name).read_bytes()).hexdigest()
     add_runtime_fields(fields)
     (native / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
@@ -107,7 +107,7 @@ def write_release_assets(directory, commit, version="0.1.0"):
     fields = {"version": version, "commit": commit, "native-target": "x86_64-unknown-linux-gnu",
               "native-profile": "release", "native-rustc": "fixture compiler",
               "native-environment-sha256": "a" * 64, "native-inputs-sha256": "b" * 64,
-              "native-zxs-sha256": hashlib.sha256(elf_fixture()).hexdigest(), "native-zxs-rescue-sha256": "d" * 64,
+              "native-zxs-sha256": hashlib.sha256(elf_fixture()).hexdigest(), "native-zxs-helper-sha256": "d" * 64,
               "materials-archive-sha256": hashlib.sha256(data).hexdigest(),
               "native-baseline": "debian13-amd64", "native-web-embedded": "true",
               "native-web-commit": commit, "native-web-tree": "b" * 40,

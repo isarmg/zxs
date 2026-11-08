@@ -1,10 +1,11 @@
 //! Independent, explicitly initialized per-disk authority. This module does not
 //! read the managed-directory format or participate in the current pool quorum.
-//! The offline rescue consumer is separate from Engine's online namespace.
+//! The offline helper consumer is separate from Engine's online namespace.
 mod cache;
 mod candidate_session;
 mod candidate_set;
 mod codec;
+mod content;
 mod fault;
 mod inventory;
 mod journal;
@@ -30,6 +31,7 @@ pub use candidate_set::{
     SourceCandidateBatch, SourceCandidateBatchError, SourceCandidateBatchStage,
     SourceCandidateBatchStatus,
 };
+pub use content::{ContentSnapshot, PublishedContent};
 pub use inventory::{RetainedVersion, SourceInventory};
 pub use journal::{
     DiskReport, DiskSelection, FileWrite, IndependentDisk, OperationStatus, ReviewedPublication,

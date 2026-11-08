@@ -1,5 +1,6 @@
 //! Actual offline consumer for the opt-in independent disk format. Commands
 //! never select the current Engine pool protocol or its SQLite database.
+mod check;
 use crate::{Result, print, private_io};
 use command_line::{Args, Subcommand};
 use data_serialization::de::DeserializeOwned;
@@ -24,6 +25,8 @@ pub(crate) enum Command {
     },
     /// Read the exact selected identity and its complete local publication chain.
     Inspect { selection: PathBuf },
+    /// Check retained local FULL copies independently; content issues return nonzero. Stop all writers first.
+    Check { selection: PathBuf },
     /// Read-only review; prints the digest required by publish-file.
     ReviewFile {
         #[command(flatten)]
@@ -164,6 +167,7 @@ pub(crate) fn run(command: Command) -> Result<()> {
             print(IndependentDisk::initialize(&disk, read::<Identity>(&identity)?)?.report()?)
         }
         Command::Inspect { selection } => print(open(&selection)?.report()?),
+        Command::Check { selection } => check::run(&selection),
         Command::ReviewFile { write } => print_review(&review_file(write)?.1),
         Command::PublishFile {
             write,

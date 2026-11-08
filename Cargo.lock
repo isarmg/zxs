@@ -1346,7 +1346,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "storage-rescue"
+name = "storage-helper"
 version = "1.0.0"
 dependencies = [
  "authentication",

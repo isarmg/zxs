@@ -15,7 +15,7 @@ import subprocess
 
 TARGET = "x86_64-unknown-linux-gnu"
 OUTPUT = Path("target/native") / TARGET / "release"
-BINARIES = ("zxs", "zxs-rescue")
+BINARIES = ("zxs", "zxs-helper")
 
 
 def digest(path):
@@ -105,7 +105,7 @@ def main():
     subprocess.run(["python3", ".github/scripts/check-rust-diagnostics.py", "--",
                     "cargo", "build", "--locked", "--offline", "--release",
                     "--target", TARGET, "--target-dir", "target/native",
-                    "--package", "storage-server", "--package", "storage-rescue",
+                    "--package", "storage-server", "--package", "storage-helper",
                     "--message-format=json"], check=True, env=build_environment)
     if commit != subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip():
         raise RuntimeError("native release source commit changed during build")

@@ -842,7 +842,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
             assert_eq!(cause.code(), ErrorCode::InvalidJson);
             assert!(cause.source().unwrap().is::<json_codec::Error>());
         }
-        // zxs-rescue's outer error formatter uses this native Display, not the
+        // zxs-helper's outer error formatter uses this native Display, not the
         // generic offline HTTP diagnostic that previously hid publication.
         assert!(error.to_string().contains("is already published"));
         assert!(error.to_string().contains(&operation.to_string()));

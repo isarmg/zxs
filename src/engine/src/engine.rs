@@ -526,7 +526,7 @@ impl Engine {
             let disk = disk_resources.get(d)?;
             disk.root
                 .write_json(&d.root.join("disk.json"), &disk.seal, false)?;
-            disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-rescue offline-check/offline-export before recovery. Filesystem choice and physical failure-domain independence are the operator responsibility.\n",false)?;
+            disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-helper offline-check/offline-export before recovery. Filesystem choice and physical failure-domain independence are the operator responsibility.\n",false)?;
             for p in [
                 "histories",
                 "metadata/application-log",

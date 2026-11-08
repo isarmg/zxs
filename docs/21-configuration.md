@@ -17,7 +17,7 @@
 
 ## 21.1 配置示例
 
-以下 TOML 定义完整目标配置，不是现有进程直接读取的配置或可直接部署的 smb.conf。当前引擎读取严格 JSON `Config`；Web 公开一次性首次设置只创建管理员，登录后由 `--storage-discovery-root`（默认 `/zxs/data/disks`）只读发现直接子目录，通过磁盘向导明确选择和确认；不提供任意路径、挂载目录或发现父目录编辑。此流程不挂载、分区或格式化设备。下述目标配置字段不表示 Web 已提供任意 Config 编辑器。实际接受的字段和限制见[服务端说明](components/server.md)、[救援配置草稿](components/rescue.md#uninitialized-configuration-drafts)及[当前限制](23-delivery-and-decisions.md#s23-03)。
+以下 TOML 定义完整目标配置，不是现有进程直接读取的配置或可直接部署的 smb.conf。当前引擎读取严格 JSON `Config`；Web 公开一次性首次设置只创建管理员，登录后由 `--storage-discovery-root`（默认 `/zxs/data/disks`）只读发现直接子目录，通过磁盘向导明确选择和确认；不提供任意路径、挂载目录或发现父目录编辑。此流程不挂载、分区或格式化设备。下述目标配置字段不表示 Web 已提供任意 Config 编辑器。实际接受的字段和限制见[服务端说明](components/server.md)、[救援配置草稿](components/helper.md#uninitialized-configuration-drafts)及[当前限制](23-delivery-and-decisions.md#s23-03)。
 
 当前守护进程的 `--listen` 默认值为 `0.0.0.0:7400`，允许非回环 IPv4/IPv6 地址；网络可达范围与传输保护由部署者管理。直接 HTTP 与 HTTPS 反向代理的 Origin 配置见[服务端启动说明](components/server.md)。下方 `remote_transport` 是 HTTPS 部署目标示例，不是禁止非回环 HTTP 的进程准入规则。
 
@@ -327,7 +327,7 @@ queue_warning_seconds = 30
 
 | 文档投影字段 | 当前入口及作用域 |
 | --- | --- |
-| `max_workspaces` | 引擎 JSON `Config.max_workspaces`；初始化前的受审查草稿，见[救援配置草稿](components/rescue.md#uninitialized-configuration-drafts) |
+| `max_workspaces` | 引擎 JSON `Config.max_workspaces`；初始化前的受审查草稿，见[救援配置草稿](components/helper.md#uninitialized-configuration-drafts) |
 | `http_transfer_slots` | `--http-transfer-slots` → `ServerConfig.http_transfer_limits.slots`；上传、读取各自一池，每池默认 2，不是两池合计 2 |
 | `http_spool_bytes_per_account` / `http_spool_bytes_total` / `http_spool_recovery_reserve_bytes` | 对应 `--http-spool-*` 参数 → `ServerConfig.http_spool_limits`；只约束 HTTP spool |
 | `smb_spool_bytes_per_account` / `smb_spool_bytes_total` / `smb_spool_recovery_reserve_bytes` | 对应 `--smb-spool-*` 参数 → `SmbConfig.spool_limits`；只约束 SMB spool |
@@ -389,7 +389,7 @@ HTTP 传输准入及期限参数（上传/读取各自独立一池）：
 
 ## 当前配置应用入口
 
-`zxs-rescue configuration` 只生成或编辑未初始化草稿，不直接应用配置或在线登记磁盘。当前 Web 首次激活按所选空目录建立默认逐级备份链，不应用任意 Config JSON 或本机高级预设；旧公开预设初始化路由已删除。`--setup-disk` 的本机映射只保留既有离线恢复用途。不要直接改写已有池的系统配置或磁盘锚来更改成员。详见[受保护初始化](management/setup-recovery.md)。
+`zxs-helper configuration` 只生成或编辑未初始化草稿，不直接应用配置或在线登记磁盘。当前 Web 首次激活按所选空目录建立默认逐级备份链，不应用任意 Config JSON 或本机高级预设；旧公开预设初始化路由已删除。`--setup-disk` 的本机映射只保留既有离线恢复用途。不要直接改写已有池的系统配置或磁盘锚来更改成员。详见[受保护初始化](management/setup-recovery.md)。
 
 ---
 

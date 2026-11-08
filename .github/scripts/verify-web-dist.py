@@ -156,7 +156,7 @@ def verify(root, stage=None):
                  *tree_paths(root, "compliance"), *tree_paths(root, "docs")]
     for relative in materials:
         input_path(root, relative)
-    native_binaries = ("zxs", "zxs-rescue")
+    native_binaries = ("zxs", "zxs-helper")
     for name in native_binaries:
         binary = input_path(root, f"target/native/x86_64-unknown-linux-gnu/release/{name}")
         if not binary.stat().st_size or not binary.stat().st_mode & 0o111:

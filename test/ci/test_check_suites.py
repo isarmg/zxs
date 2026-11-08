@@ -99,7 +99,7 @@ class SuiteCoverageTests(unittest.TestCase):
         })
         self.assertEqual(calls[1], {"tool": "cargo", "args": [
             "check", "--locked", "--offline", "-p", "storage-engine",
-            "-p", "storage-server", "-p", "storage-rescue",
+            "-p", "storage-server", "-p", "storage-helper",
         ]})
         self.assertEqual(calls[2], {"tool": "cargo", "args": [
             "check", "--locked", "--offline", "-p", "storage-server",
@@ -142,7 +142,7 @@ class SuiteCoverageTests(unittest.TestCase):
         })
         self.assertEqual(calls.count(calls[12]), 1)
         self.assertEqual(calls[13], {
-            "tool": "python3", "args": [".github/scripts/check-rescue-publication-io.py"],
+            "tool": "python3", "args": [".github/scripts/check-helper-publication-io.py"],
         })
         self.assertEqual(calls.count(calls[13]), 1)
         self.assertEqual(calls[14], {

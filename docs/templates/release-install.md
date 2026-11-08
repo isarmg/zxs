@@ -69,7 +69,7 @@ chmod 755 "server-$VERSION/zxs"
 
 `SHA256SUMS` 是完整性清单，**不是独立的发布者签名**。`BUILD.txt` 绑定构建源码、内嵌 Web 与输出字节，不承诺位级可重现。
 
-`zxs-materials-版本.tar.gz` 仅为非运行必需的许可证、来源资料、文档、示例配置和可选离线救援工具 `zxs-rescue`；不需要解压它才能运行 `zxs`，它也不是“单个二进制”的别名。保留、分发对应许可证/版权与来源资料。
+`zxs-materials-版本.tar.gz` 仅为非运行必需的许可证、来源资料、文档、示例配置和可选离线辅助工具 `zxs-helper`；不需要解压它才能运行 `zxs`，它也不是“单个二进制”的别名。保留、分发对应许可证/版权与来源资料。
 
 ## `/zxs` 安装布局与 systemd
 
@@ -99,6 +99,6 @@ Samba 的空导出目录采用 root 所有、`0555` 的 `/zxs/smb-export`，独�
 
 ## 实测通用运行库
 
-`BUILD.txt` 的 `native-runtime-dependencies` 是 Debian 13 构建环境对实际 `zxs`／`zxs-rescue` ELF 的 `readelf NEEDED` 与 `ldd` 解析结果；包含传递依赖及 loader，每项记录实际路径、解析后路径、文件摘要与 `dpkg-query` 的包名/精确版本。`native-runtime-dependencies-sha256` 绑定该 JSON 字段原文。构建工具不把这些通用库复制进 ZXS。
+`BUILD.txt` 的 `native-runtime-dependencies` 是 Debian 13 构建环境对实际 `zxs`／`zxs-helper` ELF 的 `readelf NEEDED` 与 `ldd` 解析结果；包含传递依赖及 loader，每项记录实际路径、解析后路径、文件摘要与 `dpkg-query` 的包名/精确版本。`native-runtime-dependencies-sha256` 绑定该 JSON 字段原文。构建工具不把这些通用库复制进 ZXS。
 
 安装前从该字段核对 `binaries[].libraries[]` 的包名与版本，使用 Debian 软件源准备对应运行库；不要将构建容器的全部开发依赖当作运行依赖。该清单是实际验证版本的证据，不意味着只能永久锁定旧版本；系统安全升级后应重新验收。VFS 所需系统 Samba 与库以 `VFS-BUILD.json` 和对应 SDK 运行验收记录为准。缺库或版本不匹配须先处理，不能宣称“零系统运行依赖”。

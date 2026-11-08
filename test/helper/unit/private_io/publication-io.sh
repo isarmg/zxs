@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Isolated libc-backend tests only; no ptrace or host policy changes.
 set -euo pipefail
-binary="$(realpath "${1:?pass the current storage-rescue bin-test executable}")"
-cli="$(realpath "${2:?pass the current zxs-rescue executable}")"
+binary="$(realpath "${1:?pass the current storage-helper bin-test executable}")"
+cli="$(realpath "${2:?pass the current zxs-helper executable}")"
 test_name=private_io::tests::publication_faults_preserve_phase_identity_and_evidence
 listed="$("$binary" --list --ignored --exact "$test_name")"
-[[ "$(grep -Fxc "$test_name: test" <<< "$listed")" == 1 ]] || { echo "missing exact rescue fault test" >&2; exit 1; }
+[[ "$(grep -Fxc "$test_name: test" <<< "$listed")" == 1 ]] || { echo "missing exact helper fault test" >&2; exit 1; }
 fixture="$(cd "$(dirname "$0")/../../../platform/unit/fs_safety" && pwd)"
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
-cc -shared -fPIC -Wall -Wextra -Werror '-DZXS_STAGING_PREFIX=".zxs-rescue-"' \
+cc -shared -fPIC -Wall -Wextra -Werror '-DZXS_STAGING_PREFIX=".zxs-helper-"' \
   "$fixture/atomic_io.c" -ldl -o "$temporary/publication.so"
 for mode in create replace; do
   for stage in success file-sync directory-sync rename-before rename-after create-race; do
@@ -52,7 +52,7 @@ for stage in rename-before rename-after; do
   else
     test ! -e "$root/draft.json.before-registration"
     grep -Fxq 'rename-before-eio' "$temporary/events"
-    staged=("$root"/.zxs-rescue-*.tmp)
+    staged=("$root"/.zxs-helper-*.tmp)
     [[ "${#staged[@]}" == 1 ]]
     cmp "${staged[0]}" "$temporary/original"
   fi

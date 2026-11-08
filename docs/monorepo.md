@@ -2,14 +2,14 @@
 
 [文档目录](README.md) · [工程约定](20-engineering.md) · [统一许可证与溯源](../compliance/README.md)
 
-ZXS 采用一个 Git 仓库、一个根 Cargo 工作区和一个活动锁文件。产品用户入口为 Web 与 SMB；`zxs` 直接启动守护进程，初始化与日常管理由受保护 Web/API 提供，独立 `zxs-rescue` 保留离线救援与配置草稿操作。自有应用和工具属于根工作区；基础实现通过本地路径接入同一依赖图，共同使用根锁文件、依赖解析和验证流程。
+ZXS 采用一个 Git 仓库、一个根 Cargo 工作区和一个活动锁文件。产品用户入口为 Web 与 SMB；`zxs` 直接启动守护进程，主服务 Web/API 保留日常账户管理；辅助工具 `zxs-helper` 将以独立 Web 控制台完成首次账户/系统初始化，并保留核验/恢复，磁盘初始化、添加、注销/移除和外来接纳按[职责方案](design/helper-disk-management.md)逐项迁入。自有应用和工具属于根工作区；基础实现通过本地路径接入同一依赖图，共同使用根锁文件、依赖解析和验证流程。
 
 ## 目录职责
 
 | 位置 | 职责 |
 | --- | --- |
 | `src/{auth,contract,naming,platform,engine,server,client}` | 认证、业务契约、命名、平台能力、存储引擎、HTTP 服务与客户端 |
-| `rescue` | 独立离线恢复与本机救援工具 `zxs-rescue` |
+| `helper` | 独立离线恢复与本机辅助工具 `zxs-helper` |
 | `src/web` | 浏览器 Rust/WASM 产品界面及静态样式、字体资源 |
 | `src/interface` | 主题、语言、生命周期、共享组件及直接合并的 CSR 基础原语 |
 | `src/macros` | 与编译器进程边界一致的界面过程宏 |
@@ -56,7 +56,7 @@ Unicode 规范化实现位于 `src/naming`，与项目的固定映射、命名�
 | `src/engine` | `storage-engine` |
 | `src/server` | `storage-server` |
 | `src/client` | `storage-client` |
-| `rescue` | `storage-rescue`，离线救援命令为 `zxs-rescue`；正常守护进程 `zxs` 由 `src/server` 生成 |
+| `helper` | `storage-helper`，离线救援命令为 `zxs-helper`；正常守护进程 `zxs` 由 `src/server` 生成 |
 | `src/web` | `web-app` |
 | `src/interface` | `web-interface` |
 | `src/macros` | `view-macros` |

@@ -1,4 +1,4 @@
-//! Deliberately small offline rescue utility. Stop the daemon before using it.
+//! Offline auxiliary utility. Stop the daemon before using it.
 mod authority;
 mod configuration;
 mod private_io;
@@ -10,12 +10,13 @@ use storage_engine::{Engine, OperationId};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 #[derive(Parser)]
 #[command(
-    name = "zxs-rescue",
+    name = "zxs-helper",
     version,
-    about = "Offline verified recovery; stop ZXS before use",
+    about = "Offline auxiliary tool; stop ZXS before use",
     after_help = "restore-system requires a majority of the configured original metadata members (one for a single-disk pool).
 Recovery preview/commit only accepts decided, unpublished operations with all original disks accessible. It requires a reviewed digest and explicit permanent-loss acknowledgement; it is not a reset or missing-disk replacement.
-Offline export validates one published version, not the entire pool or current permissions."
+Offline export validates one published version, not the entire pool or current permissions.
+Web console, first-run setup, disk addition/removal, foreign admission, password reset and installation/repair are not yet implemented. No planned-offline action is offered."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
@@ -163,7 +164,7 @@ fn main() {
         .log_internal_errors(false)
         .init();
     if let Err(error) = run(args) {
-        eprintln!("zxs-rescue: {}", diagnostic_chain(error.as_ref()));
+        eprintln!("zxs-helper: {}", diagnostic_chain(error.as_ref()));
         std::process::exit(1);
     }
 }
@@ -186,7 +187,7 @@ fn report_recovery_warnings(engine: &mut Engine) {
     ] {
         if let Some(error) = warning {
             let message = diagnostic_chain(&error);
-            eprintln!("zxs-rescue: {action}: {message}");
+            eprintln!("zxs-helper: {action}: {message}");
         }
     }
 }
@@ -322,5 +323,5 @@ fn run(args: Args) -> Result<()> {
 }
 
 #[cfg(test)]
-#[path = "../../test/rescue/unit/main/args_tests.rs"]
+#[path = "../../test/helper/unit/main/args_tests.rs"]
 mod args_tests;

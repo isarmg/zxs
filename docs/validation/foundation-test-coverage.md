@@ -68,7 +68,7 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 | concurrent-collections（SQLite 池空闲连接 `ArrayQueue`） | 有界容量、MPMC 恰好一次、析构释放剩余元素、线性化 | 保留 `array_queue`、`seg_queue`、`deque/{fifo,lifo,injector}`、`sharded_lock`（原 DORMANT） | `rand` → `fastrand` |
 | parking（async-notification 阻塞 `wait`） | unpark 先于 park、超时、跨线程唤醒、waker | 保留 `parking.rs` | `easy_parallel` → `std::thread::scope` |
 | spin（flume 依赖） | 自旋锁、读写锁、Once、屏障 | 库内单元测试 | 删除只测试本地已不存在的 `Once::init_from_ref` 的一项 |
-| signal-hook-registry（tokio signal → 服务端／救援工具关停） | 注册、注销、多处理器 | 库内单元测试与 `unregister_signal.rs` | 无 |
+| signal-hook-registry（tokio signal → 服务端／辅助工具关停） | 注册、注销、多处理器 | 库内单元测试与 `unregister_signal.rs` | 无 |
 | tempfile（platform-io、storage-client） | 持久化不覆盖、析构清理、spooled 回滚 | 保留五个集成测试 | 无 |
 | bytes（SQLite、HTTP、服务端） | `Bytes`/`BytesMut` 分割、冻结、共享 vtable 所有权 | 库内及十个集成测试 | `test_serialization.rs` 需要缺失的 `serde_test`，不执行 |
 | slab、hashlink、once_cell、thread_local、scopeguard、guardian、send_wrapper | 键复用、LRU、一次性初始化竞争、线程局部、守卫释放 | 库内或保留集成测试 | 无 |

@@ -31,7 +31,7 @@ spool、管理及初始化恢复直接使用 Unix 权限与链接检查，不保
 
 ## 启动
 
-从项目根目录构建 `CARGO_TARGET_DIR=target/native cargo build --locked --offline -p storage-server -p storage-rescue`。下面是已有池或诊断模式的最小启动样例。首次安装预置引导密钥并创建管理员，登录后在固定发现父目录的直接子目录中运行磁盘向导；创建管理员不依赖数据盘白名单：
+从项目根目录构建 `CARGO_TARGET_DIR=target/native cargo build --locked --offline -p storage-server -p storage-helper`。下面是已有池或诊断模式的最小启动样例。首次安装预置引导密钥并创建管理员，登录后在固定发现父目录的直接子目录中运行磁盘向导；创建管理员不依赖数据盘白名单：
 
 ```sh
 target/native/debug/zxs --root /srv/zxs/system \

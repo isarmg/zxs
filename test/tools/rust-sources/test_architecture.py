@@ -11,21 +11,21 @@ SPEC.loader.exec_module(architecture)
 
 
 class ConsumerEdges(unittest.TestCase):
-    def test_root_rescue_is_indexed_as_a_foundation_consumer(self):
+    def test_root_helper_is_indexed_as_a_foundation_consumer(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'Cargo.toml').write_text(
-                '[workspace]\nmembers = ["rescue"]\n'
+                '[workspace]\nmembers = ["helper"]\n'
                 '[workspace.dependencies]\nmini = { path = "src/foundation/mini" }\n',
                 encoding='utf-8')
-            (root / 'rescue').mkdir()
-            (root / 'rescue/Cargo.toml').write_text(
-                '[package]\nname = "storage-rescue"\nversion = "1.0.0"\n'
+            (root / 'helper').mkdir()
+            (root / 'helper/Cargo.toml').write_text(
+                '[package]\nname = "storage-helper"\nversion = "1.0.0"\n'
                 '[dependencies]\nmini.workspace = true\n', encoding='utf-8')
             documents = architecture.manifests(root)
-            self.assertEqual(set(documents), {'Cargo.toml', 'rescue/Cargo.toml'})
+            self.assertEqual(set(documents), {'Cargo.toml', 'helper/Cargo.toml'})
             self.assertEqual(architecture.consumer_edges(root, documents)['src/foundation/mini'],
-                             ['rescue [normal]'])
+                             ['helper [normal]'])
 
     def test_merged_source_index_keeps_identity_without_reprinting_history(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -48,12 +48,12 @@ class ConsumerEdges(unittest.TestCase):
             self.assertNotIn('docs/reports/', document)
             self.assertEqual(catalog, original, 'rendering must not rewrite provenance')
 
-    def test_generated_product_roles_use_the_current_rescue_entrypoint(self):
+    def test_generated_product_roles_use_the_current_helper_entrypoint(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'Cargo.toml').write_text('[workspace]\nmembers = []\n', encoding='utf-8')
             document = architecture.document(root, {'packages': {}}, {'profiles': []})
-            self.assertIn('engine / server / client / rescue]', document)
+            self.assertIn('engine / server / client / helper]', document)
             self.assertNotIn('client / admin]', document)
 
     def test_inherited_alias_target_optional_and_dev_edges_remain_visible(self):

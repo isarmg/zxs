@@ -17,7 +17,7 @@ def check():
     manifest=ROOT/'src/foundation/tooling/terminal-style/Cargo.toml'
     assert not (ROOT/'src/foundation/utf8parse').exists(), 'standalone UTF-8 package remains'
     assert not (ROOT/'test/foundation/utf8parse').exists(), 'UTF-8 tests not transferred'
-    for base in ('src', 'tools', 'rescue'):
+    for base in ('src', 'tools', 'helper'):
         for candidate in (ROOT/base).rglob('Cargo.toml'):
             assert 'utf8parse' not in candidate.read_text(), f'stale UTF-8 package declaration: {candidate}'
     library=(manifest.parent/'src/lib.rs').read_text()

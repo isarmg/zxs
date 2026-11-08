@@ -1,7 +1,7 @@
 use std::process::Command;
 #[test]
-fn rescue_exposes_only_offline_recovery_and_configuration_operations() {
-    let binary = env!("CARGO_BIN_EXE_zxs-rescue");
+fn helper_exposes_only_implemented_offline_operations() {
+    let binary = env!("CARGO_BIN_EXE_zxs-helper");
     for name in [
         "restore-system",
         "recovery-preview",
@@ -30,16 +30,46 @@ fn rescue_exposes_only_offline_recovery_and_configuration_operations() {
         "export-history",
         "register-disk",
         "config-template",
+        "planned-offline",
+        "disk-offline",
         "--server",
     ] {
         let output = Command::new(binary).arg(name).output().unwrap();
         assert_eq!(output.status.code(), Some(2));
     }
 }
+
+#[test]
+fn helper_identity_is_consistent_without_creating_runtime_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_zxs-helper");
+    let output = Command::new(binary)
+        .current_dir(directory.path())
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("zxs-helper {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    let output = Command::new(binary)
+        .current_dir(directory.path())
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("Offline auxiliary tool"));
+    assert!(help.contains("Usage: zxs-helper"));
+    assert!(help.contains("not yet implemented"));
+    assert!(!help.contains("zxs-rescue"));
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
 #[test]
 fn recovery_requires_explicit_loss_acknowledgement_before_opening_pool() {
     let directory = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .current_dir(directory.path())
         .args(["recovery-commit", "recovery", "--digest", "digest"])
         .output()
@@ -99,7 +129,7 @@ fn recovery_commands_report_returned_engine_seal_failure_once_before_command_rej
             "--accept-permanent-loss".into(),
         ],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
             .arg("--root")
             .arg(&root)
             .args(args)
@@ -117,7 +147,7 @@ fn recovery_commands_report_returned_engine_seal_failure_once_before_command_rej
         assert!(error.contains(candidate), "{error}");
         assert!(error.contains("Filesystem(Io("), "{error}");
         assert!(error.contains("NotFound"), "{error}");
-        assert!(error.contains("zxs-rescue:"), "{error}");
+        assert!(error.contains("zxs-helper:"), "{error}");
         let engine = Engine::open_for_recovery(&root).unwrap();
         assert!(engine.is_read_only());
         assert!(engine.state().repositories.is_empty());
@@ -137,7 +167,7 @@ fn recovery_commands_report_returned_engine_seal_failure_once_before_command_rej
 #[test]
 fn package_restore_rejects_zero_copies_before_opening_pool_or_package() {
     let directory = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .current_dir(directory.path())
         .args([
             "package",
@@ -201,7 +231,7 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
         ]
     };
     let rejected = directory.path().join("rejected");
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .arg("--root")
         .arg(&rejected)
         .args(["restore-system", "--disks"])
@@ -212,7 +242,7 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
     assert!(!output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("CONFIG_INVALID"));
     assert!(!rejected.join("config.json").exists());
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .arg("--root")
         .arg(&replacement)
         .args(["restore-system", "--disks"])
@@ -283,7 +313,7 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     drop(engine);
     let package = directory.path().join("package");
     let invoke = |root: &std::path::Path, args: &[&std::ffi::OsStr]| {
-        Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
             .arg("--root")
             .arg(root)
             .arg("package")
@@ -368,7 +398,7 @@ fn configuration_commands_edit_only_an_uninitialized_draft() {
         directory.join("b"),
         directory.join("c"),
     ];
-    let binary = env!("CARGO_BIN_EXE_zxs-rescue");
+    let binary = env!("CARGO_BIN_EXE_zxs-helper");
     let result = Command::new(binary)
         .args(["configuration", "template", "--disks"])
         .args(&disks)
@@ -421,7 +451,7 @@ fn configuration_commands_edit_only_an_uninitialized_draft() {
 fn template_cli_accepts_one_disk_and_rejects_no_disks() {
     let directory = tempfile::tempdir().unwrap();
     let disk = directory.path().join("only");
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .args(["configuration", "template", "--disks"])
         .arg(&disk)
         .output()
@@ -435,7 +465,7 @@ fn template_cli_accepts_one_disk_and_rejects_no_disks() {
     assert_eq!(config.disks.len(), 1);
     assert_eq!(config.disks[0].level, 1);
     assert!(!disk.exists());
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .args(["configuration", "template", "--disks"])
         .output()
         .unwrap();
@@ -459,7 +489,7 @@ fn invalid_retained_workspace_flags_do_not_create_state() {
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("pool");
-        let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
             .arg("--root")
             .arg(&root)
             .args(["package", "export", "history"])
@@ -490,7 +520,7 @@ fn malformed_operation_id_is_rejected_before_opening_the_pool() {
             "op_BAD",
         ],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
             .arg("--root")
             .arg(&root)
             .args(args)
@@ -524,7 +554,7 @@ fn scrub_is_a_real_exclusive_offline_consumer_with_explicit_partial_failure() {
         )
         .unwrap();
     let invoke = || {
-        Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
             .arg("--root")
             .arg(&root)
             .arg("scrub")
@@ -558,7 +588,7 @@ fn scrub_is_a_real_exclusive_offline_consumer_with_explicit_partial_failure() {
 fn scrub_cannot_turn_a_failed_open_into_a_healthy_report() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("absent-system");
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .arg("--root")
         .arg(&root)
         .arg("scrub")
@@ -572,7 +602,7 @@ fn scrub_cannot_turn_a_failed_open_into_a_healthy_report() {
 #[test]
 fn scrub_help_describes_offline_scan_without_opening_pool() {
     let directory = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .current_dir(directory.path())
         .args(["scrub", "--help"])
         .output()
@@ -585,7 +615,7 @@ fn scrub_help_describes_offline_scan_without_opening_pool() {
             "Scan retained publication metadata and required full copies; stop ZXS first"
         )
     );
-    assert!(help.contains("Usage: zxs-rescue scrub [OPTIONS]"));
+    assert!(help.contains("Usage: zxs-helper scrub [OPTIONS]"));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
@@ -597,7 +627,7 @@ fn offline_export_rejects_non_utf8_receipt_paths_before_io() {
     let destination = directory
         .path()
         .join(OsString::from_vec(b"export-\xff".to_vec()));
-    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .arg("offline-export")
         .arg(directory.path().join("missing-disk"))
         .arg("ver_00000000000000000000000000000000")
@@ -661,7 +691,7 @@ fn offline_export_receipt_paths_are_admitted_before_publishing_verified_bytes() 
         .version_id;
     drop(engine);
     let invoke = |destination: &std::path::Path| {
-        Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
             .arg("offline-export")
             .arg(&disk)
             .arg(&version)

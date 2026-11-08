@@ -1,5 +1,7 @@
 # ZXS Web 与 SMB 发布
 
+**发行目标已修订，流水线尚待迁移：** 公开产物最终只保留源码归档、SHA256 文件、`zxs-helper` 可执行文件和 `zxs` 可执行产物四类；不再单独发布文档或安装包。匹配的 ZXS 安装/修复载荷及必要 VFS/收据须内置辅助工具，许可与来源材料仍随源码或内置载荷完整提供。参见[辅助工具打包边界](design/helper-disk-management.md)。下文七文件集合描述当前脚本而非新的发行完成标准；本改名切片没有实现内嵌载荷或四类资产流水线，不据此发布为已满足新目标的版本。
+
 当前业务入口为 Web 和 SMB。Debian 13 amd64 服务端使用单个 `zxs` ELF 提供业务 API、内嵌 Web 和本地 Samba 桥接；系统 apt Samba 使用精确匹配的独立 `zxs.so`，不内嵌或自动管理 smbd。
 
 每次发行前须逐项核对[发行验收清单](validation/release-checklist.md)，明确区分自动门禁、目标环境实测和仍未关闭的发行阻断项。
@@ -22,7 +24,7 @@
 
 - `zxs-VERSION-debian13-amd64`：Debian 13 amd64 的单个原生 ELF，内嵌正式 Web；运行无需旁置静态目录。
 - `zxs-vfs-VERSION-debian13-amd64.so`：与 `VFS-BUILD.json` 所记 Debian Samba 包精确匹配的独立模块。Samba 服务由系统提供，不打包进 ZXS。
-- `zxs-materials-VERSION.tar.gz`：完整 `docs/`、根说明、中央 `compliance/`、部署模板及可选离线救援工具 `zxs-rescue`。资料归档不是主程序，也不是启动时必须解压的运行依赖。
+- `zxs-materials-VERSION.tar.gz`：完整 `docs/`、根说明、中央 `compliance/`、部署模板及可选离线辅助工具 `zxs-helper`。资料归档不是主程序，也不是启动时必须解压的运行依赖。
 - `VFS-BUILD.json`：Debian 源码及补丁、系统包版本、ABI、源码身份和模块摘要收据。
 - `INSTALL.md`、`BUILD.txt`、`SHA256SUMS`：安装与重建说明、原生程序及内嵌 Web 的源码/构建身份、全部其他资产摘要。
 

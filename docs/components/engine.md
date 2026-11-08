@@ -35,7 +35,7 @@
 
 ## 显式逐盘格式切片
 
-`disk_authority.rs` 与 `disk_authority/` 为独立新格式提供真实持久日志、文件版本链、来源 checkpoint 备份和可重建系统投影，写入调用方是 `zxs-rescue authority`；管理面的独立盘预览只读消费已验证来源图和本盘保留版本清单。它不接入当前 Engine 的池 State、命名空间或在线写者准入。边界、命令、恢复与未切换消费者见[逐盘权威切片](../design/independent-disk-journal.md)。
+`disk_authority.rs` 与 `disk_authority/` 为独立新格式提供真实持久日志、文件版本链、来源 checkpoint 备份和可重建系统投影，写入调用方是 `zxs-helper authority`；管理面的独立盘预览只读消费已验证来源图和本盘保留版本清单。它不接入当前 Engine 的池 State、命名空间或在线写者准入。边界、命令、恢复与未切换消费者见[逐盘权威切片](../design/independent-disk-journal.md)。
 
 ## 权威数据与投影
 

@@ -12,7 +12,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = "x86_64-unknown-linux-gnu"
-CONSUMERS = ("storage-client", "storage-server", "storage-engine", "storage-rescue",
+CONSUMERS = ("storage-client", "storage-server", "storage-engine", "storage-helper",
              "platform-io", "perf-check", "browser-smoke")
 EDGES = ("normal,build", "normal,build,dev")
 
@@ -25,9 +25,9 @@ def validate(output, consumer, edges):
             selected.setdefault(match[1], []).append(set(filter(None, match[2].split(","))))
     required = {"rustix"}
     if consumer in {"storage-server", "browser-smoke"} or (
-            consumer == "storage-rescue" and edges == "normal,build,dev"):
+            consumer == "storage-helper" and edges == "normal,build,dev"):
         required.add("http-routing")
-    if consumer in {"storage-engine", "storage-server", "storage-rescue", "perf-check", "browser-smoke"}:
+    if consumer in {"storage-engine", "storage-server", "storage-helper", "perf-check", "browser-smoke"}:
         required.add("storage-engine")
     missing = required - selected.keys()
     if missing:

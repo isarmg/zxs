@@ -47,7 +47,7 @@ case "${1:-}" in
     # the Samba SDK module have dedicated suites in this same workspace.
     python3 .github/scripts/check-native-consumer-features.py
     # Compile the hook-free product graph separately from dev feature unification.
-    cargo check --locked --offline -p storage-engine -p storage-server -p storage-rescue
+    cargo check --locked --offline -p storage-engine -p storage-server -p storage-helper
     cargo check --locked --offline -p storage-server --no-default-features --all-targets
     cargo test --locked --offline
     python3 .github/scripts/check-history-object-io.py
@@ -59,7 +59,7 @@ case "${1:-}" in
     python3 .github/scripts/check-entropy-fault-io.py
     python3 .github/scripts/check-telemetry-enumeration-io.py
     python3 .github/scripts/check-disk-observation-io.py
-    python3 .github/scripts/check-rescue-publication-io.py
+    python3 .github/scripts/check-helper-publication-io.py
     python3 .github/scripts/check-independent-disk-publication-io.py
     cargo test --locked --offline -p storage-engine --lib \
       history_package::graph::tests::distributed_history_larger_than_real_reader_limit_roundtrips \
@@ -129,7 +129,7 @@ case "${1:-}" in
     python3 .github/scripts/check-csr-scope.py
     ;;
   browser-smoke)
-    cargo build --locked --offline -p storage-server -p storage-rescue
+    cargo build --locked --offline -p storage-server -p storage-helper
     cargo test --locked --offline -p browser-smoke
     screenshot_args=()
     if [[ -n "${ZXS_SMOKE_SCREENSHOT:-}" ]]; then

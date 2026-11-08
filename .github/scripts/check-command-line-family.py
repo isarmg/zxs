@@ -84,7 +84,7 @@ def check(root):
     assert "similarity::jaro(v, pv.as_ref())" in suggestions.read_text(), "suggestions bypass moved Jaro implementation"
     assert "mod lexer;" in runtime.read_text(), "missing private lexer module"
     assert "pub mod lexer" not in runtime.read_text(), "lexer exposed as separate public API"
-    for base in ("src", "tools", "rescue"):
+    for base in ("src", "tools", "helper"):
         for manifest in (root / base).rglob("Cargo.toml"):
             reject_dependency_aliases(tomllib.loads(manifest.read_text()))
 
@@ -117,7 +117,7 @@ def check(root):
             r'is_ident\("(?:clap|structopt|command_line)"\)', attributes.read_text()
         ), "legacy helper parser branch"
 
-    for relative in ("src/server/src/main.rs", "rescue/src/main.rs"):
+    for relative in ("src/server/src/main.rs", "helper/src/main.rs"):
         source = root / relative
         assert "command_line::" in source.read_text(), f"unmigrated consumer: {source}"
     catalog = json.loads((root / "compliance/rust-sources.json").read_text())
@@ -330,7 +330,7 @@ fn debug_error_contains_real_backtrace() {
 
 def check_consumers(root):
     subprocess.run(
-        cargo_command("build", "-p", "storage-server", "-p", "storage-rescue", "-p", "web-build"),
+        cargo_command("build", "-p", "storage-server", "-p", "storage-helper", "-p", "web-build"),
         cwd=root,
         check=True,
     )
@@ -361,7 +361,7 @@ def check_consumers(root):
         expected = (case["code"], case["stdout"], case["stderr"])
         actual = (result.returncode, result.stdout, result.stderr)
         assert actual == expected, f'CLI contract drift: {case["binary"]} {case["args"]}'
-    print("actual daemon/rescue/web-build CLI outputs and exit statuses match fixed baseline")
+    print("actual daemon/helper/web-build CLI outputs and exit statuses match fixed baseline")
 
 
 def main():

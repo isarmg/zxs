@@ -11,7 +11,7 @@
 先按 [Web 界面构建说明](../components/web.md#web-build)构建真实 `build/web`，并构建 CLI：
 
 ```sh
-cargo build --locked --offline -p storage-server -p storage-rescue
+cargo build --locked --offline -p storage-server -p storage-helper
 export CHROME_BIN="$(command -v google-chrome)"
 export CHROMEDRIVER="$(command -v chromedriver)"
 cargo run --locked --offline -p browser-smoke -- \

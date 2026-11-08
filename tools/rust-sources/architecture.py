@@ -20,7 +20,7 @@ def cell(text):
 
 def manifests(root):
     paths = [root / 'Cargo.toml']
-    for base in ('src', 'tools', 'rescue'):
+    for base in ('src', 'tools', 'helper'):
         paths.extend((root / base).rglob('Cargo.toml'))
     return {path.relative_to(root).as_posix(): tomllib.loads(path.read_text(encoding='utf-8'))
             for path in sorted(set(paths))}
@@ -62,7 +62,7 @@ def document(root, catalog, policy):
         '功能列表来自整个工作区统一特性后的保守闭包，直接 dev 边虽不遍历，dev 激活的功能仍可能扩大闭包。'
         'runtime/compile 是维护角色，不证明最终链接或单消费者实际编译输入。', '',
         '```mermaid', 'flowchart TD',
-        '  native[Linux amd64 产品] --> storage[auth / contract / platform / engine / server / client / rescue]',
+        '  native[Linux amd64 产品] --> storage[auth / contract / platform / engine / server / client / helper]',
         '  smb[Samba SDK 与协议] --> storage',
         '  browser[浏览器 WASM] --> web[web / interface]',
         '  web --> macros[macros 宿主过程宏]',

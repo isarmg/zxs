@@ -1,10 +1,10 @@
 # 逐盘权威的离线存储切片
 
-[存储核心](../components/engine.md) · [离线工具](../components/rescue.md) · [架构决策](../adr/0015-independent-disk-journal.md)
+[存储核心](../components/engine.md) · [离线工具](../components/helper.md) · [架构决策](../adr/0015-independent-disk-journal.md)
 
 ## 当前接线与边界
 
-本分支提供显式选择的 `independent-disk-journal` 格式。真实调用链是 `zxs-rescue authority` → `storage_engine::disk_authority::IndependentDisk` → 本盘持久意图、不可变文件和发布决定。它不是旧池旁的 sidecar，也不借旧池 quorum 决定本盘成功。调用方必须停止所有相关写者，工具只提供本机排它锁，不提供跨主机围栏、在线用户会话或管理面授权。
+本分支提供显式选择的 `independent-disk-journal` 格式。真实调用链是 `zxs-helper authority` → `storage_engine::disk_authority::IndependentDisk` → 本盘持久意图、不可变文件和发布决定。它不是旧池旁的 sidecar，也不借旧池 quorum 决定本盘成功。调用方必须停止所有相关写者，工具只提供本机排它锁，不提供跨主机围栏、在线用户会话或管理面授权。
 
 尚未切换的消费者包括当前 `Engine` 的 State、目录命名空间、文件分支/目录 Git、自动备份、在线恢复、HTTP/SMB 写入和原系统 SQLite。这个切片不能作为已完成生产逐盘架构、外来盘迁入向导或当前池接纳的声明。新格式不读取 managed-directory、membership-generation 或独立协议实验格式，不补 incarnation，不迁移或重置已有目录。
 
@@ -48,30 +48,33 @@ SQLite 读取先从已持有且验证的 FD 读取有界字节，再以只读 de
 
 ```sh
 # 只初始化新空目录，不转换当前运行池。
-zxs-rescue authority initialize /srv/new-independent-disk identity.json --accept-new-format
-zxs-rescue authority inspect selection.json
+zxs-helper authority initialize /srv/new-independent-disk identity.json --accept-new-format
+zxs-helper authority inspect selection.json
+zxs-helper authority check selection.json
 
 # 先只读审核，再以完全一致摘要显式执行。
-zxs-rescue authority review-file selection.json OPERATION_ID \
+zxs-helper authority review-file selection.json OPERATION_ID \
   --base empty --history HISTORY --file FILE input.bin
-zxs-rescue authority publish-file selection.json OPERATION_ID \
+zxs-helper authority publish-file selection.json OPERATION_ID \
   --base empty --history HISTORY --file FILE input.bin \
   --request-digest REVIEWED_DIGEST --confirm-write
 
-zxs-rescue authority review-backup backup-selection.json OPERATION_ID \
+zxs-helper authority review-backup backup-selection.json OPERATION_ID \
   --base empty source-selections.json
-zxs-rescue authority publish-backup backup-selection.json OPERATION_ID \
+zxs-helper authority publish-backup backup-selection.json OPERATION_ID \
   --base empty source-selections.json --request-digest REVIEWED_DIGEST --confirm-write
 
-zxs-rescue authority status selection.json OPERATION_ID
-zxs-rescue authority resume selection.json OPERATION_ID \
+zxs-helper authority status selection.json OPERATION_ID
+zxs-helper authority resume selection.json OPERATION_ID \
   --request-digest REVIEWED_DIGEST --confirm-write
 # 父目录须预先存在、由当前用户持有且权限为 0700；命令不会替用户改权限。
-zxs-rescue authority rebuild-projection /srv/private-projections/cache selections.json
-zxs-rescue authority export selection.json COMMIT_DIGEST /srv/export/new-file
+zxs-helper authority rebuild-projection /srv/private-projections/cache selections.json
+zxs-helper authority export selection.json COMMIT_DIGEST /srv/export/new-file
 ```
 
 `--base empty` 只用于零发布盘；否则提供准确本盘 checkpoint。输入变化、目标推进或物理来源选择变化都要求新 review。export 先核验完整元数据发布链、身份和已知 pin，证明所选 commit 可达且 owner/history/file/body 绑定正确，再只读验该版本的独立 FULL 文件并拒绝覆盖。未读取的其他正文不会输出可用性或产生写能力；report、备份审核和写入/恢复仍保持完整正文核验。缺正文返回暂不可用错误，不创建空文件。
+
+`check` 是独立的离线诊断入口：先得到完整核验的元数据捕获，再逐份核对本地保留 FULL。正文缺失或长度/摘要损坏保留为逐项诊断，不遮蔽其它可验证版本；IO、不安全文件、身份/元数据或预算失败仍拒绝整个报告，不能降级成正常缺失。所有成功读入（包括损坏正文）的实际字节与捕获元数据按原 16 MiB 材料额度累计准入，首次超额即失败，后续不再读正文，也不输出部分成功；单次读仍受原单文件上限约束。一次只保留一份正文，读取失败立即停止。最终再次核对持有的盘及子目录身份。报告保留具体 checkpoint、来源 incarnation 和独立 commit，不选择当前所有者、不合并同正文版本、不生成写入能力。它是停服期间的区间观测，不证明随后未改变，也不扫描未发布候选和未知孤儿。CLI 输出/退出语义见[逐版本检查](../components/helper.md#independent-content-check)。
 
 ## 资源、故障与后续接入
 
@@ -81,7 +84,7 @@ zxs-rescue authority export selection.json COMMIT_DIGEST /srv/export/new-file
 
 CI 的既有 workspace I/O 链调用[独立盘发布验收入口](../../.github/scripts/check-independent-disk-publication-io.py)，从本次 Cargo 输出选择唯一当前 libtest，再运行[真实 fsync 驱动](../../test/engine/unit/disk_authority/publication-io.sh)。这个 ignored 用例必须由该入口明确执行；缺少注入完成标记、零执行、重复完成、子进程失败或缺少当前产物均使门禁失败，不按权限或环境静默跳过。
 
-后续在线接入必须先给新格式定义真实 owner/会话授权、跨主机写者隔离、完整产品历史和 namespace 发布、保护目标与跨盘完成判定、目录转换和恢复准入。三级转二级还必须证明所选当前一级已接纳全部将声明为其备份的历史。不能把原一级来源四元组直接替换成任选的当前一级。
+正式接入改归离线辅助工具，须先给新格式定义真实操作 owner/授权、跨主机写者隔离、完整产品历史和 namespace 发布、保护目标与跨盘完成判定、目录转换及到正常服务的完整恢复准入。外来二级及以上必须同批显式设置并纳入全部所需低级链，三级包含二级和一级；不允许虚占位、先接高层后另补低层，也不能借改变角色绕过完整链证明。不能把原一级来源四元组直接替换成任选的当前一级。只读检查和隔离导出不等于接入，仍不依赖低层盘同时在场。
 
 ## 初始化权威互斥
 

@@ -39,7 +39,7 @@ class EmbeddedWeb(unittest.TestCase):
             MODULE.generate(self.root, self.out)
 
     def test_snapshot_is_exact_source_bound_and_independent_of_later_asset_changes(self):
-        for name in ('zxs', 'zxs-rescue'):
+        for name in ('zxs', 'zxs-helper'):
             (self.root / 'target/native/x86_64-unknown-linux-gnu/release' / name).unlink()
         self.generate()
         generated = (self.out / 'embedded_web.rs').read_text()
