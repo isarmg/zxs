@@ -25,4 +25,6 @@
 | [递归备份空 scope 目录发布](empty-directory-backup-publication.md) | 有限实现；仅元数据成员目标，Server/Web 提供显式入口 | 第 08、09、10 章及递归备份、冷恢复边界 |
 | [显式递归备份的命名空间路径跟随](recursive-namespace-follow.md) | 有限实现设计；实际验证另行绑定源码与证据 | 递归备份、原生请求闭合、永久重试及冷恢复边界 |
 
+| [在线单文件历史 fork](online-file-history-copy.md) | 有限 Engine 入口；不表示 SMB/目录递归已接线 | 第 10、11 章及完整历史、独立副本、原操作恢复边界 |
+
 决策文档只保留当前背景、选择、代价、替代方案与关联规则，不追加实施进度或构建日志。

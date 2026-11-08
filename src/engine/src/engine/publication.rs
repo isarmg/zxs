@@ -898,6 +898,7 @@ impl crate::engine::PlanningContext<'_> {
             // The State proof above cannot constrain Prepared. Bind every copy
             // before the first existing-body probe or any payload preparation.
             view.verify_backup_prepared(self.state, &next, &result, &prepared)?;
+            view.verify_history_copy_prepared(self.state, &next, &result, &prepared)?;
         }
         let metadata_epoch = self.metadata_integrity.capture();
         let members = self.members();

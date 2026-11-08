@@ -95,3 +95,7 @@ path = "../../test/engine/integration/directory_layout_recovery_boundaries.rs"
 [[test]]
 name = "content_matches"
 path = "../../test/engine/integration/content_matches.rs"
+
+[[test]]
+name = "file_history_copy"
+path = "../../test/engine/integration/file_history_copy.rs"

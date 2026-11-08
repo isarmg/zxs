@@ -17,6 +17,7 @@ mod directory_staging;
 mod file_branches;
 mod file_synchronization;
 mod file_tags;
+mod history_copy;
 mod history_merges;
 mod merge_links;
 mod new_scope;
@@ -210,7 +211,8 @@ impl CurrentNamespaces {
         // Imports without an exact current occurrence proof remain fenced.
         // Admitted planners must verify their own projected sources and
         // reference closure before a resulting state can be published.
-        if kind == "repository.create"
+        if kind == crate::business::history_copy::KIND
+            || kind == "repository.create"
             || kind == "workspace.commit"
             || kind == "workspace.namespace.admit"
             || kind == "directory.import.stop"
@@ -505,6 +507,9 @@ impl CurrentNamespaces {
     /// Derived only before a real publication. Ordinary publication installs the
     /// result atomically with its State; failure leaves the previous view intact.
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
+        if let Some(view) = self.advance_history_copy(previous, next)? {
+            return Ok(view);
+        }
         crate::file_deletion::publication::verify(previous, next, Some(self))?;
         crate::file_deletion::freeze::verify(previous, next)?;
         self.verify_path_notes(previous, next)?;

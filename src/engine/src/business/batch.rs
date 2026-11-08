@@ -95,7 +95,11 @@ pub(crate) fn separated_file_source<'a>(
     Ok(secondary)
 }
 
-fn require_completed_file_saves(engine: &Engine, state: &State, history: &str) -> Result<()> {
+pub(super) fn require_completed_file_saves(
+    engine: &Engine,
+    state: &State,
+    history: &str,
+) -> Result<()> {
     // Open and sealed workspaces are resident; only completed/empty-aborted
     // records may be cold. Do not silently copy an older committed body while
     // a workspace can still contain the secondary occurrence's newer save.

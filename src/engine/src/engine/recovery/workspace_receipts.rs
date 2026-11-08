@@ -279,6 +279,7 @@ impl Engine {
             && let Some(snapshot) = &snapshot
         {
             CurrentNamespaces::reject_degraded_backup(&candidate, &snapshot.share_state())?;
+            CurrentNamespaces::reject_degraded_history_copy(&candidate, &snapshot.share_state())?;
         }
         Ok(PreparedCandidate {
             candidate,
@@ -374,7 +375,9 @@ fn verify_current_candidate_transition(
 ) -> Result<CurrentNamespaces> {
     let advanced = view.advance(previous, next)?;
     verify_current_candidate_receipt(candidate, next)?;
-    if !view.verify_backup_candidate_payloads(previous, next, candidate)? {
+    if !view.verify_backup_candidate_payloads(previous, next, candidate)?
+        && !view.verify_history_copy_candidate(previous, next, candidate)?
+    {
         super::payload_admission::verify(view, &advanced, previous, next, candidate)?;
     }
     Ok(advanced)

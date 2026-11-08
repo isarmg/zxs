@@ -19,6 +19,7 @@
 | `directory_conversion/` | [磁盘向导普通目录转换](engine/src/directory_conversion.md)：只读预览、非覆盖导入和显式当前视图导出，不接纳外来 ZXS 历史 |
 | `foreign_import/migration/` | [外来历史离线迁入包](engine/src/foreign_migration.md)：精确来源分组、完整独立副本、非覆盖发布和断点恢复；不是活动池接纳 |
 | `business/` | 仓库、命名空间、上传、文件分支、目录批量分支与历史查询 |
+| `business/history_copy.rs`、`engine/disk_registry/current/history_copy.rs` | 单文件在线历史 fork、精确写集重放及独立正文来源／候选向量准入；范围见[写入语义](../11-write-semantics.md) |
 | `business/namespace.rs` | 路径校验、父目录约束、命名空间改动与工作区冲突规则 |
 | `business/namespace/draft.rs` | 工作区提交内的临时路径索引与保序条目草稿，不用于读取或持久缓存 |
 | `business/ancestry.rs` | 基于子节点索引的提交后代查询，供拆分与历史包校验复用 |
