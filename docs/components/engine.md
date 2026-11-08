@@ -276,3 +276,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ## 受限终态 registry successor
 
 原 terminal authority 不被覆盖。`disk_lifecycle/terminal/retirement/completion.rs` 从其原选定请求发布第一笔管理登记后继，逐步落原生 successor、bootstrap Stop、真实进程 I/O 排除和完成记录，再重建永久结果与当前登记投影。`TerminalRegistry` 的该类型不能被现有 metadata-resume 消费；保留全部历史定义/原 occurrence masks，不伪造新活动 mask。当前仅已记录且未 Stop 绑定的一次后继，第二次和已 Stop 生命周期拒绝。源码未验证，详见[协议与成本](../design/terminal-retirement-successor.md)。
+
+## 逐笔终态登记链与既有关闭生命周期
+
+终态后继由原完成摘要与下一完整 intent 的不可变链接串行扩展，不替换 selector，不扫描孤立目录来推断操作。冷态按准确链重建 registry/永久回执并持有每个已关闭盘的进程排除；未决下一笔不抹掉前面的已完成结果。Disabled 绑定仅在原 final-voter/历史 portable authority、原 Stop 和当前 epoch 全部匹配后重用关闭屏障，不重复追加 Stop 或执行新 PlannedOffline。metadata resume/活动命名空间仍硬拒绝，详见[协议、恢复和成本](../design/terminal-retirement-chain.md)。未审查/编译/测试/CI。

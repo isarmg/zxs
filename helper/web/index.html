@@ -133,20 +133,20 @@
         <button type="submit">确认注销并保留盘字节 / 继续原操作</button>
       </form>
       <pre id="disk-remove-result" hidden></pre>
-      <p class="muted">只有原生 D3 与永久回执核验后才返回 Completed。失败或断连可能已部分或全部发布，在结果不明时不要拔盘、删证据或换编号重做。只能继续原操作；终态下可核对原永久回执，检查剩余登记的准确 authority/registry 边界。下方单独提供受限的首笔终态后继，不自动恢复活动存储。检查摘要不是操作或准入令牌，不创建注销意图。本片没有失败自动回滚、外来完整链接纳或完整系统就绪证明。</p>
+      <p class="muted">只有原生 D3 与永久回执核验后才返回 Completed。失败或断连可能已部分或全部发布，在结果不明时不要拔盘、删证据或换编号重做。只能继续原操作；终态下可核对原永久回执，检查剩余登记的准确 authority/registry 边界。下方单独提供逐笔终态后继，不自动恢复活动存储。检查摘要不是操作或准入令牌，不创建注销意图。本片没有失败自动回滚、外来完整链接纳或完整系统就绪证明。</p>
     </section>
     <section class="card">
-      <h2>终态管理：首笔剩余登记移除</h2>
-      <p class="warning">当前仅支持原终态权威下第一笔、bootstrap 已记录且尚未 Stop 的绑定。必须先在上方读取并选择终态登记。完成后登记移除、保存永久结果及 Stop/D3，但尚不能再移除另一成员或恢复元数据/活动存储。已 Stop 的 Disabled 成员明确拒绝。不要用此操作替代外来盘接纳、擦盘或完整迁移。</p>
-      <button id="terminal-retire-preview" type="button">按上方选择预览首笔终态移除</button>
+      <h2>终态管理：逐笔剩余登记移除</h2>
+      <p class="warning">每笔必须基于上一笔已完成的精确 registry/永久结果，先在上方重新读取并选择实际剩余登记。已 Stop 的 Disabled 绑定必须同时验证原固定权威、Stop 操作和当前生命周期，单独标志不能证明安全。完成后可以另行预览下一登记，但仍不能恢复元数据或活动存储。不要用此操作替代外来盘接纳、擦盘或完整迁移。</p>
+      <button id="terminal-retire-preview" type="button">按上方选择预览该笔终态移除</button>
       <label>中断后终态原摘要 <input id="terminal-retire-digest" maxlength="64" autocomplete="off" spellcheck="false"></label>
       <button id="terminal-retire-original" class="secondary" type="button">核对原终态计划 / 永久结果</button>
       <pre id="terminal-retire-plan" hidden></pre>
       <button id="terminal-retire-save" class="secondary" type="button" hidden>保存原终态计划</button>
       <form id="terminal-retire-commit" hidden>
         <label class="ack"><input id="terminal-retire-loss" type="checkbox" required> 已核对准确原盘/slot/绑定/来源与摘要，接受登记和当前访问丢失；物理字节保留不等于可完整恢复。</label>
-        <label class="ack"><input id="terminal-retire-restart" type="checkbox" required> 我确认本阶段完成后仍不支持元数据恢复、活动存储重启或第二笔终态移除，不清理原证据。</label>
-        <button type="submit">确认首笔终态移除 / 继续同一原操作</button>
+        <label class="ack"><input id="terminal-retire-restart" type="checkbox" required> 我确认本阶段完成后仍不支持元数据恢复、活动存储重启，不清理原证据。</label>
+        <button type="submit">确认该笔终态移除 / 继续同一原操作</button>
       </form>
       <pre id="terminal-retire-result" hidden></pre>
     </section>

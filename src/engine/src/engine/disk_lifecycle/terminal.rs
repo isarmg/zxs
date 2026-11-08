@@ -54,6 +54,9 @@ pub struct TerminalManagement {
     result: OperationResult,
     retirement_base_state: Arc<State>,
     retirement_completion: Option<retirement::Completed>,
+    retirement_history: Vec<retirement::HistoricalCompleted>,
+    retirement_base_registry: Option<TerminalRegistry>,
+    retirement_directory: Option<DiskRoot>,
     _locks: WriterLocks,
     _target_stop: RecoveredDiskIo,
 }
@@ -237,6 +240,9 @@ impl TerminalManagement {
             verified,
             retirement_base_state: Arc::clone(&state),
             retirement_completion: None,
+            retirement_history: Vec::new(),
+            retirement_base_registry: None,
+            retirement_directory: None,
             state,
             result,
             _locks: locks,
@@ -275,7 +281,7 @@ impl TerminalManagement {
         self.retirement_completion
             .as_ref()
             .map(|completed| &completed.registry)
-            .unwrap_or(&self.verified.registry)
+            .unwrap_or_else(|| self.retirement_base_registry())
     }
     pub fn result(&self) -> &OperationResult {
         &self.result
@@ -336,6 +342,7 @@ impl TerminalManagement {
     }
 
     pub(in crate::engine) fn refresh_cancelled_resume_results(&mut self) -> Result<()> {
+        self.require_no_terminal_retirement()?;
         let attempts =
             crate::engine::membership_transition::terminal_resume::cancellation::attempts::load(
                 self.system_root(),

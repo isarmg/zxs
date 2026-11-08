@@ -507,3 +507,33 @@ fn terminal_continues_prior_exit_authority_and_replayed_occurrence_history() {
         assert_eq!(reopened.operation(result.operation_id), Some(result));
     }
 }
+
+#[test]
+fn historical_disabled_terminal_binding_can_be_removed_without_rewriting_its_stop_lifetime() {
+    // Uses the existing historical PlannedOffline fixture. This is not a new
+    // helper/HTTP PlannedOffline action or a claim that this source test ran.
+    let mut fixture = Fixture::new(0);
+    let mut exit = fixture.begin(MembershipExitAction::PlannedOffline);
+    let mut management = exit.complete(&mut fixture.engine).unwrap();
+    drop(exit);
+    let root = fixture.system();
+    let disk = fixture.config.disks[0].clone();
+    let records_before = files(&root.join("bootstrap-discovery"));
+    drop(fixture.engine);
+    fs::rename(&disk.root, disk.root.with_extension("unplugged")).unwrap();
+    let plan = management
+        .preview_terminal_retirement(&disk.disk_id, "admin", OperationId::generate().unwrap())
+        .unwrap();
+    let result = management.complete_terminal_retirement(&plan).unwrap();
+    assert_eq!(management.registered_disks().len(), 0);
+    assert_eq!(files(&root.join("bootstrap-discovery")), records_before);
+    assert!(!disk.root.exists());
+    drop(management);
+    let cold = TerminalManagement::open(&root).unwrap();
+    assert_eq!(
+        cold.terminal_retirement_result("admin", plan.operation_id(), plan.digest())
+            .unwrap(),
+        Some(result)
+    );
+    assert_eq!(cold.registered_disks().len(), 0);
+}

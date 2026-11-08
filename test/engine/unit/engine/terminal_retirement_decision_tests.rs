@@ -278,7 +278,7 @@ fn first_terminal_successor_completes_stop_and_receipt_without_any_target_probe(
                 "admin",
                 OperationId::generate().unwrap()
             )
-            .is_err()
+            .is_ok()
     );
     assert!(fixture.terminal.writer_locks().is_err());
     let root = fixture.system();
@@ -358,5 +358,152 @@ fn final_marker_without_its_native_stop_is_corruption_not_completed_or_empty() {
     drop(fixture.terminal);
     assert!(TerminalManagement::open(&root).is_err());
     assert!(TerminalManagement::requires_management(&root).unwrap());
+    assert!(Engine::open(&root).is_err());
+}
+
+#[test]
+fn linked_retirements_cold_resume_to_empty_registry_keep_every_exact_original_receipt() {
+    let mut fixture = Fixture::new();
+    let first = fixture.plan();
+    let first_result = fixture
+        .terminal
+        .complete_terminal_retirement(&first)
+        .unwrap();
+    let second = fixture
+        .terminal
+        .preview_terminal_retirement(
+            &fixture.config.disks[2].disk_id,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    fixture.terminal.stage_terminal_retirement(&second).unwrap();
+    assert_eq!(fixture.terminal.registered_disks().len(), 1);
+    assert_eq!(
+        fixture.terminal.completed_terminal_retirement(),
+        Some(&first_result)
+    );
+    assert_eq!(
+        fixture
+            .terminal
+            .terminal_retirement_status()
+            .unwrap()
+            .unwrap()
+            .operation_id,
+        second.operation_id()
+    );
+    for disk in &fixture.config.disks {
+        fs::rename(&disk.root, disk.root.with_extension("removed")).unwrap();
+        fs::write(&disk.root, b"all old addresses are non-directories").unwrap();
+    }
+    let root = fixture.system();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&root).unwrap();
+    assert_eq!(
+        cold.terminal_retirement_result("admin", first.operation_id(), first.digest())
+            .unwrap(),
+        Some(first_result.clone())
+    );
+    let original_second = cold
+        .original_terminal_retirement("admin", second.operation_id(), second.digest())
+        .unwrap();
+    let second_result = cold.complete_terminal_retirement(&original_second).unwrap();
+    assert_eq!(second_result.sequence, first_result.sequence + 1);
+    assert_eq!(cold.registered_disks().len(), 0);
+    assert_eq!(cold.registry().historical_topology().len(), 3);
+    let original_first = cold
+        .original_terminal_retirement("admin", first.operation_id(), first.digest())
+        .unwrap();
+    assert_eq!(
+        cold.complete_terminal_retirement(&original_first).unwrap(),
+        first_result
+    );
+    assert_eq!(cold.state().sequence, second_result.sequence);
+    assert!(
+        cold.original_terminal_retirement("other", first.operation_id(), first.digest())
+            .is_err()
+    );
+    assert!(cold.writer_locks().is_err());
+    drop(cold);
+    let reopened = TerminalManagement::open(&root).unwrap();
+    assert_eq!(
+        reopened.status().registrations,
+        super::super::TerminalRegistrationState::EmptyRegistry
+    );
+    assert_eq!(
+        reopened.operation(second.operation_id()),
+        Some(&second_result)
+    );
+    assert_eq!(
+        reopened.operation(first.operation_id()),
+        Some(&first_result)
+    );
+}
+
+#[test]
+fn durable_next_intent_recovers_missing_child_without_choosing_another_operation() {
+    let mut fixture = Fixture::new();
+    let first = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&first)
+        .unwrap();
+    let next = fixture
+        .terminal
+        .preview_terminal_retirement(
+            &fixture.config.disks[2].disk_id,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let directory = fixture.terminal.store.operation();
+    let complete: json_codec::Value = crate::decode_strict(
+        &directory
+            .read_bytes(
+                &directory.path().join(completion::COMPLETE),
+                crate::disk::MAX_METADATA,
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let link = json_codec::json!({"format":"terminal-registration-retirement",
+        "predecessor_completion":object_hash("terminal-retirement-completion", &complete).unwrap(),
+        "intent":next.intent,"intent_digest":next.digest});
+    directory
+        .write_json(&directory.path().join(chain::NEXT), &link, false)
+        .unwrap();
+    let root = fixture.system();
+    drop(fixture.terminal);
+    let mut cold = TerminalManagement::open(&root).unwrap();
+    let original = cold
+        .original_terminal_retirement("admin", next.operation_id(), next.digest())
+        .unwrap();
+    assert_eq!(cold.registered_disks().len(), 1);
+    cold.complete_terminal_retirement(&original).unwrap();
+    assert_eq!(cold.registered_disks().len(), 0);
+}
+
+#[test]
+fn unrelated_terminal_child_is_not_adopted_as_another_registration_decision() {
+    let mut fixture = Fixture::new();
+    let first = fixture.plan();
+    fixture
+        .terminal
+        .complete_terminal_retirement(&first)
+        .unwrap();
+    let directory = fixture.terminal.store.operation();
+    let container = directory.path().join("retirement-operations");
+    directory.private_dir(&container).unwrap();
+    let container = directory.private_child(&container).unwrap();
+    container
+        .private_dir(
+            &container
+                .path()
+                .join(OperationId::generate().unwrap().to_string()),
+        )
+        .unwrap();
+    let root = fixture.system();
+    drop(fixture.terminal);
+    assert!(TerminalManagement::open(&root).is_err());
     assert!(Engine::open(&root).is_err());
 }

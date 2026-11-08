@@ -199,3 +199,20 @@ fn terminal_pending_retirement_is_recovery_not_initialization_or_completed_remov
     wrong["state"] = "terminal_management".into();
     assert!(storage_snapshot(wrong).is_err());
 }
+
+#[test]
+fn terminal_pending_successor_can_preserve_its_distinct_previous_completed_operation() {
+    let value = json!({"state":"recovery_required","disk_ids":["disk_retained"],
+        "completion_available":false,"allow_development":false,"terminal":{
+        "pool_id":"pool_00000000000000000000000000000001","operation_id":"op_00000000000000000000000000000001",
+        "authority_hash":"a".repeat(64),"registrations":"retained_registrations","registered_directories":1,
+        "original_metadata_members":1,"original_metadata_quorum":1,
+        "completed_retirement":"op_00000000000000000000000000000002","pending_retirement":{
+        "operation_id":"op_00000000000000000000000000000003","principal":"admin",
+        "pool_id":"pool_00000000000000000000000000000001","disk_id":"disk_retained","slot_id":"P03",
+        "binding_generation":"1","intent_digest":"b".repeat(64),"phase":"decision_stored"}}});
+    assert!(storage_snapshot(value.clone()).is_ok());
+    let mut wrong = value;
+    wrong["terminal"]["completed_retirement"] = "op_00000000000000000000000000000003".into();
+    assert!(storage_snapshot(wrong).is_err());
+}

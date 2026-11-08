@@ -1,4 +1,4 @@
-//! Root-retained exact plan for the first management-only retirement successor.
+//! Root-retained exact plan for sequential management-only retirement successors.
 //! Native completion owns Stop/D3; helper files are never completion authority.
 use super::*;
 use storage_contract::{
@@ -78,7 +78,7 @@ fn response(plan: Plan, original_result: Option<OperationResult>) -> Result<Prev
         physical_bytes_erased: false,
         active_namespace_admitted: false,
         metadata_resumption_supported: false,
-        another_terminal_retirement_supported: false,
+        another_terminal_retirement_supported: true,
     })
 }
 pub(crate) fn preview(input: Input) -> Result<Preview> {
@@ -167,7 +167,7 @@ fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
         json_codec::json!({"format":"zxs-helper-terminal-retirement-result",
         "request_digest":input.input.request_digest, "result":result,
         "physical_bytes_erased":false,"active_namespace_admitted":false,
-        "metadata_resumption_supported":false,"another_terminal_retirement_supported":false,
+        "metadata_resumption_supported":false,"another_terminal_retirement_supported":true,
         "service_started":false,"complete_installation_ready":false}),
     )
 }

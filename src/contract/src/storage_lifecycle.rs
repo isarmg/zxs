@@ -86,6 +86,7 @@ pub struct TerminalStorageStatus {
     #[serialization(deserialize_with = "required_retirement")]
     pub pending_retirement: Option<TerminalRetirementPending>,
     #[serialization(deserialize_with = "required_completed_retirement")]
+    /// Latest completed retirement; may precede a distinct unfinished successor.
     pub completed_retirement: Option<OperationId>,
 }
 

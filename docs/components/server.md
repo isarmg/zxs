@@ -476,3 +476,7 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 ## 终态首笔 successor 控制适配
 
 `ExclusiveExit` 增加终态专用 preview/result/complete API，持续核对当前主 AuthReader、准确原主体/目标/来源摘要；不复用最后 voter 的旧永久回执当新结果。helper-only HTTP/根计划/确认留在 helper。核心实际完成后，终态状态的必需可空 `completed_retirement` 指向新永久操作，当前登记数来自 successor，保留原固定 N/Q；Web 明示不能恢复 metadata 或执行第二笔。未审查/编译/测试/CI，见[后继边界](../design/terminal-retirement-successor.md)。
+
+## 终态链状态语义
+
+`completed_retirement` 是最近已完成的原操作，可与不同 ID 的 `pending_retirement` 同时出现：前者仍有永久结果，后者仍保留在当前登记中。相同 ID 同时未决/完成是无效 wire 状态。`ExclusiveExit` 原结果/确认按 native 历史 Plan 与当前身份核对，下一笔的新预览不能替代前一未决操作；metadata resume 仍拒绝。未审查/编译/测试/CI，见[终态链](../design/terminal-retirement-chain.md)。

@@ -164,8 +164,8 @@ impl LoadedLocator {
         &self,
         identity: &DiskRegistrationIdentity,
     ) -> Result<()> {
-        self.recorded_admission_epoch(identity)?;
-        if !self.record.is_terminal() || self.record.is_stopped(&identity.disk_id) {
+        self.require_terminal_retirement_binding(identity)?;
+        if self.record.is_stopped(&identity.disk_id) {
             return Err(BootstrapError::ManagementOnly(
                 "terminal successor requires a recorded, not-already-stopped registration",
             ));
@@ -173,6 +173,18 @@ impl LoadedLocator {
         Ok(())
     }
 
+    pub(in crate::engine) fn require_terminal_retirement_binding(
+        &self,
+        identity: &DiskRegistrationIdentity,
+    ) -> Result<()> {
+        self.recorded_admission_epoch(identity)?;
+        if !self.record.is_terminal() {
+            return Err(BootstrapError::ManagementOnly(
+                "retirement requires the terminal locator",
+            ));
+        }
+        Ok(())
+    }
     pub(in crate::engine) fn recorded_admission_epoch(
         &self,
         identity: &DiskRegistrationIdentity,

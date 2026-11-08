@@ -37,7 +37,6 @@ impl TerminalRegistry {
         })
     }
     fn retirement_state(&self, identity: &DiskRegistrationIdentity) -> Result<RegistryState> {
-        self.require_resumable()?;
         self.verified.require_identity(identity)?;
         if !self.verified.state.voters.is_empty() || self.verified.state.pending_exit.is_none() {
             return Err(invalid(

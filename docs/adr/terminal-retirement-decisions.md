@@ -1,6 +1,6 @@
 # 终态剩余登记先保留原生决定，再建立后继发布
 
-状态：分阶段实现。首笔受限管理后继已接线，仍非完整终态管理或发行验收。
+状态：分阶段实现。逐笔管理后继及已认证旧 Stop 消费已接线，仍非完整终态管理或发行验收。
 
 ## 背景
 
@@ -12,7 +12,7 @@
 
 `IntentStored` 与 `DecisionStored` 都是未完成状态，不创建 OperationResult，不改变当前登记或业务 State，不授予目标 Stop/D3、registry successor 或可写权限。新操作与 metadata resume 在未完成意图存在时拒绝；原 actor/operation/digest 可以重建相同写入屏障。普通原历史回执仍可查询。
 
-只有具备准确 successor、Stop、真实 I/O 排除、最终结果及冷恢复的完整执行路径才向 helper 暴露确认按钮。[首笔后继](../design/terminal-retirement-successor.md)现实现这一路径，明确拒绝第二笔、已 Stop 绑定和元数据恢复；不能把一次首笔完成扩成全功能。诊断端公开未完成原因和准确原 ID；不能把库内 staging 能力列为辅助工具已完成注销。
+只有具备准确 successor、Stop、真实 I/O 排除、最终结果及冷恢复的完整执行路径才向 helper 暴露确认按钮。[首笔后继](../design/terminal-retirement-successor.md)现实现这一路径，后继的[逐笔链](../design/terminal-retirement-chain.md)已增加下一笔和已认证旧 Stop 消费，仍拒绝元数据恢复；不能把一次首笔完成扩成全功能。诊断端公开未完成原因和准确原 ID；不能把库内 staging 能力列为辅助工具已完成注销。
 
 ## 代价与替代方案
 

@@ -130,7 +130,10 @@ impl TerminalStore {
                     | super::super::retirement::SELECTED
                     | "retirement-successor.json"
                     | "retirement-stop.json"
+                    | "retirement-existing-stop.json"
                     | "retirement-complete.json"
+                    | "retirement-next.json"
+                    | "retirement-operations"
             ) {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,

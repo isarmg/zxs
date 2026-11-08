@@ -210,3 +210,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 首笔终态登记后继
 
 独立 Web 单独提供终态原生预览、明确确认、原计划查询/续作，覆盖已记录且尚未 Stop 的绑定在原终态权威下的第一笔移除。SYSTEM 原选择、精确 registry successor、Stop 计划、进程 I/O 排除及永久回执缺一不可；不从 root 计划或缓存状态推断完成。服务仍关闭，不读取退役盘路径，不擦除字节。第二笔、已 Stop/Disabled 生命周期、metadata resume、新活动命名空间和外来正式接纳均拒绝；页面须单独确认这一限制。源码未审查/编译/测试/CI，见[生产边界与恢复](../design/terminal-retirement-successor.md)。
+
+## 终态逐笔移除与原结果
+
+首笔入口现可在上一笔确实完成后重新读取剩余登记，逐笔预览/确认；中断时只继续该根计划的原操作。既有 Stop 的 Disabled 绑定可在核心核对原权威与 epoch 后移除，不把 Disabled 状态本身当证明。父链原完成、子链原未决可同时展示，历史任一原摘要都核准确永久结果。仍不支持 metadata resume/活动存储恢复、取消、外来正式接纳或完整就绪；缺根/证明、坏前驱或孤立目录均拒绝并保留。源码未验证，见[逐笔链](../design/terminal-retirement-chain.md)。

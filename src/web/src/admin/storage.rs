@@ -81,10 +81,9 @@ fn storage_snapshot(value: Value) -> Result<Snapshot, api::Error> {
                 || (terminal.registrations
                     == storage_contract::storage_lifecycle::TerminalRegistrations::EmptyRegistry)
                     != (terminal.registered_directories == 0)
-                || (terminal.pending_retirement.is_some()
-                    && terminal.completed_retirement.is_some())
                 || terminal.pending_retirement.as_ref().is_some_and(|pending| {
-                    pending.pool_id != terminal.pool_id
+                    terminal.completed_retirement == Some(pending.operation_id)
+                        || pending.pool_id != terminal.pool_id
                         || !snapshot._disk_ids.contains(&pending.disk_id)
                         || pending.slot_id.is_empty()
                         || pending.binding_generation == 0
@@ -427,7 +426,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <p class="zxs-row">{format!("{}{} · {}{}/{}",t("保留登记目录：", "Retained registered directories: "),terminal.registered_directories,t("原固定元数据 N/Q：", "Original fixed metadata N/Q: "),terminal.original_metadata_members,terminal.original_metadata_quorum)}</p>
             <p class="zxs-row">{t("磁盘内容与历史没有清理。新的元数据组需要基于这份已认证历史接续，不能使用首次激活或普通添加替代。", "Disk contents and history have not been cleared. A new metadata group must resume this authenticated history; initial activation and ordinary addition cannot replace that process.")}</p>
             {terminal.completed_retirement.map(|operation|view!{
-                <p class="zxs-row" role="alert">{format!("{}{} · {}", t("终态首笔登记移除已发布：", "First terminal registration retirement published: "), operation, t("本阶段尚不支持后继元数据恢复或第二笔终态移除；历史和原决定保留，不能从旧配置重开。", "This stage does not support successor metadata resumption or another terminal retirement. Preserve history and the original decision; do not reopen from old configuration."))}</p>
+                <p class="zxs-row" role="alert">{format!("{}{} · {}", t("终态最近登记移除已发布：", "Latest terminal registration retirement published: "), operation, t("后续移除须另行选择准确剩余登记；仍不支持后继元数据恢复，保留全部历史，不能从旧配置重开。", "Further retirements require separate exact remaining-member selection. Successor metadata resumption is still unsupported; preserve history and never reopen from old configuration."))}</p>
             })}
             {terminal.pending_retirement.map(|pending|view!{
                 <p class="zxs-row" role="alert">{format!("{}{} · {} · {}", t("终态注销原决定未发布：", "Terminal retirement decision is unfinished: "), pending.slot_id, pending.operation_id, t("当前登记尚未移除，元数据恢复被阻断；保留原决定，不要清理文件或另换操作。", "The registration remains and metadata resumption is fenced. Preserve the original decision; do not clean files or replace the operation."))}</p>
