@@ -182,3 +182,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 首批空目录存储初始化
 
 独立 Web 可在已完成管理账户后，预览并明确初始化 `/zxs/data/disks` 下全部已存在的空直接子目录。root 编排通过同一二进制的非 root 服务身份工作进程使用现有 activation/Engine 协议，完成前发布凭据灾备快照并核系统及逐盘 current/history SQLite。它不挂载、格式化、创建 Unix 账户或启动服务，不接纳外来盘；完整安装就绪与正常运行最终门禁仍未完成。原计划、生命周期交接、部分失败及未运行验证见[首批存储](../design/helper-first-storage-batch.md)。
+
+## 独立 Web 的本地 Samba 密码重置
+
+手工 root 控制台新增受支持的既有本地 tdbsam 改密，准确匹配安装配置与账户，密码只经 stdin 送给已核验的固定 `smbpasswd`。它不是 `restore-system` 或管理员改密，不创建账户，不启用服务，结果不明只查询原记录、不自动重放。源码未编译/测试/审查/CI，见[支持范围和恢复限制](../design/helper-samba-password-reset.md)。

@@ -55,9 +55,18 @@ pub(super) fn router(state: State) -> Router {
         .route("/console.css", get(styles))
         .route("/console.js", get(script))
         .route("/api/status", get(status))
-        .route("/api/initialization/storage-preview", post(first_storage_preview))
-        .route("/api/initialization/storage-recover-preview", post(first_storage_recover))
-        .route("/api/initialization/storage-create", post(first_storage_create))
+        .route(
+            "/api/initialization/storage-preview",
+            post(first_storage_preview),
+        )
+        .route(
+            "/api/initialization/storage-recover-preview",
+            post(first_storage_recover),
+        )
+        .route(
+            "/api/initialization/storage-create",
+            post(first_storage_create),
+        )
         .route("/api/authority/check", post(check))
         .route("/api/authority/export", post(export))
         .route("/api/shutdown", post(shutdown))
@@ -80,6 +89,9 @@ pub(super) fn router(state: State) -> Router {
             "/api/credentials/reset-recover-preview",
             post(administrator_reset_recover_preview),
         )
+        .route("/api/credentials/samba-preview", post(samba_reset_preview))
+        .route("/api/credentials/samba-reset", post(samba_reset))
+        .route("/api/credentials/samba-status", post(samba_reset_status))
         .route("/api/host/preview", post(host_preview))
         .route("/api/host/prepare", post(host_prepare))
         .route("/api/initialization/layout-preview", post(layout_preview))
@@ -161,8 +173,8 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "first_storage_initialization":"confirmed_empty_existing_roots_only", "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch"],
-        "not_implemented":["complete_first_run_setup","disk_add","disk_deregister","foreign_admission","later_disk_initialization","full_system_rebuild","samba_password_reset","program_repair","systemd_smb_activation"]
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset","first_management_administrator_initialization","first_empty_storage_batch","existing_local_tdbsam_password_reset"],
+        "not_implemented":["complete_first_run_setup","disk_add","disk_deregister","foreign_admission","later_disk_initialization","full_system_rebuild","other_samba_backends_and_account_creation","program_repair","systemd_smb_activation"]
     }))
 }
 
@@ -666,38 +678,138 @@ fn first_administrator_failure(error: Box<dyn std::error::Error + Send + Sync>) 
 }
 
 async fn first_storage_preview(
-    ExtractState(state): ExtractState<State>, request: Request,
+    ExtractState(state): ExtractState<State>,
+    request: Request,
 ) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
     let input: crate::initialization::storage::Input = input(request).await?;
     let preview = tokio::task::spawn_blocking(move || {
         let _owner = permit;
         crate::initialization::storage::preview(input).map_err(first_storage_failure)
-    }).await.map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR,"first_storage_worker",error))??;
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "first_storage_worker",
+            error,
+        )
+    })??;
     Ok(Json(preview).into_response())
 }
 async fn first_storage_recover(
-    ExtractState(state): ExtractState<State>, request: Request,
+    ExtractState(state): ExtractState<State>,
+    request: Request,
 ) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
     let input: crate::initialization::storage::Original = input(request).await?;
     let preview = tokio::task::spawn_blocking(move || {
         let _owner = permit;
         crate::initialization::storage::recover_preview(input).map_err(first_storage_failure)
-    }).await.map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR,"first_storage_worker",error))??;
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "first_storage_worker",
+            error,
+        )
+    })??;
     Ok(Json(preview).into_response())
 }
 async fn first_storage_create(
-    ExtractState(state): ExtractState<State>, request: Request,
+    ExtractState(state): ExtractState<State>,
+    request: Request,
 ) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
     let input: crate::initialization::storage::Commit = input(request).await?;
     let receipt = tokio::task::spawn_blocking(move || {
         let _owner = permit;
         crate::initialization::storage::commit(input).map_err(first_storage_failure)
-    }).await.map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR,"first_storage_worker",error))??;
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "first_storage_worker",
+            error,
+        )
+    })??;
     Ok(Json(receipt).into_response())
 }
-fn first_storage_failure(error: Box<dyn std::error::Error+Send+Sync>) -> Failure {
-    Failure::message(StatusCode::CONFLICT,"first_storage_initialization",&error.to_string())
+fn first_storage_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    Failure::message(
+        StatusCode::CONFLICT,
+        "first_storage_initialization",
+        &error.to_string(),
+    )
+}
+
+async fn samba_reset_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::deployment::samba_password::Input = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::deployment::samba_password::preview(input).map_err(samba_reset_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "samba_reset_worker",
+            error,
+        )
+    })??;
+    Ok(Json(preview).into_response())
+}
+async fn samba_reset(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::deployment::samba_password::Reset = secret_input(request).await?;
+    let receipt = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::deployment::samba_password::reset(input).map_err(samba_reset_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "samba_reset_worker",
+            error,
+        )
+    })??;
+    Ok(Json(receipt).into_response())
+}
+async fn samba_reset_status(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::deployment::samba_password::Original = input(request).await?;
+    let status = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::deployment::samba_password::status(input).map_err(samba_reset_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "samba_reset_worker",
+            error,
+        )
+    })??;
+    Ok(Json(status).into_response())
+}
+fn samba_reset_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    // Never format command output, secret input, a verifier, or a source chain.
+    Failure::message(
+        StatusCode::CONFLICT,
+        "local_samba_password_reset",
+        &error.to_string(),
+    )
 }

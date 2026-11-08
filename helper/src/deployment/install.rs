@@ -57,7 +57,7 @@ const REQUIREMENTS: &[&str] = &[
     "Target-system systemd and Samba syntax/configuration validation, including existing unit drop-ins and Samba includes",
     "Separate explicit activation: reload, select the standalone /etc/samba/zxs.conf and start/enable the intended services",
 ];
-struct Prepared {
+pub(super) struct Prepared {
     host: BundleDestination,
     program: InstalledProgram,
     account: LocalAccount,
@@ -78,6 +78,41 @@ impl Prepared {
         self.destinations.recheck()
     }
 }
+impl Prepared {
+    pub(super) fn require_existing(&self) -> Result<()> {
+        self.recheck()?;
+        let plan = &self.preview.plan;
+        if self
+            .destinations
+            .inspect(
+                plan.unit.content.as_bytes(),
+                plan.samba.as_ref().map(|item| item.content.as_bytes()),
+            )?
+            .iter()
+            .any(|present| !present)
+        {
+            return Err("exact installed configuration is required; missing files are not installed by this operation".into());
+        }
+        Ok(())
+    }
+    pub(super) fn context_digest(&self) -> &str {
+        &self.preview.request_digest
+    }
+    pub(super) fn host(&self) -> &BundleDestination {
+        &self.host
+    }
+    pub(super) fn samba_account(&self) -> Result<&LocalAccount> {
+        self.samba_account
+            .as_ref()
+            .ok_or_else(|| "an explicitly configured independent Samba account is required".into())
+    }
+}
+pub(super) fn existing(input: Input) -> Result<Prepared> {
+    let prepared = build(input)?;
+    prepared.require_existing()?;
+    Ok(prepared)
+}
+
 fn build(input: Input) -> Result<Prepared> {
     if rustix::process::geteuid().as_raw() != 0 {
         return Err("configuration file installation requires the manually run root helper".into());

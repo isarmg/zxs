@@ -5,6 +5,7 @@ mod configuration;
 mod console;
 mod credentials;
 mod deployment;
+mod system_program;
 mod disk_databases;
 mod host;
 mod initialization;

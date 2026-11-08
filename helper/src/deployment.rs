@@ -1,6 +1,7 @@
 //! Version-bound deployment preparation and confirmed fixed-path configuration
 //! installation. Never reloads, starts or enables a service/account manager.
 pub(crate) mod install;
+pub(crate) mod samba_password;
 mod model;
 mod render;
 

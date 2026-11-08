@@ -81,3 +81,7 @@ POST 输入最大 64 KiB，正文读取期限 15 秒；磁盘读取只允许一�
 ## 首批存储工作进程
 
 首批空目录预览/初始化/原计划恢复已接 `storage-preview`、`storage-create`、`storage-recover-preview`，放在首次管理员之后。使用受限同二进制 service UID/GID 子进程，不放宽 root 对 Engine 的权限规则；父任务等待子进程结束，响应丢失保留原请求。当前仍无登录、默认 0.0.0.0、手动 root，无 helper 自启。入口和不代表完整首次安装的边界见[首批存储](helper-first-storage-batch.md)；源码尚未编译/测试/审查或运行 CI。
+
+## 既有本地 Samba 账户改密
+
+后继 `/api/credentials/samba-preview`、`samba-reset`、`samba-status` 实现严格已有本地 tdbsam 的密码命令与保留结果查询。页面必须明确选择已安装配置、手动输入新密码、确认外部 Samba/管理员已停止；当前 host 租约不等于 Samba 自身已停。密码不进入 URL/argv/回执，未知命令结果不自动重放，仍无登录或 helper 自启。范围、固定系统程序、缺失/替换拒绝和未运行证据见[本地 Samba 重置](helper-samba-password-reset.md)。

@@ -11,9 +11,11 @@ let configurationPreview = null;
 let administratorResetPreview = null;
 let firstAdministratorPreview = null;
 let firstStoragePreview = null;
+let sambaPasswordPreview = null;
+let sambaPasswordOriginal = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -426,3 +428,69 @@ byId("first-storage-commit-form").addEventListener("submit", async event => {
   } catch (failure) { error(`${failure.message}。存储可能已部分或全部初始化。保留原计划及摘要，不删除磁盘或控制文件、不换请求清盘重做。`); }
   finally { setBusy(false); }
 });
+
+function sambaDeploymentInput() {
+  if (!byId("smb-enabled").checked) throw new Error("请先启用上方配置中的 Samba 选项，并填写与已安装文件相同的设置。");
+  return {service_user:byId("service-user").value,service_group:byId("service-group").value,
+    listen:byId("service-listen").value,smb:{account:byId("smb-account").value,peer_uid:Number(byId("smb-peer-uid").value)}};
+}
+function clearSambaPasswords() {
+  byId("samba-new-password").value = ""; byId("samba-repeat-password").value = "";
+}
+function invalidateSambaPreview() {
+  sambaPasswordPreview = null; clearSambaPasswords();
+  byId("samba-password-form").hidden = true; byId("samba-reset-plan").hidden = true;
+}
+byId("deployment-form").addEventListener("input",invalidateSambaPreview);
+byId("samba-writers-stopped").addEventListener("change",invalidateSambaPreview);
+byId("samba-reset-form").addEventListener("submit",async event => {
+  event.preventDefault(); if (busy || stopping) return;
+  invalidateSambaPreview(); error("");
+  let input;
+  try {
+    const nonce = crypto.getRandomValues(new Uint8Array(16));
+    const operation_id = Array.from(nonce,byte => byte.toString(16).padStart(2,"0")).join("");
+    input = {deployment:sambaDeploymentInput(),operation_id,external_writers_stopped:byId("samba-writers-stopped").checked};
+  } catch (failure) { error(failure.message); return; }
+  setBusy(true);
+  try {
+    const preview = await (await post("/api/credentials/samba-preview",input)).json();
+    sambaPasswordPreview = {input,request_digest:preview.request_digest};
+    sambaPasswordOriginal = sambaPasswordPreview;
+    byId("samba-reset-digest").value = preview.request_digest;
+    byId("samba-reset-plan").textContent = JSON.stringify(preview,null,2);
+    for (const id of ["samba-reset-plan","samba-reset-save","samba-password-form"]) byId(id).hidden = false;
+    byId("samba-reset-receipt").hidden = true;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("samba-reset-save").addEventListener("click",() => {
+  if (!sambaPasswordOriginal) return;
+  save(new Blob([JSON.stringify(sambaPasswordOriginal,null,2)],{type:"application/json"}),`zxs-samba-reset-${sambaPasswordOriginal.request_digest}.json`);
+});
+byId("samba-password-form").addEventListener("submit",async event => {
+  event.preventDefault(); if (busy || stopping || !sambaPasswordPreview) return;
+  if (byId("samba-new-password").value !== byId("samba-repeat-password").value) { error("两次 Samba 新密码不一致。"); return; }
+  const name = sambaPasswordPreview.input.deployment.smb.account;
+  if (!window.confirm(`确认真实重置本地 Samba 账户 ${name} 的密码？不创建或启用账户，不更改 ZXS/Unix 密码，不启动服务。结果不明时只查询原请求，不自动重放。`)) return;
+  const body = {...sambaPasswordPreview,confirmation:"reset-existing-local-samba-password",
+    new_password:byId("samba-new-password").value,repeat_password:byId("samba-repeat-password").value};
+  sambaPasswordPreview = null; clearSambaPasswords(); byId("samba-password-form").hidden = true;
+  error(""); setBusy(true);
+  try {
+    const receipt = await (await post("/api/credentials/samba-reset",body)).json();
+    byId("samba-reset-receipt").textContent = JSON.stringify(receipt,null,2);
+    byId("samba-reset-receipt").hidden = false;
+  } catch (failure) { error(`${failure.message}。密码可能已改变。保留原摘要并查询结果，不重复提交原操作，也不要恢复旧 passdb 覆盖其他账户。`); }
+  finally { body.new_password = ""; body.repeat_password = ""; clearSambaPasswords(); setBusy(false); }
+});
+byId("samba-reset-status-form").addEventListener("submit",async event => {
+  event.preventDefault(); if (busy || stopping) return;
+  const request_digest = byId("samba-reset-digest").value;
+  if (!/^[0-9a-f]{64}$/.test(request_digest)) { error("请输入原 Samba 操作的完整摘要。"); return; }
+  error(""); setBusy(true);
+  try {
+    const result = await (await post("/api/credentials/samba-status",{request_digest})).json();
+    byId("samba-reset-receipt").textContent = JSON.stringify(result,null,2); byId("samba-reset-receipt").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+window.addEventListener("pagehide",clearSambaPasswords);

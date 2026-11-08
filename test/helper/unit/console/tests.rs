@@ -379,10 +379,47 @@ async fn installation_payload_is_explicit_and_wrong_confirmation_never_opens_a_t
 
 #[tokio::test]
 async fn first_storage_routes_require_the_same_origin_before_initialization() {
-    for route in ["/api/initialization/storage-preview","/api/initialization/storage-recover-preview","/api/initialization/storage-create"] {
-        let mut request=post(route,json!({}));
-        request.headers_mut().insert("origin","http://foreign.example".parse().unwrap());
-        let response=http::router(state()).oneshot(request).await.unwrap();
-        assert_eq!(response.status(),StatusCode::FORBIDDEN);
+    for route in [
+        "/api/initialization/storage-preview",
+        "/api/initialization/storage-recover-preview",
+        "/api/initialization/storage-create",
+    ] {
+        let mut request = post(route, json!({}));
+        request
+            .headers_mut()
+            .insert("origin", "http://foreign.example".parse().unwrap());
+        let response = http::router(state()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
+}
+
+#[tokio::test]
+async fn samba_password_routes_reject_cross_origin_before_host_or_program_access() {
+    let app = http::router(state());
+    for path in [
+        "/api/credentials/samba-preview",
+        "/api/credentials/samba-reset",
+        "/api/credentials/samba-status",
+    ] {
+        let mut request = post(path, json!({}));
+        request
+            .headers_mut()
+            .insert("origin", "http://untrusted.invalid:9040".parse().unwrap());
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}
+#[tokio::test]
+async fn samba_password_malformed_secret_body_does_not_echo_it_or_start_a_program() {
+    let response = http::router(state())
+        .oneshot(post(
+            "/api/credentials/samba-reset",
+            json!({"new_password":"must-not-echo-test-password"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["code"], "credential_request_json");
+    assert!(!body.to_string().contains("must-not-echo-test-password"));
 }
