@@ -160,3 +160,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 服务私有布局前置
 
 `initialization layout-preview/layout-prepare` 及 Web 对应卡片可按准确本机非 root 服务账户，原子准备空 `/zxs/data/{state,management,disks}`。使用当前 daemon 同一生命周期租约，固定目的地、精确摘要确认，只交接新空树所有权，不递归 chown 现用数据。没有创建管理员/数据库/磁盘，仍不是完整首次初始化。源码未构建或运行。见[私有布局边界](../design/helper-private-data-layout.md)。
+
+## 固定 systemd / Samba 文件安装
+
+`deployment install-preview/install-files` 和独立 Web 可核对实际本机服务账户、主组、独立 Samba UID 与已安装准确程序，确认后先持久化原意图，再新建或核验固定 `/etc/systemd/system/zxs.service` 和可选 `/etc/samba/zxs.conf`。不覆盖不同配置，不改默认 smb.conf，不加载/启动/启用服务，不创建密码/账户或系统就绪标记。跨目录失败可能已安装部分文件，保留原请求与证据，只按原请求重试。源码未构建/运行/审查/CI，仍不是完整首次初始化或一条龙安装。见[安装与恢复边界](../design/helper-configuration-file-installation.md)。

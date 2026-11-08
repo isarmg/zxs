@@ -166,3 +166,38 @@ fn bundle_parent_lock_and_identity_changes_refuse_without_touching_replacement()
     );
     assert!(fs::read_dir(path).unwrap().next().is_none());
 }
+
+#[test]
+fn live_path_installation_rejects_missing_confirmation_before_any_host_access() {
+    for (confirmation, external_administration_stopped) in [
+        ("activate", true),
+        ("install-configuration-files-only", false),
+    ] {
+        let error = install::commit(install::Commit {
+            input: input(),
+            request_digest: "unreviewed".into(),
+            confirmation: confirmation.into(),
+            external_administration_stopped,
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("before inspecting or writing any configuration")
+        );
+    }
+}
+
+#[test]
+fn configuration_installation_request_is_strict_and_has_no_activation_switch() {
+    let good = json_codec::json!({
+        "input":{"service_user":"zxs","service_group":"zxs","listen":"0.0.0.0:7400","smb":null},
+        "request_digest":"exact",
+        "confirmation":"install-configuration-files-only",
+        "external_administration_stopped":true
+    });
+    assert!(json_codec::from_value::<install::Commit>(good.clone()).is_ok());
+    let mut unknown = good;
+    unknown["start_service"] = true.into();
+    assert!(json_codec::from_value::<install::Commit>(unknown).is_err());
+}

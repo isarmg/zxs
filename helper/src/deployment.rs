@@ -1,5 +1,6 @@
-//! Inert, version-bound deployment preparation. Never installs a live unit,
-//! edits Samba's active configuration, or invokes a service/account manager.
+//! Version-bound deployment preparation and confirmed fixed-path configuration
+//! installation. Never reloads, starts or enables a service/account manager.
+pub(crate) mod install;
 mod model;
 mod render;
 
@@ -19,6 +20,20 @@ const PARENT: &str = "/zxs";
 pub(crate) enum Command {
     /// Preview an inactive systemd/Samba bundle; does not inspect or stop services.
     Preview(Options),
+    /// Preview fixed systemd/Samba file installation, not service activation.
+    InstallPreview(Options),
+    /// Install matching configuration files without replacement, reload or start.
+    InstallFiles {
+        #[command(flatten)]
+        options: Options,
+        #[arg(long)]
+        request_digest: String,
+        #[arg(long)]
+        confirm_configuration_files_only: bool,
+        /// Operator acknowledgment, not proof that external writers hold a lock.
+        #[arg(long)]
+        external_administration_stopped: bool,
+    },
     /// Durably prepare exactly the previewed bundle; never activate configuration.
     Prepare {
         #[command(flatten)]
@@ -183,6 +198,23 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
         Command::Preview(options) => print(preview(options.input()?)?),
+        Command::InstallPreview(options) => print(install::preview(options.input()?)?),
+        Command::InstallFiles {
+            options,
+            request_digest,
+            confirm_configuration_files_only,
+            external_administration_stopped,
+        } => {
+            if !confirm_configuration_files_only {
+                return Err("review the exact file installation and pass --confirm-configuration-files-only; no configuration was inspected or modified".into());
+            }
+            print(install::commit(install::Commit {
+                input: options.input()?,
+                request_digest,
+                confirmation: "install-configuration-files-only".into(),
+                external_administration_stopped,
+            })?)
+        }
         Command::Prepare {
             options,
             request_digest,

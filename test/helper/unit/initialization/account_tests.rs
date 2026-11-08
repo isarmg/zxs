@@ -18,3 +18,22 @@ fn account_selection_is_local_nonroot_unique_uid_and_does_not_return_password_fi
         assert!(Name::new(value.into()).is_err());
     }
 }
+
+#[test]
+fn configuration_group_selection_is_unique_local_and_nonroot() {
+    let group = Name::new("zxs".into()).unwrap();
+    assert_eq!(
+        local_group_record("root:x:0:\nzxs:x:981:\n", &group).unwrap(),
+        981
+    );
+    for source in [
+        "zxs:x:0:\n",
+        "zxs:x:981:\nzxs:x:982:\n",
+        "zxs:x:981:\nother:x:981:\n",
+        "zxs:malformed\n",
+        "other:x:981:\n",
+        "zxs:x:invalid:\n",
+    ] {
+        assert!(local_group_record(source, &group).is_err());
+    }
+}

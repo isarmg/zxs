@@ -396,3 +396,31 @@ fn private_layout_cli_is_named_as_preparation_not_system_initialization() {
         .is_err()
     );
 }
+
+#[test]
+fn configuration_installation_has_explicit_files_only_boundary_no_service_start() {
+    let base = [
+        "zxs-helper",
+        "deployment",
+        "install-files",
+        "--service-user",
+        "zxs",
+        "--service-group",
+        "zxs",
+        "--request-digest",
+        "exact",
+        "--confirm-configuration-files-only",
+        "--external-administration-stopped",
+    ];
+    assert!(matches!(
+        Args::try_parse_from(base).unwrap().command,
+        Some(Command::Deployment {
+            command: deployment::Command::InstallFiles { .. }
+        })
+    ));
+    for forbidden in ["--enable", "--start", "--force", "--destination"] {
+        let mut arguments = base.to_vec();
+        arguments.push(forbidden);
+        assert!(Args::try_parse_from(arguments).is_err());
+    }
+}

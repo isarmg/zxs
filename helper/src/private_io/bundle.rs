@@ -61,7 +61,7 @@ impl BundleDestination {
     pub(crate) fn identity(&self) -> FileIdentity {
         self.parent.identity()
     }
-    fn recheck(&self) -> Result<()> {
+    pub(crate) fn recheck(&self) -> Result<()> {
         let current = OpenAt2Root::open(&self.path, MountPolicy::AllowNestedMounts)?;
         if current.identity() != self.identity() {
             return Err(format!("deployment parent identity changed; inspect held device {} inode {} before retrying", self.identity().device, self.identity().inode).into());

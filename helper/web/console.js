@@ -7,9 +7,10 @@ let installationPreview = null;
 let deploymentPreview = null;
 let hostPreview = null;
 let layoutPreview = null;
+let configurationPreview = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -112,6 +113,7 @@ byId("install-commit").addEventListener("click", async () => {
 });
 
 function resetDeployment() {
+  resetConfiguration();
   deploymentPreview = null; byId("deployment-prepare").hidden = true;
   byId("deployment-plan").hidden = true; byId("deployment-receipt").hidden = true;
 }
@@ -193,4 +195,42 @@ byId("layout-prepare").addEventListener("click", async () => {
     byId("layout-receipt").textContent = JSON.stringify(receipt, null, 2); byId("layout-receipt").hidden = false;
   } catch (failure) { error(`${failure.message}。保留 pending 目录；失败不证明未写入，不能以重新初始化或清空目录代替恢复。`); }
   finally { setBusy(false); }
+});
+
+function resetConfiguration() {
+  configurationPreview = null;
+  byId("configuration-plan").hidden = true;
+  byId("configuration-install").hidden = true;
+  byId("configuration-receipt").hidden = true;
+  byId("external-administration-stopped").checked = false;
+}
+byId("configuration-preview").addEventListener("click", async () => {
+  if (busy || stopping || !byId("deployment-form").reportValidity()) return;
+  const input = {service_user:byId("service-user").value,service_group:byId("service-group").value,
+    listen:byId("service-listen").value,smb:byId("smb-enabled").checked ? {
+      account:byId("smb-account").value,peer_uid:Number(byId("smb-peer-uid").value)} : null};
+  resetConfiguration(); error(""); setBusy(true);
+  try {
+    const preview = await (await post("/api/deployment/install-preview", input)).json();
+    configurationPreview = {input,request_digest:preview.request_digest};
+    byId("configuration-plan").textContent = JSON.stringify(preview, null, 2);
+    byId("configuration-plan").hidden = false;
+    byId("configuration-install").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("configuration-install").addEventListener("click", async () => {
+  if (busy || stopping || !configurationPreview) return;
+  if (!byId("external-administration-stopped").checked) {
+    error("请先停止外部配置/服务管理操作并明确确认。当前 ZXS 租约不等于已停止所有外部写入者。"); return;
+  }
+  if (!window.confirm("确认仅安装预览中的 /etc/systemd/system/zxs.service 和可选 /etc/samba/zxs.conf？不覆盖不同文件，不更改默认 smb.conf 或密码，不加载/启动/启用服务。当前未提供完整初始化和自动激活。")) return;
+  error(""); setBusy(true);
+  try {
+    const receipt = await (await post("/api/deployment/install-files", {...configurationPreview,
+      confirmation:"install-configuration-files-only",external_administration_stopped:true})).json();
+    byId("configuration-receipt").textContent = JSON.stringify(receipt, null, 2);
+    byId("configuration-receipt").hidden = false;
+  } catch (failure) {
+    error(`${failure.message}。跨目录安装不是一个原子事务，已有文件可能已经发布。保留准确输入/摘要、intent/installed 记录和临时文件，只重试同一操作，不删证据或覆盖未知配置。`);
+  } finally { setBusy(false); }
 });

@@ -63,6 +63,11 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/install/commit", post(install_commit))
         .route("/api/deployment/preview", post(deployment_preview))
         .route("/api/deployment/prepare", post(deployment_prepare))
+        .route(
+            "/api/deployment/install-preview",
+            post(configuration_preview),
+        )
+        .route("/api/deployment/install-files", post(configuration_install))
         .route("/api/host/preview", post(host_preview))
         .route("/api/host/prepare", post(host_prepare))
         .route("/api/initialization/layout-preview", post(layout_preview))
@@ -132,8 +137,8 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout"],
-        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","password_reset","program_repair","active_systemd_smb_installation"]
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation"],
+        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","password_reset","program_repair","systemd_smb_activation"]
     }))
 }
 
@@ -416,6 +421,54 @@ fn layout_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
     Failure::message(
         StatusCode::CONFLICT,
         "private_layout_preparation",
+        &crate::diagnostic_chain(error.as_ref()),
+    )
+}
+
+async fn configuration_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::deployment::Input = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::deployment::install::preview(input).map_err(configuration_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "configuration_worker",
+            error,
+        )
+    })??;
+    Ok(Json(preview).into_response())
+}
+async fn configuration_install(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::deployment::install::Commit = input(request).await?;
+    let receipt = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::deployment::install::commit(input).map_err(configuration_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "configuration_worker",
+            error,
+        )
+    })??;
+    Ok(Json(receipt).into_response())
+}
+fn configuration_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    Failure::message(
+        StatusCode::CONFLICT,
+        "configuration_file_installation",
         &crate::diagnostic_chain(error.as_ref()),
     )
 }

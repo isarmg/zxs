@@ -12,7 +12,7 @@
     <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、首装与部署准备</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
     <section class="card">
@@ -46,7 +46,7 @@
       <pre id="layout-receipt" hidden></pre>
     </section>
     <section class="card">
-      <h2>准备 systemd / SMB 配置</h2>
+      <h2>准备与安装 systemd / SMB 配置文件</h2>
       <p>生成与内置版本绑定的未激活配置包，存于已存在、root 所有且其他用户不可写的 <code>/zxs/.zxs-helper-deployment-摘要/</code>。不会写入 <code>/etc</code>、合并现有 Samba 共享、创建账户、设置密码，或执行服务 reload / start / enable。</p>
       <form id="deployment-form">
         <div class="fields">
@@ -60,11 +60,19 @@
           <label>可信 Samba 连接 UID <input id="smb-peer-uid" type="number" min="0" max="4294967295" step="1" value="0" autocomplete="off"></label>
         </div>
         <p class="muted">UID 0 只适用于已经验证桥接在 Samba root 身份下连接的主机。这些账户名只做语法约束，尚未核实系统账户、UID、VFS ABI、依赖、路径权限或初次初始化。准备期间与当前 ZXS 可执行程序互斥，但不证明旧版或 Samba 已停。原样准备不是配置生效。</p>
-        <button id="deployment-preview" type="submit">预览准确配置</button>
+        <button id="deployment-preview" type="submit">预览未激活配置包</button>
+        <button id="configuration-preview" type="button" class="secondary">核对账户并预览固定配置安装</button>
       </form>
       <pre id="deployment-plan" hidden></pre>
       <button id="deployment-prepare" type="button" hidden>确认仅保存未激活配置包</button>
       <pre id="deployment-receipt" hidden></pre>
+      <h3>安装到固定系统路径，不启动服务</h3>
+      <p>此操作另行核对本机服务账户、主组、独立 Samba 账户，以及已经安装的准确内置 ZXS 程序。只新建或核验 <code>/etc/systemd/system/zxs.service</code> 和可选 <code>/etc/samba/zxs.conf</code>，不覆盖不同文件，不改默认 <code>smb.conf</code>，也不创建父目录。</p>
+      <p class="muted">安装会让 unit 文件出现在 systemd 的搜索路径，但不运行 reload / start / enable、不接管 Samba 配置和 passdb。配置与意图记录不是完整系统初始化或可以启动的证明。当前 ZXS 租约能互斥；旧二进制、外部配置管理者和 Samba 仍须另行停止，不能并发编辑或加载配置。</p>
+      <pre id="configuration-plan" hidden></pre>
+      <label class="ack"><input id="external-administration-stopped" type="checkbox"> 我已停止外部配置/服务管理操作，并理解这只是我的确认，不是工具已取得所有外部进程锁。</label>
+      <button id="configuration-install" type="button" hidden>确认仅安装这些固定配置文件</button>
+      <pre id="configuration-receipt" hidden></pre>
     </section>
     <section class="card">
       <h2>选择准确的独立磁盘</h2>
@@ -85,7 +93,7 @@
       <details><summary>完整报告与来源身份</summary><pre id="report"></pre></details>
     </section>
     <p id="error" class="error" role="alert" hidden></p>
-    <section class="card pending"><h2>尚未完成的能力</h2><p>首次系统初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、密码重置、程序覆盖修复、依赖安装及 systemd/SMB 配置的实际安装/激活尚未提供。内置程序首装和未激活配置包都不是系统初始化或服务启用完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
+    <section class="card pending"><h2>尚未完成的能力</h2><p>首次系统初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、密码重置、程序覆盖修复、依赖安装、已有配置的替换和 systemd/SMB 的加载/启动/启用尚未提供。程序首装、空布局和固定配置文件安装都不是系统初始化或服务启用完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
     <footer>手动运行，不注册 systemd，不设置开机自启。关闭页面不会结束进程；请点“退出辅助工具”或在启动终端按 Ctrl+C，并等进程真正退出再移除磁盘。</footer>
   </main>
 </body>

@@ -38,3 +38,7 @@ UI 输入更改立即取消旧预览与确认；确认请求携带冻结输入�
 实际 systemd/Samba 安装、外部语法校验、依赖/VFS 安装、Unix/Samba 账户与 passdb、私有目录准备、首次系统/磁盘初始化、完整交接与旧版/第三方进程与 Samba 生命周期互斥均未完成。当前 ZXS 二进制的共用租约已有后继源码，但尚未构建/运行。不得将 `systemctl is-active` 的瞬时状态或“已停服”复选框当并发安全证明。后续真正替换现用配置前须有服务租约、原配置备份与持久提交/恢复，并显式决定是否加载、启动或启用开机服务。本片没有尝试这些动作，因此也不需要伪造已停服的事实。
 
 部署包不是业务权威或运行准备完成标记。主服务不能消费它作为已初始化、已准入或已恢复的系统。包中的 `required_before_activation` 和结果中的 `live_configuration_modified=false`、`service_started_or_enabled=false`、`system_initialized=false` 必须保持可见。
+
+## 后继的固定文件安装
+
+[固定配置文件安装](helper-configuration-file-installation.md) 提供另一个明确确认的 install-preview/install-files 入口，核对实际账户、主组、独立 Samba UID 与已安装匹配程序，写入固定 `/etc/systemd/system/zxs.service` 和可选 `/etc/samba/zxs.conf`，不覆盖不同文件，不调用服务管理器。本页 preview/prepare 仍只保存未激活包，不能冒充该后继入口已执行。安装也不代表现有 drop-in/依赖/VFS/初始化/语法检查或服务激活完成；新后继未编译/测试/审查/CI。

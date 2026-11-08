@@ -1,4 +1,4 @@
-# Inactive standalone configuration, not a fragment for an existing Samba service.
+# Standalone configuration, not a fragment for the default or an existing Samba service.
 # Account/passdb, VFS ABI and protected export/socket require separate installation.
 # No credentials are included; never merge over unrelated Samba shares.
 [global]

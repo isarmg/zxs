@@ -5,6 +5,36 @@ pub(crate) use payload::Metadata as PayloadMetadata;
 pub(crate) fn verified_payload_metadata() -> Result<PayloadMetadata> {
     Ok(payload::required()?.metadata())
 }
+/// Hold the normal program-publication lock while configuration is derived from
+/// the exact installed payload. Configuration never repairs a different binary.
+pub(crate) struct InstalledProgram {
+    destination: crate::private_io::ProgramDestination,
+    payload: payload::Payload,
+}
+impl InstalledProgram {
+    pub(crate) fn open() -> Result<Self> {
+        let payload = payload::required()?;
+        let destination =
+            crate::private_io::ProgramDestination::open(std::path::Path::new(DESTINATION))?;
+        let result = Self {
+            destination,
+            payload,
+        };
+        result.recheck()?;
+        Ok(result)
+    }
+    pub(crate) fn metadata(&self) -> PayloadMetadata {
+        self.payload.metadata()
+    }
+    pub(crate) fn recheck(&self) -> Result<()> {
+        if !self.destination.matches_or_absent(self.payload.bytes)? {
+            return Err(
+                "install the exact embedded ZXS program before installing configuration".into(),
+            );
+        }
+        Ok(())
+    }
+}
 use crate::{Result, print, private_io::ProgramDestination};
 use command_line::Subcommand;
 use data_serialization::{Deserialize, Serialize};

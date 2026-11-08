@@ -65,3 +65,7 @@ POST 输入最大 64 KiB，正文读取期限 15 秒；磁盘读取只允许一�
 ## 首次初始化的私有布局前置
 
 `/api/initialization/layout-preview` 和 `/api/initialization/layout-prepare` 使用准确本地账户与相同作业 owner/CSRF/Origin，持有当前 daemon 生命周期租约，固定创建尚不存在的空私有数据树。页面明确不创建管理员、数据库或磁盘，不将此回执称作初始化完成。详见[布局边界](helper-private-data-layout.md)，源码未运行。
+
+### 固定系统配置文件安装后继
+
+控制台另有 `/api/deployment/install-preview` 与 `/api/deployment/install-files`，使用同一单工作 owner、同源/CSRF/Host 与退出排空。真实目标仅 root 所有的固定 systemd unit 和独立 Samba 配置；确认文案明确原请求、无覆盖、外部管理须停止与不加载/启动/启用。网络风险提示同步扩大到这些写权限，没有登录或秘密。源码未运行，详见[固定安装边界](helper-configuration-file-installation.md)。
