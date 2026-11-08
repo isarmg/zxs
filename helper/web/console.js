@@ -7,6 +7,7 @@ let installationPreview = null;
 let deploymentPreview = null;
 let hostPreview = null;
 let layoutPreview = null;
+let runtimePreview = null;
 let configurationPreview = null;
 let administratorResetPreview = null;
 let firstAdministratorPreview = null;
@@ -19,7 +20,7 @@ let sambaPasswordPreview = null;
 let sambaPasswordOriginal = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const input of byId("chain-generation-select-form").elements) input.disabled = value || stopping || !csrf; byId("chain-generation-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) { byId("chain-generation-select-form").hidden = true; byId("chain-generation-read").hidden = true; } for (const input of byId("chain-generation-log-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-generation-log-form").hidden = true; for (const input of byId("chain-io-decision-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-io-decision-form").hidden = true; for (const input of byId("chain-epoch-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-epoch-form").hidden = true; byId("chain-current-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-current-read").hidden = true; for (const input of byId("chain-publish-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("chain-first-form").elements) input.disabled = value || stopping || !csrf; byId("chain-target-status").disabled = value || stopping || !csrf; for (const input of byId("chain-target-form").elements) input.disabled = value || stopping || !csrf; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const input of byId("runtime-form").elements) input.disabled = value || stopping || !csrf; byId("runtime-prepare").disabled = value || stopping || !csrf; byId("runtime-external-stopped").disabled = value || stopping || !csrf; for (const input of byId("chain-generation-select-form").elements) input.disabled = value || stopping || !csrf; byId("chain-generation-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) { byId("chain-generation-select-form").hidden = true; byId("chain-generation-read").hidden = true; } for (const input of byId("chain-generation-log-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-generation-log-form").hidden = true; for (const input of byId("chain-io-decision-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-io-decision-form").hidden = true; for (const input of byId("chain-epoch-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-epoch-form").hidden = true; byId("chain-current-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-current-read").hidden = true; for (const input of byId("chain-publish-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("chain-first-form").elements) input.disabled = value || stopping || !csrf; byId("chain-target-status").disabled = value || stopping || !csrf; for (const input of byId("chain-target-form").elements) input.disabled = value || stopping || !csrf; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -204,6 +205,44 @@ byId("layout-prepare").addEventListener("click", async () => {
     byId("layout-receipt").textContent = JSON.stringify(receipt, null, 2); byId("layout-receipt").hidden = false;
   } catch (failure) { error(`${failure.message}。保留 pending 目录；失败不证明未写入，不能以重新初始化或清空目录代替恢复。`); }
   finally { setBusy(false); }
+});
+
+function resetRuntime() {
+  runtimePreview = null;
+  byId("runtime-plan").hidden = true;
+  byId("runtime-receipt").hidden = true;
+  byId("runtime-prepare").hidden = true;
+  byId("runtime-external-stopped").checked = false;
+}
+byId("runtime-user").addEventListener("input", resetRuntime);
+byId("runtime-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping || !csrf) return;
+  const input = {service_user:byId("runtime-user").value};
+  resetRuntime(); error(""); setBusy(true);
+  try {
+    const preview = await (await post("/api/initialization/runtime-preview", input)).json();
+    runtimePreview = {input, request_digest:preview.request_digest};
+    byId("runtime-plan").textContent = JSON.stringify(preview, null, 2);
+    byId("runtime-plan").hidden = false;
+    byId("runtime-prepare").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("runtime-prepare").addEventListener("click", async () => {
+  if (busy || stopping || !csrf || !runtimePreview) return;
+  if (!byId("runtime-external-stopped").checked) {
+    error("请先停止外部 ZXS/Samba 与主机配置写者，再确认。辅助工具的 host 租约不能替代它们的互斥。"); return;
+  }
+  if (!window.confirm("只准备预览中的 6 个服务私有空运行目录和 root 所有的空 SMB 导出目录？不会清理已有文件、修改现有目录权限或启动服务。部分发布失败时保留原意图和 pending，仅续作原请求。")) return;
+  error(""); setBusy(true);
+  try {
+    const receipt = await (await post("/api/initialization/runtime-prepare", {
+      ...runtimePreview, confirmation:"prepare-empty-runtime-only", external_administration_stopped:true,
+    })).json();
+    byId("runtime-receipt").textContent = JSON.stringify(receipt, null, 2);
+    byId("runtime-receipt").hidden = false;
+  } catch (failure) {
+    error(`${failure.message}。不确定结果不是未写入；保留原请求和全部目录。已有完成回执与当前目录身份不符时会拒绝重建，不要删除证据。`);
+  } finally { setBusy(false); }
 });
 
 function resetConfiguration() {

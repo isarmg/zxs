@@ -46,6 +46,19 @@
       <pre id="layout-receipt" hidden></pre>
     </section>
     <section class="card">
+      <h2>首次安装：运行目录与空 SMB 导出</h2>
+      <p>仅为已存在的本机服务账户准备 <code>/zxs/{cache,config,home,log,run,tmp}</code>，均为该 UID / 主 GID 的 0700 空目录；另建 root:root、0755 的空 <code>/zxs/smb-export</code>。不接管已使用的运行目录，不清理日志、socket、缓存或导出内容。</p>
+      <form id="runtime-form">
+        <div class="fields"><label>已存在的服务账户 <input id="runtime-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label></div>
+        <button type="submit">核对身份并预览固定运行目录</button>
+      </form>
+      <pre id="runtime-plan" hidden></pre>
+      <label class="ack"><input id="runtime-external-stopped" type="checkbox"> 我已停止外部 ZXS/Samba 及主机配置写者；此声明不是系统级锁定证明。</label>
+      <button id="runtime-prepare" type="button" hidden>确认仅准备这些空目录</button>
+      <pre id="runtime-receipt" hidden></pre>
+      <p class="muted">此步骤不创建账户、密码或数据库，不加载 VFS，不修改 systemd/Samba 配置，也不启动或启用任何服务。完成回执不是整体安装 ready。服务使用这些目录后，此首装入口将明确拒绝，不会重置为新空目录。</p>
+    </section>
+    <section class="card">
       <h2>首次初始化：只创建系统管理员</h2>
       <p>在前一步准备的准确空 <code>/zxs/data/{state,management,disks}</code> 中创建唯一 ZXS 管理员。必须已有正确的本机服务账户。原子写入当前管理凭据、管理初始化意图和系统管理权威标记，不创建 Unix/Samba 账户，不初始化磁盘或存储数据库。</p>
       <form id="first-administrator-form">

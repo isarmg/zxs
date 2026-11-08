@@ -1,5 +1,6 @@
 //! Staged offline first installation: layout, administrator, and initial storage.
 pub(crate) mod administrator;
+pub(crate) mod runtime;
 pub(crate) mod storage;
 mod layout;
 use crate::{
@@ -14,6 +15,22 @@ use sha2::{Digest, Sha256};
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    /// Preview first-install private runtime paths and a protected empty SMB export.
+    RuntimePreview {
+        #[arg(long)]
+        service_user: String,
+    },
+    /// Prepare only those empty directories; never clear used runtime state or start services.
+    RuntimePrepare {
+        #[arg(long)]
+        service_user: String,
+        #[arg(long)]
+        request_digest: String,
+        #[arg(long)]
+        confirm_empty_runtime_only: bool,
+        #[arg(long)]
+        external_administration_stopped: bool,
+    },
     /// Preview the three empty private data directories for an existing local account.
     LayoutPreview {
         #[arg(long)]
@@ -112,6 +129,23 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
 }
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
+        Command::RuntimePreview { service_user } => print(runtime::preview(Input { service_user })?),
+        Command::RuntimePrepare {
+            service_user,
+            request_digest,
+            confirm_empty_runtime_only,
+            external_administration_stopped,
+        } => {
+            if !confirm_empty_runtime_only {
+                return Err("review the exact runtime paths and pass --confirm-empty-runtime-only; no directory was inspected or changed".into());
+            }
+            print(runtime::prepare(runtime::Prepare {
+                input: Input { service_user },
+                request_digest,
+                confirmation: "prepare-empty-runtime-only".into(),
+                external_administration_stopped,
+            })?)
+        }
         Command::LayoutPreview { service_user } => print(preview(Input { service_user })?),
         Command::LayoutPrepare {
             service_user,

@@ -424,3 +424,21 @@ fn configuration_installation_has_explicit_files_only_boundary_no_service_start(
         assert!(Args::try_parse_from(arguments).is_err());
     }
 }
+
+#[test]
+fn runtime_first_install_has_separate_preview_confirmation_and_external_ack() {
+    let args = Args::try_parse_from([
+        "zxs-helper", "initialization", "runtime-prepare", "--service-user", "zxs",
+        "--request-digest", "exact", "--confirm-empty-runtime-only",
+        "--external-administration-stopped",
+    ]).unwrap();
+    assert!(matches!(args.command, Some(Command::Initialization {
+        command: initialization::Command::RuntimePrepare {
+            confirm_empty_runtime_only: true, external_administration_stopped: true, ..
+        }
+    })));
+    assert!(Args::try_parse_from([
+        "zxs-helper", "initialization", "runtime-preview", "--service-user", "zxs",
+        "--path", "/tmp/other",
+    ]).is_err());
+}

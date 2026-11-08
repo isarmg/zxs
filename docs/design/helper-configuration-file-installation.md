@@ -43,8 +43,10 @@ Web 使用同一部署表单，分别“预览未激活配置包”和“核对�
 
 完成记录只证明那次准确文件集合持久化，不是当前服务状态、有效语法、数据库/磁盘准入或系统就绪凭据。任何后续重试都会重新核验真实文件。源码的 `service_reloaded=false`、`service_started=false`、`autostart_enabled=false`、`samba_default_configuration_changed=false`、`samba_passdb_changed=false`、`system_initialized=false` 必须保留。
 
+首装的固定运行目录与独立空导出目录现有单独的[准确准备入口](helper-runtime-directory-preparation.md)。配置文件安装不会隐式调用它，也不把它的回执当作服务可用或整体 ready。
+
 ## 工作预算与未完成项
 
 单次处理最多两份 64 KiB 配置，每份只做固定数量的安全打开、写入和文件/目录同步；意图/完成目录沿用各自目录发布屏障，不能用跨目录批量同步删掉必要持久化。完整 passwd/group 各有 4 MiB 上限，程序验证按内置 256 MiB 上限；阶段重核仍是固定次数的 O(程序字节数＋身份文件字节数)，非前台热路径，不宣称增量或零复制优化。
 
-仍缺：完整管理员与首批磁盘初始化、服务运行目录/日志权限准备、VFS 与 OS 依赖安装、Samba passdb 初始化/密码重置、真实目标环境 `systemd-analyze`/`testparm` 校验、已有 unit/drop-in/自动启动状态的治理、明确 reload/start/enable、旧配置备份替换与回滚、完整 clean-start 权威交接。**没有把文件安装降低为“服务已配置并可用”，也没有删除现有尚未迁移的安全初始化入口。** 测试源码仅新增而未运行，文件发布正向用例在非 root 测试进程只验证拒绝边界，不能算真实 root `/etc` 安装验收。
+本配置文件阶段本身仍不完成：管理员/首批磁盘初始化、VFS 与 OS 依赖安装、Samba passdb 初始化、真实目标环境整体 `systemd-analyze`/`testparm` 校验、已有 unit/drop-in/自动启动状态治理、明确 reload/start/enable、旧配置备份替换与回滚或完整 clean-start 权威交接。运行目录和本地 passdb 重置各有独立后继，不等于完整部署闭环。**没有把文件安装降低为“服务已配置并可用”，也没有删除现有尚未迁移的安全初始化入口。** 测试源码仅新增而未运行，文件发布正向用例在非 root 测试进程只验证拒绝边界，不能算真实 root `/etc` 安装验收。

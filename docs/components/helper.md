@@ -10,6 +10,10 @@
 
 需要打开或恢复池的命令支持[四项保留证据运行期上限](../19-capacity-and-performance.md#runtime-retained-workspace-limits)，作为全局参数同时提供；不带时使用原配置基线。`offline-check` / `offline-export` 直接核验单盘，不借这些参数改变证明或载荷规则。恢复前应配置足够额度，不能通过删除已提交清单释放名额。
 
+## 首装运行目录准备
+
+`initialization runtime-preview/runtime-prepare` 与独立 Web 现有[固定运行目录入口](../design/helper-runtime-directory-preparation.md)：准确本机服务账户的六个 0700 空目录和 root 所有的独立空 SMB export，原意图及完成 inode 回执、部分发布保留与原请求续作。它不清理已使用目录、不改 live owner/mode、不创建账户或启动服务，且不表示完整安装就绪。此切片未审查、编译、测试或 CI。
+
 ## 恢复系统盘
 
 ```sh

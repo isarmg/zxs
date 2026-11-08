@@ -97,3 +97,7 @@ async fn serve(options: Options) -> Result<()> {
 #[cfg(test)]
 #[path = "../../test/helper/unit/console/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../test/helper/unit/console/runtime_tests.rs"]
+mod runtime_tests;
