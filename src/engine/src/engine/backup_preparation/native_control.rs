@@ -7,7 +7,6 @@ mod archive;
 mod databases;
 mod runtime;
 pub use archive::BackupNativeControlReport;
-pub(in crate::engine) use databases::BackupSourceFenceEvidence;
 pub(in crate::engine::backup_preparation) use databases::resume_fenced;
 pub use databases::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest,
@@ -15,6 +14,9 @@ pub use databases::{
     BackupScopedDatabasePreparationReport, BackupTopologyTarget,
     offline_check_backup_cutover_inputs, offline_check_backup_object_databases,
     offline_check_backup_scoped_databases,
+};
+pub(in crate::engine) use databases::{
+    BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };
 
 const FORMAT: &str = "zxs-backup-native-preparation";

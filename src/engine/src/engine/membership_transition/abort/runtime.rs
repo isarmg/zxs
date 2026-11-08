@@ -150,7 +150,7 @@ impl Engine {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 format!(
-                    "Abort cannot reach fixed old Q={} of N={}; eligible={}, immutable Joint choices={}",
+                    "Abort cannot reach fixed old Q={} of N={}; eligible={}, immutable non-Abort choices={}",
                     context.quorum(),
                     originals.len(),
                     eligible,
@@ -188,7 +188,7 @@ impl Engine {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 format!(
-                    "Abort lacks fixed old Q={} of N={}; Abort votes={}, immutable Joint choices={}",
+                    "Abort lacks fixed old Q={} of N={}; Abort votes={}, immutable non-Abort choices={}",
                     context.quorum(),
                     originals.len(),
                     votes.len(),

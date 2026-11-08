@@ -3,11 +3,13 @@
 use super::*;
 
 mod cutover;
-pub(in crate::engine) use cutover::BackupSourceFenceEvidence;
 pub(in crate::engine::backup_preparation) use cutover::resume_fenced;
 pub use cutover::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupPreparedTopologyNode,
     BackupTopologyTarget, offline_check_backup_cutover_inputs,
+};
+pub(in crate::engine) use cutover::{
+    BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };
 mod projection;
 mod runtime;

@@ -9,8 +9,12 @@ use std::collections::BTreeSet;
 
 mod fence;
 mod installation;
+mod registration;
 pub(in crate::engine) use fence::BackupSourceFenceEvidence;
 pub(in crate::engine::backup_preparation) use installation::resume_fenced;
+pub(in crate::engine) use registration::{
+    BackupRegistryProjection, MAX_DECISION_BYTES, PreparedBackupRegistry,
+};
 mod runtime;
 mod topology;
 pub(super) use runtime::resume;

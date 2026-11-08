@@ -18,7 +18,9 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
+mod placement;
 mod store;
+pub(crate) use placement::EntityPlacement;
 const ROOT: &str = "activation-image";
 const MANIFEST: &str = "manifest.json";
 const MAX_ENTRIES: usize = 100_000;
@@ -70,6 +72,7 @@ pub(crate) struct Image<'a> {
     files: BTreeMap<PathBuf, Data<'a>>,
     metadata_bytes: usize,
     manifest: Vec<u8>,
+    placement: EntityPlacement,
     pub(crate) file_units: usize,
     pub(crate) directory_repositories: usize,
     pub(crate) bodies: u64,
@@ -98,12 +101,14 @@ impl<'a> Image<'a> {
             files: BTreeMap::new(),
             metadata_bytes: 0,
             manifest: Vec::new(),
+            placement: EntityPlacement::empty(),
             file_units: 0,
             directory_repositories: 0,
             bodies: 0,
             body_bytes: 0,
         };
         let paths = Paths::build(state, &base, &mut image, stop)?;
+        image.placement = EntityPlacement::capture(state, &paths, stop)?;
         let databases = PreparedDatabases::capture(admitted, stop)?;
         for database in databases.into_databases() {
             preparation_checkpoint(stop)?;
@@ -270,6 +275,9 @@ impl<'a> Image<'a> {
         }
         self.files.insert(path, data);
         Ok(())
+    }
+    pub(crate) fn placement(&self) -> &EntityPlacement {
+        &self.placement
     }
     pub(crate) fn manifest_hash(&self) -> String {
         blake3::hash(&self.manifest).to_hex().to_string()

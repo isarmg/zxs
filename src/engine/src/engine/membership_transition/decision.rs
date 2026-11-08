@@ -1,5 +1,5 @@
-//! One immutable choice per intent and actual member root. Joint and future
-//! certified abort share this name; staging objects and status caches never vote.
+//! One immutable choice per intent and actual member root. Joint, certified
+//! Abort and backup registry/placement share this name; staging objects and status caches never vote.
 use super::*;
 use pending::MemberIdentity;
 use platform_io::fs_safety::{AtomicFile, EntryName, linux::FileIdentity};
@@ -30,6 +30,10 @@ enum DecisionFormat {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", deny_unknown_fields)]
 enum Choice {
+    BackupRegistryPlacement {
+        core_hash: String,
+        acceptance_hash: String,
+    },
     Readmission {
         proposal_hash: String,
         acceptance_hash: String,
@@ -76,7 +80,11 @@ impl DecisionRecord {
                 proposal_hash,
                 acceptance_hash,
             } => (proposal_hash, acceptance_hash),
-            Choice::Abort {
+            Choice::BackupRegistryPlacement {
+                core_hash,
+                acceptance_hash,
+            }
+            | Choice::Abort {
                 core_hash,
                 acceptance_hash,
             }
@@ -104,6 +112,35 @@ pub(super) struct DecisionReceipt {
     record: DecisionRecord,
 }
 impl DecisionReceipt {
+    pub(super) fn plan_backup(
+        transition: &str,
+        identity: &MemberIdentity,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<Self> {
+        let record = backup_record(transition, identity, core, acceptance)?;
+        Ok(Self {
+            record_hash: object_hash(DECISION_KIND, &record)?,
+            record,
+        })
+    }
+    pub(super) fn verify_backup(
+        &self,
+        transition: &str,
+        identity: &MemberIdentity,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<()> {
+        let expected = Self::plan_backup(transition, identity, core, acceptance)?;
+        if self != &expected {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "registry/placement member decision differs",
+            ));
+        }
+        Ok(())
+    }
+
     /// Pure deterministic encoding for pre-decision metadata budgeting. Like a
     /// decoded receipt, this is not evidence of any local selected or synced slot.
     pub(super) fn plan_terminal_resume(
@@ -256,6 +293,39 @@ pub(super) enum TerminalResumeChoice {
 }
 
 impl DecisionStore {
+    pub(super) fn require_backup_allowed(&self, core: &str, acceptance: &str) -> Result<()> {
+        let expected = backup_record(
+            &self.binding.transition_hash,
+            &self.binding.identity,
+            core,
+            acceptance,
+        )?;
+        if let Some((file, record)) = self.observe()? {
+            self.verify_named_record(&file, &record)?;
+            if record != expected {
+                return Err(Error::new(
+                    ErrorCode::LogFork,
+                    "another immutable decision blocks the registry/placement choice",
+                ));
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn backup_receipt(&self, core: &str, acceptance: &str) -> Result<DecisionReceipt> {
+        let expected = backup_record(
+            &self.binding.transition_hash,
+            &self.binding.identity,
+            core,
+            acceptance,
+        )?;
+        self.select(
+            &expected,
+            true,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
+    }
+
     /// A missing exact slot is neutral. Existing neutral binding staging is
     /// inspected without installing, synchronizing or choosing anything.
     pub(super) fn observe_terminal_resume(
@@ -624,7 +694,14 @@ impl DecisionStore {
     pub(super) fn can_choose_abort(&self, core: &str, acceptance: &str) -> Result<bool> {
         let expected = self.abort_record(core, acceptance)?;
         match self.observe()? {
-            Some((_, record)) if matches!(record.choice, Choice::Joint { .. }) => Ok(false),
+            Some((_, record))
+                if matches!(
+                    record.choice,
+                    Choice::Joint { .. } | Choice::BackupRegistryPlacement { .. }
+                ) =>
+            {
+                Ok(false)
+            }
             Some((_, record)) if record != expected => Err(Error::new(
                 ErrorCode::LogFork,
                 "member selected another Abort core",
@@ -633,7 +710,7 @@ impl DecisionStore {
         }
     }
 
-    /// Joint minorities are immutable, but do not prevent another fixed old
+    /// Joint/backup minorities are immutable, but do not prevent another fixed old
     /// majority choosing Abort. Any different Abort core remains a hard fork.
     pub(super) fn abort_receipt(
         &self,
@@ -641,7 +718,10 @@ impl DecisionStore {
         acceptance: &str,
     ) -> Result<Option<DecisionReceipt>> {
         if let Some((_, record)) = self.observe()?
-            && matches!(record.choice, Choice::Joint { .. })
+            && matches!(
+                record.choice,
+                Choice::Joint { .. } | Choice::BackupRegistryPlacement { .. }
+            )
         {
             return Ok(None);
         }
@@ -1033,6 +1113,26 @@ fn terminal_resume_cancel_record(
         choice: Choice::TerminalResumeCancel {
             core_hash: core.to_owned(),
             acceptance_hash: acceptance.to_owned(),
+        },
+    })
+}
+
+fn backup_record(
+    transition: &str,
+    identity: &MemberIdentity,
+    core: &str,
+    acceptance: &str,
+) -> Result<DecisionRecord> {
+    validate_hash(transition)?;
+    validate_hash(core)?;
+    validate_hash(acceptance)?;
+    Ok(DecisionRecord {
+        format: DecisionFormat::Decision,
+        transition_hash: transition.into(),
+        identity: identity.clone(),
+        choice: Choice::BackupRegistryPlacement {
+            core_hash: core.into(),
+            acceptance_hash: acceptance.into(),
         },
     })
 }

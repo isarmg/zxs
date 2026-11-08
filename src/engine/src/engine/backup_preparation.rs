@@ -1,5 +1,6 @@
 //! Durable background preparation of complete history material. It never changes
-//! Config, Current, routes, old receipts, or claims that a target is activated.
+//! active Config, Current, routes or old receipts. Explicit later native choice
+//! stages still do not claim a serving target or release the source fence.
 use super::Engine;
 use crate::{disk::*, history_package::PreparedHistoryPackage, *};
 use data_serialization::{Deserialize, Serialize};
@@ -19,13 +20,15 @@ mod batch;
 mod execution;
 mod inspection;
 mod native_control;
-pub(in crate::engine) use native_control::BackupSourceFenceEvidence;
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
     BackupNativePreparationReport, BackupNativeTargetReport, BackupObjectDatabasePreparationReport,
     BackupPreparedTopologyNode, BackupScopedDatabasePreparationReport, BackupTopologyTarget,
     offline_check_backup_cutover_inputs, offline_check_backup_native_preparation,
     offline_check_backup_object_databases, offline_check_backup_scoped_databases,
+};
+pub(in crate::engine) use native_control::{
+    BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };
 mod snapshot;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
@@ -75,6 +78,9 @@ pub enum BackupPreparationPhase {
     /// Independent entity images on every selected target, still isolated. The
     /// source remains fenced; no target membership or final placement exists.
     TargetEntitiesPrepared,
+    /// Exact registry and whole-unit placements selected in every original
+    /// native decision slot. No active writer/route or source fence release.
+    RegistryPlacementDecided,
     Blocked,
     SourceChanged,
 }

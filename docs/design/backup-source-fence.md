@@ -31,7 +31,7 @@
 
 ## 可恢复的原成员认证取消
 
-这不是永久无法退出的停写，也不是直接清除 `blocked`：
+在尚未选定后继共同决定时，源 fence 可按以下认证协议退出，不是直接清除 `blocked`。后继 [registry/placement 共同选择](backup-registry-placement-decision.md)与 Abort 共享同一槽；足够 Backup 选择后 Abort 可能不可达，不能再承诺可取消：
 
 - 使用既有原成员完整 control archive 和 `certify_membership_abort` / `cancel_membership_handoff`，按固定原 N/Q 做不可变 Abort 选择。
 - 新备份 origin 只能使用 source-only 取消分支。它要求目标 Config 与原 Config 完全一致、无新根登记、无 ExitEffect、无缩小围栏范围；原普通 Add 的准入不被放宽。

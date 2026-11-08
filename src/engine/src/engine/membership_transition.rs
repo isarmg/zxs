@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 mod abort;
 mod archive;
 mod backup;
+pub(in crate::engine) use backup::BackupChoiceContext;
 mod complete_chain;
 pub use abort::MembershipAbortStatus;
 mod decision;

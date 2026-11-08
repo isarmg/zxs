@@ -277,3 +277,7 @@
 ## 源围栏后的隔离实体安装切片
 
 [目标实体安装](../design/backup-target-entity-installation.md)将原完整目标中的文件／目录材料复制成独立物理单位，并以原生围栏绑定任务恢复；不变更 Config、registry、placement 或源数据，不解除全池停写。真正最终切换仍未闭合。此片按当前指示未审查／编译／测试／CI。
+
+## 后继：原成员共同 registry/placement 选择
+
+[共同选择切片](../design/backup-registry-placement-decision.md)使用 source fence 的真实原成员共享决定槽，一次绑定全部目标身份、完整实体地址及旧源保留。实际全成员选择和全目标证书落盘仍不等于活动 writer 或最终切换；足够 Backup 选择会使认证 Abort 不可达，原池仍停写，不能接成普通设置隐藏操作。没有调用实际操作，按要求未审查、编译、测试或 CI。

@@ -13,16 +13,16 @@ const MAX_INTENT: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct Task {
+pub(super) struct Task {
     format: String,
-    source_fence_hash: String,
-    evidence: BackupSourceFenceEvidence,
+    pub(super) source_fence_hash: String,
+    pub(super) evidence: BackupSourceFenceEvidence,
 }
 impl Task {
-    fn selection(&self) -> &Selection {
+    pub(super) fn selection(&self) -> &Selection {
         self.evidence.task.selection()
     }
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.format != FORMAT
             || self.source_fence_hash.len() != 64
             || !self
@@ -42,7 +42,7 @@ impl Task {
             &job.snapshot,
         )
     }
-    fn bytes(&self) -> Result<Vec<u8>> {
+    pub(super) fn bytes(&self) -> Result<Vec<u8>> {
         let bytes = canonical_json(self)?;
         if bytes.len() > MAX_INTENT {
             return Err(Error::new(
@@ -52,7 +52,11 @@ impl Task {
         }
         Ok(bytes)
     }
-    fn current(engine: &Engine, operation: OperationId, principal: &str) -> Result<Self> {
+    pub(super) fn current(
+        engine: &Engine,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<Self> {
         let (source_fence_hash, evidence) = engine.fenced_backup_inputs(operation, principal)?;
         Ok(Self {
             format: FORMAT.into(),
@@ -60,14 +64,14 @@ impl Task {
             evidence,
         })
     }
-    fn read(system: &DiskRoot) -> Result<Self> {
+    pub(super) fn read(system: &DiskRoot) -> Result<Self> {
         let task: Self = crate::journal::decode_proof(
             &system.read_bytes(&system.path().join(TASK), MAX_INTENT)?,
         )?;
         task.validate()?;
         Ok(task)
     }
-    fn require_current(&self, engine: &Engine) -> Result<()> {
+    pub(super) fn require_current(&self, engine: &Engine) -> Result<()> {
         let request = &self.evidence.task.request;
         if self.bytes()?
             != Self::current(engine, request.operation_id, &request.principal)?.bytes()?
@@ -79,8 +83,8 @@ impl Task {
         Ok(())
     }
 }
-struct Target {
-    root: DiskRoot,
+pub(super) struct Target {
+    pub(super) root: DiskRoot,
     _lock: AdvisoryLock,
 }
 
@@ -138,7 +142,7 @@ impl Engine {
     }
 }
 
-fn acquire(engine: &Engine, task: &Task) -> Result<Vec<Target>> {
+pub(super) fn acquire(engine: &Engine, task: &Task) -> Result<Vec<Target>> {
     // The only exception to ordinary require_write is this narrow, source-fence
     // capability. No raw SYSTEM file can take this branch. Original all-member
     // seals, State and prefix are checked before reopening any target pathname.
@@ -172,6 +176,9 @@ pub(in crate::engine::backup_preparation) fn resume_fenced(
     engine: &mut Engine,
     system: &DiskRoot,
 ) -> Result<bool> {
+    if super::registration::resume(engine, system)? {
+        return Ok(true);
+    }
     if !preparation_path_exists(system, &system.path().join(TASK))? {
         return Ok(false);
     }
@@ -225,7 +232,7 @@ fn acceptance(task: &Task, task_hash: &str, index: usize, image: &Image<'_>) -> 
     })
 }
 
-fn with_image<T>(
+pub(super) fn with_image<T>(
     task: &Task,
     target: &Target,
     index: usize,
@@ -327,22 +334,7 @@ fn run(
             Ok(())
         })?;
     }
-    #[derive(Serialize)]
-    struct Completion<'a> {
-        format: &'static str,
-        source_fence_hash: &'a str,
-        task_hash: &'a str,
-        target_acceptance_hashes: Vec<String>,
-    }
-    let complete = bounded(&Completion {
-        format: FORMAT,
-        source_fence_hash: &task.source_fence_hash,
-        task_hash: &hash,
-        target_acceptance_hashes: acceptances
-            .iter()
-            .map(|bytes| blake3::hash(bytes).to_hex().to_string())
-            .collect(),
-    })?;
+    let complete = completion(task, &hash, &acceptances)?;
     for (target, job) in targets.iter().zip(task.selection().jobs()) {
         preparation_checkpoint(stop)?;
         named_target(&target.root, job)?;
@@ -398,4 +390,73 @@ fn spawn(engine: &Engine, task: Task, system: DiskRoot, targets: Vec<Target>) ->
         stop,
         thread: Some(thread),
     })
+}
+
+fn completion(task: &Task, hash: &str, acceptances: &[Vec<u8>]) -> Result<Vec<u8>> {
+    #[derive(Serialize)]
+    struct Completion<'a> {
+        format: &'static str,
+        source_fence_hash: &'a str,
+        task_hash: &'a str,
+        target_acceptance_hashes: Vec<String>,
+    }
+    bounded(&Completion {
+        format: FORMAT,
+        source_fence_hash: &task.source_fence_hash,
+        task_hash: hash,
+        target_acceptance_hashes: acceptances
+            .iter()
+            .map(|bytes| blake3::hash(bytes).to_hex().to_string())
+            .collect(),
+    })
+}
+
+/// Require all old entity acceptances and their identical complete-set marker.
+/// No decision caller may infer image completion from a progress phase alone.
+pub(super) fn verify_installed(task: &Task, targets: &[Target], stop: &AtomicBool) -> Result<()> {
+    let roots = targets
+        .iter()
+        .map(|target| &target.root)
+        .collect::<Vec<_>>();
+    let observed = super::verify_at(&task.evidence.task, &roots, stop)?;
+    if bounded(&observed)? != bounded(&task.evidence.report)? {
+        return Err(invalid(
+            "installed entities extend different original cutover inputs",
+        ));
+    }
+    let hash = object_hash(FORMAT, task)?;
+    let intent = task.bytes()?;
+    let mut acceptances = Vec::with_capacity(targets.len());
+    for (index, target) in targets.iter().enumerate() {
+        let accepted = with_image(task, target, index, stop, |image| {
+            image.verify(&target.root, stop)?;
+            acceptance(task, &hash, index, image)
+        })?;
+        if target
+            .root
+            .read_bytes(&target.root.path().join(INTENT), MAX_INTENT)?
+            != intent
+            || target
+                .root
+                .read_bytes(&target.root.path().join(ACCEPTANCE), MAX_TASK)?
+                != accepted
+        {
+            return Err(invalid(
+                "image acceptance is absent or differs from original task",
+            ));
+        }
+        acceptances.push(accepted);
+    }
+    let complete = completion(task, &hash, &acceptances)?;
+    for (target, job) in targets.iter().zip(task.selection().jobs()) {
+        named_target(&target.root, job)?;
+        if target
+            .root
+            .read_bytes(&target.root.path().join(COMPLETE), MAX_TASK)?
+            != complete
+        {
+            return Err(invalid("target image lacks the exact complete-set marker"));
+        }
+    }
+    Ok(())
 }

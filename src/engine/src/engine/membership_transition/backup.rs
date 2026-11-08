@@ -2,7 +2,9 @@
 //! The effective Config remains the original one. No target is a voter or an
 //! active member, and ordinary Add/Joint activation cannot consume this origin.
 use super::*;
+mod registry;
 use crate::engine::backup_preparation::BackupSourceFenceEvidence;
+pub(in crate::engine) use registry::BackupChoiceContext;
 
 pub(super) fn verify_intent(intent: &TransitionIntent) -> Result<()> {
     let Origin::BackupCutover { config, evidence } = &intent.origin else {
