@@ -98,6 +98,17 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             </Show>
             <Show when=move ||state.with(|s|s.files.node_retirement.loading)><p class="zxs-row" role="status">{t("正在计算当前根的完整条件影响…", "Computing complete conditional impact at the current root…")}</p></Show>
             {move ||state.with(summary).map(|message|view!{<p class="zxs-row" role="status">{message}</p>})}
+            {move ||state.with(|s|s.files.node_retirement.attempt.as_ref().and_then(|a|a.separation.clone())).map(|partition|match partition {
+                wire::Separation::Published { history_root, original_files, file_components } => view! {
+                    <details class="zxs-stack"><summary class="zxs-row">{t("原退役决定的真实文件分组", "File groups published by the original retirement")}</summary>
+                        <p class="zxs-row">{format!("{} {} · {} {}", t("原共享分量文件数", "Files in the original component"), original_files.len(), t("发布后分组数", "Groups at publication"), file_components.len())}</p>
+                        {file_components.into_iter().map(|group|view!{<p class="zxs-row">{group.iter().map(ToString::to_string).collect::<Vec<_>>().join(" · ")}</p>}).collect_view()}
+                        <p class="zxs-row">{format!("{} {}", t("原来源根：", "Original source root:"), history_root)}</p>
+                        <p class="zxs-row">{t("此为原操作发布时的准确结果，不是清理证明。之后新增相同内容或继续退役可能改变当前联合图，不改写此原收据。", "This is the exact original publication result, not cleanup proof. Later matching saves or further retirements may change the live graph without rewriting this receipt.")}</p>
+                    </details>
+                }.into_any(),
+                wire::Separation::Unverified { error_code } => view!{<p class="zxs-row">{format!("{}: {}",t("原决定分组未核验", "Original decision groups unverified"), error_code)}</p>}.into_any(),
+            })}
             {move ||state.with(|s|s.files.node_retirement.attempt.as_ref().and_then(|a|a.cleanup.clone())).map(|cleanup|match cleanup {
                 Cleanup::Observed{replicas,..}=>view!{<details class="zxs-stack"><summary class="zxs-row">{t("逐副本清理观察", "Per-replica cleanup observations")}</summary>{replicas.iter().map(|replica|view!{<p class="zxs-row">{replica_label(replica)}</p>}).collect_view()}</details>}.into_any(),
                 Cleanup::Unverified{error_code}=>view!{<p class="zxs-row">{format!("{}: {}",t("正文清理未核验", "Body cleanup unverified"),error_code)}</p>}.into_any(),

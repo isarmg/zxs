@@ -83,6 +83,8 @@ mod maintenance;
 mod metadata_budget;
 mod metadata_map;
 mod node_retirement;
+pub use node_retirement::PermanentNodeSeparation;
+mod shared_file_topology;
 mod protection;
 mod publication_evidence;
 mod repair;

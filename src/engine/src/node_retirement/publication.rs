@@ -9,6 +9,7 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
     for receipt in state.operations.values().filter(|r| r.kind == KIND) {
         let decision = decision(receipt)?;
         decision.request.validate()?;
+        decision.separation.validate(state, &decision.request)?;
         let principal = state.operation_principals.get(&receipt.operation_id).ok_or_else(invalid)?;
         Engine::require_actor(principal)?;
         if receipt.sequence == 0 || receipt.sequence > state.sequence
@@ -20,7 +21,8 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
             || !receipt.result["timestamp"].as_str().is_some_and(|v| v.parse::<u64>().is_ok())
             || !receipt.result["membership_epoch"].as_str().is_some_and(|v| v.parse::<u64>().is_ok())
             || receipt.result.as_object().is_none_or(|v| v.len() != 4)
-            || archive_digest(state, &decision.request)? != decision.archive_digest {
+            || archive_digest(state, &decision.request)? != decision.archive_digest
+            || references::capture(state, &decision.request)? != decision.inbound_references {
             return Err(invalid());
         }
         for id in decision.request.version_ids {

@@ -105,3 +105,55 @@ fn permanent_retirement_refuses_lossy_portable_export_and_stale_new_request() {
     assert_eq!(pool.engine.export_history_package(&pool.history, &destination).unwrap_err().code(), ErrorCode::HistoryPackageInvalid);
     assert!(!destination.exists());
 }
+
+#[test]
+fn repeated_equal_versions_keep_the_last_parallel_witness_live() {
+    let mut pool = Pool::new();
+    pool.save(&[("a", b"shared"), ("b", b"shared")]);
+    let first = pool.entry("a");
+    pool.save(&[("a", b"between")]);
+    pool.save(&[("a", b"shared")]);
+    let repeated = pool.entry("a");
+    pool.save(&[("a", b"private")]);
+    let first_result = retire(&mut pool, &first, &[&first.version_id]);
+    assert_eq!(first_result.separation().unwrap().file_components().len(), 1);
+    assert_eq!(super::permanent_removal::read(&pool, &first.file_id).graph().unwrap().files.len(), 2);
+    let last_result = retire(&mut pool, &repeated, &[&repeated.version_id]);
+    assert_eq!(last_result.separation().unwrap().original_files().len(), 2);
+    assert_eq!(last_result.separation().unwrap().file_components().len(), 2);
+    assert_eq!(super::permanent_removal::read(&pool, &first.file_id).graph().unwrap().files.len(), 1);
+}
+
+#[test]
+fn transitive_paths_and_original_partitions_survive_later_retirement_reconnect_and_cold_open() {
+    let mut pool = Pool::new();
+    pool.save(&[("a", b"x"), ("b", b"x"), ("c", b"private-c")]);
+    let ax = pool.entry("a");
+    pool.save(&[("a", b"z"), ("c", b"z")]);
+    let az = pool.entry("a");
+    pool.save(&[("b", b"y"), ("c", b"y")]);
+    pool.save(&[("a", b"private-a"), ("b", b"private-b"), ("c", b"private-c-final")]);
+    let first = retire(&mut pool, &ax, &[&ax.version_id]);
+    let first_id = first.publication().operation_id;
+    assert_eq!(first.separation().unwrap().original_files().len(), 3);
+    assert_eq!(first.separation().unwrap().file_components().len(), 1, "a-c-b still connects all files");
+    let second = retire(&mut pool, &az, &[&az.version_id]);
+    let second_id = second.publication().operation_id;
+    let original_root = second.separation().unwrap().source_history_root();
+    let original_partition = second.separation().unwrap().file_components().to_vec();
+    assert_eq!(original_partition.len(), 2);
+    assert_eq!(super::permanent_removal::read(&pool, &ax.file_id).graph().unwrap().files.len(), 1);
+    pool.save(&[("a", b"y")]);
+    assert_eq!(super::permanent_removal::read(&pool, &ax.file_id).graph().unwrap().files.len(), 3);
+    assert_eq!(pool.engine.state().content_states[&ax.version_id], ContentState::Retired);
+    assert_eq!(pool.engine.state().content_states[&az.version_id], ContentState::Retired);
+    let root = pool.root.clone();
+    drop(pool.engine);
+    pool.engine = Engine::open(&root).unwrap();
+    let old = pool.engine.resume_file_node_retirement(first_id, "admin").unwrap();
+    assert_eq!(old.separation().unwrap().file_components().len(), 1);
+    let resumed = pool.engine.resume_file_node_retirement(second_id, "admin").unwrap();
+    assert_eq!(resumed.separation().unwrap().source_history_root(), original_root);
+    assert_eq!(resumed.separation().unwrap().file_components(), original_partition);
+    assert_eq!(super::permanent_removal::read(&pool, &ax.file_id).graph().unwrap().files.len(), 3);
+}

@@ -1,6 +1,6 @@
 //! Current administrator admission and exact file-bound retry, under the engine owner.
 use super::*;
-use storage_contract::{OperationId, history_window::{HistoryFileId, HistoryWindowCancellation}, node_retirement::{Cleanup, Outcome, Preview, Replica, ReplicaState, Selection}};
+use storage_contract::{OperationId, history_window::{HistoryFileId, HistoryWindowCancellation}, node_retirement::{Cleanup, Outcome, Preview, Replica, ReplicaState, Selection, Separation}};
 
 fn identity(engine: &AdmissionEngine, caller: &Identity) -> Result<Identity, ApiError> {
     let current = current_protected_identity(engine, caller)?;
@@ -56,6 +56,14 @@ pub(super) fn resume(backend: &EngineBackend, caller: &Identity, file: HistoryFi
     outcome(file, result)
 }
 fn outcome(file_id: HistoryFileId, result: storage_engine::PermanentNodeRetirementOutcome) -> Result<Outcome, ApiError> {
+    let separation = match result.separation() {
+        Ok(partition) => Separation::Published {
+            history_root: partition.source_history_root(),
+            original_files: partition.original_files().to_vec(),
+            file_components: partition.file_components().to_vec(),
+        },
+        Err(error) => Separation::Unverified { error_code: error.code().as_str().into() },
+    };
     let cleanup = match result.cleanup() {
         Err(error) => Cleanup::Unverified { error_code: error.code().as_str().into() },
         Ok(observation) => Cleanup::Observed {
@@ -72,5 +80,5 @@ fn outcome(file_id: HistoryFileId, result: storage_engine::PermanentNodeRetireme
             }).collect(),
         },
     };
-    Ok(Outcome { file_id, operation: crate::operation_wire::operation_wire(result.publication().clone().into())?, cleanup })
+    Ok(Outcome { file_id, operation: crate::operation_wire::operation_wire(result.publication().clone().into())?, separation, cleanup })
 }

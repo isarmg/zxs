@@ -53,3 +53,42 @@ fn retirement_never_accepts_bare_state_token_as_authority() {
     before.content_states.insert(version, ContentState::Retired);
     assert!(crate::node_retirement::admit_current(&before).is_err());
 }
+
+#[test]
+fn cold_retirement_closure_rejects_new_inbound_sources_without_using_version_sequence() {
+    let (_temp, mut engine, _before, _operation, old) = fixture();
+    let repository = engine.state().repositories.values().next().unwrap().clone();
+    let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "a", b"later live content").unwrap();
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id, operation_id: OperationId::generate().unwrap(),
+        principal: "admin".into(), expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token, message: "after retirement".into(), request_digest: None,
+    }).unwrap();
+    let entry = engine.namespace_tree(&repository.main_branch_id).unwrap().get("a").unwrap().clone();
+    let mut changed = engine.state().clone();
+    let mut version = changed.versions[&entry.version_id].clone();
+    assert!(!version.source_version_ids.contains(&old));
+    version.source_version_ids.push(old);
+    // Imported historical records may carry an old sequence. It is not a proof
+    // that a newly attached inbound reference predates the retirement.
+    version.version_sequence = 1;
+    changed.versions.insert(entry.version_id, version);
+    assert!(crate::node_retirement::admit_current(&changed).is_err());
+}
+
+#[test]
+fn cold_retirement_requires_the_frozen_partition_and_inbound_closure_fields() {
+    let (_temp, engine, _before, operation, _version) = fixture();
+    let state = engine.state();
+    let mut changed = state.clone();
+    let mut receipt = changed.operations[&operation].clone();
+    receipt.result["retirement"]["separation"]["file_components"] = json_codec::json!([]);
+    changed.operations.insert(operation, receipt);
+    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    let mut missing = state.clone();
+    let mut receipt = missing.operations[&operation].clone();
+    receipt.result["retirement"].as_object_mut().unwrap().remove("inbound_references");
+    missing.operations.insert(operation, receipt);
+    assert!(crate::node_retirement::admit_current(&missing).is_err(), "missing current-format proof is not silently defaulted");
+}

@@ -252,53 +252,17 @@ fn components(
     selected: &BTreeSet<&HistoryVersionId>,
     work: &mut Work<'_>,
 ) -> Result<Vec<Vec<HistoryFileId>>> {
-    let mut groups = BTreeMap::<_, BTreeSet<_>>::new();
-    for version in &graph.versions {
-        work.step()?;
-        if version.logical_size != 0 && !selected.contains(&version.version_id) {
-            groups
-                .entry((version.content_hash, version.logical_size))
-                .or_default()
-                .insert(&version.file_id);
-        }
-    }
-    let mut memberships = BTreeMap::<_, Vec<_>>::new();
-    for (key, files) in &groups {
-        for file in files {
-            work.step()?;
-            memberships.entry(*file).or_default().push(key);
-        }
-    }
-    let mut seen = BTreeSet::new();
-    let mut expanded = BTreeSet::new();
-    let mut result = Vec::new();
-    for file in &graph.files {
-        work.step()?;
-        if !seen.insert(&file.file_id) {
-            continue;
-        }
-        let mut component = BTreeSet::from([&file.file_id]);
-        let mut pending = VecDeque::from([&file.file_id]);
-        while let Some(file) = pending.pop_front() {
-            work.step()?;
-            if let Some(keys) = memberships.get(file) {
-                for key in keys {
-                    work.step()?;
-                    if expanded.insert(*key) {
-                        for other in &groups[key] {
-                            work.step()?;
-                            if seen.insert(other) {
-                                component.insert(other);
-                                pending.push_back(other);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        result.push(component.into_iter().cloned().collect());
-    }
-    Ok(result)
+    let files = graph.files.iter().map(|file| file.file_id.as_str()).collect();
+    let selected = selected.iter().map(|id| id.as_str()).collect();
+    let versions = graph.versions.iter().map(|version| crate::shared_file_topology::Member {
+        file: version.file_id.as_str(),
+        version: version.version_id.as_str(),
+        content: (version.content_hash, version.logical_size),
+    });
+    crate::shared_file_topology::partition(&files, versions, &selected, || work.step())?
+        .into_iter()
+        .map(|component| component.iter().map(|id| HistoryFileId::parse(id)).collect::<storage_contract::Result<_>>().map_err(Into::into))
+        .collect()
 }
 
 fn parents(

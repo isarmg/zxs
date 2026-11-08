@@ -10633,14 +10633,83 @@
         },
         "cleanup": {
           "$ref": "#/$defs/NodeRetirementCleanup"
+        },
+        "separation": {
+          "$ref": "#/$defs/NodeRetirementSeparation"
         }
       },
       "required": [
         "file_id",
         "operation",
-        "cleanup"
+        "cleanup",
+        "separation"
       ],
-      "description": "Native file.nodes.retire receipt plus separate body cleanup result. A failed cleanup cannot roll back or conceal published retirement. The result retains the original exact request for operation polling and retry."
+      "description": "Native file.nodes.retire receipt, exact original publication-time separation and separate current-route cleanup. Neither unavailable observation can conceal an already published irreversible decision."
+    },
+    "NodeRetirementSeparation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "published"
+            },
+            "history_root": {
+              "$ref": "#/$defs/HistoryRoot"
+            },
+            "original_files": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/FileId"
+              }
+            },
+            "file_components": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/FileId"
+                }
+              }
+            }
+          },
+          "required": [
+            "state",
+            "history_root",
+            "original_files",
+            "file_components"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "unverified"
+            },
+            "error_code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "state",
+            "error_code"
+          ]
+        }
+      ],
+      "description": "Exact original publication-time separation, never today's topology or body cleanup. Original files are sorted/unique, include the selected origin, and are covered once by disjoint sorted components. Bound to the original request root. The permanent native decision freezes and authenticates the complete original live version cohort; cold admission recomputes this historical partition without filtering later retirements or adding later saves."
     }
   }
 }

@@ -1,119 +1,19 @@
 //! Request-local automatic components over retained nonempty content metadata.
 //! Equality is separate from ancestry: revisiting bytes never folds event IDs.
 use super::{HistoryCancellationCheckpoint, nodes, query};
-use crate::{Error, FileVersion, Result, State};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use crate::{Result, State};
+use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::history_window::{
-    HistoryBranchId, HistoryFileId, HistoryTreeId, HistoryVersionId, HistoryWindowCancellation,
+    HistoryBranchId, HistoryFileId, HistoryTreeId, HistoryVersionId,
 };
 use storage_contract::shared_history::{
-    MAX_SHARED_HISTORY_BRANCHES, MAX_SHARED_HISTORY_EDGES, MAX_SHARED_HISTORY_FILES,
+    MAX_SHARED_HISTORY_BRANCHES, MAX_SHARED_HISTORY_EDGES,
     MAX_SHARED_HISTORY_NODES, SharedContent, SharedHistoryBranch, SharedHistoryFile,
     SharedHistoryGraph, SharedHistoryNode, SharedHistoryNodeId, SharedHistoryNodeKind,
     SharedHistoryRequest, SharedHistoryVersion,
 };
 
-const MAX_SCAN_RECORDS: usize = 1_048_576;
-const MAX_INDEX_VERSIONS: usize = 65_536;
-type ContentKey = (storage_contract::ContentHash, u64);
-
-fn exhausted() -> Error {
-    Error::new(
-        storage_contract::ErrorCode::ResourceLimit,
-        "shared history exceeds its complete-component lookup budget",
-    )
-}
-
-struct Scan<'a> {
-    remaining: usize,
-    cancellation: &'a HistoryWindowCancellation,
-}
-impl Scan<'_> {
-    fn record(&mut self) -> Result<()> {
-        self.cancellation.checkpoint()?;
-        if self.remaining == 0 {
-            return Err(exhausted());
-        }
-        self.remaining -= 1;
-        Ok(())
-    }
-}
-
-struct VersionIndex<'a> {
-    files: BTreeMap<&'a str, Vec<&'a FileVersion>>,
-    contents: BTreeMap<ContentKey, Vec<&'a FileVersion>>,
-}
-impl<'a> VersionIndex<'a> {
-    fn new(state: &'a State, history: &str, scan: &mut Scan<'_>) -> Result<Self> {
-        let mut index = Self {
-            files: BTreeMap::new(),
-            contents: BTreeMap::new(),
-        };
-        let mut count = 0;
-        for version in state.versions.values() {
-            scan.record()?;
-            if version.history_tree_id != history || crate::node_retirement::is_retired(state, &version.version_id) {
-                continue;
-            }
-            if count == MAX_INDEX_VERSIONS {
-                return Err(exhausted());
-            }
-            count += 1;
-            index
-                .files
-                .entry(&version.file_id)
-                .or_default()
-                .push(version);
-            if version.logical_size != 0 {
-                index
-                    .contents
-                    .entry(content_key(version))
-                    .or_default()
-                    .push(version);
-            }
-        }
-        Ok(index)
-    }
-
-    fn component(&self, origin: &str, scan: &mut Scan<'_>) -> Result<BTreeSet<&'a str>> {
-        let origin = self
-            .files
-            .get_key_value(origin)
-            .expect("invariant: admitted file has a version")
-            .0;
-        let mut files = BTreeSet::from([*origin]);
-        let mut queue = VecDeque::from([*origin]);
-        let mut seen = BTreeSet::new();
-        let mut versions = 0;
-        while let Some(file) = queue.pop_front() {
-            for version in &self.files[file] {
-                scan.record()?;
-                if versions == MAX_SHARED_HISTORY_NODES {
-                    return Err(exhausted());
-                }
-                versions += 1;
-                if version.logical_size == 0 || !seen.insert(content_key(version)) {
-                    continue;
-                }
-                for related in &self.contents[&content_key(version)] {
-                    scan.record()?;
-                    if !files.contains(related.file_id.as_str()) {
-                        if files.len() == MAX_SHARED_HISTORY_FILES {
-                            return Err(exhausted());
-                        }
-                        files.insert(&related.file_id);
-                        queue.push_back(&related.file_id);
-                    }
-                }
-            }
-        }
-        Ok(files)
-    }
-}
-
-fn content_key(version: &FileVersion) -> ContentKey {
-    (version.content_hash, version.logical_size)
-}
+use crate::shared_file_topology::{Scan, VersionIndex, exhausted};
 
 struct Events {
     nodes: BTreeMap<String, SharedHistoryNode>,
@@ -192,10 +92,7 @@ pub(super) fn project(
     query: &query::Query<'_>,
     request: &SharedHistoryRequest,
 ) -> Result<SharedHistoryGraph> {
-    let mut scan = Scan {
-        remaining: MAX_SCAN_RECORDS,
-        cancellation: query.cancel,
-    };
+    let mut scan = Scan::new(query.cancel);
     let history = query.context.history_tree_id.as_str();
     let index = VersionIndex::new(query.state, history, &mut scan)?;
     let component = index.component(request.file_id.as_str(), &mut scan)?;

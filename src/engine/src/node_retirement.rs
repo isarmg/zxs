@@ -7,6 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::history_window::{HistoryFileId, HistoryRoot, HistoryTreeId, HistoryVersionId};
 
 mod publication;
+mod references;
+mod separation;
+pub use separation::PermanentNodeSeparation;
 pub(crate) use publication::{admit_current, verify};
 pub(crate) const KIND: &str = "file.nodes.retire";
 const MAX_SELECTED: usize = storage_contract::shared_history::MAX_SHARED_HISTORY_NODES;
@@ -24,6 +27,8 @@ pub(crate) struct Request {
 pub(crate) struct Decision {
     pub(crate) request: Request,
     archive_digest: String,
+    inbound_references: references::ReferenceClosure,
+    separation: separation::Separation,
 }
 
 fn invalid() -> Error {
@@ -102,7 +107,12 @@ pub(crate) fn decide(state: &State, request: Request) -> Result<Decision> {
     if crate::history_package::retirement_history_root(state, &request.history_tree_id)? != request.history_root {
         return Err(Error::new(ErrorCode::HistoryChanged, "retirement source history root changed"));
     }
-    Ok(Decision { archive_digest: archive_digest(state, &request)?, request })
+    Ok(Decision {
+        archive_digest: archive_digest(state, &request)?,
+        inbound_references: references::capture(state, &request)?,
+        separation: separation::Separation::capture(state, &request)?,
+        request,
+    })
 }
 
 pub(crate) fn decision(receipt: &OperationResult) -> Result<Decision> {

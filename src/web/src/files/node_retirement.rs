@@ -24,7 +24,7 @@ impl Target {
     }
 }
 #[derive(Clone)]
-struct Attempt { target: Target, selection: Selection, operation: String, in_flight: bool, uncertain: bool, cleanup: Option<Cleanup> }
+struct Attempt { target: Target, selection: Selection, operation: String, in_flight: bool, uncertain: bool, cleanup: Option<Cleanup>, separation: Option<wire::Separation> }
 #[derive(Clone, Default)]
 pub(crate) struct Model {
     target: Option<Target>,

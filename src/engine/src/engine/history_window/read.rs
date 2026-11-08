@@ -433,10 +433,14 @@ impl Engine {
 #[derive(Debug)]
 pub struct PermanentNodeRetirementOutcome {
     publication: crate::OperationResult,
+    separation: Result<crate::PermanentNodeSeparation>,
     cleanup: Result<super::PermanentRemovalCleanupObservation>,
 }
 impl PermanentNodeRetirementOutcome {
     pub fn publication(&self) -> &crate::OperationResult { &self.publication }
+    pub fn separation(&self) -> std::result::Result<&crate::PermanentNodeSeparation, &Error> {
+        self.separation.as_ref()
+    }
     pub fn cleanup(&self) -> std::result::Result<&super::PermanentRemovalCleanupObservation, &Error> {
         self.cleanup.as_ref()
     }
@@ -446,7 +450,7 @@ impl Engine {
     /// Permanently retire an explicit selection from one complete, current
     /// shared component. Old immutable descriptions remain authentication
     /// evidence, not live nodes. Trusted callers supply current authorization.
-    /// No HTTP/UI command is exposed by this core-only slice.
+    /// HTTP/UI adapters keep their confirmation and current-session admission.
     pub fn retire_file_nodes(
         &mut self,
         read: &SharedHistoryRead,
@@ -506,6 +510,8 @@ impl Engine {
     fn finish_node_retirement(
         &mut self, publication: crate::OperationResult, cancel: &HistoryWindowCancellation,
     ) -> PermanentNodeRetirementOutcome {
+        let separation = crate::node_retirement::decision(&publication)
+            .and_then(|decision| decision.separation_observation(&self.state));
         let cleanup = (|| {
             let decision = crate::node_retirement::decision(&publication)?;
             self.cleanup_purged()?;
@@ -516,7 +522,7 @@ impl Engine {
                 .collect::<storage_contract::Result<Vec<_>>>()?;
             super::permanent_removal_cleanup::inspect_selected(self, root, &versions, cancel)
         })();
-        PermanentNodeRetirementOutcome { publication, cleanup }
+        PermanentNodeRetirementOutcome { publication, separation, cleanup }
     }
 }
 

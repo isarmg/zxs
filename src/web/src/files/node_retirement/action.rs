@@ -46,7 +46,7 @@ pub(super) fn submit(state: RwSignal<State>) {
     });
     let Some((target, selection)) = request else { return; };
     let Some(operation) = crate::ui::file_operation_id(state) else { return; };
-    let attempt = Attempt { target, selection, operation: operation.clone(), in_flight: false, uncertain: false, cleanup: None };
+    let attempt = Attempt { target, selection, operation: operation.clone(), in_flight: false, uncertain: false, cleanup: None, separation: None };
     state.update(|s| {
         s.files.node_retirement.attempt = Some(attempt); s.files.node_retirement.confirmed = false;
         s.notices.operation_success(t("节点退役已发布；正文清理请查看逐副本结果，旧认证证据仍保留。", "Node retirement was published. See per-replica body cleanup results; old authentication evidence remains."));
@@ -138,12 +138,19 @@ fn receive(state: RwSignal<State>, attempt: &Attempt, value: Value) {
         .and_then(|outcome| {
             if outcome.file_id != *attempt.selection.file_id() { return Err(malformed("Retirement cleanup names another file")); }
             outcome.cleanup.validate(attempt.selection.version_ids()).map_err(DecodeError::Name)?;
-            Ok(outcome.cleanup)
+            outcome.separation.validate(&attempt.selection).map_err(DecodeError::Name)?;
+            Ok((outcome.cleanup, outcome.separation))
         });
     state.update(|s| {
         let model = &mut s.files.node_retirement;
         match result {
-            Ok(cleanup) => { if let Some(attempt) = &mut model.attempt { attempt.cleanup = Some(cleanup); } model.error = None; }
+            Ok((cleanup, separation)) => {
+                if let Some(attempt) = &mut model.attempt {
+                    attempt.cleanup = Some(cleanup);
+                    attempt.separation = Some(separation);
+                }
+                model.error = None;
+            }
             Err(error) => model.error = Some(error),
         }
         model.preview = None; model.selected.clear(); model.confirmed = false;

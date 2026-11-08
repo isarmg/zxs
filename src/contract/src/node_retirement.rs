@@ -117,6 +117,7 @@ impl Cleanup {
 pub struct Outcome {
     pub file_id: HistoryFileId,
     pub operation: json_codec::Value,
+    pub separation: Separation,
     pub cleanup: Cleanup,
 }
 
@@ -125,4 +126,45 @@ fn valid_slot(slot: &str) -> bool {
     bytes.len() <= 64
         && bytes.first().is_some_and(u8::is_ascii_alphabetic)
         && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+/// Permanent publication-time partition, not a fresh current-topology result.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Separation {
+    Published {
+        history_root: HistoryRoot,
+        original_files: Vec<HistoryFileId>,
+        file_components: Vec<Vec<HistoryFileId>>,
+    },
+    Unverified { error_code: String },
+}
+impl Separation {
+    pub fn validate(&self, selection: &Selection) -> Result<()> {
+        match self {
+            Self::Unverified { error_code } if !error_code.is_empty() && error_code.len() <= 128 => Ok(()),
+            Self::Published { history_root, original_files, file_components } => {
+                if *history_root != selection.history_root() || original_files.is_empty()
+                    || original_files.len() > MAX_SHARED_HISTORY_FILES
+                    || original_files.windows(2).any(|pair| pair[0] >= pair[1])
+                    || original_files.binary_search(selection.file_id()).is_err()
+                    || file_components.is_empty() || file_components.len() > MAX_SHARED_HISTORY_FILES {
+                    return Err(invalid());
+                }
+                let mut files = BTreeSet::new();
+                for component in file_components {
+                    if component.is_empty() || component.len() > MAX_SHARED_HISTORY_FILES
+                        || component.windows(2).any(|pair| pair[0] >= pair[1]) {
+                        return Err(invalid());
+                    }
+                    for file in component {
+                        if !files.insert(file) { return Err(invalid()); }
+                    }
+                }
+                if files.into_iter().ne(original_files.iter()) { return Err(invalid()); }
+                Ok(())
+            }
+            _ => Err(invalid()),
+        }
+    }
 }
