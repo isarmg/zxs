@@ -22,10 +22,11 @@ mod inspection;
 mod native_control;
 pub(in crate::engine) use native_control::BackupNativeObjects;
 pub use native_control::{
-    BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
-    BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
-    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
+    BackupCommonDatabasesReport, BackupConfigurationReport, BackupDecidedTargets,
+    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupFirstCandidateReport,
+    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
+    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
     BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
     BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
     BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
@@ -131,6 +132,9 @@ pub enum BackupPreparationPhase {
     /// Final published scoped SQLite retained on all targets, with exact own
     /// root copies. Active SYSTEM/Current/writers and source release are absent.
     GenerationPublishedScopesInstalled,
+    /// Common published database copies on SYSTEM/all original disks/targets.
+    /// Active aliases, Current/writers and the source fence remain unchanged.
+    GenerationCommonDatabasesInstalled,
     Blocked,
     SourceChanged,
 }

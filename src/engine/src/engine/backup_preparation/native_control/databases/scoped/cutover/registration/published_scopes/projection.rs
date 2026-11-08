@@ -48,7 +48,7 @@ struct Manifest<'a> {
     databases: &'a [Descriptor],
 }
 
-pub(super) struct Scopes {
+pub(in super::super) struct Scopes {
     files: BTreeMap<PathBuf, Vec<u8>>,
     descriptors: Vec<Descriptor>,
     own_current: PathBuf,
@@ -59,7 +59,7 @@ pub(super) struct Scopes {
     pub(super) manifest: Vec<u8>,
 }
 impl Scopes {
-    pub(super) fn capture(
+    pub(in super::super) fn capture(
         prepared: &PreparedBackupRegistry,
         registry: &published_registry::Plan,
         index: usize,
@@ -191,6 +191,32 @@ impl Scopes {
                 .iter()
                 .map(|(path, bytes)| (path.clone(), bytes.as_slice())),
         )
+    }
+    pub(in super::super) fn system(&self) -> &[u8] {
+        &self.files[&PathBuf::from("system/index.sqlite")]
+    }
+    pub(in super::super) fn disk(
+        &self,
+        identity: &DiskRegistrationIdentity,
+    ) -> Result<[(&'static str, &[u8]); 2]> {
+        let current = self
+            .files
+            .get(&disk_path(
+                identity,
+                crate::database_install::DISK_DATABASE_NAME,
+            ))
+            .ok_or_else(|| invalid("published scopes omit an original disk current database"))?;
+        let history = self
+            .files
+            .get(&disk_path(
+                identity,
+                crate::database_install::DISK_HISTORY_DATABASE_NAME,
+            ))
+            .ok_or_else(|| invalid("published scopes omit an original disk history database"))?;
+        Ok([
+            (crate::database_install::DISK_DATABASE_NAME, current),
+            (crate::database_install::DISK_HISTORY_DATABASE_NAME, history),
+        ])
     }
     pub(super) fn own(&self) -> [(&'static str, &[u8]); 2] {
         [

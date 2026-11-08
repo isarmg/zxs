@@ -7,7 +7,7 @@ use crate::engine::backup_preparation::native_control::databases::materials::{
 };
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
 
-mod projection;
+pub(super) mod projection;
 use projection::Scopes;
 
 const COMPLETE: &str = "published-scoped-databases-installed.json";

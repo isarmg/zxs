@@ -111,6 +111,7 @@ fn run(
     system: &DiskRoot,
     targets: Vec<Target>,
     choices: BackupChoiceContext,
+    sources: common_databases::Sources,
     progress: &Mutex<BackupPreparationStatus>,
     stop: &AtomicBool,
 ) -> Result<()> {
@@ -123,6 +124,7 @@ fn run(
         Some(hash) => hash,
         None => {
             serving::require_capacity_before_choice(&prepared, stop)?;
+            sources.require_capacity_before_choice(system)?;
             choices.decide(&prepared, stop)?
         }
     };
@@ -263,6 +265,25 @@ fn run(
             "decision {hash} retains published SYSTEM/current-history scopes and each target's own root databases on all {} targets; old histories remain bound to their own disks, source SYSTEM and original disks are unchanged; ordinary Current/writer and source fence release remain unavailable",
             scopes.targets.len(),
         );
+    })?;
+    let common = common_databases::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationCommonDatabasesInstalled;
+        status.detail = format!(
+            "decision {hash} retains common published database set {} at SYSTEM, all {} original disks and every target; immutable generation-local copies only, old active database aliases/Current/writer and source fence remain unchanged",
+            common.common_manifest_hash,
+            common.original_disks.len(),
+        );
     })
 }
 fn spawn(
@@ -273,6 +294,7 @@ fn spawn(
     choices: BackupChoiceContext,
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
+    let sources = common_databases::Sources::capture(engine, &system)?;
     let mut initial = task.selection().status();
     initial.phase = BackupPreparationPhase::Verifying;
     initial.detail = "recovering only the original native registry/placement task; no resampling or source release".into();
@@ -285,13 +307,13 @@ fn spawn(
         .name("zxs-backup-registry-decision".into())
         .spawn(move || {
             let _locks = locks;
-            if let Err(error) = run(frozen, &system, targets, choices, &progress, &cancel)
-                && let Err(persistence) = update(&system, &progress, |status| {
-                    status.phase = BackupPreparationPhase::Blocked;
-                    status.error_code = Some(error.code());
-                    status.detail = error.to_string();
-                })
-            {
+            if let Err(error) = run(
+                frozen, &system, targets, choices, sources, &progress, &cancel,
+            ) && let Err(persistence) = update(&system, &progress, |status| {
+                status.phase = BackupPreparationPhase::Blocked;
+                status.error_code = Some(error.code());
+                status.detail = error.to_string();
+            }) {
                 progress
                     .lock()
                     .expect("invariant: registry diagnostic mutex poisoned")

@@ -811,6 +811,64 @@ impl Engine {
         Ok(report)
     }
 
+    /// Inspect common generation-local SYSTEM/original-disk copies and all
+    /// selected targets under the original live authority. Does not repair,
+    /// replace active database aliases, start a writer or release a fence.
+    pub fn inspect_backup_common_databases(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupCommonDatabasesReport> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let system = DiskRoot::open(&self.root)?;
+        let task = Task::read(&system)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "Backup common database inspection belongs to another actor or task",
+            ));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceBusy,
+                "wait for the retained scoped database worker",
+            ));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        let sources = common_databases::Sources::capture(self, &system)?;
+        let (targets, choices) = runtime::acquire(self, &task)?;
+        require_isolated(&targets)?;
+        let stop = AtomicBool::new(false);
+        let prepared = PreparedBackupRegistry::capture(task, targets, &stop)?;
+        let decision = choices.observe_decision(&prepared, &stop)?;
+        let (_, candidate) = first_candidate::read_verified(&prepared, &decision, &stop)?;
+        let published = choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        let expected = BackupFirstPublicationHash::parse(&published.publication_hash)?;
+        let report = common_databases::observe(
+            &common_databases::Context {
+                system: &system,
+                sources: &sources,
+                choices: &choices,
+            },
+            &prepared,
+            &decision,
+            &expected,
+            &stop,
+        )?;
+        choices.observe_first_publication(&prepared, &candidate, &stop)?;
+        Ok(report)
+    }
+
     /// Observe actual native ACCEPT/FINALIZE from every original member. This
     /// needs the original fenced Engine and complete selected target set; the
     /// detached target reader cannot manufacture these live acknowledgements.

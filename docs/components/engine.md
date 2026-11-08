@@ -305,3 +305,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### 已发布 SYSTEM/盘根作用域与目标根数据库
 
 原 Backup 后台在完整已发布 serving image 后，按每目标自身原生前缀和真实首笔 State 编码最终 SYSTEM-current 与全部原/新盘 current/history；原历史不改变物理归属，新目标只在本次 Publication 首次记入。私有完整集和目标自己的两份根库合计容量预检、独立无覆盖写入/读回后到 `GenerationPublishedScopesInstalled`。目标/live 只读观察与明确同原任务续存保留原公共证据，完成后缺损不自动补造。源 SYSTEM、原盘库、普通 Current/writer 和源围栏保持不变，H03 不放行。范围、预算、恢复 API 和未完成活动绑定见[已发布作用域](../design/backup-native-generation-authority.md#backup-published-scopes)。按要求未审查、编译、测试或 CI，未操作真实盘。
+
+
+### SYSTEM/全部原盘共同的后继数据库副本
+
+原 Backup worker 在目标 scopes 完整后，用原 Engine 所有配置盘的持有根、原 seal 与 I/O lease，将同一 Publication 的 SYSTEM-current 和各盘精确 current/history 独立写入各自 `backup-common-databases` 专属目录；SYSTEM 意图先落，整批实际读回及原 metadata Publication 再核后，全参与方保存同一完成描述。`GenerationCommonDatabasesInstalled` 和只读 `inspect_backup_common_databases` 不代表活动别名切换；已有任一完成描述后的整批缺损拒绝补造，原任务可继续未完成标记。活动 index/原盘根库、Current/writer、源 fence 仍不变，H03 不放行。见[共同安装与恢复边界](../design/backup-native-generation-authority.md#backup-common-databases)。未审查/编译/测试/CI或操作真实盘。

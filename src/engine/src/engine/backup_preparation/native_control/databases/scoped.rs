@@ -5,10 +5,11 @@ use super::*;
 mod cutover;
 pub(in crate::engine::backup_preparation) use cutover::resume_fenced;
 pub use cutover::{
-    BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
-    BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
-    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
+    BackupCommonDatabasesReport, BackupConfigurationReport, BackupDecidedTargets,
+    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupFirstCandidateReport,
+    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
+    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
     BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
     BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
     BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,

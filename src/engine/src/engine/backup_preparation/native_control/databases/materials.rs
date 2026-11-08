@@ -17,6 +17,7 @@ pub(super) enum Namespace {
     GenerationFirstPublication,
     PublishedRegistry,
     PublishedScopes,
+    CommonDatabases,
 }
 impl Namespace {
     fn name(self) -> &'static str {
@@ -30,6 +31,7 @@ impl Namespace {
             Self::GenerationFirstPublication => "backup-generation-first-publication",
             Self::PublishedRegistry => "backup-published-registry",
             Self::PublishedScopes => "published-scoped-databases",
+            Self::CommonDatabases => "backup-common-databases",
         }
     }
 }
@@ -127,6 +129,7 @@ fn inventory(
                     | Namespace::GenerationFirstPublication
                     | Namespace::PublishedRegistry
                     | Namespace::PublishedScopes
+                    | Namespace::CommonDatabases
             ) && platform_io::fs_safety::AtomicFile::is_temporary_name(&name)
             {
                 // Preserve interrupted private atomic writes, never promote,

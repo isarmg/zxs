@@ -37,11 +37,12 @@ pub mod disk_authority;
 mod engine;
 pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
-    BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
-    BackupFileWriterRoute, BackupFirstCandidateReport, BackupFirstFinalizeReport,
-    BackupFirstPublicationHash, BackupFirstPublicationReport, BackupGenerationAuthorityReport,
-    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
+    BackupCommonDatabasesReport, BackupConfigurationReport, BackupDecidedTargets,
+    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupFirstCandidateReport,
+    BackupFirstFinalizeReport, BackupFirstPublicationHash, BackupFirstPublicationReport,
+    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
+    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
     BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryDecisionHash,
     BackupRegistryRecoveryReport, BackupServingContent, BackupServingImagesReport,
     BackupServingRead, BackupServingTargetReport, BackupTargetPublicationReport,

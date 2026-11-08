@@ -242,3 +242,33 @@ SYSTEM 保留的原任务在冷开重建旧权威和旧 fence 后，可重复同
 本片不替换源 `index.sqlite`、原盘根库，不写目标 `disk.json`/活动 `metadata`，不安装普通 CurrentRegistry、runtime target writer、未来放置策略，也不解除源围栏。SYSTEM 与其他盘的最终活动绑定必须等待同一原生权威/Current 安装闭包，不能在内存仍是旧 State 时提前替换活动库。目标根数据库仍只是已发布状态的派生投影，无 disk seal/准入证明不能被独立读取器当正式成员；helper H03 完整外来低级链仍关闭。旧数据、原 receipts、原 image 与原冻结 scoped 数据均保持不变。
 
 按本轮要求未审查、编译、测试、运行静态检查或 CI，未操作真实盘；上述为生产源码接线，不是已验最终迁移成功。
+
+
+<a id="backup-common-databases"></a>
+
+## SYSTEM 与全部原盘的共同数据库落盘
+
+`GenerationPublishedScopesInstalled` 已覆盖目标私有完整集合与目标自己的两份盘根库，但源 SYSTEM 和原盘仍没有后继范围的本地副本。本片由**原 live Engine 的同一后台决定**补这一写路径，不先替换活动数据库再设法修复旧 State。
+
+### 保留活动库，安装确切后继副本
+
+- SYSTEM 写入 `backup-common-databases/index.sqlite`；每个原配置盘写入其**既有** `metadata/backup-common-databases/` 下的 `.zxs-disk.sqlite` 和 `.zxs-disk-history.sqlite`。目录清单严格只允许其当前 scope 的文件和 manifest；缺失原 `metadata` 不自行初始化。目标保留上一阶段自己的实际盘根两库，不借源副本代替。
+- 编码来自全目标分别通过实际原生前缀、Publication、registry、实体和 scopes 读回之后，固定第一个目标的同一已发布 State/原生前缀。这个固定来源缺损直接失败，不换别的目标补造；没有读取源正在使用的 SQLite 来猜 State。
+- 全部原盘，包括不再承担最终 route 的原末端和无当前正文的原登记，必须由原 Engine 的 DiskResources/原 writer lock 正规取得。每个根持有 I/O lease，逐次重核命名路径 dev/ino 与原 `disk.json` 字节；SYSTEM 也绑定原持有目录与原 writer.lock 身份，并持续复核命名锁和实际持有锁一致。不能凭目标清单在运行态登记新成员，或把 offline 原盘从共同安装集合删除。
+- 所有库都通过既有独立 no-clobber 原子写原语保存，原活动 `index.sqlite`、原盘根 current/history、源正文/旧 receipt 不覆盖不删除。SQLite 不通过未约束路径打开写入。**这些名字是 generation-local 后继副本，不是已切换的活动别名。**
+
+### 一个原任务、一份共同描述
+
+共同 manifest 绑定原 fence、decision、实际 Publication/snapshot、registry、SYSTEM 物理身份、全部原绑定/物理身份/seal 摘要、各准确本盘库摘要及原选定目标 scopes。全部成员先容量/碰撞预检，再将同一描述无覆盖写入 SYSTEM `backup-preparation/common-databases.json`，之后落 SYSTEM/全部原盘的准确库。
+
+所有本地实际字节、目标完整材料和原 metadata 全员真实 Publication 重新读回后，才在 SYSTEM、每个原盘的 metadata 和所有目标保存同一 `common-databases-installed.json`。原后台到 `GenerationCommonDatabasesInstalled`。任一个参与方已经有完成描述，就要求**整批数据已经完整**；后续发现缺库/异内容不能把其他参与方当未完成来补造。只缺后续完成标记的正常中断仍可按同一原描述继续同步，已有不同描述永久保留并拒绝。
+
+冷开仍先恢复原 State/原 fence，再走原 registry task 的确定路径；不重选目标、原 decision、Publication 或历史归属。新增 `Engine::inspect_backup_common_databases` 必须原 actor/task、无活动后台冲突、全部真实原/目标根和原 Publication，纯读观察不修复。没有离线仅凭目标 JSON 写源库的接口。
+
+### 仍缺的原子活动边界与预算
+
+当前普通 Current 需要独立的原生活动准入证明，不能从 common manifest 推出来。本片因此不切换 Config、CurrentRegistry、`disk.json`、未来写策略或目标 writer，不解除源 fence。普通查询仍使用原活动 State/索引，原池可能继续停写；缺少最终选择/安装闭包时，不得调用普通 Add、metadata readmission 或 helper H03 绕过。
+
+最多 32 原盘、8 目标和一个 SYSTEM。新增选择前每个 SYSTEM/原盘单独检查 80 MiB 保守余量，实际安装按一份最多 64 MiB SYSTEM 或两份各最多 32 MiB 本盘库加目录/原子临时/完成余量计算；不把统计当物理 reservation。共享文件系统/外部空间消耗可导致中途 NoSpace，保留原数据和未完成诊断，不伪成功。完整 scopes 仍受上一阶段 81 库/128 MiB 限制，manifest/完成描述各 64 KiB；已有原子临时文件最多保留 1,024 项，不删除或提升为证据。
+
+后台会多次读完整原前缀、目标集合和实际数据库，成本随完整历史、原盘和目标数变化，不是热查询或硬时限保证。同步 I/O 仅在检查点响应取消。按用户要求本片未审查、编译、测试、静态检查或 CI，未实际操作盘；共同副本落盘不构成最终活动迁移验收。

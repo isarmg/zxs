@@ -5,6 +5,8 @@ use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
+mod common_databases;
+pub use common_databases::{BackupCommonDatabasesReport, BackupOriginalDatabaseReport};
 mod published_scopes;
 pub use published_scopes::{BackupPublishedScopeTargetReport, BackupPublishedScopesReport};
 mod serving;

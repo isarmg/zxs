@@ -13,10 +13,11 @@ mod registration;
 pub(in crate::engine) use fence::BackupSourceFenceEvidence;
 pub(in crate::engine::backup_preparation) use installation::resume_fenced;
 pub use registration::{
-    BackupConfigurationReport, BackupDecidedTargets, BackupDirectoryWriterRoute,
-    BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
-    BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
+    BackupCommonDatabasesReport, BackupConfigurationReport, BackupDecidedTargets,
+    BackupDirectoryWriterRoute, BackupFileWriterRoute, BackupFirstCandidateReport,
+    BackupGenerationAuthorityReport, BackupGenerationControlReport,
+    BackupGenerationPreparationReport, BackupNamespacePage, BackupNamespaceScope,
+    BackupOriginalDatabaseReport, BackupPublishedRegistryReport, BackupPublishedScopeTargetReport,
     BackupPublishedScopesReport, BackupRecoveredContent, BackupRegistryRecoveryReport,
     BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
     BackupTargetPublicationReport, BackupWriterDestination, BackupWriterRoutesReport,
