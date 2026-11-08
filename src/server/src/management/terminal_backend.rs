@@ -144,8 +144,16 @@ impl Inner {
             return Ok(None);
         };
         let status = terminal.status();
+        let pending_retirement = terminal
+            .terminal_retirement_status()
+            .map_err(crate::engine_backend::error)?
+            .map(storage_lifecycle::retirement_pending);
         Ok(Some(crate::setup_recovery::StorageActivationStatus {
-            state: crate::setup_recovery::StorageActivationState::TerminalManagement,
+            state: if pending_retirement.is_some() {
+                crate::setup_recovery::StorageActivationState::RecoveryRequired
+            } else {
+                crate::setup_recovery::StorageActivationState::TerminalManagement
+            },
             disk_ids: terminal
                 .registered_disks()
                 .map(|disk| disk.disk_id.to_owned())
@@ -167,6 +175,7 @@ impl Inner {
                 registered_directories: status.registered_disks,
                 original_metadata_members: status.original_metadata_members,
                 original_metadata_quorum: status.original_metadata_quorum,
+                pending_retirement,
             }),
         }))
     }

@@ -24,3 +24,6 @@
 专用查询、诊断、HTTP 和页面在 `helper/`；服务组件只提供持有原生权威的只读 `TerminalBoundary` 元数据投影，不暴露 Engine handle 或新增 write capability。关联成本 O(登记数 × 配置数)，复用原 bounded IPC，无性能测量。
 
 新增测试源码覆盖严格输入、无停服确认先拒绝、目标代数/活动 voter 拒绝、报告不能作为执行计划，以及真实 terminal 冷态路径替换后的边界查询。按当前指示未审查、编译、测试或执行 CI，无真实系统操作。
+
+
+后继原生[决定持久化](terminal-retirement-decision-storage.md)可产生未完成选择，检查会在 `selection.source.pending_retirement` 返回该真实记录，blocker 改为 `original_terminal_retirement_pending`；检查本身仍不创建选择、不执行注销。最终后继/关闭/回执未实现前，完整移除仍拒绝。

@@ -1,5 +1,6 @@
 //! Explicit no-voter management. Protected system authority and complete old
 //! fixed-quorum evidence replace neither an active pool nor ordinary writes.
+mod retirement;
 mod store;
 use super::bootstrap::{
     IntentDigest,
@@ -12,6 +13,7 @@ use crate::{
     disk::{DiskIoBinding, DiskRoot, RecoveredDiskIo, WriterLocks},
     engine::membership_transition::terminal::{TerminalAuthority, VerifiedTerminalAuthority},
 };
+pub use retirement::{TerminalRetirementPhase, TerminalRetirementPlan, TerminalRetirementStatus};
 use std::{path::Path, sync::Arc};
 use store::TerminalStore;
 
@@ -201,6 +203,7 @@ impl TerminalManagement {
         verify: impl FnOnce(&DiskRoot, &VerifiedTerminalAuthority) -> Result<()>,
     ) -> Result<Self> {
         let (store, locks) = TerminalStore::open(root)?;
+        retirement::require_no_evidence(&store)?;
         let verified = store.load_authority()?;
         store.verify_publication(&verified.authority)?;
         verify(store.system(), &verified)?;
@@ -227,14 +230,16 @@ impl TerminalManagement {
             Arc::get_mut(&mut state).expect("invariant: a new management projection has one owner"),
             &attempts.cancelled,
         )?;
-        Ok(Self {
+        let management = Self {
             store,
             verified,
             state,
             result,
             _locks: locks,
             _target_stop: target_stop,
-        })
+        };
+        management.validate_terminal_retirement()?;
+        Ok(management)
     }
 
     pub fn status(&self) -> TerminalManagementStatus {
@@ -318,6 +323,7 @@ impl TerminalManagement {
         &self.state
     }
     pub(in crate::engine) fn writer_locks(&self) -> Result<WriterLocks> {
+        self.require_no_terminal_retirement()?;
         self._locks.retain()
     }
 

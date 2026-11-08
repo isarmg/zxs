@@ -468,3 +468,7 @@ Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字�
 ## 独占原生注销与终态回执
 
 `management::storage_lifecycle::ExclusiveExit` 持有唯一 EngineBackend 或已验证 TerminalManagement，不暴露业务 handle。沿共享的原生记录构造、阶段持久化、`complete_terminal_exit` 与精确 terminal receipt 规则接通最后 voter；普通服务的 Arc 排空路径与终态回执校验仍在使用同一底层能力。选择 terminal 在 Engine::open 前，损坏或 metadata-resume 未决不回落空初始化。主 AuthReader 必须持续存活且匹配当前身份，不以归档凭据/session 伪造授权。helper 专用 host lease、账户/固定路径、IPC、确认及页面仍位于 helper；此片未编译/测试/审查/CI。见[终态注销](../design/helper-terminal-disk-deregistration.md)。
+
+## 终态未完成注销决定状态
+
+终态 `StorageActivationStatus` 包含必需可空 `pending_retirement`。原生剩余成员选择未完成时状态为 RecoveryRequired，带真实操作/主体/目标/摘要/阶段，不改变当前登记数，不构造 Published/永久回执。Web 与 helper 诊断消费该状态；既有终态原回执仍分离。原生 staging 尚未暴露 HTTP 写入口，不能据状态字段声称完整注销。源码未编译/测试/审查/CI，见[决定存储](../design/terminal-retirement-decision-storage.md)。

@@ -64,6 +64,7 @@ impl TerminalManagement {
         operation_id: OperationId,
         directories: Vec<PendingMemberDirectory>,
     ) -> Result<TerminalMetadataResume> {
+        self.require_no_terminal_retirement()?;
         Engine::require_actor(principal)?;
         let target = ValidatedConfig::try_from(target)?;
         let verified = self.verified_authority();
@@ -170,6 +171,7 @@ impl TerminalManagement {
         self,
         directories: Vec<PendingMemberDirectory>,
     ) -> Result<TerminalMetadataResume> {
+        self.require_no_terminal_retirement()?;
         let management = self;
         let proposal = attempts::load(management.system_root(), management.verified_authority())?
             .current
@@ -498,6 +500,7 @@ impl TerminalManagement {
         self,
         limits: Option<crate::RetainedWorkspaceLimits>,
     ) -> Result<Engine> {
+        self.require_no_terminal_retirement()?;
         activation::terminal_resume::reopen_held(self, limits)
     }
 }

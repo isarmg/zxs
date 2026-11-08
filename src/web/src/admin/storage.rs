@@ -56,7 +56,18 @@ fn nullable_terminal<'de, D: data_serialization::Deserializer<'de>>(
 }
 fn storage_snapshot(value: Value) -> Result<Snapshot, api::Error> {
     let snapshot: Snapshot = decode(value)?;
-    if (snapshot.state == StorageState::TerminalManagement) != snapshot.terminal.is_some()
+    let terminal_state_matches = match &snapshot.terminal {
+        Some(terminal) => {
+            snapshot.state
+                == if terminal.pending_retirement.is_some() {
+                    StorageState::RecoveryRequired
+                } else {
+                    StorageState::TerminalManagement
+                }
+        }
+        None => snapshot.state != StorageState::TerminalManagement,
+    };
+    if !terminal_state_matches
         || snapshot.terminal.as_ref().is_some_and(|terminal| {
             terminal.original_metadata_members == 0
                 || storage_contract::validate_id(&terminal.pool_id, "pool").is_err()
@@ -70,6 +81,18 @@ fn storage_snapshot(value: Value) -> Result<Snapshot, api::Error> {
                 || (terminal.registrations
                     == storage_contract::storage_lifecycle::TerminalRegistrations::EmptyRegistry)
                     != (terminal.registered_directories == 0)
+                || terminal.pending_retirement.as_ref().is_some_and(|pending| {
+                    pending.pool_id != terminal.pool_id
+                        || !snapshot._disk_ids.contains(&pending.disk_id)
+                        || pending.slot_id.is_empty()
+                        || pending.binding_generation == 0
+                        || pending.principal.is_empty()
+                        || pending.intent_digest.len() != 64
+                        || !pending
+                            .intent_digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
                 || snapshot.completion_available
         })
     {
@@ -401,6 +424,9 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         {move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().and_then(|snapshot|snapshot.terminal.clone())).map(|terminal|view!{
             <p class="zxs-row">{format!("{}{} · {}{}/{}",t("保留登记目录：", "Retained registered directories: "),terminal.registered_directories,t("原固定元数据 N/Q：", "Original fixed metadata N/Q: "),terminal.original_metadata_members,terminal.original_metadata_quorum)}</p>
             <p class="zxs-row">{t("磁盘内容与历史没有清理。新的元数据组需要基于这份已认证历史接续，不能使用首次激活或普通添加替代。", "Disk contents and history have not been cleared. A new metadata group must resume this authenticated history; initial activation and ordinary addition cannot replace that process.")}</p>
+            {terminal.pending_retirement.map(|pending|view!{
+                <p class="zxs-row" role="alert">{format!("{}{} · {} · {}", t("终态注销原决定未发布：", "Terminal retirement decision is unfinished: "), pending.slot_id, pending.operation_id, t("当前登记尚未移除，元数据恢复被阻断；保留原决定，不要清理文件或另换操作。", "The registration remains and metadata resumption is fenced. Preserve the original decision; do not clean files or replace the operation."))}</p>
+            })}
         })}
         {wizard::view(state)}
         <Show when=move ||state.with(|s|!s.admin_console.storage.conversion.blocks_edit())>{addition::view(state)}</Show>

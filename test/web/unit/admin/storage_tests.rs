@@ -165,7 +165,7 @@ fn terminal_management_allows_fresh_resume_but_never_initial_activation() {
         "terminal": {
             "pool_id":"pool_00000000000000000000000000000001", "operation_id":"op_00000000000000000000000000000001",
             "authority_hash":"a".repeat(64), "registrations":"retained_registrations",
-            "registered_directories":1, "original_metadata_members":1, "original_metadata_quorum":1
+            "registered_directories":1, "original_metadata_members":1, "original_metadata_quorum":1, "pending_retirement":null
         }
     });
     let snapshot = storage_snapshot(value.clone()).unwrap();
@@ -181,4 +181,21 @@ fn terminal_management_allows_fresh_resume_but_never_initial_activation() {
     let mut mismatched = value;
     mismatched["terminal"]["registrations"] = json!("empty_registry");
     assert!(storage_snapshot(mismatched).is_err());
+}
+
+#[test]
+fn terminal_pending_retirement_is_recovery_not_initialization_or_completed_removal() {
+    let value = json!({"state":"recovery_required","disk_ids":["disk_retained"],
+        "completion_available":false,"allow_development":false,"terminal":{
+        "pool_id":"pool_00000000000000000000000000000001","operation_id":"op_00000000000000000000000000000001",
+        "authority_hash":"a".repeat(64),"registrations":"retained_registrations","registered_directories":1,
+        "original_metadata_members":1,"original_metadata_quorum":1,"pending_retirement":{
+        "operation_id":"op_00000000000000000000000000000002","principal":"admin",
+        "pool_id":"pool_00000000000000000000000000000001","disk_id":"disk_retained","slot_id":"P02",
+        "binding_generation":"1","intent_digest":"b".repeat(64),"phase":"decision_stored"}}});
+    let snapshot = storage_snapshot(value.clone()).unwrap();
+    assert!(snapshot.terminal.unwrap().pending_retirement.is_some());
+    let mut wrong = value;
+    wrong["state"] = "terminal_management".into();
+    assert!(storage_snapshot(wrong).is_err());
 }

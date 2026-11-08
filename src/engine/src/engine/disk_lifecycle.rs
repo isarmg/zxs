@@ -4,6 +4,7 @@ pub(crate) mod bootstrap;
 pub(in crate::engine) mod terminal;
 pub use terminal::{
     TerminalDiskExit, TerminalManagement, TerminalManagementStatus, TerminalRegistrationState,
+    TerminalRetirementPhase, TerminalRetirementPlan, TerminalRetirementStatus,
 };
 mod plan;
 pub use plan::{

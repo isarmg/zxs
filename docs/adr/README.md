@@ -28,4 +28,6 @@
 
 | [在线单文件历史 fork](online-file-history-copy.md) | 有限 Engine 入口；不表示 SMB/目录递归已接线 | 第 10、11 章及完整历史、独立副本、原操作恢复边界 |
 
+| [终态剩余登记原生决定](terminal-retirement-decisions.md) | 仅未完成选择/原请求恢复；最终后继与成功回执未实现 | SYSTEM terminal owner、metadata resume 围栏与严格状态边界 |
+
 决策文档只保留当前背景、选择、代价、替代方案与关联规则，不追加实施进度或构建日志。

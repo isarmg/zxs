@@ -51,6 +51,27 @@ pub enum TerminalRegistrations {
     EmptyRegistry,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum TerminalRetirementPhase {
+    IntentStored,
+    DecisionStored,
+}
+/// Unfinished native selection. Neither phase certifies removal or target I/O closure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct TerminalRetirementPending {
+    pub operation_id: OperationId,
+    pub principal: String,
+    pub pool_id: String,
+    pub disk_id: String,
+    pub slot_id: String,
+    #[serialization(with = "crate::u64_string")]
+    pub binding_generation: u64,
+    pub intent_digest: String,
+    pub phase: TerminalRetirementPhase,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct TerminalStorageStatus {
@@ -62,6 +83,8 @@ pub struct TerminalStorageStatus {
     /// Historical authenticated denominator, never recalculated from survivors.
     pub original_metadata_members: usize,
     pub original_metadata_quorum: usize,
+    #[serialization(deserialize_with = "required_retirement")]
+    pub pending_retirement: Option<TerminalRetirementPending>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,4 +146,13 @@ pub struct ExitStatus {
 #[serialization(deny_unknown_fields)]
 pub struct ExitStatusResponse {
     pub operation: Option<ExitStatus>,
+}
+
+fn required_retirement<'de, D>(
+    deserializer: D,
+) -> Result<Option<TerminalRetirementPending>, D::Error>
+where
+    D: data_serialization::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
 }

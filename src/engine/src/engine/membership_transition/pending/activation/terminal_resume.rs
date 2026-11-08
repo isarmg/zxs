@@ -56,6 +56,7 @@ pub(in crate::engine::membership_transition::pending) fn activate(
     members: BTreeMap<String, PendingDisk>,
     limits: Option<crate::RetainedWorkspaceLimits>,
 ) -> Result<Engine> {
+    management.require_no_terminal_retirement()?;
     let portable = PortableAuthority::new_terminal_resume(core.clone())?;
     let intent = portable.intent()?;
     let verified = management.verified_authority();

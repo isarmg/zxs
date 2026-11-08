@@ -540,3 +540,25 @@ fn execute_record(
         }
     }
 }
+
+pub(super) fn retirement_pending(
+    value: storage_engine::TerminalRetirementStatus,
+) -> TerminalRetirementPending {
+    TerminalRetirementPending {
+        operation_id: value.operation_id,
+        principal: value.principal,
+        pool_id: value.target.pool_id,
+        disk_id: value.target.disk_id,
+        slot_id: value.target.slot_id,
+        binding_generation: value.target.binding_generation,
+        intent_digest: value.intent_digest,
+        phase: match value.phase {
+            storage_engine::TerminalRetirementPhase::IntentStored => {
+                TerminalRetirementPhase::IntentStored
+            }
+            storage_engine::TerminalRetirementPhase::DecisionStored => {
+                TerminalRetirementPhase::DecisionStored
+            }
+        },
+    }
+}

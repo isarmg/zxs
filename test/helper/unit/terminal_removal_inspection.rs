@@ -33,6 +33,7 @@ fn fixture() -> (
             registry,
             sequence: 12,
             topology_generation: 5,
+            pending_retirement: None,
         },
         config,
         registrations,

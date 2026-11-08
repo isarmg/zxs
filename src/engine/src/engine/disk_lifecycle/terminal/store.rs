@@ -164,6 +164,9 @@ impl TerminalStore {
             head: self.head.clone(),
         })
     }
+    pub(super) fn operation(&self) -> &DiskRoot {
+        &self.operation
+    }
     pub(super) fn system(&self) -> &DiskRoot {
         &self.system
     }
@@ -303,7 +306,10 @@ impl TerminalStore {
     }
 }
 
-fn optional<T: for<'de> Deserialize<'de>>(root: &DiskRoot, path: &Path) -> Result<Option<T>> {
+pub(super) fn optional<T: for<'de> Deserialize<'de>>(
+    root: &DiskRoot,
+    path: &Path,
+) -> Result<Option<T>> {
     let Some(mut file) = root.open_optional_read_regular(path)? else {
         return Ok(None);
     };

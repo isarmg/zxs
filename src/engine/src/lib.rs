@@ -88,6 +88,7 @@ pub use engine::{
     PreparedDiskRegistry, RegisteredDisk, RegisteredHolders, RegistrationEffect, RegistrationMode,
     RegistryExitEffect, RegistryExitRequest, TargetPlacementRole, TerminalDiskExit,
     TerminalManagement, TerminalManagementStatus, TerminalRegistrationState, TerminalRegistry,
+    TerminalRetirementPhase, TerminalRetirementPlan, TerminalRetirementStatus,
     VerifiedDiskRegistry, VerifiedRegistryCandidate, VerifiedRegistryPublication,
     VersionDeregistrationImpact, VersionImpactScan,
 };

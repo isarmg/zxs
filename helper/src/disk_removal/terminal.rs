@@ -25,11 +25,13 @@ struct Source {
     sequence: u64,
     #[serialization(with = "storage_contract::u64_string")]
     topology_generation: u64,
+    pending_retirement: Option<storage_contract::storage_lifecycle::TerminalRetirementPending>,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(rename_all = "snake_case")]
 enum Blocker {
     TerminalRegistrySuccessorUnavailable,
+    OriginalTerminalRetirementPending,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -120,6 +122,11 @@ fn inspect(
             dependents.push(entry.clone());
         }
     }
+    let blocker = if boundary.pending_retirement.is_some() {
+        Blocker::OriginalTerminalRetirementPending
+    } else {
+        Blocker::TerminalRegistrySuccessorUnavailable
+    };
     let selection = Selection {
         source: Source {
             pool_id: config.pool_id.clone(),
@@ -129,6 +136,7 @@ fn inspect(
             registry_generation: boundary.registry.view_generation(),
             sequence: boundary.sequence,
             topology_generation: boundary.topology_generation,
+            pending_retirement: boundary.pending_retirement,
         },
         target,
         recorded_root_path: root,
@@ -145,7 +153,7 @@ fn inspect(
         selection,
         inspection_digest,
         executable: false,
-        blocker: Blocker::TerminalRegistrySuccessorUnavailable,
+        blocker,
         operation_created: false,
         physical_bytes_erased: false,
         target_io_probed: false,

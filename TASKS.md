@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-08。当前源码父基线：`ea7407e8`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-08。当前源码父基线：`1a778c2e`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -37,7 +37,7 @@
 | T02 | **跨盘 SMB move**：捕获、共同投影、恢复封套、全部目标 FULL/FILE 与 `1b3fba43` 共同决定输入已合入，均未运行验证。本提交新增[单一原生操作准备](docs/design/file-history-move-native-operation.md)：一个 STAGING move operation/principal/event 同时归属源 D 和目标旧审计，普通 receipt-owner 投影须精确重建两个已准备 FILE 库；native 模板在全部参与根持久保存并可原操作冷重建，完整 State 仍仅系统/元数据盘。八项集成及三项围栏单元测试源码未运行，无审查/编译/格式化/CI。 | 不是成功收据：模板不写 PUBLISHED/TARGET_MET，通用发布在 I/O 前硬拒绝 native move。系统/盘根完整历史库、统一永久结果实际准入、真正 Candidate/N 成员决定及原决定恢复、双端读取围栏仍缺；五项义务未解除，无 ACCEPT/SMB 成功。不改原输入，不 copy/unlink；同原 manifest 可显式补缺 native 文件，损坏/异内容保留，单槽无自动清理。 |
 | T03 | **整体备份迁移**：`25c7dcfd` 已合入真实 native Backup 选择身份。本片新增[首笔原生 Candidate 与完整 State](docs/design/backup-native-generation-authority.md#backup-first-candidate)：沿同一整单位路由配方固定原 fence+1、全部原 metadata voters、操作/主体和全部 AVAILABLE 版本保护义务；完整 snapshot/history/Candidate 逐目标无覆盖持久化并经生产原生读回进入 `GenerationFirstCandidatePrepared`，可只读重建或显式续写原任务。未审查、编译、测试或 CI。 | **不是首笔 Publication 或最终切换**：PUBLISHED/TARGET_MET 只在未发布候选快照内作为待满足模板，不入活动 State/不返回成功；没有 ACCEPT/FINALIZE/PUBLICATION 收据、fanout Config/CurrentRegistry、最终绑定数据库/serving locator、未来策略、目标 writer 或源解围栏。旧数据/收据及原成员集合保留，源池仍可能停写。仍限完整固定 Genesis、单 primary 原链、一条原末端和显式 1–8 全副本目标；复杂旧分叉、异盘父子合流、外来一次完整链正式接纳未完成。 |
 | T04 | **三范围数据库与逐盘可移植性**：`2470ab9d` 已合入 SYSTEM 三十四个完整业务 map 族，原盘根当前/历史自动维护及无 SYSTEM 只读材料保留。本片补原操作主体映射、保持每个原位置的完整事件数组和三项 State 代数，接同一原子 SQL 增量/冷建/严格读取及备份 SYSTEM-current 编码；未知事件谱系整族重建，不丢重复事件或残留截断尾行。未审查、编译、测试、静态检查或 CI。 | 仍非完整历史时点或三范围独立权威恢复；私有认证不输出，完整 Config/代际归档和共同切换证明仍缺。当前备注/策略不倒推过去；旧准备字节与新编码不符时保留拒绝，不暗改材料。见[系统库](docs/design/system-change-database.md)与[离线盘根材料](docs/design/offline-disk-database-material.md)。 |
-| T05 | **辅助工具改名及归属迁移**：独立 Web、程序/配置首装、管理账户/重置、首批存储、首启门禁、Samba 改密、空目录 Add 与非终态注销已合入。`f715168d` 已接最后元数据成员的原生终态注销/冷回执；本片新增终态剩余登记的准确权威/registry 边界检查，明确不可执行，不创建移除操作。 | 未编译/测试/审查/CI，无真实盘操作；终态内再注销剩余登记、一般退役后 Add/readmission、外来完整链接纳、完整安装/干净运行及服务激活仍缺。 |
+| T05 | **辅助工具改名及归属迁移**：已有独立 Web/初始阶段、空目录 Add、活动/最后 voter 注销及终态剩余登记检查。本片新增原生 SYSTEM 剩余登记决定/冷续作与 metadata-resume 围栏，Server/Web/helper 准确显示未完成选择。 | 未审查/编译/测试/CI，无真实系统操作；决定不改变登记、无 D3/永久结果且无取消能力，未向 helper 暴露 staging 写入口。最终终态 successor、外来完整链接纳、完整安装/干净运行及服务激活仍缺。 |
 | T06 | **永久节点删除及共享关系拆分**：`b9e6b631` 分组／入向闭包、`1f45a395` 原副本义务和 `631500cc` 已脱离引用文件的最后节点终止已合入。本片进一步支持这类文件仍保留独立分支 HEAD／合并前沿：原收据冻结全部分支、HEAD commit、别名、合并及选择，只将准确前沿转为不可写认证归档，冷态拒绝新增／篡改分支或同 file_id 复活，新 workspace 提前拒绝。HTTP/Web 区分条件可归档 HEAD 与真实终止。新增 3 项并调整既有回归源码，未审查、编译、测试或 CI。 | 当前 namespace、目录/Git、路径上下文、D、工作区与读取租约仍拒绝；D／namespace 的共同终止、孤立历史发现页尚未实现。每终止文件前沿最多 256 分支／512 合并／65,536 HEAD entries，仍扫描完整保留 State。新终止记录必需 retained_frontier，无缺省／双读／迁移。离线原副本义务不丢失但撤销／换代仍 pending；外部／独立旧备份完整防复活、全记录物理删除及浏览器持久队列仍缺。见 [退役协议](docs/design/permanent-node-retirement.md)。 |
 | T07 | **已准备材料／历史包审计闭包**：完整 State／原生 genesis 前缀保留旧 operations/principals/events；本提交将可认证的 D/undo、retained-copy lifecycle 投影进隔离 FILE SQLite，按每个目标自身 State 与真实库字节重验，所有原生证明与正文仍必须齐全。生产源码未编译/测试/审查/CI。 | 原生准备仍只支持无 generation、无降级恢复的完整固定成员链；对象库不是完整跨范围审计或正式恢复。公开单历史包仍缺完整 operation/principal/退役凭据，旧 D/undo 导出缺口须独立处理；不能把材料复制当最终迁移决定。 |
 | T08 | **取消手动磁盘离线功能**：现有源码仍区分 `PlannedOffline` 和 `Deregister`；取消入口的后继正在准备，未合入。 | 关闭用户新发起的“离线／计划下线”，保留删除／移除、物理失联检测、I/O 安全围栏及既有未决操作的准确诊断／收束，不机械删除历史 Disabled/stop 证明。 |
@@ -51,7 +51,7 @@
 | ID | 功能与明确边界 | 当前缺口 |
 | --- | --- | --- |
 | H01 | 手动启动的独立二进制，以 root 运行并监听 `0.0.0.0`；完整独立 Web 控制台，无登录，不依赖 ZXS 服务或 systemd，不设置自启，用完退出。可复用 ZXS 通用代码，专用代码在自己的根目录文件夹。 | 本片接本地 Samba 密码准备/确认/结果查询，同源/CSRF/IP Host、单任务 owner、固定 ELF 程序与等待子进程排空；无认证 root 风险扩大且醒目标明。未编译/测试/审查/CI，不设置 helper 自启，Samba/外部管理员停止仍须操作者保障，不能把 host 锁冒充它们的锁。 |
-| H02 | 首次账户／系统初始化、磁盘添加、注销／移除、外来盘添加、磁盘初始化迁入辅助工具；注销保留盘字节，不等于格式化。 | 已有初始/普通 Add/非终态/最后元数据成员注销；本片增加[终态剩余登记检查](docs/design/helper-terminal-removal-inspection.md)，输出准确来源、目标、依赖与缺少 successor 的拒绝理由，既不改变登记也不创建意图/完成回执。源码未编译/测试/审查/CI。终态内剩余登记的新注销、metadata resume、历史退役后一般 Add、外来接纳和完整就绪仍缺；保留旧安全出口。 |
+| H02 | 首次账户／系统初始化、磁盘添加、注销／移除、外来盘添加、磁盘初始化迁入辅助工具；注销保留盘字节，不等于格式化。 | 本片新增[终态原生未完成决定](docs/design/terminal-retirement-decision-storage.md)：真实不可变 intent/selection、准确原 actor/ID/digest 冷续作、阻断 metadata resume 防复活及只读未决状态。当前登记/State/操作结果不变，未接 helper staging 写按钮；最终 successor/Stop/D3/永久回执、取消、metadata resume 后继消费仍缺。未审查/编译/测试/CI，保留既有安全出口。 |
 | H03 | 外来二级及以上盘必须同批设置并完成所有所需低级盘链；例如三级同时具备二级和一级。不再允许虚拟占位后补盘。 | 本提交在既有纯 Add 写者增加完整原祖先 Enabled／真实根及同批新增根门禁，冷态核原认证 registry；未编译／测试。外来来源身份映射、完整材料批接纳写者、目标独立验证、原操作中断恢复及 helper 最终发布仍缺，门禁或意图保存不等于正式加入。当前 Backup 归档/目标材料仍无可安全激活的目标 writer/完整接纳 API，helper 不借终态退出或普通 Add 放行。 |
 | H04 | 正常 ZXS 启动／运行只接纳已完整处理、正式纳入且一致的数据、数据库、标签和磁盘，不展示待初始化／待接入任务。 | 本片新增[首启前置门禁](docs/design/helper-normal-start-prerequisites.md)：runtime/监听前拒绝缺根/缺配置/当前激活中断，正常后台不重建管理权威标记；持有既有目录能力，终态/损坏仍交原权威诊断。未编译/测试/审查/CI，尚非全盘/数据库一致性或未知外来项的全路径门禁，完整安装 ready 仍为 false，不隐藏失联、清空材料或声称全部完成。 |
 | H05 | 保留离线检查、导出可验证文件、重建系统盘汇总、精确恢复中断操作。 | 已合入逐版本 CLI 检查；本片将同一报告用于独立 Web，下载前重新验证完整元数据、来源身份、正文长度／摘要，不在服务器写输出文件。当前组合和 HTTP 测试源码未运行；完整新逐盘／三范围重建仍未实现，任意单盘不保证恢复整个系统。 |

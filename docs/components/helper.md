@@ -202,3 +202,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 终态剩余登记检查前置
 
 独立 Web 可对终态剩余登记读取准确 authority/registry/绑定边界及直接依赖，下载明确不可执行的诊断报告。没有新 operation 或意图，`executable:false`；剩余成员的正式终态 successor 写者仍缺。该检查不探测目标，不是完整内容/健康或外来接纳证明，已决定原操作的打开恢复仍可能同步。源码未审查/编译/测试/CI，见[边界](../design/helper-terminal-removal-inspection.md)。
+
+## 终态原生未完成决定
+
+核心增加 SYSTEM-only 的精确剩余登记选择/原请求恢复，现阶段没有最终 registry/Stop/D3 或取消能力，**未接 helper 写按钮**。既有 helper 检查可以显示其真实原 ID/摘要/阶段，仍不可执行。Server/Web 明确报告 recovery_required，metadata resume 被围栏；不是剩余成员已移除。源码未审查/编译/测试/CI，见[决定存储](../design/terminal-retirement-decision-storage.md)。

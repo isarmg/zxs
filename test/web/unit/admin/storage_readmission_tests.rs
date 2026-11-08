@@ -217,6 +217,7 @@ fn terminal_state() -> State {
             registered_directories: 1,
             original_metadata_members: 1,
             original_metadata_quorum: 1,
+            pending_retirement: None,
         }),
     });
     state.admin_console.storage.readmission.authority = RegistrationAuthority::Terminal;

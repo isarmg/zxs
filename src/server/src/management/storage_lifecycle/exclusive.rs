@@ -20,6 +20,7 @@ pub struct TerminalBoundary {
     pub registry: storage_engine::DiskRegistryCommitment,
     pub sequence: u64,
     pub topology_generation: u64,
+    pub pending_retirement: Option<TerminalRetirementPending>,
 }
 
 /// Owns an existing SYSTEM and its exclusive Engine or terminal authority.
@@ -99,6 +100,10 @@ impl ExclusiveExit {
             registry: terminal.registry().commitment().clone(),
             sequence: terminal.state().sequence,
             topology_generation: terminal.state().topology_generation,
+            pending_retirement: terminal
+                .terminal_retirement_status()
+                .map_err(crate::engine_backend::error)?
+                .map(retirement_pending),
         }))
     }
     pub fn current_configuration(&self) -> Result<Config, ApiError> {

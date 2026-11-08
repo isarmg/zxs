@@ -126,6 +126,8 @@ impl TerminalStore {
                     | "resume-cancel-intent.json"
                     | "resume-cancel.json"
                     | "resume-attempts"
+                    | super::super::retirement::INTENT
+                    | super::super::retirement::SELECTED
             ) {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,

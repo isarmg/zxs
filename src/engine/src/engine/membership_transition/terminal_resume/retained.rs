@@ -40,6 +40,9 @@ pub(in crate::engine::membership_transition) enum ResumeAdmission {
 
 impl TerminalManagement {
     pub fn readmission_metadata_member(&self, disk_id: &str) -> Result<Option<bool>> {
+        if self.terminal_retirement_status()?.is_some() {
+            return Ok(None);
+        }
         let registry = &self.verified_authority().registry;
         let Some(definition) = registry
             .historical_topology()
@@ -53,6 +56,7 @@ impl TerminalManagement {
         .then_some(true))
     }
     pub fn preview_disk_readmission(&self, disk_id: &str) -> Result<TerminalReadmissionPreview> {
+        self.require_no_terminal_retirement()?;
         TerminalReadmissionPreview::from_verified(self.verified_authority(), disk_id)
     }
 }
