@@ -74,7 +74,7 @@ impl Engine {
         Ok(report(&materials, &native))
     }
 
-    fn native_move_inputs(
+    pub(super) fn native_move_inputs(
         &self,
         projection: &FileHistoryMoveProjection,
         recovery: &FileHistoryMoveRecoveryDigest,
@@ -96,7 +96,7 @@ impl Engine {
         Ok((materials, native))
     }
 
-    fn verify_native_move_inputs(
+    pub(super) fn verify_native_move_inputs(
         &self,
         projection: &FileHistoryMoveProjection,
         recovery: &FileHistoryMoveRecoveryDigest,

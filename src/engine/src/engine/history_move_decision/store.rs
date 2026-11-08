@@ -68,29 +68,31 @@ impl Scope {
     }
 }
 
-enum Artifact<'a> {
-    Exact { name: &'static str, bytes: &'a [u8] },
-    Database { name: &'static str, prepared: &'a crate::container_storage::file_database::PreparedMoveFile },
+pub(super) enum Artifact<'a> {
+    Exact { name: &'a str, bytes: &'a [u8] },
+    Scoped { name: &'a str, bytes: &'a [u8] },
+    Database { name: &'a str, prepared: &'a crate::container_storage::file_database::PreparedMoveFile },
 }
 impl Artifact<'_> {
-    fn name(&self) -> &'static str {
-        match self { Self::Exact { name, .. } | Self::Database { name, .. } => name }
+    fn name(&self) -> &str {
+        match self { Self::Exact { name, .. } | Self::Scoped { name, .. } | Self::Database { name, .. } => name }
     }
     fn bytes(&self) -> &[u8] {
-        match self { Self::Exact { bytes, .. } => bytes, Self::Database { prepared, .. } => prepared.bytes() }
+        match self { Self::Exact { bytes, .. } | Self::Scoped { bytes, .. } => bytes, Self::Database { prepared, .. } => prepared.bytes() }
     }
     fn maximum(&self) -> usize {
         match self {
             Self::Exact { .. } => STATE_BYTES,
+            Self::Scoped { .. } => scopes::MAX_DATABASE_BYTES,
             Self::Database { .. } => crate::container_storage::file_database::MAX_BYTES,
         }
     }
     fn verify(&self, actual: &[u8]) -> Result<()> {
         match self {
-            Self::Exact { bytes, .. } if *bytes != actual => {
+            Self::Exact { bytes, .. } | Self::Scoped { bytes, .. } if *bytes != actual => {
                 Err(Error::new(ErrorCode::ObjectCorrupt, "joint move logical material differs from its exact proposal"))
             }
-            Self::Exact { .. } => Ok(()),
+            Self::Exact { .. } | Self::Scoped { .. } => Ok(()),
             Self::Database { prepared, .. } => prepared.verify(actual),
         }
     }
@@ -211,6 +213,68 @@ impl Store {
         self.install_artifacts(&self.scope.native_artifacts(native), cancellation)
     }
 
+    fn scoped_artifacts<'a>(&self, scopes: &'a scopes::Scopes) -> Vec<Artifact<'a>> {
+        let payload_disk = match (&self.scope, &self.owner) {
+            (Scope::Metadata, _) => None,
+            (Scope::Payload, Owner::Disk { disk, .. }) => Some(disk.disk_id.as_str()),
+            (Scope::Payload, Owner::System { .. }) => {
+                unreachable!("invariant: the SYSTEM store always has metadata scope")
+            }
+        };
+        scopes.artifacts(payload_disk)
+    }
+
+    pub(super) fn install_scopes(
+        &self,
+        scopes: &scopes::Scopes,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<()> {
+        self.check_names()?;
+        let artifacts = self.scoped_artifacts(scopes);
+        if self.root.open_optional_read_regular(&self.root.path().join(scopes::SCOPE_MANIFEST))?.is_none() {
+            // A crash before the immutable manifest may leave no scoped files.
+            // If any expected image exists, its origin is unknown; do not adopt
+            // it by writing a fresh manifest around retained bytes.
+            for artifact in artifacts.iter().skip(1) {
+                checkpoint(cancellation)?;
+                if self.root.open_optional_read_regular(&self.root.path().join(artifact.name()))?.is_some() {
+                    return Err(Error::new(ErrorCode::RecoveryRequired,
+                        "move scoped image lacks its original manifest; retain all files"));
+                }
+            }
+        }
+        self.install_artifacts(&artifacts, cancellation)
+    }
+
+    pub(super) fn verify_scopes(
+        &self,
+        scopes: &scopes::Scopes,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<()> {
+        self.verify_artifacts(&self.scoped_artifacts(scopes), cancellation)
+    }
+
+    pub(super) fn require_scoped_capacity(
+        engine: &Engine,
+        materials: &Materials,
+        participant: &DiskScope,
+        native: &crate::business::NativeMoveDraft,
+        scopes: &scopes::Scopes,
+    ) -> Result<()> {
+        let disk = engine.disk(&participant.identity.slot_id)?;
+        let Some(capacity) = disk.capacity_bytes else { return Ok(()); };
+        let mut required = native_storage_bytes(materials, participant, native)?;
+        let payload_disk = (!participant.carries_state()).then_some(participant.identity.disk_id.as_str());
+        for artifact in scopes.artifacts(payload_disk) {
+            required = required.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
+        }
+        if engine.used_bytes(&participant.identity.slot_id).checked_add(required).ok_or_else(limit)? > capacity {
+            return Err(Error::new(ErrorCode::NoSpace,
+                "move scoped databases exceed configured participant capacity"));
+        }
+        Ok(())
+    }
+
     fn install_artifacts(&self, artifacts: &[Artifact<'_>], cancellation: &HistoryWindowCancellation) -> Result<()> {
         self.check_names()?;
         let mut remaining = 0u64;
@@ -261,17 +325,7 @@ impl Store {
     ) -> Result<()> {
         let disk = engine.disk(&participant.identity.slot_id)?;
         let Some(capacity) = disk.capacity_bytes else { return Ok(()); };
-        let scope = if participant.carries_state() { Scope::Metadata } else { Scope::Payload };
-        let mut required = storage_bytes(scope, materials)?;
-        if participant.roles.contains(&Role::Target) {
-            required = required.checked_add(materials.target_preparation_bytes).ok_or_else(limit)?;
-        }
-        if participant.carries_state() {
-            required = required.checked_add(2 * 1024 * 1024).ok_or_else(limit)?;
-        }
-        for artifact in scope.native_artifacts(native) {
-            required = required.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
-        }
+        let required = native_storage_bytes(materials, participant, native)?;
         if engine.used_bytes(&participant.identity.slot_id).checked_add(required).ok_or_else(limit)? > capacity {
             return Err(Error::new(ErrorCode::NoSpace, "native move draft exceeds configured participant capacity"));
         }
@@ -310,4 +364,23 @@ fn storage_bytes(scope: Scope, materials: &Materials) -> Result<u64> {
         bytes = bytes.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
     }
     Ok(bytes)
+}
+
+fn native_storage_bytes(
+    materials: &Materials,
+    participant: &DiskScope,
+    native: &crate::business::NativeMoveDraft,
+) -> Result<u64> {
+        let scope = if participant.carries_state() { Scope::Metadata } else { Scope::Payload };
+        let mut required = storage_bytes(scope, materials)?;
+        if participant.roles.contains(&Role::Target) {
+            required = required.checked_add(materials.target_preparation_bytes).ok_or_else(limit)?;
+        }
+        if participant.carries_state() {
+            required = required.checked_add(2 * 1024 * 1024).ok_or_else(limit)?;
+        }
+        for artifact in scope.native_artifacts(native) {
+            required = required.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
+        }
+    Ok(required)
 }

@@ -84,6 +84,7 @@ pub(crate) struct NativeMoveDraft {
     operation: OperationId,
     envelope: Vec<u8>,
     state: Vec<u8>,
+    proposed_state: State,
     source_records_hash: String,
     target_records_hash: String,
     request_digest: String,
@@ -93,6 +94,9 @@ impl NativeMoveDraft {
     pub(crate) fn operation_id(&self) -> OperationId { self.operation }
     pub(crate) fn envelope(&self) -> &[u8] { &self.envelope }
     pub(crate) fn state(&self) -> &[u8] { &self.state }
+    /// This remains an unaccepted draft. It cannot construct AdmittedState or
+    /// authorize publication, including when used by a disposable SQL encoder.
+    pub(crate) fn proposed_state(&self) -> &State { &self.proposed_state }
     pub(crate) fn source_records_hash(&self) -> &str { &self.source_records_hash }
     pub(crate) fn target_records_hash(&self) -> &str { &self.target_records_hash }
     pub(crate) fn request_digest(&self) -> &str { &self.request_digest }
@@ -192,7 +196,7 @@ impl FileHistoryMoveProjection {
         digest.update(blake3::hash(&envelope).as_bytes());
         digest.update(blake3::hash(&state).as_bytes());
         Ok(NativeMoveDraft {
-            operation: self.operation, envelope, state,
+            operation: self.operation, envelope, state, proposed_state: next,
             source_records_hash: source.records_hash,
             target_records_hash: target_database.records_hash,
             request_digest, digest: digest.finalize().to_hex().to_string(),

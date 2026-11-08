@@ -700,3 +700,6 @@ mod move_decision;
 
 #[path = "file_history_copy/move_native.rs"]
 mod move_native;
+
+#[path = "file_history_copy/move_scopes.rs"]
+mod move_scopes;

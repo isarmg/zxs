@@ -5,11 +5,35 @@ use crate::history_package::{AdmittedState, preparation_checkpoint};
 use sqlite_access::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use std::sync::atomic::AtomicBool;
 
-const MAX_BYTES: usize = 64 * 1024 * 1024;
+pub(in crate::engine) const MAX_BYTES: usize = 64 * 1024 * 1024;
 
 pub(in crate::engine) fn encode(admitted: &AdmittedState, stop: &AtomicBool) -> Result<Vec<u8>> {
-    preparation_checkpoint(stop)?;
-    let state = admitted.state();
+    encode_observed(admitted, &|| preparation_checkpoint(stop))
+}
+
+pub(in crate::engine) fn encode_observed(
+    admitted: &AdmittedState,
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
+    encode_state(admitted.state(), checkpoint)
+}
+
+/// A private unaccepted move draft is not an admitted snapshot. Keep this
+/// staging-only entry distinct from the ordinary admitted-State encoder.
+pub(in crate::engine) fn encode_move_draft(
+    draft: &crate::business::NativeMoveDraft,
+    cancellation: &HistoryWindowCancellation,
+) -> Result<Vec<u8>> {
+    encode_state(draft.proposed_state(), &|| {
+        if cancellation.is_cancelled() {
+            return Err(Error::new(ErrorCode::OperationAborted, "move SYSTEM preparation cancelled"));
+        }
+        Ok(())
+    })
+}
+
+fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<Vec<u8>> {
+    checkpoint()?;
     // Bound the entire input before SQL rows duplicate parts of it. This is a
     // preparation budget, not a limit silently truncating the serving index.
     crate::disk::encode_metadata(state, MAX_BYTES)?;
@@ -24,7 +48,7 @@ pub(in crate::engine) fn encode(admitted: &AdmittedState, stop: &AtomicBool) -> 
             let mut tx = connection.begin().await?;
             recreate_projection(&mut tx).await.map_err(Error::from)?;
             for (id, version) in &state.versions {
-                preparation_checkpoint(stop)?;
+                checkpoint()?;
                 sqlite_access::query("INSERT INTO file_history_versions VALUES(?,?,?,?)")
                     .bind(id)
                     .bind(&version.file_id)
@@ -37,7 +61,7 @@ pub(in crate::engine) fn encode(admitted: &AdmittedState, stop: &AtomicBool) -> 
                 .project(&mut tx, state)
                 .await
                 .map_err(Error::from)?;
-            preparation_checkpoint(stop)?;
+            checkpoint()?;
             system_changes::Delta::between(None, state)
                 .project(&mut tx, state)
                 .await
@@ -47,7 +71,7 @@ pub(in crate::engine) fn encode(admitted: &AdmittedState, stop: &AtomicBool) -> 
                 .execute(&mut *tx)
                 .await?;
             tx.commit().await?;
-            preparation_checkpoint(stop)?;
+            checkpoint()?;
             let bytes = connection.serialize(None).await?;
             if bytes.len() > MAX_BYTES {
                 return Err(Error::new(

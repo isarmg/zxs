@@ -45,11 +45,17 @@ fn sources(engine: &Engine, through: u64) -> Result<BTreeMap<u64, Source<'_>>> {
     Ok(sources)
 }
 
-pub(super) fn capture(
+/// Visit the complete authenticated source prefix without installing a catalog.
+/// The callback borrows each admitted State only for that one publication.
+pub(in crate::engine) fn visit_published_prefix(
     engine: &Engine,
-    identity: DiskRegistrationIdentity,
     through: u64,
-) -> Result<DiskHistorySnapshot> {
+    checkpoint: &impl Fn() -> Result<()>,
+    mut visit: impl FnMut(
+        &Candidate, &str, &Publication, &str, &crate::history_package::AdmittedState,
+    ) -> Result<()>,
+) -> Result<()> {
+    checkpoint()?;
     if engine.config.generation().is_some() {
         return Err(Error::new(
             ErrorCode::InvalidRequest,
@@ -57,65 +63,41 @@ pub(super) fn capture(
         ));
     }
     if through > engine.state.sequence {
-        return Err(invalid(
-            "disk history claims a publication beyond the admitted head",
-        ));
+        return Err(invalid("disk history claims a publication beyond the admitted head"));
     }
     let sources = sources(engine, through)?;
     let members = engine.members();
-    let mut header = DiskHistoryHeader {
-        identity: identity.clone(),
-        through_sequence: 0,
-        through_snapshot: None,
-        publications: 0,
-    };
-    let mut changes = Changes {
-        rows: Vec::new(),
-        bytes: 0,
-    };
-    let mut previous = DiskCatalogSnapshot::empty(identity.clone());
+    let mut previous_snapshot = None;
+    let mut previous_sequence = 0u64;
     for (sequence, source) in sources {
+        checkpoint()?;
         let candidate: Candidate = verified_object_observed_at(
-            &engine.disk_resources,
-            &members,
-            "candidate",
-            source.candidate,
+            &engine.disk_resources, &members, "candidate", source.candidate,
             &mut |error| engine.metadata_integrity.fault(error),
         )?;
         engine.verify_candidate_membership(&candidate)?;
         if sequence == 0
             || candidate.sequence != sequence
-            || candidate.pool_id != identity.pool_id
-            || candidate.previous_snapshot != header.through_snapshot
+            || candidate.pool_id != engine.config.pool_id
+            || candidate.previous_snapshot != previous_snapshot
         {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "disk history candidate does not extend the complete authenticated prefix",
-            ));
+            return Err(Error::new(ErrorCode::LogFork,
+                "disk history candidate does not extend the complete authenticated prefix"));
         }
         let publication: Publication = verified_object_observed_at(
-            &engine.disk_resources,
-            &members,
-            "publication",
-            source.publication,
+            &engine.disk_resources, &members, "publication", source.publication,
             &mut |error| engine.metadata_integrity.fault(error),
         )?;
         verified_publication_seal_observed_at(
-            &engine.disk_resources,
-            &members,
-            &candidate,
-            &publication,
+            &engine.disk_resources, &members, &candidate, &publication,
             &mut |error| engine.metadata_integrity.fault(error),
         )?;
-        let admitted = verified_recovery_snapshot_at(
-            &engine.disk_resources,
-            &members,
-            &candidate.snapshot_hash,
+        let snapshot = verified_recovery_snapshot_at(
+            &engine.disk_resources, &members, &candidate.snapshot_hash,
         )?;
-        let state = admitted.for_candidate(&candidate)?.state();
-        let result = state
-            .operations
-            .get(&candidate.operation_id)
+        let admitted = snapshot.for_candidate(&candidate)?;
+        let state = admitted.state();
+        let result = state.operations.get(&candidate.operation_id)
             .ok_or_else(|| invalid("disk history candidate has no original operation receipt"))?;
         if state.sequence != sequence
             || result.operation_id != candidate.operation_id
@@ -123,32 +105,45 @@ pub(super) fn capture(
             || result.request_digest != candidate.request_digest
             || (publication.recovery.is_none() && result != &publication.result)
         {
-            return Err(invalid(
-                "disk history receipt differs from the published snapshot",
-            ));
+            return Err(invalid("disk history receipt differs from the published snapshot"));
         }
-        let next = snapshot(state, identity.clone())?;
-        changes.append(&candidate, source.candidate, &previous, &next)?;
+        visit(&candidate, source.candidate, &publication, source.publication, admitted)?;
+        previous_sequence = sequence;
+        previous_snapshot = Some(candidate.snapshot_hash.clone());
+    }
+    checkpoint()?;
+    if previous_sequence != through {
+        return Err(invalid("disk history boundary has no complete published prefix"));
+    }
+    if through == engine.state.sequence && previous_snapshot != engine.snapshot {
+        return Err(invalid("disk history prefix differs from the admitted current snapshot"));
+    }
+    Ok(())
+}
+
+pub(super) fn capture(
+    engine: &Engine,
+    identity: DiskRegistrationIdentity,
+    through: u64,
+) -> Result<DiskHistorySnapshot> {
+    let mut header = DiskHistoryHeader {
+        identity: identity.clone(), through_sequence: 0, through_snapshot: None, publications: 0,
+    };
+    let mut changes = Changes { rows: Vec::new(), bytes: 0 };
+    let mut previous = DiskCatalogSnapshot::empty(identity.clone());
+    visit_published_prefix(engine, through, &|| Ok(()), |candidate, hash, _, _, admitted| {
+        let next = snapshot(admitted.state(), identity.clone())?;
+        changes.append(candidate, hash, &previous, &next)?;
         previous = next;
-        header.through_sequence = sequence;
+        header.through_sequence = candidate.sequence;
         header.through_snapshot = Some(candidate.snapshot_hash.clone());
         header.publications += 1;
-    }
-    if header.through_sequence != through {
-        return Err(invalid(
-            "disk history boundary has no complete published prefix",
-        ));
-    }
+        Ok(())
+    })?;
     if through == engine.state.sequence
-        && (header.through_snapshot != engine.snapshot
-            || !previous.same_rows(&snapshot(&engine.state, identity)?))
+        && !previous.same_rows(&snapshot(&engine.state, identity)?)
     {
-        return Err(invalid(
-            "disk history prefix differs from the admitted current snapshot",
-        ));
+        return Err(invalid("disk history prefix differs from the admitted current snapshot"));
     }
-    Ok(DiskHistorySnapshot {
-        header,
-        changes: changes.rows,
-    })
+    Ok(DiskHistorySnapshot { header, changes: changes.rows })
 }

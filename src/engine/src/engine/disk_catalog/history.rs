@@ -10,6 +10,7 @@ mod offline;
 pub(super) use offline::fold as fold_prepared;
 pub(in crate::engine::disk_catalog) mod preparation;
 mod replay;
+pub(in crate::engine) use replay::visit_published_prefix;
 pub(super) use maintenance::Maintenance;
 pub use maintenance::{DiskHistoryFailure, DiskHistoryMaintenanceState, DiskHistoryStatus};
 pub use offline::{

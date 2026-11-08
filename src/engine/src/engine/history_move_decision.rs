@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod materials;
 mod native;
+mod scopes;
+pub use scopes::FileHistoryMoveScopedPreparation;
 pub use native::FileHistoryMoveNativePreparation;
 mod store;
 use materials::Materials;
