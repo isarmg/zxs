@@ -20,6 +20,8 @@
 
 移动专用的内存捕获与保守重验入口见[源快照切片](file-history-move-capture.md)：它另外绑定稳定 file ID、唯一 occurrence、完整 frontier、逻辑数据库摘要、State／Config 身份及双端 namespace witness，但仍不是持久移动计划或共同决定。
 
+后继[共同元数据投影](file-history-move-projection.md)复用本转换的类型化审计，与源全 frontier 的 D 一起保存在同一个私有写集中。该投影不生成 copy 或 delete 收据、不安装数据库、不改当前 namespace；普通 copy 的 source-retained 行为与结果不变。
+
 本封套的源摘要是从已捕获 State 构造的**逻辑数据库投影**，不是源物理 SQLite、目标所有备份、副本路线或系统/盘根三范围数据库已经齐备的证明。已有 placement/protection/file-backup 约束、缺正文、异路由和继承来源拒绝均不放宽。系统/盘根作用域及完整迁移证明缺口存在时，不发布源 D、不对 SMB 返回完整跨盘移动成功。
 
 当前 `HistoryManifest` 不导出永久 operations/operation_principals。新目标收据可在**本池完整 State 冷恢复**中重建审计，不表示离线 history_package 已携带这些审计、SQLite 或独立恢复闭包；不能把历史包准备成功当作本功能的完整可携带性证明。普通文件历史图/UI 也没有因内部数据库多出审计行便获得历史 D 展示入口。

@@ -87,7 +87,7 @@ fn unsupported() -> Error {
 
 /// Operation-bound identities make recovery reconstruct the complete write set,
 /// instead of trusting an arbitrary old-to-new map stored in a receipt.
-fn identity(operation: OperationId, source: &str) -> Result<String> {
+pub(super) fn identity(operation: OperationId, source: &str) -> Result<String> {
     let (prefix, _) = source.split_once('_').ok_or_else(unsupported)?;
     let hash = object_hash("file-history-copy-identity", &json!([operation, source]))?;
     Ok(format!("{prefix}_{}", &hash[..32]))

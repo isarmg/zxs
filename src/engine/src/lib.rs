@@ -13,8 +13,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 mod authority_selection;
 mod business;
 pub use business::{
-    CurrentFileHistoryMove, FileHistoryCopyRequest, FileHistoryMoveCapture,
-    FileHistoryMoveRequest, FileHistoryMoveSourceDigest,
+    CurrentFileHistoryMove, CurrentFileHistoryMoveProjection, FileHistoryCopyRequest,
+    FileHistoryMoveCapture, FileHistoryMoveProjection, FileHistoryMoveRequest,
+    FileHistoryMoveSourceDigest,
 };
 mod container_storage;
 mod database_install;

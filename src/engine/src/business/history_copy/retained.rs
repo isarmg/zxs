@@ -110,6 +110,31 @@ pub(super) fn apply(
     principal: &str,
     operation: OperationId,
 ) -> Result<Value> {
+    let RetainedProjection {
+        mut result,
+        lifecycle,
+    } = project(previous, next, view, request, route, principal, operation)?;
+    result[FIELD] = json!(lifecycle);
+    Ok(result)
+}
+
+/// The typed audit is shared by copy and the non-publishing move projection.
+/// Neither field is a receipt or publication authority until its own operation
+/// has passed the complete publication protocol.
+pub(in crate::business) struct RetainedProjection {
+    pub(in crate::business) result: Value,
+    pub(in crate::business) lifecycle: CopiedLifecycle,
+}
+
+pub(in crate::business) fn project(
+    previous: &State,
+    next: &mut State,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    request: &FileHistoryCopyRequest,
+    route: &CopyRoute,
+    principal: &str,
+    operation: OperationId,
+) -> Result<RetainedProjection> {
     let source = sources(previous, view, request)?;
     let source_history = &previous.repositories[&request.source_repository_id].history_tree_id;
     let capture = crate::container_storage::file_database::capture_copy(
@@ -117,7 +142,7 @@ pub(super) fn apply(
         &source.file,
         source_history,
     )?;
-    let mut result = super::apply(previous, next, view, request, route, principal, operation)?;
+    let result = super::apply(previous, next, view, request, route, principal, operation)?;
     let file = identity(operation, &source.file)?;
     let history = &previous.repositories[&request.target_repository_id].history_tree_id;
     let mut events = capture.events;
@@ -148,8 +173,10 @@ pub(super) fn apply(
         events,
     };
     bounded(&copied)?;
-    result[FIELD] = json!(copied);
-    Ok(result)
+    Ok(RetainedProjection {
+        result,
+        lifecycle: copied,
+    })
 }
 
 #[cfg(test)]

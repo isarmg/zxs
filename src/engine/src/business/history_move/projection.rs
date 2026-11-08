@@ -1,0 +1,278 @@
+//! One private metadata write set, never a journal candidate or an I/O permit.
+//! The target graph and source D share an operation, slot, actor and clock.
+use super::*;
+use history_copy::{CopyRoute, retained::CopiedLifecycle};
+use json_codec::json;
+
+struct ProjectionInput<'a> {
+    capture: &'a FileHistoryMoveCapture,
+    route: &'a CopyRoute,
+    principal: &'a str,
+    operation: OperationId,
+    sequence: u64,
+}
+
+struct WriteSet {
+    next: State,
+    target_file: HistoryFileId,
+    version_mapping: BTreeMap<String, String>,
+    branch_mapping: BTreeMap<String, String>,
+    lifecycle: CopiedLifecycle,
+}
+
+/// Proposed target graph and source deletion, held together and never exposed
+/// as a writable State. This is deliberately not serializable, not a permanent
+/// operation receipt and not accepted by any publication or SMB entry point.
+/// The proposed slot is observed, not reserved. Drop discards only memory.
+pub struct FileHistoryMoveProjection {
+    capture: FileHistoryMoveCapture,
+    principal: String,
+    operation: OperationId,
+    route: CopyRoute,
+    writes: WriteSet,
+}
+
+impl FileHistoryMoveProjection {
+    pub fn capture(&self) -> &FileHistoryMoveCapture {
+        &self.capture
+    }
+
+    pub fn operation_id(&self) -> OperationId {
+        self.operation
+    }
+
+    pub fn principal(&self) -> &str {
+        &self.principal
+    }
+
+    /// An unreserved proposed decision slot, not a published sequence.
+    pub fn proposed_sequence(&self) -> u64 {
+        self.writes.next.sequence
+    }
+
+    pub fn proposed_source_deletion(&self) -> &FileDeletionNode {
+        &self.writes.next.file_deletions[self.capture.source_file_id.as_str()]
+    }
+
+    pub fn target_file_id(&self) -> &HistoryFileId {
+        &self.writes.target_file
+    }
+
+    /// Complete source-to-target version identities, not verified body copies.
+    pub fn version_mapping(&self) -> &BTreeMap<String, String> {
+        &self.writes.version_mapping
+    }
+
+    /// Includes archived and alias branch identities, not only the write branch.
+    pub fn branch_mapping(&self) -> &BTreeMap<String, String> {
+        &self.writes.branch_mapping
+    }
+
+    /// Frozen logical route bindings. They do not prove physical disk health.
+    pub fn target_binding_generations(&self) -> &BTreeMap<String, u64> {
+        &self.route.bindings
+    }
+
+    /// Count of historical D/undo facts proposed for the target. The new source
+    /// D belongs to the source and is not imported into the target as a live D.
+    pub fn retained_lifecycle_events(&self) -> usize {
+        self.writes.lifecycle.events.len()
+    }
+}
+
+/// A same-owner, same-slot metadata observation. It grants no body, database,
+/// journal, recovery or publication authority.
+pub struct CurrentFileHistoryMoveProjection<'a> {
+    projection: &'a FileHistoryMoveProjection,
+    _engine: &'a Engine,
+}
+
+impl CurrentFileHistoryMoveProjection<'_> {
+    pub fn projection(&self) -> &FileHistoryMoveProjection {
+        self.projection
+    }
+}
+
+fn require_unused(engine: &Engine, operation: OperationId) -> Result<()> {
+    if engine.state().operations.contains_key(&operation) {
+        return Err(Error::new(
+            ErrorCode::IdempotencyKeyReused,
+            "move projection cannot reuse a published operation",
+        ));
+    }
+    Ok(())
+}
+
+fn map_ids<'a>(
+    operation: OperationId,
+    ids: impl Iterator<Item = &'a String>,
+) -> Result<BTreeMap<String, String>> {
+    ids.map(|id| Ok((id.clone(), history_copy::identity(operation, id)?)))
+        .collect()
+}
+
+fn deletion(previous: &State, input: &ProjectionInput<'_>) -> Result<FileDeletionNode> {
+    let capture = input.capture;
+    let request = &capture.namespace;
+    let source = &previous.repositories[&request.source_repository_id];
+    let entry = namespace::find_unordered(
+        &previous.commits[&request.expected_source_head].entries,
+        &request.source_path,
+    )
+    .expect("invariant: a current move capture has the exact source occurrence");
+    let hash = object_hash(
+        "file-history-move-deletion",
+        &json!([input.operation, capture.source_file_id.as_str()]),
+    )?;
+    Ok(FileDeletionNode {
+        node_id: format!("fdel_{}", &hash[..32]),
+        repository_id: source.repository_id.clone(),
+        history_tree_id: source.history_tree_id.clone(),
+        file_id: capture.source_file_id.as_str().into(),
+        path: entry.path.clone(),
+        branch_heads: capture.branch_heads.clone(),
+        parent_node_ids: capture.parent_node_ids.clone(),
+        operation_id: input.operation,
+        author: input.principal.into(),
+        sequence: input.sequence,
+        created_at: input.route.created_at,
+    })
+}
+
+fn name_arrival(next: &mut State, request: &FileHistoryCopyRequest, file: &str) {
+    let main = &next.repositories[&request.target_repository_id].main_branch_id;
+    let selected = &next.file_selections[file];
+    let commits = [
+        next.branches[main].head_commit_id.clone(),
+        next.branches[selected].head_commit_id.clone(),
+    ];
+    for id in commits {
+        let commit = next
+            .commits
+            .get_mut(&id)
+            .expect("invariant: target projection just created both arrival commits");
+        commit.kind = "file_history_move".into();
+        commit.message = "Move complete file history; soft delete source".into();
+    }
+}
+
+/// Pure, deterministic reconstruction from one still-current capture and frozen
+/// route/slot/actor/time. There is no operation receipt: exposing this partial
+/// State to ordinary publication would be invalid and is intentionally absent.
+fn compose(
+    previous: &State,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    input: &ProjectionInput<'_>,
+) -> Result<WriteSet> {
+    let mut next = previous.clone();
+    next.begin_tracking();
+    crate::container_storage::capture_names(&mut next);
+    next.sequence = input.sequence;
+    next.business_generation = previous
+        .business_generation
+        .checked_add(1)
+        .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "business generation exhausted"))?;
+    let request = &input.capture.namespace;
+    let copied = history_copy::retained::project(
+        previous,
+        &mut next,
+        view,
+        request,
+        input.route,
+        input.principal,
+        input.operation,
+    )?;
+    let target_file = HistoryFileId::parse(&copied.lifecycle.file_id)?;
+    name_arrival(&mut next, request, target_file.as_str());
+    let node = deletion(previous, input)?;
+    next.file_deletions.insert(node.file_id.clone(), node);
+    crate::file_deletion::freeze::verify(previous, &next)?;
+    crate::container_storage::capture_changed_names(previous, &mut next);
+    // These are complete logical graph checks, not SQLite or payload proofs.
+    for repository in [&request.source_repository_id, &request.target_repository_id] {
+        crate::history_package::validate_history_copy(
+            &next,
+            &previous.repositories[repository].history_tree_id,
+        )?;
+    }
+    Ok(WriteSet {
+        next,
+        target_file,
+        version_mapping: map_ids(input.operation, input.capture.version_ids.iter())?,
+        branch_mapping: map_ids(input.operation, input.capture.branch_heads.keys())?,
+        lifecycle: copied.lifecycle,
+    })
+}
+
+impl Engine {
+    /// Compose the target retained graph and source full-frontier D in one
+    /// private metadata write set. Does not copy bodies, install databases,
+    /// reserve an operation or slot, write PREPARE/ACCEPT, publish a receipt,
+    /// hide the source, or change the real target namespace.
+    ///
+    /// This consumes a current capture. The trusted caller authenticates the
+    /// actor before invoking this API. No public execute method exists until
+    /// three-scope proofs and the common durable/recovery protocol are closed.
+    pub fn project_file_history_move(
+        &self,
+        capture: FileHistoryMoveCapture,
+        principal: &str,
+        operation: OperationId,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<FileHistoryMoveProjection> {
+        checkpoint(cancellation)?;
+        Self::require_actor(principal)?;
+        require_unused(self, operation)?;
+        self.recheck_file_history_move(&capture, cancellation)?;
+        let route = CopyRoute {
+            created_at: now()?,
+            slots: capture.target_slots.clone(),
+            bindings: capture
+                .target_slots
+                .iter()
+                .map(|slot| Ok((slot.clone(), self.disk(slot)?.binding_generation)))
+                .collect::<Result<_>>()?,
+        };
+        let writes = compose(
+            self.state(),
+            self.admitted_current_namespaces()?,
+            &ProjectionInput {
+                capture: &capture,
+                route: &route,
+                principal,
+                operation,
+                sequence: self.next_slot,
+            },
+        )?;
+        checkpoint(cancellation)?;
+        Ok(FileHistoryMoveProjection {
+            capture,
+            principal: principal.into(),
+            operation,
+            route,
+            writes,
+        })
+    }
+
+    /// Keep the original projection fixed. A changed source, target, config,
+    /// decision slot or volatile write workspace is an error, not a replan.
+    pub fn recheck_file_history_move_projection<'a>(
+        &'a self,
+        projection: &'a FileHistoryMoveProjection,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<CurrentFileHistoryMoveProjection<'a>> {
+        self.recheck_file_history_move(&projection.capture, cancellation)?;
+        require_unused(self, projection.operation)?;
+        if self.next_slot != projection.proposed_sequence() {
+            return Err(changed());
+        }
+        Ok(CurrentFileHistoryMoveProjection {
+            projection,
+            _engine: self,
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/business/history_move_projection_tests.rs"]
+mod tests;
