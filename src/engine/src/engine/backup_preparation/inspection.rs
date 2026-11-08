@@ -50,6 +50,11 @@ pub struct BackupPreparationReport {
 /// Missing/corrupt/conflicting material and incomplete markers return errors.
 pub fn offline_check_backup_preparation(path: &Path) -> Result<BackupPreparationReport> {
     let root = DiskRoot::open(path)?;
+    check_at(&root, &AtomicBool::new(false))
+}
+
+pub(super) fn check_at(root: &DiskRoot, stop: &AtomicBool) -> Result<BackupPreparationReport> {
+    let path = root.path();
     let job: Job =
         decode_proof(&root.read_bytes(&path.join(TARGET_INTENT), crate::disk::MAX_METADATA)?)?;
     if job.format != FORMAT || job.request.target_paths.len() != 1 {
@@ -58,15 +63,14 @@ pub fn offline_check_backup_preparation(path: &Path) -> Result<BackupPreparation
             "unsupported backup preparation task",
         ));
     }
-    if PhysicalBinding::of(&root)? != job.target {
+    if PhysicalBinding::of(root)? != job.target {
         return Err(Error::new(
             ErrorCode::DiskIdentityMismatch,
             "backup preparation root identity differs",
         ));
     }
-    let stop = AtomicBool::new(false);
-    let state = snapshot::read(&root, &job, &stop)?;
-    let report = verify_material(&root, &job, &state, &stop)?;
+    let state = snapshot::read(root, &job, stop)?;
+    let report = verify_material(root, &job, &state, stop)?;
     let history: json_codec::Value = storage_contract::strict_json(&root.read_bytes(
         &path.join("history-prepared.json"),
         crate::disk::MAX_METADATA,

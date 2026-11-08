@@ -15,8 +15,11 @@ use std::{
     thread::JoinHandle,
 };
 
+mod batch;
+mod execution;
 mod inspection;
 mod snapshot;
+pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
 pub use inspection::{BackupPreparationReport, offline_check_backup_preparation};
 
 const FORMAT: &str = "zxs-backup-history-preparation";
@@ -25,8 +28,9 @@ const PROGRESS: &str = "backup-preparation/progress.json";
 const TARGET_INTENT: &str = "backup-preparation.json";
 const RESERVE: u64 = 16 * 1024 * 1024;
 
-/// Explicit selection, not an implicit fanout/replica policy. This first slice
-/// accepts one target for the entire single-primary pool, not per-file shards.
+/// Explicit complete-copy selection, never an inferred replica policy. The
+/// single-target API accepts one path; the batch API accepts two to eight. Both
+/// retain the entire supported single-primary pool, never per-file shards.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct BackupPreparationRequest {
@@ -43,7 +47,7 @@ pub struct BackupPreparationRequest {
 pub enum BackupPreparationPhase {
     Copying,
     Verifying,
-    /// History material only. Native control closure, database projections and
+    /// Frozen history/State material only. Native control closure, database projections and
     /// the topology/placement activation decision are not implemented here.
     HistoryPrepared,
     Blocked,
@@ -115,6 +119,7 @@ impl Job {
 
 pub(super) struct Worker {
     job: Job,
+    batch: Option<batch::Batch>,
     state: Arc<Mutex<BackupPreparationStatus>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -127,13 +132,17 @@ impl Worker {
         status.detail = error.to_string();
         Self {
             job,
+            batch: None,
             state: Arc::new(Mutex::new(status)),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
         }
     }
     fn unavailable_status(&self, detail: &str) -> BackupPreparationStatus {
-        let mut status = self.job.status();
+        let mut status = self
+            .batch
+            .as_ref()
+            .map_or_else(|| self.job.status(), batch::Batch::status);
         status.phase = BackupPreparationPhase::Blocked;
         status.error_code = Some(ErrorCode::RecoveryRequired);
         status.detail = detail.into();
@@ -206,6 +215,7 @@ impl Engine {
         self.require_unfenced_membership()?;
         self.check_backup_preparation_scope(&request)?;
         let system = DiskRoot::open(&self.root)?;
+        batch::require_no_batch(&system)?;
         if crate::history_package::preparation_path_exists(&system, &self.root.join(JOB))? {
             let job: Job = decode_strict(&system.read_bytes(&self.root.join(JOB), MAX_METADATA)?)?;
             if job.request != request {
@@ -317,6 +327,9 @@ impl Engine {
 
     pub(super) fn resume_backup_preparation(&mut self) -> Result<()> {
         let system = DiskRoot::open(&self.root)?;
+        if batch::resume(self, &system)? {
+            return Ok(());
+        }
         if !crate::history_package::preparation_path_exists(&system, &self.root.join(JOB))? {
             return Ok(());
         }
@@ -571,48 +584,11 @@ fn spawn(
             *progress.lock().expect("invariant: backup status poisoned") = snapshot;
             persisted
         };
-        let result = (|| {
-            named_target(&target, &frozen)?;
-            crate::history_package::preparation_checkpoint(&cancellation)?;
-            // Actual free-space admission, never a pool-wide free-space sum.
-            let remaining = plans.iter().try_fold(snapshot.remaining_bytes(&target)?, |total, plan| {
-                total.checked_add(plan.remaining_bytes(&target)?).ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "backup space overflow"))
-            })?;
-            let required = remaining.checked_add(if remaining == 0 { 64 * 1024 } else { RESERVE })
-                .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "backup space overflow"))?;
-            if target.available()? < required { return Err(Error::new(ErrorCode::NoSpace, "backup target cannot hold the complete frozen unit")); }
-            update(&|_| {})?;
-            snapshot.copy(&target, &cancellation)?;
-            let admitted = snapshot::read(&target, &frozen, &cancellation)?;
-            let mut reports = Vec::new();
-            for plan in plans {
-                named_target(&target, &frozen)?;
-                update(&|status| status.phase = BackupPreparationPhase::Copying)?;
-                let path = target.path().join("histories").join(plan.history_id());
-                target.private_dir(&path)?;
-                let package = target.private_child(&path)?;
-                let report = plan.copy(&package, &cancellation, |bytes| {
-                    update(&|status| { status.completed_files += 1; status.completed_bytes += bytes; })
-                }, || update(&|status| status.phase = BackupPreparationPhase::Verifying))?;
-                reports.push(report);
-            }
-            update(&|status| status.phase = BackupPreparationPhase::Verifying)?;
-            named_target(&target, &frozen)?;
-            crate::history_package::preparation_checkpoint(&cancellation)?;
-            crate::history_package::install_preparation_bytes(&target,
-                &target.path().join("history-prepared.json"),
-                &inspection::history_marker(&frozen, &reports)?)?;
-            let snapshot_report = inspection::verify_material(&target, &frozen, &admitted, &cancellation)?;
-            let report_bytes = canonical_json(&snapshot_report)?;
-            if report_bytes.len() > MAX_METADATA {
-                return Err(Error::new(ErrorCode::ResourceLimit, "snapshot completion exceeds metadata budget"));
-            }
-            crate::history_package::install_preparation_bytes(&target,
-                &target.path().join(inspection::COMPLETE), &report_bytes)?;
-            named_target(&target, &frozen)?;
-            update(&|status| { status.phase = BackupPreparationPhase::HistoryPrepared;
-                status.detail = "complete history and published State snapshot verified; control archive/database installation and activation are not implemented".into(); })
-        })();
+        let result = execution::copy_target(&frozen, &target, plans, &snapshot, &cancellation, &update)
+            .and_then(|_| update(&|status| {
+                status.phase = BackupPreparationPhase::HistoryPrepared;
+                status.detail = "complete history and published State snapshot verified; control archive/database installation and activation are not implemented".into();
+            }));
         if let Err(error) = result {
             let persisted = update(&|status| { status.phase = BackupPreparationPhase::Blocked;
                 status.error_code = Some(error.code()); status.detail = error.to_string(); });
@@ -624,6 +600,7 @@ fn spawn(
     })?;
     Ok(Worker {
         job,
+        batch: None,
         state,
         stop,
         thread: Some(thread),

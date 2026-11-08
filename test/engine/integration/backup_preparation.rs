@@ -1,5 +1,7 @@
 //! Real background history preparation. HistoryPrepared is NOT topology activation.
 //! Owner restart coverage below is not a physical-power-loss certification.
+#[path = "backup_preparation_batch.rs"]
+mod batch;
 #[path = "backup_preparation_progress_io.rs"]
 mod progress_io;
 #[path = "backup_preparation_snapshot.rs"]

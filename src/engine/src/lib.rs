@@ -35,8 +35,9 @@ mod disk;
 pub mod disk_authority;
 mod engine;
 pub use engine::{
-    BackupPreparationPhase, BackupPreparationReport, BackupPreparationRequest,
-    BackupPreparationStatus, RecoveryDataRoot, offline_check_backup_preparation,
+    BackupPreparationBatchReport, BackupPreparationPhase, BackupPreparationReport,
+    BackupPreparationRequest, BackupPreparationStatus, RecoveryDataRoot,
+    offline_check_backup_preparation, offline_check_backup_preparation_batch,
 };
 pub use engine::{
     TerminalMetadataResume, TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
