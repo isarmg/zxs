@@ -39,10 +39,14 @@ pub use disk_lifecycle::{
 pub use disk_registry::published::terminal::TerminalRegistry;
 mod planning;
 pub(crate) use planning::PlanningContext;
+mod disk_catalog;
+pub use disk_catalog::{
+    DiskCatalogReceipt, DiskCatalogRole, DiskCatalogSnapshot, DiskCatalogVersion,
+};
 mod index;
 pub use index::{
-    IndexFailure, IndexFailureStage, IndexHealth, SystemChangeCursor, SystemChangePage,
-    SystemChangeReadError,
+    IndexFailure, IndexFailureStage, IndexHealth, SystemCatalogKind, SystemCatalogRecord,
+    SystemCatalogValue, SystemChangeCursor, SystemChangePage, SystemChangeReadError,
 };
 mod integrity_scrub;
 pub use integrity_scrub::{

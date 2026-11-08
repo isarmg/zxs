@@ -100,22 +100,23 @@ pub use disk::{
 #[cfg(feature = "fault-injection")]
 pub use engine::DiskQuiesceFault;
 pub use engine::{
-    ContentMatchRead, ContentReadPlan, DiskObservation, DiskObservationFailure,
-    DiskObservationPlan, DiskObservationStage, Engine, FileHistorySourceRead,
-    HistoryWindowCancellation, HistoryWindowRead, IndexFailure, IndexFailureStage, IndexHealth,
-    IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
-    IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
-    IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
-    IntegrityScrubTarget, MembershipAbortStatus, MembershipArchiveInspection,
-    MembershipControlArchive, MembershipExitAction, MembershipFenceStatus,
-    MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
+    ContentMatchRead, ContentReadPlan, DiskCatalogReceipt, DiskCatalogRole, DiskCatalogSnapshot,
+    DiskCatalogVersion, DiskObservation, DiskObservationFailure, DiskObservationPlan,
+    DiskObservationStage, Engine, FileHistorySourceRead, HistoryWindowCancellation,
+    HistoryWindowRead, IndexFailure, IndexFailureStage, IndexHealth, IntegrityScrubArea,
+    IntegrityScrubBatch, IntegrityScrubBatchAdmission, IntegrityScrubCancellation,
+    IntegrityScrubCompletion, IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan,
+    IntegrityScrubReport, IntegrityScrubSchedule, IntegrityScrubTarget, MembershipAbortStatus,
+    MembershipArchiveInspection, MembershipControlArchive, MembershipExitAction,
+    MembershipFenceStatus, MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
     MembershipJournalInspection, MetadataMemberProbe, MetadataView, ObservedDiskStatus,
     OpenedContent, OperationReadObservation, OperationReadPlan, OperationRecord,
     PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus, RangeContent,
     ReadFile, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
-    RetainedWorkspaceLimits, SharedHistoryRead, SystemChangeCursor, SystemChangePage,
-    SystemChangeReadError, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
-    WorkspaceReadPlan, verify_membership_control_archive,
+    RetainedWorkspaceLimits, SharedHistoryRead, SystemCatalogKind, SystemCatalogRecord,
+    SystemCatalogValue, SystemChangeCursor, SystemChangePage, SystemChangeReadError,
+    ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord, WorkspaceReadPlan,
+    verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

@@ -1,0 +1,190 @@
+//! The global namespace/location projection. Mutable rows describe the captured
+//! State; retained commits and directory trees preserve their own historical
+//! compositions. Current placement never reassigns an old event to a disk.
+use super::*;
+use data_serialization::Deserialize;
+use std::collections::BTreeMap;
+
+/// A catalog row retains its map identity even when its value is only a path or
+/// selection. This is an Engine read model, not a recovery/admission credential.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct SystemCatalogRecord {
+    pub id: String,
+    pub value: SystemCatalogValue,
+}
+
+#[derive(Serialize)]
+struct RecordRef<'a> {
+    id: &'a str,
+    value: ValueRef<'a>,
+}
+
+/// One declaration binds every supported row family to its exact State map,
+/// durable discriminator and typed result. No field-name reflection or JSON
+/// filtering determines scope.
+macro_rules! catalog_families {
+    ($( $variant:ident => ($number:literal, $field:ident, $value:ty) ),+ $(,)?) => {
+        /// Catalog families are independent of operation/path event families.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+        pub enum SystemCatalogKind { $( $variant ),+ }
+
+        #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+        #[serialization(tag = "kind", content = "record", rename_all = "kebab-case", deny_unknown_fields)]
+        pub enum SystemCatalogValue { $( $variant($value) ),+ }
+
+        #[derive(Serialize)]
+        #[serialization(tag = "kind", content = "record", rename_all = "kebab-case")]
+        enum ValueRef<'a> { $( $variant(&'a $value) ),+ }
+
+        impl SystemCatalogKind {
+            pub(super) fn sql(self) -> i64 {
+                match self { $( Self::$variant => $number ),+ }
+            }
+            pub(super) fn contains(self, state: &State, id: &str) -> bool {
+                match self { $( Self::$variant => state.$field.contains_key(id) ),+ }
+            }
+            pub(super) fn payload(self, state: &State, id: &str) -> Result<Vec<u8>> {
+                let value = match self {
+                    $( Self::$variant => ValueRef::$variant(state.$field.get(id)
+                        .expect("invariant: trusted catalog key belongs to admitted State")) ),+
+                };
+                encode(&RecordRef { id, value })
+            }
+        }
+
+        fn changes(before: Option<&State>, after: &State) -> Vec<FamilyDelta> {
+            vec![$( FamilyDelta {
+                kind: SystemCatalogKind::$variant,
+                keys: changed_keys!(before, after, $field),
+            } ),+]
+        }
+    };
+}
+
+macro_rules! changed_keys {
+    ($before:ident, $after:ident, $field:ident) => {{
+        match $before {
+            None => $after.$field.keys().cloned().collect(),
+            Some(before) => match $after.$field.changes_since(&before.$field) {
+                MapChanges::Keys(keys) => keys
+                    .iter()
+                    .filter(|id| before.$field.get(*id) != $after.$field.get(*id))
+                    .cloned()
+                    .collect(),
+                MapChanges::All => {
+                    let mut changed = Vec::new();
+                    let mut old = before.$field.iter().peekable();
+                    for (id, value) in $after.$field.iter() {
+                        while let Some((id, _)) = old.next_if(|(old, _)| *old < id) {
+                            changed.push(id.clone());
+                        }
+                        let previous = old.next_if(|(old, _)| *old == id).map(|(_, v)| v);
+                        if previous != Some(value) {
+                            changed.push(id.clone());
+                        }
+                    }
+                    changed.extend(old.map(|(id, _)| id.clone()));
+                    changed
+                }
+            },
+        }
+    }};
+}
+
+catalog_families! {
+    Repository => (2, repositories, Repository),
+    History => (3, histories, HistoryTree),
+    Branch => (4, branches, Branch),
+    NamespaceCommit => (5, commits, Commit),
+    DirectoryRepository => (6, directory_git_repositories, storage_contract::directory_git::DirectoryGitRepository),
+    DirectoryBranch => (7, directory_branches, DirectoryBranch),
+    DirectoryTree => (8, directory_trees, DirectoryTree),
+    FileLocation => (9, file_locations, String),
+    FileBackupPaths => (10, file_backup_paths, BTreeMap<String, String>),
+    VersionPlacement => (11, placements, Placement),
+    FileSelection => (12, file_selections, String),
+    DirectorySelection => (13, directory_selections, String),
+    DirectoryTreeSelection => (14, directory_tree_selections, String),
+    FileContext => (15, file_contexts, FileContext),
+    FileWriteOrigin => (16, file_write_origins, String),
+}
+
+pub(super) struct FamilyDelta {
+    kind: SystemCatalogKind,
+    keys: Vec<String>,
+}
+
+pub(super) struct CatalogDelta(Vec<FamilyDelta>);
+impl CatalogDelta {
+    pub(super) fn between(before: Option<&State>, after: &State) -> Self {
+        Self(changes(before, after))
+    }
+
+    pub(super) fn update_order(&self, order: &mut CatalogOrder, after: &State) {
+        for family in &self.0 {
+            let rows = order.0.entry(family.kind).or_default();
+            for id in &family.keys {
+                let key = (0, id.clone());
+                if family.kind.contains(after, id) {
+                    rows.insert(key);
+                } else {
+                    rows.remove(&key);
+                }
+            }
+        }
+    }
+
+    pub(super) async fn project(
+        &self,
+        connection: &mut sqlite_access::SqliteConnection,
+        after: &State,
+    ) -> std::result::Result<(), ProjectionFailure> {
+        for family in &self.0 {
+            for id in &family.keys {
+                let payload = family
+                    .kind
+                    .contains(after, id)
+                    .then(|| family.kind.payload(after, id))
+                    .transpose()
+                    .map_err(|source| ProjectionFailure {
+                        source,
+                        corrupt: false,
+                    })?;
+                store_payload(
+                    connection,
+                    Kind::Catalog(family.kind),
+                    id,
+                    payload.as_deref().map(|bytes| (0, bytes)),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub(super) struct CatalogOrder(BTreeMap<SystemCatalogKind, BTreeSet<(u64, String)>>);
+impl CatalogOrder {
+    pub(super) fn rows(&self, kind: SystemCatalogKind) -> &BTreeSet<(u64, String)> {
+        self.0
+            .get(&kind)
+            .expect("invariant: admitted catalog initializes every family")
+    }
+}
+
+impl Engine {
+    /// Read one complete retained catalog family from the system SQLite cache.
+    /// Mutable values describe this captured State, not a chronological event
+    /// stream. Pages are ordered by canonical map key and bound to State and
+    /// projection instance. The caller must authorize global metadata access.
+    pub fn system_catalog_records(
+        &self,
+        kind: SystemCatalogKind,
+        cursor: Option<&SystemChangeCursor>,
+        limit: usize,
+    ) -> std::result::Result<SystemChangePage<SystemCatalogRecord>, SystemChangeReadError> {
+        self.system_change_page(Kind::Catalog(kind), cursor, limit)
+    }
+}

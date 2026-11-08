@@ -4,9 +4,11 @@ use super::*;
 use data_serialization::{Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
 
+mod catalog;
 mod read;
+pub use catalog::{SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue};
 
-pub(super) const TABLE: &str = "CREATE TABLE system_changes(kind INTEGER NOT NULL CHECK(kind IN (0,1)),id TEXT NOT NULL COLLATE BINARY,sequence_key BLOB NOT NULL CHECK(length(sequence_key)=8),payload TEXT NOT NULL,PRIMARY KEY(kind,id)) STRICT";
+pub(super) const TABLE: &str = "CREATE TABLE system_changes(kind INTEGER NOT NULL CHECK(kind BETWEEN 0 AND 16),id TEXT NOT NULL COLLATE BINARY,sequence_key BLOB NOT NULL CHECK(length(sequence_key)=8),payload TEXT NOT NULL,PRIMARY KEY(kind,id)) STRICT";
 pub(super) const LOOKUP: &str =
     "CREATE INDEX system_change_order ON system_changes(kind,sequence_key,id)";
 const MAX_PAGE_ROWS: usize = 100;
@@ -16,12 +18,14 @@ const MAX_PAGE_BYTES: usize = crate::disk::MAX_METADATA;
 enum Kind {
     Operation,
     FilePath,
+    Catalog(SystemCatalogKind),
 }
 impl Kind {
     fn sql(self) -> i64 {
         match self {
             Self::Operation => 0,
             Self::FilePath => 1,
+            Self::Catalog(kind) => kind.sql(),
         }
     }
 }
@@ -57,12 +61,14 @@ pub enum SystemChangeReadError {
 pub(super) struct Order {
     operations: BTreeSet<(u64, String)>,
     paths: BTreeSet<(u64, String)>,
+    catalog: catalog::CatalogOrder,
 }
 impl Order {
     fn rows(&self, kind: Kind) -> &BTreeSet<(u64, String)> {
         match kind {
             Kind::Operation => &self.operations,
             Kind::FilePath => &self.paths,
+            Kind::Catalog(kind) => self.catalog.rows(kind),
         }
     }
     pub(super) fn update(&mut self, before: Option<&State>, after: &State) {
@@ -75,6 +81,7 @@ impl Order {
                 self.operations.insert((new.sequence, id.to_string()));
             }
         }
+        delta.catalog.update_order(&mut self.catalog, after);
         for id in delta.paths {
             if let Some(old) = before.and_then(|state| state.file_path_nodes.get(&id)) {
                 self.paths.remove(&(old.sequence, id.clone()));
@@ -89,6 +96,7 @@ impl Order {
 pub(super) struct Delta {
     operations: Vec<OperationId>,
     paths: Vec<String>,
+    catalog: catalog::CatalogDelta,
 }
 impl Delta {
     pub(super) fn between(before: Option<&State>, after: &State) -> Self {
@@ -127,6 +135,7 @@ impl Delta {
         Self {
             operations: keys!(operations),
             paths: keys!(file_path_nodes),
+            catalog: catalog::CatalogDelta::between(before, after),
         }
     }
     pub(super) async fn project(
@@ -152,6 +161,7 @@ impl Delta {
             )
             .await?;
         }
+        self.catalog.project(connection, after).await?;
         Ok(())
     }
 }
@@ -162,13 +172,33 @@ async fn store_row<T: Serialize>(
     id: &str,
     value: Option<(u64, &T)>,
 ) -> std::result::Result<(), ProjectionFailure> {
-    if let Some((sequence, value)) = value {
-        let payload = encode(value).map_err(|source| ProjectionFailure {
+    let payload = value
+        .map(|(sequence, value)| encode(value).map(|bytes| (sequence, bytes)))
+        .transpose()
+        .map_err(|source| ProjectionFailure {
             source,
             corrupt: false,
         })?;
+    store_payload(
+        connection,
+        kind,
+        id,
+        payload
+            .as_ref()
+            .map(|(sequence, bytes)| (*sequence, bytes.as_slice())),
+    )
+    .await
+}
+
+async fn store_payload(
+    connection: &mut sqlite_access::SqliteConnection,
+    kind: Kind,
+    id: &str,
+    value: Option<(u64, &[u8])>,
+) -> std::result::Result<(), ProjectionFailure> {
+    if let Some((sequence, payload)) = value {
         let payload =
-            std::str::from_utf8(&payload).expect("invariant: metadata encoder emits UTF-8");
+            std::str::from_utf8(payload).expect("invariant: metadata encoder emits UTF-8");
         sqlite_access::query("INSERT INTO system_changes VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET sequence_key=excluded.sequence_key,payload=excluded.payload")
             .bind(kind.sql()).bind(id).bind(sequence.to_be_bytes().as_slice()).bind(payload)
             .execute(&mut *connection).await?;

@@ -20,7 +20,10 @@ pub(crate) use scope::{ScopeNode, ScopeReader};
 #[cfg(test)]
 pub(crate) use scope::{reset_scope_read_metrics, scope_read_metrics};
 pub(crate) use snapshot::OwnedScopeRead;
-pub use system_changes::{SystemChangeCursor, SystemChangePage, SystemChangeReadError};
+pub use system_changes::{
+    SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor,
+    SystemChangePage, SystemChangeReadError,
+};
 
 const HISTORY_INDEX_MIN_VERSIONS: usize = 300_000;
 const HISTORY_INDEX_MAX_CANDIDATES: usize = 100;

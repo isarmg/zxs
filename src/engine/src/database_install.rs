@@ -9,6 +9,8 @@ use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::linux::FileIdentity;
 use std::path::{Path, PathBuf};
 
+pub(crate) const DISK_DATABASE_NAME: &str = ".zxs-disk.sqlite";
+
 const FORMAT: &str = "scoped-database-install";
 const MAX_ENVELOPE: usize = 8192;
 const MAX_RETAINED_ENTRIES: usize = 8192;
@@ -40,6 +42,9 @@ impl InstallAdmission {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum Scope {
+    Disk {
+        identity: crate::DiskRegistrationIdentity,
+    },
     File {
         history: String,
         file: String,
@@ -51,6 +56,9 @@ pub(crate) enum Scope {
     },
 }
 impl Scope {
+    pub(crate) fn disk(identity: crate::DiskRegistrationIdentity) -> Self {
+        Self::Disk { identity }
+    }
     pub(crate) fn directory(history: &str, repository: &str, directory: &str) -> Result<Self> {
         storage_contract::validate_id(history, "history")?;
         storage_contract::validate_id(repository, "repo")?;
@@ -71,6 +79,7 @@ impl Scope {
     }
     fn leaf(&self) -> &'static str {
         match self {
+            Self::Disk { .. } => DISK_DATABASE_NAME,
             Self::Directory { .. } => crate::container_storage::directory_database_name(),
             Self::File { .. } => crate::container_storage::file_database::NAME,
         }

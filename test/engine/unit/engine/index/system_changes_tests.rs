@@ -348,3 +348,145 @@ fn named_database_replacement_is_preserved_and_not_read_as_current_system_histor
     ));
     assert_eq!(std::fs::read(path).unwrap(), b"unknown replacement");
 }
+
+fn catalog(engine: &Engine, kind: SystemCatalogKind, limit: usize) -> Vec<SystemCatalogRecord> {
+    let mut cursor = None;
+    let mut rows = Vec::new();
+    loop {
+        let page = engine
+            .system_catalog_records(kind, cursor.as_ref(), limit)
+            .unwrap();
+        assert_eq!(page.sequence, engine.state.sequence);
+        rows.extend(page.records);
+        cursor = page.next;
+        if cursor.is_none() {
+            return rows;
+        }
+    }
+}
+
+#[test]
+fn global_catalog_retains_full_namespace_rows_across_repositories_and_cold_rebuild() {
+    let (temp, mut engine) = fixture();
+    let left = repository(&mut engine, "left");
+    let right = repository(&mut engine, "right");
+    save(&mut engine, &left, "folder/same.txt");
+    save(&mut engine, &right, "folder/same.txt");
+    rename(&mut engine, &left, "folder/same.txt", "folder/moved.txt");
+    let expected: Vec<_> = engine
+        .state
+        .commits
+        .iter()
+        .map(|(id, value)| SystemCatalogRecord {
+            id: id.clone(),
+            value: SystemCatalogValue::NamespaceCommit(value.clone()),
+        })
+        .collect();
+    assert_eq!(
+        catalog(&engine, SystemCatalogKind::NamespaceCommit, 1),
+        expected
+    );
+    assert_eq!(catalog(&engine, SystemCatalogKind::Repository, 1).len(), 2);
+    assert!(expected.iter().any(|row| matches!(&row.value,
+        SystemCatalogValue::NamespaceCommit(commit) if commit.entries.iter().any(|entry| entry.path() == "folder/same.txt"))));
+    assert!(expected.iter().any(|row| matches!(&row.value,
+        SystemCatalogValue::NamespaceCommit(commit) if commit.entries.iter().any(|entry| entry.path() == "folder/moved.txt"))));
+    drop(engine);
+    let reopened = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(
+        catalog(&reopened, SystemCatalogKind::NamespaceCommit, 2),
+        expected
+    );
+}
+
+#[test]
+fn catalog_location_replacements_removals_and_long_keys_have_exact_projection() {
+    let (_temp, mut engine) = fixture();
+    let repo = repository(&mut engine, "files");
+    save(&mut engine, &repo, "before.txt");
+    let file = engine
+        .state
+        .versions
+        .values()
+        .next()
+        .unwrap()
+        .file_id
+        .clone();
+    let before = Arc::clone(&engine.state);
+    let next = Arc::make_mut(&mut engine.state);
+    next.begin_tracking();
+    next.sequence += 1;
+    next.file_locations.insert(file.clone(), "after.txt".into());
+    let long_key = "selection-key".repeat(100);
+    next.directory_selections
+        .insert(long_key.clone(), "selection".into());
+    engine.update_index(&before);
+    assert_eq!(
+        catalog(&engine, SystemCatalogKind::FileLocation, 1),
+        vec![SystemCatalogRecord {
+            id: file.clone(),
+            value: SystemCatalogValue::FileLocation("after.txt".into()),
+        }]
+    );
+    assert!(
+        catalog(&engine, SystemCatalogKind::DirectorySelection, 10)
+            .iter()
+            .any(|record| record.id == long_key)
+    );
+    let before = Arc::clone(&engine.state);
+    let next = Arc::make_mut(&mut engine.state);
+    next.begin_tracking();
+    next.sequence += 1;
+    next.file_locations.remove(&file);
+    next.directory_selections.remove(&long_key);
+    engine.update_index(&before);
+    assert!(catalog(&engine, SystemCatalogKind::FileLocation, 10).is_empty());
+    assert!(
+        !catalog(&engine, SystemCatalogKind::DirectorySelection, 10)
+            .iter()
+            .any(|record| record.id == long_key)
+    );
+}
+
+#[test]
+fn catalog_cursor_cannot_cross_family_or_publication() {
+    let (_temp, mut engine) = fixture();
+    repository(&mut engine, "left");
+    repository(&mut engine, "right");
+    let page = engine
+        .system_catalog_records(SystemCatalogKind::Repository, None, 1)
+        .unwrap();
+    let cursor = page.next.as_ref().unwrap();
+    assert!(matches!(
+        engine.system_catalog_records(SystemCatalogKind::Branch, Some(cursor), 1),
+        Err(SystemChangeReadError::Request(_))
+    ));
+    assert!(matches!(
+        engine.system_operation_records(Some(cursor), 1),
+        Err(SystemChangeReadError::Request(_))
+    ));
+    repository(&mut engine, "third");
+    assert!(matches!(
+        engine.system_catalog_records(SystemCatalogKind::Repository, Some(cursor), 1),
+        Err(SystemChangeReadError::Request(_))
+    ));
+    assert!(matches!(engine.index_health(), IndexHealth::Ready { .. }));
+}
+
+#[test]
+fn catalog_rejects_missing_and_extra_first_rows_without_false_empty_success() {
+    for statement in [
+        "DELETE FROM system_changes WHERE kind=2",
+        "INSERT INTO system_changes VALUES(2,'',X'0000000000000000','{}')",
+        "UPDATE system_changes SET payload='{}' WHERE kind=2",
+    ] {
+        let (_temp, mut engine) = fixture();
+        repository(&mut engine, "repo");
+        sql(&engine, statement);
+        assert!(matches!(
+            engine.system_catalog_records(SystemCatalogKind::Repository, None, 1),
+            Err(SystemChangeReadError::Unavailable(_))
+        ));
+        assert!(matches!(engine.index_health(), IndexHealth::Unavailable(_)));
+    }
+}

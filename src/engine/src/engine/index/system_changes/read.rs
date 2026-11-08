@@ -50,6 +50,7 @@ fn expected_page(
             break;
         }
         let payload = match kind {
+            Kind::Catalog(kind) => kind.payload(state, &key.1)?,
             Kind::Operation => {
                 let id = key
                     .1
@@ -103,15 +104,23 @@ async fn read_page<T: DeserializeOwned>(
     check_projection_marker(&mut tx, sequence).await?;
     check_schema(&mut tx).await?;
     let limit = (expected.rows.len() + 1) as i64;
+    let key_prefix = expected
+        .rows
+        .iter()
+        .map(|(key, _)| key.1.len())
+        .chain(expected.following.iter().map(|key| key.1.len()))
+        .max()
+        .unwrap_or(0) as i64
+        + 1;
     // Read bounded keys and lengths before any payload allocation. The first
     // page has no synthetic empty-key cursor that could hide an anomalous row.
     let rows = if let Some(cursor) = cursor {
-        sqlite_access::query("SELECT substr(id,1,257),length(CAST(id AS BLOB)),substr(sequence_key,1,9),length(sequence_key),length(CAST(payload AS BLOB)) FROM system_changes INDEXED BY system_change_order WHERE kind=? AND (sequence_key,id)>(?,?) ORDER BY sequence_key,id LIMIT ?")
-            .bind(kind.sql()).bind(cursor.after.0.to_be_bytes().as_slice()).bind(&cursor.after.1).bind(limit)
+        sqlite_access::query("SELECT substr(id,1,?),length(CAST(id AS BLOB)),substr(sequence_key,1,9),length(sequence_key),length(CAST(payload AS BLOB)) FROM system_changes INDEXED BY system_change_order WHERE kind=? AND (sequence_key,id)>(?,?) ORDER BY sequence_key,id LIMIT ?")
+            .bind(key_prefix).bind(kind.sql()).bind(cursor.after.0.to_be_bytes().as_slice()).bind(&cursor.after.1).bind(limit)
             .fetch_all(&mut *tx).await?
     } else {
-        sqlite_access::query("SELECT substr(id,1,257),length(CAST(id AS BLOB)),substr(sequence_key,1,9),length(sequence_key),length(CAST(payload AS BLOB)) FROM system_changes INDEXED BY system_change_order WHERE kind=? ORDER BY sequence_key,id LIMIT ?")
-            .bind(kind.sql()).bind(limit).fetch_all(&mut *tx).await?
+        sqlite_access::query("SELECT substr(id,1,?),length(CAST(id AS BLOB)),substr(sequence_key,1,9),length(sequence_key),length(CAST(payload AS BLOB)) FROM system_changes INDEXED BY system_change_order WHERE kind=? ORDER BY sequence_key,id LIMIT ?")
+            .bind(key_prefix).bind(kind.sql()).bind(limit).fetch_all(&mut *tx).await?
     };
     let keys: Vec<_> = expected
         .rows
@@ -202,7 +211,7 @@ impl Engine {
         self.system_change_page(Kind::FilePath, cursor, limit)
     }
 
-    fn system_change_page<T: DeserializeOwned>(
+    pub(super) fn system_change_page<T: DeserializeOwned>(
         &self,
         kind: Kind,
         cursor: Option<&SystemChangeCursor>,

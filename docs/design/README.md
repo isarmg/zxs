@@ -12,3 +12,5 @@
 - [系统盘全局变更库基础](system-change-database.md)：完整保留回执与明确文件路径事件、有界读取及可重建边界。
 
 这些文件说明当前产品行为和设计约束；可用能力与限制见[当前支持范围](../23-delivery-and-decisions.md)及对应[组件说明](../components/README.md)。
+
+- [盘根当前范围目录副本](disk-current-catalog.md)：只从正式盘的当前精确 binding 派生版本/路径义务；不是过去全时序日志，新增实现尚未运行验证。

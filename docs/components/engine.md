@@ -211,3 +211,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 分支登记要求本仓库自己干净；checkout 检查自身待提交状态并只替换自己拥有的工作范围，独立子仓库的挂载条目、工作字节、选中分支与 HEAD 原样保留。创建、切换、初始化、暂存、提交在当前登记模式下均由可重放的闭合元数据计划证明，公开 operation kind allowlist 不授予这些操作通用权限。永久回执、发布前持久化和冷恢复沿用原协议，不削减同步阶段。
 
 单目录差异使用路径有序索引，成本随该目录工作树和已提交树增长；子仓库 dirty 检查访问其所有权树。当前登记完整计划验证包含全 State 比较，因此显式元数据操作存在随历史增长的成本。普通文件保存未增加新的 Git 元数据发布或同步阶段。没有声称内部检查点停止增长，也没有增加自动历史清理。
+
+系统派生库增加 `system_catalog_records`，读取完整仓库/历史/分支/命名空间组成以及当前位置、placement和选择映射，见[系统变更库](../design/system-change-database.md)。它不含账户凭据，不是盘根过去归属日志或恢复权威；本次后继未执行编译/测试/CI。
+
+盘根维护API `rebuild_disk_catalog` / `disk_catalog_snapshot` 复用安全installer在正式启用盘保存、读取严格当前范围的 `.zxs-disk.sqlite`，见[当前盘目录](../design/disk-current-catalog.md)。不自动刷新、不用于恢复或外来准入，本次未运行编译/测试/CI。

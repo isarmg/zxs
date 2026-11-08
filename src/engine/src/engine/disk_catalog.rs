@@ -1,0 +1,236 @@
+//! A derived, current-binding disk inventory, not a disk-local event history or
+//! an independently recoverable publication. No unregistered root is opened.
+use super::Engine;
+use crate::{
+    database_install::{DISK_DATABASE_NAME, InstallAdmission, PreparedInstall, Scope},
+    disk::{validate_seal_observed, validate_stored_seal},
+    *,
+};
+use data_serialization::{Deserialize, Serialize};
+use std::sync::Arc;
+
+mod database;
+
+const MAX_ROWS: usize = 65_536;
+const MAX_RECORD_BYTES: usize = 24 * 1024 * 1024;
+const MAX_DATABASE_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "kebab-case")]
+pub enum DiskCatalogRole {
+    Primary,
+    Backup,
+}
+
+/// A local placement obligation and its current owner name. Missing owner_path
+/// remains unknown, and content_state is logical disposition, not live health.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DiskCatalogVersion {
+    pub version: FileVersion,
+    pub role: DiskCatalogRole,
+    pub owner_path: Option<String>,
+    pub content_state: Option<ContentState>,
+}
+
+/// Scope is the exact physical disk registration, never just its reusable slot.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DiskCatalogSnapshot {
+    pub identity: DiskRegistrationIdentity,
+    #[serialization(with = "storage_contract::u64_string")]
+    pub source_sequence: u64,
+    pub versions: Vec<DiskCatalogVersion>,
+}
+
+#[derive(Debug)]
+pub struct DiskCatalogReceipt {
+    pub identity: DiskRegistrationIdentity,
+    pub source_sequence: u64,
+    pub versions: usize,
+    pub records_hash: String,
+    pub database_bytes: usize,
+}
+
+fn invalid(message: &str) -> Error {
+    Error::new(ErrorCode::ContainerLayoutInvalid, message)
+}
+fn budget() -> Error {
+    Error::new(
+        ErrorCode::ResourceLimit,
+        "disk catalog exceeds its bounded record or byte budget",
+    )
+}
+
+fn snapshot(state: &State, identity: DiskRegistrationIdentity) -> Result<DiskCatalogSnapshot> {
+    let mut versions = Vec::new();
+    let mut bytes = 0usize;
+    for (id, placement) in state.placements.iter() {
+        if !placement.route_slot_ids.contains(&identity.slot_id)
+            || placement.binding_generations.get(&identity.slot_id)
+                != Some(&identity.binding_generation)
+        {
+            continue;
+        }
+        let version = state
+            .versions
+            .get(id)
+            .expect("invariant: admitted placement references a retained version");
+        let (role, owner_path) = if placement.primary_slot_id == identity.slot_id {
+            (
+                DiskCatalogRole::Primary,
+                state.file_locations.get(&version.file_id).cloned(),
+            )
+        } else {
+            (
+                DiskCatalogRole::Backup,
+                state
+                    .file_backup_paths
+                    .get(&version.file_id)
+                    .and_then(|paths| paths.get(&identity.slot_id))
+                    .cloned(),
+            )
+        };
+        let row = DiskCatalogVersion {
+            version: version.clone(),
+            role,
+            owner_path,
+            content_state: state.content_states.get(id).copied(),
+        };
+        bytes += crate::disk::encode_metadata(&row, MAX_RECORD_BYTES)?.len();
+        if versions.len() == MAX_ROWS || bytes > MAX_RECORD_BYTES {
+            return Err(budget());
+        }
+        versions.push(row);
+    }
+    Ok(DiskCatalogSnapshot {
+        identity,
+        source_sequence: state.sequence,
+        versions,
+    })
+}
+
+impl Engine {
+    fn catalog_disk(
+        &self,
+        slot: &str,
+    ) -> Result<(
+        DiskConfig,
+        DiskRegistrationIdentity,
+        Arc<crate::disk::DiskHandle>,
+    )> {
+        let registration = self
+            .registered_disks()
+            .find(|disk| disk.slot_id == slot)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::DiskUnavailable,
+                    "disk catalog requires a currently registered disk",
+                )
+            })?;
+        if registration.registration_mode != RegistrationMode::Enabled {
+            return Err(Error::new(
+                ErrorCode::DiskUnavailable,
+                "disk catalog cannot use a disabled registration",
+            ));
+        }
+        let disk = self.disk(slot)?.clone();
+        let identity = registration.identity();
+        if disk.disk_id != identity.disk_id
+            || disk.binding_generation != identity.binding_generation
+            || self.config.pool_id != identity.pool_id
+        {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "catalog registration differs from admitted I/O binding",
+            ));
+        }
+        let handle = Arc::clone(self.disk_resources.get(&disk)?);
+        Ok((disk, identity, handle))
+    }
+
+    /// Explicitly materialize this disk's current version/path obligations.
+    /// Requires exclusive Engine ownership and an already admitted pool/disk.
+    /// It neither adds/initializes a disk nor certifies local body availability.
+    /// The caller must authorize a global maintenance write. An interrupted
+    /// attempt is safely repeated from the same admitted State and held root.
+    pub fn rebuild_disk_catalog(&mut self, slot: &str) -> Result<DiskCatalogReceipt> {
+        self.require_write()?;
+        let (disk, identity, handle) = self.catalog_disk(slot)?;
+        let lease = handle.root.admit_io()?;
+        let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
+        validate_stored_seal(&handle.seal, &named)?;
+        let captured = snapshot(&self.state, identity.clone())?;
+        let records_hash = storage_contract::object_hash("disk-current-catalog", &captured)?;
+        let bytes = database::encode(&captured, &records_hash)?;
+        let database_bytes = bytes.len();
+        let root = &handle.root;
+        let inode = root.directory_identity(root.path())?;
+        let prepared = PreparedInstall::capture(
+            root,
+            root.path(),
+            (root.path(), inode),
+            (
+                Scope::disk(identity.clone()),
+                InstallAdmission::NewOperation,
+            ),
+            bytes,
+            MAX_DATABASE_BYTES,
+            |bytes| database::read(bytes, &identity).map(|_| ()),
+        )?;
+        let (reserved, entries) = prepared.reservation();
+        InstallAdmission::NewOperation.check(root, root.path(), reserved, entries)?;
+        if reserved.saturating_add(self.config.metadata_reserve_bytes) > root.available()? {
+            return Err(Error::new(
+                ErrorCode::NoSpace,
+                "disk catalog must preserve metadata recovery headroom",
+            ));
+        }
+        prepared.apply(root, &mut |_| lease.check_running())?;
+        let stored = root.read_bytes(&root.path().join(DISK_DATABASE_NAME), MAX_DATABASE_BYTES)?;
+        if database::read(&stored, &identity)? != captured {
+            return Err(invalid(
+                "installed disk catalog differs from its admitted snapshot",
+            ));
+        }
+        let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
+        validate_stored_seal(&handle.seal, &named)?;
+        lease.check_running()?;
+        Ok(DiskCatalogReceipt {
+            identity,
+            source_sequence: captured.source_sequence,
+            versions: captured.versions.len(),
+            records_hash,
+            database_bytes,
+        })
+    }
+
+    /// Read a bounded, exact current-State disk catalog. Stale, missing, damaged
+    /// or other-binding databases return an error; this read never repairs or
+    /// treats a stored self-digest as admission/recovery authority.
+    pub fn disk_catalog_snapshot(&self, slot: &str) -> Result<DiskCatalogSnapshot> {
+        let (disk, identity, handle) = self.catalog_disk(slot)?;
+        let lease = handle.root.admit_io()?;
+        let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
+        validate_stored_seal(&handle.seal, &named)?;
+        let expected = snapshot(&self.state, identity.clone())?;
+        let bytes = handle.root.read_bytes(
+            &handle.root.path().join(DISK_DATABASE_NAME),
+            MAX_DATABASE_BYTES,
+        )?;
+        let stored = database::read(&bytes, &identity)?;
+        if stored != expected {
+            return Err(invalid(
+                "disk catalog is stale or differs from admitted State; explicitly rebuild it",
+            ));
+        }
+        let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
+        validate_stored_seal(&handle.seal, &named)?;
+        lease.check_running()?;
+        Ok(stored)
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/disk_catalog_tests.rs"]
+mod tests;
