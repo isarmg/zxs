@@ -94,6 +94,7 @@ pub struct PermanentNodeRemovalAnalysis {
     retained_commit_entries: usize,
     affected_branch_heads: Vec<HistoryBranchId>,
     frozen_files: Vec<HistoryFileId>,
+    last_live_files: Vec<HistoryFileId>,
 }
 impl PermanentNodeRemovalAnalysis {
     pub fn origin_file_id(&self) -> &HistoryFileId {
@@ -129,6 +130,9 @@ impl PermanentNodeRemovalAnalysis {
     pub fn frozen_files(&self) -> &[HistoryFileId] {
         &self.frozen_files
     }
+    /// Conditional stable identities with no live body after this selection.
+    /// Existing HEAD/D/context references can still prevent their termination.
+    pub fn last_live_files(&self) -> &[HistoryFileId] { &self.last_live_files }
 }
 
 struct Work<'a> {
@@ -229,6 +233,11 @@ pub(super) fn analyze(
             affected_branch_heads.push(branch.branch_id.clone());
         }
     }
+    let mut last_live_files = selected_files.clone();
+    for version in &graph.versions {
+        work.step()?;
+        if !selected.contains(&version.version_id) { last_live_files.remove(&version.file_id); }
+    }
     let frozen_files = selected_files
         .into_iter()
         .filter(|file| query.state.file_deletions.contains_key(file.as_str()))
@@ -244,6 +253,7 @@ pub(super) fn analyze(
         retained_commit_entries,
         affected_branch_heads,
         frozen_files,
+        last_live_files: last_live_files.into_iter().collect(),
     })
 }
 

@@ -44,6 +44,7 @@ pub struct Preview {
     pub retained_commit_entries: u64,
     pub affected_branch_heads: Vec<HistoryBranchId>,
     pub frozen_files: Vec<HistoryFileId>,
+    pub last_live_files: Vec<HistoryFileId>,
 }
 impl Preview {
     pub fn validate(&self, selection: &Selection) -> Result<()> {
@@ -52,11 +53,14 @@ impl Preview {
         let nodes = self.coupled_node_ids.iter().collect::<BTreeSet<_>>();
         let heads = self.affected_branch_heads.iter().collect::<BTreeSet<_>>();
         let frozen = self.frozen_files.iter().collect::<BTreeSet<_>>();
+        let last = self.last_live_files.iter().collect::<BTreeSet<_>>();
         if self.file_id != *selection.file_id() || self.history_root != selection.history_root()
             || self.version_ids != selection.version_ids() || self.coupled_node_ids.len() > MAX_SHARED_HISTORY_NODES
             || self.coupled_node_ids.is_empty() || nodes.len() != self.coupled_node_ids.len()
             || heads.len() != self.affected_branch_heads.len() || frozen.len() != self.frozen_files.len()
-            || !frozen.is_subset(&files) || self.file_components.is_empty()
+            || !frozen.is_subset(&files) || !last.is_subset(&files)
+            || self.last_live_files.windows(2).any(|pair| pair[0] >= pair[1])
+            || self.file_components.is_empty()
             || self.file_components.iter().any(Vec::is_empty) || files.len() != count || count > MAX_SHARED_HISTORY_FILES
             || !files.contains(selection.file_id()) || self.frozen_files.len() > MAX_SHARED_HISTORY_FILES
             || self.affected_branch_heads.len() > crate::shared_history::MAX_SHARED_HISTORY_BRANCHES {
@@ -168,15 +172,35 @@ pub enum Separation {
     Published {
         history_root: HistoryRoot,
         original_files: Vec<HistoryFileId>,
+        terminated_files: Vec<HistoryFileId>,
         file_components: Vec<Vec<HistoryFileId>>,
     },
     Unverified { error_code: String },
 }
 impl Separation {
+    pub fn validate_for_receipt(&self, selection: &Selection, receipt: &json_codec::Value) -> Result<()> {
+        self.validate(selection)?;
+        let Self::Published { terminated_files, .. } = self else { return Ok(()); };
+        let terminal: TerminalFiles = json_codec::from_value(
+            receipt.get("result").and_then(|v| v.get("retirement"))
+                .and_then(|v| v.get("file_terminations")).ok_or_else(invalid)?.clone(),
+        )?;
+        if terminal.files.len() != terminated_files.len() { return Err(invalid()); }
+        let mut count = 0;
+        for (file, reported) in terminal.files.iter().zip(terminated_files) {
+            count += file.version_ids.len();
+            if &file.file_id != reported || file.version_ids.is_empty() || count > 65_536
+                || file.version_ids.windows(2).any(|pair| pair[0] >= pair[1])
+                || !file.version_ids.iter().any(|id| selection.version_ids().binary_search(id).is_ok()) {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
     pub fn validate(&self, selection: &Selection) -> Result<()> {
         match self {
             Self::Unverified { error_code } if !error_code.is_empty() && error_code.len() <= 128 => Ok(()),
-            Self::Published { history_root, original_files, file_components } => {
+            Self::Published { history_root, original_files, terminated_files, file_components } => {
                 if *history_root != selection.history_root() || original_files.is_empty()
                     || original_files.len() > MAX_SHARED_HISTORY_FILES
                     || original_files.windows(2).any(|pair| pair[0] >= pair[1])
@@ -194,7 +218,12 @@ impl Separation {
                         if !files.insert(file) { return Err(invalid()); }
                     }
                 }
-                if files.into_iter().ne(original_files.iter()) { return Err(invalid()); }
+                if files.into_iter().ne(original_files.iter())
+                    || terminated_files.len() > original_files.len()
+                    || terminated_files.windows(2).any(|pair| pair[0] >= pair[1])
+                    || terminated_files.iter().any(|file| !file_components.iter().any(|group| group.len() == 1 && group.first() == Some(file))) {
+                    return Err(invalid());
+                }
                 Ok(())
             }
             _ => Err(invalid()),
@@ -226,6 +255,13 @@ struct RequiredBinding {
     #[serialization(with = "crate::u64_string")]
     binding_generation: u64,
 }
+
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct TerminalFiles { files: Vec<TerminalFile> }
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct TerminalFile { file_id: HistoryFileId, version_ids: Vec<HistoryVersionId> }
 
 #[cfg(test)]
 #[path = "../../../test/contract/unit/node_retirement_tests.rs"]

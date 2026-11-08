@@ -157,3 +157,49 @@ fn transitive_paths_and_original_partitions_survive_later_retirement_reconnect_a
     assert_eq!(resumed.separation().unwrap().file_components(), original_partition);
     assert_eq!(super::permanent_removal::read(&pool, &ax.file_id).graph().unwrap().files.len(), 3);
 }
+
+#[test]
+fn detached_last_node_retires_and_resumes_without_reviving_the_old_file_identity() {
+    let mut pool = Pool::new();
+    pool.save(&[("gone", b"last body")]);
+    let old = pool.entry("gone");
+    pool.engine.file_namespace(&pool.repository,
+        storage_engine::NamespaceOperation::parse(storage_contract::NamespaceOperationKind::Delete, "gone", None).unwrap(),
+        "admin", OperationId::generate().unwrap()).unwrap();
+    let read = super::permanent_removal::read(&pool, &old.file_id);
+    let selection = super::permanent_removal::selection(&[&old.version_id]);
+    assert_eq!(read.permanent_removal_analysis(&selection).unwrap().last_live_files().iter().map(|file| file.as_str()).collect::<Vec<_>>(), vec![old.file_id.as_str()]);
+    let operation = OperationId::generate().unwrap();
+    let result = pool.engine.retire_file_nodes(&read, &selection, "admin", operation).unwrap();
+    assert_eq!(result.separation().unwrap().terminated_files().iter().map(|file| file.as_str()).collect::<Vec<_>>(), vec![old.file_id.as_str()]);
+    assert!(result.cleanup().unwrap().all_required_bindings_absent());
+    let receipt = result.publication().clone();
+    let root = pool.root.clone();
+    drop(pool.engine);
+    pool.engine = Engine::open(&root).unwrap();
+    let resumed = pool.engine.resume_file_node_retirement(operation, "admin").unwrap();
+    assert_eq!(resumed.publication(), &receipt);
+    assert!(resumed.cleanup().unwrap().all_required_bindings_absent());
+    assert!(pool.engine.open_content(&old.version_id).is_err());
+    assert!(pool.engine.file_history(&old.file_id).unwrap().is_empty());
+    pool.save(&[("gone", b"new unrelated file")]);
+    assert_ne!(pool.entry("gone").file_id, old.file_id);
+    assert_eq!(pool.engine.state().content_states[&old.version_id], ContentState::Retired);
+}
+
+#[test]
+fn detached_path_does_not_make_a_retained_file_branch_terminable() {
+    let mut pool = Pool::new();
+    pool.save(&[("a", b"retained head")]);
+    let old = pool.entry("a");
+    pool.engine.create_file_branch(&old.file_id, &old.version_id, &BranchName::parse("retained").unwrap(),
+        "admin", OperationId::generate().unwrap()).unwrap();
+    pool.engine.file_namespace(&pool.repository,
+        storage_engine::NamespaceOperation::parse(storage_contract::NamespaceOperationKind::Delete, "a", None).unwrap(),
+        "admin", OperationId::generate().unwrap()).unwrap();
+    let read = super::permanent_removal::read(&pool, &old.file_id);
+    let before = pool.engine.state().sequence;
+    assert!(pool.engine.retire_file_nodes(&read, &super::permanent_removal::selection(&[&old.version_id]),
+        "admin", OperationId::generate().unwrap()).is_err());
+    assert_eq!(pool.engine.state().sequence, before);
+}

@@ -51,3 +51,17 @@ fn current_only_observation_is_not_an_original_obligation_completion() {
     assert!(observed.validate_for_receipt(&[version()], &receipt(json!([required("P01", 1)]))).is_err());
     assert!(!observed.all_required_bindings_absent());
 }
+
+#[test]
+fn termination_observation_must_match_the_exact_original_receipt() {
+    let file = HistoryFileId::parse(&format!("file_{}", "c".repeat(32))).unwrap();
+    let selection = Selection::new(file.clone(), root(), vec![version()]).unwrap();
+    let separation = Separation::Published {
+        history_root: root(), original_files: vec![file.clone()], terminated_files: vec![file.clone()],
+        file_components: vec![vec![file.clone()]],
+    };
+    let exact = json!({"result":{"retirement":{"file_terminations":{"files":[{"file_id":file,"version_ids":[version()]}]}}}});
+    separation.validate_for_receipt(&selection, &exact).unwrap();
+    assert!(separation.validate_for_receipt(&selection, &json!({"result":{"retirement":{"file_terminations":{"files":[]}}}})).is_err());
+    assert!(separation.validate_for_receipt(&selection, &json!({"result":{"retirement":{}}})).is_err());
+}

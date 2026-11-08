@@ -110,3 +110,53 @@ fn cleanup_obligation_remains_the_original_binding_after_placement_change() {
     missing.operations.insert(operation, receipt);
     assert!(crate::node_retirement::admit_current(&missing).is_err());
 }
+
+fn terminal_fixture() -> (tempfile::TempDir, Engine, State, OperationId, String) {
+    let (temp, mut engine, _before, _operation, old) = fixture();
+    let repository = engine.state().repositories.values().next().unwrap().clone();
+    let current = engine.namespace_tree(&repository.main_branch_id).unwrap().get("a").unwrap().clone();
+    engine.file_namespace(&repository.repository_id,
+        NamespaceOperation::parse(storage_contract::NamespaceOperationKind::Delete, "a", None).unwrap(),
+        "admin", OperationId::generate().unwrap()).unwrap();
+    let before = engine.state().clone();
+    let read = engine.capture_shared_history(storage_contract::shared_history::SharedHistoryRequest::parse(
+        &current.file_id, engine.metadata_view().history_root(&repository.history_tree_id).unwrap()).unwrap(),
+        storage_contract::history_window::HistoryWindowCancellation::new()).unwrap();
+    let selected = PermanentNodeRemovalSelection::new(vec![storage_contract::history_window::HistoryVersionId::parse(&current.version_id).unwrap()]).unwrap();
+    let operation = OperationId::generate().unwrap();
+    let outcome = engine.retire_file_nodes(&read, &selected, "admin", operation).unwrap();
+    assert_eq!(outcome.separation().unwrap().terminated_files().iter().map(|file| file.as_str()).collect::<Vec<_>>(), vec![current.file_id.as_str()]);
+    assert_eq!(engine.state().content_states[&old], ContentState::Retired);
+    (temp, engine, before, operation, current.version_id)
+}
+
+#[test]
+fn terminal_identity_rejects_a_new_version_even_without_retired_source_edges() {
+    let (_temp, engine, before, _operation, version) = terminal_fixture();
+    crate::node_retirement::verify(&before, engine.state()).unwrap();
+    let mut revived = engine.state().clone();
+    let mut fresh = revived.versions[&version].clone();
+    let new_id = crate::new_id("ver").unwrap();
+    fresh.version_id = new_id.clone();
+    fresh.source_version_ids.clear();
+    // Keep the original stable file_id but fabricate a fresh content identity.
+    // The terminal cohort, not only the old node/source guard, must reject it.
+    revived.versions.insert(new_id.clone(), fresh);
+    revived.content_states.insert(new_id, ContentState::Available);
+    assert!(crate::node_retirement::admit_current(&revived).is_err());
+}
+
+#[test]
+fn completely_retired_file_requires_its_exact_terminal_receipt() {
+    let (_temp, engine, _before, operation, _version) = terminal_fixture();
+    let mut missing = engine.state().clone();
+    let mut receipt = missing.operations[&operation].clone();
+    receipt.result["retirement"].as_object_mut().unwrap().remove("file_terminations");
+    missing.operations.insert(operation, receipt);
+    assert!(crate::node_retirement::admit_current(&missing).is_err());
+    let mut erased = engine.state().clone();
+    let mut receipt = erased.operations[&operation].clone();
+    receipt.result["retirement"]["file_terminations"]["files"] = json_codec::json!([]);
+    erased.operations.insert(operation, receipt);
+    assert!(crate::node_retirement::admit_current(&erased).is_err());
+}

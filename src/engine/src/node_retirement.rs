@@ -11,6 +11,7 @@ mod references;
 mod replicas;
 pub(crate) use replicas::{CleanupRoutes, original_cleanup_bindings};
 mod separation;
+mod terminal;
 pub use separation::PermanentNodeSeparation;
 pub(crate) use publication::{admit_current, verify};
 pub(crate) const KIND: &str = "file.nodes.retire";
@@ -32,6 +33,7 @@ pub(crate) struct Decision {
     inbound_references: references::ReferenceClosure,
     separation: separation::Separation,
     pub(crate) cleanup_routes: CleanupRoutes,
+    file_terminations: terminal::TerminalFiles,
 }
 
 fn invalid() -> Error {
@@ -115,6 +117,7 @@ pub(crate) fn decide(state: &State, request: Request) -> Result<Decision> {
         inbound_references: references::capture(state, &request)?,
         separation: separation::Separation::capture(state, &request)?,
         cleanup_routes: CleanupRoutes::capture(state, &request)?,
+        file_terminations: terminal::TerminalFiles::capture(state, &request)?,
         request,
     })
 }
@@ -168,11 +171,6 @@ fn require_live_references(state: &State) -> Result<()> {
     }
     let retired = state.content_states.iter().filter(|(_, s)| **s == ContentState::Retired).map(|(id, _)| id).collect::<BTreeSet<_>>();
     if !crate::business::directory_git::protected_git_versions(state, &retired).is_empty() { return Err(pinned()); }
-    // Keep one stable live member for each file. Internal disconnection never
-    // creates another file identity, and the complete component can still open.
-    let files = retired.iter().map(|id| state.versions[*id].file_id.as_str()).collect::<BTreeSet<_>>();
-    let live = state.versions.values().filter(|v| !is_retired(state, &v.version_id)).map(|v| v.file_id.as_str()).collect::<BTreeSet<_>>();
-    if !files.is_subset(&live) { return Err(pinned()); }
     Ok(())
 }
 

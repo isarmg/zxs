@@ -138,7 +138,7 @@ fn receive(state: RwSignal<State>, attempt: &Attempt, value: Value) {
         .and_then(|outcome| {
             if outcome.file_id != *attempt.selection.file_id() { return Err(malformed("Retirement cleanup names another file")); }
             outcome.cleanup.validate_for_receipt(attempt.selection.version_ids(), &outcome.operation).map_err(DecodeError::Name)?;
-            outcome.separation.validate(&attempt.selection).map_err(DecodeError::Name)?;
+            outcome.separation.validate_for_receipt(&attempt.selection, &outcome.operation).map_err(DecodeError::Name)?;
             Ok((outcome.cleanup, outcome.separation))
         });
     state.update(|s| {

@@ -93,20 +93,25 @@ impl Separation {
 pub struct PermanentNodeSeparation {
     source_history_root: HistoryRoot,
     original_files: Vec<HistoryFileId>,
+    terminated_files: Vec<HistoryFileId>,
     file_components: Vec<Vec<HistoryFileId>>,
 }
 impl PermanentNodeSeparation {
     pub fn source_history_root(&self) -> HistoryRoot { self.source_history_root }
     pub fn original_files(&self) -> &[HistoryFileId] { &self.original_files }
+    pub fn terminated_files(&self) -> &[HistoryFileId] { &self.terminated_files }
     pub fn file_components(&self) -> &[Vec<HistoryFileId>] { &self.file_components }
 }
 
 impl Decision {
     pub(crate) fn separation_observation(&self, state: &State) -> Result<PermanentNodeSeparation> {
         self.separation.validate(state, &self.request)?;
+        self.file_terminations.validate(state, &self.request)?;
         Ok(PermanentNodeSeparation {
             source_history_root: HistoryRoot::parse(&self.request.history_root)?,
             original_files: self.separation.files.iter().map(|id| HistoryFileId::parse(id))
+                .collect::<storage_contract::Result<_>>()?,
+            terminated_files: self.file_terminations.files.iter().map(|file| HistoryFileId::parse(&file.file_id))
                 .collect::<storage_contract::Result<_>>()?,
             file_components: self.separation.file_components.iter()
                 .map(|component| component.iter().map(|id| HistoryFileId::parse(id))

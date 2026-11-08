@@ -5,12 +5,17 @@ use storage_contract::{MapChanges, SequenceChanges, TrackedOperations};
 
 pub(crate) fn admit_current(state: &State) -> Result<()> {
     let mut retired = BTreeSet::new();
+    let mut terminals = BTreeSet::new();
     let mut receipts = BTreeMap::new();
     for receipt in state.operations.values().filter(|r| r.kind == KIND) {
         let decision = decision(receipt)?;
         decision.request.validate()?;
         decision.cleanup_routes.validate(&decision.request)?;
         decision.separation.validate(state, &decision.request)?;
+        decision.file_terminations.validate(state, &decision.request)?;
+        for file in &decision.file_terminations.files {
+            if !terminals.insert(file.file_id.clone()) { return Err(invalid()); }
+        }
         let principal = state.operation_principals.get(&receipt.operation_id).ok_or_else(invalid)?;
         Engine::require_actor(principal)?;
         if receipt.sequence == 0 || receipt.sequence > state.sequence
@@ -41,6 +46,7 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
         || state.content_states.iter().any(|(id, status)| *status == ContentState::Retired && !retired.contains(id)) {
         return Err(invalid());
     }
+    terminal::require_complete(state, &terminals)?;
     if !retired.is_empty() { require_live_references(state)?; }
     Ok(())
 }

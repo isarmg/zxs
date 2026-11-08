@@ -10467,6 +10467,15 @@
           "items": {
             "$ref": "#/$defs/FileId"
           }
+        },
+        "last_live_files": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/FileId"
+          },
+          "description": "Conditional files for which the explicit selection covers every remaining live body. Existing HEAD, directory, D, branch, workspace or lease references still prevent termination."
         }
       },
       "required": [
@@ -10478,7 +10487,8 @@
         "file_components",
         "retained_commit_entries",
         "affected_branch_heads",
-        "frozen_files"
+        "frozen_files",
+        "last_live_files"
       ],
       "description": "All file components are disjoint and contain at most 64 files in total including origin. The response is bound to the exact sorted selection and root. Known HEAD/deletion blockers are not an exhaustive execution admission result."
     },
@@ -10696,13 +10706,22 @@
                   "$ref": "#/$defs/FileId"
                 }
               }
+            },
+            "terminated_files": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/FileId"
+              }
             }
           },
           "required": [
             "state",
             "history_root",
             "original_files",
-            "file_components"
+            "file_components",
+            "terminated_files"
           ]
         },
         {
@@ -10724,7 +10743,7 @@
           ]
         }
       ],
-      "description": "Exact original publication-time separation, never today's topology or body cleanup. Original files are sorted/unique, include the selected origin, and are covered once by disjoint sorted components. Bound to the original request root. The permanent native decision freezes and authenticates the complete original live version cohort; cold admission recomputes this historical partition without filtering later retirements or adding later saves."
+      "description": "Exact original publication-time separation, never today's topology or body cleanup. Original files are sorted/unique, include the selected origin, and are covered once by disjoint sorted components. Bound to the original request root. The permanent native decision freezes and authenticates the complete original live version cohort; cold admission recomputes this historical partition without filtering later retirements or adding later saves. terminated_files is sorted/unique and exactly matches operation.result.retirement.file_terminations.files. Each terminal file is a singleton original component with every retained version permanently retired; no future version may reuse that stable file_id. Current HEAD/D/branch termination is not supported by this detached-file slice."
     }
   }
 }

@@ -32,6 +32,7 @@ pub(super) fn preview(backend: &EngineBackend, caller: &Identity, request: Selec
         version_ids: request.version_ids().to_vec(), coupled_node_ids,
         file_components: analysis.file_components().to_vec(), retained_commit_entries: u64::try_from(analysis.retained_commit_entries()).map_err(ApiError::invalid_source)?,
         affected_branch_heads: analysis.affected_branch_heads().to_vec(), frozen_files: analysis.frozen_files().to_vec(),
+        last_live_files: analysis.last_live_files().to_vec(),
     };
     result.validate(&request).map_err(ApiError::invalid_source)?;
     Ok(result)
@@ -60,6 +61,7 @@ fn outcome(file_id: HistoryFileId, result: storage_engine::PermanentNodeRetireme
         Ok(partition) => Separation::Published {
             history_root: partition.source_history_root(),
             original_files: partition.original_files().to_vec(),
+            terminated_files: partition.terminated_files().to_vec(),
             file_components: partition.file_components().to_vec(),
         },
         Err(error) => Separation::Unverified { error_code: error.code().as_str().into() },
