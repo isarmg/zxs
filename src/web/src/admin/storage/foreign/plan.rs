@@ -5,6 +5,7 @@ use storage_contract::{OperationId, storage_foreign_plan::*};
 mod actions;
 mod draft;
 mod fields;
+mod intent;
 mod messages;
 mod response;
 mod view;
@@ -30,6 +31,7 @@ enum Read {
 #[derive(Clone, Default)]
 pub(super) struct Model {
     draft: Draft,
+    intent: intent::Model,
     review: Option<ForeignPlanPreview>,
     stored: Option<ForeignPlanStatus>,
     known_primary: Vec<PrimaryChoice>,
@@ -42,7 +44,8 @@ pub(super) struct Model {
 }
 impl Model {
     pub(super) fn blocks_edit(&self) -> bool {
-        self.reading
+        self.intent.blocks_edit()
+            || self.reading
             || self.previewing
             || matches!(self.save, SaveState::Sending | SaveState::Unknown)
     }
@@ -55,6 +58,7 @@ impl Model {
             .collect();
     }
     pub(super) fn leave(&mut self) {
+        self.intent.leave();
         if self.save != SaveState::Sending {
             self.generation += 1;
             self.reading = false;
@@ -67,6 +71,7 @@ impl Model {
         }
         self.generation += 1;
         self.draft = Draft::default();
+        self.intent.reset();
         self.review = None;
         self.stored = None;
         self.known_primary.clear();
@@ -84,6 +89,7 @@ impl Model {
             return;
         }
         self.generation += 1;
+        self.intent.reset();
         self.review = None;
         self.stored = None;
         self.acknowledged = false;
@@ -91,6 +97,7 @@ impl Model {
         self.save = SaveState::Unsubmitted;
     }
     fn accept_preview(&mut self, review: ForeignPlanPreview) {
+        self.intent.reset();
         let primary = PrimaryChoice {
             identity: review.target.identity.clone(),
             sequence: review.target.sequence,
@@ -110,7 +117,8 @@ impl Model {
         self.error = None;
     }
     fn can_save(&self) -> bool {
-        self.acknowledged
+        !self.intent.blocks_edit()
+            && self.acknowledged
             && self.review.is_some()
             && !self.reading
             && !self.previewing
@@ -139,7 +147,8 @@ impl Model {
         self.stored = Some(status);
     }
     fn read_request(&mut self, action: Read) -> Option<(u64, ForeignPlanPreview)> {
-        if self.reading
+        if self.intent.blocks_edit()
+            || self.reading
             || self.previewing
             || !matches!(self.save, SaveState::Unknown | SaveState::Stored)
             || (matches!(action, Read::Revalidate) && self.save != SaveState::Stored)

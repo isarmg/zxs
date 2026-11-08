@@ -65,10 +65,10 @@ fn stored(state: RwSignal<State>) -> impl IntoView {
             </section>
         })}
         <Show when=move ||state.with(|s|matches!(s.admin_console.storage.foreign.plan.save,SaveState::Unknown|SaveState::Stored))>
-            <button type="button" class="zxs-button" data-foreign-plan-status="" {..custom_attribute("aria-describedby","zxs-foreign-plan-operation zxs-foreign-plan-scope")} disabled=move ||state.with(|s|!s.session_active()||s.admin_console.storage.foreign.plan.reading) on:click=move |_|actions::load(state,Read::Status)>{t("查询原审核记录", "Query original review record")}</button>
+            <button type="button" class="zxs-button" data-foreign-plan-status="" {..custom_attribute("aria-describedby","zxs-foreign-plan-operation zxs-foreign-plan-scope")} disabled=move ||state.with(|s|!s.session_active()||s.admin_console.storage.foreign.plan.reading||s.admin_console.storage.foreign.plan.intent.blocks_edit()) on:click=move |_|actions::load(state,Read::Status)>{t("查询原审核记录", "Query original review record")}</button>
         </Show>
         <Show when=move ||state.with(|s|s.admin_console.storage.foreign.plan.save==SaveState::Stored)>
-            <button type="button" class="zxs-button" data-foreign-plan-revalidate="" {..custom_attribute("aria-describedby","zxs-foreign-plan-operation zxs-foreign-plan-scope")} disabled=move ||state.with(|s|!s.session_active()||s.admin_console.storage.foreign.plan.reading) on:click=move |_|actions::load(state,Read::Revalidate)>{t("只读重验原来源与目标", "Revalidate the original source and target read-only")}</button>
+            <button type="button" class="zxs-button" data-foreign-plan-revalidate="" {..custom_attribute("aria-describedby","zxs-foreign-plan-operation zxs-foreign-plan-scope")} disabled=move ||state.with(|s|!s.session_active()||s.admin_console.storage.foreign.plan.reading||s.admin_console.storage.foreign.plan.intent.blocks_edit()) on:click=move |_|actions::load(state,Read::Revalidate)>{t("只读重验原来源与目标", "Revalidate the original source and target read-only")}</button>
         </Show>
     }
 }
@@ -76,7 +76,7 @@ pub(in super::super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {<section class="zxs-stack" aria-label=t("外来历史重建审核向导", "Foreign history reconstruction review wizard")>
         {fields::form(state)}
         {move ||state.with(|s|s.admin_console.storage.foreign.plan.review.clone()).map(mappings)}
-        {save_controls(state)}{stored(state)}
+        {save_controls(state)}{stored(state)}{intent::view(state)}
         <Show when=move ||state.with(|s|s.admin_console.storage.foreign.plan.previewing||s.admin_console.storage.foreign.plan.reading)><p class="zxs-row" role="status">{t("正在重新核对完整来源与目标，尚未执行迁入…", "Rechecking the complete source and target; no import is being executed…")}</p></Show>
         {move ||state.with(|s|s.admin_console.storage.foreign.plan.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
     </section>}

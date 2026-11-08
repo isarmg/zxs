@@ -77,7 +77,7 @@ fn draft(source: &ForeignDiskPreview) -> Draft {
         ..Default::default()
     }
 }
-fn review() -> ForeignPlanPreview {
+pub(super) fn review() -> ForeignPlanPreview {
     let source = source();
     let request = draft(&source).request(&source, &[], operation(1)).unwrap();
     let mut target = identity(9);
