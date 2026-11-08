@@ -41,7 +41,11 @@ mod planning;
 pub(crate) use planning::PlanningContext;
 mod disk_catalog;
 pub use disk_catalog::{
-    DiskCatalogReceipt, DiskCatalogRole, DiskCatalogSnapshot, DiskCatalogVersion,
+    DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
+    DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
+    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskHistoryChange,
+    DiskHistoryHeader, DiskHistoryObservation, DiskHistoryReceipt, DiskHistoryRecord,
+    DiskHistorySnapshot,
 };
 mod index;
 pub use index::{
@@ -79,9 +83,9 @@ pub use directory_history::DirectoryHistoryRead;
 mod history_window;
 pub use history_window::{
     ContentMatchRead, CoupledNodeRetirement, FileHistorySourceRead, HistoryWindowCancellation,
-    HistoryWindowRead, PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection, PermanentNodeRetirementOutcome,
-    PermanentRemovalCleanupObservation, RemovalParentProjection, RemovalReplicaCleanup,
-    RemovalReplicaCleanupState, SharedHistoryRead,
+    HistoryWindowRead, PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection,
+    PermanentNodeRetirementOutcome, PermanentRemovalCleanupObservation, RemovalParentProjection,
+    RemovalReplicaCleanup, RemovalReplicaCleanupState, SharedHistoryRead,
 };
 pub(crate) mod membership_transition;
 pub use membership_transition::{
@@ -200,6 +204,7 @@ pub struct Engine {
     pub(crate) upload_preparations: Arc<Mutex<BTreeSet<String>>>,
     commit_preparation: Arc<std::sync::atomic::AtomicBool>,
     history_query_proof: Mutex<index::QueryProof>,
+    catalog_maintenance: disk_catalog::Maintenance,
     recovery_warnings: RecoveryWarnings,
     _locks: crate::disk::WriterLocks,
     #[cfg(feature = "fault-injection")]
@@ -599,6 +604,7 @@ impl Engine {
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_query_proof: Mutex::new(index::QueryProof::default()),
+            catalog_maintenance: disk_catalog::Maintenance::default(),
             recovery_warnings: RecoveryWarnings::default(),
             _locks: locks,
             #[cfg(feature = "fault-injection")]
@@ -703,6 +709,7 @@ impl Engine {
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         if mode == RecoveryMode::CompletePending {
+            engine.refresh_published_disk_catalogs(None);
             engine.resume_backup_preparation()?;
         }
         Ok(engine)
@@ -783,6 +790,7 @@ impl Engine {
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_query_proof: Mutex::new(index::QueryProof::default()),
+            catalog_maintenance: disk_catalog::Maintenance::default(),
             recovery_warnings: RecoveryWarnings::default(),
             _locks: locks,
             #[cfg(feature = "fault-injection")]

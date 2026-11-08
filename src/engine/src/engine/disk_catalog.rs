@@ -10,6 +10,14 @@ use data_serialization::{Deserialize, Serialize};
 use std::sync::Arc;
 
 mod database;
+mod history;
+mod maintenance;
+pub use history::{
+    DiskHistoryChange, DiskHistoryHeader, DiskHistoryObservation, DiskHistoryReceipt,
+    DiskHistoryRecord, DiskHistorySnapshot,
+};
+pub(super) use maintenance::Maintenance;
+pub use maintenance::{DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogStatus};
 
 const MAX_ROWS: usize = 65_536;
 const MAX_RECORD_BYTES: usize = 24 * 1024 * 1024;
@@ -41,6 +49,34 @@ pub struct DiskCatalogSnapshot {
     #[serialization(with = "storage_contract::u64_string")]
     pub source_sequence: u64,
     pub versions: Vec<DiskCatalogVersion>,
+}
+
+/// Distinguish when the bytes were materialized from the admitted State used
+/// for this read. An unrelated global publication need not rewrite this disk.
+#[derive(Debug)]
+pub struct DiskCatalogObservation {
+    pub verified_sequence: u64,
+    pub snapshot: DiskCatalogSnapshot,
+}
+
+#[derive(Debug)]
+pub enum DiskCatalogRefreshOutcome {
+    Updated(DiskCatalogReceipt),
+    Failed(Error),
+}
+
+#[derive(Debug)]
+pub struct DiskCatalogRefreshResult {
+    pub slot_id: String,
+    pub outcome: DiskCatalogRefreshOutcome,
+}
+
+/// Explicit partial outcomes: a successful earlier disk is not rolled back
+/// when a later disk is unavailable or contains an unknown object.
+#[derive(Debug)]
+pub struct DiskCatalogRefreshReport {
+    pub source_sequence: u64,
+    pub results: Vec<DiskCatalogRefreshResult>,
 }
 
 #[derive(Debug)]
@@ -196,19 +232,27 @@ impl Engine {
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
         lease.check_running()?;
-        Ok(DiskCatalogReceipt {
+        let receipt = DiskCatalogReceipt {
             identity,
             source_sequence: captured.source_sequence,
             versions: captured.versions.len(),
             records_hash,
             database_bytes,
-        })
+        };
+        self.record_catalog_install(&receipt);
+        Ok(receipt)
     }
 
-    /// Read a bounded, exact current-State disk catalog. Stale, missing, damaged
-    /// or other-binding databases return an error; this read never repairs or
-    /// treats a stored self-digest as admission/recovery authority.
+    /// Read complete current local rows. The stored materialization sequence
+    /// may precede this State when only other disks/global metadata changed.
     pub fn disk_catalog_snapshot(&self, slot: &str) -> Result<DiskCatalogSnapshot> {
+        Ok(self.disk_catalog_observation(slot)?.snapshot)
+    }
+
+    /// Validate the complete local row set against the currently admitted State.
+    /// No sequence-only shortcut can turn a changed local path, placement or
+    /// content disposition into an unchanged result.
+    pub fn disk_catalog_observation(&self, slot: &str) -> Result<DiskCatalogObservation> {
         let (disk, identity, handle) = self.catalog_disk(slot)?;
         let lease = handle.root.admit_io()?;
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
@@ -219,15 +263,62 @@ impl Engine {
             MAX_DATABASE_BYTES,
         )?;
         let stored = database::read(&bytes, &identity)?;
-        if stored != expected {
+        if stored.source_sequence > expected.source_sequence
+            || stored.identity != expected.identity
+            || stored.versions != expected.versions
+        {
             return Err(invalid(
-                "disk catalog is stale or differs from admitted State; explicitly rebuild it",
+                "disk catalog local rows differ from admitted State or claim a future sequence; explicitly rebuild it",
             ));
         }
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
         lease.check_running()?;
-        Ok(stored)
+        Ok(DiskCatalogObservation {
+            verified_sequence: expected.source_sequence,
+            snapshot: stored,
+        })
+    }
+
+    /// Refresh an explicit bounded set of registered disk catalogs under this
+    /// Engine's writer ownership. No target discovery or first-run initialization
+    /// occurs. Invalid/duplicate target lists are rejected before any writes;
+    /// per-disk I/O failures remain visible and do not hide completed targets.
+    pub fn refresh_disk_catalogs(&mut self, slots: &[String]) -> Result<DiskCatalogRefreshReport> {
+        if slots.is_empty() || slots.len() > 256 {
+            return Err(Error::new(
+                ErrorCode::InvalidRequest,
+                "disk catalog refresh requires 1..=256 explicit slots",
+            ));
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for slot in slots {
+            if !unique.insert(slot) {
+                return Err(Error::new(
+                    ErrorCode::InvalidRequest,
+                    "disk catalog refresh contains duplicate slots",
+                ));
+            }
+            // Check every logical target before making the first side effect.
+            // Runtime I/O still revalidates each target immediately before use.
+            self.catalog_disk(slot)?;
+        }
+        self.require_write()?;
+        let source_sequence = self.state.sequence;
+        let results = slots
+            .iter()
+            .map(|slot| DiskCatalogRefreshResult {
+                slot_id: slot.clone(),
+                outcome: match self.rebuild_disk_catalog(slot) {
+                    Ok(receipt) => DiskCatalogRefreshOutcome::Updated(receipt),
+                    Err(error) => DiskCatalogRefreshOutcome::Failed(error),
+                },
+            })
+            .collect();
+        Ok(DiskCatalogRefreshReport {
+            source_sequence,
+            results,
+        })
     }
 }
 

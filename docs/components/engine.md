@@ -200,7 +200,7 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 完整权威与边界决策见[独立目录仓库](../design/directory-git-repositories.md)。
 
-目录默认未初始化。`initialize_directory_git` 使用已审阅的主命名空间 HEAD 创建 `DirectoryGitRepository`，并登记初始无提交 HEAD 的分支。`directory_git_repositories` 在 State 快照、元数据投影、历史包分页、导入及恢复中均有显式覆盖；它随既有权威材料写入数据盘根目录，系统盘仅保存对应索引，不建立目录内数据库。当前格式不增加旧格式迁移。
+目录默认未初始化。`initialize_directory_git` 使用已审阅的主命名空间 HEAD 创建 `DirectoryGitRepository`，并登记初始无提交 HEAD 的分支。`directory_git_repositories` 在 State 快照、元数据投影、历史包分页、导入及恢复中均有显式覆盖；它随既有权威材料写入数据盘根目录，系统盘保存对应索引，已激活目录仓库还保存作用域受限的 `.zxs-directory.sqlite` 派生副本。目录内副本不是独立恢复权威。当前格式不增加旧格式迁移。
 
 文件保存、改名、移动、文件分支选择等继续即时发布文件版本与工作组合。原不可变 DirectoryTree 仍是恢复及并发工作检查点，不自动显示为用户目录历史。已初始化仓库的自身文件修改为待提交内容，未初始化子目录递归归最近父仓库；初始化独立子仓库则改变所有权边界，使父暂存令牌失效，必须显式重新暂存。`directory_git_status` 区分工作树、Git HEAD、index generation、自有内容的 staged/unstaged、待确认边界、子仓库 dirty、未暂存引用变化和已暂存引用。
 
@@ -214,4 +214,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 系统派生库增加 `system_catalog_records`，读取完整仓库/历史/分支/命名空间组成以及当前位置、placement和选择映射，见[系统变更库](../design/system-change-database.md)。它不含账户凭据，不是盘根过去归属日志或恢复权威；本次后继未执行编译/测试/CI。
 
-盘根维护API `rebuild_disk_catalog` / `disk_catalog_snapshot` 复用安全installer在正式启用盘保存、读取严格当前范围的 `.zxs-disk.sqlite`，见[当前盘目录](../design/disk-current-catalog.md)。不自动刷新、不用于恢复或外来准入，本次未运行编译/测试/CI。
+盘根维护API `rebuild_disk_catalog` / `disk_catalog_snapshot` 复用安全installer在正式启用盘保存、读取严格当前范围的 `.zxs-disk.sqlite`，见[当前盘目录](../design/disk-current-catalog.md)。正常发布/正常冷启动现在维护当前库，按前后精确 binding 刷新并保留逐盘错误；不用于恢复或外来准入，本次未运行编译/测试/CI。
+
+盘根历史维护 API `rebuild_disk_history` / `disk_history_observation` 从完整固定 genesis 发布链的相邻 State 重新计算本盘版本/owner 路径变化，保存到独立历史伴随索引，见[本盘发布变更副本](../design/disk-local-publication-history.md)。不从当前 route 推断旧归属，未支持代际归档、全部标签/目录审计或独立恢复；本片未编译/测试/审查/CI。
+
+`disk_catalog_statuses` 是无 I/O 的逐盘维护事实，不是健康准入。当前库刷新失败与已发布业务结果分离；离线 PreservePending 不自动写库，全历史伴随库也不被伪报自动追平。

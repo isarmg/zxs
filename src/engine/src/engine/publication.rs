@@ -322,6 +322,9 @@ impl Engine {
             })
         });
         self.blocked = false;
+        // Projection failure is observable separately, never a false failure
+        // or rollback of this already durable authoritative publication.
+        self.refresh_published_disk_catalogs(Some(&previous));
         Ok(result)
     }
     pub(crate) fn prepare_payload(&self, p: &Prepared) -> Result<()> {

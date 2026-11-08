@@ -10,6 +10,7 @@ use platform_io::fs_safety::linux::FileIdentity;
 use std::path::{Path, PathBuf};
 
 pub(crate) const DISK_DATABASE_NAME: &str = ".zxs-disk.sqlite";
+pub(crate) const DISK_HISTORY_DATABASE_NAME: &str = ".zxs-disk-history.sqlite";
 
 const FORMAT: &str = "scoped-database-install";
 const MAX_ENVELOPE: usize = 8192;
@@ -45,6 +46,9 @@ pub(crate) enum Scope {
     Disk {
         identity: crate::DiskRegistrationIdentity,
     },
+    DiskHistory {
+        identity: crate::DiskRegistrationIdentity,
+    },
     File {
         history: String,
         file: String,
@@ -58,6 +62,9 @@ pub(crate) enum Scope {
 impl Scope {
     pub(crate) fn disk(identity: crate::DiskRegistrationIdentity) -> Self {
         Self::Disk { identity }
+    }
+    pub(crate) fn disk_history(identity: crate::DiskRegistrationIdentity) -> Self {
+        Self::DiskHistory { identity }
     }
     pub(crate) fn directory(history: &str, repository: &str, directory: &str) -> Result<Self> {
         storage_contract::validate_id(history, "history")?;
@@ -80,6 +87,7 @@ impl Scope {
     fn leaf(&self) -> &'static str {
         match self {
             Self::Disk { .. } => DISK_DATABASE_NAME,
+            Self::DiskHistory { .. } => DISK_HISTORY_DATABASE_NAME,
             Self::Directory { .. } => crate::container_storage::directory_database_name(),
             Self::File { .. } => crate::container_storage::file_database::NAME,
         }

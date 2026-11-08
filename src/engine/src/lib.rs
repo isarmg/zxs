@@ -79,9 +79,9 @@ mod journal;
 #[cfg(feature = "fault-injection")]
 pub use journal::JournalFault;
 mod maintenance;
-mod node_retirement;
 mod metadata_budget;
 mod metadata_map;
+mod node_retirement;
 mod protection;
 mod publication_evidence;
 mod repair;
@@ -102,8 +102,12 @@ pub use disk::{
 #[cfg(feature = "fault-injection")]
 pub use engine::DiskQuiesceFault;
 pub use engine::{
-    ContentMatchRead, ContentReadPlan, CoupledNodeRetirement, DiskCatalogReceipt, DiskCatalogRole, DiskCatalogSnapshot,
-    DiskCatalogVersion, DiskObservation, DiskObservationFailure, DiskObservationPlan,
+    ContentMatchRead, ContentReadPlan, CoupledNodeRetirement, DiskCatalogFailure,
+    DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
+    DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
+    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskHistoryChange,
+    DiskHistoryHeader, DiskHistoryObservation, DiskHistoryReceipt, DiskHistoryRecord,
+    DiskHistorySnapshot, DiskObservation, DiskObservationFailure, DiskObservationPlan,
     DiskObservationStage, Engine, FileHistorySourceRead, HistoryWindowCancellation,
     HistoryWindowRead, IndexFailure, IndexFailureStage, IndexHealth, IntegrityScrubArea,
     IntegrityScrubBatch, IntegrityScrubBatchAdmission, IntegrityScrubCancellation,
@@ -115,13 +119,12 @@ pub use engine::{
     OpenedContent, OperationReadObservation, OperationReadPlan, OperationRecord,
     PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
     PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection, PermanentNodeRetirementOutcome,
-    PermanentRemovalCleanupObservation,
-    RemovalParentProjection, RemovalReplicaCleanup, RemovalReplicaCleanupState, RangeContent,
-    ReadFile, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
-    RetainedWorkspaceLimits, SharedHistoryRead, SystemCatalogKind, SystemCatalogRecord,
-    SystemCatalogValue, SystemChangeCursor, SystemChangePage, SystemChangeReadError,
-    ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord, WorkspaceReadPlan,
-    verify_membership_control_archive,
+    PermanentRemovalCleanupObservation, RangeContent, ReadFile, ReadLease, RecoverySealContext,
+    RecoverySealFailure, RecoveryWarnings, RemovalParentProjection, RemovalReplicaCleanup,
+    RemovalReplicaCleanupState, RetainedWorkspaceLimits, SharedHistoryRead, SystemCatalogKind,
+    SystemCatalogRecord, SystemCatalogValue, SystemChangeCursor, SystemChangePage,
+    SystemChangeReadError, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
+    WorkspaceReadPlan, verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

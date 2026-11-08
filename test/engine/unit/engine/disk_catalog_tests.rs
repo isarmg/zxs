@@ -145,3 +145,66 @@ fn wrong_generation_is_not_assigned_to_the_current_disk_and_unknown_database_is_
     );
     assert!(engine.rebuild_disk_catalog("not-registered").is_err());
 }
+
+#[test]
+fn unrelated_disk_publication_keeps_materialization_sequence_but_verifies_new_state() {
+    let (_temp, mut engine) = fixture();
+    let left = repository(&mut engine, "left", "P01");
+    let right = repository(&mut engine, "right", "P02");
+    save(&mut engine, &left, "left.txt");
+    let saved = engine.rebuild_disk_catalog("P01").unwrap();
+    let path = engine.disk("P01").unwrap().root.join(DISK_DATABASE_NAME);
+    let original = std::fs::read(&path).unwrap();
+    save(&mut engine, &right, "right.txt");
+    let observed = engine.disk_catalog_observation("P01").unwrap();
+    assert_eq!(observed.snapshot.source_sequence, saved.source_sequence);
+    assert_eq!(observed.verified_sequence, engine.state.sequence);
+    assert!(observed.verified_sequence > observed.snapshot.source_sequence);
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn explicit_refresh_preserves_completed_disk_and_reports_unknown_target_bytes() {
+    let (_temp, mut engine) = fixture();
+    let left = repository(&mut engine, "left", "P01");
+    let right = repository(&mut engine, "right", "P02");
+    save(&mut engine, &left, "left.txt");
+    save(&mut engine, &right, "right.txt");
+    let bad = engine.disk("P02").unwrap().root.join(DISK_DATABASE_NAME);
+    std::fs::write(&bad, b"unrelated object").unwrap();
+    let report = engine
+        .refresh_disk_catalogs(&["P01".into(), "P02".into()])
+        .unwrap();
+    assert_eq!(report.source_sequence, engine.state.sequence);
+    assert!(matches!(
+        report.results[0].outcome,
+        DiskCatalogRefreshOutcome::Updated(_)
+    ));
+    assert!(matches!(
+        report.results[1].outcome,
+        DiskCatalogRefreshOutcome::Failed(_)
+    ));
+    assert_eq!(std::fs::read(bad).unwrap(), b"unrelated object");
+    assert_eq!(
+        engine.disk_catalog_snapshot("P01").unwrap().versions.len(),
+        1
+    );
+}
+
+#[test]
+fn invalid_bulk_target_list_has_no_partial_database_creation() {
+    let (_temp, mut engine) = fixture();
+    let path = engine.disk("P01").unwrap().root.join(DISK_DATABASE_NAME);
+    assert!(engine.refresh_disk_catalogs(&[]).is_err());
+    assert!(
+        engine
+            .refresh_disk_catalogs(&["P01".into(), "P01".into()])
+            .is_err()
+    );
+    assert!(
+        engine
+            .refresh_disk_catalogs(&["P01".into(), "unknown".into()])
+            .is_err()
+    );
+    assert!(!path.exists());
+}
