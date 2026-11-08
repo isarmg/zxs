@@ -44,8 +44,8 @@ pub use disk_catalog::{
     DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
     DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
     DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskHistoryChange,
-    DiskHistoryHeader, DiskHistoryObservation, DiskHistoryReceipt, DiskHistoryRecord,
-    DiskHistorySnapshot,
+    DiskHistoryFailure, DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation,
+    DiskHistoryReceipt, DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus,
 };
 mod index;
 pub use index::{
@@ -710,6 +710,7 @@ impl Engine {
         engine.rebuild_index()?;
         if mode == RecoveryMode::CompletePending {
             engine.refresh_published_disk_catalogs(None);
+            engine.restore_published_disk_histories();
             engine.resume_backup_preparation()?;
         }
         Ok(engine)

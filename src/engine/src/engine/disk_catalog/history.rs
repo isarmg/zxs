@@ -5,7 +5,10 @@ use crate::database_install::DISK_HISTORY_DATABASE_NAME;
 use std::collections::BTreeMap;
 
 mod database;
+mod maintenance;
 mod replay;
+pub(super) use maintenance::Maintenance;
+pub use maintenance::{DiskHistoryFailure, DiskHistoryMaintenanceState, DiskHistoryStatus};
 
 const MAX_PUBLICATIONS: usize = 2048;
 const MAX_CHANGES: usize = 65_536;
@@ -93,6 +96,18 @@ struct Changes {
     bytes: usize,
 }
 impl Changes {
+    fn retained(rows: Vec<DiskHistoryRecord>) -> Result<Self> {
+        let mut changes = Self { rows, bytes: 0 };
+        for record in &changes.rows {
+            let bytes = crate::disk::encode_metadata(record, MAX_RECORD_BYTES)?.len();
+            if bytes > MAX_RECORD_BYTES - changes.bytes {
+                return Err(budget());
+            }
+            changes.bytes += bytes;
+        }
+        Ok(changes)
+    }
+
     fn append(
         &mut self,
         candidate: &crate::journal::Candidate,
@@ -150,11 +165,28 @@ impl Engine {
     /// Callers must authorize maintenance; this never admits or initializes a pool.
     pub fn rebuild_disk_history(&mut self, slot: &str) -> Result<DiskHistoryReceipt> {
         self.require_write()?;
+        // A failed attempt cannot leave an earlier in-memory success label in
+        // place. The caller retains its exact error; automatic callers latch it.
+        self.forget_disk_history(slot);
+        let (_, identity, _) = self.catalog_disk(slot)?;
+        let captured = replay::capture(self, identity, self.state.sequence)?;
+        let receipt = self.install_disk_history(slot, captured)?;
+        self.record_history_install(&receipt);
+        Ok(receipt)
+    }
+
+    fn install_disk_history(
+        &self,
+        slot: &str,
+        captured: DiskHistorySnapshot,
+    ) -> Result<DiskHistoryReceipt> {
         let (disk, identity, handle) = self.catalog_disk(slot)?;
+        if captured.header.identity != identity {
+            return Err(invalid("disk history target registration changed"));
+        }
         let lease = handle.root.admit_io()?;
         let named = validate_seal_observed(&self.config, &disk, &mut |_| lease.check_running())?;
         validate_stored_seal(&handle.seal, &named)?;
-        let captured = replay::capture(self, identity.clone(), self.state.sequence)?;
         let records_hash = digest(&captured)?;
         let bytes = database::encode(&captured, &records_hash)?;
         let database_bytes = bytes.len();

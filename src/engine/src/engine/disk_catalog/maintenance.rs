@@ -56,6 +56,7 @@ struct Entry {
 #[derive(Default)]
 pub(in crate::engine) struct Maintenance {
     entries: BTreeMap<String, Entry>,
+    pub(super) histories: history::Maintenance,
 }
 
 impl Entry {
@@ -201,7 +202,7 @@ impl Engine {
 /// Conservative write-set attribution uses both time points. Departing slots
 /// are dirtied even when no current placement references them. Binding numbers
 /// prevent a reused slot from inheriting an earlier physical disk's facts.
-fn changed_bindings(before: &State, after: &State) -> Option<BTreeSet<(String, u64)>> {
+pub(super) fn changed_bindings(before: &State, after: &State) -> Option<BTreeSet<(String, u64)>> {
     macro_rules! keys {
         ($field:ident) => {
             match after.$field.changes_since(&before.$field) {

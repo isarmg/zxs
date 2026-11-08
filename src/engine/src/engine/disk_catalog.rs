@@ -13,8 +13,9 @@ mod database;
 mod history;
 mod maintenance;
 pub use history::{
-    DiskHistoryChange, DiskHistoryHeader, DiskHistoryObservation, DiskHistoryReceipt,
-    DiskHistoryRecord, DiskHistorySnapshot,
+    DiskHistoryChange, DiskHistoryFailure, DiskHistoryHeader, DiskHistoryMaintenanceState,
+    DiskHistoryObservation, DiskHistoryReceipt, DiskHistoryRecord, DiskHistorySnapshot,
+    DiskHistoryStatus,
 };
 pub(super) use maintenance::Maintenance;
 pub use maintenance::{DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogStatus};
