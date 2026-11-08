@@ -18,6 +18,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod replacement;
+pub use replacement::{
+    CredentialRevision, PasswordReplacementOutcome, PreparedPasswordReplacement,
+};
+
 pub(crate) const SESSION_TTL_SECONDS: u64 = 12 * 60 * 60;
 const MAX_SESSIONS: usize = 64;
 /// Successful writes must remain admissible to the same bounded restart reader.
@@ -631,9 +636,28 @@ impl AuthStore {
         authoritative: Option<json_codec::Value>,
         management: bool,
     ) -> Result<Self, ApiError> {
-        let root = absolute_root(root)?;
-        let root = root.as_path();
         let directory = private_directory(root)?;
+        Self::open_directory(directory, authoritative, management)
+    }
+
+    /// Open current system-management credentials using an already admitted
+    /// private-directory capability. This never initializes missing credentials,
+    /// creates a directory, or treats an Engine snapshot as authority. Runtime
+    /// callers use the normal owner-only constructor; authorized offline callers
+    /// can supply the platform's separately checked administrative capability.
+    pub fn open_system_management_directory(directory: PrivateDirectory) -> Result<Self, ApiError> {
+        Self::open_directory(directory, None, true)
+    }
+
+    fn open_directory(
+        directory: PrivateDirectory,
+        authoritative: Option<json_codec::Value>,
+        management: bool,
+    ) -> Result<Self, ApiError> {
+        directory
+            .verify_identity()
+            .map_err(ApiError::invalid_source)?;
+        let root = directory.path();
         let auth_lock = Self::acquire_lock(&directory)?;
         let name = credential_name(management);
         let path = root.join(name.as_path());

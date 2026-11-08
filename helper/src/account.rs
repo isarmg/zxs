@@ -1,6 +1,6 @@
 //! Helper-local service identity input. No NSS calls, account creation or secrets.
 use crate::Result;
-use data_serialization::Serialize;
+use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{
     EntryName,
     linux::{MountPolicy, OpenAt2Root, SingleLinkRequirement},
@@ -8,7 +8,8 @@ use platform_io::fs_safety::{
 use sha2::{Digest, Sha256};
 use std::{io::Read, os::unix::fs::MetadataExt, path::Path};
 
-#[derive(Clone, Eq, PartialEq, Serialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(try_from = "String")]
 pub(crate) struct Name(String);
 impl Name {
     pub(crate) fn new(value: String) -> Result<Self> {
@@ -28,7 +29,14 @@ impl Name {
         &self.0
     }
 }
-#[derive(Clone, Eq, PartialEq, Serialize)]
+impl TryFrom<String> for Name {
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+    fn try_from(value: String) -> Result<Self> {
+        Self::new(value)
+    }
+}
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct Snapshot {
     pub name: Name,
     pub uid: u32,

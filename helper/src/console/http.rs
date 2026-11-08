@@ -68,6 +68,15 @@ pub(super) fn router(state: State) -> Router {
             post(configuration_preview),
         )
         .route("/api/deployment/install-files", post(configuration_install))
+        .route(
+            "/api/credentials/reset-preview",
+            post(administrator_reset_preview),
+        )
+        .route("/api/credentials/reset", post(administrator_reset))
+        .route(
+            "/api/credentials/reset-recover-preview",
+            post(administrator_reset_recover_preview),
+        )
         .route("/api/host/preview", post(host_preview))
         .route("/api/host/prepare", post(host_prepare))
         .route("/api/initialization/layout-preview", post(layout_preview))
@@ -137,8 +146,8 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation"],
-        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","password_reset","program_repair","systemd_smb_activation"]
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout","fixed_configuration_file_installation","existing_administrator_password_reset"],
+        "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","samba_password_reset","program_repair","systemd_smb_activation"]
     }))
 }
 
@@ -471,4 +480,103 @@ fn configuration_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Fai
         "configuration_file_installation",
         &crate::diagnostic_chain(error.as_ref()),
     )
+}
+
+async fn administrator_reset_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::credentials::Input = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::credentials::preview(input).map_err(credential_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "credential_worker",
+            error,
+        )
+    })??;
+    Ok(Json(preview).into_response())
+}
+async fn administrator_reset(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(15),
+        to_bytes(request.into_body(), MAX_REQUEST_BYTES),
+    )
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::REQUEST_TIMEOUT,
+            "credential_request_timeout",
+            error,
+        )
+    })?
+    .map_err(|error| Failure::new(StatusCode::BAD_REQUEST, "credential_request_body", error))?;
+    let decoded = json_codec::from_slice::<crate::credentials::Reset>(&bytes);
+    // Clear the HTTP allocation when ownership permits it. SecretString clears
+    // the admitted password values on drop; transport/library copies are not a
+    // claim that every copy in process or browser memory can be erased.
+    if let Ok(mut owned) = bytes.try_into_mut() {
+        owned.fill(0);
+    }
+    // Parser errors may quote attacker-supplied fields. Do not expose them for
+    // this secret-bearing route or log the request/decoded value.
+    let input = decoded.map_err(|_| {
+        Failure::message(
+            StatusCode::BAD_REQUEST,
+            "credential_request_json",
+            "Invalid credential request; password values and parser details are not returned.",
+        )
+    })?;
+    let receipt = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::credentials::reset(input).map_err(credential_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "credential_worker",
+            error,
+        )
+    })??;
+    Ok(Json(receipt).into_response())
+}
+fn credential_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    // The top-level pending error contains the original request digest, not the
+    // private verifier or the lower-level protected-record diagnostic chain.
+    Failure::message(
+        StatusCode::CONFLICT,
+        "administrator_password_reset",
+        &error.to_string(),
+    )
+}
+
+async fn administrator_reset_recover_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::credentials::RecoverPreview = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::credentials::recover_preview(input).map_err(credential_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "credential_worker",
+            error,
+        )
+    })??;
+    Ok(Json(preview).into_response())
 }

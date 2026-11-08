@@ -170,3 +170,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 固定 systemd / Samba 文件安装
 
 `deployment install-preview/install-files` 和独立 Web 可核对实际本机服务账户、主组、独立 Samba UID 与已安装准确程序，确认后先持久化原意图，再新建或核验固定 `/etc/systemd/system/zxs.service` 和可选 `/etc/samba/zxs.conf`。不覆盖不同配置，不改默认 smb.conf，不加载/启动/启用服务，不创建密码/账户或系统就绪标记。跨目录失败可能已安装部分文件，保留原请求与证据，只按原请求重试。源码未构建/运行/审查/CI，仍不是完整首次初始化或一条龙安装。见[安装与恢复边界](../design/helper-configuration-file-installation.md)。
+
+## 已存在管理员密码重置
+
+独立 Web 新增精确预览/确认后的固定系统管理员密码重置，持有当前 daemon 生命周期租约与管理凭据锁，验证真实服务身份和原管理权威，原子发布前先保留受保护的原操作。用户手动输入新密码，撤销全部 ZXS 会话；同一原请求可通过重新输入同一新密码核对或续作，绝不以失败响应推断未改密。没有创建管理员/磁盘，没有 Samba passdb 改密或灾备副本同步，没有服务启动。源码未编译/测试/审查/CI，详见[准确边界](../design/helper-administrator-password-reset.md)。

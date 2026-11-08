@@ -82,6 +82,57 @@ impl BundleDestination {
             MountPolicy::SameMount,
         )?))
     }
+    /// Read one bounded private operation record from its final or deterministic
+    /// pending directory. Only the requested entry is admitted; unknown staging
+    /// material is preserved and refuses automatic continuation.
+    pub(crate) fn read_operation(
+        &self,
+        name: &str,
+        entry: &str,
+        maximum: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        self.recheck()?;
+        let target = EntryName::new(name)?;
+        let pending = EntryName::new(format!("{name}.pending"))?;
+        let final_directory = self.open_bundle(&target)?;
+        let pending_directory = self.open_bundle(&pending)?;
+        let (named, directory) = match (final_directory, pending_directory) {
+            (Some(_), Some(_)) => {
+                return Err(
+                    "both final and pending operation records exist; neither was modified".into(),
+                );
+            }
+            (Some(directory), None) => (target, directory),
+            (None, Some(directory)) => (pending, directory),
+            (None, None) => return Ok(None),
+        };
+        check_entries(&directory, &[(entry, &[])])?;
+        let entry = EntryName::new(entry)?;
+        let file = match directory.open_file(&entry.as_relative(), false) {
+            Ok(file) => file,
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata()?;
+        if metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o7777 != 0o600
+            || metadata.len() > maximum as u64
+        {
+            return Err("operation record has unsafe ownership, permissions or size".into());
+        }
+        let identity = SingleLinkRequirement::check(&file)?;
+        let mut bytes = Vec::new();
+        (&file).take(maximum as u64 + 1).read_to_end(&mut bytes)?;
+        if bytes.len() > maximum || bytes.len() as u64 != metadata.len() {
+            return Err("operation record changed length or exceeded its budget".into());
+        }
+        check_named(&directory, &entry, identity)?;
+        check_named(&self.parent, &named, directory.identity())?;
+        self.recheck()?;
+        Ok(Some(bytes))
+    }
     pub(crate) fn publish(&self, name: &str, files: &[(&str, &[u8])]) -> Result<BundlePublication> {
         let target = EntryName::new(name)?;
         let staging_name = format!("{name}.pending");

@@ -8,9 +8,10 @@ let deploymentPreview = null;
 let hostPreview = null;
 let layoutPreview = null;
 let configurationPreview = null;
+let administratorResetPreview = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -233,4 +234,80 @@ byId("configuration-install").addEventListener("click", async () => {
   } catch (failure) {
     error(`${failure.message}。跨目录安装不是一个原子事务，已有文件可能已经发布。保留准确输入/摘要、intent/installed 记录和临时文件，只重试同一操作，不删证据或覆盖未知配置。`);
   } finally { setBusy(false); }
+});
+
+function clearAdministratorPasswords() {
+  byId("administrator-new-password").value = "";
+  byId("administrator-repeat-password").value = "";
+}
+function resetAdministratorPlan() {
+  byId("administrator-reset-save-plan").hidden = true;
+  administratorResetPreview = null; clearAdministratorPasswords();
+  byId("administrator-reset-plan").hidden = true;
+  byId("administrator-password-form").hidden = true;
+  byId("administrator-reset-receipt").hidden = true;
+  byId("credential-writers-stopped").checked = false;
+}
+byId("reset-service-user").addEventListener("input", resetAdministratorPlan);
+byId("administrator-reset-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping) return;
+  const input = {service_user:byId("reset-service-user").value};
+  resetAdministratorPlan(); error(""); setBusy(true);
+  try {
+    const preview = await (await post("/api/credentials/reset-preview", input)).json();
+    administratorResetPreview = {input,request_digest:preview.request_digest};
+    byId("administrator-reset-plan").textContent = JSON.stringify(preview, null, 2);
+    byId("administrator-reset-plan").hidden = false;
+    byId("administrator-password-form").hidden = false;
+    byId("administrator-reset-save-plan").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("administrator-password-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping || !administratorResetPreview) return;
+  if (byId("administrator-new-password").value !== byId("administrator-repeat-password").value) {
+    error("两次输入的新密码不一致。"); return;
+  }
+  if (!window.confirm("确认仅重置预览中的已存在 ZXS 管理员密码并撤销全部 ZXS 会话？不更改 Samba 密码，不初始化系统，灾备旧凭据副本不会在此更新。")) return;
+  const body = {...administratorResetPreview,confirmation:"reset-existing-zxs-administrator-password",
+    external_writers_stopped:byId("credential-writers-stopped").checked,
+    new_password:byId("administrator-new-password").value,
+    repeat_password:byId("administrator-repeat-password").value};
+  clearAdministratorPasswords(); error(""); setBusy(true);
+  try {
+    const response = await post("/api/credentials/reset", body);
+    const receipt = await response.json();
+    byId("administrator-reset-receipt").textContent = JSON.stringify(receipt, null, 2);
+    byId("administrator-reset-receipt").hidden = false;
+    administratorResetPreview = null;
+    byId("administrator-password-form").hidden = true;
+    byId("administrator-reset-save-plan").hidden = true;
+  } catch (failure) {
+    error(`${failure.message}。密码可能已经改变；保留原计划/摘要，再次输入同一个新密码续作，不以失败响应推断旧密码仍有效。`);
+  } finally {
+    body.new_password = ""; body.repeat_password = "";
+    clearAdministratorPasswords(); setBusy(false);
+  }
+});
+window.addEventListener("pagehide", clearAdministratorPasswords);
+
+byId("reset-original-digest").addEventListener("input", resetAdministratorPlan);
+byId("administrator-reset-save-plan").addEventListener("click", () => {
+  if (!administratorResetPreview) return;
+  save(new Blob([JSON.stringify(administratorResetPreview, null, 2)], {type:"application/json"}),
+    `zxs-administrator-reset-${administratorResetPreview.request_digest}.json`);
+});
+byId("administrator-reset-recover").addEventListener("click", async () => {
+  if (busy || stopping) return;
+  const request_digest = byId("reset-original-digest").value;
+  if (!/^[0-9a-f]{64}$/.test(request_digest)) { error("请输入原操作的完整 64 位小写摘要。"); return; }
+  const input = {service_user:byId("reset-service-user").value};
+  resetAdministratorPlan(); error(""); setBusy(true);
+  try {
+    const preview = await (await post("/api/credentials/reset-recover-preview", {input,request_digest})).json();
+    administratorResetPreview = {input,request_digest:preview.request_digest};
+    byId("administrator-reset-plan").textContent = JSON.stringify(preview, null, 2);
+    byId("administrator-reset-plan").hidden = false;
+    byId("administrator-password-form").hidden = false;
+    byId("administrator-reset-save-plan").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
 });

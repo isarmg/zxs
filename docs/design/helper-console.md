@@ -69,3 +69,7 @@ POST 输入最大 64 KiB，正文读取期限 15 秒；磁盘读取只允许一�
 ### 固定系统配置文件安装后继
 
 控制台另有 `/api/deployment/install-preview` 与 `/api/deployment/install-files`，使用同一单工作 owner、同源/CSRF/Host 与退出排空。真实目标仅 root 所有的固定 systemd unit 和独立 Samba 配置；确认文案明确原请求、无覆盖、外部管理须停止与不加载/启动/启用。网络风险提示同步扩大到这些写权限，没有登录或秘密。源码未运行，详见[固定安装边界](helper-configuration-file-installation.md)。
+
+### 已存在管理员的密码重置后继
+
+`/api/credentials/reset-preview` 和 `/api/credentials/reset` 沿用独立控制台单工作 owner、同源/CSRF/IP Host 和退出排空。重置请求秘密字段不进入日志、URL、argv 或回执，JSON 错误不展开可能引用私有字段的细节；新密码由用户手动输入，失败后需同一原请求与同一新密码明确续作。无认证/明文 HTTP 的风险提示明确可达者也可能改密。它不初始化缺失账户，不操作 Samba 密码或 Engine 灾备副本。源码未运行，见[重置协议](helper-administrator-password-reset.md)。

@@ -201,3 +201,45 @@ fn configuration_installation_request_is_strict_and_has_no_activation_switch() {
     unknown["start_service"] = true.into();
     assert!(json_codec::from_value::<install::Commit>(unknown).is_err());
 }
+
+#[test]
+fn protected_single_record_can_resume_a_complete_pending_file_without_extra_material() {
+    let temp = tempfile::tempdir().unwrap();
+    let pending = temp.path().join("operation.pending");
+    fs::create_dir(&pending).unwrap();
+    fs::set_permissions(&pending, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(pending.join("reset.json"), b"record").unwrap();
+    fs::set_permissions(
+        pending.join("reset.json"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let destination = BundleDestination::open(temp.path()).unwrap();
+    assert_eq!(
+        destination
+            .read_operation("operation", "reset.json", 100)
+            .unwrap()
+            .unwrap(),
+        b"record"
+    );
+    destination
+        .publish("operation", &[("reset.json", b"record")])
+        .unwrap();
+    assert_eq!(
+        destination
+            .read_operation("operation", "reset.json", 100)
+            .unwrap()
+            .unwrap(),
+        b"record"
+    );
+    fs::write(temp.path().join("operation/unexpected"), b"keep").unwrap();
+    assert!(
+        destination
+            .read_operation("operation", "reset.json", 100)
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(temp.path().join("operation/unexpected")).unwrap(),
+        b"keep"
+    );
+}

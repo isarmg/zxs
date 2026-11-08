@@ -12,7 +12,7 @@
     <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、首装与部署准备</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、重置已存在的 ZXS 管理员密码或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
     <section class="card">
@@ -75,6 +75,28 @@
       <pre id="configuration-receipt" hidden></pre>
     </section>
     <section class="card">
+      <h2>重置已存在的 ZXS 管理员密码</h2>
+      <p>仅重置固定 <code>/zxs/data/management/management-auth.json</code> 中已存在的管理员，必须已有真实管理权威和正确服务所有权。撤销全部 ZXS 登录会话，但不更改 Samba 密码、不创建新管理员或初始化系统，也不启动服务。</p>
+      <form id="administrator-reset-form">
+        <label>本机 ZXS 服务账户 <input id="reset-service-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        <button id="administrator-reset-preview" type="submit">核对现有管理员与重置范围</button>
+        <label>中断恢复：原请求摘要 <input id="reset-original-digest" maxlength="64" autocomplete="off" spellcheck="false" placeholder="仅续作原操作时填写"></label>
+        <button id="administrator-reset-recover" type="button" class="secondary">读取这个原请求的恢复预览</button>
+      </form>
+      <pre id="administrator-reset-plan" hidden></pre>
+      <button id="administrator-reset-save-plan" type="button" class="secondary" hidden>保存无密码的原请求信息</button>
+      <form id="administrator-password-form" hidden autocomplete="off">
+        <div class="fields">
+          <label>手动输入新密码 <input id="administrator-new-password" type="password" autocomplete="new-password" required></label>
+          <label>再次输入新密码 <input id="administrator-repeat-password" type="password" autocomplete="new-password" required></label>
+        </div>
+        <label class="ack"><input id="credential-writers-stopped" type="checkbox" required> 我已停止旧版本和其他凭据写入者，确认撤销全部 ZXS 会话。此确认不是工具取得全部外部进程锁。</label>
+        <p class="muted">无登录且明文 HTTP，网络可达者也能重置密码。只在可信隔离网络操作。密码不放入 URL、命令行、日志或回执；提交后输入框立即清空。灾备凭据副本本片不更新，未来显式灾难恢复不能把旧副本当最新密码。若结果不确定，保留当前计划并重新输入同一个新密码来续作，不换请求或删除材料。</p>
+        <button id="administrator-reset-commit" type="submit">确认重置此管理员并撤销会话</button>
+      </form>
+      <pre id="administrator-reset-receipt" hidden></pre>
+    </section>
+    <section class="card">
       <h2>选择准确的独立磁盘</h2>
       <p>使用 <code>independent-disk-journal</code> 的磁盘选择 JSON，必须包含绝对路径、来源身份、incarnation 和可选检查点。不自动发现或接纳陌生盘，也不把在线池格式当作此协议。</p>
       <form id="check-form">
@@ -93,7 +115,7 @@
       <details><summary>完整报告与来源身份</summary><pre id="report"></pre></details>
     </section>
     <p id="error" class="error" role="alert" hidden></p>
-    <section class="card pending"><h2>尚未完成的能力</h2><p>首次系统初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、密码重置、程序覆盖修复、依赖安装、已有配置的替换和 systemd/SMB 的加载/启动/启用尚未提供。程序首装、空布局和固定配置文件安装都不是系统初始化或服务启用完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
+    <section class="card pending"><h2>尚未完成的能力</h2><p>首次系统初始化、磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、实际 Samba 密码重置、程序覆盖修复、依赖安装、已有配置的替换和 systemd/SMB 的加载/启动/启用尚未提供。程序首装、空布局和固定配置文件安装都不是系统初始化或服务启用完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
     <footer>手动运行，不注册 systemd，不设置开机自启。关闭页面不会结束进程；请点“退出辅助工具”或在启动终端按 Ctrl+C，并等进程真正退出再移除磁盘。</footer>
   </main>
 </body>
