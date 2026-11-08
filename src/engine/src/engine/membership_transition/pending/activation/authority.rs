@@ -222,12 +222,14 @@ impl AuthorityNode {
         if verified.intent.effect.is_some()
             || matches!(
                 verified.intent.origin,
-                Origin::TerminalResume { .. } | Origin::Readmission { .. }
+                Origin::TerminalResume { .. }
+                    | Origin::Readmission { .. }
+                    | Origin::BackupCutover { .. }
             )
         {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                "exit control evidence cannot authorize lifecycle activation",
+                "non-addition control evidence cannot authorize ordinary Joint activation",
             ));
         }
         if object_hash("membership-control-archive", &self.archive)?

@@ -266,3 +266,10 @@
 在 `5b7f0a29` 原范围 SQLite 准备之后，新增[多级切换输入](../design/backup-cutover-inputs.md)：原 actor/operation 下明确指定每个新目标身份与直接来源，允许同批分叉与多级子树，所有新祖先必须在同一完整目标集合中。它独立于旧活动 Config，逐目标重新读取真实完整材料，再写原物理根绑定的持久输入确认；普通冷开优先续作，错误或源变化不降级为成功。
 
 终态 `CutoverInputsPrepared` 仍不是切换。当前只有原末级边/完整池的同盘全副本准备，没有实现最终成员投票、源围栏、原生 registry+placement 决定、完整历史库或活动 fanout，不开放准备盘运行权威。按用户要求本组合未审查、编译、测试或运行 CI。
+
+
+### 原生源围栏与认证取消（后继生产源码，未验证）
+
+`47109fc3` 的多级切换输入之后，新增[源写围栏](../design/backup-source-fence.md)：可信宿主显式调用 `begin_backup_cutover_fence`，重新取得全目标锁并独立重验全部材料，才在原成员上持久写同一原生 MembershipFence。原边界和实际 receipt 保持，部分成功和冷开继续阻写，不删除源或开放目标。`backup_cutover_fence_status` 只报告实际原成员围栏，不等于全目标最终投票。
+
+同一原操作可补齐围栏，也可走固定原 quorum 的认证 Abort 和取消 publication；永久结果为 `backup-cutover-cancelled`，原 Config 的盘集合与原业务材料保留。普通 Joint/Add 明确拒绝这种 source-only origin。当前没有完整迁移调度/目标激活，因此该步骤可能长期全池停写，不能藏在普通设置后自动执行。取消后新代际的后继准备仍不支持。完整最终决定、活动多下级路由、目标实体/完整历史库安装和 helper 完整链准入继续未完成。依要求未审查、编译、测试或运行 CI。

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 mod abort;
 mod archive;
+mod backup;
 mod complete_chain;
 pub use abort::MembershipAbortStatus;
 mod decision;
@@ -59,6 +60,10 @@ enum Origin {
         config: ValidatedConfig,
         predecessor_authority_hash: String,
     },
+    BackupCutover {
+        config: ValidatedConfig,
+        evidence: Box<backup::Evidence>,
+    },
     Readmission {
         config: ValidatedConfig,
         predecessor_authority_hash: String,
@@ -76,12 +81,13 @@ impl Origin {
             Self::Genesis { config }
             | Self::Successor { config, .. }
             | Self::TerminalResume { config, .. }
-            | Self::Readmission { config, .. } => config,
+            | Self::Readmission { config, .. }
+            | Self::BackupCutover { config, .. } => config,
         }
     }
     fn predecessor(&self) -> Option<&str> {
         match self {
-            Self::Genesis { .. } => None,
+            Self::Genesis { .. } | Self::BackupCutover { .. } => None,
             Self::Successor {
                 predecessor_authority_hash,
                 ..
@@ -136,6 +142,7 @@ impl TransitionIntent {
     fn verify_target(&self) -> Result<()> {
         match &self.origin {
             Origin::Readmission { request, .. } => request.verify_target(self),
+            Origin::BackupCutover { .. } => backup::verify_intent(self),
             _ => {
                 validate_transition_target(self.origin.config(), &self.target, self.effect.as_ref())
             }

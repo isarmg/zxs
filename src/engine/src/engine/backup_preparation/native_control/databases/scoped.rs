@@ -3,6 +3,7 @@
 use super::*;
 
 mod cutover;
+pub(in crate::engine) use cutover::BackupSourceFenceEvidence;
 pub use cutover::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupPreparedTopologyNode,
     BackupTopologyTarget, offline_check_backup_cutover_inputs,

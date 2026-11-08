@@ -9,6 +9,7 @@
 | `engine/disk_registry.rs`、`engine/disk_lifecycle/plan.rs` | 借用当前已准入登记与冻结业务图，生成不执行注销的分页影响预览 |
 | `disk/owned.rs` | 同代磁盘根与身份所有权、盘内 FD 相对 I/O；不持 writer lock |
 | `engine/publication.rs` | 正文准备、精确元数据预检、持久决定与发布屏障 |
+| `engine/backup_preparation/`、`engine/membership_transition/backup.rs` | 完整目标后台准备与[原生源围栏/认证取消](../design/backup-source-fence.md)；无最终目标切换，仍保留原数据 |
 | `engine/recovery.rs` | 仅沿已验证发布前缀回放，协调未完成决定 |
 | `engine/reads.rs` | 副本验证、读租约、导出、磁盘容量与状态 |
 | `engine/integrity_scrub.rs` | 独占 Engine 的有界完整巡检，分开报告 metadata 闭包与 required payload 副本 |

@@ -1,5 +1,5 @@
-//! Certified cancellation of an uncompleted pure addition. Immutable generation
-//! identity is separate from any fixed-original-majority witness.
+//! Certified cancellation of an uncompleted pure addition or source-only backup
+//! fence. Generation identity is separate from its fixed-original-majority witness.
 use super::*;
 use crate::metadata_map::Reference;
 use crate::metadata_map::{Encoder, ProofMeasure};
@@ -202,11 +202,13 @@ impl AbortContext {
         if intent.effect.is_some() {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,
-                "abort evidence only admits pure additions",
+                "abort evidence cannot change disk registration or exit effects",
             ));
         }
         let config = intent.origin.config();
-        if !pending::admission::same_settings(config, &intent.target)
+        if matches!(&intent.origin, Origin::BackupCutover { .. }) {
+            backup::verify_intent(intent)?;
+        } else if !pending::admission::same_settings(config, &intent.target)
             || config.disks.iter().any(|old| {
                 !intent
                     .target

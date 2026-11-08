@@ -7,6 +7,8 @@ use crate::history_package::{
 };
 use std::collections::BTreeSet;
 
+mod fence;
+pub(in crate::engine) use fence::BackupSourceFenceEvidence;
 mod runtime;
 mod topology;
 pub(super) use runtime::resume;

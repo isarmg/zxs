@@ -30,7 +30,7 @@ impl Engine {
         if fence.intent.effect.is_some() {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,
-                "Abort fence resume only supports pure additions",
+                "Abort fence resume cannot change disk registration or exit effects",
             ));
         }
         self.persist_membership_fence()
@@ -228,8 +228,9 @@ impl Engine {
         Ok(status)
     }
 
-    /// Cancel this admitted pure addition, preserving the original operation's
-    /// permanent result. Failure after certification leaves G recoverable/fenced.
+    /// Cancel this admitted pure addition or source-only backup fence, retaining
+    /// the original actor/operation and a distinct permanent result. Failure
+    /// after certification leaves the exact generation recoverable/fenced.
     pub fn cancel_membership_handoff(
         &mut self,
         archive_path: &Path,

@@ -120,6 +120,11 @@ impl Generation {
                 Some(MembershipExitAction::PlannedOffline) => "disk-planned-offline",
                 Some(MembershipExitAction::Deregister) => "disk-deregister",
                 None if readmission.is_some() => "disk-readmit",
+                None if self.portable.is_abort()
+                    && matches!(&self.intent.origin, Origin::BackupCutover { .. }) =>
+                {
+                    "backup-cutover-cancelled"
+                }
                 None if self.portable.is_abort() => "membership-add-cancelled",
                 None if self.portable.terminal_resume_core().is_some() => {
                     "terminal-metadata-resume"

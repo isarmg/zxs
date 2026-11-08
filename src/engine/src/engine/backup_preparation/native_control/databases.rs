@@ -7,6 +7,7 @@ mod materials;
 mod runtime;
 mod scoped;
 mod store;
+pub(in crate::engine) use scoped::BackupSourceFenceEvidence;
 pub use scoped::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupPreparedTopologyNode,
     BackupScopedDatabasePreparationReport, BackupTopologyTarget,

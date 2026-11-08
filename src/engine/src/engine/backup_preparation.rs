@@ -19,6 +19,7 @@ mod batch;
 mod execution;
 mod inspection;
 mod native_control;
+pub(in crate::engine) use native_control::BackupSourceFenceEvidence;
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
     BackupNativePreparationReport, BackupNativeTargetReport, BackupObjectDatabasePreparationReport,
@@ -68,7 +69,8 @@ pub enum BackupPreparationPhase {
     /// historical scopes, replacement bindings and cutover remain absent.
     ScopedDatabasesPrepared,
     /// Explicit complete prospective subtree accepted in the preparation domain.
-    /// No final authority, source fence or active fanout route is installed.
+    /// This material stage alone installs no source fence, final authority or
+    /// active fanout route; explicit native fencing is a separate operation.
     CutoverInputsPrepared,
     Blocked,
     SourceChanged,
@@ -330,6 +332,14 @@ impl Engine {
                 status.detail =
                     format!("cannot verify the frozen preparation source boundary: {error}");
             }
+        }
+        if let Some(fence) = self.backup_cutover_fence_status() {
+            status.phase = BackupPreparationPhase::Blocked;
+            status.error_code = Some(ErrorCode::RecoveryRequired);
+            status.detail = format!(
+                "original generation is write-fenced ({}/{} durable original member receipts); target activation is not implemented; same-operation fence retry or certified cancellation is required",
+                fence.confirmed_members, fence.original_members,
+            );
         }
         Some(status)
     }

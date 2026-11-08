@@ -11,6 +11,12 @@ impl Engine {
                 "pending members require original fence",
             )
         })?;
+        if matches!(&fence.intent.origin, Origin::BackupCutover { .. }) {
+            return Err(Error::new(
+                ErrorCode::UnsupportedOperation,
+                "backup source fencing does not admit target members or ordinary Joint activation",
+            ));
+        }
         reservation::verify_intent_roots(&fence.intent)?;
         let origin = fence.intent.origin.config();
         let target = &fence.intent.target;
