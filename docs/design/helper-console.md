@@ -61,3 +61,7 @@ POST 输入最大 64 KiB，正文读取期限 15 秒；磁盘读取只允许一�
 ## 根目录准备与当前 daemon 租约
 
 后继 `/api/host/preview`、`/api/host/prepare` 提供 root 明确确认的固定 `/zxs` 空根准备，不能当完整初始化。部署包准备现在与当前 ZXS 二进制共享同一目录 inode 租约，空闲控制台不持锁，也不宣称 Samba/旧二进制已停。见[生命周期边界](helper-service-exclusion.md)。源码未运行。
+
+## 首次初始化的私有布局前置
+
+`/api/initialization/layout-preview` 和 `/api/initialization/layout-prepare` 使用准确本地账户与相同作业 owner/CSRF/Origin，持有当前 daemon 生命周期租约，固定创建尚不存在的空私有数据树。页面明确不创建管理员、数据库或磁盘，不将此回执称作初始化完成。详见[布局边界](helper-private-data-layout.md)，源码未运行。

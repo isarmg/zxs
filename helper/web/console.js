@@ -6,9 +6,10 @@ let stopping = false;
 let installationPreview = null;
 let deploymentPreview = null;
 let hostPreview = null;
+let layoutPreview = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -164,5 +165,32 @@ byId("host-prepare").addEventListener("click", async () => {
     const receipt = await (await post("/api/host/prepare", {request_digest:hostPreview.request_digest,confirmation:"prepare-host-root-only"})).json();
     byId("host-receipt").textContent = JSON.stringify(receipt, null, 2); byId("host-receipt").hidden = false;
   } catch (failure) { error(`${failure.message}。结果不确定时保留 pending 材料，仅按准确请求重试，不手工清空目录。`); }
+  finally { setBusy(false); }
+});
+
+function resetLayout() {
+  layoutPreview = null; byId("layout-plan").hidden = true;
+  byId("layout-prepare").hidden = true; byId("layout-receipt").hidden = true;
+}
+byId("layout-user").addEventListener("input", resetLayout);
+byId("layout-form").addEventListener("submit", async event => {
+  event.preventDefault(); if (busy || stopping) return;
+  const input = {service_user:byId("layout-user").value};
+  resetLayout(); error(""); setBusy(true);
+  try {
+    const preview = await (await post("/api/initialization/layout-preview", input)).json();
+    layoutPreview = {input,request_digest:preview.request_digest};
+    byId("layout-plan").textContent = JSON.stringify(preview, null, 2);
+    byId("layout-plan").hidden = false; byId("layout-prepare").hidden = false;
+  } catch (failure) { error(failure.message); } finally { setBusy(false); }
+});
+byId("layout-prepare").addEventListener("click", async () => {
+  if (busy || stopping || !layoutPreview) return;
+  if (!window.confirm("确认只将 /zxs/data 的新空目录树交给预览中的本机服务 UID/GID？不会改现有目录权限，不创建管理员、数据库或磁盘。先确保旧版与其他写者已停止。")) return;
+  error(""); setBusy(true);
+  try {
+    const receipt = await (await post("/api/initialization/layout-prepare", {...layoutPreview,confirmation:"prepare-private-layout-only"})).json();
+    byId("layout-receipt").textContent = JSON.stringify(receipt, null, 2); byId("layout-receipt").hidden = false;
+  } catch (failure) { error(`${failure.message}。保留 pending 目录；失败不证明未写入，不能以重新初始化或清空目录代替恢复。`); }
   finally { setBusy(false); }
 });

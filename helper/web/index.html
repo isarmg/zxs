@@ -12,7 +12,7 @@
     <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、首装与部署准备</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根、生成未激活配置或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
     <section class="card">
@@ -32,6 +32,18 @@
       <pre id="install-plan" hidden></pre>
       <button id="install-commit" type="button" hidden>确认仅安装此程序</button>
       <pre id="install-receipt" hidden></pre>
+    </section>
+    <section class="card">
+      <h2>首次初始化前：服务私有目录</h2>
+      <p>为已存在的本机非 root 服务账户准备 <code>/zxs/data/{state,management,disks}</code>。从安全的本机 <code>/etc/passwd</code> 核对准确 UID / 主组 GID，创建整棵 0700 空目录树，不改现有目录权限，也不清空任何数据。</p>
+      <form id="layout-form">
+        <div class="fields"><label>已存在的服务账户 <input id="layout-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label></div>
+        <p class="muted">此步骤不创建 Unix/管理员/SMB 账户，不初始化数据库或磁盘，不表示系统可以正常启动。当前 daemon 运行时会拒绝准备；旧版和第三方写者仍须单独停止。</p>
+        <button id="layout-preview" type="submit">核对身份并预览私有目录</button>
+      </form>
+      <pre id="layout-plan" hidden></pre>
+      <button id="layout-prepare" type="button" hidden>确认仅准备这棵空目录</button>
+      <pre id="layout-receipt" hidden></pre>
     </section>
     <section class="card">
       <h2>准备 systemd / SMB 配置</h2>

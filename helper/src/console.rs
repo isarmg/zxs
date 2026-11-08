@@ -11,7 +11,7 @@ use tokio::sync::{Semaphore, watch};
 
 const DEFAULT_PORT: u16 = 9040;
 pub(super) const MAX_REQUEST_BYTES: usize = 64 * 1024;
-const WARNING: &str = "WARNING: unauthenticated root helper console over plain HTTP. Any reachable person can inspect/export selected disk data, install its embedded ZXS program, prepare its host root and inactive deployment files or stop this helper. Use only a trusted isolated network/firewall; exit after use. This program does not change your firewall, install systemd or enable autostart.";
+const WARNING: &str = "WARNING: unauthenticated root helper console over plain HTTP. Any reachable person can inspect/export selected disk data, install its embedded ZXS program, prepare its host root, an empty service-owned private layout and inactive deployment files or stop this helper. Use only a trusted isolated network/firewall; exit after use. This program does not change your firewall, install systemd or enable autostart.";
 
 #[derive(Args, Clone, Debug)]
 pub(crate) struct Options {

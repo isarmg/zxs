@@ -65,6 +65,8 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/deployment/prepare", post(deployment_prepare))
         .route("/api/host/preview", post(host_preview))
         .route("/api/host/prepare", post(host_prepare))
+        .route("/api/initialization/layout-preview", post(layout_preview))
+        .route("/api/initialization/layout-prepare", post(layout_prepare))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), security))
         .with_state(state)
@@ -130,7 +132,7 @@ async fn status(ExtractState(state): ExtractState<State>) -> Json<json_codec::Va
         "csrf":state.csrf.as_ref(), "stopping":*state.stopping.borrow(),
         "busy":state.jobs.available_permits() == 0,
         "service_exclusion_established":false, "participating_zxs_lease_root":platform_io::service_lease::HOST_ROOT, "source_writes_available":false, "program_installation":crate::installation::availability(),
-        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation"],
+        "implemented":["independent_content_check","verified_browser_download","helper_shutdown","embedded_program_installation","inactive_systemd_samba_bundle","host_lease_root_preparation","empty_service_private_layout"],
         "not_implemented":["first_run_setup","disk_add","disk_deregister","foreign_admission","managed_disk_initialization","full_system_rebuild","password_reset","program_repair","active_systemd_smb_installation"]
     }))
 }
@@ -366,6 +368,54 @@ fn host_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
     Failure::message(
         StatusCode::CONFLICT,
         "host_root_preparation",
+        &crate::diagnostic_chain(error.as_ref()),
+    )
+}
+
+async fn layout_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::initialization::Input = input(request).await?;
+    let preview = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::initialization::preview(input).map_err(layout_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "initialization_worker",
+            error,
+        )
+    })??;
+    Ok(Json(preview).into_response())
+}
+async fn layout_prepare(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    let permit = admit_job(&state, &request)?;
+    let input: crate::initialization::Prepare = input(request).await?;
+    let receipt = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::initialization::prepare(input).map_err(layout_failure)
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "initialization_worker",
+            error,
+        )
+    })??;
+    Ok(Json(receipt).into_response())
+}
+fn layout_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    Failure::message(
+        StatusCode::CONFLICT,
+        "private_layout_preparation",
         &crate::diagnostic_chain(error.as_ref()),
     )
 }

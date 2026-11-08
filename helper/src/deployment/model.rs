@@ -3,29 +3,7 @@ use crate::Result;
 use data_serialization::Serialize;
 use std::net::SocketAddr;
 
-/// Deliberately narrow account token: usable unchanged in both systemd and
-/// standalone Samba syntax, with no substitutions, comments or extra tokens.
-#[derive(Serialize)]
-pub(super) struct Account(String);
-impl Account {
-    fn new(value: String) -> Result<Self> {
-        let first = value.as_bytes().first().copied();
-        if value.is_empty()
-            || value.len() > 32
-            || value == "root"
-            || !matches!(first, Some(b'a'..=b'z' | b'_'))
-            || !value
-                .bytes()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
-        {
-            return Err("account/group must be a non-root 1–32 byte lowercase Unix name, beginning with a letter or underscore; existence and numeric ownership are not verified by preparation".into());
-        }
-        Ok(Self(value))
-    }
-    pub(super) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+use crate::account::Name as Account;
 #[derive(Serialize)]
 pub(super) struct Smb {
     pub account: Account,

@@ -156,3 +156,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ## 当前 daemon 生命周期互斥与根准备
 
 新增 `host preview` / `host prepare` 和同名 Web 页面，只原子准备缺失的固定 root 所有 `/zxs`。当前 daemon 与打开 Engine 的 helper CLI 使用同一 OS 目录租约，daemon 持有到 Tokio 阻塞池结束。源码未构建/运行，不包含旧二进制、Samba/passdb 或任意第三方写者，完整首次初始化与凭据重置仍未实现。见[准确范围](../design/helper-service-exclusion.md)。
+
+## 服务私有布局前置
+
+`initialization layout-preview/layout-prepare` 及 Web 对应卡片可按准确本机非 root 服务账户，原子准备空 `/zxs/data/{state,management,disks}`。使用当前 daemon 同一生命周期租约，固定目的地、精确摘要确认，只交接新空树所有权，不递归 chown 现用数据。没有创建管理员/数据库/磁盘，仍不是完整首次初始化。源码未构建或运行。见[私有布局边界](../design/helper-private-data-layout.md)。

@@ -1,9 +1,11 @@
 //! Offline auxiliary utility. Stop the daemon before using it.
+mod account;
 mod authority;
 mod configuration;
 mod console;
 mod deployment;
 mod host;
+mod initialization;
 mod installation;
 mod private_io;
 mod scrub;
@@ -23,6 +25,7 @@ Offline export validates one published version, not the entire pool or current p
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
 The matching release helper can install only its embedded ZXS executable at /usr/local/bin/zxs without overwriting different bytes.
 Engine recovery commands require the current-daemon /zxs lifetime lease; host preview/prepare can create that root without initializing the system.
+A selected existing non-root local account can receive an empty private data layout; this creates no administrator, database or disk.
 Systemd/Samba configuration can be prepared as an inactive bundle, never installed or activated.
 First-run setup, disk addition/removal, foreign admission, password reset, program repair and active systemd/SMB installation are not yet implemented. No planned-offline action is offered."
 )]
@@ -54,6 +57,11 @@ enum Command {
     Install {
         #[command(subcommand)]
         command: installation::Command,
+    },
+    /// Prepare only the selected service account's empty private data layout.
+    Initialization {
+        #[command(subcommand)]
+        command: initialization::Command,
     },
     /// Prepare the root-owned host lease directory only, not accounts or storage.
     Host {
@@ -231,6 +239,7 @@ fn run(args: Args) -> Result<()> {
     match command {
         Command::Serve(options) => console::run(options),
         Command::Install { command } => installation::run(command),
+        Command::Initialization { command } => initialization::run(command),
         Command::Host { command } => host::run(command),
         Command::Deployment { command } => deployment::run(command),
         Command::Configuration { command } => configuration::run(command),
@@ -376,6 +385,7 @@ fn requires_service_exclusion(command: &Command) -> bool {
         Command::Serve(_)
         | Command::Install { .. }
         | Command::Host { .. }
+        | Command::Initialization { .. }
         | Command::Deployment { .. }
         | Command::Authority { .. }
         | Command::Configuration { .. }

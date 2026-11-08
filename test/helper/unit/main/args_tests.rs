@@ -372,3 +372,27 @@ fn engine_routes_require_lifetime_exclusion_but_pure_confirmation_errors_do_not(
     let host = Args::try_parse_from(["zxs-helper", "host", "preview"]).unwrap();
     assert!(!requires_service_exclusion(&host.command.unwrap()));
 }
+
+#[test]
+fn private_layout_cli_is_named_as_preparation_not_system_initialization() {
+    let args = Args::try_parse_from([
+        "zxs-helper",
+        "initialization",
+        "layout-preview",
+        "--service-user",
+        "zxs",
+    ])
+    .unwrap();
+    assert!(matches!(args.command, Some(Command::Initialization { .. })));
+    assert!(
+        Args::try_parse_from([
+            "zxs-helper",
+            "initialization",
+            "layout-prepare",
+            "--service-user",
+            "zxs",
+            "--confirm-private-layout-only"
+        ])
+        .is_err()
+    );
+}

@@ -7,6 +7,7 @@ fn helper_exposes_only_implemented_offline_operations() {
         "install",
         "deployment",
         "host",
+        "initialization",
         "restore-system",
         "recovery-preview",
         "recovery-commit",
