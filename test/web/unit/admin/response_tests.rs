@@ -10,7 +10,6 @@ fn contract(kind: Kind, fields: &[(&str, &str)]) -> Contract {
             .map(|(key, value)| ((*key).into(), (*value).into()))
             .collect(),
         OPERATION,
-        "admin",
     )
     .unwrap()
     .contract
@@ -166,7 +165,7 @@ fn diagnostic_and_outcome_contracts_cannot_be_interchanged() {
     assert!(inspect.validate(diagnostic).is_err());
 }
 #[test]
-fn domain_and_preview_contracts_accept_real_shapes_not_generic_receipts() {
+fn repository_contract_accepts_domain_shape_not_generic_receipts() {
     let repository = json!({"repository_id":"r", "name":"Repo", "history_tree_id":"h", "main_branch_id":"b", "primary_slot_id":"P01", "target_copies":1,"name_policy":"portable", "unicode_version":"17","smb_enabled":true,"smb_binding_generation":"1"});
     let c = contract(
         Kind::Repository,
@@ -195,111 +194,6 @@ fn domain_and_preview_contracts_accept_real_shapes_not_generic_receipts() {
             c.validate(wrong).is_err(),
             "repository accepted wrong {key}"
         );
-    }
-    let branch = json!({"branch_id":"b","history_tree_id":"h","name":"Branch","head_commit_id":"new","fork_commit_id":"source","branch_kind":"full","generation":"1","state":"active","pending_file_versions":{},"materialized":true,"inherited":false,"content_state":"LIVE"});
-    assert!(
-        contract(
-            Kind::Branch,
-            &[
-                ("repository", "r"),
-                ("name", "Branch"),
-                ("commit", "source")
-            ]
-        )
-        .validate(branch)
-        .is_ok()
-    );
-    let link = json!({"merge_link_id":"m","history_tree_id":"h","source_branch_id":"s","source_commit_id":"sc","target_branch_id":"t","target_commit_id":"tc","author":"admin","operation_id":"op_00000000000000000000000000000001"});
-    assert!(
-        contract(
-            Kind::Link,
-            &[
-                ("history", "h"),
-                ("source_branch", "s"),
-                ("source_commit", "sc"),
-                ("target_branch", "t"),
-                ("target_commit", "tc")
-            ]
-        )
-        .validate(link)
-        .is_ok()
-    );
-    for (action, kind) in [
-        (Kind::Purge, "purge"),
-        (Kind::Split, "split"),
-        (Kind::Save, "historical_save"),
-    ] {
-        let c = contract(
-            action,
-            &[
-                ("history", "h"),
-                ("versions", "v"),
-                ("commit", "c"),
-                ("name", "saved"),
-            ],
-        );
-        let plan = json!({"plan_id":"p","kind":kind,"principal":"admin","expected_sequence":"4","digest":"digest","input":{"history_tree_id":"h"},"state":"ready"});
-        assert!(c.validate(plan.clone()).is_ok());
-        let mut wrong = plan.clone();
-        wrong["input"]["history_tree_id"] = "other".into();
-        assert!(c.validate(wrong).is_err());
-        for (key, bad) in [
-            ("kind", "unknown"),
-            ("principal", "other"),
-            ("state", "committed"),
-            ("digest", ""),
-            ("plan_id", ""),
-        ] {
-            let mut wrong = plan.clone();
-            wrong[key] = bad.into();
-            assert!(
-                c.validate(wrong).is_err(),
-                "{action:?} accepted wrong {key}"
-            );
-        }
-        assert!(c.validate(raw_operation()).is_err());
-    }
-}
-
-#[test]
-fn branch_creation_accepts_wire_projection_without_relaxing_domain_validation() {
-    let c = contract(
-        Kind::Branch,
-        &[
-            ("repository", "r"),
-            ("name", "Branch"),
-            ("commit", "source"),
-        ],
-    );
-    // branch_wire always adds these three fields, including for empty branches.
-    let empty = json!({"branch_id":"b","history_tree_id":"h","name":"Branch","head_commit_id":"new","fork_commit_id":"source","branch_kind":"full","generation":"1","state":"active","pending_file_versions":{},"materialized":true,"inherited":false,"content_state":"LIVE"});
-    let mut pending = empty.clone();
-    pending["pending_file_versions"] = json!({"file":"version"});
-    pending["materialized"] = false.into();
-    pending["inherited"] = true.into();
-    pending["content_state"] = "PENDING".into();
-    for valid in [empty, pending] {
-        assert!(c.validate(valid.clone()).is_ok());
-        for key in ["materialized", "inherited", "content_state"] {
-            let mut missing = valid.clone();
-            missing.as_object_mut().unwrap().remove(key);
-            assert!(c.validate(missing).is_err());
-        }
-        for (key, bad) in [
-            ("materialized", valid["inherited"].clone()),
-            ("inherited", valid["materialized"].clone()),
-            ("content_state", "UNKNOWN".into()),
-            ("name", "Other".into()),
-            ("fork_commit_id", "other".into()),
-            ("branch_id", "".into()),
-            ("history_tree_id", "".into()),
-            ("generation", json!(1)),
-            ("unexpected", true.into()),
-        ] {
-            let mut malformed = valid.clone();
-            malformed[key] = bad;
-            assert!(c.validate(malformed).is_err());
-        }
     }
 }
 
@@ -340,42 +234,6 @@ fn plan_query_checks_identity_and_shape_without_requiring_ready() {
         let mut value = plan();
         value.as_object_mut().unwrap().remove(key);
         assert!(c.validate(value).is_err(), "GET plan accepted absent {key}");
-    }
-}
-
-#[test]
-fn merge_link_response_must_match_every_captured_endpoint_identity() {
-    let c = contract(
-        Kind::Link,
-        &[
-            ("history", "h"),
-            ("source_branch", "s"),
-            ("source_commit", "sc"),
-            ("target_branch", "t"),
-            ("target_commit", "tc"),
-        ],
-    );
-    let link = json!({"merge_link_id":"m","history_tree_id":"h","source_branch_id":"s","source_commit_id":"sc","target_branch_id":"t","target_commit_id":"tc","author":"admin","operation_id":OPERATION});
-    assert!(c.validate(link.clone()).is_ok());
-    for key in [
-        "history_tree_id",
-        "source_branch_id",
-        "source_commit_id",
-        "target_branch_id",
-        "target_commit_id",
-        "operation_id",
-    ] {
-        let mut value = link.clone();
-        value[key] = if key == "operation_id" {
-            "op_00000000000000000000000000000002"
-        } else {
-            "other"
-        }
-        .into();
-        assert!(
-            c.validate(value).is_err(),
-            "merge-link accepted wrong {key}"
-        );
     }
 }
 

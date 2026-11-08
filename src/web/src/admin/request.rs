@@ -1,5 +1,5 @@
 //! Exact HTTP contracts for daily administration. Never builds content transfers.
-use super::response::{Contract, PreviewKind};
+use super::response::Contract;
 use json_codec::{Value, json};
 use std::collections::BTreeMap;
 
@@ -8,11 +8,6 @@ pub(super) enum Kind {
     Repository,
     Policy,
     Rule,
-    Branch,
-    Link,
-    Purge,
-    Split,
-    Save,
     Inspect,
 }
 
@@ -187,19 +182,7 @@ pub(super) fn initial_fields(kind: Kind) -> Fields {
         Fields::new()
     }
 }
-pub(super) fn items(value: &str) -> Vec<String> {
-    value
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-pub(super) fn build(
-    kind: Kind,
-    fields: &Fields,
-    operation: &str,
-    principal: &str,
-) -> Result<Request, InputError> {
+pub(super) fn build(kind: Kind, fields: &Fields, operation: &str) -> Result<Request, InputError> {
     let value = |key: &str| fields.get(key).map(String::as_str).unwrap_or_default();
     let required = |key: &'static str| {
         let v = value(key);
@@ -270,99 +253,6 @@ pub(super) fn build(
                 operation: operation.into(),
             },
         },
-        Kind::Branch => {
-            let path = path("/api/repositories", "repository", "branches")?;
-            let source_commit_id = required("commit")?;
-            let name = required("name")?;
-            Request {
-                method: "POST",
-                path,
-                body: Some(
-                    json!({"source_commit_id":source_commit_id,"name":name,"operation_id":operation}),
-                ),
-                contract: Contract::Branch {
-                    operation: operation.into(),
-                    name: name.into(),
-                    source_commit_id: source_commit_id.into(),
-                },
-            }
-        }
-        Kind::Link => {
-            let history_tree_id = required("history")?;
-            let source_branch_id = required("source_branch")?;
-            let source_commit_id = required("source_commit")?;
-            let target_branch_id = required("target_branch")?;
-            let target_commit_id = required("target_commit")?;
-            Request {
-                method: "POST",
-                path: format!(
-                    "/api/history-trees/{}/merge-links",
-                    segment(history_tree_id)
-                ),
-                body: Some(
-                    json!({"source_branch_id":source_branch_id,"source_commit_id":source_commit_id,"target_branch_id":target_branch_id,"target_commit_id":target_commit_id,"operation_id":operation}),
-                ),
-                contract: Contract::MergeLink {
-                    operation: operation.into(),
-                    history_tree_id: history_tree_id.into(),
-                    source_branch_id: source_branch_id.into(),
-                    source_commit_id: source_commit_id.into(),
-                    target_branch_id: target_branch_id.into(),
-                    target_commit_id: target_commit_id.into(),
-                },
-            }
-        }
-        Kind::Purge => {
-            let versions = items(required("versions")?);
-            let history_tree_id = required("history")?;
-            Request {
-                method: "POST",
-                path: format!(
-                    "/api/history-trees/{}/purge-plans",
-                    segment(history_tree_id)
-                ),
-                body: Some(json!({"version_ids":versions})),
-                contract: Contract::Preview {
-                    kind: PreviewKind::Purge,
-                    history_tree_id: history_tree_id.into(),
-                    principal: principal.into(),
-                },
-            }
-        }
-        Kind::Split => {
-            let history_tree_id = required("history")?;
-            Request {
-                method: "POST",
-                path: format!(
-                    "/api/history-trees/{}/split-plans",
-                    segment(history_tree_id)
-                ),
-                body: Some(json!({"cut_commit_id":required("commit")?})),
-                contract: Contract::Preview {
-                    kind: PreviewKind::Split,
-                    history_tree_id: history_tree_id.into(),
-                    principal: principal.into(),
-                },
-            }
-        }
-        Kind::Save => {
-            let history_tree_id = required("history")?;
-            Request {
-                method: "POST",
-                path: format!(
-                    "/api/history-trees/{}/historical-save-plans",
-                    segment(history_tree_id)
-                ),
-                body: Some(
-                    json!({"source_commit_id":required("commit")?,"name":required("name")?,"workspace_id":if value("workspace").is_empty(){None}else{Some(value("workspace"))},"primary_slot_id":if value("slot").is_empty(){None}else{Some(value("slot"))},"target_copies":if value("copies").is_empty(){None}else{Some(copies()?)}}),
-                ),
-                contract: Contract::Preview {
-                    kind: PreviewKind::HistoricalSave,
-                    history_tree_id: history_tree_id.into(),
-                    principal: principal.into(),
-                },
-            }
-        }
         Kind::Inspect => return Err(InputError::Inspect),
     })
 }

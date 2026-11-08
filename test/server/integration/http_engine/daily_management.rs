@@ -1,4 +1,5 @@
-//! Drive real HTTP operations with the exact request builders used by Web forms.
+//! Exercise retained Web configuration and plan review against real HTTP operations.
+//! Legacy plan creation remains backend API coverage, not a Web form.
 use super::*;
 #[path = "../../../../src/web/src/admin/request.rs"]
 mod request;
@@ -35,7 +36,7 @@ fn plan_fixture(id: &str, digest: &str, state: &str) -> response::ValidatedPlan 
     plan
 }
 async fn apply(app: &Router, token: &str, kind: Kind, fields: &request::Fields) -> Applied {
-    let request = request::build(kind, fields, &new_id("op").unwrap(), "admin").unwrap();
+    let request = request::build(kind, fields, &new_id("op").unwrap()).unwrap();
     apply_request(app, token, request).await
 }
 async fn apply_request(app: &Router, token: &str, request: request::Request) -> Applied {
@@ -77,7 +78,7 @@ async fn apply_request(app: &Router, token: &str, request: request::Request) -> 
     }
 }
 #[tokio::test]
-async fn web_daily_forms_execute_real_management_operations() {
+async fn retained_web_forms_and_backend_legacy_operations_execute_real_http() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let admin = login(&app, "admin", "integration-test-password").await;
@@ -93,7 +94,7 @@ async fn web_daily_forms_execute_real_management_operations() {
     let history = repo.value["history_tree_id"].as_str().unwrap();
     // Retired account/grant/SMB binding forms are not representable by Kind.
     assert!(matches!(
-        request::build(Kind::Inspect, &fields(&[]), &new_id("op").unwrap(), "admin"),
+        request::build(Kind::Inspect, &fields(&[]), &new_id("op").unwrap()),
         Err(InputError::Inspect)
     ));
     let session = login(&app, "admin", "integration-test-password").await;
@@ -123,7 +124,7 @@ async fn web_daily_forms_execute_real_management_operations() {
             ("generation", "0"),
         ]);
         apply(&app, &admin, kind, &f).await;
-        let request = request::build(kind, &f, &new_id("op").unwrap(), "admin").unwrap();
+        let request = request::build(kind, &f, &new_id("op").unwrap()).unwrap();
         assert_eq!(
             send(
                 &app,
@@ -146,53 +147,55 @@ async fn web_daily_forms_execute_real_management_operations() {
     )
     .await;
     let commit = current["head_commit_id"].as_str().unwrap();
-    let created = apply(
+    let created = success(
         &app,
         &admin,
-        Kind::Branch,
-        &fields(&[
-            ("repository", id),
-            ("commit", commit),
-            ("name", "Web branch"),
-        ]),
+        "POST",
+        &format!("/api/repositories/{id}/branches"),
+        Some(json!({
+            "source_commit_id": commit, "name": "API branch", "operation_id": new_id("op").unwrap()
+        })),
     )
     .await;
-    apply(
+    assert_eq!(created["name"], "API branch");
+    assert_eq!(created["fork_commit_id"], commit);
+    assert_eq!(created["history_tree_id"], history);
+    let link = success(
         &app,
         &admin,
-        Kind::Link,
-        &fields(&[
-            ("history", history),
-            ("source_branch", branch),
-            ("source_commit", commit),
-            (
-                "target_branch",
-                created.value["branch_id"].as_str().unwrap(),
-            ),
-            ("target_commit", commit),
-        ]),
+        "POST",
+        &format!("/api/history-trees/{history}/merge-links"),
+        Some(json!({
+            "source_branch_id": branch, "source_commit_id": commit,
+            "target_branch_id": created["branch_id"].as_str().unwrap(), "target_commit_id": commit,
+            "operation_id": new_id("op").unwrap()
+        })),
     )
     .await;
+    assert_eq!(link["history_tree_id"], history);
+    assert_eq!(link["source_branch_id"], branch);
+    assert_eq!(link["source_commit_id"], commit);
+    assert_eq!(link["target_branch_id"], created["branch_id"]);
+    assert_eq!(link["target_commit_id"], commit);
     for publish in [false, true] {
-        let plan = apply(
+        let created = success(
             &app,
             &admin,
-            Kind::Save,
-            &fields(&[
-                ("history", history),
-                ("commit", commit),
-                (
-                    "name",
-                    if publish {
-                        "Published snapshot"
-                    } else {
-                        "Cancelled snapshot"
-                    },
-                ),
-            ]),
+            "POST",
+            &format!("/api/history-trees/{history}/historical-save-plans"),
+            Some(json!({
+                "source_commit_id": commit,
+                "name": if publish { "Published snapshot" } else { "Cancelled snapshot" },
+                "workspace_id": null, "primary_slot_id": null, "target_copies": null
+            })),
         )
         .await;
-        let plan = plan.into_plan();
+        let query = request::query(
+            request::QueryKind::Plan,
+            &fields(&[("id", created["plan_id"].as_str().unwrap())]),
+        )
+        .unwrap();
+        let plan = apply_request(&app, &admin, query).await.into_plan();
         assert!(request::plan_action(Some(&plan), true, false, &new_id("op").unwrap()).is_err());
         let request =
             request::plan_action(Some(&plan), publish, true, &new_id("op").unwrap()).unwrap();
@@ -209,8 +212,7 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
         request::build(
             Kind::Repository,
             &fields(&[("name", "test"), ("slot", "P01"), ("copies", "0")]),
-            "op_test",
-            "admin"
+            "op_test"
         ),
         Err(InputError::ZeroCopies)
     ));
@@ -223,7 +225,6 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
             ("generation", "-1"),
         ]),
         "op_test",
-        "admin",
     )
     .unwrap_err();
     assert!(matches!(error, InputError::Generation(_)));
@@ -242,26 +243,11 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
         )
         .is_err()
     );
-    for (kind, key, value) in [
-        (Kind::Purge, "versions", "v1,v2"),
-        (Kind::Split, "commit", "c1"),
-    ] {
-        let request = request::build(
-            kind,
-            &fields(&[("history", "h"), (key, value)]),
-            "op_test",
-            "admin",
-        )
-        .unwrap();
-        assert!(request.path.ends_with("-plans"));
-        assert!(request.body.unwrap().get("operation_id").is_none());
-        assert!(!request.path.ends_with("/commit"));
-    }
 }
 
 #[tokio::test]
-async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() {
-    for kind in [Kind::Purge, Kind::Split] {
+async fn backend_purge_and_split_plans_support_exact_web_review() {
+    for kind in ["purge", "split"] {
         let root = tempfile::tempdir().unwrap();
         let system = root.path().join("system");
         let mut engine = Engine::initialize(
@@ -318,16 +304,29 @@ async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() 
             .unwrap();
         let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
         let admin = login(&app, "admin", "integration-test-password").await;
-        let input = fields(&[
-            ("history", &repo.history_tree_id),
-            ("versions", &first),
-            ("commit", &cut),
-        ]);
-        let cancel = apply(&app, &admin, kind, &input).await.into_plan();
+        let path = format!("/api/history-trees/{}/{}-plans", repo.history_tree_id, kind);
+        let input = if kind == "purge" {
+            json!({"version_ids": [first]})
+        } else {
+            json!({"cut_commit_id": cut})
+        };
+        let created = success(&app, &admin, "POST", &path, Some(input.clone())).await;
+        let query = request::query(
+            request::QueryKind::Plan,
+            &fields(&[("id", created["plan_id"].as_str().unwrap())]),
+        )
+        .unwrap();
+        let cancel = apply_request(&app, &admin, query).await.into_plan();
         let request =
             request::plan_action(Some(&cancel), false, false, &new_id("op").unwrap()).unwrap();
         apply_request(&app, &admin, request).await;
-        let plan = apply(&app, &admin, kind, &input).await.into_plan();
+        let created = success(&app, &admin, "POST", &path, Some(input)).await;
+        let query = request::query(
+            request::QueryKind::Plan,
+            &fields(&[("id", created["plan_id"].as_str().unwrap())]),
+        )
+        .unwrap();
+        let plan = apply_request(&app, &admin, query).await.into_plan();
         let mut request =
             request::plan_action(Some(&plan), true, true, &new_id("op").unwrap()).unwrap();
         request.body.as_mut().unwrap()["plan_digest"] = "wrong-review-digest".into();

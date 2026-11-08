@@ -4,30 +4,30 @@ fn new_repository_defaults_to_one_actual_copy_and_preserves_explicit_choices() {
     let mut fields = initial_fields(Kind::Repository);
     fields.insert("name".into(), "one disk".into());
     fields.insert("slot".into(), "P01".into());
-    let request = build(Kind::Repository, &fields, "operation", "admin").unwrap();
+    let request = build(Kind::Repository, &fields, "operation").unwrap();
     let body = request.body.unwrap();
     assert_eq!(request.path, "/api/repositories");
     assert_eq!(body["target_copies"], 1);
     fields.insert("copies".into(), "3".into());
     assert_eq!(
-        build(Kind::Repository, &fields, "operation", "admin")
+        build(Kind::Repository, &fields, "operation")
             .unwrap()
             .body
             .unwrap()["target_copies"],
         3
     );
     fields.insert("copies".into(), "0".into());
-    assert!(build(Kind::Repository, &fields, "operation", "admin").is_err());
+    assert!(build(Kind::Repository, &fields, "operation").is_err());
     assert_eq!(initial_fields(Kind::Policy)["copies"], "1");
     assert!(
-        initial_fields(Kind::Save).is_empty(),
-        "historical saves retain inherited policy unless explicitly overridden"
+        initial_fields(Kind::Rule).is_empty(),
+        "placement rules do not require a copy count"
     );
 }
 
 #[test]
 fn inspection_cannot_build_a_mutation_request() {
-    assert!(build(Kind::Inspect, &Fields::new(), "operation", "admin").is_err());
+    assert!(build(Kind::Inspect, &Fields::new(), "operation").is_err());
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn invalid_numeric_fields_retain_their_parser_source() {
     .into_iter()
     .collect();
     assert!(
-        build(Kind::Repository, &fields, "operation", "admin")
+        build(Kind::Repository, &fields, "operation")
             .unwrap_err()
             .source()
             .is_some()
@@ -55,7 +55,7 @@ fn invalid_numeric_fields_retain_their_parser_source() {
     .into_iter()
     .collect();
     assert!(
-        build(Kind::Rule, &fields, "operation", "admin")
+        build(Kind::Rule, &fields, "operation")
             .unwrap_err()
             .source()
             .is_some()
@@ -122,96 +122,15 @@ fn each_form_constructs_the_exact_request_and_response_context_together() {
                 operation: operation.into(),
             },
         ),
-        (
-            Kind::Branch,
-            "POST",
-            "/api/repositories/repo%2F%21/branches",
-            json!({"source_commit_id":"source","name":"Name","operation_id":operation}),
-            Contract::Branch {
-                operation: operation.into(),
-                name: "Name".into(),
-                source_commit_id: "source".into(),
-            },
-        ),
-        (
-            Kind::Link,
-            "POST",
-            "/api/history-trees/history%2F%21/merge-links",
-            json!({"source_branch_id":"sb","source_commit_id":"sc","target_branch_id":"tb","target_commit_id":"tc","operation_id":operation}),
-            Contract::MergeLink {
-                operation: operation.into(),
-                history_tree_id: "history/!".into(),
-                source_branch_id: "sb".into(),
-                source_commit_id: "sc".into(),
-                target_branch_id: "tb".into(),
-                target_commit_id: "tc".into(),
-            },
-        ),
-        (
-            Kind::Purge,
-            "POST",
-            "/api/history-trees/history%2F%21/purge-plans",
-            json!({"version_ids":["a","b","c"]}),
-            Contract::Preview {
-                kind: PreviewKind::Purge,
-                history_tree_id: "history/!".into(),
-                principal: "admin".into(),
-            },
-        ),
-        (
-            Kind::Split,
-            "POST",
-            "/api/history-trees/history%2F%21/split-plans",
-            json!({"cut_commit_id":"source"}),
-            Contract::Preview {
-                kind: PreviewKind::Split,
-                history_tree_id: "history/!".into(),
-                principal: "admin".into(),
-            },
-        ),
-        (
-            Kind::Save,
-            "POST",
-            "/api/history-trees/history%2F%21/historical-save-plans",
-            json!({"source_commit_id":"source","name":"Name","workspace_id":"workspace","primary_slot_id":"P01","target_copies":2}),
-            Contract::Preview {
-                kind: PreviewKind::HistoricalSave,
-                history_tree_id: "history/!".into(),
-                principal: "admin".into(),
-            },
-        ),
     ] {
-        let request = build(kind, &fields, operation, "admin").unwrap();
+        let request = build(kind, &fields, operation).unwrap();
         assert_eq!(request.method, method, "{kind:?}");
         assert_eq!(request.path, path, "{kind:?}");
         assert_eq!(request.body, Some(body), "{kind:?}");
         assert_eq!(request.contract, contract, "{kind:?}");
         assert!(request.contract.is_write());
-        assert_eq!(
-            request.contract.mutation_operation(),
-            match kind {
-                Kind::Purge | Kind::Split | Kind::Save => None,
-                Kind::Repository | Kind::Policy | Kind::Rule | Kind::Branch | Kind::Link =>
-                    Some(operation),
-                Kind::Inspect => unreachable!(),
-            }
-        );
+        assert_eq!(request.contract.mutation_operation(), Some(operation));
     }
-}
-
-#[test]
-fn optional_historical_save_overrides_remain_explicit_nulls() {
-    let mut fields = all_fields();
-    for key in ["workspace", "slot", "copies"] {
-        fields.remove(key);
-    }
-    let request = build(Kind::Save, &fields, "original", "admin").unwrap();
-    assert_eq!(
-        request.body,
-        Some(
-            json!({"source_commit_id":"source","name":"Name","workspace_id":null,"primary_slot_id":null,"target_copies":null})
-        )
-    );
 }
 
 #[test]

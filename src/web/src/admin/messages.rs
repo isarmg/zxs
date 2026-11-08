@@ -1,20 +1,8 @@
 //! Stable, finite message keys for the administration page only.
 //! Protocol identifiers and remote diagnostics are not translated.
-use super::request::{Kind, QueryId};
+use super::request::QueryId;
 use std::borrow::Cow;
 use web_interface::i18n::t;
-
-pub(super) const ACTIONS: [(Kind, Message<'static>); 9] = [
-    (Kind::Repository, Message::RepositoryAction),
-    (Kind::Policy, Message::PolicyAction),
-    (Kind::Rule, Message::RuleAction),
-    (Kind::Branch, Message::BranchAction),
-    (Kind::Link, Message::LinkAction),
-    (Kind::Purge, Message::PurgeAction),
-    (Kind::Split, Message::SplitAction),
-    (Kind::Save, Message::SaveAction),
-    (Kind::Inspect, Message::InspectAction),
-];
 
 pub(super) fn query_label(id: QueryId) -> Message<'static> {
     match id {
@@ -36,7 +24,6 @@ pub(super) fn query_label(id: QueryId) -> Message<'static> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Message<'a> {
-    Title,
     UnknownOutcome,
     ResponseUnconfirmed,
     CheckOriginalOperation,
@@ -45,11 +32,6 @@ pub(super) enum Message<'a> {
     RepositoryAction,
     PolicyAction,
     RuleAction,
-    BranchAction,
-    LinkAction,
-    PurgeAction,
-    SplitAction,
-    SaveAction,
     InspectAction,
     Name,
     PrimarySlot,
@@ -59,16 +41,6 @@ pub(super) enum Message<'a> {
     PathPrefix,
     Generation,
     RuleId,
-    SourceCommit,
-    HistoryId,
-    SourceBranch,
-    TargetBranch,
-    TargetCommit,
-    VersionIds,
-    CutCommit,
-    Workspace,
-    OptionalSlot,
-    OptionalCopies,
     InspectionId,
     Submit,
     PlanReview,
@@ -99,7 +71,6 @@ pub(super) enum Message<'a> {
 impl Message<'_> {
     fn translations(self) -> (Cow<'static, str>, Cow<'static, str>) {
         match self {
-            Self::Title => ("日常管理".into(), "Daily administration".into()),
             Self::ResponseUnconfirmed => ("响应未能确认所请求的操作。重试前请检查原操作。".into(), "The response did not confirm the requested action. Inspect the original operation before retrying.".into()),
             Self::UnknownOutcome => ("结果未确认，禁止重复修改。请查询原操作结果，不要改用新操作 ID 重发；无法查询时请在服务器本地核实。".into(), "Outcome unknown; do not repeat mutations. Check the original operation instead of resending under a new ID. Verify locally on the server if its outcome cannot be queried.".into()),
             Self::CheckOriginalOperation => ("查询原操作".into(), "Check original operation".into()),
@@ -108,11 +79,6 @@ impl Message<'_> {
             Self::RepositoryAction => ("仓库".into(), "Repository".into()),
             Self::PolicyAction => ("路径副本规则".into(), "Path copy rule".into()),
             Self::RuleAction => ("主盘规则".into(), "Placement rule".into()),
-            Self::BranchAction => ("历史分支".into(), "History branch".into()),
-            Self::LinkAction => ("合并连线".into(), "Merge link".into()),
-            Self::PurgeAction => ("清理预览".into(), "Purge preview".into()),
-            Self::SplitAction => ("拆分预览".into(), "Split preview".into()),
-            Self::SaveAction => ("历史保存预览".into(), "Historical save preview".into()),
             Self::InspectAction => ("检查 / 查询".into(), "Inspect / query".into()),
             Self::Name => ("名称".into(), "Name".into()),
             Self::PrimarySlot => ("主盘槽位".into(), "Primary slot".into()),
@@ -122,18 +88,8 @@ impl Message<'_> {
             Self::PathPrefix => ("路径前缀".into(), "Path prefix".into()),
             Self::Generation => ("预期代数（新建填 0）".into(), "Expected generation (0 for new)".into()),
             Self::RuleId => ("规则 ID".into(), "Rule ID".into()),
-            Self::SourceCommit => ("来源提交".into(), "Source commit".into()),
-            Self::HistoryId => ("历史树 ID".into(), "History ID".into()),
-            Self::SourceBranch => ("来源分支".into(), "Source branch".into()),
-            Self::TargetBranch => ("目标分支".into(), "Target branch".into()),
-            Self::TargetCommit => ("目标提交".into(), "Target commit".into()),
-            Self::VersionIds => ("版本 ID（逗号分隔）".into(), "Version IDs (comma separated)".into()),
-            Self::CutCommit => ("切分提交 ID".into(), "Cut commit ID".into()),
-            Self::Workspace => ("现有工作区 ID（可选）".into(), "Existing workspace ID (optional)".into()),
-            Self::OptionalSlot => ("主盘槽位（可选）".into(), "Primary slot (optional)".into()),
-            Self::OptionalCopies => ("份数（可选）".into(), "Copies (optional)".into()),
             Self::InspectionId => ("操作 / 计划 / 策略 / 拓扑 ID".into(), "Operation / plan / policy / topology ID".into()),
-            Self::Submit => ("保存配置 / 创建预览".into(), "Save configuration / Create preview".into()),
+            Self::Submit => ("保存配置".into(), "Save configuration".into()),
             Self::PlanReview => ("计划预览".into(), "Plan review".into()),
             Self::CommitPlan => ("提交所示计划".into(), "Commit reviewed plan".into()),
             Self::CancelPlan => ("取消计划".into(), "Cancel plan".into()),

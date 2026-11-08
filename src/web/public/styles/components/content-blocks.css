@@ -62,3 +62,6 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
 @media (prefers-reduced-motion: reduce) {
   .zxs-header-refresh[aria-busy=true] > .zxs-refresh-icon { animation: none; }
 }
+
+/* Diagnostic JSON must scroll inside its panel, not widen mobile navigation. */
+.zxs-admin-result { min-width: 0; max-width: 100%; overflow: auto; }

@@ -13,6 +13,9 @@ fn management_notices_survive_page_changes_only_when_attention_is_needed() {
         Page::Status,
         Page::History,
         Page::Account,
+        Page::Admin,
+        Page::Repositories,
+        Page::Rules,
     ] {
         state.page = page;
         for storage in [
@@ -37,11 +40,11 @@ fn management_notices_survive_page_changes_only_when_attention_is_needed() {
         assert!(management_notice_visible(&state));
         state.management.retry_unknown = false;
     }
-    state.page = Page::Admin;
+    state.page = Page::Diagnostics;
     state.management.storage = management::Storage::Unavailable;
     assert!(
         !management_notice_visible(&state),
-        "Administration owns its recovery section"
+        "Recovery and diagnostics owns its recovery section"
     );
 }
 
@@ -644,4 +647,31 @@ fn password_form_stops_showing_busy_when_an_unknown_result_keeps_submission_disa
     state.session_transition = SessionTransition::LoggingOut;
     assert!(!state.password_pending());
     assert!(state.password_change_blocked());
+}
+
+#[test]
+fn administration_navigation_has_distinct_responsibilities() {
+    assert_eq!(
+        administration_pages().map(|(page, _)| page),
+        [
+            Page::Admin,
+            Page::Repositories,
+            Page::Rules,
+            Page::Diagnostics
+        ]
+    );
+}
+
+#[test]
+fn current_directory_details_can_refresh_without_a_selected_file() {
+    let mut state = State {
+        authenticated: true,
+        page: Page::Details,
+        ..Default::default()
+    };
+    assert!(header_refresh_disabled(&state));
+    state.files.slot = "P01".into();
+    assert!(!header_refresh_disabled(&state));
+    state.files.loading = true;
+    assert!(header_refresh_disabled(&state));
 }

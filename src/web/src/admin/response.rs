@@ -1,26 +1,7 @@
 //! Validate the endpoint's actual success contract before releasing write fences.
 //! Domain-returning endpoints are not operation receipts.
 use json_codec::Value;
-use storage_contract::{
-    Branch, MergeLink, OperationResult, Plan, PlanState, Repository,
-    client_protocol::OperationStatus,
-};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PreviewKind {
-    Purge,
-    Split,
-    HistoricalSave,
-}
-impl PreviewKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Purge => "purge",
-            Self::Split => "split",
-            Self::HistoricalSave => "historical_save",
-        }
-    }
-}
+use storage_contract::{OperationResult, Plan, Repository, client_protocol::OperationStatus};
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum ResponseError {
@@ -86,24 +67,6 @@ pub(super) enum Contract {
         primary_slot_id: String,
         target_copies: u32,
     },
-    Branch {
-        operation: String,
-        name: String,
-        source_commit_id: String,
-    },
-    MergeLink {
-        operation: String,
-        history_tree_id: String,
-        source_branch_id: String,
-        source_commit_id: String,
-        target_branch_id: String,
-        target_commit_id: String,
-    },
-    Preview {
-        kind: PreviewKind,
-        history_tree_id: String,
-        principal: String,
-    },
     PlanReceipt {
         operation: String,
     },
@@ -118,12 +81,9 @@ impl Contract {
             | Self::Operation { .. }
             | Self::OperationOutcome { .. }
             | Self::Plan { .. } => false,
-            Self::Repository { .. }
-            | Self::Branch { .. }
-            | Self::MergeLink { .. }
-            | Self::Preview { .. }
-            | Self::PlanReceipt { .. }
-            | Self::MutationReceipt { .. } => true,
+            Self::Repository { .. } | Self::PlanReceipt { .. } | Self::MutationReceipt { .. } => {
+                true
+            }
         }
     }
 
@@ -132,11 +92,8 @@ impl Contract {
             Self::Inspect
             | Self::Operation { .. }
             | Self::OperationOutcome { .. }
-            | Self::Plan { .. }
-            | Self::Preview { .. } => None,
+            | Self::Plan { .. } => None,
             Self::Repository { operation, .. }
-            | Self::Branch { operation, .. }
-            | Self::MergeLink { operation, .. }
             | Self::PlanReceipt { operation }
             | Self::MutationReceipt { operation } => Some(operation),
         }
@@ -176,23 +133,6 @@ impl Contract {
                 )?;
                 Action::Plan(ValidatedPlan(plan))
             }
-            Self::Preview {
-                kind,
-                history_tree_id,
-                principal,
-            } => {
-                let plan: Plan = decode(value)?;
-                require(
-                    !plan.plan_id.is_empty()
-                        && !plan.digest.is_empty()
-                        && plan.kind == kind.as_str()
-                        && plan.state == PlanState::Ready
-                        && plan.principal == *principal
-                        && plan.input["history_tree_id"].as_str() == Some(history_tree_id),
-                    "preview identity, principal, history, state and digest",
-                )?;
-                Action::Plan(ValidatedPlan(plan))
-            }
             Self::Repository {
                 operation,
                 name,
@@ -208,46 +148,6 @@ impl Contract {
                         && repository.primary_slot_id == *primary_slot_id
                         && repository.target_copies == *target_copies,
                     "repository identity and requested configuration",
-                )?;
-                Action::Mutation {
-                    operation: operation.clone(),
-                }
-            }
-            Self::Branch {
-                operation,
-                name,
-                source_commit_id,
-            } => {
-                let branch = branch_creation(value)?;
-                require(
-                    !branch.branch_id.is_empty()
-                        && !branch.history_tree_id.is_empty()
-                        && branch.name == *name
-                        && branch.fork_commit_id == *source_commit_id,
-                    "branch identity and source",
-                )?;
-                Action::Mutation {
-                    operation: operation.clone(),
-                }
-            }
-            Self::MergeLink {
-                operation,
-                history_tree_id,
-                source_branch_id,
-                source_commit_id,
-                target_branch_id,
-                target_commit_id,
-            } => {
-                let link: MergeLink = decode(value)?;
-                require(
-                    !link.merge_link_id.is_empty()
-                        && link.operation_id.to_string() == *operation
-                        && link.history_tree_id == *history_tree_id
-                        && link.source_branch_id == *source_branch_id
-                        && link.source_commit_id == *source_commit_id
-                        && link.target_branch_id == *target_branch_id
-                        && link.target_commit_id == *target_commit_id,
-                    "merge link identities",
                 )?;
                 Action::Mutation {
                     operation: operation.clone(),
@@ -290,26 +190,6 @@ impl Contract {
         Ok(ValidatedAdminResponse { display, action })
     }
 }
-fn branch_creation(mut domain: Value) -> Result<Branch, ResponseError> {
-    // The public content projection is separate from the strict domain record.
-    let fields = domain
-        .as_object_mut()
-        .ok_or(ResponseError::Contract("branch object"))?;
-    let materialized = fields.remove("materialized");
-    let inherited = fields.remove("inherited");
-    let content_state = fields.remove("content_state");
-    let branch: Branch = decode(domain)?;
-    let pending = !branch.pending_file_versions.is_empty();
-    require(
-        materialized.as_ref().and_then(Value::as_bool) == Some(!pending)
-            && inherited.as_ref().and_then(Value::as_bool) == Some(pending)
-            && content_state.as_ref().and_then(Value::as_str)
-                == Some(if pending { "PENDING" } else { "LIVE" }),
-        "branch content projection",
-    )?;
-    Ok(branch)
-}
-
 #[cfg(test)]
 #[path = "../../../../test/web/unit/admin/response_tests.rs"]
 mod tests;

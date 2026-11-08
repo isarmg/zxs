@@ -8,7 +8,6 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
             "响应未能确认所请求的操作。重试前请检查原操作。",
             "The response did not confirm the requested action. Inspect the original operation before retrying.",
         ),
-        (Message::Title, "日常管理", "Daily administration"),
         (
             Message::UnknownOutcome,
             "结果未确认，禁止重复修改。请查询原操作结果，不要改用新操作 ID 重发；无法查询时请在服务器本地核实。",
@@ -32,15 +31,6 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
         (Message::RepositoryAction, "仓库", "Repository"),
         (Message::PolicyAction, "路径副本规则", "Path copy rule"),
         (Message::RuleAction, "主盘规则", "Placement rule"),
-        (Message::BranchAction, "历史分支", "History branch"),
-        (Message::LinkAction, "合并连线", "Merge link"),
-        (Message::PurgeAction, "清理预览", "Purge preview"),
-        (Message::SplitAction, "拆分预览", "Split preview"),
-        (
-            Message::SaveAction,
-            "历史保存预览",
-            "Historical save preview",
-        ),
         (Message::InspectAction, "检查 / 查询", "Inspect / query"),
         (Message::Name, "名称", "Name"),
         (Message::PrimarySlot, "主盘槽位", "Primary slot"),
@@ -58,38 +48,12 @@ fn every_admin_message_has_exact_chinese_and_english_copy() {
             "Expected generation (0 for new)",
         ),
         (Message::RuleId, "规则 ID", "Rule ID"),
-        (Message::SourceCommit, "来源提交", "Source commit"),
-        (Message::HistoryId, "历史树 ID", "History ID"),
-        (Message::SourceBranch, "来源分支", "Source branch"),
-        (Message::TargetBranch, "目标分支", "Target branch"),
-        (Message::TargetCommit, "目标提交", "Target commit"),
-        (
-            Message::VersionIds,
-            "版本 ID（逗号分隔）",
-            "Version IDs (comma separated)",
-        ),
-        (Message::CutCommit, "切分提交 ID", "Cut commit ID"),
-        (
-            Message::Workspace,
-            "现有工作区 ID（可选）",
-            "Existing workspace ID (optional)",
-        ),
-        (
-            Message::OptionalSlot,
-            "主盘槽位（可选）",
-            "Primary slot (optional)",
-        ),
-        (Message::OptionalCopies, "份数（可选）", "Copies (optional)"),
         (
             Message::InspectionId,
             "操作 / 计划 / 策略 / 拓扑 ID",
             "Operation / plan / policy / topology ID",
         ),
-        (
-            Message::Submit,
-            "保存配置 / 创建预览",
-            "Save configuration / Create preview",
-        ),
+        (Message::Submit, "保存配置", "Save configuration"),
         (Message::PlanReview, "计划预览", "Plan review"),
         (Message::CommitPlan, "提交所示计划", "Commit reviewed plan"),
         (Message::CancelPlan, "取消计划", "Cancel plan"),
@@ -186,23 +150,14 @@ fn localized_input_feedback_preserves_typed_errors_and_sources() {
 
 #[test]
 fn actual_action_and_query_buttons_use_distinct_localized_keys() {
-    use super::super::request::{Kind, QUERIES};
-    assert_eq!(
-        ACTIONS.map(|(kind, _)| kind),
-        [
-            Kind::Repository,
-            Kind::Policy,
-            Kind::Rule,
-            Kind::Branch,
-            Kind::Link,
-            Kind::Purge,
-            Kind::Split,
-            Kind::Save,
-            Kind::Inspect,
-        ]
-    );
+    use super::super::request::QUERIES;
     for keys in [
-        ACTIONS.map(|(_, key)| key).to_vec(),
+        vec![
+            Message::RepositoryAction,
+            Message::PolicyAction,
+            Message::RuleAction,
+            Message::InspectAction,
+        ],
         QUERIES.map(|(id, _)| query_label(id)).to_vec(),
     ] {
         for (index, key) in keys.iter().enumerate() {
@@ -229,7 +184,12 @@ fn shared_default_view_has_no_separate_web_binding_controls() {
         assert!(!source.contains("smb-binding"));
         assert!(!source.contains("Kind::Smb"));
     }
-    for (_, key) in ACTIONS {
+    for key in [
+        Message::RepositoryAction,
+        Message::PolicyAction,
+        Message::RuleAction,
+        Message::InspectAction,
+    ] {
         assert!(!key.translations().1.contains("SMB binding"));
     }
 }

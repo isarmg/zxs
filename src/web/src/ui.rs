@@ -17,6 +17,9 @@ pub(crate) enum Page {
     Files,
     Details,
     Admin,
+    Repositories,
+    Rules,
+    Diagnostics,
     Status,
     History,
     Account,
@@ -272,6 +275,7 @@ pub(crate) fn navigate(state: RwSignal<State>, page: Page) {
             management::load(state);
             admin::load_disks(state);
         }
+        Page::Repositories | Page::Rules | Page::Diagnostics => management::load(state),
         Page::Account => crate::smb_account::load(state),
         Page::Details | Page::Files => {}
     }
@@ -285,7 +289,8 @@ fn header_refreshing(state: &State) -> bool {
         Page::Status => monitor::refreshing(state),
         Page::History => state.activity.loading,
         Page::Admin => admin::disks_refreshing(state),
-        Page::Account => false,
+        Page::Diagnostics => state.management.loading,
+        Page::Repositories | Page::Rules | Page::Account => false,
     }
 }
 
@@ -294,16 +299,34 @@ fn header_refresh_disabled(state: &State) -> bool {
         // A listing refresh may replace a pending selected-file history read.
         // Busy presentation must not remove that cancellation path.
         Page::Files => state.files.loading || state.files.loading_disks,
-        Page::Details => header_refreshing(state) || state.files.selected.is_none(),
+        Page::Details => {
+            header_refreshing(state)
+                || (state.files.selected.is_none() && state.files.slot.is_empty())
+        }
         Page::Status => monitor::refreshing(state) || !state.session_active(),
         Page::History => state.activity.loading,
         Page::Admin => !admin::can_load_disks(state),
+        Page::Diagnostics => {
+            !state.session_active() || state.management.loading || state.management.retrying
+        }
         _ => true,
     }
 }
 
 fn management_notice_visible(state: &State) -> bool {
-    state.page != Page::Admin && state.management.needs_attention()
+    state.page != Page::Diagnostics && state.management.needs_attention()
+}
+
+fn administration_pages() -> [(Page, String); 4] {
+    [
+        (Page::Admin, t("磁盘与接入", "Disks and admission")),
+        (Page::Repositories, t("仓库", "Repositories")),
+        (Page::Rules, t("备份与放置", "Backup and placement")),
+        (
+            Page::Diagnostics,
+            t("恢复与检查", "Recovery and diagnostics"),
+        ),
+    ]
 }
 
 fn workspace(state: RwSignal<State>) -> impl IntoView {
@@ -313,15 +336,17 @@ fn workspace(state: RwSignal<State>) -> impl IntoView {
             {[ (Page::Files,t("文件","Files")), (Page::Details,t("详情","Details")), (Page::Status,t("状态","Status")), (Page::History,t("历史记录","History")) ].into_iter().map(move |(page,title)|view! {
                 <button class="zxs-button" aria-current=move ||(state.with(|s|s.page==page)).then_some("page") on:click=move |_|navigate(state,page)>{title}</button>
             }).collect_view()}
-            <Show when=move ||state.with(|s|s.session_active())><button class="zxs-button" aria-current=move ||state.with(|s|(s.page==Page::Admin).then_some("page")) on:click=move |_|navigate(state,Page::Admin)>{t("系统管理","Administration")}</button></Show>
+            <Show when=move ||state.with(|s|s.session_active())>{administration_pages().into_iter().map(move |(page,title)|view!{
+                <button class="zxs-button" data-zxs-management-menu="true" aria-current=move ||state.with(|s|(s.page==page).then_some("page")) on:click=move |_|navigate(state,page)>{title}</button>
+            }).collect_view()}</Show>
         </HeaderNavigation>
         <HeaderActions><div class="zxs-header-tools zxs-flow">
-            <Show when=move ||state.with(|s|matches!(s.page,Page::Files|Page::Details|Page::Status|Page::History|Page::Admin))>
-                <button class="zxs-button zxs-header-refresh" type="button" aria-busy=move ||state.with(header_refreshing).to_string() aria-label=t("刷新","Refresh") title=t("刷新","Refresh") disabled=move ||state.with(header_refresh_disabled) on:click=move |_|match state.with_untracked(|s|s.page){Page::Files|Page::Details=>if state.with_untracked(|s|s.files.slot.is_empty()){files::load_disks(state)}else{files::load_entries(state)},Page::Status=>monitor::load(state),Page::History=>history::load(state),Page::Admin=>admin::load_disks(state),_=>{}}><FileIcon name="refresh"/></button>
+            <Show when=move ||state.with(|s|matches!(s.page,Page::Files|Page::Details|Page::Status|Page::History|Page::Admin|Page::Diagnostics))>
+                <button class="zxs-button zxs-header-refresh" type="button" aria-busy=move ||state.with(header_refreshing).to_string() aria-label=t("刷新","Refresh") title=t("刷新","Refresh") disabled=move ||state.with(header_refresh_disabled) on:click=move |_|match state.with_untracked(|s|s.page){Page::Files|Page::Details=>if state.with_untracked(|s|s.files.slot.is_empty()){files::load_disks(state)}else{files::load_entries(state)},Page::Status=>monitor::load(state),Page::History=>history::load(state),Page::Admin=>admin::load_disks(state),Page::Diagnostics=>management::load(state),_=>{}}><FileIcon name="refresh"/></button>
             </Show>
         </div></HeaderActions>
         <Show when=move ||state.with(management_notice_visible)>{management::summary(state)}</Show>
-        {move ||match page.get() { Page::Admin=>admin::view(state).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
+        {move ||match page.get() { Page::Admin=>admin::view(state).into_any(),Page::Repositories=>admin::console(state,admin::Section::Repositories).into_any(),Page::Rules=>admin::console(state,admin::Section::Rules).into_any(),Page::Diagnostics=>admin::console(state,admin::Section::Diagnostics).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
     }
 }
 fn session_view(state: &State) -> SessionView {

@@ -1,6 +1,8 @@
 //! Storage administration for the sole authenticated account.
 mod disks;
 mod messages;
+mod navigation;
+pub(crate) use navigation::Section;
 mod request;
 mod response;
 mod storage;
@@ -249,9 +251,8 @@ fn submit(state: RwSignal<State>) {
     let Some(operation) = crate::ui::operation_id(state) else {
         return;
     };
-    let request = state.with_untracked(|s| {
-        request::build(kind, &s.admin_console.fields, &operation, &s.principal)
-    });
+    let request =
+        state.with_untracked(|s| request::build(kind, &s.admin_console.fields, &operation));
     match request {
         Ok(request) => {
             state.update(|s| {
@@ -289,7 +290,9 @@ fn plan_action(state: RwSignal<State>, commit: bool) {
 }
 fn select(state: RwSignal<State>, kind: Kind) {
     if !allowed(state, false)
-        || state.with_untracked(|s| s.admin_console.uncertain_operation.is_some())
+        || state.with_untracked(|s| {
+            s.admin_console.uncertain_operation.is_some() || s.admin_console.kind == kind
+        })
     {
         return;
     }
@@ -317,32 +320,73 @@ fn query(state: RwSignal<State>, kind: QueryKind) {
     }
 }
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
-    view! {<section class="zxs-content-stack zxs-stack">
-    {crate::management::recovery(state)}
-    {storage::view(state)}
-    {disks::view(state)}
-    <section class="zxs-flow" aria-label=Message::Title.text()>
-    <nav class="zxs-flow">{messages::ACTIONS.into_iter().map(move |(kind,label)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy||s.admin_console.uncertain_operation.is_some()) on:click=move |_|select(state,kind)>{label.text()}</button>}).collect_view()}</nav>
-    <p role="alert">{move ||state.with(|s|s.admin_console.error.as_ref().map(Failure::display))}</p>
-    <Show when=move ||state.with(|s|s.admin_console.uncertain_operation.is_some())><p role="alert">{Message::UnknownOutcome.text()}</p><p>{move ||state.with(|s|s.admin_console.uncertain_operation.as_ref().map(|operation| operation.label()))}</p><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,false)||s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).is_none()) on:click=move |_|{let Some(id)=state.with_untracked(|s|s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).map(str::to_owned)) else {return};execute(state,request::operation_outcome(&id))}>{Message::CheckOriginalOperation.text()}</button></Show>
-    <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Policy)><p>{Message::PathRuleHelp.text()}</p></Show>
-    <div class="zxs-form-grid">{move ||{let kind=state.with(|s|s.admin_console.kind); let fields:Vec<(&'static str,Message<'static>)>=match kind{
-        Kind::Repository=>vec![("name",Message::Name),("slot",Message::PrimarySlot),("copies",Message::Copies)],
-        Kind::Policy=>vec![("id",Message::PathRuleId),("repository",Message::RepositoryId),("prefix",Message::PathPrefix),("copies",Message::Copies),("generation",Message::Generation)],
-        Kind::Rule=>vec![("id",Message::RuleId),("repository",Message::RepositoryId),("prefix",Message::PathPrefix),("slot",Message::PrimarySlot),("generation",Message::Generation)],
-        Kind::Branch=>vec![("repository",Message::RepositoryId),("commit",Message::SourceCommit),("name",Message::Name)],
-        Kind::Link=>vec![("history",Message::HistoryId),("source_branch",Message::SourceBranch),("source_commit",Message::SourceCommit),("target_branch",Message::TargetBranch),("target_commit",Message::TargetCommit)],
-        Kind::Purge=>vec![("history",Message::HistoryId),("versions",Message::VersionIds)],
-        Kind::Split=>vec![("history",Message::HistoryId),("commit",Message::CutCommit)],
-        Kind::Save=>vec![("history",Message::HistoryId),("commit",Message::SourceCommit),("name",Message::Name),("workspace",Message::Workspace),("slot",Message::OptionalSlot),("copies",Message::OptionalCopies)],
-        Kind::Inspect=>vec![("repository",Message::RepositoryId),("id",Message::InspectionId)]};fields.into_iter().map(move |(key,label)|field(state,key,label)).collect_view()}}</div>
-    <Show when=move ||state.with(|s|s.admin_console.kind!=Kind::Inspect)><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|submit(state)>{Message::Submit.text()}</button></Show>
-    <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Inspect)>{request::QUERIES.into_iter().map(move |(id,kind)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy) on:click=move |_|query(state,kind)>{messages::query_label(id).text()}</button>}).collect_view()}</Show>
-    <pre>{move ||state.with(|s|s.admin_console.result.clone())}</pre>
-    <Show when=move ||state.with(|s|s.admin_console.plan.is_some())><h3>{Message::PlanReview.text()}</h3><pre>{move ||state.with(|s|s.admin_console.plan.as_ref().map(|plan|json_codec::to_string_pretty(plan.plan()).expect("invariant: plans serialize")))}</pre><label><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.acknowledged) disabled=move ||state.with(|s|s.admin_console.busy) on:change=move |ev|state.update(|s|s.admin_console.acknowledged=event_target_checked(&ev))/>{Message::AcknowledgePlan.text()}</label><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||!s.admin_console.acknowledged||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,true)>{Message::CommitPlan.text()}</button><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,false)>{Message::CancelPlan.text()}</button></Show>
-    </section></section>}
+    view! {<section class="zxs-content-stack zxs-stack" data-zxs-admin-section="storage">
+        <h1 class="zxs-row">{web_interface::i18n::t("磁盘与接入", "Disks and admission")}</h1>
+        <p class="zxs-row">{web_interface::i18n::t("更换下一级备份盘必须迁移所有数据，并按真实迁移进度和完成回执确认。此处尚未提供该迁移入口；添加磁盘或保存路径规则不代表替换已完成。", "Replacing the next backup disk must migrate all data and be confirmed by real migration progress and a completion receipt. That migration is not available here yet; adding a disk or saving a path rule does not complete replacement.")}</p>
+        {operation_status(state)}
+        {storage::view(state)}
+        {disks::view(state)}
+    </section>}
+}
+
+fn operation_status(state: RwSignal<State>) -> impl IntoView {
+    view! {
+        <p class="zxs-row" role="alert">{move ||state.with(|s|s.admin_console.error.as_ref().map(Failure::display))}</p>
+        <Show when=move ||state.with(|s|s.admin_console.uncertain_operation.is_some())>
+            <p class="zxs-row" role="alert">{Message::UnknownOutcome.text()}</p>
+            <p class="zxs-row">{move ||state.with(|s|s.admin_console.uncertain_operation.as_ref().map(UncertainOperation::label))}</p>
+            <button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,false)||s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).is_none()) on:click=move |_|{
+                let Some(id)=state.with_untracked(|s|s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).map(str::to_owned)) else {return};
+                execute(state,request::operation_outcome(&id));
+            }>{Message::CheckOriginalOperation.text()}</button>
+        </Show>
+    }
+}
+
+pub(crate) fn console(state: RwSignal<State>, section: Section) -> impl IntoView {
+    view! {<section class="zxs-content-stack zxs-stack" data-zxs-admin-section=match section {Section::Repositories=>"repositories",Section::Rules=>"rules",Section::Diagnostics=>"diagnostics"}>
+        <h1 class="zxs-row">{section.title()}</h1>
+        <p class="zxs-row">{section.help()}</p>
+        {(section==Section::Diagnostics).then(move ||crate::management::recovery(state))}
+        <nav class="zxs-flow" aria-label=section.title()>{section.actions().iter().copied().map(move |(kind,label)|view!{
+            <button class="zxs-button" aria-pressed=move ||state.with(|s|s.admin_console.kind==kind).to_string() disabled=move ||state.with(|s|s.admin_console.busy||s.admin_console.uncertain_operation.is_some()) on:click=move |_|select(state,kind)>{label.text()}</button>
+        }).collect_view()}</nav>
+        {operation_status(state)}
+        <Show when=move ||state.with(|s|section.contains(s.admin_console.kind))>
+            <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Policy)><p class="zxs-row">{Message::PathRuleHelp.text()}</p></Show>
+            <div class="zxs-form-grid">{move ||{
+                let fields=match state.with(|s|s.admin_console.kind) {
+                    Kind::Repository=>vec![("name",Message::Name),("slot",Message::PrimarySlot),("copies",Message::Copies)],
+                    Kind::Policy=>vec![("id",Message::PathRuleId),("repository",Message::RepositoryId),("prefix",Message::PathPrefix),("copies",Message::Copies),("generation",Message::Generation)],
+                    Kind::Rule=>vec![("id",Message::RuleId),("repository",Message::RepositoryId),("prefix",Message::PathPrefix),("slot",Message::PrimarySlot),("generation",Message::Generation)],
+                    Kind::Inspect=>vec![("repository",Message::RepositoryId),("id",Message::InspectionId)],
+                };
+                fields.into_iter().map(move |(key,label)|field(state,key,label)).collect_view()
+            }}</div>
+            <Show when=move ||state.with(|s|s.admin_console.kind!=Kind::Inspect)><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|submit(state)>{Message::Submit.text()}</button></Show>
+            <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Inspect)><div class="zxs-flow">{request::QUERIES.into_iter().map(move |(id,kind)|view!{
+                <button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,false)) on:click=move |_|query(state,kind)>{messages::query_label(id).text()}</button>
+            }).collect_view()}</div></Show>
+        </Show>
+        <pre class="zxs-admin-result">{move ||state.with(|s|s.admin_console.result.clone())}</pre>
+        {(section==Section::Diagnostics).then(move ||view!{
+            <Show when=move ||state.with(|s|s.admin_console.plan.is_some())>
+                <h2 class="zxs-row">{Message::PlanReview.text()}</h2>
+                <pre class="zxs-admin-result">{move ||state.with(|s|s.admin_console.plan.as_ref().map(|plan|json_codec::to_string_pretty(plan.plan()).expect("invariant: plans serialize")))}</pre>
+                <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.acknowledged) disabled=move ||state.with(|s|s.admin_console.busy) on:change=move |ev|state.update(|s|s.admin_console.acknowledged=event_target_checked(&ev))/>{Message::AcknowledgePlan.text()}</label>
+                <div class="zxs-flow">
+                    <button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||!s.admin_console.acknowledged||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,true)>{Message::CommitPlan.text()}</button>
+                    <button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,false)>{Message::CancelPlan.text()}</button>
+                </div>
+            </Show>
+        })}
+    </section>}
 }
 
 #[cfg(test)]
 #[path = "../../../../test/web/unit/admin/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/web/unit/admin/navigation_tests.rs"]
+mod navigation_tests;

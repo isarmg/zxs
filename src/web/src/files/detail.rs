@@ -11,19 +11,46 @@ use crate::{icons::FileIcon, ui::State};
 use web_interface::components::{EmptyState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
+mod directory;
+
 pub(crate) fn page(state: RwSignal<State>) -> impl IntoView {
     inline::provide_context(state);
     super::history_index::provide(state);
     let selected = detail_selection(state);
+    let current_directory = Memo::new(move |_| {
+        state.with(|s| {
+            (s.session_active() && s.files.selected.is_none() && !s.files.slot.is_empty()).then(
+                || {
+                    (
+                        s.session_epoch,
+                        s.files.slot.clone(),
+                        s.files.directory.clone(),
+                    )
+                },
+            )
+        })
+    });
     view! {
         <section class="zxs-content-stack zxs-entry-page zxs-stack">
-            {move ||match selected.get() {
-                Some(selection) => entry_view(state, selection).into_any(),
-                None => view!{<EmptyState message=t("请在文件页面选择一个文件或文件夹，查看详情。","Choose a file or folder on the Files page to view its details.")/>}.into_any(),
+            {move ||match (selected.get(), current_directory.get()) {
+                (Some(selection), _) => entry_view(state, selection).into_any(),
+                (None, Some(_)) => directory::view(state).into_any(),
+                (None, None) => view!{<EmptyState message=t("请在文件页面选择一个文件或文件夹，查看详情。","Choose a file or folder on the Files page to view its details.")/>}.into_any(),
             }}
         </section>
     }
 }
+/// Select the current directory without resetting its query, cursor or branch.
+pub(super) fn open_current_directory(state: RwSignal<State>) {
+    state.update(|s| {
+        if !s.session_active() || s.files.slot.is_empty() || actions::pending(s) {
+            return;
+        }
+        s.files.clear_selection();
+        s.change_page(crate::ui::Page::Details);
+    });
+}
+
 /// Detail controls own browser focus and popover state. Refreshing metadata must
 /// update their signals without recreating the controls for the same entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,7 +243,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
             <dl class="zxs-file-properties"><div><dt class="zxs-row">{t("位置","Location")}</dt><dd class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|join_path(&state.with(|s|s.files.slot.clone()),entry.path())).unwrap_or_default())}</dd></div><div><dt class="zxs-row">{t("类型","Type")}</dt><dd class="zxs-row">{if is_file{t("文件","File")}else{t("文件夹","Folder")}}</dd></div></dl>
             {(!is_file).then(move ||view!{
                 {super::directory_history::view(state)}
-                <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录分支操作","Folder branch actions")}</h3><p class="zxs-row">{t("打开此目录后，可手动初始化独立仓库，再管理分支和提交。独立子仓库只通过明确暂存的提交引用参与父级，不会随父级一起提交。","Open this directory to initialize an independent repository and then manage its branches and commits. Independent children enter the parent only through explicitly staged commit references and are never committed by the parent.")}</p><div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||folder_navigation_disabled.get() on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.directory_path(s).map(str::to_owned))){actions::go_directory(state,path);}>{t("打开目录仓库管理","Open directory repository controls")}</button></div><p class="zxs-row">{t("目录分支合并暂未提供。","Folder branch merging is not available yet.")}</p></section>
+                <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录分支与节点","Folder branches and nodes")}</h3><p class="zxs-row">{t("进入此目录的详情，管理独立仓库初始化、分支、暂存和提交。父仓库不会替子仓库提交。", "Open this folder's Details to manage repository initialization, branches, staging and commits. A parent never commits an independent child.")}</p><div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||folder_navigation_disabled.get()||state.with(actions::pending) on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.directory_path(s).map(str::to_owned))){actions::go_directory(state,path);crate::ui::navigate(state,crate::ui::Page::Details);}>{t("管理此目录的分支与提交", "Manage this folder's branches and commits")}</button></div></section>
             })}
             {is_file.then(move ||view! {
                 <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件备注","File note")}</h3><Show when=move ||can_modify.get() fallback=move ||view!{<p class="zxs-row">{move ||state.with(|s|s.files.file_history.file_note().unwrap_or_default().to_owned())}</p>}>{inline::control(state,t("编辑文件备注","Edit file note"),None,inline::Target::FileNote,note_disabled)}</Show></section>

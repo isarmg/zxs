@@ -44,12 +44,12 @@ fn language_reload_preserves_admin_operation_fences() {
 }
 
 #[test]
-fn edited_plan_inputs_require_a_new_preview_before_commit_or_cancel() {
+fn edited_plan_inputs_require_a_new_review_before_commit_or_cancel() {
     for (kind, key, original, changed) in [
         (Kind::Inspect, "id", "plan-a", "plan-b"),
-        (Kind::Purge, "versions", "version-a", "version-b"),
-        (Kind::Split, "commit", "commit-a", "commit-b"),
-        (Kind::Save, "name", "saved-a", "saved-b"),
+        (Kind::Policy, "copies", "1", "2"),
+        (Kind::Rule, "slot", "P01", "P02"),
+        (Kind::Repository, "name", "saved-a", "saved-b"),
     ] {
         let mut model = Model {
             kind,
@@ -500,14 +500,9 @@ fn plan_queries_install_the_plan_but_cannot_settle_a_mutation() {
 }
 
 #[test]
-fn preview_success_installs_review_but_preview_failures_never_create_a_mutation_fence() {
-    let fields = [
-        ("history".into(), "h".into()),
-        ("versions".into(), "v".into()),
-    ]
-    .into_iter()
-    .collect();
-    let request = request::build(Kind::Purge, &fields, "original", "admin").unwrap();
+fn plan_lookup_installs_review_but_read_failures_never_create_a_mutation_fence() {
+    let fields = [("id".into(), "p".into())].into_iter().collect();
+    let request = request::query(request::QueryKind::Plan, &fields).unwrap();
     let mut model = Model {
         acknowledged: true,
         ..Default::default()
@@ -521,7 +516,7 @@ fn preview_success_installs_review_but_preview_failures_never_create_a_mutation_
     assert_eq!(model.plan, plan);
     let error = api::Error {
         code: storage_contract::ErrorCode::InternalError,
-        message: "preview failed".into(),
+        message: "plan lookup failed".into(),
         status: 503,
         retryable: false,
         request_id: None,
@@ -551,16 +546,10 @@ fn every_mutation_failure_keeps_its_captured_operation_not_the_current_form() {
     .into_iter()
     .map(|(key, value)| (key.into(), value.into()))
     .collect();
-    let mut requests = [
-        Kind::Repository,
-        Kind::Policy,
-        Kind::Rule,
-        Kind::Branch,
-        Kind::Link,
-    ]
-    .into_iter()
-    .map(|kind| request::build(kind, &fields, "original", "admin").unwrap())
-    .collect::<Vec<_>>();
+    let mut requests = [Kind::Repository, Kind::Policy, Kind::Rule]
+        .into_iter()
+        .map(|kind| request::build(kind, &fields, "original").unwrap())
+        .collect::<Vec<_>>();
     for commit in [true, false] {
         requests.push(
             request::plan_action(reviewed_plan().as_ref(), commit, true, "original").unwrap(),
@@ -743,8 +732,9 @@ fn typed_execution_checks_session_busy_and_storage_before_starting_work() {
     Owner::new().with(|| {
         let state = RwSignal::new(State::default());
         let fields = [
-            ("history".into(), "h".into()),
-            ("versions".into(), "v".into()),
+            ("name".into(), "Repository".into()),
+            ("slot".into(), "P01".into()),
+            ("copies".into(), "1".into()),
         ]
         .into_iter()
         .collect();
@@ -798,7 +788,7 @@ fn typed_execution_checks_session_busy_and_storage_before_starting_work() {
             });
             execute(
                 state,
-                request::build(Kind::Purge, &fields, "original", "admin").unwrap(),
+                request::build(Kind::Repository, &fields, "original").unwrap(),
             );
             if storage == Storage::Ready {
                 execute(state, request::operation_outcome("original"));

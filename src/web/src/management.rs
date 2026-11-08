@@ -340,7 +340,7 @@ pub(crate) fn recovery(state: RwSignal<State>) -> impl IntoView {
         <section class="zxs-stack zxs-management-recovery">
             <h2 class="zxs-row">{t("全局存储与认证恢复","Storage and authentication recovery")}</h2>
             {summary(state)}
-            <p class="zxs-row">{t("这里显示全局服务状态，不代表硬盘健康。存储故障不影响管理访问；恢复磁盘挂载后可重试打开，重试不会格式化磁盘。各目录所属设备的健康信息显示在下面的目录信息块中。","This is global service status, not disk health. Management remains accessible during storage faults. Restore disk mounts before retrying; retry does not format disks. Device health appears in the corresponding directory card below.")}</p>
+            <p class="zxs-row">{t("这里显示全局服务状态，不代表硬盘健康。存储故障不影响管理访问；恢复磁盘挂载后可重试打开，重试不会格式化磁盘。各目录所属设备的健康信息请查看「磁盘与接入」。","This is global service status, not disk health. Management remains accessible during storage faults. Restore disk mounts before retrying; retry does not format disks. See Disks and admission for device health.")}</p>
         </section>
     }
 }

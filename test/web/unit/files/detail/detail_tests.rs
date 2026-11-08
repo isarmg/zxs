@@ -372,3 +372,43 @@ fn folder_navigation_rechecks_the_session_without_requiring_write_access() {
     assert!(state.files.selected.as_ref().unwrap().read_only());
     assert_eq!(backup.directory_path(&state), Some("docs/backup"));
 }
+
+#[test]
+fn opening_current_directory_details_preserves_the_listing_scope() {
+    Owner::new().with(|| {
+        let mut original = selected_state();
+        original.files.cursor = Some("page-2".into());
+        let state = RwSignal::new(original);
+        open_current_directory(state);
+        state.with_untracked(|s| {
+            assert_eq!(s.page, crate::ui::Page::Details);
+            assert!(s.files.selected.is_none());
+            assert_eq!(s.files.slot, "P01");
+            assert_eq!(s.files.directory, "docs");
+            assert_eq!(s.files.repository_id, "repository");
+            assert_eq!(s.files.repository_path, "docs");
+            assert_eq!(s.files.cursor.as_deref(), Some("page-2"));
+        });
+    });
+}
+
+#[test]
+fn current_directory_details_does_not_replace_a_pending_or_expired_selection() {
+    Owner::new().with(|| {
+        for reason in 0..3 {
+            let mut original = selected_state();
+            original.page = crate::ui::Page::Files;
+            match reason {
+                0 => original.files.mutation_pending = true,
+                1 => original.authenticated = false,
+                _ => original.files.slot.clear(),
+            }
+            let state = RwSignal::new(original);
+            open_current_directory(state);
+            state.with_untracked(|s| {
+                assert_eq!(s.page, crate::ui::Page::Files);
+                assert!(s.files.selected.is_some());
+            });
+        }
+    });
+}
