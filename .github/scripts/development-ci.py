@@ -76,6 +76,54 @@ jobs:
           retention-days: 7
 """
 
+SQLITE_IMPORT = 'sqlite-import.yml'
+# Separately authorized, exact artifact import; no commit/ref publication path.
+SQLITE_IMPORT_WORKFLOW = """# Temporary, fixed-artifact import. Creates Git blobs/tree only, never a commit/ref.
+name: SQLite 0.39.1 artifact import
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sqlite-0391-maintenance
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: ${{ github.repository == 'isarmg/zxs' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    env:
+      CARGO_NET_OFFLINE: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Select the repository Rust toolchain for offline metadata only
+        run: rustup show active-toolchain
+      - name: Import only the approved SQLite artifact into unreferenced Git objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/sqlite-import-maintenance.py
+      - name: Retain import evidence, including any failed stage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sqlite-0391-import-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zxs-sqlite-import/result.json
+          if-no-files-found: error
+          retention-days: 7
+"""
+
 PAUSE = '    if: ${{ false }}\n'
 PUBLISH_CONDITION = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
 HEADER = '# Development short CI: long checks are paused, not passed. See docs/ci/development-short-ci.md.\n'
@@ -121,10 +169,13 @@ def check_workflows(root):
     """Fail on any unreviewed entrypoint, override, ignored failure or recipe drift."""
     live = root / '.github/workflows'
     names = {path.name for path in live.iterdir() if path.suffix in {'.yml', '.yaml'}}
-    if names not in (set(SNAPSHOT_SHA256), set(SNAPSHOT_SHA256) | {SQLITE_MAINTENANCE}):
+    manual = {SQLITE_MAINTENANCE: SQLITE_WORKFLOW, SQLITE_IMPORT: SQLITE_IMPORT_WORKFLOW}
+    required = set(SNAPSHOT_SHA256)
+    if not required <= names or not names <= required | set(manual):
         raise ValueError('development workflow entrypoints changed')
-    if SQLITE_MAINTENANCE in names and (live / SQLITE_MAINTENANCE).read_text() != SQLITE_WORKFLOW:
-        raise ValueError('development policy: SQLite maintenance scope changed')
+    for name, expected in manual.items():
+        if name in names and (live / name).read_text() != expected:
+            raise ValueError('development policy: SQLite maintenance scope changed')
     for name, expected_hash in SNAPSHOT_SHA256.items():
         original = (root / '.github/ci/full-workflows' / name).read_bytes()
         if hashlib.sha256(original).hexdigest() != expected_hash:

@@ -1,0 +1,44 @@
+# Temporary, fixed-artifact import. Creates Git blobs/tree only, never a commit/ref.
+name: SQLite 0.39.1 artifact import
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sqlite-0391-maintenance
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: ${{ github.repository == 'isarmg/zxs' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    env:
+      CARGO_NET_OFFLINE: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Select the repository Rust toolchain for offline metadata only
+        run: rustup show active-toolchain
+      - name: Import only the approved SQLite artifact into unreferenced Git objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/sqlite-import-maintenance.py
+      - name: Retain import evidence, including any failed stage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sqlite-0391-import-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zxs-sqlite-import/result.json
+          if-no-files-found: error
+          retention-days: 7
