@@ -108,7 +108,7 @@ fn cancellation(state: RwSignal<State>) -> impl IntoView {
     }
 }
 
-pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
+pub(in crate::admin) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {<section class="zxs-frame zxs-stack" data-zxs-backup-transaction="">
         <h2 class="zxs-row">{t("完整备份事务","Complete backup transaction")}</h2>
         <p class="zxs-row">{t("独立的管理员操作，不是逐级备份规则或 backup.configure。当前核心仅支持固定 genesis、单一级来源的全池完整副本和 1–8 个新空目标；不等于任意现有备份拓扑替换或外来盘接纳。准备期间原发布改变会拒绝，最终切换需要明确全池停写。","This explicit administrator transaction is separate from recursive backup rules and backup.configure. The core currently supports a fixed-genesis single-primary whole-pool copy to 1–8 fresh empty targets, not arbitrary existing-topology replacement or foreign admission. Source changes invalidate preparation; cutover requires explicit whole-pool write fencing.")}</p>

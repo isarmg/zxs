@@ -39,11 +39,17 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                             <p><code>{description(&record)}</code></p>
                             <Show when=move ||state.with(|s|s.files.deletion.recovery.records.iter().any(|r|r.record.operation==operation&&r.settled.is_none()))>
                                 <p>{t("结果尚未确认。查询返回找不到或重试遭到拒绝，都不证明原操作未发布。", "The outcome is unconfirmed. A missing lookup or rejected retry does not prove the original operation never published.")}</p>
-                                <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending||s.files.polling_operations.contains(&retry_id)) on:click=move |_|begin_retry(state,epoch,operation)>{t("核对并续发原请求…", "Review original-request retry…")}</button>
+                                {
+                                    let retry_id = retry_id.clone();
+                                    view! {<button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending||s.files.polling_operations.contains(&retry_id)) on:click=move |_|begin_retry(state,epoch,operation)>{t("核对并续发原请求…", "Review original-request retry…")}</button>}
+                                }
                             </Show>
                             <Show when=move ||state.with(|s|s.files.deletion.recovery.records.iter().any(|r|r.record.operation==operation&&r.settled.is_some()))>
                                 <p>{t("原操作已获明确结果；只剩本机恢复记录清理，清理不会再次提交。", "The original operation has a confirmed outcome. Only local recovery cleanup remains; cleanup never resubmits.")}</p>
-                                <button class="zxs-button" on:click=move |_| { if current_session(state,epoch) { finish(state,&cleanup_id); } }>{t("重试本机记录清理", "Retry local record cleanup")}</button>
+                                {
+                                    let cleanup_id = cleanup_id.clone();
+                                    view! {<button class="zxs-button" on:click=move |_| { if current_session(state,epoch) { finish(state,&cleanup_id); } }>{t("重试本机记录清理", "Retry local record cleanup")}</button>}
+                                }
                             </Show>
                         </section>
                     }
