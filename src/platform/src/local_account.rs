@@ -210,10 +210,8 @@ fn local_record(text: &str, name: &Name) -> Result<(u32, u32)> {
             .parse()
             .map_err(|_| "local passwd source contains an invalid GID")?;
         ids.push((fields[0], uid));
-        if fields[0] == name.as_str() {
-            if selected.replace((uid, gid)).is_some() {
-                return Err("selected local account is duplicated".into());
-            }
+        if fields[0] == name.as_str() && selected.replace((uid, gid)).is_some() {
+            return Err("selected local account is duplicated".into());
         }
     }
     let (uid,gid) = selected.ok_or("selected service account does not exist in local /etc/passwd; account creation is not implemented")?;
