@@ -4,6 +4,7 @@ use super::*;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{ErrorCode, OperationId};
 mod receipt_lookup;
+mod transfer;
 
 const PREFIX: &str = "zxs:node-retirement:";
 const MAX_RECORDS: usize = 32;
@@ -172,7 +173,7 @@ fn persist(record: &Record) -> Result<(), api::Error> {
     }
     Ok(())
 }
-fn retain_published(record: &Record) -> Result<Record, api::Error> {
+fn retain_original(record: &Record) -> Result<Record, api::Error> {
     let records = load(&record.principal)?;
     if let Some(existing) = records.iter().find(|saved| saved.operation == record.operation) {
         if !existing.same_request(record) {
@@ -273,6 +274,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     });
     view! {
         {receipt_lookup::view(state)}
+        {transfer::import_view(state)}
         <Show when=move ||state.with(|s|s.session_active() && (s.files.node_retirement.attempt.is_some() || !s.files.node_retirement.recovery.records.is_empty() || s.files.node_retirement.recovery.error.is_some()))>
             <aside class="zxs-entry-section zxs-stack" data-zxs-node-retirement-recovery="true">
                 <h2 class="zxs-row">{t("节点永久退役：原操作恢复", "Permanent node retirement: original-operation recovery")}</h2>
@@ -281,7 +283,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 <For each=move ||state.with(|s|s.files.node_retirement.recovery.records.iter().cloned().map(|record|(s.session_epoch,record)).collect::<Vec<_>>()) key=|row|(row.0,row.1.operation) children=move |(epoch,record)| {
                     let operation = record.operation;
                     let label = format!("{} · {} · {}", record.label, record.file_id, operation);
-                    view! { <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending||s.files.node_retirement.attempt.as_ref().is_some_and(|attempt|attempt.operation==operation.to_string())) on:click=move |_|open(state,operation,epoch)>{label}</button> }
+                    view! { <div class="zxs-stack">
+                        <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending||s.files.node_retirement.attempt.as_ref().is_some_and(|attempt|attempt.operation==operation.to_string())) on:click=move |_|open(state,operation,epoch)>{label}</button>
+                        {transfer::export_view(state, epoch, record)}
+                    </div> }
                 }/>
                 {super::view::attempt_view(state)}
                 {move ||state.with(|s|s.files.node_retirement.recovery.error.clone()).map(|error|view!{<p class="zxs-row" role="alert">{error.to_string()}</p>})}

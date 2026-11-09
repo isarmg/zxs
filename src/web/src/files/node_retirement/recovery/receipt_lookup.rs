@@ -116,7 +116,7 @@ fn accept(state: RwSignal<State>, model: RwSignal<Lookup>, generation: u64) {
     });
     let Some(candidate) = candidate else { return; };
     if !state.with_untracked(|s| can_accept(s, &candidate)) { return; }
-    if let Err(error) = retain_published(&candidate.record) {
+    if let Err(error) = retain_original(&candidate.record) {
         model.update(|model| model.error = Some(error)); return;
     }
     // Re-admit the complete bounded queue, retaining every independent operation.

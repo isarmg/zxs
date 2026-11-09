@@ -8,7 +8,7 @@
 
 Web 接纳必须同时满足：当前回包与输入的 operation_id 一致、完整 outcome wire 合法、确已发布、种类为 `file.nodes.retire`，且原 `retirement.request` 完整严格解析为 history_tree_id、history_root、origin_file_id 与非空有界、已排序唯一 version_ids。它使用服务器原请求，不要求当前 namespace、当前历史窗口或原文件仍可见；不从当前版本推测原选择。
 
-404、未知、拒绝、未发布、其他种类、另一个 ID、畸形收据、账号切换或网络错误均不会创建恢复记录，更不会重发删除或新建 operation_id。错误不证明更早的请求从未执行。没有原 ID、服务器缺少原决定或原 owner 不再可认证时，本入口不能恢复。
+404、未知、拒绝、未发布、其他种类、另一个 ID、畸形收据、账号切换或网络错误均不会创建恢复记录，更不会重发删除或新建 operation_id。错误不证明更早的请求从未执行。没有原 ID、服务器缺少原决定或原 owner 不再可认证时，本入口不能恢复。发布未知但此前另存过完整原意图时，可使用[同源原请求文本恢复](node-retirement-request-transfer.md)；该入口不冒充已发布收据，也不自动执行原请求。
 
 ## 显式补存与 resume-only 围栏
 
