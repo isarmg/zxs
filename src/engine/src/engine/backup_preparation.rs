@@ -17,6 +17,7 @@ use std::{
 };
 
 mod batch;
+mod completion;
 mod execution;
 mod inspection;
 mod native_control;
@@ -276,26 +277,6 @@ impl Engine {
         self.workspace_namespace_baselines.clear();
         self.current_namespaces = Some(Arc::clone(&admission.first));
         Ok(())
-    }
-    pub(in crate::engine) fn complete_backup_serving_open(&mut self) -> Result<OperationResult> {
-        self.restore_backup_current()?;
-        let admitted = self.backup_serving.as_ref().ok_or_else(|| {
-            Error::new(
-                ErrorCode::RecoveryRequired,
-                "Backup serving open lacks its native completion",
-            )
-        })?;
-        if self.state.operations.get(&admitted.barrier.operation) != Some(&admitted.result) {
-            return Err(Error::new(
-                ErrorCode::PublicationInvalid,
-                "Backup replay did not retain its exact original operation result",
-            ));
-        }
-        self.reopen_backup_system_index(&admitted.barrier)?;
-        write_json(&self.root.join("config.json"), &self.config, true)?;
-        // Preserve any later pending-operation/fence status. Completing the
-        // first Backup is not permission to clear a successor's write stop.
-        Ok(admitted.result.clone())
     }
 }
 
@@ -674,9 +655,13 @@ impl Engine {
             let ready = admitted.barrier.require_current(self).and_then(|()| {
                 if self.state.operations.get(&admitted.barrier.operation) != Some(&admitted.result)
                     || !matches!(self.index_health(), super::index::IndexHealth::Ready { sequence } if sequence == self.state.sequence)
+                    || self.backup_cutover_fence_status().is_some_and(|fence| {
+                        fence.operation_id == admitted.barrier.operation
+                            && fence.transition_hash == admitted.result.request_digest
+                    })
                 {
                     return Err(Error::new(ErrorCode::RecoveryRequired,
-                        "Backup native switch is retained, but current receipt or SYSTEM query admission is not ready"));
+                        "Backup native switch is retained, but receipt, SYSTEM or original write-stop completion is not ready"));
                 }
                 Ok(())
             });

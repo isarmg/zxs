@@ -435,7 +435,6 @@ fn install_engine(
         native.registry.candidate().candidate(),
         Some(&native.published),
     )?;
-    let result = native.registry.candidate().result().clone();
     let snapshot = native.registry.candidate().snapshot_hash().to_owned();
     let next_slot = native
         .registry
@@ -463,12 +462,5 @@ fn install_engine(
     engine.published_state_base = None;
     engine.metadata_integrity.invalidate();
     engine.bind_recovered_history_roots(history_roots);
-    write_json(&engine.root.join("config.json"), &engine.config, true)?;
-    engine.reopen_backup_system_index(barrier)?;
-    // Durable native controls and all active resources already agree. Keep the
-    // historical disk fence evidence, but retire only this old in-memory stop.
-    engine.membership_fence = None;
-    engine.pending_membership = None;
-    engine.blocked = false;
-    Ok(result)
+    engine.complete_backup_serving_open()
 }

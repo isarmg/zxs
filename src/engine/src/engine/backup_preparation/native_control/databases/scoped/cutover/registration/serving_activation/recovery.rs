@@ -326,6 +326,9 @@ impl Engine {
         engine.complete_backup_serving_open()?;
         engine.load_workspaces()?;
         engine.verify_selected_move_prepare()?;
+        if !engine.is_read_only() && engine.history_move_choice.is_none() {
+            engine.restore_published_disk_histories();
+        }
         Ok(engine)
     }
 }
