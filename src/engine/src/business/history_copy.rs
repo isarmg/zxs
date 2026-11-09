@@ -196,21 +196,40 @@ fn sources_for(
     {
         return Err(unsupported());
     }
+    let target_entries = &previous.commits[&target_branch.head_commit_id].entries;
     let source_entries = if let Some(view) = view {
         view.require_branch_write(previous, &source.main_branch_id)?;
         view.require_branch_write(previous, &target.main_branch_id)?;
-        if matches!(destination, Destination::MoveIntoDiskRoot(_))
-            || !view
-                .branch_entries(&target.main_branch_id, &target_branch.head_commit_id)?
-                .is_empty()
-        {
-            return Err(unsupported());
+        let current_target =
+            view.branch_entries(&target.main_branch_id, &target_branch.head_commit_id)?;
+        match destination {
+            Destination::EmptyRepository(_) if !current_target.is_empty() => {
+                return Err(unsupported());
+            }
+            Destination::MoveIntoDiskRoot(_) => {
+                let path = name_policy::LookupPath::parse(&request.target_name)?;
+                if namespace::find_unordered_key(current_target, path.key()).is_some() {
+                    return Err(Error::new(
+                        ErrorCode::NameCollision,
+                        "history move cannot replace a current target entry",
+                    ));
+                }
+                // The native projection appends to this retained parent. A
+                // masked or rewritten view needs its own publication adapter,
+                // not a fallback that resurrects hidden historical entries.
+                if current_target != target_entries.as_slice() {
+                    return Err(Error::new(
+                        ErrorCode::UnsupportedOperation,
+                        "history move target view differs from its retained parent namespace",
+                    ));
+                }
+            }
+            Destination::EmptyRepository(_) => {}
         }
         view.branch_entries(&source.main_branch_id, &source_branch.head_commit_id)?
     } else {
         &previous.commits[&source_branch.head_commit_id].entries
     };
-    let target_entries = &previous.commits[&target_branch.head_commit_id].entries;
     match destination {
         Destination::EmptyRepository(_) => {
             // Copy keeps its original empty-root contract, including masked entries.
@@ -251,6 +270,18 @@ fn sources_for(
     let entry = namespace::find_unordered_key(source_entries, source_path.key())
         .filter(|entry| entry.kind == NamespaceEntryKind::File)
         .ok_or_else(|| Error::new(ErrorCode::FileNotFound, "history copy source file missing"))?;
+    if view.is_some()
+        && matches!(destination, Destination::MoveIntoDiskRoot(_))
+        && namespace::find_unordered_key(
+            &previous.commits[&source_branch.head_commit_id].entries,
+            source_path.key(),
+        ) != Some(entry)
+    {
+        return Err(Error::new(
+            ErrorCode::UnsupportedOperation,
+            "history move source view differs from its exact retained occurrence",
+        ));
+    }
     if previous.file_deletions.contains_key(&entry.file_id)
         || previous.file_backup_policies.contains_key(&entry.file_id)
         || previous.file_backup_paths.contains_key(&entry.file_id)
