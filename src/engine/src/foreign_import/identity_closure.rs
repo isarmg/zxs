@@ -4,8 +4,13 @@ use super::*;
 use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod admission;
 mod catalog;
+mod graph;
+pub(crate) use admission::ForeignAdmissionRecipe;
 use catalog::Catalog;
+pub use graph::ForeignHistoryGraphReport;
+pub(super) use graph::PreparedGraph;
 
 pub(crate) const MAX_MAPPING_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IDENTITIES: usize = 100_000;
@@ -94,6 +99,8 @@ pub struct ForeignIdentityClosureReport {
 pub(super) struct Prepared {
     pub(super) report: ForeignIdentityClosureReport,
     pub(super) bytes: Vec<u8>,
+    objects: BTreeMap<catalog::Domain, BTreeMap<String, String>>,
+    principals: BTreeMap<String, String>,
 }
 #[derive(Serialize)]
 struct Mapping<'a> {
@@ -101,6 +108,7 @@ struct Mapping<'a> {
     baseline: &'a ForeignIdentityBaseline,
     original: &'a ForeignOriginalStateReport,
     objects: BTreeMap<catalog::Domain, BTreeMap<String, String>>,
+    principals: BTreeMap<String, String>,
     // Separate tags deliberately cannot be parsed as local op/user/plan IDs.
     archived_operations: BTreeMap<String, String>,
     archived_principals: BTreeMap<String, String>,
@@ -226,7 +234,15 @@ impl Prepared {
         source: &ForeignImportPreview,
     ) -> Result<Self> {
         let (original, admitted) = source.visit_original_states(|_, _, _, _| Ok(()))?;
-        if source.source_level() as usize != target.new_disks.len() {
+        Self::from_state(target, source.source_level(), original, admitted.state())
+    }
+    fn from_state(
+        target: &ForeignIdentityTarget,
+        source_level: u32,
+        original: ForeignOriginalStateReport,
+        state: &State,
+    ) -> Result<Self> {
+        if source_level as usize != target.new_disks.len() {
             return Err(invalid(
                 "object identity target omits or adds a required lower level",
             ));
@@ -246,7 +262,6 @@ impl Prepared {
                 "new chain registrations reuse an original source disk identity",
             ));
         }
-        let state = admitted.state();
         let catalog = Catalog::capture(state)?;
         if catalog.count + catalog.principals.len() + state.operations.len() + state.plans.len()
             > MAX_IDENTITIES
@@ -336,7 +351,12 @@ impl Prepared {
             archived_events: state.events.len(),
             mapping_bytes: bytes.len() as u64,
         };
-        Ok(Self { report, bytes })
+        Ok(Self {
+            report,
+            bytes,
+            objects: mapping.objects,
+            principals: mapping.archived_principals,
+        })
     }
 }
 fn assign<'a>(

@@ -110,6 +110,7 @@ impl TerminalManagement {
                 .map(|root| (root.disk.disk_id.clone(), root.identity.clone()))
                 .collect(),
             effect: None,
+            foreign: None,
             fence_scope: None,
             boundary: authority.intent().boundary.clone(),
             fence_sequence: self.management_state().sequence,

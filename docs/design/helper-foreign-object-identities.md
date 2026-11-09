@@ -47,3 +47,5 @@ root 保存 `.zxs-helper-foreign-chain-<operation>-identities` 和相应 `-compl
 仍缺：映射后的完整对象/路径/placement 引用转换、保留现池永久记录与独立外来审计的联合 State、联合三范围数据库、各层真实正文可用性/落位、共同 authority/epoch/Publication、Config/locator/Stop/fence/serving 切换及冷恢复。不能把本片名称准备或原 SQLite 的“完成”当成其中任何一项已经完成。
 
 原候选父基线 `cb7fb288`，本次对齐 `c9b22db6`，当前组合没有重新验证。按用户最新要求，**未本地编译、未执行测试、未触发 GitHub CI**；仅对明确受影响 Rust 文件运行格式化，`git diff --check` 通过；这不证明类型、逻辑或运行正确。新增六项临时目录集成、两项命名模型、两项请求门禁以及真实 JS handler doubles 场景目前都只有源码，未执行，未操作真实盘/服务或进行浏览器验收。上一片最后一次生产组合 check 未通过；“共享旧缓存导致新 Operation 缺失”仍只是未复验推测，本轮不提供通过或已修复结论。
+
+后继本地片已有[来源域 typed 历史图转换](helper-foreign-mapped-graphs.md)：把对象名应用到各类型的局部引用并保留来源审计/路径/placement 域，新增单目标隔离图准备 API，尚未接 Web/同批协调、联合 State 或正式接纳。该后继未编译测试，不改变本文命名阶段的准确完成语义。

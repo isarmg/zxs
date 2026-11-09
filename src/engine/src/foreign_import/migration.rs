@@ -7,7 +7,9 @@ use platform_io::fs_safety::{EntryName, RelativePath, linux::AdvisoryLock};
 use std::{collections::BTreeSet, io::Read, path::Path};
 
 mod databases;
+mod history_graph;
 mod identity_closure;
+pub use history_graph::ForeignHistoryGraphStatus;
 pub use identity_closure::ForeignIdentityClosureStatus;
 mod inventory;
 mod planning;

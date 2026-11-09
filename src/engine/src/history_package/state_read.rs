@@ -147,7 +147,7 @@ history_coverage! {
     history_boundaries => boundary_marks,
 }
 
-fn validate(state: &State) -> Result<()> {
+pub(crate) fn validate(state: &State) -> Result<()> {
     crate::file_deletion::publication::admit_current(state)?;
     // Event polling seeks by sequence while preserving ordinal array order.
     // Writers append increasing publication slots; recovery must establish the

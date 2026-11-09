@@ -407,3 +407,116 @@ fn changed_finished_identity_bytes_are_preserved_and_never_replaced() {
     assert!(owner.prepare_identity_closure(&target).is_err());
     assert_eq!(fs::read(&mapping).unwrap(), b"changed original mapping");
 }
+
+#[test]
+fn history_graph_requires_complete_original_identity_material_before_writes() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    let before = fs::read_dir(&roots[0]).unwrap().count();
+    assert!(owner.preview_history_graph(&target).is_err());
+    assert!(owner.prepare_history_graph(&target).is_err());
+    assert_eq!(fs::read_dir(&roots[0]).unwrap().count(), before);
+}
+#[test]
+fn every_lower_derives_equal_mapped_graphs_without_turning_missing_bodies_into_ready() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (current, target) = identity_targets(&f, operation, &roots);
+    let before = json_codec::to_vec(current.state()).unwrap();
+    let mut reports = Vec::new();
+    for (root, digest) in roots.iter().zip(&digests) {
+        let owner = published_owner(root, operation, digest);
+        owner.prepare_identity_closure(&target).unwrap();
+        let count = fs::read_dir(root).unwrap().count();
+        let (expected, status) = owner.preview_history_graph(&target).unwrap();
+        assert_eq!(status, ForeignHistoryGraphStatus::NotStarted);
+        assert_eq!(fs::read_dir(root).unwrap().count(), count);
+        assert_eq!(expected.histories, f.engine.state().histories.len());
+        assert!(expected.unavailable_versions > 0);
+        let report = owner.prepare_history_graph(&target).unwrap();
+        assert_eq!(report, expected);
+        assert_eq!(
+            owner.preview_history_graph(&target).unwrap().1,
+            ForeignHistoryGraphStatus::Verified {
+                report: report.clone()
+            }
+        );
+        let graph: json_codec::Value = json_codec::from_slice(
+            &fs::read(root.join(format!(".zxs-foreign-graphs-{operation}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            graph["format"],
+            "zxs-foreign-source-scoped-mapped-history-graphs"
+        );
+        for history in graph["histories"].as_array().unwrap() {
+            assert_ne!(
+                history["original_history_id"],
+                history["graph"]["history"]["history_tree_id"]
+            );
+            assert_eq!(
+                history["graph"]["versions"].as_object().unwrap().len(),
+                history["original_version_availability"]
+                    .as_object()
+                    .unwrap()
+                    .len()
+            );
+        }
+        assert!(graph.get("operations").is_none());
+        assert!(graph.get("control_auth").is_none());
+        reports.push(report);
+    }
+    assert_eq!(reports[0], reports[1]);
+    assert_eq!(json_codec::to_vec(current.state()).unwrap(), before);
+    current.recheck_foreign_identity_target(&target).unwrap();
+}
+#[test]
+fn completed_history_graph_loss_cannot_be_recreated_from_another_lower() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    for (root, digest) in roots.iter().zip(&digests) {
+        let owner = published_owner(root, operation, digest);
+        owner.prepare_identity_closure(&target).unwrap();
+        owner.prepare_history_graph(&target).unwrap();
+    }
+    let path = roots[0].join(format!(".zxs-foreign-graphs-{operation}.json"));
+    fs::remove_file(&path).unwrap();
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    assert!(owner.preview_history_graph(&target).is_err());
+    assert!(owner.prepare_history_graph(&target).is_err());
+    assert!(!path.exists());
+    assert!(
+        published_owner(&roots[1], operation, &digests[1])
+            .preview_history_graph(&target)
+            .is_ok()
+    );
+}
+#[test]
+fn interrupted_history_graph_completion_preserves_and_rechecks_original_bytes() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    owner.prepare_identity_closure(&target).unwrap();
+    let expected = owner.prepare_history_graph(&target).unwrap();
+    let marker = roots[0].join(format!(".zxs-foreign-graphs-{operation}-complete.json"));
+    let path = roots[0].join(format!(".zxs-foreign-graphs-{operation}.json"));
+    let original = fs::read(&path).unwrap();
+    fs::remove_file(&marker).unwrap();
+    assert_eq!(
+        owner.preview_history_graph(&target).unwrap().1,
+        ForeignHistoryGraphStatus::Preparing
+    );
+    assert_eq!(owner.prepare_history_graph(&target).unwrap(), expected);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::write(&path, b"changed graph").unwrap();
+    assert!(owner.prepare_history_graph(&target).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"changed graph");
+}

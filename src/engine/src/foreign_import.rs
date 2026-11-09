@@ -5,9 +5,10 @@ use std::{collections::BTreeMap, fs::File, path::PathBuf};
 
 mod identity_closure;
 mod inspect;
+pub(crate) use identity_closure::ForeignAdmissionRecipe;
 pub use identity_closure::{
-    ForeignIdentityBaseline, ForeignIdentityClosureReport, ForeignIdentityTarget,
-    ForeignIdentityTargetRequest,
+    ForeignHistoryGraphReport, ForeignIdentityBaseline, ForeignIdentityClosureReport,
+    ForeignIdentityTarget, ForeignIdentityTargetRequest,
 };
 mod intent;
 pub use intent::{
@@ -18,9 +19,9 @@ mod mapping;
 mod migration;
 mod model;
 pub use migration::{
-    ForeignDatabaseStatus, ForeignIdentityClosureStatus, ForeignMigrationPlan,
-    ForeignMigrationReceipt, ForeignMigrationStatus, ForeignMigrationTransaction,
-    ForeignOriginalDatabasesReport,
+    ForeignDatabaseStatus, ForeignHistoryGraphStatus, ForeignIdentityClosureStatus,
+    ForeignMigrationPlan, ForeignMigrationReceipt, ForeignMigrationStatus,
+    ForeignMigrationTransaction, ForeignOriginalDatabasesReport,
 };
 pub use model::{
     ForeignCheckpoint, ForeignEvidenceDigest, ForeignHistory, ForeignImportLimits,

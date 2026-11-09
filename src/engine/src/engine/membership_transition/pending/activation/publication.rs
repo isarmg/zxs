@@ -259,6 +259,13 @@ impl Engine {
     /// Complete the pending pure device addition. No payload copies or placement
     /// changes are claimed; original routes and every body remain in place.
     pub fn activate_pending_membership(&mut self) -> Result<OperationResult> {
+        if self
+            .config
+            .generation()
+            .is_some_and(|generation| generation.portable.is_foreign())
+        {
+            return Err(super::foreign::ForeignCore::activation_required());
+        }
         if self.membership_fence.is_none()
             && self
                 .config
@@ -291,6 +298,10 @@ impl Engine {
             return self.complete_generation_activation();
         }
         self.require_no_commit_preparation()?;
+        let foreign_fenced = self
+            .membership_fence
+            .as_ref()
+            .is_some_and(|fence| fence.intent.foreign.is_some());
         let backup_fenced = self
             .membership_fence
             .as_ref()
@@ -307,6 +318,9 @@ impl Engine {
             }
             if backup_fenced {
                 return Err(backup_generation_required());
+            }
+            if foreign_fenced {
+                return Err(super::foreign::ForeignCore::activation_required());
             }
             let pending = self.pending_membership.take().ok_or_else(|| {
                 Error::new(
@@ -325,6 +339,9 @@ impl Engine {
             // consume pending resources or call the generic promotion path.
             // An actually certified Abort above retains its existing recovery.
             return Err(backup_generation_required());
+        }
+        if foreign_fenced {
+            return Err(super::foreign::ForeignCore::activation_required());
         }
         self.verify_membership_joint_decision()?;
         let mut pending = self.pending_membership.take().ok_or_else(|| {

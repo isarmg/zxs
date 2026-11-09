@@ -103,6 +103,7 @@ impl Engine {
             target: self.config.clone(),
             added_roots: BTreeMap::new(),
             effect: None,
+            foreign: None,
             fence_scope: None,
             boundary,
             fence_sequence: self.next_slot,

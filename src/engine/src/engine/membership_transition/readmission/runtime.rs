@@ -242,6 +242,7 @@ impl Engine {
             target,
             added_roots: BTreeMap::new(),
             effect: None,
+            foreign: None,
             fence_scope: None,
             boundary: self.handoff_boundary(&members)?,
             fence_sequence: self.next_slot,

@@ -13,6 +13,16 @@ impl PreparedProposal {
         checked: &[CheckedMember],
     ) -> Result<Self> {
         let config = fence.intent.origin.config();
+        fence.intent.verify_target()?;
+        if let Some(recipe) = &fence.intent.foreign {
+            let (base, _) = pending.source.generation_base(&fence.intent)?;
+            recipe.joint_state(
+                &base,
+                config,
+                &fence.intent.target,
+                fence.intent.fence_sequence,
+            )?;
+        }
         let mut encoder = Encoder::new(MAX_METADATA);
         encoder.object(INTENT_KIND, &fence.intent)?;
         let mut original = json_codec::Map::new();
@@ -69,6 +79,12 @@ impl PreparedProposal {
             JointFormat::RetainedExitQuorum
         } else if fence.intent.effect.is_some() {
             JointFormat::ExitControl
+        } else if fence.intent.foreign.is_some() {
+            if pending.data_disks.is_empty() {
+                JointFormat::ForeignJoint
+            } else {
+                JointFormat::ForeignDevices
+            }
         } else if pending.data_disks.is_empty() {
             JointFormat::Joint
         } else {
@@ -394,11 +410,15 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
     let intent: TransitionIntent = typed(load, INTENT_KIND, &proposal.transition_hash)?;
     reservation::verify_intent_roots(&intent)?;
     let config = intent.origin.config();
-    validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
+    intent.verify_target()?;
     if matches!(
         proposal.format,
-        JointFormat::ExitControl | JointFormat::RetainedExitQuorum
-    ) != intent.effect.is_some()
+        JointFormat::ForeignJoint | JointFormat::ForeignDevices
+    ) != intent.foreign.is_some()
+        || matches!(
+            proposal.format,
+            JointFormat::ExitControl | JointFormat::RetainedExitQuorum
+        ) != intent.effect.is_some()
         || (proposal.format == JointFormat::RetainedExitQuorum) != intent.fence_scope.is_some()
     {
         return Err(Error::new(
@@ -529,12 +549,16 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
         })
         .collect::<Vec<_>>();
     let data_values = match (&proposal.format, &proposal.data_disks) {
-        (JointFormat::Joint | JointFormat::ExitControl | JointFormat::RetainedExitQuorum, None)
-            if added_data.is_empty() =>
+        (
+            JointFormat::Joint
+            | JointFormat::ForeignJoint
+            | JointFormat::ExitControl
+            | JointFormat::RetainedExitQuorum,
+            None,
+        ) if added_data.is_empty() => json_codec::Map::new(),
+        (JointFormat::Devices | JointFormat::ForeignDevices, Some(reference))
+            if !added_data.is_empty() =>
         {
-            json_codec::Map::new()
-        }
-        (JointFormat::Devices, Some(reference)) if !added_data.is_empty() => {
             crate::metadata_map::read_map(reference, |kind, hash| load(kind, hash))?
         }
         _ => {

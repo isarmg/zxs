@@ -96,6 +96,7 @@ impl TerminalManagement {
             target,
             added_roots: BTreeMap::new(),
             effect: None,
+            foreign: None,
             fence_scope: None,
             boundary: authority.intent().boundary.clone(),
             fence_sequence: self.management_state().sequence,

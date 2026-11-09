@@ -110,10 +110,11 @@ impl<'a> FrozenEpoch<'a> {
                     config,
                     genesis: predecessor.genesis_config()?,
                     authority_hash: Some(hash.to_owned()),
-                    previous_snapshot: previous.boundary.map(|boundary| boundary.snapshot_hash),
-                    first_sequence: previous.fence_sequence.checked_add(1).ok_or_else(|| {
-                        Error::new(ErrorCode::ResourceLimit, "frozen epoch sequence exhausted")
-                    })?,
+                    previous_snapshot: previous
+                        .boundary
+                        .as_ref()
+                        .map(|boundary| boundary.snapshot_hash.clone()),
+                    first_sequence: predecessor.first_sequence()?,
                     activation: Some((predecessor, std::sync::Arc::new(base))),
                 })
             }

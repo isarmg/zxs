@@ -247,6 +247,12 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
+        if generation.portable.is_foreign() {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "foreign joint evidence cannot admit Config before exact root, FULL and three-scope activation",
+            ));
+        }
         if self.admitted.generation.is_some() {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,

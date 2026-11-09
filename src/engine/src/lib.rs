@@ -97,14 +97,15 @@ mod file_stamp;
 mod foreign_import;
 pub use foreign_import::{
     ConfirmedForeignImportIntent, ForeignCheckpoint, ForeignDatabaseStatus, ForeignEvidenceDigest,
-    ForeignHistory, ForeignIdentityBaseline, ForeignIdentityClosureReport,
-    ForeignIdentityClosureStatus, ForeignIdentityTarget, ForeignIdentityTargetRequest,
-    ForeignImportIntentInfo, ForeignImportIntentRequest, ForeignImportIntentSource,
-    ForeignImportIntentTarget, ForeignImportLimits, ForeignImportMapping, ForeignImportPreview,
-    ForeignLocalBinding, ForeignMappedHistory, ForeignMigrationPlan, ForeignMigrationReceipt,
-    ForeignMigrationStatus, ForeignMigrationTransaction, ForeignOriginalDatabasesReport,
-    ForeignOriginalStateReport, ForeignPrimaryOrigin, ForeignSourceIdentity,
-    ForeignVersionAvailability, PreparedForeignImportIntent,
+    ForeignHistory, ForeignHistoryGraphReport, ForeignHistoryGraphStatus, ForeignIdentityBaseline,
+    ForeignIdentityClosureReport, ForeignIdentityClosureStatus, ForeignIdentityTarget,
+    ForeignIdentityTargetRequest, ForeignImportIntentInfo, ForeignImportIntentRequest,
+    ForeignImportIntentSource, ForeignImportIntentTarget, ForeignImportLimits,
+    ForeignImportMapping, ForeignImportPreview, ForeignLocalBinding, ForeignMappedHistory,
+    ForeignMigrationPlan, ForeignMigrationReceipt, ForeignMigrationStatus,
+    ForeignMigrationTransaction, ForeignOriginalDatabasesReport, ForeignOriginalStateReport,
+    ForeignPrimaryOrigin, ForeignSourceIdentity, ForeignVersionAvailability,
+    PreparedForeignImportIntent,
 };
 mod historical_save;
 pub use engine::{

@@ -13,6 +13,7 @@ type WorkspaceRootAliases = BTreeMap<(String, String, u64), BTreeSet<PathBuf>>;
 
 mod authority;
 mod backup;
+mod foreign;
 pub(in crate::engine) use backup::{BackupWriterIoConfig, PreparedBackupTargetLocator};
 pub(in crate::engine) mod exit;
 #[path = "../readmission/activation.rs"]
@@ -69,6 +70,9 @@ impl Generation {
             .map(|boundary| boundary.snapshot_hash.clone())
     }
     pub(crate) fn first_sequence(&self) -> Result<u64> {
+        if self.portable.is_foreign() {
+            return self.intent.first_sequence();
+        }
         self.intent
             .fence_sequence
             .checked_add(1)
@@ -105,6 +109,17 @@ impl Generation {
             .into();
             outcome["target_io"] = "closed".into();
         }
+        if self.portable.is_foreign() {
+            let recipe = self
+                .intent
+                .foreign
+                .as_ref()
+                .expect("invariant: Foreign core requires recipe");
+            outcome["foreign_recipe"] = recipe.digest()?.into();
+            outcome["foreign_mapping"] = recipe.identities().mapping_digest.clone().into();
+            outcome["original_state"] = recipe.identities().original.state_hash.clone().into();
+            outcome["original_pool"] = recipe.identities().original.pool_id.clone().into();
+        }
         let readmission = match &self.intent.origin {
             Origin::Readmission { request, .. } => Some(request.as_ref()),
             _ => self
@@ -130,7 +145,11 @@ impl Generation {
                 {
                     "backup-cutover-cancelled"
                 }
+                None if self.portable.is_abort() && self.intent.foreign.is_some() => {
+                    "foreign-membership-cancelled"
+                }
                 None if self.portable.is_abort() => "membership-add-cancelled",
+                None if self.portable.is_foreign() => "foreign-membership-admission",
                 None if self.portable.terminal_resume_core().is_some() => {
                     "terminal-metadata-resume"
                 }
@@ -155,6 +174,9 @@ impl Generation {
     fn next_state(&self) -> Result<(State, OperationResult)> {
         if let Some(core) = self.portable.backup_core() {
             return self.backup_first_state(core);
+        }
+        if self.portable.is_foreign() {
+            return self.foreign_first_state();
         }
         let mut next = match self.portable.terminal_resume_core() {
             Some(core) => (*core.management_state(&self.base)?).clone(),
@@ -243,6 +265,9 @@ impl Generation {
     pub(crate) fn verify_activation_candidate(&self, candidate: &Candidate) -> Result<()> {
         if let Some(core) = self.portable.backup_core() {
             return self.verify_backup_first_candidate(core, candidate);
+        }
+        if self.portable.is_foreign() {
+            return self.verify_foreign_first_candidate(candidate);
         }
         self.portable.verify_registry_source(&self.base)?;
         let (state, result) = self.next_state()?;

@@ -1,5 +1,6 @@
 //! Flat, hash-linked generation authority. Old node bytes remain unchanged;
 //! successors carry each immutable predecessor node exactly once.
+use super::foreign::ForeignCore;
 use super::*;
 use crate::engine::membership_transition::abort::{AbortAuthorityEvidence, AbortCore};
 use crate::engine::membership_transition::backup::BackupCore;
@@ -22,6 +23,7 @@ pub(crate) struct AuthorityNode {
 #[serialization(untagged)]
 enum AuthorityCore {
     Add(AuthorityNode),
+    Foreign(Box<ForeignCore>),
     Abort(AbortCore),
     Exit(exit::ExitCore),
     TerminalResume(Box<ResumeCore>),
@@ -48,12 +50,17 @@ impl AuthorityCore {
         match self {
             Self::Exit(_) => Some(intent),
             Self::TerminalResume(core) => Some(core.terminal().intent()),
-            Self::Add(_) | Self::Abort(_) | Self::Readmission(_) | Self::Backup(_) => None,
+            Self::Add(_)
+            | Self::Foreign(_)
+            | Self::Abort(_)
+            | Self::Readmission(_)
+            | Self::Backup(_) => None,
         }
     }
     fn archive(&self) -> &ArchiveRoot {
         match self {
             Self::Add(node) => &node.archive,
+            Self::Foreign(core) => &core.node().archive,
             Self::Abort(core) => &core.archive,
             Self::Exit(core) => &core.archive,
             Self::TerminalResume(core) => core.archive(),
@@ -64,6 +71,7 @@ impl AuthorityCore {
     fn intent(&self, evidence: Option<&AbortAuthorityEvidence>) -> Result<TransitionIntent> {
         match (self, evidence) {
             (Self::Add(node), None) => node.intent(),
+            (Self::Foreign(core), None) => core.intent(),
             (Self::Exit(core), None) => core.intent(),
             (Self::TerminalResume(core), None) => core.intent(),
             (Self::Readmission(core), None) => core.intent(),
@@ -77,9 +85,11 @@ impl AuthorityCore {
     }
     fn effective_config(&self, intent: &TransitionIntent) -> Result<ValidatedConfig> {
         match self {
-            Self::Add(_) | Self::Exit(_) | Self::TerminalResume(_) | Self::Readmission(_) => {
-                Ok(intent.target.clone())
-            }
+            Self::Add(_)
+            | Self::Foreign(_)
+            | Self::Exit(_)
+            | Self::TerminalResume(_)
+            | Self::Readmission(_) => Ok(intent.target.clone()),
             Self::Abort(_) => Ok(intent.origin.config().clone()),
             Self::Backup(core) => core.effective_config(),
         }
@@ -220,9 +230,27 @@ impl<'de> Deserialize<'de> for PortableAuthority {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AdditionKind {
+    Empty,
+    Foreign,
+}
 impl AuthorityNode {
     fn intent(&self) -> Result<TransitionIntent> {
+        self.intent_kind(AdditionKind::Empty)
+    }
+    pub(super) fn foreign_intent(&self) -> Result<TransitionIntent> {
+        self.intent_kind(AdditionKind::Foreign)
+    }
+    fn intent_kind(&self, kind: AdditionKind) -> Result<TransitionIntent> {
         let verified = self.joint.verify()?;
+        if verified.intent.foreign.is_some() != (kind == AdditionKind::Foreign) {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "foreign recipe must be carried by its distinct authority kind",
+            ));
+        }
+        verified.intent.verify_target()?;
         self.archive.verify_scope(&verified.intent)?;
         if verified.intent.effect.is_some()
             || matches!(
@@ -277,6 +305,21 @@ impl AuthorityNode {
         )?;
         Ok(verified.intent)
     }
+    pub(super) fn verify_membership(
+        &self,
+        candidate: &Candidate,
+        intent: &TransitionIntent,
+        hash: &str,
+    ) -> Result<()> {
+        match &self.registry {
+            Some(registry) => registry
+                .verify(intent, &intent.target)?
+                .verify_lifecycle_candidate(candidate, hash),
+            None => intent
+                .target
+                .verify_original_candidate_membership(candidate),
+        }
+    }
 }
 
 impl PortableAuthority {
@@ -286,6 +329,7 @@ impl PortableAuthority {
             AuthorityCore::Add(node) => Ok(&node.joint),
             AuthorityCore::Exit(core) => Ok(&core.joint),
             AuthorityCore::Abort(_)
+            | AuthorityCore::Foreign(_)
             | AuthorityCore::TerminalResume(_)
             | AuthorityCore::Readmission(_)
             | AuthorityCore::Backup(_) => Err(Error::new(
@@ -317,6 +361,7 @@ impl PortableAuthority {
                 self.evidence[&self.hash()?].verify_member(core, root, disk)
             }
             AuthorityCore::Add(_)
+            | AuthorityCore::Foreign(_)
             | AuthorityCore::Exit(_)
             | AuthorityCore::TerminalResume(_)
             | AuthorityCore::Readmission(_)
@@ -327,6 +372,19 @@ impl PortableAuthority {
         }
     }
 
+    pub(in crate::engine) fn is_foreign(&self) -> bool {
+        matches!(self.head, AuthorityCore::Foreign(_))
+    }
+    pub(in crate::engine::membership_transition) fn first_sequence(&self) -> Result<u64> {
+        let intent = self.intent()?;
+        if self.is_foreign() {
+            return intent.first_sequence();
+        }
+        intent
+            .fence_sequence
+            .checked_add(1)
+            .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "activation sequence exhausted"))
+    }
     pub(in crate::engine) fn is_exit(&self) -> bool {
         matches!(self.head, AuthorityCore::Exit(_))
     }
@@ -348,6 +406,7 @@ impl PortableAuthority {
             AuthorityCore::TerminalResume(core) => Ok(Some(core.registry())),
             AuthorityCore::Readmission(core) => Ok(Some(core.registry())),
             AuthorityCore::Backup(_) => Err(BackupCore::activation_required()),
+            AuthorityCore::Foreign(_) => Err(ForeignCore::activation_required()),
             AuthorityCore::Abort(_) => {
                 let hash = object_hash(AUTHORITY_KIND, node)?;
                 let intent = node.intent(self.evidence.get(&hash))?;
@@ -383,6 +442,7 @@ impl PortableAuthority {
             AuthorityCore::TerminalResume(core) => core.verified_registry().map(Some),
             AuthorityCore::Readmission(core) => core.verified_registry().map(Some),
             AuthorityCore::Backup(_) => Err(BackupCore::activation_required()),
+            AuthorityCore::Foreign(_) => Err(ForeignCore::activation_required()),
             AuthorityCore::Abort(_) => {
                 let hash = object_hash(AUTHORITY_KIND, node)?;
                 let intent = node.intent(self.evidence.get(&hash))?;
@@ -395,6 +455,11 @@ impl PortableAuthority {
     }
     pub(in crate::engine) fn verify_registry_source(&self, source: &State) -> Result<()> {
         match &self.head {
+            AuthorityCore::Foreign(core) => {
+                if let Some(registry) = &core.node().registry {
+                    registry.verify_source(&core.intent()?, source)?;
+                }
+            }
             AuthorityCore::Add(node) => {
                 if let Some(registry) = &node.registry {
                     registry.verify_source(&self.intent()?, source)?;
@@ -418,6 +483,9 @@ impl PortableAuthority {
         if self.is_backup() {
             return Err(BackupCore::activation_required());
         }
+        if self.is_foreign() {
+            return Err(ForeignCore::activation_required());
+        }
         let forbidden = self.forbidden_disk_ids()?;
         if forbidden.is_empty() {
             return Ok(config);
@@ -437,6 +505,9 @@ impl PortableAuthority {
     ) -> Result<crate::engine::disk_registry::current::PreparedCurrentNamespaces> {
         if self.is_backup() {
             return Err(BackupCore::activation_required());
+        }
+        if self.is_foreign() {
+            return Err(ForeignCore::activation_required());
         }
         let intent = self.intent()?;
         if let AuthorityCore::TerminalResume(core) = &self.head {
@@ -974,11 +1045,19 @@ impl PortableAuthority {
             evidence = previous.evidence.clone();
         }
         let authority = Self {
-            head: AuthorityCore::Add(AuthorityNode {
-                joint,
-                archive,
-                registry,
-            }),
+            head: {
+                let foreign = joint.verify()?.intent.foreign.is_some();
+                let node = AuthorityNode {
+                    joint,
+                    archive,
+                    registry,
+                };
+                if foreign {
+                    AuthorityCore::Foreign(Box::new(ForeignCore::new(node)?))
+                } else {
+                    AuthorityCore::Add(node)
+                }
+            },
             predecessors,
             evidence,
         };
@@ -1154,6 +1233,11 @@ impl PortableAuthority {
                 .transpose()?
                 .flatten();
             let carried = match node {
+                AuthorityCore::Foreign(core) => core
+                    .node()
+                    .registry
+                    .as_ref()
+                    .map(registry::RegistryContinuation::parent),
                 AuthorityCore::Add(node) => node
                     .registry
                     .as_ref()
@@ -1354,6 +1438,9 @@ impl PortableAuthority {
                 if let AuthorityCore::Backup(core) = node {
                     return core.verify_first_slot(candidate, hash);
                 }
+                if let AuthorityCore::Foreign(core) = node {
+                    return core.verify_first_slot(candidate, hash);
+                }
                 match self.registry_for_node(node)? {
                     Some(registry) => registry.verify_lifecycle_candidate(candidate, hash),
                     None => node
@@ -1402,6 +1489,10 @@ impl PortableAuthority {
             return core.effective_config();
         }
         let config = self.head.effective_config(&intent)?;
+        if let AuthorityCore::Foreign(core) = &self.head {
+            core.verify_first_slot(candidate, &self.hash()?)?;
+            return Ok(config);
+        }
         match self.registry_for_node(&self.head)? {
             Some(registry) => registry.verify_lifecycle_candidate(candidate, &self.hash()?)?,
             None => config.verify_original_candidate_membership(candidate)?,

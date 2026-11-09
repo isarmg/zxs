@@ -6,6 +6,8 @@
 
 已确定将**磁盘添加、注销/移除、外来磁盘接入和磁盘初始化**移入此工具，并取消用户发起的“计划下线”动作。失联、不可用和既有 Disabled 状态仍须如实展示。这是职责决策，不表示四项操作已经迁完；分项现状、原操作恢复及切换门槛见[辅助工具磁盘管理](../design/helper-disk-management.md)和[架构决策](../adr/0017-helper-disk-management.md)。当前可执行命令以下述各节及 `--help` 为准，不注册只会假报成功的磁盘管理占位命令。
 
+外来盘后继的[来源域历史图准备](../design/helper-foreign-mapped-graphs.md)目前仅有 Engine 单目标 API，未接 helper 同批协调器/线协议/Web，不修改既有对象命名阶段含义；它不安装目标数据库或启用任何磁盘。
+
 所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；独立 Web 已有管理员密码重置，需手动输入和独立确认；实际 SMB 密码重置已有受限本地 tdbsam 入口，真实认证仍待验收。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
 
 需要打开或恢复池的命令支持[四项保留证据运行期上限](../19-capacity-and-performance.md#runtime-retained-workspace-limits)，作为全局参数同时提供；不带时使用原配置基线。`offline-check` / `offline-export` 直接核验单盘，不借这些参数改变证明或载荷规则。恢复前应配置足够额度，不能通过删除已提交清单释放名额。
@@ -309,3 +311,5 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 救援数据库发表后/冷态只读核验
 
 对象和盘根 `rebuild` 现在在无覆盖发表后持有准确原 inode，对实际 SQLite 完整解码、对比原归档全部记录，并重核实际文件字节、属性、具名父目录及未知侧车。只有成功才报告 `file_readback_verified:true`，分别带归档/实际文件摘要和准确文件身份。已发表但核验失败会明确保留文件，不回滚或覆盖。新 `object-database verify` 与 `disk-database-rescue verify` 可在进程重启后只读完成同类核验，盘根仍必须明确 `--source`；缺失或错误镜像不会被补造。详见[读回协议与保全边界](../design/rescue-database-readback.md)。它们均无活动安装或来源接纳能力；本次生产 helper check、22 项所选 Rust 回归通过；三项新增 Engine libtest 用例尚未执行，不能据此宣称盘根全套验证通过。未复跑 CI，无真实盘操作。
+
+外来链后继直接推进[共同决定与冷态联合 State](../design/helper-foreign-joint-protocol.md)，不增加图准备 UI；原根 enrollment、全链 FULL/目标三范围安装与实际活动切换仍缺，正式接入没有开放。该后继未编译测试，不将协议源码或旧 Node 检查当可用流程验收。

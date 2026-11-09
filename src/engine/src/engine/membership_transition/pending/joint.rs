@@ -106,6 +106,10 @@ impl MembershipJointDecisionStatus {
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum JointFormat {
+    #[serialization(rename = "fenced-foreign-joint-state-decision")]
+    ForeignJoint,
+    #[serialization(rename = "fenced-foreign-device-state-decision")]
+    ForeignDevices,
     #[serialization(rename = "fenced-joint-slot-decision")]
     Joint,
     #[serialization(rename = "fenced-device-slot-decision")]

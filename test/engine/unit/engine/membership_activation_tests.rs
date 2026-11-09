@@ -1912,3 +1912,19 @@ fn membership_activation_bad_marker_cannot_be_removed_by_editing_voter_role() {
     assert!(Engine::open(&temp.path().join("system")).is_err());
     assert_eq!(files(&bad.root), before);
 }
+
+#[test]
+fn an_empty_add_certificate_cannot_decode_as_foreign_joint_authority() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    let portable = &fixture.engine.config.generation().unwrap().portable;
+    let addition = json_codec::to_value(portable).unwrap();
+    // Exact ordinary Add bytes remain a valid ordinary authority. Wrapping that
+    // certificate in the Foreign schema cannot manufacture a missing recipe.
+    let ordinary: PortableAuthority = json_codec::from_value(addition.clone()).unwrap();
+    assert!(!ordinary.is_foreign());
+    let foreign = json_codec::json!({
+        "format":"foreign-membership-joint-state", "addition":addition,
+    });
+    assert!(json_codec::from_value::<PortableAuthority>(foreign).is_err());
+}

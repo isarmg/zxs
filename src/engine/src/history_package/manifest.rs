@@ -101,7 +101,7 @@ impl HistoryManifest {
         Ok(())
     }
 
-    pub(super) fn from_state(state: &State, history_id: &str) -> Result<Self> {
+    pub(crate) fn from_state(state: &State, history_id: &str) -> Result<Self> {
         let manifest = Self::project_state(state, history_id)?;
         manifest.validate()?;
         Ok(manifest)
@@ -851,7 +851,7 @@ impl HistoryManifest {
         }
         Ok(())
     }
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         let invalid =
             |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let history = &self.history.history_tree_id;

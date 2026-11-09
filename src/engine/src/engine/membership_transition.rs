@@ -143,6 +143,8 @@ struct TransitionIntent {
     #[serialization(default, skip_serializing_if = "Option::is_none")]
     effect: Option<ExitEffect>,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
+    foreign: Option<crate::foreign_import::ForeignAdmissionRecipe>,
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
     fence_scope: Option<FenceScope>,
     boundary: Option<PublishedBoundary>,
     #[serialization(with = "storage_contract::u64_string")]
@@ -158,7 +160,30 @@ enum FenceScope {
 }
 
 impl TransitionIntent {
+    fn first_sequence(&self) -> Result<u64> {
+        match &self.foreign {
+            Some(recipe) => recipe.first_sequence(self.fence_sequence),
+            None => self.fence_sequence.checked_add(1).ok_or_else(|| {
+                Error::new(ErrorCode::ResourceLimit, "activation sequence exhausted")
+            }),
+        }
+    }
     fn verify_target(&self) -> Result<()> {
+        if let Some(recipe) = &self.foreign {
+            if self.effect.is_some()
+                || self.fence_scope.is_some()
+                || !matches!(
+                    self.origin,
+                    Origin::Genesis { .. } | Origin::Successor { .. }
+                )
+            {
+                return Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "foreign recipe cannot reinterpret another membership protocol",
+                ));
+            }
+            recipe.verify_contract(self.origin.config(), &self.target, self.operation_id)?;
+        }
         match &self.origin {
             Origin::Readmission { request, .. } => request.verify_target(self),
             Origin::BackupCutover { .. } => backup::verify_intent(self),
@@ -338,8 +363,47 @@ impl Engine {
         self.begin_membership_handoff_prepared(
             target,
             None,
+            None,
             principal,
             operation_id,
+            Some(directories),
+        )
+    }
+
+    /// Begin one foreign-chain operation from its admitted native source, not
+    /// an editable mapped State or saved proposal. Root enrollment and physical
+    /// activation remain fail-closed until their foreign-preserving path exists.
+    /// No generic empty-root admission rule is relaxed by this entry.
+    pub fn begin_foreign_membership_handoff(
+        &mut self,
+        request: ForeignIdentityTargetRequest,
+        source: &ForeignImportPreview,
+        principal: &str,
+        directories: Vec<PendingMemberDirectory>,
+    ) -> Result<MembershipFenceStatus> {
+        let operation = request.operation_id;
+        let target = ValidatedConfig::try_from(request.proposed_configuration.clone())?;
+        let recipe = match self
+            .membership_fence
+            .as_ref()
+            .and_then(|fence| fence.intent.foreign.as_ref())
+        {
+            Some(recipe) => {
+                recipe.recheck_request_source(&request, source)?;
+                recipe.clone()
+            }
+            None => {
+                let names = self.capture_foreign_identity_target(request)?;
+                self.capture_foreign_admission_recipe(&names, source)?
+            }
+        };
+        self.require_addition_chain(&target)?;
+        self.begin_membership_handoff_prepared(
+            target,
+            None,
+            Some(recipe),
+            principal,
+            operation,
             Some(directories),
         )
     }
@@ -351,13 +415,14 @@ impl Engine {
         principal: &str,
         operation_id: OperationId,
     ) -> Result<MembershipFenceStatus> {
-        self.begin_membership_handoff_prepared(target, effect, principal, operation_id, None)
+        self.begin_membership_handoff_prepared(target, effect, None, principal, operation_id, None)
     }
 
     fn begin_membership_handoff_prepared(
         &mut self,
         target: ValidatedConfig,
         effect: Option<ExitEffect>,
+        foreign: Option<crate::foreign_import::ForeignAdmissionRecipe>,
         principal: &str,
         operation_id: OperationId,
         directories: Option<Vec<PendingMemberDirectory>>,
@@ -380,6 +445,16 @@ impl Engine {
             ));
         }
         validate_transition_target(&self.config, &target, effect.as_ref())?;
+        if let Some(recipe) = &foreign {
+            recipe.verify_contract(&self.config, &target, operation_id)?;
+            // Recompute the complete target before any root reservation or fence.
+            // This does not claim that its FULLs or databases are installed.
+            let sequence = self
+                .membership_fence
+                .as_ref()
+                .map_or(self.next_slot, |fence| fence.intent.fence_sequence);
+            recipe.joint_state(&self.state, &self.config, &target, sequence)?;
+        }
         let held = directories
             .map(|directories| self.admit_added_directories(&target, directories))
             .transpose()?;
@@ -387,6 +462,13 @@ impl Engine {
             if fence.intent.operation_id != operation_id
                 || fence.intent.principal != principal
                 || fence.intent.effect != effect
+                || fence
+                    .intent
+                    .foreign
+                    .as_ref()
+                    .map(|recipe| recipe.digest())
+                    .transpose()?
+                    != foreign.as_ref().map(|recipe| recipe.digest()).transpose()?
                 || object_hash("membership-target", &fence.intent.target)?
                     != object_hash("membership-target", &target)?
             {
@@ -474,10 +556,12 @@ impl Engine {
                     .collect(),
                 target,
                 effect,
+                foreign,
                 fence_scope,
                 boundary,
                 fence_sequence: self.next_slot,
             };
+            intent.verify_target()?;
             intent.verify_fence_scope()?;
             if intent.fence_scope.is_some() {
                 // Missing-voter recovery is normally write-blocked. This exact
