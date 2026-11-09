@@ -13,6 +13,10 @@ BINDING_BLOB = "f9cb81254df6304c1061576ed61853735bebc761"
 BINDING_BYTES = 127402
 CONSUMERS = "docs/architecture/foundation-consumers.md"
 DEPENDENCY_PAGE = "docs/dependencies/data-storage.md"
+BINDING_COMMIT = "b05ee959578b1d4ce0a1686ccd5ffb2be0f07fdb"
+OLD_ORIGIN = "vendor/rust/libsqlite3-sys-0.37.0"
+COVERAGE_JSON = "test/ci/fixtures/foundation-test-coverage.json"
+COVERAGE_DOC = "docs/validation/foundation-test-coverage-map.md"
 
 
 def prepare(api, head, root, manage, run, previous, evidence):
@@ -39,10 +43,10 @@ def prepare(api, head, root, manage, run, previous, evidence):
     if len(original) != BINDING_BYTES or sha256(original) != BINDING_SHA256:
         raise ValueError("the retained SQLCipher binding is not the authenticated original")
     before_files = package["files_sha256"]
-    if any(path.startswith("sqlcipher/") for path in before_files):
-        raise ValueError("SQLCipher source is already active; do not repeat or overwrite this repair")
     if manage.files(root / DIRECTORY) != before_files:
         raise ValueError("the active SQLite source changed after admission")
+    if any(path.startswith("sqlcipher/") for path in before_files):
+        return prepare_coverage(api, head, root, manage, run, previous, evidence)
 
     evidence.update({
         "task": "restore-original-linked-sqlcipher-binding",
@@ -95,4 +99,50 @@ def prepare(api, head, root, manage, run, previous, evidence):
     if run(["git", "rev-parse", ":" + DESTINATION]).decode().strip() != BINDING_BLOB:
         raise ValueError("the restored active binding differs from the original Git blob")
     evidence["binding_repair_paths"] = paths
+    return paths
+
+
+def prepare_coverage(api, head, root, manage, run, previous, evidence):
+    comparison = api.request("compare/" + BINDING_COMMIT + "..." + head + "?per_page=1")
+    if (comparison["status"] not in ("ahead", "identical")
+            or comparison["base_commit"]["sha"] != BINDING_COMMIT
+            or comparison["merge_base_commit"]["sha"] != BINDING_COMMIT):
+        raise ValueError("coverage repair requires a descendant of the verified binding installation")
+    active = {path: digest for path, digest in previous["packages"][DIRECTORY]["files_sha256"].items()
+              if path.startswith("sqlcipher/")}
+    if (active != {BINDING: BINDING_SHA256}
+            or run(["git", "rev-parse", "HEAD:" + DESTINATION]).decode().strip() != BINDING_BLOB
+            or previous["superseded"][OLD_ORIGIN]["successor_origin_directory"] != "vendor/rust/" + IDENTITY):
+        raise ValueError("coverage repair requires the exact installed binding and SQLite upgrade chain")
+    before = manage.read_json(root / COVERAGE_JSON)
+    retired = [{"record": key, "kind": kind}
+               for kind in ("retired", "superseded") for key in sorted(previous[kind])]
+    missing = {"record": OLD_ORIGIN, "kind": "superseded"}
+    if before["retired"] != [row for row in retired if row != missing]:
+        raise ValueError("coverage repair only fills the one missing SQLite superseded record")
+    expected = deepcopy(before)
+    expected["retired"] = retired
+    evidence.update({
+        "task": "refresh-fixed-sqlite-superseded-coverage",
+        "source_binding_commit": BINDING_COMMIT,
+        "source_binding_git_blob": BINDING_BLOB,
+        "source_artifacts_downloaded": False,
+        "stage": "regenerate-retained-foundation-coverage",
+    })
+    # This generator inspects manifests/tests and offline Cargo dependency trees.
+    # It does not compile or execute the retained test recipes it documents.
+    run(["python3", "tools/rust-sources/foundation_coverage.py", "--write"])
+    run(["python3", "tools/rust-sources/foundation_coverage.py", "--check"])
+    if manage.read_json(root / COVERAGE_JSON) != expected:
+        raise ValueError("coverage generation changed more than the authenticated SQLite history entry")
+    if manage.read_json(root / manage.CATALOG) != previous:
+        raise ValueError("coverage generation changed the source catalog")
+    allowed = [COVERAGE_JSON, COVERAGE_DOC]
+    run(["git", "add", "--", *allowed])
+    paths = sorted(path.decode("utf-8") for path in
+                   run(["git", "diff", "--cached", "--name-only", "-z", "--"]).split(b"\0") if path)
+    if paths != sorted(allowed):
+        raise ValueError("coverage repair must change exactly the two generated coverage files")
+    evidence["coverage_repair_paths"] = paths
+    evidence["covered_superseded_record"] = OLD_ORIGIN
     return paths
