@@ -95,8 +95,7 @@ fn digest(plan: &Plan) -> Result<String> {
 fn prepare(input: Input) -> Result<Prepared> {
     if rustix::process::getuid().as_raw() != 0 || rustix::process::geteuid().as_raw() != 0 {
         return Err(
-            "Samba account enrollment requires the manually run real/effective root helper"
-                .into(),
+            "Samba account enrollment requires the manually run real/effective root helper".into(),
         );
     }
     if !input.external_writers_stopped {

@@ -22,7 +22,9 @@ pub(crate) fn verify_current_move_transition(
         || body.membership_epoch != epoch
         || epoch == 0
         || previous.operations.contains_key(&receipt.operation_id)
-        || previous.operation_principals.contains_key(&receipt.operation_id)
+        || previous
+            .operation_principals
+            .contains_key(&receipt.operation_id)
     {
         return Err(invalid());
     }

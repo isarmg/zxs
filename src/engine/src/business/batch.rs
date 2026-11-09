@@ -1244,7 +1244,10 @@ impl Engine {
         operation: OperationId,
     ) -> Result<OperationResult> {
         if request.kind == DirectoryBatchKind::Delete
-            && self.state().operations.get(&operation)
+            && self
+                .state()
+                .operations
+                .get(&operation)
                 .is_none_or(|receipt| receipt.kind == crate::file_deletion::batch::KIND)
         {
             return self.soft_delete_directory_files(repository, request, principal, operation);

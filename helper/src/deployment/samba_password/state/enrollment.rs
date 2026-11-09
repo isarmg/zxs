@@ -51,7 +51,12 @@ impl Target {
             .transpose()?;
         let database = existing
             .as_ref()
-            .map(|value| value.file.metadata().map(|metadata| FileStamp::of(&metadata)))
+            .map(|value| {
+                value
+                    .file
+                    .metadata()
+                    .map(|metadata| FileStamp::of(&metadata))
+            })
             .transpose()?;
         // A list command must never initialize a missing database during preview.
         let accounts = if existing.is_some() {
@@ -130,7 +135,10 @@ impl Target {
         if let Some(original) = &self.existing
             && (identity != original.identity || check_database(&original.file)? != identity)
         {
-            return Err("Samba enrollment replaced the admitted database inode; preserve all material".into());
+            return Err(
+                "Samba enrollment replaced the admitted database inode; preserve all material"
+                    .into(),
+            );
         }
         let mut current = accounts(program)?;
         let selected = current
@@ -161,7 +169,10 @@ impl Target {
             || expected.parent_inode != self.baseline.parent_inode
             || FileStamp::of(&file.metadata()?) != expected.file
         {
-            return Err("Samba enrollment database changed after readback; the receipt is historical only".into());
+            return Err(
+                "Samba enrollment database changed after readback; the receipt is historical only"
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -183,15 +194,17 @@ fn accounts(program: &Executable) -> Result<Accounts> {
         crate::private_io::SAMBA_PATH,
         "--list",
     ])?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| "native Samba account listing is not UTF-8")?;
+    let text =
+        std::str::from_utf8(&bytes).map_err(|_| "native Samba account listing is not UTF-8")?;
     let mut result = Accounts::new();
     for line in text.lines() {
         if line.is_empty() || line.chars().any(char::is_control) {
             return Err("native Samba account listing contains an invalid record".into());
         }
         let mut fields = line.splitn(3, ':');
-        let name = fields.next().ok_or("native Samba account record has no name")?;
+        let name = fields
+            .next()
+            .ok_or("native Samba account record has no name")?;
         let uid = fields
             .next()
             .ok_or("native Samba account record has no UID")?

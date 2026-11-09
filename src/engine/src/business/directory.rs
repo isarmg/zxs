@@ -861,9 +861,14 @@ pub(crate) fn namespace_locations(
     operation: OperationId,
 ) -> Result<()> {
     if changes.iter().any(|change| {
-        matches!(change, NamespaceOperation::Delete { .. } | NamespaceOperation::DeleteTree { .. })
+        matches!(
+            change,
+            NamespaceOperation::Delete { .. } | NamespaceOperation::DeleteTree { .. }
+        )
     }) {
-        crate::file_deletion::preflight::require_reversible_removals(state, repository, before, after)?;
+        crate::file_deletion::preflight::require_reversible_removals(
+            state, repository, before, after,
+        )?;
     }
     let mut ownership = changes
         .iter()

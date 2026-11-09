@@ -13,7 +13,10 @@ pub(crate) enum DeletionOwner<'a> {
 }
 pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
     if receipt.kind == crate::file_deletion::batch::KIND {
-        let Some(nodes) = receipt.result.get("deletion_nodes").and_then(json_codec::Value::as_array)
+        let Some(nodes) = receipt
+            .result
+            .get("deletion_nodes")
+            .and_then(json_codec::Value::as_array)
         else {
             return DeletionOwner::Malformed;
         };
@@ -98,7 +101,8 @@ impl DerivedOwners {
             },
             DeletionOwner::File(file) => {
                 if add && !self.file_rows.contains_key(*file) {
-                    self.file_rows.insert((*file).to_owned(), FileRows::default());
+                    self.file_rows
+                        .insert((*file).to_owned(), FileRows::default());
                 }
                 let rows = self
                     .file_rows

@@ -33,7 +33,10 @@ fn frozen_entries<'a>(state: &State, entries: &'a [Entry]) -> Vec<&'a Entry> {
     }
     // A replacement ancestor must not silently change the deleted occurrence's
     // stable directory ownership while leaving its file Entry byte-identical.
-    entries.iter().filter(|entry| paths.contains(entry.lookup_key())).collect()
+    entries
+        .iter()
+        .filter(|entry| paths.contains(entry.lookup_key()))
+        .collect()
 }
 
 fn verify_directory_contexts(
@@ -53,7 +56,8 @@ fn verify_directory_contexts(
             || before.file_contexts.get(entry.lookup_key())
                 != after.file_contexts.get(entry.lookup_key())
             || before.file_branches.get(&entry.file_id) != after.file_branches.get(&entry.file_id)
-            || before.inherited_files.get(&entry.file_id) != after.inherited_files.get(&entry.file_id)
+            || before.inherited_files.get(&entry.file_id)
+                != after.inherited_files.get(&entry.file_id)
         {
             return Err(frozen());
         }

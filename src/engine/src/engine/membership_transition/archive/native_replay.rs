@@ -24,7 +24,10 @@ pub(in crate::engine::membership_transition) fn visit(
     let mut observe = |count: usize| -> Result<()> {
         checkpoint()?;
         bytes = bytes.checked_add(count).ok_or_else(|| {
-            Error::new(ErrorCode::ResourceLimit, "native archive byte budget overflow")
+            Error::new(
+                ErrorCode::ResourceLimit,
+                "native archive byte budget overflow",
+            )
         })?;
         if bytes > MAX_BYTES {
             return Err(Error::new(
@@ -94,7 +97,9 @@ pub(in crate::engine::membership_transition) fn visit(
             let seal: PublicationSeal =
                 json_codec::from_value(store.load(SEAL_KIND, &seal_hash)?.into_value())?;
             let publication: Publication = json_codec::from_value(
-                store.load("publication", &seal.publication_hash)?.into_value(),
+                store
+                    .load("publication", &seal.publication_hash)?
+                    .into_value(),
             )?;
             verify_publication_seal(&candidate, &publication, &seal)?;
             if publication.recovery.is_some() {
@@ -104,14 +109,22 @@ pub(in crate::engine::membership_transition) fn visit(
                 ));
             }
             let snapshot: Snapshot = json_codec::from_value(
-                store.load("snapshot", &candidate.snapshot_hash)?.into_value(),
+                store
+                    .load("snapshot", &candidate.snapshot_hash)?
+                    .into_value(),
             )?;
             let admitted =
                 resolve_admitted_snapshot(snapshot, |kind, hash| store.load(kind, hash))?;
             let state = admitted.state();
-            let result = state.operations.get(&candidate.operation_id).ok_or_else(|| {
-                Error::new(ErrorCode::PublicationInvalid, "native archive operation is absent")
-            })?;
+            let result = state
+                .operations
+                .get(&candidate.operation_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "native archive operation is absent",
+                    )
+                })?;
             if state.sequence != sequence
                 || result.sequence != sequence
                 || result.operation_id != candidate.operation_id
@@ -123,7 +136,13 @@ pub(in crate::engine::membership_transition) fn visit(
                     "native archive snapshot differs from its publication",
                 ));
             }
-            visit(&candidate, &hash, &publication, &seal.publication_hash, &admitted)?;
+            visit(
+                &candidate,
+                &hash,
+                &publication,
+                &seal.publication_hash,
+                &admitted,
+            )?;
             previous = Some(sequence);
         }
     }

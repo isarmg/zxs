@@ -47,13 +47,10 @@ pub(crate) fn verify(
         let before = previous.operations.get(id);
         let after = next.operations.get(id);
         if before == after
-            || !before
-                .into_iter()
-                .chain(after)
-                .any(|receipt| {
-                    matches!(receipt.kind.as_str(), "file.delete" | "file.delete.undo")
-                        || receipt.kind == super::batch::KIND
-                })
+            || !before.into_iter().chain(after).any(|receipt| {
+                matches!(receipt.kind.as_str(), "file.delete" | "file.delete.undo")
+                    || receipt.kind == super::batch::KIND
+            })
         {
             return Ok(());
         }
@@ -81,7 +78,11 @@ pub(crate) fn verify(
         }
     }
     if changed.is_empty() {
-        return if lifecycle.is_none() { Ok(()) } else { Err(invalid()) };
+        return if lifecycle.is_none() {
+            Ok(())
+        } else {
+            Err(invalid())
+        };
     }
     let receipt = lifecycle.ok_or_else(invalid)?;
     verify_shape(previous, next, receipt)?;
@@ -199,7 +200,11 @@ fn admit_receipt(state: &State, receipt: &OperationResult, undo: bool) -> Result
     let node: FileDeletionNode = json_codec::from_value(
         receipt
             .result
-            .get(if undo { "removed_deletion_node" } else { "deletion_node" })
+            .get(if undo {
+                "removed_deletion_node"
+            } else {
+                "deletion_node"
+            })
             .ok_or_else(invalid)?
             .clone(),
     )?;
@@ -210,7 +215,12 @@ fn admit_receipt(state: &State, receipt: &OperationResult, undo: bool) -> Result
         json!({"repository_id": node.repository_id, "file_id": node.file_id, "path": node.path.key()})
     };
     let principal = admit_envelope(state, receipt, &input, if undo { 5 } else { 4 })?;
-    if receipt.kind != if undo { "file.delete.undo" } else { "file.delete" }
+    if receipt.kind
+        != if undo {
+            "file.delete.undo"
+        } else {
+            "file.delete"
+        }
         || node.sequence == 0
         || node.sequence > receipt.sequence
         || (!undo
@@ -232,8 +242,10 @@ pub(in crate::file_deletion) fn admit_envelope<'a>(
     input: &json_codec::Value,
     fields: usize,
 ) -> Result<&'a str> {
-    let principal = state.operation_principals
-        .get(&receipt.operation_id).ok_or_else(invalid)?;
+    let principal = state
+        .operation_principals
+        .get(&receipt.operation_id)
+        .ok_or_else(invalid)?;
     Engine::require_actor(principal)?;
     if receipt.sequence == 0
         || receipt.sequence > state.sequence
@@ -241,14 +253,22 @@ pub(in crate::file_deletion) fn admit_envelope<'a>(
         || receipt.commit_id.is_some()
         || receipt.history_tree_id.is_some()
         || receipt.branch_id.is_some()
-        || !matches!(receipt.commit_state, CommitState::Published | CommitState::PublishedDegraded)
+        || !matches!(
+            receipt.commit_state,
+            CommitState::Published | CommitState::PublishedDegraded
+        )
         || receipt.protection_at_publish != ProtectionAtPublish::NotApplicable
         || receipt.result["version_protection"] != json!([])
-        || !receipt.result["timestamp"].as_str()
+        || !receipt.result["timestamp"]
+            .as_str()
             .is_some_and(|value| value.parse::<u64>().is_ok())
-        || !receipt.result["membership_epoch"].as_str()
+        || !receipt.result["membership_epoch"]
+            .as_str()
             .is_some_and(|value| value.parse::<u64>().is_ok())
-        || receipt.result.as_object().is_none_or(|result| result.len() != fields)
+        || receipt
+            .result
+            .as_object()
+            .is_none_or(|result| result.len() != fields)
     {
         return Err(invalid());
     }

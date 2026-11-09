@@ -38,57 +38,63 @@ impl Engine {
         operation: OperationId,
     ) -> Result<OperationResult> {
         let input = json!({"repository_id": repository, "request": request});
-        self.mutate(KIND, principal, operation, input.clone(), |engine, state, _| {
-            let captured = capture(
-                engine.state(),
-                engine.admitted_current_namespaces()?,
-                repository,
-                request,
-                engine.config().max_entries,
-            )?;
-            let repository_id = HistoryRepositoryId::parse(repository)?;
-            let mut nodes = Vec::with_capacity(captured.targets.len());
-            let mut frontier = (0, 0);
-            for (file, path) in captured.targets {
-                let file_id = HistoryFileId::parse(&file)?;
-                let path = name_policy::LookupPath::from(&path);
-                let capture = engine.file_deletion_preflight(
-                    FileDeletionTarget {
-                        repository_id: &repository_id,
-                        file_id: &file_id,
-                        path: &path,
-                    },
-                    &HistoryWindowCancellation::default(),
+        self.mutate(
+            KIND,
+            principal,
+            operation,
+            input.clone(),
+            |engine, state, _| {
+                let captured = capture(
+                    engine.state(),
+                    engine.admitted_current_namespaces()?,
+                    repository,
+                    request,
+                    engine.config().max_entries,
                 )?;
-                require_frontier((capture.branches().len(), capture.parent_node_ids().len()))?;
-                frontier.0 += capture.branches().len();
-                frontier.1 += capture.parent_node_ids().len();
-                require_frontier(frontier)?;
-                nodes.push(super::lifecycle::deletion_node(
-                    &capture,
-                    &path,
-                    principal,
-                    operation,
-                    state.sequence,
-                )?);
-            }
-            let result = json!({
-                "input": input, "sources": captured.sources, "deletion_nodes": nodes
-            });
-            // Timestamp, membership epoch and empty version protection are the
-            // only publication additions. Reserve their envelope before any D.
-            if json_codec::to_vec(&result)?.len() > MAX_RESULT_BYTES - 1024 {
-                return Err(Error::new(
-                    ErrorCode::ResourceLimit,
-                    "complete batch deletion receipt exceeds its recovery response budget",
-                ));
-            }
-            // Capture and admit the entire set before changing even the draft.
-            for node in nodes {
-                state.file_deletions.insert(node.file_id.clone(), node);
-            }
-            Ok(result)
-        })
+                let repository_id = HistoryRepositoryId::parse(repository)?;
+                let mut nodes = Vec::with_capacity(captured.targets.len());
+                let mut frontier = (0, 0);
+                for (file, path) in captured.targets {
+                    let file_id = HistoryFileId::parse(&file)?;
+                    let path = name_policy::LookupPath::from(&path);
+                    let capture = engine.file_deletion_preflight(
+                        FileDeletionTarget {
+                            repository_id: &repository_id,
+                            file_id: &file_id,
+                            path: &path,
+                        },
+                        &HistoryWindowCancellation::default(),
+                    )?;
+                    require_frontier((capture.branches().len(), capture.parent_node_ids().len()))?;
+                    frontier.0 += capture.branches().len();
+                    frontier.1 += capture.parent_node_ids().len();
+                    require_frontier(frontier)?;
+                    nodes.push(super::lifecycle::deletion_node(
+                        &capture,
+                        &path,
+                        principal,
+                        operation,
+                        state.sequence,
+                    )?);
+                }
+                let result = json!({
+                    "input": input, "sources": captured.sources, "deletion_nodes": nodes
+                });
+                // Timestamp, membership epoch and empty version protection are the
+                // only publication additions. Reserve their envelope before any D.
+                if json_codec::to_vec(&result)?.len() > MAX_RESULT_BYTES - 1024 {
+                    return Err(Error::new(
+                        ErrorCode::ResourceLimit,
+                        "complete batch deletion receipt exceeds its recovery response budget",
+                    ));
+                }
+                // Capture and admit the entire set before changing even the draft.
+                for node in nodes {
+                    state.file_deletions.insert(node.file_id.clone(), node);
+                }
+                Ok(result)
+            },
+        )
     }
 }
 

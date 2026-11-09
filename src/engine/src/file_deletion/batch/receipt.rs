@@ -68,7 +68,10 @@ fn requested_files(
             .directory_branches
             .get(&source.directory_branch_id)
             .ok_or_else(invalid)?;
-        let tree = state.directory_trees.get(&frozen.tree_id).ok_or_else(invalid)?;
+        let tree = state
+            .directory_trees
+            .get(&frozen.tree_id)
+            .ok_or_else(invalid)?;
         let baseline = state
             .directory_trees
             .get(&source.expected_tree_id)
@@ -86,8 +89,16 @@ fn requested_files(
             || owner.directory_id != branch.directory_id
             || baseline_owner.repository_id != input.repository_id
             || baseline_owner.directory_id != branch.directory_id
-            || !inherits(state, &branch.directory_branch_id, &tree.directory_branch_id)
-            || !seen.insert((&source.directory_branch_id, &source.entry_id, path.key().to_owned()))
+            || !inherits(
+                state,
+                &branch.directory_branch_id,
+                &tree.directory_branch_id,
+            )
+            || !seen.insert((
+                &source.directory_branch_id,
+                &source.entry_id,
+                path.key().to_owned(),
+            ))
         {
             return Err(invalid());
         }
@@ -109,7 +120,10 @@ fn requested_files(
     Ok(files)
 }
 
-pub(in crate::file_deletion) fn admit(state: &State, receipt: &OperationResult) -> Result<Evidence> {
+pub(in crate::file_deletion) fn admit(
+    state: &State,
+    receipt: &OperationResult,
+) -> Result<Evidence> {
     if receipt.kind != KIND || json_codec::to_vec(&receipt.result)?.len() > MAX_RESULT_BYTES {
         return Err(invalid());
     }
@@ -181,8 +195,7 @@ pub(in crate::file_deletion) fn verify(
     changed: &BTreeSet<String>,
 ) -> Result<()> {
     let evidence = admit(next, receipt)?;
-    if receipt.sequence != next.sequence
-        || previous.operations.contains_key(&receipt.operation_id)
+    if receipt.sequence != next.sequence || previous.operations.contains_key(&receipt.operation_id)
     {
         return Err(invalid());
     }

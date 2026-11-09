@@ -224,7 +224,10 @@ impl Choice {
             || candidate.previous_snapshot.as_deref() != Some(self.record.source_snapshot.as_str())
             || candidate.transaction_id != format!("tx_{}", &transaction[..32])
             || candidate.generation() != config.generation_hash()
-            || candidate.registry() != config.generation().and_then(|generation| generation.registry())
+            || candidate.registry()
+                != config
+                    .generation()
+                    .and_then(|generation| generation.registry())
         {
             return Err(invalid(
                 "journal PREPARE is not the original selected native move candidate",

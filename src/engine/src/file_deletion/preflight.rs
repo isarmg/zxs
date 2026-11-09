@@ -45,18 +45,25 @@ pub(super) fn require_scope_writable(
 ) -> Result<()> {
     let main = &state.branches[&repository.main_branch_id];
     if main.state != crate::BranchState::Active {
-        return Err(Error::new(ErrorCode::BranchNotActive, "file namespace is not writable"));
+        return Err(Error::new(
+            ErrorCode::BranchNotActive,
+            "file namespace is not writable",
+        ));
     }
     if let Some(view) = current {
         view.require_branch_write(state, &repository.main_branch_id)?;
     }
-    if let Some(git) = state.directory_git_repositories.get(&repository.repository_id) {
+    if let Some(git) = state
+        .directory_git_repositories
+        .get(&repository.repository_id)
+    {
         require_directory_owner(state, current, repository, git)?;
     }
     let mut checked = BTreeSet::new();
-    for entry in entries.iter().filter(|entry| {
-        entry.kind == NamespaceEntryKind::File && entry.file_id == file
-    }) {
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
+    {
         checkpoint(cancellation)?;
         let mut key = entry.lookup_key();
         while let Some((parent, _)) = key.rsplit_once('/') {
@@ -78,7 +85,7 @@ fn require_directory_owner(
     state: &State,
     current: Option<&crate::engine::CurrentNamespaces>,
     repository: &Repository,
-    git: &crate::DirectoryGitRepository,
+    git: &storage_contract::directory_git::DirectoryGitRepository,
 ) -> Result<()> {
     if git.repository_id != repository.repository_id
         || state.directory_selections.get(&git.directory_id) != Some(&git.current_branch_id)
@@ -232,18 +239,32 @@ pub(crate) fn require_reversible_removals(
     before: &[Entry],
     after: &[Entry],
 ) -> Result<()> {
-    let retained = after.iter().map(|entry| entry.entry_id.as_str()).collect::<BTreeSet<_>>();
-    let parents = before.iter().map(|entry| (entry.lookup_key(), entry))
+    let retained = after
+        .iter()
+        .map(|entry| entry.entry_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let parents = before
+        .iter()
+        .map(|entry| (entry.lookup_key(), entry))
         .collect::<std::collections::BTreeMap<_, _>>();
-    for entry in before.iter().filter(|entry| !retained.contains(entry.entry_id.as_str())) {
+    for entry in before
+        .iter()
+        .filter(|entry| !retained.contains(entry.entry_id.as_str()))
+    {
         let mut initialized = state.directory_git_repositories.contains_key(repository)
             || (entry.kind == NamespaceEntryKind::Directory
-                && state.directory_git_repositories.contains_key(&entry.entry_id));
+                && state
+                    .directory_git_repositories
+                    .contains_key(&entry.entry_id));
         let mut path = entry.lookup_key();
         while !initialized {
-            let Some((parent, _)) = path.rsplit_once('/') else { break };
+            let Some((parent, _)) = path.rsplit_once('/') else {
+                break;
+            };
             initialized = parents.get(parent).is_some_and(|parent| {
-                state.directory_git_repositories.contains_key(&parent.entry_id)
+                state
+                    .directory_git_repositories
+                    .contains_key(&parent.entry_id)
             });
             path = parent;
         }

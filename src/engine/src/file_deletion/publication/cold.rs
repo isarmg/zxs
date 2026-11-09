@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 fn is_lifecycle(kind: &str) -> bool {
     matches!(
         kind,
-        "file.delete" | "file.delete.undo" | crate::business::FILE_HISTORY_MOVE_KIND
+        "file.delete"
+            | "file.delete.undo"
+            | crate::business::FILE_HISTORY_MOVE_KIND
             | crate::file_deletion::batch::KIND
     )
 }

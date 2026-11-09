@@ -13,26 +13,27 @@ fn invalid() -> Error {
 
 fn receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
     let mut found = None;
-    let mut inspect = |id: &OperationId| -> Result<()> {
-        let before = previous.operations.get(id);
-        let after = next.operations.get(id);
-        if before == after {
-            return Ok(());
-        }
-        if before.into_iter().chain(after).any(|op| {
-            op.kind == FILE_HISTORY_MOVE_KIND || op.result.get("move_request").is_some()
-        }) {
-            let current = after.ok_or_else(invalid)?;
-            if before.is_some()
-                || current.operation_id != *id
-                || current.kind != FILE_HISTORY_MOVE_KIND
-                || found.replace(current).is_some()
-            {
-                return Err(invalid());
+    let mut inspect =
+        |id: &OperationId| -> Result<()> {
+            let before = previous.operations.get(id);
+            let after = next.operations.get(id);
+            if before == after {
+                return Ok(());
             }
-        }
-        Ok(())
-    };
+            if before.into_iter().chain(after).any(|op| {
+                op.kind == FILE_HISTORY_MOVE_KIND || op.result.get("move_request").is_some()
+            }) {
+                let current = after.ok_or_else(invalid)?;
+                if before.is_some()
+                    || current.operation_id != *id
+                    || current.kind != FILE_HISTORY_MOVE_KIND
+                    || found.replace(current).is_some()
+                {
+                    return Err(invalid());
+                }
+            }
+            Ok(())
+        };
     match next.operations.changes_since(&previous.operations) {
         storage_contract::MapChanges::Keys(keys) => {
             for id in keys.iter() {

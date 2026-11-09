@@ -39,9 +39,10 @@ pub(in crate::file_deletion) fn capture(
             "file deletion batch requires one to one hundred explicit file occurrences",
         ));
     }
-    let repo = state.repositories.get(repository).ok_or_else(|| {
-        Error::new(ErrorCode::RepositoryNotFound, "batch repository is missing")
-    })?;
+    let repo = state
+        .repositories
+        .get(repository)
+        .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "batch repository is missing"))?;
     if !repo.file_manager_root {
         return Err(Error::new(
             ErrorCode::FileBranchScope,
@@ -123,12 +124,18 @@ pub(in crate::file_deletion) fn capture(
             .ok()
             .map(|index| &entries[index]);
         if actual != Some(entry) {
-            return Err(conflict("file is not the exact current namespace occurrence"));
+            return Err(conflict(
+                "file is not the exact current namespace occurrence",
+            ));
         }
         if state.file_deletions.contains_key(&entry.file_id) {
             return Err(super::super::lifecycle::frozen());
         }
-        if !seen.insert((&source.directory_branch_id, &source.entry_id, path.key().to_owned())) {
+        if !seen.insert((
+            &source.directory_branch_id,
+            &source.entry_id,
+            path.key().to_owned(),
+        )) {
             return Err(Error::new(
                 ErrorCode::BatchMappingConflict,
                 "duplicate deletion occurrence",
@@ -137,7 +144,9 @@ pub(in crate::file_deletion) fn capture(
         sources.push(FrozenSource {
             tree_id: admitted
                 .as_ref()
-                .map_or(branch.head_tree_id.as_str(), |scope| scope.selected_tree_id())
+                .map_or(branch.head_tree_id.as_str(), |scope| {
+                    scope.selected_tree_id()
+                })
                 .to_owned(),
             file_id: entry.file_id.clone(),
         });
