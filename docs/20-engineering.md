@@ -154,7 +154,7 @@ platform-io → 文件系统 / SQLite / 凭据算法依赖
 
 辅助工具的磁盘请求、状态、操作 ID 与整数编码使用 `storage-engine` 已公开的共同契约，不另建到 `storage-contract` 的直接依赖。磁盘槽名通过引擎明确公开的 `validate_slot` 调用同一 `name-policy` 实现，不复制规则、跳过校验或添加 helper 到命名包的直接边。这些 API 只提供原类型与语法约束，不授予磁盘接纳或发布权限；辅助工具仍须走原有授权、持久化和恢复流程。
 
-辅助管理流程不再链接 `storage-server`：helper 保留传输和单操作门禁，发行内嵌的准确 ZXS 程序通过有界本机管道执行无监听的 `offline` 协调器。AuthStore、首次激活与成员维护仍使用服务实现，不复制或用 Engine 泛化转发掩盖反向边。通用本地账户读取与原子私有文件/bundle 发布置于 platform-io，业务记录和恢复决定不下沉；开发依赖 storage-server 只供真实启动集成测试。入口、资源预算与未覆盖部署边界见[辅助工具](components/helper.md#管理语义与独立进程边界)。
+辅助管理流程不再链接 `storage-server`：helper 保留传输和单操作门禁，发行内嵌的准确 ZXS 程序通过有界本机管道执行无监听的 `offline` 协调器。AuthStore、首次激活与成员维护仍使用服务实现，不复制或用 Engine 泛化转发掩盖反向边。通用本地账户读取与原子私有文件/bundle 发布置于 platform-io，业务记录和恢复决定不下沉；开发依赖 storage-server 只供真实启动集成测试。入口、资源预算与未覆盖部署边界见[辅助工具](components/helper.md#offline-maintenance-process-boundary)。
 
 [架构检查器](../.github/scripts/check-architecture.py)以 TOML 和真实路径解析包身份、依赖别名、workspace 继承、可选与目标条件依赖，区分 runtime/build/dev，检查运行与构建依赖无环；显式允许的开发期反向边不视作生产环。它不按当前主机 cfg 隐藏依赖，也不把 Foundation 内部一并当作第一方分层。Foundation 的布局、来源完整性和特性边由[来源治理工具](../tools/rust-sources/manage.py)校验；[消费者索引生成器](../tools/rust-sources/architecture.py)只生成并核对声明依赖与保守特性闭包的文档，不是 Foundation 分层规则检查器。这些检查都不证明模块内业务调用、授权与锁语义正确。
 

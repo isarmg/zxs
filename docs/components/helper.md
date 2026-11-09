@@ -10,6 +10,8 @@
 
 需要打开或恢复池的命令支持[四项保留证据运行期上限](../19-capacity-and-performance.md#runtime-retained-workspace-limits)，作为全局参数同时提供；不带时使用原配置基线。`offline-check` / `offline-export` 直接核验单盘，不借这些参数改变证明或载荷规则。恢复前应配置足够额度，不能通过删除已提交清单释放名额。
 
+<a id="offline-maintenance-process-boundary"></a>
+
 ## 管理语义与独立进程边界
 
 辅助 Web 的使用入口仍是独立 `zxs-helper`，不依赖已安装的守护进程或网络管理服务。首次管理员、现有密码重置、首次存储批次与磁盘成员/退役协调由 `src/server/src/offline/` 单一实现拥有，通过内嵌同版 `zxs` 的隐藏 `internal-maintenance` 入口执行。该分支先于日志初始化、普通启动准入、Tokio 与监听器退出；不会启动、启用或重新加载任何系统服务。
