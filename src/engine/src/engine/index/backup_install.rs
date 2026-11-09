@@ -57,18 +57,17 @@ fn close_old(proof: &mut QueryProof, sequence: u64) -> Result<()> {
     }
     if let IndexAvailability::Ready(mut writer) =
         std::mem::replace(&mut proof.availability, suspended(sequence))
+        && let Err(failure) = writer.close()
     {
-        if let Err(failure) = writer.close() {
-            proof.availability = IndexAvailability::Unavailable(Arc::new(IndexFailure {
-                stage: IndexFailureStage::Update,
-                sequence,
-                source: failure.source,
-            }));
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "SYSTEM index shutdown failed; no alias-installation capability was issued; inspect index_health",
-            ));
-        }
+        proof.availability = IndexAvailability::Unavailable(Arc::new(IndexFailure {
+            stage: IndexFailureStage::Update,
+            sequence,
+            source: failure.source,
+        }));
+        return Err(Error::new(
+            ErrorCode::RecoveryRequired,
+            "SYSTEM index shutdown failed; no alias-installation capability was issued; inspect index_health",
+        ));
     }
     // IndexConnection disables checkpoint-on-close. The exact main/WAL/SHM/
     // journal set is retained by the worker, not checkpointed or unlinked here.

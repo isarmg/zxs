@@ -567,10 +567,10 @@ fn spawn_batch(
             update(&|s| { s.phase = BackupPreparationPhase::HistoryPrepared;
                 s.detail = format!("all {} explicit targets contain complete frozen State and history; database installation, chain admission and authority switch remain unsupported", frozen.targets.len()); })
         })();
-        if let Err(error) = result {
-            if let Err(persistence) = update(&|s| { s.phase = BackupPreparationPhase::Blocked; s.error_code = Some(error.code()); s.detail = error.to_string(); }) {
-                progress.lock().expect("invariant: backup batch status poisoned").detail = format!("{error}; progress persistence failed: {persistence}");
-            }
+        if let Err(error) = result
+            && let Err(persistence) = update(&|s| { s.phase = BackupPreparationPhase::Blocked; s.error_code = Some(error.code()); s.detail = error.to_string(); })
+        {
+            progress.lock().expect("invariant: backup batch status poisoned").detail = format!("{error}; progress persistence failed: {persistence}");
         }
     })?;
     Ok(Worker {

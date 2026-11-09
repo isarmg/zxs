@@ -228,17 +228,17 @@ fn spawn(
         .name("zxs-backup-scoped-databases".into())
         .spawn(move || {
             let _locks = locks;
-            if let Err(error) = run(&frozen, &system, &work, objects, &progress, &cancellation) {
-                if let Err(persistence) = update(&system, &progress, |status| {
+            if let Err(error) = run(&frozen, &system, &work, objects, &progress, &cancellation)
+                && let Err(persistence) = update(&system, &progress, |status| {
                     status.phase = BackupPreparationPhase::Blocked;
                     status.error_code = Some(error.code());
                     status.detail = error.to_string();
-                }) {
-                    progress
-                        .lock()
-                        .expect("invariant: scoped database progress poisoned")
-                        .detail = format!("{error}; progress persistence failed: {persistence}");
-                }
+                })
+            {
+                progress
+                    .lock()
+                    .expect("invariant: scoped database progress poisoned")
+                    .detail = format!("{error}; progress persistence failed: {persistence}");
             }
         })?;
     let job = task.objects.native.selection.first().clone();

@@ -304,8 +304,7 @@ impl Roots {
         self.visit(|root| {
             for path in ["disk.json", GENERATION] {
                 let parent = root.private_child(
-                    &root
-                        .path()
+                    root.path()
                         .join(path)
                         .parent()
                         .expect("invariant: native file has a parent"),

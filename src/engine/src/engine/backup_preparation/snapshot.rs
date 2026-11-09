@@ -126,7 +126,7 @@ impl PreparedSnapshot {
                     disk,
                     &engine.config,
                 ))?;
-            for (record, _) in records.records.into_iter().rev().filter(|(record, _)| {
+            if let Some((record, _)) = records.records.into_iter().rev().find(|(record, _)| {
                 record.record_type == RecordType::Publication
                     && record.sequence == job.request.expected_sequence
             }) {
@@ -165,7 +165,6 @@ impl PreparedSnapshot {
                 };
                 value.verify(job)?;
                 envelope = Some(canonical_json(&value)?);
-                break;
             }
             if envelope.is_some() {
                 break;

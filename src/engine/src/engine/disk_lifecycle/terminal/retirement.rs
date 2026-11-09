@@ -180,13 +180,13 @@ impl TerminalManagement {
                 "terminal retirement plan digest differs",
             ));
         }
-        if let Some(pending) = self.load_terminal_retirement()? {
-            if pending.plan.intent != plan.intent || pending.plan.digest != plan.digest {
-                return Err(failure(
-                    ErrorCode::IdempotencyKeyReused,
-                    "another exact terminal retirement is already pending",
-                ));
-            }
+        if let Some(pending) = self.load_terminal_retirement()?
+            && (pending.plan.intent != plan.intent || pending.plan.digest != plan.digest)
+        {
+            return Err(failure(
+                ErrorCode::IdempotencyKeyReused,
+                "another exact terminal retirement is already pending",
+            ));
         }
         let directory = self.retirement_directory();
         // The immutable intent is durable before the selection. Repeating these

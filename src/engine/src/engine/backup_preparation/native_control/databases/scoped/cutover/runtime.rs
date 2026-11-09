@@ -266,17 +266,17 @@ fn spawn(
         .name("zxs-backup-cutover-inputs".into())
         .spawn(move || {
             let _locks = locks;
-            if let Err(error) = run(&frozen, &system, &work, &report, &progress, &cancel) {
-                if let Err(persistence) = update(&system, &progress, |status| {
+            if let Err(error) = run(&frozen, &system, &work, &report, &progress, &cancel)
+                && let Err(persistence) = update(&system, &progress, |status| {
                     status.phase = BackupPreparationPhase::Blocked;
                     status.error_code = Some(error.code());
                     status.detail = error.to_string();
-                }) {
-                    progress
-                        .lock()
-                        .expect("invariant: cutover diagnostic mutex poisoned")
-                        .detail = format!("{error}; progress persistence failed: {persistence}");
-                }
+                })
+            {
+                progress
+                    .lock()
+                    .expect("invariant: cutover diagnostic mutex poisoned")
+                    .detail = format!("{error}; progress persistence failed: {persistence}");
             }
         })?;
     let job = task.selection().first().clone();

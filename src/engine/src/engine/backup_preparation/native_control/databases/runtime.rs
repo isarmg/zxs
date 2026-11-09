@@ -229,17 +229,17 @@ fn spawn(
         .name("zxs-backup-object-databases".into())
         .spawn(move || {
             let _locks = locks;
-            if let Err(error) = run(&frozen, &system, &work, native, &progress, &cancellation) {
-                if let Err(persistence) = update(&system, &progress, |status| {
+            if let Err(error) = run(&frozen, &system, &work, native, &progress, &cancellation)
+                && let Err(persistence) = update(&system, &progress, |status| {
                     status.phase = BackupPreparationPhase::Blocked;
                     status.error_code = Some(error.code());
                     status.detail = error.to_string();
-                }) {
-                    progress
-                        .lock()
-                        .expect("invariant: database progress poisoned")
-                        .detail = format!("{error}; progress persistence failed: {persistence}");
-                }
+                })
+            {
+                progress
+                    .lock()
+                    .expect("invariant: database progress poisoned")
+                    .detail = format!("{error}; progress persistence failed: {persistence}");
             }
         })?;
     let job = task.native.selection.first().clone();

@@ -53,7 +53,7 @@ impl<'a> PreparedFiles<'a> {
                 || path
                     .components()
                     .any(|part| !matches!(part, std::path::Component::Normal(_)))
-                || path == PathBuf::from(MANIFEST)
+                || path == std::path::Path::new(MANIFEST)
                 || exact.insert(path, bytes).is_some()
             {
                 return Err(invalid(

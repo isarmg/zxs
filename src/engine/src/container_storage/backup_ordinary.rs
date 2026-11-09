@@ -379,7 +379,7 @@ impl<'a> Image<'a> {
                     self.add_directory(
                         PathBuf::from("histories")
                             .join(&repository.history_tree_id)
-                            .join(&forest)
+                            .join(forest)
                             .join("namespace-directories")
                             .join(&repository.repository_id)
                             .join(entry.path()),

@@ -19,8 +19,8 @@ enum ArchiveFormat {
 #[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 enum StopSnapshot {
     Fresh {
-        binding: StopPlan,
-        native: RetirementStopSnapshot,
+        binding: Box<StopPlan>,
+        native: Box<RetirementStopSnapshot>,
     },
     Existing {
         native: stopped::ExistingStop,
@@ -470,10 +470,12 @@ fn read_frame(
         store::optional(directory, &directory.path().join(EXISTING))?;
     let stop = match (fresh, existing) {
         (Some(binding), None) => StopSnapshot::Fresh {
-            native: bootstrap
-                .retirement_stop_snapshot(&binding.stop)
-                .map_err(management_error)?,
-            binding,
+            native: Box::new(
+                bootstrap
+                    .retirement_stop_snapshot(&binding.stop)
+                    .map_err(management_error)?,
+            ),
+            binding: Box::new(binding),
         },
         (None, Some(native)) => StopSnapshot::Existing { native },
         _ => {

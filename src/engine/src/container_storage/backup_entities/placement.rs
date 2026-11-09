@@ -107,13 +107,11 @@ impl EntityPlacement {
             directory.parent_directory_id = nearest(&by_path, &directory.path, true);
         }
         let mut retained = BTreeMap::<(String, String), BTreeSet<String>>::new();
-        let mut entries = directories.len();
-        for version in state.versions.values() {
+        for (entries, version) in (directories.len()..).zip(state.versions.values()) {
             preparation_checkpoint(stop)?;
             if entries == MAX_ENTRIES {
                 return Err(budget());
             }
-            entries += 1;
             retained
                 .entry((version.history_tree_id.clone(), version.file_id.clone()))
                 .or_default()

@@ -23,7 +23,7 @@ pub(super) struct ClosedLifetime {
     admission_epoch: Option<String>,
 }
 pub(super) enum StopEvidence {
-    Fresh(StopPlan),
+    Fresh(Box<StopPlan>),
     Existing(ExistingStop),
 }
 impl TerminalManagement {
@@ -202,7 +202,7 @@ impl TerminalManagement {
                 bootstrap
                     .admit_retirement_stop(&stop.stop, source)
                     .map_err(management_error)?;
-                Ok(Some(StopEvidence::Fresh(stop)))
+                Ok(Some(StopEvidence::Fresh(Box::new(stop))))
             }
             (None, Some(stop)) => {
                 let current = bootstrap

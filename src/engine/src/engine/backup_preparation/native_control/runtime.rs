@@ -231,10 +231,10 @@ fn spawn(
             for (target, job) in work.iter().zip(frozen.selection.jobs()) { named_target(&target.root, job)?; }
             update(&|status| { status.phase = BackupPreparationPhase::NativeControlPrepared; status.detail = format!("all {} targets independently retain original native control and complete history material; database installation, complete-chain admission and cutover are not implemented", work.len()); })
         })();
-        if let Err(error) = result {
-            if let Err(persistence) = update(&|status| { status.phase = BackupPreparationPhase::Blocked; status.error_code = Some(error.code()); status.detail = error.to_string(); }) {
-                progress.lock().expect("invariant: native progress poisoned").detail = format!("{error}; progress persistence failed: {persistence}");
-            }
+        if let Err(error) = result
+            && let Err(persistence) = update(&|status| { status.phase = BackupPreparationPhase::Blocked; status.error_code = Some(error.code()); status.detail = error.to_string(); })
+        {
+            progress.lock().expect("invariant: native progress poisoned").detail = format!("{error}; progress persistence failed: {persistence}");
         }
     })?;
     let job = task.selection.first().clone();
