@@ -106,7 +106,7 @@ impl Target {
         }
     }
 
-    fn can_manage_branches(&self, state: &State) -> bool {
+    fn current_repository(&self, state: &State) -> bool {
         matches!(
             &self.scope,
             Scope::CurrentDirectory {
@@ -115,7 +115,10 @@ impl Target {
             }
         ) && self.current(state)
             && state.files.directory_branches_supported
-            && super::actions::write_allowed(state)
+    }
+
+    fn can_manage_branches(&self, state: &State) -> bool {
+        self.current_repository(state) && super::actions::write_allowed(state)
     }
 
     fn current(&self, state: &State) -> bool {

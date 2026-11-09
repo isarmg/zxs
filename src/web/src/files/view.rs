@@ -7,6 +7,7 @@ use crate::{format, icons::FileIcon, ui::State};
 use web_interface::components::EmptyState;
 use web_interface::{i18n::t, prelude::*};
 
+mod directory_preview;
 mod disk_read;
 mod disk_status;
 use disk_read::DiskRead;
@@ -192,7 +193,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             </label>
         </div>
 
-        <Show when=move ||state.with(|s|s.files.directory_preview.as_ref().is_some_and(|preview|preview.branch().is_none()))><p class="zxs-row" role="status" data-directory-snapshot-readonly="">{t("正在只读浏览明确选定的历史快照，不是当前工作内容。此快照不能直接设为默认；返回默认视图后继续当前工作。","You are viewing an explicitly selected immutable snapshot, not current working content. This snapshot cannot be set as default directly; return to the default view to continue current work.")}</p></Show>
+        {directory_preview::view(state)}
         <Show when=move ||state.with(|s|s.files.loaded&&s.files.writable&&!s.files.directory_branches_supported)><p class="zxs-row">{t("目录分支管理需要先手动初始化当前目录的独立仓库。","Initialize this directory as an independent repository before managing its branches.")}</p></Show>
         <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable&&s.files.directory_preview.is_none())><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
         {backup::view(state)}
