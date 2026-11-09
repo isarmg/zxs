@@ -326,6 +326,7 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<StoredId
             "directory database records do not match their recorded digest",
         ));
     }
+    crate::sqlite_integrity::verify(connection).await?;
     Ok(StoredIdentity {
         records,
         sequence,

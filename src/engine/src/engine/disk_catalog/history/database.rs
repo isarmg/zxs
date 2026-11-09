@@ -152,6 +152,7 @@ async fn read_connection(
             "disk history rows differ from their recorded digest",
         ));
     }
+    crate::sqlite_integrity::verify(connection).await?;
     Ok(snapshot)
 }
 

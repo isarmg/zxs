@@ -226,5 +226,6 @@ async fn read_connection(
             "disk catalog rows differ from their recorded digest",
         ));
     }
+    crate::sqlite_integrity::verify(connection).await?;
     Ok(snapshot)
 }

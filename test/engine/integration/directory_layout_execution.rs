@@ -847,3 +847,6 @@ mod file_database_budget;
 
 #[path = "directory_layout_execution/object_material.rs"]
 mod object_material;
+
+#[path = "directory_layout_execution/rescue_integrity.rs"]
+mod rescue_integrity;

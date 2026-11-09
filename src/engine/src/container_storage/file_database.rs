@@ -477,6 +477,7 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<Verified
             "file database records differ from their recorded digest",
         ));
     }
+    crate::sqlite_integrity::verify(connection).await?;
     Ok(VerifiedSnapshot {
         file,
         history,
