@@ -183,18 +183,33 @@ class ReleaseForeignReviewWorkflow(unittest.TestCase):
         self.assertNotIn('continue-on-error:', self.browser)
         self.assertEqual(self.browser.count('release-acceptance.sh'), 1)
 
-    def test_existing_dependencies_and_both_concurrency_policies_are_unchanged(self):
+    def test_retained_dependencies_and_current_concurrency_policies(self):
         self.assertIn('    needs: [static, web-production, smb-sdk]\n', self.browser)
         self.assertIn('    timeout-minutes: 60\n', self.browser)
+        # Manual short CI must not cancel an earlier run. The paused browser
+        # recipe keeps its dependencies without restoring the old CI policy.
         expected = (
             (self.ci, '  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n'
-             '  cancel-in-progress: true\n'),
+             '  cancel-in-progress: false\n'),
             (self.release, '  group: release-${{ github.ref }}\n'
              '  cancel-in-progress: false\n'),
         )
         for source, policy in expected:
             self.assertEqual(re.search(r'^concurrency:\n((?:  .+\n)+)', source,
                                        re.MULTILINE).group(1), policy)
+
+    def test_full_recipe_retains_original_concurrency_policies(self):
+        expected = (
+            ('ci.yml', '  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n'
+             '  cancel-in-progress: true\n'),
+            ('release.yml', '  group: release-${{ github.ref }}\n'
+             '  cancel-in-progress: false\n'),
+        )
+        for name, policy in expected:
+            with self.subTest(workflow=name):
+                source = (ROOT / '.github/ci/full-workflows' / name).read_text()
+                self.assertEqual(re.search(r'^concurrency:\n((?:  .+\n)+)', source,
+                                           re.MULTILINE).group(1), policy)
 
     def test_foreign_evidence_is_scoped_and_attempted_even_after_failure(self):
         block = self.browser.split('      - name: Retain foreign review browser evidence\n', 1)[1]
