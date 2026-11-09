@@ -32,6 +32,7 @@ pub(crate) fn page(state: RwSignal<State>) -> impl IntoView {
     });
     view! {
         <section class="zxs-content-stack zxs-entry-page zxs-stack">
+            {super::deletion::view(state)}
             {move ||match (selected.get(), current_directory.get()) {
                 (Some(selection), _) => entry_view(state, selection).into_any(),
                 (None, Some(_)) => directory::view(state).into_any(),
@@ -238,7 +239,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                 {(!is_file).then(move ||view!{<button class="zxs-button" disabled=move ||mutation_disabled.get() on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){super::placement::start_entry(state,entry);}>{t("主盘规则","Primary placement")}</button>})}
                 <button class="zxs-button" disabled=move ||state.with(|s|actions::pending(s)||selection.with_value(|key|key.action_entry(s).and_then(super::model::file_context)).is_none()) on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.action_entry(s).cloned())){backup::recursive::start_entry(state,entry);}>{t("逐级备份","Recursive backups")}</button>
                 <button class="zxs-button" disabled=move ||state.with(|s|actions::pending(s)||selection.with_value(|key|key.action_entry(s).and_then(super::model::file_context)).is_none()) on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.action_entry(s).cloned())){backup::start_entry(state,entry);}>{t("自定义备份前缀","Custom backup prefixes")}</button>
-                <Show when=move ||can_modify.get()><button class="zxs-button" title=t("软删除目前只支持单个当前可写文件", "Soft deletion currently supports one current writable file") disabled=move ||mutation_disabled.get()||!is_file on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){batch::start(state,batch::Kind::Delete,Some(entry));}><FileIcon name="delete"/>{t("删除","Delete")}</button></Show>
+                <Show when=move ||can_modify.get()><button class="zxs-button" title=t("软删除同一文件的全部路径与分支；不删除目录本身", "Soft-delete all paths and branches of this file, not the folder itself") disabled=move ||mutation_disabled.get()||!is_file on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){batch::start(state,batch::Kind::Delete,Some(entry));}><FileIcon name="delete"/>{t("软删除文件…","Soft-delete file…")}</button></Show>
             </div></div>
             <Show when=move ||entry.with(|entry|entry.as_ref().is_some_and(Entry::retained_history))>
                 <p class="zxs-row" role="status">{t("这是按稳定 file_id 打开的保留历史，不是当前目录中的文件。上方名称来自历史版本记录；不授权普通编辑、改名、软删除或设为默认。永久退役仍须准确选择和完整引用检查。", "This is retained history opened by stable file_id, not a current directory file. The displayed name comes from a historical version. It does not permit ordinary editing, rename, soft deletion or setting a default. Permanent retirement still requires an exact selection and complete reference checks.")}</p>

@@ -86,6 +86,20 @@ pub(super) fn node(
     Ok(Some(node))
 }
 
+/// A restore review may not silently adopt a changed D, even if the list's
+/// file/path identity still matches. Absence remains an observed absence.
+pub(super) fn unchanged_node(
+    value: Value,
+    summary: &Summary,
+    expected: &FileDeletionNode,
+) -> Result<Option<FileDeletionNode>, api::Error> {
+    let current = node(value, summary)?;
+    if current.as_ref().is_some_and(|node| node != expected) {
+        return Err(invalid("deletion changed while reviewing restoration"));
+    }
+    Ok(current)
+}
+
 /// Shared by HTTP ingress and the untrusted browser recovery boundary. A local
 /// record is not evidence of current deletion or permission to restore it.
 pub(super) fn validate_node(node: &FileDeletionNode) -> Result<(), api::Error> {

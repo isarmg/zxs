@@ -2,6 +2,7 @@
 //! belong to a session/generation; undo belongs to the global operation ledger.
 mod recovery;
 mod request;
+mod restore;
 mod view;
 mod wire;
 use super::actions;
@@ -22,6 +23,7 @@ use wire::{Page, Summary};
 pub(crate) struct Model {
     review_generation: u64,
     review: Option<request::Review>,
+    restore_review: Option<restore::Review>,
     attempt: Option<request::Attempt>,
     recovery: recovery::Queue,
     open: bool,
@@ -36,12 +38,14 @@ impl Model {
     pub(crate) fn cancel_review(&mut self) {
         self.review_generation += 1;
         self.review = None;
+        self.restore_review = None;
     }
 
     fn accepts(&self, generation: u64) -> bool {
         self.open && self.generation == generation
     }
     fn begin(&mut self) -> u64 {
+        self.cancel_review();
         self.generation += 1;
         self.loading = true;
         self.node = None;
@@ -49,6 +53,7 @@ impl Model {
         self.generation
     }
     fn close(&mut self) {
+        self.cancel_review();
         self.open = false;
         self.generation += 1;
         self.loading = false;

@@ -28,7 +28,15 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             <aside class="zxs-surface zxs-stack" data-zxs-file-deletion-recovery="">
                 <h2>{t("软删除与撤销：原操作恢复", "Soft deletion and restore: original-operation recovery")}</h2>
                 <p>{t("本浏览器按站点和账号保存原请求与准确删除节点，不保存密码、登录令牌或完成结论。刷新或重新登录只查询原收据，不自动重新删除或恢复；关闭文件面板不丢弃记录。", "This browser retains original requests and exact deletion nodes per site and account, never passwords, login tokens or completion claims. Refreshing or signing in only queries original receipts; it never automatically deletes or restores. Closing file panels keeps these records.")}</p>
-                <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending) on:click=move |_|restore(state)>{t("重新读取本机原请求", "Reload local original requests")}</button>
+                <div class="zxs-row">
+                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending||!s.files.deletion.recovery.owns(s)||s.files.deletion.recovery.records.iter().all(|r|r.settled.is_some())) on:click=move |_|{
+                        if state.with_untracked(|s|s.files.deletion.recovery.owns(s)&&!s.files.mutation_pending&&s.files.deletion.recovery.records.iter().any(|r|r.settled.is_none())) {
+                            actions::poll(state);
+                        }
+                    }>{t("只查询原操作结果", "Check original outcomes only")}</button>
+                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending) on:click=move |_|restore(state)>{t("重新读取本机原请求", "Reload local original requests")}</button>
+                </div>
+                <p>{t("查询不会再次发送删除或撤销。查询失败、暂未找到或删除列表变化都不能解除原操作围栏；只有核对原账号、摘要和完整结果的回执才能确认。", "Checking never resends deletion or restoration. A failed or missing lookup, or a changed deletion list, cannot settle the original operation. Confirmation requires the receipt matching its account, digest and complete result.")}</p>
                 <For each=move ||state.with(|s|s.files.deletion.recovery.records.iter().map(|r|(s.session_epoch,r.record.clone())).collect::<Vec<_>>()) key=|row|(row.0,row.1.operation) children=move |(epoch,record)| {
                     let operation = record.operation;
                     let id = operation.to_string();

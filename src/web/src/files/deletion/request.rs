@@ -16,8 +16,8 @@ pub(super) struct Target {
 pub(super) struct Review {
     pub(super) generation: u64,
     pub(super) display_path: String,
-    target: Target,
-    epoch: u64,
+    pub(super) target: Target,
+    pub(super) epoch: u64,
     slot: String,
     directory: String,
     listing_generation: u64,
@@ -121,9 +121,9 @@ fn capture(state: &State, explicit: Option<&Entry>) -> Result<Option<Review>, ap
 pub(crate) fn start(state: RwSignal<State>, entry: Option<Entry>) {
     match state.with_untracked(|s| capture(s, entry.as_ref())) {
         Ok(Some(review)) => state.update(|s| {
+            s.files.deletion.restore_review = None;
             s.files.deletion.review_generation = review.generation;
             s.files.deletion.review = Some(review);
-            s.change_page(crate::ui::Page::Files);
         }),
         Ok(None) => crate::ui::set_notice(
             state,
