@@ -21,6 +21,8 @@ impl Engine {
     /// Finally it acquires and durably binds every ordinary target writer lock;
     /// the retained task owns the directory and writer descriptors even after
     /// background completion or failure. These are fences, not DiskWriter I/O.
+    /// It then adopts those same descriptors into ordinary DiskWriter/gates
+    /// with native target-only I/O epochs; only this retained task can use them.
     /// Query admission and serving activation remain separate: the original
     /// pool stays fenced even after this stage succeeds.
     /// Hosts must authenticate this separate, explicit request. Ordinary settings
@@ -438,6 +440,66 @@ fn run(
             "decision {hash} durably bound all {} actual target writer files in set {}; this Engine task retains directory/writer ownership after completion; active selector, disk.json, Current, writer I/O, next publication and source release remain unavailable",
             writers.targets.len(),
             writers.fencing_hash,
+        );
+    })?;
+    let io = writer_io::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationTargetWriterIoPrepared;
+        status.detail = format!(
+            "decision {hash} retains actual target-only DiskWriter/gates for {} selected targets in admission {}; bound target aliases use native I/O epochs, but Engine selector, disk.json, Current, next ordinary publication and source release remain unavailable",
+            io.targets.len(),
+            io.admission_hash,
+        );
+    })?;
+    let seals = target_seals::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationTargetSealsInstalled;
+        status.detail = format!(
+            "decision {hash} installed and inode-bound exact native disk.json files for all {} targets in set {}; task-local DiskWriter ownership remains, but no active generation selector, Engine Current, next publication, SYSTEM query admission or source release is installed",
+            seals.targets.len(),
+            seals.installation_hash,
+        );
+    })?;
+    let locator = target_locator::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationTargetLocatorsInstalled;
+        status.detail = format!(
+            "decision {hash} installed ordinary native generation locators and independent control archive {} on all {} targets ({} files/{} bytes each), set {}; original selectors/journals, Engine Current, SYSTEM query admission and source release are unchanged",
+            locator.archive_hash,
+            locator.targets,
+            locator.files_per_target,
+            locator.bytes_per_target,
+            locator.installation_hash,
         );
     })
 }

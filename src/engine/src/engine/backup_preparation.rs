@@ -31,9 +31,10 @@ pub use native_control::{
     BackupPublishedRegistryReport, BackupPublishedScopeTargetReport, BackupPublishedScopesReport,
     BackupRecoveredContent, BackupRegistryRecoveryReport, BackupRootDatabasesReport,
     BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupTargetWriterReport,
-    BackupTargetWritersReport, BackupWriterDestination, BackupWriterRoutesReport,
-    open_decided_backup_targets,
+    BackupSystemDatabaseReport, BackupTargetLocatorReport, BackupTargetPublicationReport,
+    BackupTargetSealReport, BackupTargetSealsReport, BackupTargetWriterIoReport,
+    BackupTargetWriterReport, BackupTargetWritersReport, BackupWriterDestination,
+    BackupWriterIoReport, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -160,6 +161,16 @@ pub enum BackupPreparationPhase {
     /// Every selected target has its actual ordinary writer lock held by this
     /// Engine task. This is fencing, not active DiskWriter/Current or unfence.
     GenerationTargetWriterFencesInstalled,
+    /// Exact target-only ordinary DiskWriter/gates are retained by the task.
+    /// Not active Engine Current, ordinary pool writes or source fence release.
+    GenerationTargetWriterIoPrepared,
+    /// Actual native disk.json files are installed and inode-bound while the
+    /// exact original task still owns their writers. No generation selector,
+    /// active Engine Current or safe source-fence release is implied.
+    GenerationTargetSealsInstalled,
+    /// All target-only ordinary native locators/archives have independently
+    /// replayed under the retained writers. The active pool remains fenced.
+    GenerationTargetLocatorsInstalled,
     Blocked,
     SourceChanged,
 }

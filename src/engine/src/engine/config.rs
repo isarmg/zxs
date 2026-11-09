@@ -124,6 +124,26 @@ impl ValidatedConfig {
             .map(Option::flatten)
     }
 
+    /// Only the native Backup recipe supplies this already replayed generation.
+    /// Keep the original Genesis context and voters; grant resources solely to
+    /// the selected new targets, not the original pool or a serialized Config.
+    pub(in crate::engine) fn with_backup_writer_generation(
+        mut self,
+        generation: Arc<super::membership_transition::pending::activation::Generation>,
+    ) -> Result<Self> {
+        if self.generation().is_some() {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "Backup writer projection already carries a generation",
+            ));
+        }
+        let targets = generation.portable.backup_writer_target_ids(&self)?;
+        let admitted = Arc::make_mut(&mut self.admitted);
+        admitted.generation = Some(generation);
+        admitted.io_disks = Some(targets);
+        Ok(self)
+    }
+
     /// Actual startup resources are a subset of the authenticated configuration.
     /// Historical registration and fixed voter denominators remain unchanged.
     pub(crate) fn io_disks(&self) -> impl Iterator<Item = &DiskConfig> {

@@ -581,6 +581,11 @@ impl PortableAuthority {
     pub(in crate::engine) fn io_admission_epoch(&self, disk_id: &str) -> Result<Option<String>> {
         let mut epoch = None;
         for (hash, intent) in self.lineage()? {
+            if let AuthorityCore::Backup(core) = self.node(&hash)?
+                && let Some(selected) = core.writer_epoch(&hash, disk_id)?
+            {
+                epoch = Some(selected);
+            }
             if self
                 .node(&hash)?
                 .retained_readmission(&intent)?
@@ -636,6 +641,13 @@ impl PortableAuthority {
     ) -> Result<BTreeSet<Option<String>>> {
         let mut retired = BTreeSet::new();
         for (hash, intent) in self.lineage()? {
+            if let AuthorityCore::Backup(core) = self.node(&hash)?
+                && core.writer_epoch(&hash, disk_id)?.is_some()
+            {
+                // These are fresh selected identities, not Genesis members.
+                // Never let a separately parsed projection mint Genesis I/O.
+                retired.insert(None);
+            }
             if let Some(request) = self.node(&hash)?.retained_readmission(&intent)?
                 && request.target.disk_id == disk_id
             {
@@ -643,6 +655,26 @@ impl PortableAuthority {
             }
         }
         Ok(retired)
+    }
+
+    pub(in crate::engine) fn backup_writer_target_ids(
+        &self,
+        projected: &ValidatedConfig,
+    ) -> Result<BTreeSet<String>> {
+        let core = self
+            .backup_core()
+            .ok_or_else(BackupCore::activation_required)?;
+        let expected = core.effective_config()?;
+        if object_hash("backup-effective-config", projected)?
+            != object_hash("backup-effective-config", &expected)?
+            || !projected.same_genesis_io_authority(&expected)
+        {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "Backup writer projection changes its exact original authority or selected roots",
+            ));
+        }
+        core.writer_targets()
     }
 
     pub(in crate::engine) fn historical_bootstrap_stops(

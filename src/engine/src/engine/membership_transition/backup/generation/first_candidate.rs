@@ -207,6 +207,23 @@ impl PreparedBackupAuthority {
 }
 
 impl PreparedBackupFirstCandidate {
+    pub(in crate::engine) fn writer_configuration(
+        &self,
+        publication: &crate::engine::membership_transition::PreparedBackupFirstPublication,
+        archive: DiskRoot,
+        stop: &AtomicBool,
+    ) -> Result<crate::engine::membership_transition::pending::activation::BackupWriterIoConfig>
+    {
+        publication.require_namespace_candidate(self)?;
+        let portable: PortableAuthority = crate::journal::decode_proof(self.authority.bytes())?;
+        crate::engine::membership_transition::pending::activation::BackupWriterIoConfig::capture(
+            portable,
+            archive,
+            &self.candidate,
+            stop,
+        )
+    }
+
     pub(crate) fn candidate(&self) -> &Candidate {
         &self.candidate
     }

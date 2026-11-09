@@ -1,19 +1,31 @@
 //! Retained ownership of the exact selected target, separate from runtime I/O.
-//! A writer-file fence is not a DiskWriter or permission to mutate user data.
+//! A file fence alone is not I/O admission. Only the full native task can attach
+//! a target-only DiskWriter; no ordinary Engine or source authority is changed.
 use super::*;
+use crate::engine::membership_transition::pending::activation::BackupWriterIoConfig;
 use platform_io::fs_safety::linux::FileIdentity;
 
+struct WriterIo {
+    plan_hash: String,
+    handle: DiskHandle,
+    _writer: DiskWriter,
+}
+
 pub(super) struct Target {
+    io: Arc<Mutex<Option<WriterIo>>>,
     writer: Arc<Mutex<Option<Arc<FenceOwner>>>>,
-    directory: Arc<AdvisoryLock>,
+    // Taken exactly once into FenceOwner. Idle Target aliases must not keep an
+    // untracked strong lock after the gate has certified final fence closure.
+    directory: Arc<Mutex<Option<Arc<AdvisoryLock>>>>,
     pub(super) root: DiskRoot,
 }
 
 impl Target {
     pub(super) fn new(root: DiskRoot, lock: AdvisoryLock) -> Self {
         Self {
+            io: Arc::new(Mutex::new(None)),
             writer: Arc::new(Mutex::new(None)),
-            directory: Arc::new(lock),
+            directory: Arc::new(Mutex::new(Some(Arc::new(lock)))),
             root,
         }
     }
@@ -22,6 +34,7 @@ impl Target {
     /// or briefly release the old reservation when a task/query borrows it.
     pub(super) fn retain(&self) -> Result<Self> {
         Ok(Self {
+            io: Arc::clone(&self.io),
             writer: Arc::clone(&self.writer),
             directory: Arc::clone(&self.directory),
             root: self.root.retained(self.root.path().to_owned())?,
@@ -71,7 +84,23 @@ impl Target {
                     })?;
                 // Preserve ownership before any later fallible synchronization
                 // or receipt write. The surrounding Target retains its directory.
-                *held = Some(FenceOwner::new(named, None));
+                let reservation = self
+                    .directory
+                    .lock()
+                    .map_err(|_| {
+                        Error::new(
+                            ErrorCode::RecoveryRequired,
+                            "Backup target directory ownership is poisoned",
+                        )
+                    })?
+                    .take()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::RecoveryRequired,
+                            "Backup target directory reservation was already transferred",
+                        )
+                    })?;
+                *held = Some(FenceOwner::with_advisory_reservation(named, reservation));
             }
         }
         Ok(PhysicalBinding {
@@ -122,5 +151,125 @@ impl Target {
             ));
         }
         Ok(())
+    }
+
+    /// Bind the same held directory to the ordinary gate and adopt the SAME
+    /// acquired OS writer. This cannot reparse a Config or reacquire a lock.
+    pub(super) fn bind_writer_io(
+        &self,
+        admitted: &BackupWriterIoConfig,
+        disk_id: &str,
+        writer: &PhysicalBinding,
+        plan_hash: &str,
+    ) -> Result<String> {
+        self.require_writer(writer)?;
+        let config = admitted.config();
+        let disk = config
+            .io_disks()
+            .find(|disk| disk.disk_id == disk_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::DiskNotFound,
+                    "Backup writer is not an admitted selected target",
+                )
+            })?;
+        if disk.root != self.root.path() {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "Backup writer I/O cannot rebind its exact original root address",
+            ));
+        }
+        let epoch = config
+            .io_admission_epoch(disk_id)?
+            .expect("invariant: native selected target epoch");
+        let seal = crate::disk::identity_at(config, disk, &self.root.directory(self.root.path())?)?;
+        let mut io = self.io.lock().map_err(|_| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup target writer I/O ownership is poisoned",
+            )
+        })?;
+        if let Some(current) = io.as_ref() {
+            if current.plan_hash != plan_hash {
+                return Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "Backup target already retains another writer I/O plan",
+                ));
+            }
+            validate_stored_seal(&current.handle.seal, &seal)?;
+        } else {
+            let owner = self
+                .writer
+                .lock()
+                .map_err(|_| {
+                    Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "Backup target writer ownership is poisoned",
+                    )
+                })?
+                .as_ref()
+                .cloned()
+                .expect("invariant: verified target writer owner remains retained");
+            let handle = DiskHandle::new(self.root.retained(disk.root.clone())?, seal, config)?;
+            let writer = DiskWriter::adopt(&handle.root, owner)?;
+            // Retain before any subsequent write/readback can fail. The root's
+            // permanent shared binding also governs aliases created earlier.
+            *io = Some(WriterIo {
+                plan_hash: plan_hash.into(),
+                handle,
+                _writer: writer,
+            });
+        }
+        let current = io.as_ref().expect("invariant: writer I/O was retained");
+        let _lease = current.handle.root.admit_io()?;
+        self.recheck_writer()?;
+        Ok(epoch)
+    }
+
+    /// Use the real ordinary I/O gate, with ownership pinned through the full
+    /// operation and its error/sync tail. No raw FD or active writer is returned.
+    pub(super) fn with_writer_io<T>(
+        &self,
+        plan_hash: &str,
+        action: impl FnOnce(&DiskRoot) -> Result<T>,
+    ) -> Result<T> {
+        self.with_writer_handle(plan_hash, |handle| action(&handle.root))
+    }
+
+    /// The seal recipe must come from this retained native handle, not a new
+    /// Config parsed from progress or a target-local diagnostic record.
+    pub(super) fn writer_seal(&self, plan_hash: &str) -> Result<DiskSeal> {
+        self.with_writer_handle(plan_hash, |handle| Ok(handle.seal.clone()))
+    }
+
+    fn with_writer_handle<T>(
+        &self,
+        plan_hash: &str,
+        action: impl FnOnce(&DiskHandle) -> Result<T>,
+    ) -> Result<T> {
+        let io = self.io.lock().map_err(|_| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup target writer I/O ownership is poisoned",
+            )
+        })?;
+        let current = io.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup target has no admitted task-local DiskWriter",
+            )
+        })?;
+        if current.plan_hash != plan_hash {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "Backup target DiskWriter belongs to another original I/O plan",
+            ));
+        }
+        let lease = current.handle.root.admit_io()?;
+        self.recheck_writer()?;
+        let result = action(&current.handle)?;
+        self.recheck_writer()?;
+        lease.check_running()?;
+        Ok(result)
     }
 }

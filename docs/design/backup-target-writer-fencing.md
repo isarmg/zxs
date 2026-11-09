@@ -35,3 +35,5 @@ SYSTEM 的 `backup-preparation/target-writer-fences.json` 绑定原 source fence
 最终还需要把准确 Backup authority、完整 registry 和 Current 接入普通代际发现／配置／locator，建立目标 `DiskWriter` I/O epoch 和普通后续 publication，再共同开放 SYSTEM 与新代际写入。当前普通 Backup activation 仍硬拒绝，较晚槽仍未获准。提前写活动 selector／disk.json 会让冷开转入尚未闭合的通用代际路径，因此本片不这样做。
 
 **真实 writer 文件围栏不等于活动 writer，目标互斥不等于可安全解开源围栏。** 活动切换、完整迁移和 H03 外来完整低级链接纳均未完成；所有旧数据、永久收据、原成员及原围栏保留。
+
+独立后继[目标专用 DiskWriter I/O](backup-target-writer-io.md)把本片原 owner 和目录预约接入生产 gate／DiskWriter，并持有准确目标 epoch；仍只用于原任务，未选择普通 Engine／disk.json，也未解除源围栏。该后继和本片的发布状态分别记录在根 TASKS，不能把源码能力当作 main 已交付。

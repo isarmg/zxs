@@ -13,6 +13,7 @@ type WorkspaceRootAliases = BTreeMap<(String, String, u64), BTreeSet<PathBuf>>;
 
 mod authority;
 mod backup;
+pub(in crate::engine) use backup::{BackupWriterIoConfig, PreparedBackupTargetLocator};
 pub(in crate::engine) mod exit;
 #[path = "../readmission/activation.rs"]
 mod readmission;

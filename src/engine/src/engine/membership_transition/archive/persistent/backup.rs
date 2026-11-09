@@ -180,6 +180,56 @@ impl PreparedBackupControl {
             .iter()
             .map(|(path, bytes)| (path, bytes.as_slice()))
     }
+
+    /// Exact native inclusion proofs for this admitted fixed-Genesis archive.
+    /// The caller supplies no paths or publication subset; all retained seals
+    /// are projected, including histories whose bodies are unavailable.
+    pub(in crate::engine::membership_transition) fn visit_publication_proofs(
+        &self,
+        stop: &AtomicBool,
+        visit: &mut impl FnMut(&str, &crate::metadata_map::InclusionProof) -> Result<()>,
+    ) -> Result<()> {
+        let load = |kind: &'static str, hash: &str| {
+            preparation_checkpoint(stop)?;
+            if !valid_hash(hash) {
+                return Err(Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "Backup native proof requests an invalid immutable address",
+                ));
+            }
+            let path = PathBuf::from("objects")
+                .join(kind)
+                .join(&hash[..2])
+                .join(format!("{hash}.json"));
+            let bytes = self.files.get(&path).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "Backup native archive lost an admitted proof object",
+                )
+            })?;
+            AuthenticatedMetadataObject::authenticate(kind, hash, decode_strict(bytes)?)
+        };
+        let seals = crate::metadata_map::read_map(&self.archive.publication_seals, load)?;
+        for (candidate, value) in seals {
+            preparation_checkpoint(stop)?;
+            if !valid_hash(&candidate) {
+                return Err(Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "Backup native publication proof has an invalid candidate address",
+                ));
+            }
+            let (observed, proof) =
+                crate::metadata_map::read_proof(&self.archive.publication_seals, &candidate, load)?;
+            if observed.as_ref() != Some(&value) {
+                return Err(Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "Backup native publication proof differs from its admitted archive map",
+                ));
+            }
+            visit(&candidate, &proof)?;
+        }
+        Ok(())
+    }
     pub(in crate::engine) fn verify(
         &self,
         root: DiskRoot,

@@ -12,6 +12,21 @@ struct Fixture {
     version: String,
 }
 
+#[test]
+fn ordinary_add_generation_cannot_mint_backup_target_writer_io() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    let generation = Arc::clone(fixture.engine.config.generation().unwrap());
+    let projection = ValidatedConfig::try_from(fixture.target.clone()).unwrap();
+    assert_eq!(
+        projection
+            .with_backup_writer_generation(generation)
+            .unwrap_err()
+            .code(),
+        ErrorCode::UnsupportedOperation
+    );
+}
+
 fn descriptor_numbers(path: &std::path::Path) -> Vec<String> {
     let mut descriptors = fs::read_dir("/proc/self/fd")
         .unwrap()

@@ -1004,6 +1004,69 @@ impl Engine {
         self.with_backup_database_aliases(operation, principal, target_writers::observe)
     }
 
+    /// Observe actual target-only DiskWriter admission through the retained
+    /// Engine task. No gate is constructed by this read-only entry point, and
+    /// no source authority or active pool selector is changed.
+    pub fn inspect_backup_writer_io(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupWriterIoReport> {
+        if self
+            .backup_preparation
+            .as_ref()
+            .is_none_or(|worker| worker.targets.is_empty())
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "resume the original Backup task before observing target DiskWriter admission",
+            ));
+        }
+        self.with_backup_database_aliases(operation, principal, writer_io::observe)
+    }
+
+    /// Observe ordinary target disk.json bytes and their durable file bindings
+    /// under the actual retained writer gates. This never creates or repairs a
+    /// seal, selects the pool generation or releases the original source fence.
+    pub fn inspect_backup_target_seals(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupTargetSealsReport> {
+        if self
+            .backup_preparation
+            .as_ref()
+            .is_none_or(|worker| worker.targets.is_empty())
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "resume the original Backup task before observing its retained target seals",
+            ));
+        }
+        self.with_backup_database_aliases(operation, principal, target_seals::observe)
+    }
+
+    /// Re-read this original task's ordinary target generation locator and
+    /// independently replay its normal-address archive. No repairing, pool
+    /// selection, journal promotion or source-fence release occurs here.
+    pub fn inspect_backup_target_locators(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupTargetLocatorReport> {
+        if self
+            .backup_preparation
+            .as_ref()
+            .is_none_or(|worker| worker.targets.is_empty())
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "resume the original Backup task before observing target native locators",
+            ));
+        }
+        self.with_backup_database_aliases(operation, principal, target_locator::observe)
+    }
+
     fn with_backup_database_aliases<T>(
         &mut self,
         operation: OperationId,

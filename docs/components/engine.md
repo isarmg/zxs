@@ -342,3 +342,18 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### Backup 目标 writer 文件的持久围栏
 
 原 registry 任务在普通原生对象后续接[目标 writer 围栏](../design/backup-target-writer-fencing.md)：全部实际证据成立才无覆盖创建普通 `.writer.lock`、取得真实独占锁并绑定设备／inode；Engine 保留同一目标目录与 writer owner 跨后台完成和错误，同原任务和检查借用已有所有者，冷开不创建缺失已绑定文件。任一共同完成后缺失绑定／lock 拒绝补造。独立 helper 不能与保留这些资源的 Engine 并行抢目标锁。`inspect_backup_target_writers` 重新观察全体材料及实际持锁，不选择活动 generation／disk.json、Current 或新 I/O epoch。最终 writer、第二笔、SYSTEM 解静默和源解围栏仍缺，H03 不放行。本批对齐 `04af3778` 后生产 lib check、全部 engine 测试源码类型检查及变更 Rust 格式检查通过且无警告；八项单测因整体 libtest 编译被 SIGKILL 未执行，不计通过。未触发 GitHub CI或操作真实盘；后继 DiskWriter I/O／seal／locator 未混入。
+
+
+### Backup 原任务内的目标 DiskWriter I/O
+
+独立候选在已持有 writer 文件围栏之后，基于真实首笔 Publication 和完整归档构造[目标专用 native I/O](../design/backup-target-writer-io.md)，保持原 Genesis 上下文及原 voters，唯一允许新目标 root。原目录和 writer owner 接入生产 DiskHandle／gate／DiskWriter，目标普通根别名不再绕过 admission，目录预约由真实 I/O 尾部继续持有。原任务全体再验后经普通租约写回共同记录；冷态按原锁 inode 和全部实际材料重建 gate，检查接口不创建 gate。未改变 Engine 活动 Config／selector／disk.json／Current、普通后续 publication、SYSTEM 查询和源围栏；H03 仍拒绝。本地 I/O 后继已对齐已发布 `ef0f35cb` 并格式化改动 Rust 源码；三项新增测试源码未运行，没有本地编译／测试或新 CI，未操作真实盘；本片未发布。
+
+### Backup 原任务内的普通目标 seal
+
+后继本地候选续接[真实目标 disk.json 安装](../design/backup-target-seals.md)：从已持有 native DiskHandle 取得唯一 seal，原全体计划及本地意图先行，经同一普通 I/O gate 不覆盖写入并绑定文件设备／inode。全体实际证明再观察后共同记录全部 seal hash／inode；一旦本地绑定存在就不重建缺失或替换文件，任一共同完成后只许补相同完成副本。冻结材料读取仅允许与原 native stage、物理根和本地 seal 记录一致的身份文件，仍禁止活动 generation／journal 命名空间，不开放普通启动或来源解围栏。`inspect_backup_target_seals` 只观察已有资源；活动 Config／selector／locator／Current、第二笔 publication 和 SYSTEM 解静默仍缺，H03 不放行。本地 seal 后继已对齐 `ef0f35cb` 上的 I/O 切片并格式化改动 Rust 源码；八项新测试仅源码，无本地编译／测试或新 CI，未操作真实盘，本片未发布。
+
+### Backup 目标普通原生恢复地址
+
+在准确 writer、I/O gate 和 `disk.json` 后，原任务续接[目标原生恢复地址](../design/backup-target-native-locators.md)：真实首笔 Publication 与全部材料重验后，从同一 sealed writer Config 和完整 control archive 生成目标自身普通 Config 锚／generation／authority、完整归档及逐历史 inclusion proof。SYSTEM 原计划先行，四个固定命名空间必须先有与物理根、原 native stage 相符的本地选择；逐目标真实普通租约覆盖不覆盖安装、归档重放、普通本地成员冷读和同步。任何目标本地完成后不修复缺失材料，任一共同完成后全体本地材料都必须已完整；原显式任务只可补相同共同完成副本。
+
+`GenerationTargetLocatorsInstalled` 和 `inspect_backup_target_locators` 仅报告已有资源的目标恢复地址，不切换原盘 selector／journal、Engine Config／Current，不开放第二笔、SYSTEM 或安全源解围栏，不开放 H03。八项新边界测试仅源码，已格式化改动 Rust 源码；用户最新要求不再本地编译，未编译或运行这些测试、未触发新 CI、未操作真实盘。此后继仍仅本地，未发布。

@@ -51,17 +51,16 @@ pub(super) fn require_target_selection(root: &DiskRoot, hash: &str) -> Result<()
 }
 
 /// No authority is obtained from this file. A selected ordinary-object stage
-/// may coexist with old isolated readers because they still use only their own
-/// authenticated preparation domain. Every active name remains forbidden.
+/// may coexist with frozen readers because they still use only their own
+/// authenticated preparation domain. The later task-local seal is permitted
+/// only behind its exact physical record. Later target-only native locators
+/// require their own matching staging selection. No source selector, ordinary
+/// pool activation or writer I/O is granted by this inventory check.
 pub(in super::super) fn require_unselected_target(root: &DiskRoot) -> Result<()> {
-    if preparation_path_exists(root, &root.path().join("disk.json"))? {
-        return Err(Error::new(
-            ErrorCode::UnsupportedOperation,
-            "frozen Backup reader cannot open a sealed runtime target",
-        ));
-    }
     let metadata = root.path().join("metadata");
     if !preparation_path_exists(root, &metadata)? {
+        target_seals::require_staging(root, None)?;
+        target_locator::require_staging(root, None)?;
         return Ok(());
     }
     let bytes = root.read_bytes(&root.path().join(TARGET_SELECTION), MAX_SELECTION)?;
@@ -78,15 +77,18 @@ pub(in super::super) fn require_unselected_target(root: &DiskRoot) -> Result<()>
             "unselected Backup metadata has no exact bounded local staging record",
         ));
     }
+    target_seals::require_staging(root, Some(&selected.installation_hash))?;
+    let locator = target_locator::require_staging(root, Some(&selected.installation_hash))?;
     let held = root.private_child(&metadata)?;
     for entry in held.entries(held.path())? {
         let name = entry.map_err(fs_error)?;
-        // In particular pool-membership/generation.json, journal namespaces,
-        // I/O decisions and writer names cannot hide behind a staging record.
+        // Additional fixed target-only trees need their own prior selection;
+        // this does not admit an arbitrary active namespace or metadata voter.
         if !matches!(
             name.as_path().to_str(),
             Some("objects" | "publication-seals")
-        ) {
+        ) && !(locator && target_locator::is_namespace(name.as_path().as_os_str()))
+        {
             return Err(Error::new(
                 ErrorCode::UnsupportedOperation,
                 "frozen Backup metadata contains an active or unknown namespace; retained without adoption",
@@ -302,6 +304,13 @@ impl<'a> ObjectSet<'a> {
                     return Err(budget());
                 }
                 let name = entry.map_err(fs_error)?;
+                // The later target locator owns only these four fixed trees.
+                // Its complete recipe has a separate bounded exact inventory.
+                if parent.as_os_str().is_empty()
+                    && target_locator::is_namespace(name.as_path().as_os_str())
+                {
+                    continue;
+                }
                 let relative = parent.join(name.as_path());
                 let path = held.path().join(&relative);
                 if directories.contains(&relative) {

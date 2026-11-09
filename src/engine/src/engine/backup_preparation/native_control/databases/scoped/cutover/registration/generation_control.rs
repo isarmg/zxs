@@ -13,6 +13,16 @@ const DIRECTORY: &str = "backup-generation-control";
 const COMPLETE: &str = "generation-control-prepared.json";
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
 
+pub(super) fn retained_archive(
+    prepared: &PreparedBackupRegistry,
+    index: usize,
+) -> Result<DiskRoot> {
+    let target = &prepared.targets[index];
+    target
+        .root
+        .private_child(&target.root.path().join(DIRECTORY).join("archive"))
+}
+
 /// Actual original control bytes and normal native replay, not a successor
 /// generation certificate, target membership or permission to release a fence.
 #[derive(Clone, Debug)]

@@ -52,6 +52,48 @@ fn require_hash(hash: &str) -> Result<()> {
     Ok(())
 }
 impl BackupCore {
+    /// A newly selected payload disk has an authority-specific I/O lifetime.
+    /// Original disks retain their original epoch; none is retired by Backup.
+    pub(in crate::engine::membership_transition) fn writer_epoch(
+        &self,
+        authority: &str,
+        disk_id: &str,
+    ) -> Result<Option<String>> {
+        #[derive(Serialize)]
+        struct Epoch<'a> {
+            authority: &'a str,
+            identity: &'a crate::DiskRegistrationIdentity,
+        }
+        let decision = AdmittedBackupDecision::from_certificate(self.decision.clone())?;
+        decision
+            .projection()
+            .selected_nodes()
+            .iter()
+            .find(|node| node.identity.disk_id == disk_id)
+            .map(|node| {
+                object_hash(
+                    "backup-target-io-epoch",
+                    &Epoch {
+                        authority,
+                        identity: &node.identity,
+                    },
+                )
+            })
+            .transpose()
+    }
+
+    pub(in crate::engine::membership_transition) fn writer_targets(
+        &self,
+    ) -> Result<std::collections::BTreeSet<String>> {
+        let decision = AdmittedBackupDecision::from_certificate(self.decision.clone())?;
+        Ok(decision
+            .projection()
+            .selected_nodes()
+            .into_iter()
+            .map(|node| node.identity.disk_id)
+            .collect())
+    }
+
     pub(in crate::engine::membership_transition) fn intent(&self) -> Result<TransitionIntent> {
         let decision = AdmittedBackupDecision::from_certificate(self.decision.clone())?;
         let intent = decision.transition();
@@ -111,7 +153,7 @@ impl BackupCore {
     pub(in crate::engine::membership_transition) fn activation_required() -> Error {
         Error::new(
             ErrorCode::UnsupportedOperation,
-            "Backup generation requires active Config/CurrentRegistry and target writer installation; even a reserved first Publication cannot release the source fence",
+            "Backup generation requires active Engine Config/CurrentRegistry and serving selection; task-local DiskWriter or a reserved first Publication cannot release the source fence",
         )
     }
 }

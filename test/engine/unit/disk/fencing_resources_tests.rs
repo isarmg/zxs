@@ -69,6 +69,73 @@ fn fixture() -> (tempfile::TempDir, Vec<Arc<DiskHandle>>, WriterLocks) {
     (temp, handles, locks)
 }
 
+fn directory_reserved_writer() -> (tempfile::TempDir, DiskHandle, DiskWriter) {
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let config =
+        ValidatedConfig::try_from(Config::development([temp.path().to_owned()]).unwrap()).unwrap();
+    let handle = DiskHandle::open(&config, &config.disks[0], false).unwrap();
+    let directory = Arc::new(
+        platform_io::fs_safety::linux::AdvisoryLock::directory(
+            &handle.root.directory(handle.root.path()).unwrap(),
+        )
+        .unwrap(),
+    );
+    let owner =
+        FenceOwner::with_advisory_reservation(locked(&temp.path().join(".writer.lock")), directory);
+    let writer = DiskWriter::adopt(&handle.root, owner).unwrap();
+    (temp, handle, writer)
+}
+
+#[test]
+fn advisory_directory_reservation_outlives_the_last_writer_wrapper_for_a_live_io_tail() {
+    let (temp, handle, writer) = directory_reserved_writer();
+    let lease = handle.root.admit_io().unwrap();
+    let path = temp.path().join(".writer.lock");
+    drop(writer);
+    excluded(&path, true);
+    assert!(
+        platform_io::fs_safety::linux::AdvisoryLock::directory(
+            &handle.root.directory(handle.root.path()).unwrap(),
+        )
+        .is_err()
+    );
+    lease.check_running().unwrap();
+    drop(lease);
+    excluded(&path, false);
+    platform_io::fs_safety::linux::AdvisoryLock::directory(
+        &handle.root.directory(handle.root.path()).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn final_io_drain_releases_both_actual_writer_and_advisory_directory_without_removing_bytes() {
+    let (temp, handle, writer) = directory_reserved_writer();
+    let lease = handle.root.admit_io().unwrap();
+    let binding = handle.root.io_binding().unwrap().clone();
+    let writer_path = temp.path().join(".writer.lock");
+    let original = fs::metadata(&writer_path).unwrap();
+    let transition = binding.begin_quiesce().unwrap().unwrap();
+    drop(transition);
+    drop(writer);
+    excluded(&writer_path, true);
+    assert!(!binding.status().unwrap().drained());
+    drop(lease);
+    assert!(binding.status().unwrap().drained());
+    excluded(&writer_path, false);
+    let root = crate::disk::DiskRoot::open(temp.path()).unwrap();
+    platform_io::fs_safety::linux::AdvisoryLock::directory(&root.directory(root.path()).unwrap())
+        .unwrap();
+    let remaining = fs::metadata(writer_path).unwrap();
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(
+        (remaining.dev(), remaining.ino()),
+        (original.dev(), original.ino())
+    );
+    assert_eq!(remaining.len(), 0);
+}
+
 #[test]
 fn idle_root_and_fence_owners_close_only_target_after_control_tail() {
     let (temp, handles, locks) = fixture();

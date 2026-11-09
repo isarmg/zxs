@@ -131,7 +131,7 @@ impl Plan {
     }
 }
 
-fn visit(
+pub(super) fn visit(
     context: &common_databases::Context<'_>,
     prepared: &PreparedBackupRegistry,
     stop: &AtomicBool,

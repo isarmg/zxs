@@ -26,6 +26,9 @@ pub(super) struct FenceDescriptor {
 struct FenceFiles {
     _reservation: Option<File>,
     writer: File,
+    // A target's original directory reservation must outlive all admitted I/O
+    // tails, not merely the task/root wrapper that first acquired its writer.
+    _advisory_reservation: Option<Arc<platform_io::fs_safety::linux::AdvisoryLock>>,
 }
 
 impl FenceOwner {
@@ -35,6 +38,22 @@ impl FenceOwner {
                 files: Mutex::new(Some(FenceFiles {
                     _reservation: reservation,
                     writer,
+                    _advisory_reservation: None,
+                })),
+            }),
+        })
+    }
+
+    pub(crate) fn with_advisory_reservation(
+        writer: File,
+        reservation: Arc<platform_io::fs_safety::linux::AdvisoryLock>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            descriptor: Arc::new(FenceDescriptor {
+                files: Mutex::new(Some(FenceFiles {
+                    _reservation: None,
+                    writer,
+                    _advisory_reservation: Some(reservation),
                 })),
             }),
         })
