@@ -88,6 +88,7 @@ impl Fixture {
         let input = Request {
             namespace: &request,
             source_file_id: &source_file,
+            replacement: None,
         };
         let digest = Engine::native_request_digest(KIND, "admin", &json!(input)).unwrap();
         let body = ResultBody {
@@ -98,6 +99,7 @@ impl Fixture {
             source_sequence: 10,
             source_records_hash: lifecycle.source_records_hash.clone(),
             deletion_node: &node,
+            replacement: None,
             retained_lifecycle: &lifecycle,
             version_ids: vec![target_version.clone()],
             version_mapping: &versions,
