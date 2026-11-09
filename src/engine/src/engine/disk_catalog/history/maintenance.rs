@@ -1,4 +1,4 @@
-//! A complete genesis replay establishes a trusted prefix. Normal publication
+//! A complete native replay establishes a trusted prefix. Normal publication
 //! extends that prefix from the exact two admitted States; disk bytes alone
 //! never establish continuity. Only small headers/digests remain in memory.
 use super::*;
@@ -256,8 +256,22 @@ impl Engine {
         unchanged: bool,
     ) -> Result<()> {
         let prior = &coverage.observed;
-        if self.config.generation().is_some()
-            || prior.through_sequence != previous.sequence
+        if let Some(generation) = self.config.generation() {
+            // Coverage is never adopted from SQLite. The matching Entry was
+            // seeded by the complete original archive + actual Backup first
+            // slot, under this exact Config admission. Other generations still
+            // lack that provenance and must not inherit the present binding.
+            if !generation.portable.is_backup()
+                || generation.registry().is_none()
+                || prior.through_sequence < generation.first_sequence()?
+            {
+                return Err(invalid(
+                    "disk history continuation lacks its native Backup prefix",
+                ));
+            }
+            generation.verify_candidate(candidate)?;
+        }
+        if prior.through_sequence != previous.sequence
             || candidate.previous_snapshot != prior.through_snapshot
             || candidate.sequence <= prior.through_sequence
             || candidate.sequence != self.state.sequence

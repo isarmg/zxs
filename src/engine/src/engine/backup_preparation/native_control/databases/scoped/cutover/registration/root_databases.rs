@@ -14,6 +14,8 @@ const MAX_DESCRIPTOR: usize = 128 * 1024;
 const MAX_DATABASE: usize = 32 * 1024 * 1024;
 const MARGIN: u64 = 1024 * 1024;
 
+mod admission;
+
 /// All ordinary disk-root pairs have been freshly compared with the actual
 /// published common set. No field is an active writer or source-release permit.
 #[derive(Clone, Debug)]
@@ -24,21 +26,23 @@ pub struct BackupRootDatabasesReport {
     pub selected_targets: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 struct OriginalBinding {
     identity: DiskRegistrationIdentity,
     physical: PhysicalBinding,
 }
-#[derive(Serialize)]
-struct Manifest<'a> {
-    format: &'static str,
-    source_fence_hash: &'a str,
-    publication_hash: &'a str,
-    aliases_hash: &'a str,
+#[derive(Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct Manifest {
+    format: String,
+    source_fence_hash: String,
+    publication_hash: String,
+    aliases_hash: String,
     #[serialization(with = "storage_contract::u64_string")]
     sequence: u64,
-    original_roots: &'a [OriginalBinding],
-    original_databases: &'a [BackupOriginalDatabaseReport],
+    original_roots: Vec<OriginalBinding>,
+    original_databases: Vec<BackupOriginalDatabaseReport>,
 }
 struct Plan {
     report: BackupRootDatabasesReport,
@@ -91,13 +95,13 @@ impl Plan {
             &prepared.task.selection().first().pool_id,
         )?;
         let bytes = canonical_json(&Manifest {
-            format: "zxs-backup-ordinary-root-databases",
-            source_fence_hash: prepared.source_fence_hash(),
-            publication_hash: expected.as_str(),
-            aliases_hash: &aliases.aliases_hash,
+            format: "zxs-backup-ordinary-root-databases".into(),
+            source_fence_hash: prepared.source_fence_hash().into(),
+            publication_hash: expected.as_str().into(),
+            aliases_hash: aliases.aliases_hash.clone(),
             sequence,
-            original_roots: &bindings,
-            original_databases: &aliases.current.common.original_disks,
+            original_roots: bindings.clone(),
+            original_databases: aliases.current.common.original_disks.clone(),
         })?;
         if bytes.len() > MAX_DESCRIPTOR {
             return Err(Error::new(

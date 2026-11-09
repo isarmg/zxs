@@ -220,7 +220,15 @@ impl Engine {
         // A preserved Backup root-name switch is not the old Engine's State.
         // Its selection only fences these disposable reads/maintenance paths;
         // it cannot select an authority or grant a successor writer.
-        root_install::require_unselected(&handle.root)?;
+        if self
+            .config
+            .generation()
+            .is_some_and(|generation| generation.portable.is_backup())
+        {
+            self.require_backup_catalog_admission(&handle.root)?;
+        } else {
+            root_install::require_unselected(&handle.root)?;
+        }
         Ok((disk, identity, handle))
     }
 

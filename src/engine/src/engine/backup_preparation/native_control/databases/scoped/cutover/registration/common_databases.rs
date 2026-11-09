@@ -16,7 +16,8 @@ const INTENT: &str = "backup-preparation/common-databases.json";
 const COMPLETE: &str = "common-databases-installed.json";
 const MAX_DESCRIPTOR: usize = 64 * 1024;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub struct BackupOriginalDatabaseReport {
     pub identity: DiskRegistrationIdentity,
     #[serialization(with = "storage_contract::u64_string")]

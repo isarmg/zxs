@@ -246,8 +246,9 @@ impl Changes {
 impl Engine {
     /// Reconstruct a bounded disk-local history from every published State in
     /// the admitted genesis chain and install it at the registered disk root.
-    /// Membership-generation archives are not yet supported: reject rather
-    /// than assign earlier publications to the present disk registration.
+    /// Completed Backup generations replay their independently verified archive
+    /// and exact first publication before the ordinary suffix. Other generation
+    /// kinds remain unsupported rather than relabelling their historical disks.
     /// Callers must authorize maintenance; this never admits or initializes a pool.
     pub fn rebuild_disk_history(&mut self, slot: &str) -> Result<DiskHistoryReceipt> {
         self.require_write()?;
