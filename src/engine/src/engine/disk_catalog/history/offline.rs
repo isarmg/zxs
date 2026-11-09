@@ -321,7 +321,8 @@ pub(in crate::engine::disk_catalog) fn fold(
                 }
             }
             DiskHistoryChange::Changed { before, after } => {
-                if active.get(before.version.version_id.as_str()).copied() != Some(before) {
+                if active.get(before.version.version_id.as_str()).copied() != Some(before.as_ref())
+                {
                     return Err(invalid(
                         "disk history change has no exact retained predecessor",
                     ));

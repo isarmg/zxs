@@ -48,7 +48,7 @@ pub enum DiskHistoryChange {
         after: DiskCatalogVersion,
     },
     Changed {
-        before: DiskCatalogVersion,
+        before: Box<DiskCatalogVersion>,
         after: DiskCatalogVersion,
     },
     Departed {
@@ -204,7 +204,7 @@ impl Changes {
             let change = match (before, after) {
                 (Some(before), Some(after)) if before == after => continue,
                 (Some(before), Some(after)) => DiskHistoryChange::Changed {
-                    before: before.clone(),
+                    before: Box::new(before.clone()),
                     after: after.clone(),
                 },
                 (Some(before), None) => DiskHistoryChange::Departed {

@@ -58,7 +58,7 @@ struct Coverage {
 }
 
 enum Availability {
-    Tracked(Coverage),
+    Tracked(Box<Coverage>),
     Unavailable(Arc<DiskHistoryFailure>),
 }
 
@@ -149,7 +149,7 @@ impl Engine {
                 identity,
                 config: self.config.clone(),
                 state: Arc::downgrade(&self.state),
-                availability: Availability::Tracked(coverage),
+                availability: Availability::Tracked(Box::new(coverage)),
             },
         );
     }
@@ -219,7 +219,7 @@ impl Engine {
                 Availability::Tracked(coverage)
                     if entry.state.ptr_eq(&Arc::downgrade(previous)) =>
                 {
-                    Some(coverage.clone())
+                    Some(coverage.as_ref().clone())
                 }
                 _ => None,
             });

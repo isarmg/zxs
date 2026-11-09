@@ -91,7 +91,7 @@ fn encode_records(
                 .bind(repository)
                 .bind(directory)
                 .bind(sequence.to_string())
-                .bind(&hash)
+                .bind(hash)
                 .execute(&mut *tx)
                 .await?;
             for record in records {

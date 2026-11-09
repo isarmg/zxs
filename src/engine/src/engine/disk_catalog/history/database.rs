@@ -245,7 +245,7 @@ fn validate_record(record: &DiskHistoryRecord, through: u64) -> Result<()> {
         DiskHistoryChange::Changed { before, after } => {
             row(before)?;
             row(after)?;
-            if before.version.version_id != after.version.version_id || before == after {
+            if before.version.version_id != after.version.version_id || before.as_ref() == after {
                 return Err(invalid(
                     "disk history changed row has no exact same-version transition",
                 ));
