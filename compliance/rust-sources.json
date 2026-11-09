@@ -95742,6 +95742,7 @@
         "bindgen-bindings/bindgen_3.45.3.rs": "2633a8b90cded7bc2c8464fc423891a6dda7f68a72fcf433b3a5408aaa8f37ce",
         "bindgen-bindings/bindgen_3.45.3_ext.rs": "35d3d3f2388bfeb6d950242f0efa217541d2eb0d686195f41eb9ce9cef86f99d",
         "build.rs": "ae492583476332cf947f5e4922ee6aa085ad91bb0dfcac683dae96a825e124ab",
+        "sqlcipher/bindgen_bundled_version.rs": "4ce4a6519255f9d1c22c9f894b7f0452f1ae11d54dc9bf3205265ec9142f1da3",
         "sqlite3/bindgen_bundled_version.rs": "a25057a06d8cb5053a61c8f0ff746cc3d81b3bd778fbd3199ba12c8a6ee2945d",
         "sqlite3/bindgen_bundled_version_ext.rs": "b4757194d9f463c9c9168d38f943eedfd2a06d7c402374a75062e6fda8d4ff2c",
         "sqlite3/sqlite3.c": "0c657666d819f261cc4007526ad57e1669de9949df7a8ea847aa284a2bf0ee52",

@@ -91,7 +91,7 @@
 
 | 上游来源身份 | 使用文档 | 许可与来源 |
 | --- | --- | --- |
-| libsqlite3-sys@0.37.0 | [README.md](../../docs/upstream/libsqlite3-sys-0.37.0/README.md) | [许可与通知](../../compliance/licenses/upstream/libsqlite3-sys-0.37.0)、[其他许可](../../compliance/licenses/upstream/libsqlite3-sys-0.37.0/sqlcipher)；[来源](../../compliance/provenance/packages/libsqlite3-sys-0.37.0/Cargo.toml.orig.txt) |
+| libsqlite3-sys@0.39.1 | [README.md](../../docs/upstream/libsqlite3-sys-0.39.1/README.md) | [许可与通知](../../compliance/licenses/upstream/libsqlite3-sys-0.39.1)；[来源](../../compliance/provenance/packages/libsqlite3-sys-0.39.1/original/Cargo.toml.orig.txt) |
 
 ## schema-validation
 
