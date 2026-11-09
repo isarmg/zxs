@@ -195,7 +195,7 @@ fn verify(bytes: &[u8]) -> Result<StoredIdentity> {
 
 async fn verify_schema(connection: &mut SqliteConnection) -> Result<()> {
     let schemas = sqlite_access::query(
-        "SELECT name,type,tbl_name,sql FROM sqlite_schema ORDER BY name LIMIT 4",
+        "SELECT CAST(substr(CAST(name AS BLOB),1,257) AS TEXT) AS name,CAST(substr(CAST(type AS BLOB),1,257) AS TEXT) AS type,CAST(substr(CAST(tbl_name AS BLOB),1,257) AS TEXT) AS tbl_name,CAST(substr(CAST(sql AS BLOB),1,4097) AS TEXT) AS sql FROM sqlite_schema ORDER BY name LIMIT 4",
     )
     .fetch_all(&mut *connection)
     .await?;
@@ -230,14 +230,14 @@ async fn read_records(connection: &mut SqliteConnection) -> Result<Vec<Record>> 
         // without a predicate, then continue from an actually observed key.
         let row = match records.last() {
             Some(last) => sqlite_access::query(
-                "SELECT kind,id,body FROM records WHERE (kind,id)>(?,?) ORDER BY kind,id LIMIT 1",
+                "SELECT CAST(substr(CAST(kind AS BLOB),1,17) AS TEXT) AS kind,CAST(substr(CAST(id AS BLOB),1,257) AS TEXT) AS id,length(CAST(id AS BLOB)) AS id_bytes,length(CAST(body AS BLOB)) AS body_bytes FROM records WHERE (records.kind,records.id)>(?,?) ORDER BY records.kind,records.id LIMIT 1",
             )
             .bind(last.kind)
             .bind(&last.id)
             .fetch_optional(&mut *connection)
             .await?,
             None => {
-                sqlite_access::query("SELECT kind,id,body FROM records ORDER BY kind,id LIMIT 1")
+                sqlite_access::query("SELECT CAST(substr(CAST(kind AS BLOB),1,17) AS TEXT) AS kind,CAST(substr(CAST(id AS BLOB),1,257) AS TEXT) AS id,length(CAST(id AS BLOB)) AS id_bytes,length(CAST(body AS BLOB)) AS body_bytes FROM records ORDER BY records.kind,records.id LIMIT 1")
                     .fetch_optional(&mut *connection)
                     .await?
             }
@@ -257,14 +257,33 @@ async fn read_records(connection: &mut SqliteConnection) -> Result<Vec<Record>> 
             _ => return Err(invalid("directory database record kind is unsupported")),
         };
         let id: String = row.try_get("id")?;
-        if id.is_empty() {
-            return Err(invalid("directory database record identity is empty"));
+        if id.is_empty() || id.len() > 256 || row.try_get::<i64, _>("id_bytes")? != id.len() as i64
+        {
+            return Err(invalid(
+                "directory database record identity is not bounded exact text",
+            ));
         }
-        let body: String = row.try_get("body")?;
-        bytes += id.len() + body.len();
-        if bytes > projection::MAX_RECORD_BYTES {
+        let length = usize::try_from(row.try_get::<i64, _>("body_bytes")?)
+            .map_err(|_| invalid("directory database record length is invalid"))?;
+        let remaining = projection::MAX_RECORD_BYTES - bytes;
+        if id.len() > remaining || length > remaining - id.len() {
             return Err(budget());
         }
+        // Check the aggregate budget before copying an untrusted record body.
+        let body: String = sqlite_access::query_scalar(
+            "SELECT CAST(substr(CAST(body AS BLOB),1,?) AS TEXT) FROM records WHERE kind=? AND id=?",
+        )
+        .bind((length + 1) as i64)
+        .bind(kind)
+        .bind(&id)
+        .fetch_one(&mut *connection)
+        .await?;
+        if body.len() != length {
+            return Err(invalid(
+                "directory database record length differs from its bytes",
+            ));
+        }
+        bytes += id.len() + length;
         records.push(Record { kind, id, body });
     }
     Ok(records)
@@ -292,7 +311,10 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<StoredId
             )
         })?;
     verify_schema(connection).await?;
-    let identities = sqlite_access::query("SELECT * FROM identity LIMIT 2")
+    // Bound returned values in bytes, preserving NUL tails for exact rejection.
+    let identities = sqlite_access::query(
+        "SELECT singleton,CAST(substr(CAST(format AS BLOB),1,65) AS TEXT) AS format,CAST(substr(CAST(repository_id AS BLOB),1,257) AS TEXT) AS repository_id,CAST(substr(CAST(directory_id AS BLOB),1,257) AS TEXT) AS directory_id,CAST(substr(CAST(source_sequence AS BLOB),1,21) AS TEXT) AS source_sequence,CAST(substr(CAST(records_hash AS BLOB),1,65) AS TEXT) AS records_hash FROM identity LIMIT 2",
+    )
         .fetch_all(&mut *connection)
         .await?;
     if identities.len() != 1 {
@@ -327,6 +349,9 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<StoredId
         ));
     }
     crate::sqlite_integrity::verify(connection).await?;
+    // The same typed closure governs rescue and any ordinary admission of old
+    // material. A recomputed self-hash cannot authorize replacing unknown rows.
+    material::validate_rows(&records, &repository, directory.as_str(), sequence)?;
     Ok(StoredIdentity {
         records,
         sequence,

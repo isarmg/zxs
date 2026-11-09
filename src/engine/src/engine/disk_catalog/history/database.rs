@@ -101,7 +101,7 @@ async fn read_connection(
     identity: &DiskRegistrationIdentity,
 ) -> Result<DiskHistorySnapshot> {
     let schema = sqlite_access::query(
-        "SELECT name,type,tbl_name,sql FROM sqlite_schema ORDER BY name LIMIT 3",
+        "SELECT CAST(substr(CAST(name AS BLOB),1,257) AS TEXT),CAST(substr(CAST(type AS BLOB),1,257) AS TEXT),CAST(substr(CAST(tbl_name AS BLOB),1,257) AS TEXT),CAST(substr(CAST(sql AS BLOB),1,4097) AS TEXT) FROM sqlite_schema ORDER BY name LIMIT 3",
     )
     .fetch_all(&mut *connection)
     .await?;
@@ -122,7 +122,7 @@ async fn read_connection(
             ));
         }
     }
-    let headers = sqlite_access::query("SELECT singleton,substr(format,1,64),length(CAST(body AS BLOB)),substr(CAST(body AS BLOB),1,8193),substr(records_hash,1,65) FROM identity LIMIT 2")
+    let headers = sqlite_access::query("SELECT singleton,CAST(substr(CAST(format AS BLOB),1,65) AS TEXT),length(CAST(body AS BLOB)),substr(CAST(body AS BLOB),1,8193),CAST(substr(CAST(records_hash AS BLOB),1,65) AS TEXT) FROM identity LIMIT 2")
         .fetch_all(&mut *connection).await?;
     if headers.len() != 1 {
         return Err(invalid("disk history requires one scope header"));

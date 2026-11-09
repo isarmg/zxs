@@ -115,7 +115,7 @@ async fn read_connection(
     identity: &DiskRegistrationIdentity,
 ) -> Result<DiskCatalogSnapshot> {
     let schema = sqlite_access::query(
-        "SELECT name,type,tbl_name,sql FROM sqlite_schema ORDER BY name LIMIT 5",
+        "SELECT CAST(substr(CAST(name AS BLOB),1,257) AS TEXT),CAST(substr(CAST(type AS BLOB),1,257) AS TEXT),CAST(substr(CAST(tbl_name AS BLOB),1,257) AS TEXT),CAST(substr(CAST(sql AS BLOB),1,4097) AS TEXT) FROM sqlite_schema ORDER BY name LIMIT 5",
     )
     .fetch_all(&mut *connection)
     .await?;
@@ -143,16 +143,20 @@ async fn read_connection(
             ));
         }
     }
-    let headers = sqlite_access::query("SELECT * FROM identity LIMIT 2")
+    let headers = sqlite_access::query(
+        "SELECT singleton,CAST(substr(CAST(format AS BLOB),1,65) AS TEXT) AS format,substr(CAST(scope AS BLOB),1,8193) AS scope,CAST(substr(CAST(source_sequence AS BLOB),1,21) AS TEXT) AS source_sequence,CAST(substr(CAST(records_hash AS BLOB),1,65) AS TEXT) AS records_hash FROM identity LIMIT 2",
+    )
         .fetch_all(&mut *connection)
         .await?;
     if headers.len() != 1 {
         return Err(invalid("disk catalog requires one exact identity"));
     }
     let header = &headers[0];
-    let scope: String = header.try_get("scope")?;
-    let stored_identity: DiskRegistrationIdentity =
-        storage_contract::decode_strict(scope.as_bytes())?;
+    let scope: Vec<u8> = header.try_get("scope")?;
+    if scope.len() > 8192 {
+        return Err(invalid("disk catalog scope header exceeds its byte budget"));
+    }
+    let stored_identity: DiskRegistrationIdentity = storage_contract::decode_strict(&scope)?;
     if header.try_get::<i64, _>("singleton")? != 1
         || header.try_get::<String, _>("format")? != FORMAT
         || &stored_identity != identity
@@ -167,9 +171,9 @@ async fn read_connection(
     let mut total = 0usize;
     loop {
         let row = match versions.last() {
-            None => sqlite_access::query("SELECT substr(version_id,1,257),length(CAST(version_id AS BLOB)),length(CAST(body AS BLOB)) FROM versions ORDER BY version_id LIMIT 1")
+            None => sqlite_access::query("SELECT CAST(substr(CAST(version_id AS BLOB),1,257) AS TEXT),length(CAST(version_id AS BLOB)),length(CAST(body AS BLOB)) FROM versions ORDER BY version_id LIMIT 1")
                 .fetch_optional(&mut *connection).await?,
-            Some(last) => sqlite_access::query("SELECT substr(version_id,1,257),length(CAST(version_id AS BLOB)),length(CAST(body AS BLOB)) FROM versions WHERE version_id>? ORDER BY version_id LIMIT 1")
+            Some(last) => sqlite_access::query("SELECT CAST(substr(CAST(version_id AS BLOB),1,257) AS TEXT),length(CAST(version_id AS BLOB)),length(CAST(body AS BLOB)) FROM versions WHERE version_id>? ORDER BY version_id LIMIT 1")
                 .bind(&last.version.version_id).fetch_optional(&mut *connection).await?,
         };
         let Some(row) = row else {

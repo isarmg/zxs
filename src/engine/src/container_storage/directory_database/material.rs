@@ -11,16 +11,10 @@ use storage_contract::{
 };
 
 mod rows;
-use rows::validate_rows;
+pub(super) use rows::validate_rows;
 
 pub(in crate::container_storage) fn read_material(bytes: &[u8]) -> Result<ObjectDatabaseMaterial> {
     let captured = verify(bytes)?;
-    validate_rows(
-        &captured.records,
-        &captured.repository,
-        captured.directory.as_str(),
-        captured.sequence,
-    )?;
     Ok(ObjectDatabaseMaterial::new(
         ObjectDatabaseScope::Directory {
             repository_id: captured.repository,

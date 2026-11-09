@@ -850,3 +850,6 @@ mod object_material;
 
 #[path = "directory_layout_execution/rescue_integrity.rs"]
 mod rescue_integrity;
+
+#[path = "directory_layout_execution/database_admission.rs"]
+mod database_admission;

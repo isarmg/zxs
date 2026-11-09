@@ -13,7 +13,7 @@ pub(super) struct LocalBranch {
     materialized: bool,
 }
 
-pub(super) fn validate_rows(
+pub(in crate::container_storage::directory_database) fn validate_rows(
     records: &[Record],
     repository: &str,
     directory: &str,
