@@ -37,10 +37,10 @@ impl Joined {
 }
 impl Drop for Joined {
     fn drop(&mut self) {
-        if !self.reaped {
-            if let Err(error) = self.child.wait() {
-                tracing::error!(%error, "service worker could not be reaped; inspect retained initialization before retrying");
-            }
+        if !self.reaped
+            && let Err(error) = self.child.wait()
+        {
+            tracing::error!(%error, "service worker could not be reaped; inspect retained initialization before retrying");
         }
     }
 }

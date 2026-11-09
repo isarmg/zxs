@@ -130,7 +130,9 @@ pub(super) fn execute(request: WorkerRequest) -> Result<WorkerOutput> {
                 credential: target.auth.credential_revision()?,
                 selections,
             };
-            Ok(WorkerOutput::Preview { plan })
+            Ok(WorkerOutput::Preview {
+                plan: Box::new(plan),
+            })
         }
         Action::InspectOriginal { plan } => {
             // Correlation only. A partly initialized pool remains possibly
@@ -209,7 +211,7 @@ fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Mater
             .iter()
             .zip(&expected)
             .any(|(disk, path)| {
-                disk.root != PathBuf::from(path)
+                disk.root != std::path::Path::new(path)
                     || disk.level != 1
                     || disk.upstream_slot_id.is_some()
             })

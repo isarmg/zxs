@@ -84,7 +84,7 @@ enum Action {
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WorkerOutput {
-    Preview { plan: Plan },
+    Preview { plan: Box<Plan> },
     OriginalInspected,
     Initialized { report: worker::Materialized },
 }
@@ -157,6 +157,7 @@ pub(crate) fn preview(input: Input) -> Result<Preview> {
     else {
         return Err("unexpected first-storage preview worker result".into());
     };
+    let plan = *plan;
     let root = Root::open(input.service_user)?;
     root.check(&plan)?;
     Ok(preview_response(plan.clone(), digest(&plan)?, false))
@@ -208,12 +209,10 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     }
     let root = Root::open(input.input.service_user.clone())?;
     root.check(&input.plan)?;
-    if let Some(original) = load(&root, &input.input.request_digest)? {
-        if digest(&original)? != input.input.request_digest {
-            return Err(
-                "retained first-storage operation differs; no material was replaced".into(),
-            );
-        }
+    if let Some(original) = load(&root, &input.input.request_digest)?
+        && digest(&original)? != input.input.request_digest
+    {
+        return Err("retained first-storage operation differs; no material was replaced".into());
     }
     let bytes = json_codec::to_vec(&input.plan)?;
     if bytes.len() > MAX_RECORD_BYTES {

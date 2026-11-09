@@ -25,36 +25,36 @@ mod service_worker;
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Pipe-only host coordinator. No listener, service activation or background runtime.
-    #[command(hide = true)]
-    InternalMaintenance,
-    #[command(hide = true)]
-    InternalStorageWorker,
-    #[command(hide = true)]
-    InternalAdditionWorker,
-    #[command(hide = true)]
-    InternalForeignChainWorker,
-    #[command(hide = true)]
-    InternalRemovalWorker,
-    #[command(hide = true)]
-    InternalReadmissionWorker,
-    #[command(hide = true)]
-    InternalTerminalChainWorker,
-    #[command(hide = true)]
-    InternalChainReadmissionWorker,
-    #[command(hide = true)]
-    InternalChainTargetWorker,
+    #[command(name = "internal-maintenance", hide = true)]
+    Maintenance,
+    #[command(name = "internal-storage-worker", hide = true)]
+    StorageWorker,
+    #[command(name = "internal-addition-worker", hide = true)]
+    AdditionWorker,
+    #[command(name = "internal-foreign-chain-worker", hide = true)]
+    ForeignChainWorker,
+    #[command(name = "internal-removal-worker", hide = true)]
+    RemovalWorker,
+    #[command(name = "internal-readmission-worker", hide = true)]
+    ReadmissionWorker,
+    #[command(name = "internal-terminal-chain-worker", hide = true)]
+    TerminalChainWorker,
+    #[command(name = "internal-chain-readmission-worker", hide = true)]
+    ChainReadmissionWorker,
+    #[command(name = "internal-chain-target-worker", hide = true)]
+    ChainTargetWorker,
 }
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
-        Command::InternalMaintenance => entry(),
-        Command::InternalStorageWorker => initialization::storage::process::entry(),
-        Command::InternalAdditionWorker => disk_addition::worker_entry(),
-        Command::InternalForeignChainWorker => foreign_chain::worker_entry(),
-        Command::InternalRemovalWorker => disk_removal::worker_entry(),
-        Command::InternalReadmissionWorker => disk_readmission::worker_entry(),
-        Command::InternalTerminalChainWorker => disk_removal::chain_archive::worker_entry(),
-        Command::InternalChainReadmissionWorker => disk_removal::chain_readmission::worker_entry(),
-        Command::InternalChainTargetWorker => disk_removal::chain_target::worker_entry(),
+        Command::Maintenance => entry(),
+        Command::StorageWorker => initialization::storage::process::entry(),
+        Command::AdditionWorker => disk_addition::worker_entry(),
+        Command::ForeignChainWorker => foreign_chain::worker_entry(),
+        Command::RemovalWorker => disk_removal::worker_entry(),
+        Command::ReadmissionWorker => disk_readmission::worker_entry(),
+        Command::TerminalChainWorker => disk_removal::chain_archive::worker_entry(),
+        Command::ChainReadmissionWorker => disk_removal::chain_readmission::worker_entry(),
+        Command::ChainTargetWorker => disk_removal::chain_target::worker_entry(),
     }
 }
 #[derive(Debug)]

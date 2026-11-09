@@ -385,7 +385,7 @@ async fn foreign_chain_routes_keep_request_gates_without_accessing_system_or_dis
         ("/api/disks/foreign-chain-preview", preview),
         ("/api/disks/foreign-chain-original", original),
     ] {
-        let response = app.clone().oneshot(post(path, input)).await.unwrap();
+        let response = app.oneshot(post(path, input)).await.unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = json_body(response).await;
         assert_eq!(body["error"]["code"], "foreign_chain_material");
@@ -473,7 +473,6 @@ async fn foreign_original_database_routes_do_not_open_roots_without_explicit_sto
     let original = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
         "request_digest":"a".repeat(64),"external_writers_stopped":false});
     let response = app
-        .clone()
         .oneshot(post(
             "/api/disks/foreign-chain-databases-preview",
             original.clone(),
