@@ -19,11 +19,11 @@ struct HistoryCompletion<'a> {
 }
 
 pub(super) fn history_marker(job: &Job, histories: &[HistoryPackageReport]) -> Result<Vec<u8>> {
-    canonical_json(&HistoryCompletion {
+    Ok(canonical_json(&HistoryCompletion {
         format: FORMAT,
         job_hash: object_hash("backup-preparation-job", job)?,
         histories,
-    })
+    })?)
 }
 
 pub(super) const COMPLETE: &str = "snapshot-prepared.json";

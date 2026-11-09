@@ -271,7 +271,7 @@ impl ResumeCancellation {
 
 /// Checks a linear hash-linked chain. Cancelled operations are permanent and
 /// cannot be hidden by a later request, actor change, or successful resumption.
-pub(in crate::engine) fn verify_history(
+pub(super) fn verify_history(
     terminal: &TerminalAuthority,
     cancelled: &[ResumeCancellation],
     selected: Option<&ResumeProposal>,
@@ -303,6 +303,15 @@ pub(in crate::engine) fn verify_history(
         ));
     }
     Ok(())
+}
+
+/// Terminal completion has no selected resumption proposal. Keep that private
+/// proposal type inside the resumption owner while validating the same chain.
+pub(in crate::engine) fn verify_cancelled_history(
+    terminal: &TerminalAuthority,
+    cancelled: &[ResumeCancellation],
+) -> Result<()> {
+    verify_history(terminal, cancelled, None)
 }
 
 pub(in crate::engine) fn apply_history(

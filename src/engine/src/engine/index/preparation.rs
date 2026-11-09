@@ -56,7 +56,7 @@ fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<V
             connection.execute("PRAGMA max_page_count=16384").await?;
             let mut tx = connection.begin().await?;
             recreate_projection(&mut tx).await.map_err(Error::from)?;
-            for (id, version) in &state.versions {
+            for (id, version) in state.versions.iter() {
                 checkpoint()?;
                 sqlite_access::query("INSERT INTO file_history_versions VALUES(?,?,?,?)")
                     .bind(id)

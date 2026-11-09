@@ -39,7 +39,7 @@ pub struct TerminalChainGenerationLogReport {
 }
 impl Manifest {
     pub(super) fn hash(&self) -> Result<String> {
-        object_hash("terminal-chain-generation-log", self)
+        Ok(object_hash("terminal-chain-generation-log", self)?)
     }
     fn exact(&self, expected: &Self) -> Result<()> {
         if canonical_json(self)? != canonical_json(expected)? {

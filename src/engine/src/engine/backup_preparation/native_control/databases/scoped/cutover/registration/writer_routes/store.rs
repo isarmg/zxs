@@ -14,13 +14,13 @@ fn inventory(root: &DiskRoot) -> Result<()> {
     let held = root.private_child(&path)?;
     for entry in held.entries(held.path())? {
         let name = entry.map_err(fs_error)?;
-        if !matches!(name.to_str(), Some(ROUTES | COMPLETE)) {
+        if !matches!(name.as_path().to_str(), Some(ROUTES | COMPLETE)) {
             return Err(Error::new(
                 ErrorCode::ObjectCollision,
                 "unknown writer-route material retained; no cleanup or adoption",
             ));
         }
-        held.open_regular(&held.path().join(name))?;
+        held.open_regular(&held.path().join(name.as_path()))?;
     }
     Ok(())
 }

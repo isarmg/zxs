@@ -170,7 +170,7 @@ impl Engine {
         if !self.blocked
             || self.current_namespaces.is_some()
             || canonical_json(config)? != canonical_json(&self.config)?
-            || object_hash("backup-prepared-state", &self.state)? != evidence.state_hash()
+            || object_hash("backup-prepared-state", self.state.as_ref())? != evidence.state_hash()
             || !self
                 .membership_fence_status()
                 .expect("invariant: native fence present")

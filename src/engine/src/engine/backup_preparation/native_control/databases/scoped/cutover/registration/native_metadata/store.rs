@@ -21,11 +21,11 @@ struct Selection {
     physical: PhysicalBinding,
 }
 fn selection(root: &DiskRoot, hash: &str) -> Result<Vec<u8>> {
-    canonical_json(&Selection {
+    Ok(canonical_json(&Selection {
         format: SelectionFormat::BackupUnselectedNativeMetadata,
         installation_hash: hash.into(),
         physical: PhysicalBinding::of(root)?,
-    })
+    })?)
 }
 pub(super) fn preflight_target(root: &DiskRoot, hash: &str) -> Result<()> {
     require_unselected_target(root)?;
@@ -74,13 +74,13 @@ pub(in super::super) fn require_unselected_target(root: &DiskRoot) -> Result<()>
         let name = entry.map_err(fs_error)?;
         // In particular pool-membership/generation.json, journal namespaces,
         // I/O decisions and writer names cannot hide behind a staging record.
-        if !matches!(name.to_str(), Some("objects" | "publication-seals")) {
+        if !matches!(name.as_path().to_str(), Some("objects" | "publication-seals")) {
             return Err(Error::new(
                 ErrorCode::UnsupportedOperation,
                 "frozen Backup metadata contains an active or unknown namespace; retained without adoption",
             ));
         }
-        held.private_child(&held.path().join(name))?;
+        held.private_child(&held.path().join(name.as_path()))?;
     }
     Ok(())
 }
@@ -230,7 +230,7 @@ impl<'a> ObjectSet<'a> {
                 count += 1;
                 if count > 4 * MAX_OBJECTS { return Err(budget()); }
                 let name = entry.map_err(fs_error)?;
-                let relative = parent.join(&name);
+                let relative = parent.join(name.as_path());
                 let path = held.path().join(&relative);
                 if directories.contains(&relative) {
                     held.private_child(&path)?;

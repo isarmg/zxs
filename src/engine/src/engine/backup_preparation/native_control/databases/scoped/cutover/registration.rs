@@ -426,13 +426,13 @@ fn inventory(root: &DiskRoot) -> Result<()> {
     let held = root.private_child(&path)?;
     for entry in held.entries(held.path())? {
         let entry = entry.map_err(fs_error)?;
-        if !matches!(entry.to_str(), Some(INPUTS | DECISION)) {
+        if !matches!(entry.as_path().to_str(), Some(INPUTS | DECISION)) {
             return Err(Error::new(
                 ErrorCode::ObjectCollision,
                 "unknown registry decision material retained; no cleanup or adoption",
             ));
         }
-        held.open_regular(&held.path().join(entry))?;
+        held.open_regular(&held.path().join(entry.as_path()))?;
     }
     Ok(())
 }

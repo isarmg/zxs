@@ -145,7 +145,7 @@ fn inventory(
                 held.open_read_regular(&held.path().join(&relative).join(name.as_path()))?;
                 continue;
             }
-            let child = relative.join(name);
+            let child = relative.join(name.as_path());
             let file = *expected.get(&child).ok_or_else(|| {
                 Error::new(
                     ErrorCode::ObjectCollision,

@@ -326,11 +326,12 @@ impl TerminalAuthority {
         let registry =
             source.verify_terminal_successor(&self.registry, |kind, hash| self.read(kind, hash))?;
         let request = registry.exit();
+        let transition_hash = self.transition_hash()?;
         if request.target != self.target()
             || request.operation_id != self.operation_id()
             || request.principal != self.intent.principal
-            || request.intent_hash != self.transition_hash()?
-            || request.request_digest != expected.transition_hash
+            || request.intent_hash != transition_hash
+            || request.request_digest != transition_hash
             || !matches!(
                 (&request.effect, self.action()),
                 (

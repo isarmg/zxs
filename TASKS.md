@@ -1,13 +1,13 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`e5782e51`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`b7caa120`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
 - **每次相关代码、测试或文档提交，同步更新本文件对应任务的状态、实际验证和下一步。** 合入前重新核对最新主线及组合结果，不沿用旧基线的通过结论。
 - 只有远端 `main` 已包含的切片才能写“已合入”；本地候选、测试源码、编译和独立模型分别标明，不算交付完成。任务 ID 保持稳定，不靠新增重复行掩盖未完成工作。
 - 本清单负责当前任务状态；产品规则链接到各自规范，详细日志留在 CI 或验收归档，不在这里重复堆积。根目录旧日期快照和全面规划是历史材料，不作为当前状态来源。
-- 按最新要求继续开发并及时提交；不新跑 CI，不以检查作为提交前置，也不把未验证说成通过。当前暂停 push、PR 和标签的自动 Actions，仅保留人工入口供以后明确恢复；不取消已有运行、不删除历史。测试源码与未运行结果必须分开记录。见 [暂停策略](docs/ci/development-short-ci.md)。
+- 按最新要求继续开发并及时提交；用户已授权一次人工 CI 及失败修复的定向检查，不把未验证说成通过。当前仍暂停 push、PR 和标签的自动 Actions；不自行新增 dispatch/rerun，不取消已有运行、不删除历史。测试源码、定向检查与完整 CI 结果分开记录。见 [暂停策略](docs/ci/development-short-ci.md)。
 - 不承诺旧格式兼容，不增加双读或隐式升级；拒绝不支持的材料时保留数据。更新任务、改名和测试均不是操作真实磁盘、重置实际密码或部署的指令。
 
 状态含义：**已合入**仅指列明切片；**进行中**尚未交付或尚在验证；**阻塞**须先满足明确前提；**未完成**仍有目标缺口；**撤销**不得继续按旧方案实现。
@@ -32,7 +32,7 @@
 
 | ID | 工作方向与当前事实 | 下一步／合入条件 |
 | --- | --- | --- |
-| T00 | **自动 CI 仍暂停，单次人工检查与失败修复**：用户于 2026-11-09 明确授权一次人工 CI；`7583e229` 的 [#924](https://github.com/isarmg/zxs/actions/runs/42545476490) 约 18 秒内因 helper 禁止依赖边而 static 失败，Rust 矩阵未启动。`e5782e51` 已修 ELF 负向夹具的准确载荷前置摘要并新增绑定负向用例，原门禁不改。本片另移除 helper 的 contract/name 直接边，经 Engine 既有共同类型与单一槽名校验，不复制规则或放宽策略。 | ELF 定向 17 项通过；原基线 test/ci 814 项除该 failure 与 helper 架构 error 外无其它失败，其余 static 命令已独立通过。本架构定向 30 项中 29 过，唯一仓库库存仍拒绝 helper → storage-server 生产边，待独立解耦；来源 verify --metadata、消费者索引 verify 及其 4 项回归通过。Rust 槽名新用例未运行，未新增编译缓存；未重跑 GitHub CI/Rust 长套件或真实系统操作，不把这些独立结果当组合全绿。自动触发暂停、长套件暂停及 5+10 分钟上限不变，旧外来数据库候选独立保全。 |
+| T00 | **自动 CI 仍暂停，单次人工检查与失败修复**：用户于 2026-11-09 明确授权一次人工 CI；`7583e229` 的 [#924](https://github.com/isarmg/zxs/actions/runs/42545476490) 约 18 秒内因 helper 禁止依赖边而 static 失败，Rust 矩阵未启动。`e5782e51` 已修 ELF 负向夹具的准确载荷前置摘要并新增绑定负向用例，原门禁不改。本片另移除 helper 的 contract/name 直接边，经 Engine 既有共同类型与单一槽名校验，不复制规则或放宽策略。 | ELF 定向 17 项通过；原基线 test/ci 814 项除该 failure 与 helper 架构 error 外无其它失败，其余 static 命令已独立通过。本架构定向 30 项中 29 过，唯一仓库库存仍拒绝 helper → storage-server 生产边，待独立解耦；来源 verify --metadata、消费者索引 verify 及其 4 项回归通过。本片在 `b7caa120` 上修复 Engine 名称/受限路径类型/TrackedRecords 迭代/错误转换/Arc State 编码/成员访问，以及 terminal 原摘要和取消链的窄类型边界；复用现有缓存的 `cargo check --offline -p storage-engine --lib` 最终通过，仍有原 `node_retirement` 私有模块遮蔽 glob 重导出 warning。前两轮失败后修正，未跑测试、Clippy、生产特性、长套件或 GitHub CI 复跑；不覆盖独立普通 move 候选 `2a01b0e8`，不把本地 lib 检查当组合全绿。自动触发暂停、长套件暂停及 5+10 分钟上限不变，旧外来数据库候选独立保全。 |
 | T01 | **SMB/Web 普通软删除与撤销接线**：Engine 生命周期核心已合入；未合入后继在 cb99 基线通过 20 项所选 Engine／进程内 HTTP 回归及 Engine Clippy。Web 与 Server/Web Clippy 未跑，真实 SMB socket 受环境限制；尚未实际验证与 2189 的组合。 | 完成准确组合的受影响入口验证；D 连接原文件全部分支最新节点、冻结其新节点／分支，撤销当前 D 才恢复 SMB 可见与编辑。保留永久原操作和同路径身份边界；所选回归不是全套或真实 SMB 验收。 |
 | T02 | **跨盘 SMB move**：`5c14a7a` 的完整源历史/scoped 材料在主线；`ccf3f49c` 已合入原 choice/写围栏。本片接[唯一普通 Candidate 与逐成员冷读](docs/design/file-history-move-native-candidate.md)：原 choice 确定 tx/槽/候选，单一 prospective 结果仍同时绑定源 D 和完整目标；真实 snapshot/history/Candidate 安装到全部原元数据根，各根独立普通冷读、全 State/图比较，原 FILE/盘根投影不得漂移。六项新集成仅源码，未审查/编译/格式化/测试/CI，无真实盘操作。 | 普通对象不是决定：无 journal PREPARE/ACCEPT/PUBLISHED、无活动库安装或源/目标可见切换，不返回 SMB 成功，五项义务不解除。孤立无原清单/损坏候选保留拒绝；单成员缺对象不借别盘宣称完整，只原材料显式补齐。完整普通正文/三范围共同安装、N 成员决定及失败收束、双端读取围栏和 choice 解除仍缺，不自动接 SMB。 |
 | T03 | **整体备份迁移**：`160a642f` 已合入原首笔通用冷重放；本片接[普通原生对象安装](docs/design/backup-ordinary-native-metadata.md)，在全部原盘／目标的真实 `metadata/objects` 和 seal 地址无覆盖安装完整 State／history／registry／Publication，目标从自身普通字节重放只读 Current；原任务可辨识未激活的部分 metadata 并按原决定续作。**六项临时目录测试源码未运行；未审查、编译、测试或 CI，未实际操作盘。** | 普通对象不是活动 Current：不写活动 selector／disk.json／writer；第二笔、活动 Config／locator、SYSTEM 解静默及安全源解围栏仍未完成。任一完成标记后全体缺件拒绝补造，旧数据／永久回执和原围栏保留，不开放 H03；仍缺普通设置自动触发和完整进度入口，完整单元／父子同层同盘／一次性完整低级链约束不放宽。 |

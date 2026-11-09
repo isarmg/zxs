@@ -122,7 +122,7 @@ impl BackupCore {
         // AVAILABLE retained version must be protected on its complete explicit
         // route by a future publisher. Tombstones and retirement receipts stay
         // in the full snapshot; do not fabricate a body for unavailable content.
-        for (id, version) in &next.versions {
+        for (id, version) in next.versions.iter() {
             preparation_checkpoint(stop)?;
             match next.content_states.get(id) {
                 None | Some(storage_contract::ContentState::Available) => {

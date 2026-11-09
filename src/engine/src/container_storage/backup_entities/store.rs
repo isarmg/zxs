@@ -20,7 +20,7 @@ fn inventory(root: &DiskRoot, image: &Image<'_>, complete: bool, stop: &AtomicBo
         for entry in held.entries(&held.path().join(&parent))? {
             preparation_checkpoint(stop)?;
             let name = entry.map_err(fs_error)?;
-            let child = parent.join(&name);
+            let child = parent.join(name.as_path());
             if image.root_name == super::serving::PUBLISHED_ROOT
                 && child != Path::new(MANIFEST)
                 && !image.directories.contains(&child)
@@ -33,7 +33,7 @@ fn inventory(root: &DiskRoot, image: &Image<'_>, complete: bool, stop: &AtomicBo
                 }
                 // Interrupted private writes are not entities or completion
                 // evidence. Keep them, bounded, without promoting or removing.
-                held.open_read_regular(&held.path().join(&parent).join(&name))?;
+                held.open_read_regular(&held.path().join(&parent).join(name.as_path()))?;
                 continue;
             }
             if !seen.insert(child.clone()) || seen.len() > MAX_ENTRIES + 1 {

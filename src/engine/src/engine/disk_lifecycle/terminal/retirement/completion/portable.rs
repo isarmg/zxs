@@ -123,7 +123,7 @@ struct Projection {
 }
 impl Projection {
     fn new(source: &VerifiedTerminalAuthority, cancelled: &[ResumeCancellation]) -> Result<Self> {
-        cancellation::verify_history(&source.authority, cancelled, None)?;
+        cancellation::verify_cancelled_history(&source.authority, cancelled)?;
         for cancellation in cancelled {
             cancellation.verify_frozen_source(&source.state)?;
         }

@@ -251,7 +251,7 @@ impl ValidatedConfig {
         Ok(())
     }
 
-    pub(super) fn metadata_members(&self) -> impl ExactSizeIterator<Item = &DiskConfig> {
+    pub(crate) fn metadata_members(&self) -> impl ExactSizeIterator<Item = &DiskConfig> {
         self.admitted
             .metadata_members
             .iter()
