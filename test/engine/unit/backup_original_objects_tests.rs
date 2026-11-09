@@ -210,9 +210,8 @@ fn completed_missing_database_is_not_repaired_by_read_only_verification() {
     let missing = database_path(&plan.evidence.objects[0]);
     plan.apply_preserving(&AtomicBool::new(false)).unwrap();
     fs::remove_file(&missing).unwrap();
-    match fixture.plan() {
-        Ok(cold) => assert!(cold.verify(&AtomicBool::new(false)).is_err()),
-        Err(_) => {}
+    if let Ok(cold) = fixture.plan() {
+        assert!(cold.verify(&AtomicBool::new(false)).is_err());
     }
     assert!(!missing.exists());
 }

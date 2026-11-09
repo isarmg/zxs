@@ -11,8 +11,7 @@ fn repair_confirmation_precedes_root_payload_or_system_path_access() {
             confirmation: confirmation.into(),
             external_administration_stopped: stopped,
         })
-        .err()
-        .expect("confirmation must fail before host access");
+        .expect_err("confirmation must fail before host access");
         assert!(error.to_string().contains("before reading or writing"));
     }
 }

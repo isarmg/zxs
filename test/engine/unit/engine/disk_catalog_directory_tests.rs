@@ -172,8 +172,10 @@ fn directory_projection_uses_exact_original_binding_and_each_states_policy() {
             }
         }),
     };
-    let mut state = State::default();
-    state.sequence = 1;
+    let mut state = State {
+        sequence: 1,
+        ..State::default()
+    };
     state
         .protection_policies
         .insert(policy.policy_id.clone(), policy.clone());

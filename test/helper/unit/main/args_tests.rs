@@ -509,7 +509,7 @@ fn embedded_material_export_requires_an_explicit_new_output_and_has_no_extractio
     .unwrap();
     assert!(matches!(args.command, Some(Command::Install {
         command: installation::Command::Materials { output }
-    }) if output == PathBuf::from("/tmp/explicit-new-archive.tar.gz")));
+    }) if output == std::path::Path::new("/tmp/explicit-new-archive.tar.gz")));
     assert!(Args::try_parse_from(["zxs-helper", "install", "materials"]).is_err());
     assert!(
         Args::try_parse_from([
