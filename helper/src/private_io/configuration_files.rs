@@ -121,6 +121,20 @@ impl ConfigurationFiles {
         self.recheck()?;
         Ok(present)
     }
+    /// The dedicated Samba service is installed only by explicit activation.
+    /// Old configuration-only requests retain their original two-file format.
+    pub(crate) fn inspect_smb_unit(&self, bytes: &[u8]) -> Result<bool> {
+        self.recheck()?;
+        let present = matching(&self.units.root, "zxs-smb.service", bytes)?.is_some();
+        self.recheck()?;
+        Ok(present)
+    }
+    pub(crate) fn install_smb_unit(&self, bytes: &[u8]) -> Result<bool> {
+        self.recheck()?;
+        let created = publish(&self.units.root, "zxs-smb.service", bytes)?;
+        self.recheck()?;
+        Ok(created)
+    }
     pub(crate) fn install_unit(&self, bytes: &[u8]) -> Result<bool> {
         self.recheck()?;
         let created = publish(&self.units.root, "zxs.service", bytes)?;

@@ -41,7 +41,7 @@ The independent Web console can add and initialize an exact empty directory batc
 The independent Web console can copy an exact foreign level 2/3 source into all explicitly selected lower roots as one recoverable material batch; it does not admit the source or any lower member.
 The Web console can reset a supported existing local tdbsam Samba password with explicit confirmation; other backends/account creation are not implemented.
 The independent Web console can explicitly deregister an exact non-final-voter member with original D3/receipt checks; disk bytes remain, but current pool visibility/content access may be lost.
-Complete installation readiness/all-path clean-start gating, final-voter terminal removal, foreign admission, program repair and systemd/SMB activation are not yet implemented. No planned-offline action is offered."
+Complete installation readiness/all-path clean-start gating, final-voter terminal removal and foreign admission remain incomplete. Explicit activation starts only verified installed service units; it does not install dependencies or attest network SMB/file I/O. No planned-offline action is offered."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
@@ -82,7 +82,7 @@ enum Command {
         #[command(subcommand)]
         command: host::Command,
     },
-    /// Prepare or install fixed systemd/Samba files, never start or enable services.
+    /// Prepare/install fixed files or explicitly activate verified installed ZXS services.
     Deployment {
         #[command(subcommand)]
         command: deployment::Command,

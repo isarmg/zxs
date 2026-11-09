@@ -344,6 +344,21 @@
         <button type="submit">确认仅续作这个原配置安装</button>
       </form>
       <pre id="configuration-recovery-receipt" hidden></pre>
+      <h3>启动已安装的 ZXS 服务</h3>
+      <p>使用上方同一账户、监听与 SMB 设置，先核对已安装的程序、固定配置、私有目录和本机工具，再明确执行 <code>daemon-reload</code> 与 <code>start</code>。不会重新初始化数据、修改密码、安装系统包或停止其他服务。此操作需要手动 root helper；不要与其他主机管理操作并行。</p>
+      <p class="muted">可选 SMB 使用独立 <code>zxs-smb.service</code> 和 <code>/etc/samba/zxs.conf</code>，不接管默认 smbd 或其他共享。必须事先安装匹配的 Debian 13 amd64 Samba/VFS 和独立本地账户/passdb。就绪只观察正常管理服务、精确单元及受保护 socket，不冒充网络 SMB 密码登录、VFS 加载或实际文件读写验收。</p>
+      <label class="ack"><input id="activation-enable-on-boot" type="checkbox"> 同时为本次选定的 ZXS / 独立 Samba 服务启用开机启动（不会给 helper 设置自启）</label>
+      <button id="activation-preview" type="button" class="secondary">核对已安装环境并预览启动</button>
+      <pre id="activation-plan" hidden></pre>
+      <label class="ack"><input id="activation-external-stopped" type="checkbox"> 已停止其他配置、软件安装与服务管理操作，允许上述固定服务动作；此确认不是外部进程锁。</label>
+      <button id="activation-start" type="button" hidden>确认启动预览中的服务</button>
+      <h4>查询或继续原启动请求</h4>
+      <p class="muted">首次发送前保留完整原输入。中断、超时或失败不能说明服务未启动；刷新后只查询，不自动重发，不清理磁盘或停止服务。若已启动但尚未就绪，修复明确原因后再主动重试同一请求。</p>
+      <label>本浏览器保留的原请求 <select id="activation-retained"><option value="">没有已保留请求</option></select></label>
+      <button id="activation-status" type="button" class="secondary" hidden>只查询这个原请求</button>
+      <button id="activation-retry" type="button" hidden>再次确认并继续这个原请求</button>
+      <pre id="activation-result" hidden></pre>
+      <p id="activation-open" hidden><a id="activation-web" target="_blank" rel="noreferrer noopener">打开 ZXS Web 管理</a>（使用 ZXS 管理员登录；页面是否可从此客户端访问仍以实际网络为准）</p>
     </section>
     <section class="card">
       <h2>重置已存在的 ZXS 管理员密码</h2>

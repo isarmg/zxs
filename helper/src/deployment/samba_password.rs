@@ -185,6 +185,19 @@ impl Prepared {
         format!(".zxs-helper-samba-reset-{}", self.digest)
     }
 }
+pub(super) fn require_activation(
+    testparm: &Executable,
+    pdbedit: &Executable,
+    account: &crate::account::Snapshot,
+) -> Result<()> {
+    // Do not let a nominally read-only pdbedit query initialize a missing
+    // passdb. Require the existing native file and preserve its exact revision.
+    let database = state::Database::open()?;
+    state::require_local_configuration(testparm)?;
+    state::require_existing_account(pdbedit, account)?;
+    database.require_original()
+}
+
 pub(crate) fn preview(input: Input) -> Result<Preview> {
     let prepared = prepare(input)?;
     prepared.unchanged()?;

@@ -12,6 +12,10 @@ let hostPreview = null;
 let layoutPreview = null;
 let runtimePreview = null;
 let configurationPreview = null;
+let activationPreview = null;
+let activationOriginal = null;
+let activationObserved = false;
+const activationPrefix = "zxs-helper:service-activation:";
 let configurationRecovery = null;
 let administratorResetPreview = null;
 let firstAdministratorPreview = null;
@@ -29,7 +33,7 @@ let sambaPasswordPreview = null;
 let sambaPasswordOriginal = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const id of ["foreign-chain-objects-preview","foreign-chain-objects-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("foreign-chain-objects-form").elements) input.disabled = value || stopping || !csrf; for (const id of ["foreign-chain-identity-preview","foreign-chain-identity-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("foreign-chain-databases-form").elements) input.disabled = value || stopping || !csrf; for (const id of ["foreign-chain-databases-preview","foreign-chain-databases-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["configuration-recovery-form", "configuration-recovery-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; byId("configuration-original-save").disabled = value || stopping || !csrf; for (const id of ["legal-materials-download", "legal-materials-manifest"]) byId(id).disabled = value || stopping || !csrf || !legalMaterials; for (const form of ["foreign-chain-form","foreign-chain-prepare-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; byId("foreign-chain-save").disabled = value || stopping || !csrf; for (const input of byId("program-repair-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("runtime-form").elements) input.disabled = value || stopping || !csrf; byId("runtime-prepare").disabled = value || stopping || !csrf; byId("runtime-external-stopped").disabled = value || stopping || !csrf; for (const input of byId("chain-generation-select-form").elements) input.disabled = value || stopping || !csrf; byId("chain-generation-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) { byId("chain-generation-select-form").hidden = true; byId("chain-generation-read").hidden = true; } for (const input of byId("chain-generation-log-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-generation-log-form").hidden = true; for (const input of byId("chain-io-decision-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-io-decision-form").hidden = true; for (const input of byId("chain-epoch-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-epoch-form").hidden = true; byId("chain-current-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-current-read").hidden = true; for (const input of byId("chain-publish-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("chain-first-form").elements) input.disabled = value || stopping || !csrf; byId("chain-target-status").disabled = value || stopping || !csrf; for (const input of byId("chain-target-form").elements) input.disabled = value || stopping || !csrf; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const id of ["activation-preview","activation-start","activation-status","activation-retry","activation-retained","activation-enable-on-boot","activation-external-stopped"]) byId(id).disabled = value || stopping || !csrf; for (const id of ["foreign-chain-objects-preview","foreign-chain-objects-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("foreign-chain-objects-form").elements) input.disabled = value || stopping || !csrf; for (const id of ["foreign-chain-identity-preview","foreign-chain-identity-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("foreign-chain-databases-form").elements) input.disabled = value || stopping || !csrf; for (const id of ["foreign-chain-databases-preview","foreign-chain-databases-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["configuration-recovery-form", "configuration-recovery-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; byId("configuration-original-save").disabled = value || stopping || !csrf; for (const id of ["legal-materials-download", "legal-materials-manifest"]) byId(id).disabled = value || stopping || !csrf || !legalMaterials; for (const form of ["foreign-chain-form","foreign-chain-prepare-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; byId("foreign-chain-save").disabled = value || stopping || !csrf; for (const input of byId("program-repair-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("runtime-form").elements) input.disabled = value || stopping || !csrf; byId("runtime-prepare").disabled = value || stopping || !csrf; byId("runtime-external-stopped").disabled = value || stopping || !csrf; for (const input of byId("chain-generation-select-form").elements) input.disabled = value || stopping || !csrf; byId("chain-generation-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) { byId("chain-generation-select-form").hidden = true; byId("chain-generation-read").hidden = true; } for (const input of byId("chain-generation-log-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-generation-log-form").hidden = true; for (const input of byId("chain-io-decision-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-io-decision-form").hidden = true; for (const input of byId("chain-epoch-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-epoch-form").hidden = true; byId("chain-current-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-current-read").hidden = true; for (const input of byId("chain-publish-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("chain-first-form").elements) input.disabled = value || stopping || !csrf; byId("chain-target-status").disabled = value || stopping || !csrf; for (const input of byId("chain-target-form").elements) input.disabled = value || stopping || !csrf; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -194,7 +198,183 @@ for (const [id, path, checksumKey, bytesKey, filename] of [
   });
 }
 
+
+function resetActivationPreview() {
+  activationPreview = null;
+  byId("activation-plan").hidden = true;
+  byId("activation-start").hidden = true;
+  byId("activation-external-stopped").checked = false;
+}
+function activationInput() {
+  return {deployment:{
+    service_user:byId("service-user").value,
+    service_group:byId("service-group").value,
+    listen:byId("service-listen").value,
+    smb:byId("smb-enabled").checked ? {
+      account:byId("smb-account").value,peer_uid:Number(byId("smb-peer-uid").value)
+    } : null
+  },enable_on_boot:byId("activation-enable-on-boot").checked};
+}
+function activationRecord(record) {
+  const input = record?.input;
+  const settings = input?.deployment;
+  if (!record || Object.keys(record).sort().join(",") !== "input,request_digest"
+      || !/^[0-9a-f]{64}$/.test(record.request_digest)
+      || !input || Object.keys(input).sort().join(",") !== "deployment,enable_on_boot"
+      || typeof input.enable_on_boot !== "boolean" || !settings
+      || Object.keys(settings).sort().join(",") !== "listen,service_group,service_user,smb"
+      || typeof settings.service_user !== "string" || typeof settings.service_group !== "string"
+      || typeof settings.listen !== "string"
+      || (settings.smb !== null && (typeof settings.smb !== "object"
+          || Object.keys(settings.smb).sort().join(",") !== "account,peer_uid"
+          || typeof settings.smb.account !== "string"
+          || !Number.isInteger(settings.smb.peer_uid) || settings.smb.peer_uid < 0
+          || settings.smb.peer_uid > 4294967295))) {
+    throw new Error("原启动请求格式不正确；保留原材料，不改写或自动重新开始。");
+  }
+  return record;
+}
+function refreshActivationRecords(selected = "") {
+  const records = [];
+  if (localStorage.length > 4096) throw new Error("浏览器存储键过多；未扫描或清理原请求。");
+  for (let index = 0; index < localStorage.length; index++) {
+    const key = localStorage.key(index);
+    if (!key?.startsWith(activationPrefix)) continue;
+    const text = localStorage.getItem(key);
+    if (!text || text.length > 16 * 1024) throw new Error("原启动记录缺失或过大；未清理。");
+    const record = activationRecord(JSON.parse(text));
+    if (key !== activationPrefix + record.request_digest) throw new Error("原启动记录与摘要键不符；未清理。");
+    records.push(record);
+    if (records.length > 16) throw new Error("保留的启动请求超过 16 条；先保全原材料，不能静默丢弃。");
+  }
+  const select = byId("activation-retained");
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = ""; placeholder.textContent = records.length ? "选择要查询的原请求" : "没有已保留请求";
+  select.append(placeholder);
+  for (const record of records) {
+    const option = document.createElement("option");
+    option.value = record.request_digest;
+    option.textContent = record.request_digest + " · " + record.input.deployment.listen;
+    select.append(option);
+  }
+  select.value = selected || (records.length === 1 ? records[0].request_digest : "");
+  activationOriginal = records.find(record => record.request_digest === select.value) || null;
+  activationObserved = false;
+  byId("activation-status").hidden = !activationOriginal;
+  byId("activation-retry").hidden = true;
+  return records.length;
+}
+function showActivationResult(result, original) {
+  if (result.request_digest !== original.request_digest) throw new Error("响应不属于这个原启动请求，结果仍未知。");
+  byId("activation-result").textContent = JSON.stringify(result,null,2);
+  byId("activation-result").hidden = false;
+  const ready = result.state === "services_active_and_management_ready";
+  byId("activation-open").hidden = !ready;
+  if (ready) {
+    const url = new URL(window.location.href);
+    url.protocol = "http:";
+    const listen = original.input.deployment.listen;
+    const port = listen.slice(listen.lastIndexOf(":") + 1);
+    if (!/^[0-9]+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw new Error("原服务端口无效。");
+    url.port = port; url.pathname = "/"; url.search = ""; url.hash = "";
+    byId("activation-web").href = url.toString();
+  }
+}
+async function sendActivation(original) {
+  if (!byId("activation-external-stopped").checked) {
+    error("请先停止其他主机管理操作，并明确勾选服务动作确认。"); return;
+  }
+  const smb = original.input.deployment.smb ? "以及独立 zxs-smb.service" : "（不启动 Samba）";
+  if (!window.confirm(`以 root 执行原请求 ${original.request_digest} 的 daemon-reload 和启动 zxs.service ${smb}？${original.input.enable_on_boot ? "就绪后还将启用这些服务的开机启动。" : "不会更改开机启动设置。"} 不停止其他服务、不初始化数据或重置密码。`)) return;
+  const text = JSON.stringify(activationRecord(original));
+  try {
+    const count = refreshActivationRecords(original.request_digest);
+    const key = activationPrefix + original.request_digest;
+    const retained = localStorage.getItem(key);
+    if (text.length > 16 * 1024 || (!retained && count >= 16)) throw new Error("原请求保存预算已满");
+    if (retained && retained !== text) throw new Error("同摘要已有不同原请求，未覆盖");
+    // Per-digest immutable keys preserve other tabs' different requests.
+    localStorage.setItem(key,text);
+    if (localStorage.getItem(key) !== text) throw new Error("原启动请求未能准确读回");
+    refreshActivationRecords(original.request_digest);
+  } catch (failure) {
+    error(`尚未发送启动请求：${failure.message}。`); return;
+  }
+  activationOriginal = original;
+  activationObserved = false;
+  resetActivationPreview();
+  byId("activation-open").hidden = true;
+  setBusy(true); error("");
+  try {
+    const result = await (await post("/api/deployment/activate",{
+      ...original,confirmation:"activate-installed-zxs-services",external_administration_stopped:true
+    })).json();
+    showActivationResult(result,original);
+  } catch (failure) {
+    error(`${failure.message} 原请求 ${original.request_digest} 的结果可能已生效；只查询后再明确决定是否重试。`);
+  } finally {
+    byId("activation-status").hidden = false;
+    byId("activation-retry").hidden = true;
+    setBusy(false);
+  }
+}
+byId("activation-enable-on-boot").addEventListener("input",resetActivationPreview);
+byId("activation-preview").addEventListener("click",async () => {
+  if (busy || stopping || !csrf) return;
+  if (!byId("deployment-form").reportValidity()) return;
+  const input = activationInput();
+  resetActivationPreview(); setBusy(true); error("");
+  try {
+    const preview = await (await post("/api/deployment/activation-preview",input)).json();
+    activationPreview = activationRecord({input,request_digest:preview.request_digest});
+    byId("activation-plan").textContent = JSON.stringify(preview,null,2);
+    byId("activation-plan").hidden = false;
+    byId("activation-start").hidden = false;
+  } catch (failure) { error(failure.message); }
+  finally { setBusy(false); }
+});
+byId("activation-start").addEventListener("click",async () => {
+  if (busy || stopping || !csrf || !activationPreview) return;
+  await sendActivation(activationPreview);
+});
+byId("activation-retained").addEventListener("change",() => {
+  try {
+    refreshActivationRecords(byId("activation-retained").value);
+    byId("activation-open").hidden = true;
+    if (activationOriginal) {
+      byId("activation-result").textContent = JSON.stringify({original_request:activationOriginal,state:"query_before_retry"},null,2);
+      byId("activation-result").hidden = false;
+    }
+  } catch (failure) {
+    activationOriginal = null; activationObserved = false;
+    byId("activation-status").hidden = true; byId("activation-retry").hidden = true;
+    error(failure.message);
+  }
+});
+byId("activation-status").addEventListener("click",async () => {
+  if (busy || stopping || !csrf || !activationOriginal) return;
+  const original = activationOriginal;
+  activationObserved = false; byId("activation-retry").hidden = true;
+  byId("activation-open").hidden = true; setBusy(true); error("");
+  try {
+    const result = await (await post("/api/deployment/activation-status",original)).json();
+    showActivationResult(result,original);
+    activationObserved = true;
+    byId("activation-retry").hidden = result.state === "services_active_and_management_ready";
+  } catch (failure) {
+    error(`${failure.message} 未启动、停止或禁用任何服务；原结果仍需核对，不能直接按新设置重发。`);
+  } finally { setBusy(false); }
+});
+byId("activation-retry").addEventListener("click",async () => {
+  if (busy || stopping || !csrf || !activationOriginal || !activationObserved) return;
+  await sendActivation(activationOriginal);
+});
+try { refreshActivationRecords(); }
+catch (failure) { error(failure.message); }
+
 function resetDeployment() {
+  resetActivationPreview();
   resetConfiguration();
   deploymentPreview = null; byId("deployment-prepare").hidden = true;
   byId("deployment-plan").hidden = true; byId("deployment-receipt").hidden = true;
@@ -346,7 +526,7 @@ byId("configuration-install").addEventListener("click", async () => {
   if (!byId("external-administration-stopped").checked) {
     error("请先停止外部配置/服务管理操作并明确确认。当前 ZXS 租约不等于已停止所有外部写入者。"); return;
   }
-  if (!window.confirm("确认仅安装预览中的 /etc/systemd/system/zxs.service 和可选 /etc/samba/zxs.conf？不覆盖不同文件，不更改默认 smb.conf 或密码，不加载/启动/启用服务。当前未提供完整初始化和自动激活。")) return;
+  if (!window.confirm("确认仅安装预览中的 /etc/systemd/system/zxs.service 和可选 /etc/samba/zxs.conf？不覆盖不同文件，不更改默认 smb.conf 或密码，不加载/启动/启用服务。本步骤不启动服务；初始化与依赖完备后可使用下方的独立显式启动入口。")) return;
   error(""); setBusy(true);
   try {
     const receipt = await (await post("/api/deployment/install-files", {...configurationPreview,

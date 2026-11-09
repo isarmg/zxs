@@ -1,0 +1,17 @@
+# Dedicated ZXS share. Never replaces the distribution's smbd service/configuration.
+[Unit]
+Description=ZXS dedicated Samba bridge
+Requires=zxs.service
+After=zxs.service network.target
+PartOf=zxs.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/smbd --foreground --no-process-group --configfile=/etc/samba/zxs.conf
+KillSignal=SIGTERM
+TimeoutStopSec=infinity
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

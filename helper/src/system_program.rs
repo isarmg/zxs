@@ -10,9 +10,13 @@ use platform_io::{
     secret::SecretString,
 };
 use sha2::{Digest, Sha256};
+use rustix::{
+    fs::{OFlags, fcntl_getfl, fcntl_setfl},
+    process::{Pid, Signal, kill_process_group},
+};
 use std::{
     fs::{File, Metadata},
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::{
         fd::AsRawFd,
         unix::{
@@ -21,11 +25,14 @@ use std::{
         },
     },
     path::Path,
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
+    time::{Duration, Instant},
 };
 
 const MAX_EXECUTABLE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_REPLY_BYTES: usize = 16 * 1024;
+const COMMAND_BUDGET: Duration = Duration::from_secs(30);
+const PIPE_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct FileStamp {
@@ -70,6 +77,9 @@ pub(crate) enum Program {
     Testparm,
     Pdbedit,
     Smbpasswd,
+    Systemctl,
+    SystemdAnalyze,
+    Smbd,
 }
 impl Program {
     fn location(self) -> (&'static str, &'static str, &'static str) {
@@ -77,6 +87,9 @@ impl Program {
             Self::Testparm => ("bin", "testparm", "/usr/bin/testparm"),
             Self::Pdbedit => ("bin", "pdbedit", "/usr/bin/pdbedit"),
             Self::Smbpasswd => ("bin", "smbpasswd", "/usr/bin/smbpasswd"),
+            Self::Systemctl => ("bin", "systemctl", "/usr/bin/systemctl"),
+            Self::SystemdAnalyze => ("bin", "systemd-analyze", "/usr/bin/systemd-analyze"),
+            Self::Smbd => ("sbin", "smbd", "/usr/sbin/smbd"),
         }
     }
 }
@@ -151,34 +164,26 @@ impl Executable {
         Ok(command)
     }
     pub(crate) fn capture(&self, args: &[&str]) -> Result<Vec<u8>> {
+        let (status, bytes) = self.capture_status(args)?;
+        if !status.success() {
+            return Err("fixed system command did not report success; it may have taken effect, so inspect its current state before an explicit retry".into());
+        }
+        Ok(bytes)
+    }
+    /// Unit observation also needs systemctl's explicit not-found exit status.
+    /// Failed commands never become success solely because their stdout parses.
+    pub(crate) fn capture_status(&self, args: &[&str]) -> Result<(ExitStatus, Vec<u8>)> {
         let child = self
             .command(args)?
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .spawn()?;
-        let mut joined = Joined {
-            child,
-            reaped: false,
-        };
-        let mut output = joined
-            .child
-            .stdout
-            .take()
-            .expect("invariant: capture stdout is piped");
-        let mut bytes = Vec::new();
-        let read = (&mut output)
-            .take(MAX_REPLY_BYTES as u64 + 1)
-            .read_to_end(&mut bytes);
-        let drained = std::io::copy(&mut output, &mut std::io::sink());
-        drop(output);
+        let mut joined = Joined::new(child);
+        let output = joined.child.stdout.take().expect("invariant: capture stdout is piped");
+        let bytes = joined.capture(output)?;
         let status = joined.wait()?;
-        read?;
-        drained?;
-        if !status.success() || bytes.len() > MAX_REPLY_BYTES {
-            return Err("fixed system query failed or exceeded its reply bound; program output was not returned".into());
-        }
         self.recheck()?;
-        Ok(bytes)
+        Ok((status, bytes))
     }
     pub(crate) fn password(&self, args: &[&str], password: &SecretString) -> Result<()> {
         // Only smbpasswd's silent local input protocol uses this method. No
@@ -191,25 +196,10 @@ impl Executable {
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()?;
-        let mut joined = Joined {
-            child,
-            reaped: false,
-        };
-        let mut input = joined
-            .child
-            .stdin
-            .take()
-            .expect("invariant: password stdin is piped");
-        let written = (|| -> std::io::Result<()> {
-            for _ in 0..2 {
-                input.write_all(password.expose().as_bytes())?;
-                input.write_all(b"\n")?;
-            }
-            Ok(())
-        })();
-        drop(input);
+        let mut joined = Joined::new(child);
+        let input = joined.child.stdin.take().expect("invariant: password stdin is piped");
+        joined.password(input, password)?;
         let status = joined.wait()?;
-        written?;
         if !status.success() {
             return Err("smbpasswd did not report success; password may have changed and the request must not be automatically replayed".into());
         }
@@ -266,21 +256,98 @@ fn snapshot(file: &File, path: &str) -> Result<Snapshot> {
 }
 struct Joined {
     child: Child,
+    started: Instant,
     reaped: bool,
 }
 impl Joined {
+    fn new(child: Child) -> Self {
+        Self { child, started: Instant::now(), reaped: false }
+    }
+    fn remaining(&self) -> io::Result<Duration> {
+        let elapsed = self.started.elapsed();
+        if elapsed >= COMMAND_BUDGET {
+            return Err(io::Error::new(io::ErrorKind::TimedOut,
+                "fixed system command exceeded its 30-second execution budget; preserve any original operation, do not automatically replay it"));
+        }
+        Ok(COMMAND_BUDGET - elapsed)
+    }
+    fn pause(&self) -> io::Result<()> {
+        std::thread::sleep(PIPE_RETRY_INTERVAL.min(self.remaining()?));
+        Ok(())
+    }
+    fn capture(&self, mut output: ChildStdout) -> Result<Vec<u8>> {
+        fcntl_setfl(&output, fcntl_getfl(&output)? | OFlags::NONBLOCK)?;
+        let mut bytes = Vec::with_capacity(MAX_REPLY_BYTES);
+        let mut block = [0_u8; 4096];
+        loop {
+            self.remaining()?;
+            match output.read(&mut block) {
+                Ok(0) => return Ok(bytes),
+                Ok(count) => {
+                    if count > MAX_REPLY_BYTES - bytes.len() {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData,
+                            "fixed system query exceeded its reply bound; output was not returned or drained").into());
+                    }
+                    bytes.extend_from_slice(&block[..count]);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => self.pause()?,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    fn password(&self, mut input: ChildStdin, password: &SecretString) -> Result<()> {
+        fcntl_setfl(&input, fcntl_getfl(&input)? | OFlags::NONBLOCK)?;
+        for _ in 0..2 {
+            for mut bytes in [password.expose().as_bytes(), b"\n".as_slice()] {
+                while !bytes.is_empty() {
+                    self.remaining()?;
+                    match input.write(bytes) {
+                        Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero,
+                            "fixed password command stopped accepting input; preserve the uncertain operation").into()),
+                        Ok(count) => bytes = &bytes[count..],
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => self.pause()?,
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     fn wait(&mut self) -> Result<ExitStatus> {
-        let status = self.child.wait()?;
-        self.reaped = true;
-        Ok(status)
+        loop {
+            self.remaining()?;
+            match self.child.try_wait() {
+                Ok(Some(status)) => { self.reaped = true; return Ok(status); }
+                Ok(None) => self.pause()?,
+                Err(error) => {
+                    if error.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error()) {
+                        self.reaped = true;
+                    }
+                    return Err(error.into());
+                }
+            }
+        }
     }
 }
 impl Drop for Joined {
     fn drop(&mut self) {
-        if !self.reaped {
-            if let Err(error) = self.child.wait() {
-                tracing::error!(%error,"helper system program could not be reaped; preserve the operation before retrying");
-            }
+        if self.reaped { return; }
+        // The unreaped PID still pins our private process group. The owner is
+        // retained until the child is reaped, even through uninterruptible I/O.
+        if let Err(error) = kill_process_group(Pid::from_child(&self.child), Signal::KILL)
+            && error != rustix::io::Errno::SRCH
+        {
+            tracing::error!(%error, "helper system program group could not be terminated; preserving ownership until the child exits");
+        }
+        if let Err(error) = self.child.kill()
+            && error.raw_os_error() != Some(rustix::io::Errno::SRCH.raw_os_error())
+        {
+            tracing::error!(%error, "helper system program could not be terminated; preserve the original operation");
+        }
+        if let Err(error) = self.child.wait() {
+            tracing::error!(%error, "helper system program could not be reaped; preserve the operation before retrying");
         }
     }
 }
