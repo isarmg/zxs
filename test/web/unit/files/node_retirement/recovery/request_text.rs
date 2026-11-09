@@ -166,8 +166,10 @@ fn recovery_text_uses_a_native_non_void_multiline_control() {
     fn native_textarea<T: ElementType<Output = web_sys::HtmlTextAreaElement>>() {}
     native_textarea::<Textarea>();
     assert_eq!(Textarea::TAG, "textarea");
-    assert!(!Textarea::SELF_CLOSING);
-    assert!(Textarea::ESCAPE_CHILDREN);
+    const {
+        assert!(!Textarea::SELF_CLOSING);
+        assert!(Textarea::ESCAPE_CHILDREN);
+    };
     // Construct both supported controls without mounting a DOM on the host.
     let _export = view! { <textarea readonly rows="6" prop:value="original request"/> };
     let _import = view! {
