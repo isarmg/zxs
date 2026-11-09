@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`bb854136`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`8516a06c`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -37,6 +37,14 @@
 历史基线的 [短 CI `42473259562`](https://github.com/isarmg/zxs/actions/runs/42473259562) 已于 2026-11-08 11:00 UTC 成功，八项通过、四项按策略跳过。生产 WASM、一期 core、Samba SDK 和真实 Chrome 未由本次运行验证；workspace 长套件没有执行。该结果不覆盖本文件或未合入候选，不以较早 CI 代替后续代码的验证。
 
 ## 进行中与未合入候选
+
+### M01 目录仓库独立根布局收口
+
+- 原业务源码候选基于准确 `a233f59a2e790afc8613b05084258429b0ac3d4d`；本次对齐 `8516a06c5b25ef1b5438cf06c6dd5e3f00e9ba81`，保留新目录详情和每次 push 短 CI 配置，尚未合入。手动初始化、stage-owned、stage-child、显式提交及其 HTTP 入口已经存在，本片不重复创建状态机、不自动初始化，也不改变原工作树／index generation／永久 operation 绑定。空目录初始化后无 HEAD 仍为真实 staged，可显式首提交；父提交只使用已明确暂存的子提交，不替子仓库提交。
+- 修正独立子仓库不在父稳定 main 中时整池实体规划报 `UnplacedRepository` 的缺口：以所有已初始化仓库各自稳定 main 的直接边界构造完整无环森林；没有当前父挂载的仓库保留自身稳定 ID 根，复用现有 `directory-repositories/<directory_id>`、本库及保留式实体 Batch。旧父树仍保存原子引用，不再用历史挂载推断当前物理父路径；所有注册库与受管文件必须被整个物理计划准确覆盖，不丢历史、不把同名不同身份合并。
+- 多个当前父挂载、环、同一文件多个 main 自有位置、明确 unmanaged 冲突及无法证明的历史文件归属继续拒绝。保留原 1,000,000 工作步／16 MiB 规划预算与物理安装身份门；森林增加前置全体拓扑扫描，未测量最大规模成本，不宣称性能改善。
+- 仅两份业务源码与本 TASKS；Foreign WIP 原样保全并暂停，没有改 helper／Web／SMB／目录初始化或暂存提交请求。未本地编译、运行业务程序、格式器、测试或 CI；仅准备 GitHub tree 交协调者，不创建 commit/ref、不更新 main。既有 `omitted_child_and_ordinary_scope_require_exact_historical_evidence` 首断言仍要求旧的脱挂拒绝，`detached_child_and_unproven_retained_file_cannot_disappear` 尾断言仍要求该错误优先于缺失文件归属；统一测试阶段需同步这两处语义并覆盖脱挂／重新挂载的保旧安装及冷恢复，缺失文件归属仍拒绝。全部实际磁盘／浏览器、同名文件／嵌套操作组合未验，目录移入移出／普通复制由独立业务片处理，本片不代表整个目录仓库需求完成。
+
 
 ### T00 最新 GitHub 验证与格式修复
 

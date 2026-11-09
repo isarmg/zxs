@@ -549,39 +549,102 @@ fn mount_roots<'a>(
     Ok(())
 }
 
-/// The outer initialized root encloses all registered repositories. A selected
-/// subdirectory instead reaches only children mounted by each stable main.
-fn included_repositories<'a>(
-    state: &'a State,
-    outer: &str,
-    root: &'a str,
-    registered: &BTreeSet<&'a str>,
-    budget: &mut Budget,
-) -> Result<BTreeSet<&'a str>> {
-    if root == outer {
-        return Ok(registered.clone());
-    }
-    let mut included = BTreeSet::new();
-    let mut pending = vec![root];
-    while let Some(directory) = pending.pop() {
-        budget.charge(0)?;
-        if !included.insert(directory) {
-            continue;
-        }
-        let git = &state.directory_git_repositories[directory];
-        let main = &state.directory_branches[&git.main_branch_id];
-        let boundaries = Boundaries::new(&main.entries, registered, budget)?;
-        for entry in &main.entries {
+/// Current stable-main mounts form a forest, not a historical enclosing tree.
+/// An independently initialized child missing from its former parent's main
+/// keeps its own root. Retained parent snapshots do not give it a current mount.
+struct RepositoryForest<'a> {
+    registered: BTreeSet<&'a str>,
+    roots: Vec<&'a str>,
+    children: BTreeMap<&'a str, BTreeSet<&'a str>>,
+}
+
+impl<'a> RepositoryForest<'a> {
+    fn capture(state: &'a State, outer: &str, budget: &mut Budget) -> Result<Self> {
+        let mut registered = BTreeSet::new();
+        for git in state.directory_git_repositories.values() {
             budget.charge(0)?;
-            if entry.kind == NamespaceEntryKind::Directory
-                && registered.contains(entry.entry_id.as_str())
-                && boundaries.owner(entry.lookup_key()).is_none()
-            {
-                pending.push(entry.entry_id.as_str());
+            if git.repository_id == outer {
+                registered.insert(git.directory_id.as_str());
             }
         }
+        let mut parents = BTreeMap::new();
+        let mut children = BTreeMap::<&str, BTreeSet<&str>>::new();
+        for directory in &registered {
+            let git = &state.directory_git_repositories[*directory];
+            let main = &state.directory_branches[&git.main_branch_id];
+            let boundaries = Boundaries::new(&main.entries, &registered, budget)?;
+            for entry in &main.entries {
+                budget.charge(0)?;
+                if entry.kind != NamespaceEntryKind::Directory
+                    || !registered.contains(entry.entry_id.as_str())
+                    || boundaries.owner(entry.lookup_key()).is_some()
+                {
+                    continue;
+                }
+                let child = entry.entry_id.as_str();
+                if let Some((first, path)) = parents.insert(child, (*directory, entry.path())) {
+                    return Err(LayoutError::MultipleRepositoryMounts {
+                        directory_id: child.into(),
+                        mounts: vec![
+                            (first.into(), path.into()),
+                            ((*directory).into(), entry.path().into()),
+                        ],
+                    });
+                }
+                children.entry(*directory).or_default().insert(child);
+            }
+        }
+        let roots = registered
+            .iter()
+            .filter(|id| !parents.contains_key(**id))
+            .copied()
+            .collect::<Vec<_>>();
+        let mut pending = VecDeque::from(roots.clone());
+        let mut reached = BTreeSet::new();
+        while let Some(directory) = pending.pop_front() {
+            budget.charge(0)?;
+            reached.insert(directory);
+            if let Some(direct) = children.get(directory) {
+                pending.extend(direct.iter().copied());
+            }
+        }
+        if reached.len() != registered.len() {
+            return Err(LayoutError::RepositoryCycle {
+                directory_ids: registered
+                    .difference(&reached)
+                    .map(|id| (*id).into())
+                    .collect(),
+            });
+        }
+        Ok(Self {
+            registered,
+            roots,
+            children,
+        })
     }
-    Ok(included)
+
+    fn included(&self, root: &'a str, budget: &mut Budget) -> Result<BTreeSet<&'a str>> {
+        let mut included = BTreeSet::new();
+        let mut pending = vec![root];
+        while let Some(directory) = pending.pop() {
+            budget.charge(0)?;
+            included.insert(directory);
+            if let Some(children) = self.children.get(directory) {
+                pending.extend(children.iter().copied());
+            }
+        }
+        Ok(included)
+    }
+}
+
+/// Every initialized repository belongs to exactly one current stable-main
+/// forest. Physical roots use their stable ID, never a guessed historical path.
+pub(crate) fn forest_roots<'a>(
+    state: &'a State,
+    outer: &str,
+) -> Result<(BTreeSet<&'a str>, Vec<&'a str>)> {
+    let forest = RepositoryForest::capture(state, outer, &mut Budget { steps: 0, bytes: 0 })?;
+    Ok((forest.registered, forest.roots))
 }
 
 struct CurrentMain<'a> {
@@ -703,7 +766,6 @@ fn reject_current_position_conflicts<'a>(
 struct OwnershipEvidence<'a> {
     resolved: BTreeSet<LayoutFileKey<'a>>,
     files: BTreeMap<LayoutFileKey<'a>, BTreeSet<LayoutOwner<'a>>>,
-    directories: BTreeMap<&'a str, BTreeSet<LayoutOwner<'a>>>,
 }
 struct SnapshotScope<'a> {
     entries: &'a [Entry],
@@ -720,27 +782,18 @@ fn add_snapshot<'a>(
     let boundaries = Boundaries::new(snapshot.entries, registered, budget)?;
     for entry in snapshot.entries {
         budget.charge(0)?;
+        if entry.kind != NamespaceEntryKind::File {
+            continue;
+        }
+        let key = key(state, entry)?;
+        if evidence.resolved.contains(&key) {
+            continue;
+        }
         let owner = boundaries
             .owner(entry.lookup_key())
             .map(LayoutOwner::Repository)
             .unwrap_or(snapshot.owner);
-        match entry.kind {
-            NamespaceEntryKind::File => {
-                let key = key(state, entry)?;
-                if !evidence.resolved.contains(&key) {
-                    evidence.files.entry(key).or_default().insert(owner);
-                }
-            }
-            NamespaceEntryKind::Directory => {
-                if registered.contains(entry.entry_id.as_str()) {
-                    evidence
-                        .directories
-                        .entry(entry.entry_id.as_str())
-                        .or_default()
-                        .insert(owner);
-                }
-            }
-        }
+        evidence.files.entry(key).or_default().insert(owner);
     }
     Ok(())
 }
@@ -835,7 +888,6 @@ fn ownership_evidence<'a>(
     let mut evidence = OwnershipEvidence {
         resolved,
         files: BTreeMap::new(),
-        directories: BTreeMap::new(),
     };
     // Admitted Commit entries include every directory ancestor, including file
     // branch snapshots. A proven ancestor chain with no registered boundary is
@@ -864,13 +916,8 @@ fn ownership_evidence<'a>(
         let mut needed = false;
         for entry in &tree.entries {
             budget.charge(0)?;
-            match entry.kind {
-                NamespaceEntryKind::File => {
-                    needed |= !evidence.resolved.contains(&key(state, entry)?);
-                }
-                NamespaceEntryKind::Directory => {
-                    needed |= registered.contains(entry.entry_id.as_str());
-                }
+            if entry.kind == NamespaceEntryKind::File {
+                needed |= !evidence.resolved.contains(&key(state, entry)?);
             }
         }
         if !needed {
@@ -892,40 +939,8 @@ fn ownership_evidence<'a>(
     Ok(evidence)
 }
 
-fn reject_omitted_repositories(
-    evidence: &OwnershipEvidence<'_>,
-    outer: &str,
-    registered: &BTreeSet<&str>,
-    included: &BTreeSet<&str>,
-    budget: &mut Budget,
-) -> Result<()> {
-    for directory in registered.difference(included) {
-        budget.charge(0)?;
-        // The outer root is a proven enclosing scope, not a detached child of
-        // the explicitly requested subdirectory root.
-        if *directory == outer {
-            continue;
-        }
-        let parents = evidence.directories.get(directory).ok_or_else(|| {
-            LayoutError::RepositoryOwnerMissing {
-                directory_id: (*directory).into(),
-            }
-        })?;
-        for owner in parents {
-            budget.charge(0)?;
-            if let LayoutOwner::Repository(parent) = owner
-                && included.contains(parent)
-            {
-                return Err(LayoutError::UnplacedRepository {
-                    directory_id: (*directory).into(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Preserve the whole-outer-root entry point for callers that initialized it.
+/// Plan the outer root's current forest. Other independent roots are accounted
+/// for by forest_roots and the physical producer's complete forest coverage.
 pub(crate) fn plan<'a>(
     state: &'a State,
     repository: &str,
@@ -955,13 +970,8 @@ pub(crate) fn plan_root<'a>(
     name_policy::validate_name(extra_name).map_err(LayoutError::ExtraDirectoryName)?;
     let extra = PortablePath::parse(extra_name).map_err(LayoutError::ExtraDirectoryName)?;
     let mut budget = Budget { steps: 0, bytes: 0 };
-    let mut registered = BTreeSet::new();
-    for git in state.directory_git_repositories.values() {
-        budget.charge(0)?;
-        if git.repository_id == repository.repository_id {
-            registered.insert(git.directory_id.as_str());
-        }
-    }
+    let forest = RepositoryForest::capture(state, &repository.repository_id, &mut budget)?;
+    let registered = &forest.registered;
     if !registered.contains(root_directory_id) {
         return Err(LayoutError::RootNotInitialized {
             directory_id: root_directory_id.into(),
@@ -970,38 +980,25 @@ pub(crate) fn plan_root<'a>(
     let root_directory_id = state.directory_git_repositories[root_directory_id]
         .directory_id
         .as_str();
-    let current_mains = current_main_homes(state, &registered, &mut budget)?;
-    let current_unmanaged = current_unmanaged(state, repository, &registered, &mut budget)?;
+    let current_mains = current_main_homes(state, registered, &mut budget)?;
+    let current_unmanaged = current_unmanaged(state, repository, registered, &mut budget)?;
     reject_current_position_conflicts(&current_mains, &current_unmanaged, &mut budget)?;
     let resolved = current_mains
         .keys()
         .chain(current_unmanaged.keys())
         .copied()
         .collect();
-    let included = included_repositories(
-        state,
-        &repository.repository_id,
-        root_directory_id,
-        &registered,
-        &mut budget,
-    )?;
+    let included = forest.included(root_directory_id, &mut budget)?;
     let MainProjection {
         mut repositories,
         files: mut mains,
-    } = main_layouts(state, &included, &registered, &extra, &mut budget)?;
+    } = main_layouts(state, &included, registered, &extra, &mut budget)?;
     mount_roots(root_directory_id, &mut repositories, &mut budget)?;
     let mut evidence = ownership_evidence(
         state,
         &repository.repository_id,
-        &registered,
+        registered,
         resolved,
-        &mut budget,
-    )?;
-    reject_omitted_repositories(
-        &evidence,
-        &repository.repository_id,
-        &registered,
-        &included,
         &mut budget,
     )?;
     let mut versions: BTreeMap<_, Vec<_>> = BTreeMap::new();

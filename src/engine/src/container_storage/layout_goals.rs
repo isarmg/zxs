@@ -538,41 +538,7 @@ fn file_goal(
 }
 
 fn forest_roots<'a>(state: &'a State, outer: &str) -> Result<(BTreeSet<&'a str>, Vec<&'a str>)> {
-    let registered = state
-        .directory_git_repositories
-        .values()
-        .filter(|git| git.repository_id == outer)
-        .map(|git| git.directory_id.as_str())
-        .collect::<BTreeSet<_>>();
-    if registered.contains(outer) {
-        return Ok((
-            registered,
-            vec![
-                state.directory_git_repositories[outer]
-                    .directory_id
-                    .as_str(),
-            ],
-        ));
-    }
-    let mut mounted = BTreeSet::new();
-    for directory in &registered {
-        let git = &state.directory_git_repositories[*directory];
-        for entry in &state.directory_branches[&git.main_branch_id].entries {
-            if entry.kind == storage_contract::NamespaceEntryKind::Directory
-                && registered.contains(entry.entry_id.as_str())
-            {
-                mounted.insert(entry.entry_id.as_str());
-            }
-        }
-    }
-    let roots = registered.difference(&mounted).copied().collect::<Vec<_>>();
-    if !registered.is_empty() && roots.is_empty() {
-        return Err(crate::DirectoryLayoutError::RepositoryCycle {
-            directory_ids: registered.iter().map(|id| (*id).to_owned()).collect(),
-        }
-        .into());
-    }
-    Ok((registered, roots))
+    directory_layout::forest_roots(state, outer).map_err(Into::into)
 }
 
 #[derive(Default)]
