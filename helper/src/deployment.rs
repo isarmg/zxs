@@ -1,7 +1,7 @@
 //! Version-bound deployment preparation and confirmed fixed-path configuration
 //! installation. Activation is a separate explicit service-manager handoff.
-pub(crate) mod install;
 pub(crate) mod activation;
+pub(crate) mod install;
 mod model;
 mod render;
 pub(crate) mod samba_password;
@@ -242,20 +242,43 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
 }
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
-        Command::ActivationPreview { options, enable_on_boot } => print(activation::preview(
-            activation::Input { deployment: options.input()?, enable_on_boot })?),
-        Command::ActivationStatus { options, request_digest, enable_on_boot } =>
-            print(activation::status(activation::Observation {
-                input: activation::Input { deployment: options.input()?, enable_on_boot }, request_digest })?),
-        Command::Activate { options, request_digest, enable_on_boot,
-            confirm_activate_installed_services, external_administration_stopped } => {
+        Command::ActivationPreview {
+            options,
+            enable_on_boot,
+        } => print(activation::preview(activation::Input {
+            deployment: options.input()?,
+            enable_on_boot,
+        })?),
+        Command::ActivationStatus {
+            options,
+            request_digest,
+            enable_on_boot,
+        } => print(activation::status(activation::Observation {
+            input: activation::Input {
+                deployment: options.input()?,
+                enable_on_boot,
+            },
+            request_digest,
+        })?),
+        Command::Activate {
+            options,
+            request_digest,
+            enable_on_boot,
+            confirm_activate_installed_services,
+            external_administration_stopped,
+        } => {
             if !confirm_activate_installed_services {
                 return Err("review exact activation and pass --confirm-activate-installed-services; no service action was attempted".into());
             }
             print(activation::activate(activation::Commit {
-                input: activation::Input { deployment: options.input()?, enable_on_boot },
-                request_digest, confirmation: "activate-installed-zxs-services".into(),
-                external_administration_stopped })?)
+                input: activation::Input {
+                    deployment: options.input()?,
+                    enable_on_boot,
+                },
+                request_digest,
+                confirmation: "activate-installed-zxs-services".into(),
+                external_administration_stopped,
+            })?)
         }
         Command::Preview(options) => print(preview(options.input()?)?),
         Command::InstallPreview(options) => print(install::preview(options.input()?)?),

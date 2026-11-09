@@ -1,6 +1,6 @@
 use super::{MAX_REQUEST_BYTES, State, boundary, work};
-mod configuration_recovery;
 mod activation;
+mod configuration_recovery;
 mod materials;
 mod response_body;
 use data_serialization::{Deserialize, de::DeserializeOwned};
@@ -203,9 +203,15 @@ pub(super) fn router(state: State) -> Router {
             post(repair_recover_preview),
         )
         .route("/api/install/repair-commit", post(repair_commit))
-        .route("/api/deployment/activation-preview", post(activation::preview))
+        .route(
+            "/api/deployment/activation-preview",
+            post(activation::preview),
+        )
         .route("/api/deployment/activate", post(activation::activate))
-        .route("/api/deployment/activation-status", post(activation::status))
+        .route(
+            "/api/deployment/activation-status",
+            post(activation::status),
+        )
         .route("/api/deployment/preview", post(deployment_preview))
         .route("/api/deployment/prepare", post(deployment_prepare))
         .route(

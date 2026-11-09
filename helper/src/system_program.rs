@@ -9,11 +9,11 @@ use platform_io::{
     },
     secret::SecretString,
 };
-use sha2::{Digest, Sha256};
 use rustix::{
     fs::{OFlags, fcntl_getfl, fcntl_setfl},
     process::{Pid, Signal, kill_process_group},
 };
+use sha2::{Digest, Sha256};
 use std::{
     fs::{File, Metadata},
     io::{self, Read, Write},
@@ -179,7 +179,11 @@ impl Executable {
             .stdout(Stdio::piped())
             .spawn()?;
         let mut joined = Joined::new(child);
-        let output = joined.child.stdout.take().expect("invariant: capture stdout is piped");
+        let output = joined
+            .child
+            .stdout
+            .take()
+            .expect("invariant: capture stdout is piped");
         let bytes = joined.capture(output)?;
         let status = joined.wait()?;
         self.recheck()?;
@@ -197,7 +201,11 @@ impl Executable {
             .stdout(Stdio::null())
             .spawn()?;
         let mut joined = Joined::new(child);
-        let input = joined.child.stdin.take().expect("invariant: password stdin is piped");
+        let input = joined
+            .child
+            .stdin
+            .take()
+            .expect("invariant: password stdin is piped");
         joined.password(input, password)?;
         let status = joined.wait()?;
         if !status.success() {
@@ -261,13 +269,19 @@ struct Joined {
 }
 impl Joined {
     fn new(child: Child) -> Self {
-        Self { child, started: Instant::now(), reaped: false }
+        Self {
+            child,
+            started: Instant::now(),
+            reaped: false,
+        }
     }
     fn remaining(&self) -> io::Result<Duration> {
         let elapsed = self.started.elapsed();
         if elapsed >= COMMAND_BUDGET {
-            return Err(io::Error::new(io::ErrorKind::TimedOut,
-                "fixed system command exceeded its 30-second execution budget; preserve any original operation, do not automatically replay it"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "fixed system command exceeded its 30-second execution budget; preserve any original operation, do not automatically replay it",
+            ));
         }
         Ok(COMMAND_BUDGET - elapsed)
     }
@@ -319,7 +333,10 @@ impl Joined {
         loop {
             self.remaining()?;
             match self.child.try_wait() {
-                Ok(Some(status)) => { self.reaped = true; return Ok(status); }
+                Ok(Some(status)) => {
+                    self.reaped = true;
+                    return Ok(status);
+                }
                 Ok(None) => self.pause()?,
                 Err(error) => {
                     if error.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error()) {
@@ -333,7 +350,9 @@ impl Joined {
 }
 impl Drop for Joined {
     fn drop(&mut self) {
-        if self.reaped { return; }
+        if self.reaped {
+            return;
+        }
         // The unreaped PID still pins our private process group. The owner is
         // retained until the child is reaped, even through uninterruptible I/O.
         if let Err(error) = kill_process_group(Pid::from_child(&self.child), Signal::KILL)

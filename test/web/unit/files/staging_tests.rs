@@ -106,7 +106,10 @@ fn empty_directory_git_status_keeps_unborn_head_staged() {
     value["index_generation"] = "2".into();
     let (state, model) = reviewed(value);
     let status = model.status.as_ref().unwrap();
-    assert_eq!(status.head_tree_id.as_deref(), Some(id("dtree", 1).as_str()));
+    assert_eq!(
+        status.head_tree_id.as_deref(),
+        Some(id("dtree", 1).as_str())
+    );
     assert!(!status.staged);
     assert!(commit_review(&state, &model).is_none());
 }
