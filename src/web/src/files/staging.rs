@@ -82,8 +82,8 @@ impl Model {
     fn current(&self, target: &Target, generation: u64) -> bool {
         self.target.as_ref() == Some(target) && self.request_generation == generation
     }
-    fn ready<'a>(&'a self, state: &State) -> Option<(&'a Target, &'a DirectoryGitStatus)> {
-        if self.reading || self.error.is_some() || !actions::write_allowed(state) {
+    fn reviewed<'a>(&'a self, state: &State) -> Option<(&'a Target, &'a DirectoryGitStatus)> {
+        if self.reading || self.error.is_some() {
             return None;
         }
         let target = self.target.as_ref()?;
@@ -93,6 +93,12 @@ impl Model {
             return None;
         }
         Some((target, self.status.as_ref()?))
+    }
+    fn ready<'a>(&'a self, state: &State) -> Option<(&'a Target, &'a DirectoryGitStatus)> {
+        if !actions::write_allowed(state) {
+            return None;
+        }
+        self.reviewed(state)
     }
 }
 fn invalid() -> api::Error {
@@ -165,6 +171,7 @@ fn decode(value: json_codec::Value, target: &Target) -> Result<DirectoryGitStatu
     if status.initialized {
         if status.directory_branch_id.is_none()
             || status.working_tree_id.is_none()
+            || (status.head_tree_id.is_none() && !status.staged)
             || !status.owner.as_ref().is_some_and(|owner| {
                 owner.directory_id == status.directory_id && owner.path == status.path
             })
@@ -443,6 +450,19 @@ fn child_view(
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Model::default());
     let target = Memo::new(move |_| state.with(Target::capture));
+    let history_target = Memo::new(move |_| {
+        state.with(|state| {
+            if state.files.selected.is_some() {
+                return None;
+            }
+            model.with(|model| {
+                let (_, status) = model.reviewed(state)?;
+                Some(super::directory_history::Target::current_directory(
+                    state, status,
+                ))
+            })
+        })
+    });
     let children = Memo::new(move |_| {
         model.with(|model| {
             model
@@ -493,6 +513,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 </div>
                 <p class="zxs-row" role="status">{move ||model.with(|model|format!("{} / {} UTF-8 bytes",model.message.len(),storage_contract::MAX_NOTE_BYTES))}</p>
             </Show>
+            {super::directory_history::current_directory_view(state, history_target)}
             {layout::view(state, model)}
         </section>
     </Show>}

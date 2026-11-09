@@ -8,6 +8,23 @@ pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
     let Some(target) = state.with_untracked(Target::capture) else {
         return view! { <section class="zxs-entry-section zxs-directory-history zxs-stack"><h3 class="zxs-row">{t("目录分支树","Folder branch tree")}</h3><p class="zxs-row">{t("此目录是磁盘或备份的汇总视图，没有独立的目录历史。请打开原始仓库中的具体文件夹查看。","This is a disk or backup aggregate, with no independent folder history. Open the original folder in its repository to view its history.")}</p></section> }.into_any();
     };
+    graph(state, target).into_any()
+}
+
+pub(in crate::files) fn current_directory_view(
+    state: RwSignal<State>,
+    target: Memo<Option<Target>>,
+) -> impl IntoView {
+    view! {
+        <For
+            each=move || target.get()
+            key=|target| target.clone()
+            children=move |target| graph(state, target)
+        />
+    }
+}
+
+fn graph(state: RwSignal<State>, target: Target) -> impl IntoView {
     let target = StoredValue::new(target);
     let model = RwSignal::new(Model::default());
     on_cleanup(move || {
@@ -94,7 +111,7 @@ pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
             <div class="zxs-file-toolbar zxs-flow"><h3 class="zxs-row">{t("目录分支树","Folder branch tree")}</h3>
                 <button class="zxs-button" disabled=move ||model.with(|model|model.loading) on:click=move |_|load(state,model,target,Read::Refresh)>{t("刷新目录历史","Refresh folder history")}</button>
             </div>
-            <p class="zxs-row">{t("每个节点是用户明确提交的本仓库文件及已暂存子仓库版本引用。文件保存仅更新持久化暂存；父级不会代子仓库提交。连线连接前一次目录提交，分页只显示已加载的关系。","Each node commits this repository’s files and explicitly staged child-repository version references. File saves only update durable staging; a parent never commits a child. Lines connect previous directory commits; a page shows only loaded relationships.")}</p>
+            <p class="zxs-row">{t("每个节点是用户明确提交的本仓库文件及已暂存子仓库版本引用。文件保存只更新持久化工作内容，需明确暂存后再提交；父级不会代子仓库提交。连线连接前一次目录提交，分页只显示已加载的关系。","Each node commits this repository’s files and explicitly staged child-repository version references. File saves only update durable working contents; stage them explicitly before committing. A parent never commits a child. Lines connect previous directory commits; a page shows only loaded relationships.")}</p>
             <Show when=move ||model.with(|model|model.stale)><p class="zxs-row" role="status">{t("目录历史已改变；保留原图供查看，请刷新后继续定位节点。","The folder history changed. The previous graph remains visible; refresh before following nodes.")}</p></Show>
             <Show when=move ||model.with(|model|model.error.is_some())><p class="zxs-row zxs-inline-error" role="status">{move ||model.with(|model|model.error.as_ref().map(ToString::to_string).unwrap_or_default())}</p></Show>
             <Show when=move ||model.with(|model|!model.loading&&model.error.is_none()&&model.nodes.as_ref().is_some_and(|page|page.nodes.is_empty()))><p class="zxs-row" data-directory-history-empty="true">{t("此文件夹尚无目录历史记录。查看此图不会创建分支或写入记录。","This folder has no recorded history yet. Viewing this graph does not create branches or write records.")}</p></Show>

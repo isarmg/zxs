@@ -12,7 +12,7 @@ use storage_contract::directory_history::{
 use web_interface::{prelude::*, tasks::spawn_local};
 
 mod view;
-pub(super) use view::view;
+pub(super) use view::{current_directory_view, view};
 const PAGE_SIZE: usize = 64;
 
 #[derive(Debug, error_definition::Error)]
@@ -36,14 +36,25 @@ impl From<DecodeError> for api::Error {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Target {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Scope {
+    Selected,
+    CurrentDirectory {
+        generation: u64,
+        repository_path: String,
+        namespace_head: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) struct Target {
     epoch: u64,
     repository: String,
     directory: String,
     slot: String,
     path: String,
     preview: bool,
+    scope: Scope,
 }
 impl Target {
     fn capture(state: &State) -> Option<Self> {
@@ -68,10 +79,53 @@ impl Target {
             slot: state.files.slot.clone(),
             path: entry.path().into(),
             preview: entry.preview(),
+            scope: Scope::Selected,
         })
     }
+    /// The caller has matched the decoded Git status to this exact listing.
+    /// Paths select the view; only that response supplies the stable directory ID.
+    pub(super) fn current_directory(
+        state: &State,
+        status: &storage_contract::directory_git::DirectoryGitStatus,
+    ) -> Self {
+        Self {
+            epoch: state.session_epoch,
+            repository: status.repository_id.clone(),
+            directory: status.directory_id.clone(),
+            slot: state.files.slot.clone(),
+            path: state.files.directory.clone(),
+            preview: false,
+            scope: Scope::CurrentDirectory {
+                generation: state.files.generation,
+                repository_path: status.path.clone(),
+                namespace_head: state.files.namespace_head.clone(),
+            },
+        }
+    }
+
     fn current(&self, state: &State) -> bool {
-        Self::capture(state).as_ref() == Some(self)
+        match &self.scope {
+            Scope::Selected => Self::capture(state).as_ref() == Some(self),
+            Scope::CurrentDirectory {
+                generation,
+                repository_path,
+                namespace_head,
+            } => {
+                state.session_active()
+                    && state.session_epoch == self.epoch
+                    && state.files.loaded
+                    && !state.files.loading
+                    && state.files.selected.is_none()
+                    && state.files.directory_preview.is_none()
+                    && state.files.file_preview.is_none()
+                    && state.files.generation == *generation
+                    && state.files.slot == self.slot
+                    && state.files.directory == self.path
+                    && state.files.repository_id == self.repository
+                    && state.files.repository_path == *repository_path
+                    && state.files.namespace_head == *namespace_head
+            }
+        }
     }
 }
 

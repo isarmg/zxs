@@ -402,7 +402,10 @@ fn apply_page(state: &mut State, page: Page, requested: Option<&Entry>) {
             .map(super::super::model::entry_key)
     {
         state.files.reconcile_selection(page.selected);
-        if state.page == crate::ui::Page::Details && state.files.selected.is_none() {
+        if requested.is_some()
+            && state.page == crate::ui::Page::Details
+            && state.files.selected.is_none()
+        {
             state.change_page(crate::ui::Page::Files);
         }
     } else {
