@@ -186,10 +186,10 @@ class ReleaseForeignReviewWorkflow(unittest.TestCase):
     def test_retained_dependencies_and_current_concurrency_policies(self):
         self.assertIn('    needs: [static, web-production, smb-sdk]\n', self.browser)
         self.assertIn('    timeout-minutes: 60\n', self.browser)
-        # Manual short CI must not cancel an earlier run. The paused browser
+        # Each push/manual short CI run has its own non-cancelling group. The paused browser
         # recipe keeps its dependencies without restoring the old CI policy.
         expected = (
-            (self.ci, '  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n'
+            (self.ci, '  group: ci-${{ github.workflow }}-${{ github.sha }}-${{ github.run_id }}\n'
              '  cancel-in-progress: false\n'),
             (self.release, '  group: release-${{ github.ref }}\n'
              '  cancel-in-progress: false\n'),

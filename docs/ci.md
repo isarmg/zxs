@@ -1,8 +1,8 @@
 # 持续集成
 
-当前按用户最新要求由协调者每小时通过 `workflow_dispatch` 手动发起一次当前 `main` 的 [开发期短 CI](ci/development-short-ci.md)。仓内已移除 GitHub `schedule`，push、PR、标签与其他自动触发仍暂停；周期提醒/实际 dispatch 由外部协调，不由工作流定时。本轮不再本地编译。短 CI 路径仍为 5 分钟静态预检加 10 分钟七套并行矩阵。长套件、真实 Chrome、SDK、生产 WASM、一期 core 和 Release 长验证固定暂停，直到所有任务完成后另行明确恢复。下文完整入口与产物说明是保留的检查配方，不表示暂停项当前执行或通过。
+当前按用户最新要求每次 push 自动运行 [开发期短 CI](ci/development-short-ci.md)，保留 `workflow_dispatch` 人工入口。仓内没有 GitHub `schedule` 或 PR 入口，标签发布与其他自动入口仍暂停。本轮不在本地运行程序、编译或测试。短 CI 路径仍为 5 分钟静态预检加 10 分钟七套并行矩阵。长套件、真实 Chrome、SDK、生产 WASM、一期 core 和 Release 长验证固定暂停，直到所有任务完成后另行明确恢复。下文完整入口与产物说明是保留的检查配方，不表示暂停项当前执行或通过。
 
-[GitHub Actions 工作流](../.github/workflows/ci.yml) 仅保留 `workflow_dispatch` 入口，实际执行完整 static 和固定七套短矩阵，不因没有新提交而空跑；不重复触发同一轮、不自动取消运行中的检查。触发前选择当前 `main`，之后核对实际 run 的 head SHA 与结论，不能用旧 run 的 rerun 冒充新检查。使用 `rust-toolchain.toml` 指定工具链与唯一根 Cargo.lock，不部署或发布。产品用户入口仅为 Web 与 SMB；没有桌面或移动 App 构建任务。
+[GitHub Actions 工作流](../.github/workflows/ci.yml) 的 push 与 `workflow_dispatch` 入口均实际执行完整 static 和固定七套短矩阵，不因没有源码变化而空跑。并发组按 workflow／SHA／run ID 区分，后续轮次不替换排队或运行中的检查。提交后核对自动 push run 的实际 head SHA 与结论，不额外重复触发同一轮；按授权人工发起时选择当前 `main`，不能用旧 run 的 rerun 冒充新检查。使用 `rust-toolchain.toml` 指定工具链与唯一根 Cargo.lock，不部署或发布。产品用户入口仅为 Web 与 SMB；没有桌面或移动 App 构建任务。
 
 所有自有 Rust 组件和基础实现由一个根 workspace 管理，命令按包和编译目标选择。统一入口为 [check.sh](../.github/scripts/check.sh)：
 

@@ -132,11 +132,14 @@ HEADER = '# Development short CI: long checks are paused, not passed. See docs/c
 def development_workflow(name, original):
     """The complete original jobs remain; only these reviewed edits are allowed."""
     source = HEADER + original
-    # Recurring checks are dispatched externally, never by GitHub schedule.
+    # Every push runs short CI; manual dispatch remains, but no schedule or PR trigger.
     if name == 'ci.yml':
         source = source.replace('on:\n  push:\n  pull_request:\n',
-                                'on:\n  # Manual dispatch only; GitHub automatic triggers remain paused.\n')
-        # A later manual check must not cancel one already in progress.
+                                'on:\n  # Run the short CI on every push, and retain manual dispatch.\n  push:\n')
+        # Each run has its own group so later pushes cannot replace a queued run.
+        source = source.replace(
+            '  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n',
+            '  group: ci-${{ github.workflow }}-${{ github.sha }}-${{ github.run_id }}\n', 1)
         source = source.replace('  cancel-in-progress: true\n',
                                 '  cancel-in-progress: false\n', 1)
     elif name == 'release.yml':
@@ -188,7 +191,7 @@ def check_workflows(root):
 def receipt():
     return {
         'mode': 'development-short-ci',
-        'automatic_triggers': False,
+        'automatic_triggers': True,
         'suites': list(SHORT_SUITES),
         'paused_suites': list(PAUSED_SUITES),
         'paused_jobs': {name: list(jobs) for name, jobs in PAUSED_JOBS.items()},
