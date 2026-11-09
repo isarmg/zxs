@@ -23,7 +23,7 @@
 
 root 操作人先看固定目的地、root UID、0755、父目录设备/inode，再明确确认 `prepare-host-root-only`。仅准备该根目录，**不创建 Unix/Samba/管理员账户、不初始化数据库或磁盘、不修改 systemd/SMB、不停止或启动服务**。不存在时在 `/` 的确定 pending 名内创建空目录，核验为空并持有未来 daemon 的 inode 锁，同步后 `RENAME_NOREPLACE` 发布为 `/zxs`，同步父目录后释放。非空 pending、链接、不同权限、冲突和不确定发布均保留证据，不强行清理。
 
-已有安全 `/zxs` 仅核验身份/权限并同步，不修改其内容；已有业务数据不会被重置。准确空 pending 且权限已完成者可原请求重试；在初始 mkdir/权限设置之间中断的 0700 pending 需要明确调查，不自动 chmod 不明既有目录。目标与 pending 同时存在也拒绝猜测。
+已有安全 `/zxs` 仅核验身份/权限并同步，不修改其内容；已有业务数据不会被重置。准确空 pending 可按同一预览摘要重试，包括初始 mkdir 后留下的 root 所有、0700 阶段；在父目录锁、空性、原 inode 和未来 daemon 锁核对后，只将这个未发布 inode 完成到 0755。非空 pending、其他 owner/mode、既有 final 权限不符、目标与 pending 同时存在均保留拒绝。本次中断窗口修正未编译、未执行测试或真实主机操作。
 
 此准备结果明确 `system_initialized=false`、`service_stopped_or_started=false` 和 `service_exclusion_held_after_response=false`。请求结束没有持久的“已停服票据”，只能由下一操作重新实际取得租约。
 

@@ -44,12 +44,12 @@ class MaintainedDocs(unittest.TestCase):
                 self.assertFalse(export.is_relative_to(private))
                 self.assertFalse(private.is_relative_to(export))
 
-    def test_systemd_program_and_persistent_data_use_zxs_tree(self):
+    def test_systemd_uses_helper_program_and_private_zxs_tree(self):
         unit = configparser.ConfigParser(interpolation=None, delimiters=('=',), strict=False)
         unit.read(ROOT / 'deploy/systemd/zxs.service')
         service = unit['Service']
         args = shlex.split(service['ExecStart'])
-        self.assertEqual(args[0], '/zxs/zxs')
+        self.assertEqual(args[0], '/usr/local/bin/zxs')
         self.assertEqual(service['WorkingDirectory'], '/zxs')
         for option, path in (('--root', '/zxs/data/state'),
                              ('--management-root', '/zxs/data/management')):

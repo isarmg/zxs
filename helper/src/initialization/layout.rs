@@ -22,6 +22,11 @@ pub(super) struct Destination {
     lease: ServiceLease,
     owner: (u32, u32),
 }
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PendingOwner {
+    Helper,
+    Service,
+}
 #[derive(Debug)]
 struct PublicationFailure {
     parent: FileIdentity,
@@ -121,51 +126,19 @@ impl Destination {
             }
         };
         self.root.directory().sync_all()?;
-        let metadata = directory.directory().metadata()?;
-        if metadata.mode() & 0o7777 != 0o700
-            || (metadata.uid() != rustix::process::geteuid().as_raw()
-                && (metadata.uid(), metadata.gid()) != self.owner)
-        {
-            return Err(
-                "pending private layout has unexpected owner/mode; it was not repaired".into(),
-            );
-        }
-        check_names(&directory)?;
-        // Inspect every already present child before creating any missing child.
-        for name in CHILDREN {
-            match directory.open_directory(&EntryName::new(*name)?.as_relative()) {
-                Ok(child) => {
-                    check_owner(&child, self.owner)?;
-                    empty(&OpenAt2Root::from_directory(child, MountPolicy::SameMount)?)?;
-                }
-                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-        for name in CHILDREN {
-            let entry = EntryName::new(*name)?;
-            match directory.open_directory(&entry.as_relative()) {
-                Ok(child) => child.sync_all()?,
-                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                    mkdirat(
-                        directory.directory(),
-                        entry.as_os_str(),
-                        Mode::from_raw_mode(0o700),
-                    )?;
-                    let child = directory.open_directory(&entry.as_relative())?;
-                    // Only the inode exclusively created by this call is handed off.
-                    set_owner(&child, self.owner)?;
-                    child.sync_all()?;
-                    check_named(&directory, &entry, FileIdentity::from_fd(&child)?)?;
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
+        let owner = pending_owner(directory.directory(), self.owner)?;
+        self.prepare_children(&directory, &pending, owner, &revalidate)?;
         self.complete_children(&directory)?;
+        // Persist every child name before handing off the staging parent. A
+        // service-owned pending parent must never imply missing children may be
+        // reconstructed after its private preparation has already finished.
+        directory.directory().sync_all()?;
         revalidate()?;
+        self.lease.recheck()?;
+        check_named(&self.root, &pending, directory.identity())?;
         // This dedicated, exact-request pending tree is never a preexisting live
         // data root. An interrupted top-level handoff can finish the same plan.
-        if (metadata.uid(), metadata.gid()) != self.owner {
+        if owner == PendingOwner::Helper {
             set_owner(directory.directory(), self.owner)?;
         }
         check_owner(directory.directory(), self.owner)?;
@@ -197,6 +170,75 @@ impl Destination {
         self.complete_children(&directory)?;
         Ok(true)
     }
+    fn prepare_children(
+        &self,
+        directory: &OpenAt2Root,
+        pending: &EntryName,
+        owner: PendingOwner,
+        revalidate: &impl Fn() -> Result<()>,
+    ) -> Result<()> {
+        check_names(directory)?;
+        // Hold all existing children after checking the entire original staging
+        // tree, before creating or handing off any inode. A published data tree
+        // never reaches this path.
+        let mut children = Vec::with_capacity(CHILDREN.len());
+        for name in CHILDREN {
+            let entry = EntryName::new(*name)?;
+            let child = match directory.open_directory(&entry.as_relative()) {
+                Ok(file) => {
+                    let child = OpenAt2Root::from_directory(file, MountPolicy::SameMount)?;
+                    let child_owner = pending_owner(child.directory(), self.owner)?;
+                    if owner == PendingOwner::Service && child_owner != PendingOwner::Service {
+                        return Err("handed-off pending layout has an unfinished child; its original contents were preserved".into());
+                    }
+                    empty(&child)?;
+                    check_named(directory, &entry, child.identity())?;
+                    Some(child)
+                }
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if owner == PendingOwner::Service {
+                        return Err(
+                            "handed-off pending layout lost a child; it was not recreated".into(),
+                        );
+                    }
+                    None
+                }
+                Err(error) => return Err(error.into()),
+            };
+            children.push((entry, child));
+        }
+        for (entry, child) in children {
+            self.lease.recheck()?;
+            check_named(&self.root, pending, directory.identity())?;
+            revalidate()?;
+            let child = match child {
+                Some(child) => child,
+                None => {
+                    mkdirat(
+                        directory.directory(),
+                        entry.as_os_str(),
+                        Mode::from_raw_mode(0o700),
+                    )?;
+                    OpenAt2Root::from_directory(
+                        directory.open_directory(&entry.as_relative())?,
+                        MountPolicy::SameMount,
+                    )?
+                }
+            };
+            check_named(directory, &entry, child.identity())?;
+            empty(&child)?;
+            if pending_owner(child.directory(), self.owner)? == PendingOwner::Helper {
+                // mkdir may have succeeded before an earlier process stopped.
+                // This is the held, empty child of the exact original pending
+                // request, not a live directory or a replacement path.
+                set_owner(child.directory(), self.owner)?;
+            }
+            check_owner(child.directory(), self.owner)?;
+            child.directory().sync_all()?;
+            check_named(directory, &entry, child.identity())?;
+        }
+        Ok(())
+    }
     fn complete_children(&self, directory: &OpenAt2Root) -> Result<()> {
         check_names(directory)?;
         for name in CHILDREN {
@@ -206,6 +248,18 @@ impl Destination {
         }
         Ok(())
     }
+}
+fn pending_owner(file: &File, owner: (u32, u32)) -> Result<PendingOwner> {
+    let metadata = file.metadata()?;
+    if metadata.mode() & 0o7777 == 0o700 {
+        if metadata.uid() == rustix::process::geteuid().as_raw() {
+            return Ok(PendingOwner::Helper);
+        }
+        if (metadata.uid(), metadata.gid()) == owner {
+            return Ok(PendingOwner::Service);
+        }
+    }
+    Err("original pending private layout requires mode 0700 and either its administrative staging owner or the exact selected UID/GID; it was not repaired".into())
 }
 fn check_owner(file: &File, owner: (u32, u32)) -> Result<()> {
     let metadata = file.metadata()?;

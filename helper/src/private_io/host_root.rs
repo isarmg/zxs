@@ -76,10 +76,14 @@ impl HostRoot {
             Err(error) => return Err(error.into()),
         };
         let metadata = file.metadata()?;
+        let mode = metadata.mode() & 0o7777;
+        // Only the fixed, unpublished staging name may still have mkdir's
+        // private mode. The live root must already have its final attributes.
+        let initial_pending = name == &self.pending && mode == 0o700;
         if metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.mode() & 0o7777 != 0o755
+            || (mode != 0o755 && !initial_pending)
         {
-            return Err("existing host root must have this user's ownership and exact mode 0755; it was not chmodded or replaced".into());
+            return Err("host root requires this user's ownership and mode 0755; only the original unpublished pending root may retain mode 0700; neither was repaired or replaced".into());
         }
         Ok(Some(OpenAt2Root::from_directory(
             file,
@@ -111,10 +115,8 @@ impl HostRoot {
                     self.pending.as_os_str(),
                     Mode::from_raw_mode(0o700),
                 )?;
-                let file = self.parent.open_directory(&self.pending.as_relative())?;
-                // This is a newly created empty staging inode, never an existing root.
-                file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
-                OpenAt2Root::from_directory(file, MountPolicy::AllowNestedMounts)?
+                self.open_named(&self.pending)?
+                    .ok_or("new pending host root disappeared; no replacement was accepted")?
             }
         };
         if let Some(entry) = root.entries()?.next() {
@@ -126,6 +128,12 @@ impl HostRoot {
         }
         // Lock the future daemon inode before publishing its public name.
         let _root_lock = AdvisoryLock::directory(root.directory())?;
+        self.check_named(&self.pending, root.identity())?;
+        self.recheck_parent()?;
+        // A retry after mkdir resumes this same empty, administrative-owned
+        // pending inode. Never chmod the final root or any nonempty staging tree.
+        root.directory()
+            .set_permissions(std::fs::Permissions::from_mode(0o755))?;
         root.directory().sync_all()?;
         self.parent.directory().sync_all()?;
         self.check_named(&self.pending, root.identity())?;

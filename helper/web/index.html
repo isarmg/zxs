@@ -18,6 +18,7 @@
     <section class="card">
       <h2>准备安装根与运行互斥</h2>
       <p>只在缺少时原子创建 root 所有、0755 的 <code>/zxs</code>，已有安全目录只核验并同步，不改已有权限或内容。当前 ZXS 可执行程序启动前独占该目录的 OS 租约，直到所有运行时工作结束。准备此空根不代表账户、磁盘或系统已经初始化。</p>
+      <p class="muted">中断后保留原预览摘要及 pending，明确重试同一请求。只允许原 root 所有的空 pending 完成 0700 → 0755 交接；不会修改已发布 /zxs 的权限或删除异常材料。</p>
       <p class="muted">不会停止或启动任何服务。旧二进制、第三方进程、Samba/passdb 和其他设备写入者不受此协议自动约束，仍须单独停服。这里的成功回执不证明当前没有其他进程运行。</p>
       <button id="host-preview" type="button">预览安装根准备</button>
       <pre id="host-plan" hidden></pre>
@@ -52,6 +53,7 @@
     <section class="card">
       <h2>首次初始化前：服务私有目录</h2>
       <p>为已存在的本机非 root 服务账户准备 <code>/zxs/data/{state,management,disks}</code>。从安全的本机 <code>/etc/passwd</code> 核对准确 UID / 主组 GID，创建整棵 0700 空目录树，不改现有目录权限，也不清空任何数据。</p>
+      <p class="muted">原请求中断可保留同一账户与摘要后续作：只交接原 root pending 中尚属 root 的 0700 空子目录。未知内容或权限不匹配仍拒绝，不清理 pending，不改已发布的数据树。</p>
       <form id="layout-form">
         <div class="fields"><label>已存在的服务账户 <input id="layout-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label></div>
         <p class="muted">此步骤不创建 Unix/管理员/SMB 账户，不初始化数据库或磁盘，不表示系统可以正常启动。当前 daemon 运行时会拒绝准备；旧版和第三方写者仍须单独停止。</p>

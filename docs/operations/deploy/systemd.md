@@ -1,12 +1,12 @@
 # Linux 服务部署审阅样例
 
-[zxs.service](../../../deploy/systemd/zxs.service) 是供部署前审阅的 systemd 单元，没有安装、启用或启动。程序为 `/zxs/zxs`，使用发行 ELF 内嵌 Web；持久业务状态与示例存储目录在 `/zxs/data`，日志、缓存、配置和运行目录也统一放在 `/zxs` 下。默认直接提供 `0.0.0.0:7400` 的 HTTP，不限制非回环监听，也不预设 HTTPS 外部来源。浏览器使用实际服务器 IP 或主机名访问，服务仍校验精确同源、认证及权限。网络可达范围和明文传输风险由部署者管理；远程运维 CLI 已移除。
+[zxs.service](../../../deploy/systemd/zxs.service) 是供部署前审阅的 systemd 单元，没有安装、启用或启动。程序为 `/usr/local/bin/zxs`，使用发行 ELF 内嵌 Web；持久业务状态与示例存储目录在 `/zxs/data`，日志、缓存、配置和运行目录也统一放在 `/zxs` 下。默认直接提供 `0.0.0.0:7400` 的 HTTP，不限制非回环监听，也不预设 HTTPS 外部来源。浏览器使用实际服务器 IP 或主机名访问，服务仍校验精确同源、认证及权限。网络可达范围和明文传输风险由部署者管理；远程运维 CLI 已移除。
 
 需要 HTTPS 反向代理时，按实际域名增加 `--external-origin https://实际域名`；只有显式配置且与 TCP 对端精确匹配的代理 IP 才可提供单一、覆盖写入的 `X-Forwarded-For`。不要保留未使用的示例域名，也不要把任意远端转发头当作认证或同源证明。
 
 ## 部署前条件
 
-- 创建专用 `zxs` 服务账户。`/zxs` 与 `/zxs/zxs` 由 root 所有、服务账户不可写，目录和程序可采用 `0755`；`/zxs/INSTALL.md` 保存本版安装说明。预先建立 `/zxs/data`、`/zxs/data/state`、`/zxs/data/management`、`/zxs/data/disks` 和示例盘根 `/zxs/data/disks/P01`，均由 `zxs` 服务账户所有、权限 `0700`，文件默认 `0600`。模板不使用 `StateDirectory=`，因此不会自动创建或继续写 `/var/lib` 下的旧目录；不自动搬迁已有数据。首次初始化通过运行中的受保护 Web 引导执行，由服务独占初始化门控；操作员预先批准盘位与引导授权。不能把开发模式目录当作独立物理盘。
+- 创建专用 `zxs` 服务账户。`/zxs` 与 `/usr/local/bin/zxs` 由 root 所有、服务账户不可写，目录和程序可采用 `0755`；`/zxs/INSTALL.md` 保存本版安装说明。先通过配套独立 `zxs-helper` 准备 `/zxs/data/{state,management,disks}` 和运行目录，均由 `zxs` 服务账户所有、权限 `0700`，文件默认 `0600`。模板不使用 `StateDirectory=`，因此不会自动创建或继续写 `/var/lib` 下的旧目录；不自动搬迁已有数据。首次管理员与首批存储由 helper 的离线入口显式初始化：先在空布局创建管理员，再准备实际空盘目录并确认完整首批。普通 `zxs` 在 runtime/监听前拒绝缺少配置或初始激活证明的空系统，不提供在线首装替代入口。不能把开发模式目录当作独立物理盘。
 - 存储目录及其文件系统由管理员准备；不限定 Btrfs、不要求独立挂载点、不核实物理设备独立性，共享底层故障域由用户自行保证。不要用 `RequiresMountsFor=` 或数据配置文件的启动前检查阻止管理服务启动。按真实配置调整 `ReadWritePaths=`，模板对 `/zxs/data` 开放写入，示例盘根位于其内；若另加该树以外的盘根，在其精确路径前加 `-` 允许挂载点缺失；已有池的路径替换或 seal 缺失不能当作新成员自动接入；核心核对 held FD 的 device/inode、根目录身份和登记 seal。首次登记普通目录不被物理关系规则拒绝。
 - 日常账户不能打开原始块设备或数据盘目录。部署者需要单独设置设备访问和自动挂载策略，关闭会把业务盘重新暴露给普通用户的桌面自动挂载流程。`PrivateMounts=yes` 不会自动撤销宿主机原有目录或设备权限。
 - SQLite 是可重建索引；不要只备份 SQLite。保护元数据、配置和凭据的恢复材料均按项目恢复流程处理。敏感内容不通过环境变量、命令行或 systemd 单元传入。
@@ -17,9 +17,9 @@
 
 ## `/zxs` 目录与日志
 
-由管理员预建以下目录；除程序、说明和 SMB 空导出目录外，均由 `zxs:zxs` 所有、权限 `0700`，文件默认 `0600`：
+以下私有目录由 helper 首装阶段准备；除程序、说明和 SMB 空导出目录外，均由 `zxs:zxs` 所有、权限 `0700`，文件默认 `0600`。不要覆盖或清空已有目录来满足首装条件：
 
-- `/zxs/zxs`：root 所有、服务不可写的程序，`0755`；`/zxs/INSTALL.md` 为本版说明。
+- `/usr/local/bin/zxs`：root 所有、服务不可写的程序，`0755`；`/zxs/INSTALL.md` 为本版说明。
 - `/zxs/data`：持久业务数据、状态、管理凭据、HTTP/SMB spool 和可重建索引。
 - `/zxs/config`：部署配置文件；可选初始化方案可置于 `/zxs/config/layout.json`。
 - `/zxs/log`：预建 `zxs:zxs` 所有、`0600` 的普通日志文件 `/zxs/log/zxs.log`，不得为符号链接；systemd 打开该文件后将标准输出和标准错误追加写入。
@@ -29,7 +29,7 @@
 
 `WorkingDirectory=/zxs`，XDG 配置、数据和状态变量均指向上述树内路径；只读程序目录不进入 `ReadWritePaths=`。日志不自动轮转或清空，部署者应监测空间并在正常停服后归档日志，再启动重新打开文件；不要把日志归档动作用于业务恢复材料。systemd 自身服务状态/故障日志仍属于操作系统管理记录，不是应用日志文件。
 
-系统服务注册文件仍须安装在 systemd 的单元目录，apt 管理的 Samba、运行库和 VFS 模块仍使用发行版目录；这些是系统组件，ZXS 自身程序、配置、数据、日志、缓存、临时文件和 socket 均在 `/zxs` 下。这里不自动修改目标主机。
+系统服务注册文件仍须安装在 systemd 的单元目录，apt 管理的 Samba、运行库和 VFS 模块仍使用发行版目录；这些是系统组件；ZXS 程序统一在 `/usr/local/bin/zxs`，自身配置、数据、日志、缓存、临时文件和 socket 在 `/zxs` 下。这里不自动修改目标主机。
 
 ## 可选 Samba 本机桥接
 
@@ -38,7 +38,7 @@
 ```ini
 [Service]
 ExecStart=
-ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400 --smb-socket /zxs/run/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
+ExecStart=/usr/local/bin/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400 --smb-socket /zxs/run/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
 ```
 
 示例的 `0` 只适用于确认桥接在 Samba 可信 root 进程身份下连接的部署。该连接时机必须在目标 Samba 验证，不能放宽 socket 权限来适应未认证的进程。`/zxs/run` 及 socket 分别维持 `0700`、`0600`，`zxs-owner` 通过 Samba 独立凭据认证后绑定到唯一 ZXS 管理员；不接受 `Samba=ZXS` 映射、重复账户配置、匿名、guest 或 force-user 会话。Samba 配置须同时限制 `valid users` 并关闭所有 guest 路径，见[共享样例](../../../deploy/samba/smb.conf.example)。共享仓库拆分、恢复后必须显式重新绑定，不能自动接入迁移后的历史域。
@@ -55,7 +55,7 @@ SMB spool 与 socket 目录分离，守护进程固定使用 `--management-root/
 
 ## 数据盘故障与管理面
 
-`zxs` 直接启动 HTTP/Web，不再需要 `serve` 子命令。管理目录、凭据、HTTP 暂存与监控位于系统盘的 `--management-root`；示例与池系统目录分开。数据引擎后台尝试打开，失败不能阻止静态 Web 和管理状态页。数据业务仍拒绝不安全请求，不会因 Web 可用而绕过元数据仲裁或自动重置池。系统目录不可用或监听端口错误仍可阻止服务启动。
+`zxs` 完成上述首启准入后直接启动 HTTP/Web，不再需要 `serve` 子命令。管理目录、凭据、HTTP 暂存与监控位于系统盘的 `--management-root`；示例与池系统目录分开。对已经通过首启准入的已初始化系统，数据引擎后台尝试打开，失败不能阻止静态 Web 和管理状态页；这不把未初始化空目录变成允许启动的管理模式。数据业务仍拒绝不安全请求，不会因 Web 可用而绕过元数据仲裁或自动重置池。系统目录不可用或监听端口错误仍可阻止服务启动。
 
 监控历史缓存属于可重建的辅助状态。缓存无法打开时（包括缓存目录是被拒绝的符号链接）退回有界内存历史，不因此阻止 Web、登录、健康检查或实时监控。服务不会跟随该缓存目录符号链接、修改其目标权限或清理目标内容；修复前内存中的新历史不跨进程重启保留。不要通过放宽路径安全检查恢复缓存。
 

@@ -24,10 +24,10 @@ zxs-helper initialization layout-prepare --service-user zxs \
 
 持续取得与当前 ZXS 可执行程序相同的 `/zxs` 生命周期租约，才检查和准备固定 `/zxs/data`，不接受浏览器任意目标路径。新树只含 `state`、`management`、`disks` 三个空目录，全部为所选 UID/GID、0700。`disks` 只是尚无成员的发现容器，不会创建、挂载、格式化或接纳任何磁盘。
 
-在 `/zxs/.zxs-helper-data-<预览摘要>.pending/` 内逐个创建、设置新 inode 所有权并同步；不修改已存在的 live `/zxs/data` 或其子目录权限。只允许准确请求的受控 pending 完成顶层所有权交接。所有子目录、权限、空性和身份符合后，整棵树以 `RENAME_NOREPLACE` 发布为 `data`，同步父目录，返回清楚的准备结果。
+在 `/zxs/.zxs-helper-data-<预览摘要>.pending/` 内逐个创建、设置新 inode 所有权并同步；不修改已存在的 live `/zxs/data` 或其子目录权限。只允许准确请求的受控 pending 完成子目录和顶层所有权交接。先检查全部已有子目录并持有其 FD；中断留下的 root 所有、0700 空子目录只能在仍属 root 的原 pending 内继续交接。全部子目录名字和 inode 同步后才交接父目录，随后整棵树以 `RENAME_NOREPLACE` 发布为 `data`，同步父目录，返回清楚的准备结果。
 
 - 已存在完整且仍空的准确布局：只核验并同步，返回 `matching_empty_private_layout_durably_verified`，不冒充新建。
-- 原 pending 的已完成子目录准确、其余缺少：同一请求可补齐。子目录 mkdir/chown 中断留下的异常 owner/mode 不会猜测修复，保留并拒绝。
+- 仍属 root 的原 pending 中，已完成子目录准确、其余缺少或停在 mkdir 后的 root:0700：同一请求可补齐并交接准确空 inode。父目录已经交接给服务身份后，子目录必须完整且均已交接；缺件不重建。
 - 已有内容、未知条目、链接、不符 owner/mode、同时存在 pending 与 final：拒绝，不清空、不 chmod/chown live 目录、不重建已有数据库。
 - rename/fsync 结果不确定：保留类型化 `Unknown` / `Published` / `PublishedDurabilityUnknown` 与 pending 名/父身份；不能因 HTTP 失败判断没写入，也不能删目录重新初始化。
 
@@ -35,4 +35,4 @@ zxs-helper initialization layout-prepare --service-user zxs \
 
 ## 后续仍需实现
 
-完整首次管理员与必要磁盘配置、SQLite/权威初始化、完整成功交接、普通服务拒绝半成状态、root 至服务身份的受控业务执行、准确中断收束，以及凭据重置/现用 systemd-Samba 配置激活仍未接齐。当前只对新空布局设置服务所有权；不对现用数据执行递归 chown。原有安全 Web 初始化入口尚未因这一前置被删除。
+首次管理员与首批存储现由独立 helper 的同版离线协调器执行，普通 `zxs` 启动前拒绝缺少配置或初始激活证明的空系统，不提供在线首装替代入口。完整安装交接、依赖/VFS 与 systemd-Samba 激活仍未接齐，当前状态见 TASKS H04/H07。目录准备只交接原空 pending，不对现用数据执行递归 chown。本次中断窗口修正未编译、未执行测试或真实主机操作。

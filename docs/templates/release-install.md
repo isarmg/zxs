@@ -64,30 +64,48 @@ cp "zxs-$VERSION-debian13-amd64" "server-$VERSION/zxs"
 cp "zxs-vfs-$VERSION-debian13-amd64.so" "server-$VERSION/zxs.so"
 cp VFS-BUILD.json "server-$VERSION/"
 chmod 755 "server-$VERSION/zxs"
+mkdir "materials-$VERSION"
+tar --extract --gzip --file "zxs-materials-$VERSION.tar.gz" \
+  --directory "materials-$VERSION" --no-same-owner --no-same-permissions -- zxs-helper
+chmod 755 "materials-$VERSION/zxs-helper"
 )
 ```
 
 `SHA256SUMS` 是完整性清单，**不是独立的发布者签名**。`BUILD.txt` 绑定构建源码、内嵌 Web 与输出字节，不承诺位级可重现。
 
-`zxs-materials-版本.tar.gz` 仅为非运行必需的许可证、来源资料、文档、示例配置和可选离线辅助工具 `zxs-helper`；不需要解压它才能运行 `zxs`，它也不是“单个二进制”的别名。保留、分发对应许可证/版权与来源资料。
+`zxs-materials-版本.tar.gz` 包含本版独立 `zxs-helper`、许可证、来源资料、文档和配置样例。**全新机器必须先用配套 helper 完成离线首装**；普通 `zxs` 不会在空目录上启动 Web 首次设置。上面的命令只在下载目录提取 helper，不安装或启动服务。保留完整资料归档及其许可证/版权和来源材料；已初始化的日常服务不需要 helper 常驻。
 
-## `/zxs` 安装布局与 systemd
+## 首次安装：先用独立辅助工具，再启动主服务
 
-校验完成后，由管理员将准备好的 `zxs` 安装为 `/zxs/zxs`，本版 `INSTALL.md` 保存为 `/zxs/INSTALL.md`。`/zxs` 与程序由 root 所有、服务账户不可写，可采用目录/程序 `0755`。建立专用 `zxs` 服务账户，并预建其所有、`0700` 的 `/zxs/data`、`/zxs/data/state`、`/zxs/data/management`、`/zxs/data/disks` 和示例盘根 `/zxs/data/disks/P01`。已有数据不自动搬迁，不要用安装步骤覆盖旧池或恢复材料。
+管理员先在工具外建立专用的非 root 本机 `zxs` 服务账户及其主组，并停止 ZXS、Samba 和其他磁盘/主机配置写者。在可信隔离网络中，手动以 root 运行已校验的 `materials-版本/zxs-helper`，浏览器打开 `http://主机实际IP:9040`。此控制台**没有登录，且为明文 HTTP**，任何可达者均有维护权限；同源/CSRF 不是访问认证。工具不设置自身自启，使用后退出。
 
-资料归档中的 `deploy/systemd/zxs.service` 使用以下启动布局：
+按控制台中独立的预览、确认和真实回执依次进行：
+
+1. “准备安装根与运行互斥”：仅创建 root 所有、0755 的 `/zxs`。然后“安装内置 ZXS 程序”，固定安装到 `/usr/local/bin/zxs` 并保留准确载荷基线；不手工覆盖已有不同程序。
+2. “首次初始化前：服务私有目录”及“首次安装：运行目录与空 SMB 导出”：使用同一服务账户，准备 `/zxs/data/{state,management,disks}` 及运行目录。它们只准备空布局，不创建管理员、数据库或磁盘。已有不匹配或非空目录须保留，不能清空来重走首装。
+3. “首次初始化：只创建系统管理员”：在仍无磁盘子目录的准确空布局创建唯一 ZXS 管理员，手动输入密码并保存不含密码的原请求摘要。**不是启动普通 ZXS 后再设置管理员。**
+4. 管理员在工具外准备和挂载正确的持久空盘目录，设置准确服务 UID/GID 与 0700；随后在“首次存储：整批初始化现有空目录”中一次列出 `/zxs/data/disks` 下全部真实直接子目录并确认。该阶段创建初始配置、数据库及激活证明，不格式化设备或自动挂载。
+5. 核对运行库、实际 Samba/VFS 与独立 SMB 凭据，再通过配置安装入口预览并安装准确 systemd/Samba 文件。该入口不覆盖不同配置、不修改系统默认 Samba 配置、不 reload/start/enable。完整安装 ready 与自动服务激活仍未提供，不能把某一步成功当作已可上线。
+
+任何一步中断或响应丢失，先保留原摘要、输入、pending 和已发布材料，再走同一步的原请求查询/确认续作；不换请求重置、不删目录或凭据。初始空根和私有布局只允许准确空 staging 的权限/属主交接恢复，不修复现用数据树。
+
+## `/zxs` 布局与 systemd
+
+资料归档中的 `deploy/systemd/zxs.service` 与 helper 生成单元统一使用固定程序目的地；持久数据与运行目录仍在 `/zxs`：
 
 ```ini
 WorkingDirectory=/zxs
-ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400
+ExecStart=/usr/local/bin/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400
 ReadWritePaths=/zxs/data /zxs/config /zxs/log /zxs/run /zxs/tmp /zxs/cache /zxs/home
 ```
 
-使用内嵌 Web，不需要 `--web-dir`。默认直接 HTTP；部署者自行控制网络暴露和传输保护。需要 HTTPS 代理时再按实际地址配置 `--external-origin`，不填写未使用的示例域名。预建 `zxs:zxs` 所有、`0700` 的 `/zxs/config`、`/zxs/log`、`/zxs/run`、`/zxs/tmp`、`/zxs/cache` 和 `/zxs/home`。由管理员预建 `zxs:zxs` 所有、`0600` 的普通日志文件 `/zxs/log/zxs.log`（不得为符号链接）；systemd 打开该文件后将标准输出和错误追加到它；socket 位于 `/zxs/run`，临时文件通过 `TMPDIR` 等变量使用 `/zxs/tmp`，HOME 和 XDG 变量也统一指向树内。凭据、完整工作文件、SMB spool、索引和恢复记录仍放 `/zxs/data`，不能当作临时文件清理。日志需监测空间并在正常停服后归档，不自动删除。单元不创建 `/run`、`/var/lib`、`/var/log` 下的 ZXS 专用目录。
+`/usr/local/bin/zxs` 由 root 所有、0755、服务账户不可写；`/zxs` 为 root 所有、0755，本版安装说明可保存为 `/zxs/INSTALL.md`。不要再安装另一个 `/zxs/zxs` 或用样例单元覆盖 helper 已安装的准确配置。
 
-Samba 的空导出目录采用 root 所有、`0555` 的 `/zxs/smb-export`，独立于所有 `0700` 私有目录；根 `/zxs` 为 `0755` 允许认证 Samba 用户遍历。系统服务注册文件、apt Samba、系统运行库和 VFS 模块仍使用发行版要求的系统目录；systemd 自身状态日志属于操作系统记录，ZXS 应用输出则写入上述日志文件。
+使用内嵌 Web，不需要 `--web-dir`。默认直接 HTTP；部署者自行控制网络暴露和传输保护。需要 HTTPS 代理时再按实际地址配置 `--external-origin`。helper 首装运行目录准备完成后，`/zxs/{config,log,run,tmp,cache,home}` 均为准确服务 UID/GID、0700；管理员另行预建该账户所有、0600 的普通日志文件 `/zxs/log/zxs.log`（不得为符号链接），不能在运行目录“空目录准备”之前预放日志。socket 位于 `/zxs/run`；凭据、完整工作文件、SMB spool、索引和恢复记录仍放 `/zxs/data`，不能当临时文件清理。日志需监测空间并在正常停服后归档，不自动删除。单元不创建 `/run`、`/var/lib`、`/var/log` 下的 ZXS 专用目录。
 
-模板保留专用账户、只读系统目录和精确可写目录约束。安装者审阅完整单元及实际盘位后，再安装到系统单元目录、启用并启动；本安装材料不自动执行这些主机操作。正式启动时限制初始 Web 的可达范围，并首先设置唯一管理员账户；首次设置无需授权密钥。
+helper 的独立空导出目录 `/zxs/smb-export` 为 root:root、0755，认证 Samba 用户不可写；不位于任何 0700 私有目录内。系统服务注册文件、apt Samba、系统运行库和 VFS 模块仍使用发行版要求的系统目录。
+
+完成首批存储及上述部署前提后，管理员审阅实际 unit/drop-in、执行目标环境的 systemd/Samba 配置核验，并另行决定 reload、启动或启用服务。普通 `zxs` 在任何 runtime/监听器启动前检查已有管理/SYSTEM 根、`config.json` 及初始激活证明，缺项即退出并要求 helper 原操作恢复，不提供空系统 Web 引导。启动后的 Web 使用已经离线创建的管理员登录；初始化回执不替代实际目标机启动和访问验收。
 
 ## 系统 Samba 与模块
 

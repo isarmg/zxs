@@ -8,13 +8,13 @@ Type=simple
 User=zxs
 Group=zxs
 UMask=0077
-# Pre-create all private directories below /zxs for the zxs service account.
+# Complete offline helper initialization before separately activating this unit.
 Environment=HOME=/zxs/home TMPDIR=/zxs/tmp TMP=/zxs/tmp TEMP=/zxs/tmp
 Environment=XDG_CACHE_HOME=/zxs/cache XDG_CONFIG_HOME=/zxs/config XDG_DATA_HOME=/zxs/data XDG_STATE_HOME=/zxs/data/state XDG_RUNTIME_DIR=/zxs/run
 StandardOutput=append:/zxs/log/zxs.log
 StandardError=append:/zxs/log/zxs.log
 WorkingDirectory=/zxs
-ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400
+ExecStart=/usr/local/bin/zxs --root /zxs/data/state --management-root /zxs/data/management --storage-discovery-root /zxs/data/disks --listen 0.0.0.0:7400
 KillSignal=SIGINT
 # Do not kill admitted durability/recovery work during normal shutdown.
 # A stuck kernel I/O requires an explicit operator force-stop and crash recovery.
