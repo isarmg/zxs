@@ -211,15 +211,17 @@ impl Materials {
                 history_tree_id: target_repository.history_tree_id.clone(),
                 records_hash: target.records_hash().into(),
             },
-            replacement_file: projection.proposed_replacement_deletion().map(|node| FileScope {
-                file_id: node.file_id.clone(),
-                history_tree_id: node.history_tree_id.clone(),
-                records_hash: replacement
-                    .as_ref()
-                    .expect("invariant: replacement D has its prepared FILE")
-                    .records_hash()
-                    .into(),
-            }),
+            replacement_file: projection
+                .proposed_replacement_deletion()
+                .map(|node| FileScope {
+                    file_id: node.file_id.clone(),
+                    history_tree_id: node.history_tree_id.clone(),
+                    records_hash: replacement
+                        .as_ref()
+                        .expect("invariant: replacement D has its prepared FILE")
+                        .records_hash()
+                        .into(),
+                }),
             source_placements,
             target_route: projection.recovery_route().clone(),
             target_copy_identities: targets.copy_identities().clone(),

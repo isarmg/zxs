@@ -16,7 +16,10 @@ impl ReadBody {
         let request = &self.move_request.namespace;
         let node = &proof.deletion_node;
         let occurrence = &proof.occurrence;
-        let target = state.repositories.get(&request.target_repository_id).ok_or_else(invalid)?;
+        let target = state
+            .repositories
+            .get(&request.target_repository_id)
+            .ok_or_else(invalid)?;
         let context = &occurrence.displaced_context;
         let context_branch = state.branches.get(&context.branch_id).ok_or_else(invalid)?;
         crate::file_deletion::publication::admit_node_shape(node)?;
@@ -44,7 +47,12 @@ impl ReadBody {
             || context_branch.file_id.as_deref() != Some(node.file_id.as_str())
             || context_branch.history_tree_id != node.history_tree_id
             || node.branch_heads.get(&context.branch_id)
-                != Some(context.node_id.as_ref().unwrap_or(&occurrence.displaced.version_id))
+                != Some(
+                    context
+                        .node_id
+                        .as_ref()
+                        .unwrap_or(&occurrence.displaced.version_id),
+                )
         {
             return Err(invalid());
         }
@@ -70,16 +78,15 @@ pub(crate) fn admit_deletions(
 
 /// FILE audit projection is also used for the private pre-publication draft.
 /// Publication flags and complete State authority are checked by its consumer.
-pub(crate) fn retained_deletion(
-    receipt: &OperationResult,
-    file: &str,
-) -> Result<FileDeletionNode> {
+pub(crate) fn retained_deletion(receipt: &OperationResult, file: &str) -> Result<FileDeletionNode> {
     history_copy::retained::bounded(&receipt.result)?;
     let source = receipt.result.get("deletion_node").ok_or_else(invalid)?;
     let node = if source.get("file_id").and_then(json_codec::Value::as_str) == Some(file) {
         source
     } else {
-        receipt.result.get("replacement")
+        receipt
+            .result
+            .get("replacement")
             .and_then(|proof| proof.get("deletion_node"))
             .filter(|node| node.get("file_id").and_then(json_codec::Value::as_str) == Some(file))
             .ok_or_else(invalid)?

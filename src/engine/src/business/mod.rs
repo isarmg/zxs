@@ -22,10 +22,9 @@ pub use history_move::{
 pub(crate) use history_move::{
     FileHistoryMoveReplay, NATIVE_KIND as FILE_HISTORY_MOVE_KIND, NativeMoveCandidate,
     NativeMoveDraft, admit_deletions as admit_file_history_move_deletions,
-    admit_displaced as admit_file_history_move_displaced,
-    retained_deletion as retained_file_history_move_deletion,
-    original_move_intent, reject_unclosed_publication as reject_unclosed_file_history_move,
-    replay_selected_move, verify_current_move_transition,
+    admit_displaced as admit_file_history_move_displaced, original_move_intent,
+    reject_unclosed_publication as reject_unclosed_file_history_move, replay_selected_move,
+    retained_deletion as retained_file_history_move_deletion, verify_current_move_transition,
 };
 pub(crate) mod file_ancestry;
 mod file_history_merges;

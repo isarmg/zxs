@@ -4,11 +4,14 @@ use super::*;
 use crate::{Event, OperationResult};
 use storage_contract::MapChanges;
 
-pub(super) fn original(
+pub(in crate::file_deletion) fn original(
     state: &State,
     node: &FileDeletionNode,
 ) -> Result<Option<DisplacedOccurrence>> {
-    let receipt = state.operations.get(&node.operation_id).ok_or_else(invalid)?;
+    let receipt = state
+        .operations
+        .get(&node.operation_id)
+        .ok_or_else(invalid)?;
     if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
         crate::business::admit_file_history_move_displaced(state, receipt, node)
     } else {
@@ -18,7 +21,10 @@ pub(super) fn original(
 
 fn node(result: &json_codec::Value) -> Result<FileDeletionNode> {
     Ok(json_codec::from_value(
-        result.get("removed_deletion_node").ok_or_else(invalid)?.clone(),
+        result
+            .get("removed_deletion_node")
+            .ok_or_else(invalid)?
+            .clone(),
     )?)
 }
 
@@ -37,7 +43,9 @@ fn expected_draft(
         return Err(invalid());
     }
     expected.sequence = actual.sequence;
-    expected.business_generation = previous.business_generation.checked_add(1)
+    expected.business_generation = previous
+        .business_generation
+        .checked_add(1)
         .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "business generation exhausted"))?;
     restore(previous, &mut expected, current, node, evidence, request)?;
     if expected.file_deletions.remove(&node.file_id).as_ref() != Some(node) {
@@ -79,7 +87,10 @@ fn new_undo<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Operatio
         let before = previous.operations.get(id);
         let after = next.operations.get(id);
         if before == after
-            || !before.into_iter().chain(after).any(|op| op.kind == "file.delete.undo")
+            || !before
+                .into_iter()
+                .chain(after)
+                .any(|op| op.kind == "file.delete.undo")
         {
             return Ok(());
         }
@@ -96,7 +107,10 @@ fn new_undo<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Operatio
             }
         }
         MapChanges::All => {
-            for id in previous.operations.keys().chain(next.operations.keys())
+            for id in previous
+                .operations
+                .keys()
+                .chain(next.operations.keys())
                 .collect::<std::collections::BTreeSet<_>>()
             {
                 inspect(id)?;
@@ -128,14 +142,28 @@ pub(crate) fn verify_publication(
     {
         return Err(invalid());
     }
-    let principal = next.operation_principals.get(&receipt.operation_id).ok_or_else(invalid)?;
+    let principal = next
+        .operation_principals
+        .get(&receipt.operation_id)
+        .ok_or_else(invalid)?;
     let mut expected = expected_draft(
-        previous, next, current, &node, &evidence,
-        RestorePublication { operation_id: receipt.operation_id, principal },
+        previous,
+        next,
+        current,
+        &node,
+        &evidence,
+        RestorePublication {
+            operation_id: receipt.operation_id,
+            principal,
+        },
     )?;
     crate::container_storage::capture_changed_names(previous, &mut expected);
-    expected.operations.insert(receipt.operation_id, receipt.clone());
-    expected.operation_principals.insert(receipt.operation_id, principal.clone());
+    expected
+        .operations
+        .insert(receipt.operation_id, receipt.clone());
+    expected
+        .operation_principals
+        .insert(receipt.operation_id, principal.clone());
     expected.events.push(Event {
         sequence: next.sequence,
         operation_id: receipt.operation_id,
@@ -168,7 +196,10 @@ pub(crate) fn admit_retained_undo(
     if restored.parent_commit_ids.len() != 1 {
         return Err(invalid());
     }
-    let previous = state.commits.get(&restored.parent_commit_ids[0]).ok_or_else(invalid)?;
+    let previous = state
+        .commits
+        .get(&restored.parent_commit_ids[0])
+        .ok_or_else(invalid)?;
     if previous.history_tree_id != node.history_tree_id
         || previous.sequence >= receipt.sequence
         || previous.entries.iter().any(|entry| {
@@ -180,13 +211,21 @@ pub(crate) fn admit_retained_undo(
         return Err(invalid());
     }
     parent_chain(&original.entries, &previous.entries, &evidence.displaced)?;
-    let principal = state.operation_principals.get(&receipt.operation_id).ok_or_else(invalid)?;
+    let principal = state
+        .operation_principals
+        .get(&receipt.operation_id)
+        .ok_or_else(invalid)?;
     let mut entries = previous.entries.clone();
     entries.push(evidence.displaced);
     crate::business::validate_entries(&mut entries, usize::MAX)?;
     let expected = commit(
-        previous, entries, receipt.sequence,
-        RestorePublication { operation_id: receipt.operation_id, principal },
+        previous,
+        entries,
+        receipt.sequence,
+        RestorePublication {
+            operation_id: receipt.operation_id,
+            principal,
+        },
     )?;
     if expected != *restored {
         return Err(invalid());

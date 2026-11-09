@@ -29,12 +29,7 @@ impl EngineBackend {
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
-        move_current_file_target_locked(
-            &mut engine,
-            identity,
-            command.request,
-            Some(&replacement),
-        )
+        move_current_file_target_locked(&mut engine, identity, command.request, Some(&replacement))
     }
 }
 

@@ -537,7 +537,10 @@ impl<'a> PlanningContext<'a> {
             &next,
             self.current_namespaces.map(AsRef::as_ref),
             kind,
-            crate::file_deletion::occurrence::RestorePublication { operation_id, principal },
+            crate::file_deletion::occurrence::RestorePublication {
+                operation_id,
+                principal,
+            },
             &result,
         )? {
             crate::file_deletion::freeze::verify(self.state, &next)?;

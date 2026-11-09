@@ -6,9 +6,9 @@ use json_codec::json;
 
 mod native;
 pub(crate) use native::{
-    KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, admit_deletions,
-    admit_displaced, original_move_intent, reject_unclosed_publication, replay_selected_move,
-    retained_deletion, verify_current_move_transition,
+    KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, admit_deletions, admit_displaced,
+    original_move_intent, reject_unclosed_publication, replay_selected_move, retained_deletion,
+    verify_current_move_transition,
 };
 
 struct ProjectionSource<'a> {

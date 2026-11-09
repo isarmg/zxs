@@ -1440,7 +1440,9 @@ impl Backend for ManagementBackend {
         identity: &crate::auth::Identity,
         command: crate::ReplaceCurrentFile,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        self.inner.backend()?.replace_current_file(identity, command)
+        self.inner
+            .backend()?
+            .replace_current_file(identity, command)
     }
     fn move_current_file_to_empty_disk(
         &self,

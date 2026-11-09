@@ -105,7 +105,10 @@ impl Engine {
         if native.source_records_hash() != materials.source.records_hash()
             || native.target_records_hash() != materials.target.records_hash()
             || native.replacement_records_hash()
-                != materials.replacement.as_ref().map(|database| database.records_hash())
+                != materials
+                    .replacement
+                    .as_ref()
+                    .map(|database| database.records_hash())
         {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,

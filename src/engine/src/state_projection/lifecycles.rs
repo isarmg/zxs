@@ -15,10 +15,13 @@ pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
     if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND
         && let Some(replacement) = receipt.result.get("replacement")
     {
-        let source = receipt.result.get("deletion_node")
+        let source = receipt
+            .result
+            .get("deletion_node")
             .and_then(|node| node.get("file_id"))
             .and_then(json_codec::Value::as_str);
-        let target = replacement.get("deletion_node")
+        let target = replacement
+            .get("deletion_node")
             .and_then(|node| node.get("file_id"))
             .and_then(json_codec::Value::as_str);
         return match (source, target) {

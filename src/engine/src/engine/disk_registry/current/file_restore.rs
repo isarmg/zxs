@@ -8,16 +8,20 @@ impl CurrentNamespaces {
         previous: &State,
         next: &State,
     ) -> Result<Option<Self>> {
-        let Some(restored) = crate::file_deletion::occurrence::verify_publication(
-            previous, next, Some(self),
-        )? else {
+        let Some(restored) =
+            crate::file_deletion::occurrence::verify_publication(previous, next, Some(self))?
+        else {
             return Ok(None);
         };
         let mut view = self.clone();
         let id = &restored.main_branch_id;
         let branch = next.branches.get(id).ok_or_else(stale)?;
         let old = self.branches.get(id).ok_or_else(stale)?;
-        let entries = &next.commits.get(&branch.head_commit_id).ok_or_else(stale)?.entries;
+        let entries = &next
+            .commits
+            .get(&branch.head_commit_id)
+            .ok_or_else(stale)?
+            .entries;
         Arc::make_mut(&mut view.branches).insert(
             id.clone(),
             Arc::new(CurrentScope {
@@ -29,9 +33,11 @@ impl CurrentNamespaces {
                 hidden_paths: old.hidden_paths.clone(),
             }),
         );
-        for (id, branch) in next.directory_branches.iter().filter(|(id, branch)| {
-            previous.directory_branches.get(*id) != Some(*branch)
-        }) {
+        for (id, branch) in next
+            .directory_branches
+            .iter()
+            .filter(|(id, branch)| previous.directory_branches.get(*id) != Some(*branch))
+        {
             if branch.repository_id != restored.repository_id {
                 return Err(stale());
             }

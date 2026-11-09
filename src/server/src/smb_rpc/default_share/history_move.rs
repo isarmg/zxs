@@ -67,11 +67,11 @@ impl DefaultShare {
                 "cross-disk move requires a single file",
             ));
         }
-        let replacement = match self
-            .shared
-            .backend
-            .lookup_current(&target_identity, &target.branch, &target_name.lookup())?
-        {
+        let replacement = match self.shared.backend.lookup_current(
+            &target_identity,
+            &target.branch,
+            &target_name.lookup(),
+        )? {
             Some(_) if !replace => {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::NameCollision,
@@ -156,13 +156,15 @@ impl DefaultShare {
                 crate::ReplaceCurrentFile {
                     request,
                     expected_target_entry_id: target.entry_id,
-                    expected_target_file_id: storage_contract::history_window::HistoryFileId::parse(
-                        &target.file_id,
-                    )
-                    .map_err(ApiError::contract_input)?,
+                    expected_target_file_id:
+                        storage_contract::history_window::HistoryFileId::parse(&target.file_id)
+                            .map_err(ApiError::contract_input)?,
                 },
             ),
-            None => self.shared.backend.move_current_file(&self.identity, request),
+            None => self
+                .shared
+                .backend
+                .move_current_file(&self.identity, request),
         }
     }
 }

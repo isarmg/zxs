@@ -3,8 +3,8 @@
 use super::*;
 use std::collections::BTreeSet;
 
-mod transition;
 mod displaced;
+mod transition;
 pub(crate) use displaced::{admit_deletions, admit_displaced, retained_deletion};
 pub(crate) use transition::verify_current_move_transition;
 
@@ -179,7 +179,10 @@ impl ReadBody {
         let path = name_policy::LookupPath::from(&target_path);
         let entry =
             namespace::find_unordered_key(&arrival.entries, path.key()).ok_or_else(invalid)?;
-        let replaced = self.replacement.as_ref().map(|proof| &proof.occurrence.displaced);
+        let replaced = self
+            .replacement
+            .as_ref()
+            .map(|proof| &proof.occurrence.displaced);
         let previous_entry = namespace::find_unordered_key(&previous.entries, path.key());
         let expected_len = previous.entries.len() + usize::from(replaced.is_none());
         if arrival.entries.len() != expected_len
@@ -187,7 +190,10 @@ impl ReadBody {
                 .entries
                 .iter()
                 .filter(|entry| entry.lookup_key() != path.key())
-                .ne(previous.entries.iter().filter(|entry| entry.lookup_key() != path.key()))
+                .ne(previous
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.lookup_key() != path.key()))
             || previous_entry != replaced
             || entry.kind != NamespaceEntryKind::File
             || entry.file_id != self.file_id

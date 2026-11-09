@@ -7,8 +7,8 @@ use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
 
 mod proof;
-pub(crate) use proof::{admit_retained_undo, verify_plan, verify_publication};
 pub(super) use proof::original;
+pub(crate) use proof::{admit_retained_undo, verify_plan, verify_publication};
 
 const COMMIT_KIND: &str = "file_deletion_restore";
 
@@ -53,7 +53,10 @@ fn original_namespace<'a>(
     node: &FileDeletionNode,
     evidence: &DisplacedOccurrence,
 ) -> Result<&'a Commit> {
-    let original = state.commits.get(&evidence.namespace_head).ok_or_else(invalid)?;
+    let original = state
+        .commits
+        .get(&evidence.namespace_head)
+        .ok_or_else(invalid)?;
     let entry = &evidence.displaced;
     let context = &evidence.displaced_context;
     let selected = state.branches.get(&context.branch_id).ok_or_else(invalid)?;
@@ -69,7 +72,10 @@ fn original_namespace<'a>(
         || selected.file_id.as_deref() != Some(node.file_id.as_str())
         || selected.history_tree_id != node.history_tree_id
         || context.inherited_from.is_some()
-        || node.branch_heads.get(&context.branch_id).map(String::as_str)
+        || node
+            .branch_heads
+            .get(&context.branch_id)
+            .map(String::as_str)
             != Some(context.node_id.as_deref().unwrap_or(&entry.version_id))
     {
         return Err(invalid());
@@ -133,11 +139,17 @@ fn namespace<'a>(
     current: Option<&'a crate::engine::CurrentNamespaces>,
     repository: &Repository,
 ) -> Result<&'a [Entry]> {
-    let branch = previous.branches.get(&repository.main_branch_id).ok_or_else(invalid)?;
+    let branch = previous
+        .branches
+        .get(&repository.main_branch_id)
+        .ok_or_else(invalid)?;
     if !repository.file_manager_root || branch.state != BranchState::Active {
         return Err(lifecycle::frozen());
     }
-    let head = previous.commits.get(&branch.head_commit_id).ok_or_else(invalid)?;
+    let head = previous
+        .commits
+        .get(&branch.head_commit_id)
+        .ok_or_else(invalid)?;
     let entries = match current {
         Some(view) => {
             view.require_branch_write(previous, &branch.branch_id)?;
@@ -190,10 +202,14 @@ pub(crate) fn restore(
     request: RestorePublication<'_>,
 ) -> Result<()> {
     let original = original_namespace(previous, node, evidence)?;
-    let repository = previous.repositories.get(&node.repository_id).ok_or_else(invalid)?;
+    let repository = previous
+        .repositories
+        .get(&node.repository_id)
+        .ok_or_else(invalid)?;
     if repository.history_tree_id != node.history_tree_id
         || previous.file_deletions.get(&node.file_id) != Some(node)
-        || previous.file_selections.get(&node.file_id) != Some(&evidence.displaced_context.branch_id)
+        || previous.file_selections.get(&node.file_id)
+            != Some(&evidence.displaced_context.branch_id)
         || previous.file_write_origins.contains_key(&node.file_id)
     {
         return Err(invalid());
@@ -212,7 +228,9 @@ pub(crate) fn restore(
     }
     let file_branch = &previous.branches[&evidence.displaced_context.branch_id];
     if file_branch.state != BranchState::Active
-        || previous.file_branch_aliases.contains_key(&file_branch.branch_id)
+        || previous
+            .file_branch_aliases
+            .contains_key(&file_branch.branch_id)
     {
         return Err(lifecycle::frozen());
     }
@@ -226,17 +244,24 @@ pub(crate) fn restore(
     crate::business::validate_entries(&mut restored, usize::MAX)?;
     let restored = commit(head, restored, next.sequence, request)?;
     if previous.commits.contains_key(&restored.commit_id)
-        || previous.commits.values().any(|old| old.tree_id == restored.tree_id)
+        || previous
+            .commits
+            .values()
+            .any(|old| old.tree_id == restored.tree_id)
     {
         return Err(invalid());
     }
-    next.file_contexts.insert(key, evidence.displaced_context.clone());
-    let main = next.branches.get_mut(&repository.main_branch_id)
+    next.file_contexts
+        .insert(key, evidence.displaced_context.clone());
+    let main = next
+        .branches
+        .get_mut(&repository.main_branch_id)
         .expect("invariant: the original namespace branch was admitted");
     main.head_commit_id = restored.commit_id.clone();
-    main.generation = main.generation.checked_add(1).ok_or_else(|| {
-        Error::new(ErrorCode::ResourceLimit, "namespace generation exhausted")
-    })?;
+    main.generation = main
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "namespace generation exhausted"))?;
     next.commits.insert(restored.commit_id.clone(), restored);
     let mut ordinal = 0u64;
     crate::business::record_restored_namespace_with_ids(
@@ -245,9 +270,16 @@ pub(crate) fn restore(
         &evidence.displaced.path,
         &mut |prefix| {
             ordinal = ordinal.checked_add(1).ok_or_else(|| {
-                Error::new(ErrorCode::ResourceLimit, "restoration identity budget exhausted")
+                Error::new(
+                    ErrorCode::ResourceLimit,
+                    "restoration identity budget exhausted",
+                )
             })?;
-            identity(request.operation_id, prefix, &format!("directory-{ordinal}"))
+            identity(
+                request.operation_id,
+                prefix,
+                &format!("directory-{ordinal}"),
+            )
         },
     )
 }

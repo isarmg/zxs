@@ -105,12 +105,17 @@ pub(super) fn capture(
     }
     let context = state
         .file_contexts
-        .get(&directory::context_key_from_key(&repository.repository_id, entry.lookup_key()))
+        .get(&directory::context_key_from_key(
+            &repository.repository_id,
+            entry.lookup_key(),
+        ))
         .ok_or_else(changed_target)?;
     if context.inherited_from.is_some()
         || state.file_selections.get(file.as_str()) != Some(&context.branch_id)
         || state.file_branch_aliases.contains_key(&context.branch_id)
-        || !state.branches[&context.branch_id].pending_file_versions.is_empty()
+        || !state.branches[&context.branch_id]
+            .pending_file_versions
+            .is_empty()
         || file_nodes::branch_head(state, &context.branch_id)?
             != *context.node_id.as_ref().unwrap_or(&entry.version_id)
     {
@@ -235,7 +240,9 @@ pub(super) fn project(
         created_at: timestamp,
     };
     require_recoverable(&node)?;
-    state.file_deletions.insert(node.file_id.clone(), node.clone());
+    state
+        .file_deletions
+        .insert(node.file_id.clone(), node.clone());
     Ok(Evidence {
         deletion_node: node,
         occurrence: crate::file_deletion::occurrence::DisplacedOccurrence {

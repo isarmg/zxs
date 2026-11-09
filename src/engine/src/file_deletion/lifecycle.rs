@@ -145,7 +145,10 @@ impl Engine {
                         engine.admitted_current_namespaces()?,
                         &deletion,
                         &evidence,
-                        occurrence::RestorePublication { operation_id, principal },
+                        occurrence::RestorePublication {
+                            operation_id,
+                            principal,
+                        },
                     )?;
                 } else {
                     let namespace = engine.namespace_tree(&repository.main_branch_id)?;

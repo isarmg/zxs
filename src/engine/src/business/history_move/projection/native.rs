@@ -7,12 +7,12 @@ use storage_contract::{CommitState, CurrentHealth, Event, OperationResult, Prote
 pub(crate) const KIND: &str = "file.history.move";
 
 mod admission;
+#[cfg(test)]
+use admission::admit_source_deletion;
 pub(crate) use admission::{
     admit_deletions, admit_displaced, original_move_intent, replay_selected_move,
     retained_deletion, verify_current_move_transition,
 };
-#[cfg(test)]
-use admission::admit_source_deletion;
 
 #[derive(Serialize)]
 #[serialization(deny_unknown_fields)]

@@ -13,9 +13,9 @@ pub use replacement::FileHistoryMoveReplacement;
 pub(in crate::business) mod target_path;
 pub use projection::{CurrentFileHistoryMoveProjection, FileHistoryMoveProjection};
 pub(crate) use projection::{
-    FileHistoryMoveReplay, NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft,
-    admit_deletions, admit_displaced, original_move_intent, reject_unclosed_publication,
-    replay_selected_move, retained_deletion, verify_current_move_transition,
+    FileHistoryMoveReplay, NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, admit_deletions,
+    admit_displaced, original_move_intent, reject_unclosed_publication, replay_selected_move,
+    retained_deletion, verify_current_move_transition,
 };
 
 /// Exact source identity in addition to the two namespace heads. The history
@@ -247,9 +247,10 @@ impl Engine {
                 )
             })
             .transpose()?;
-        if replacement.as_ref().is_some_and(|capture| {
-            capture.entry.file_id == request.source_file_id.as_str()
-        }) {
+        if replacement
+            .as_ref()
+            .is_some_and(|capture| capture.entry.file_id == request.source_file_id.as_str())
+        {
             return Err(Error::new(
                 ErrorCode::FileBranchScope,
                 "history move source and replacement must have distinct stable file identities",
