@@ -5,11 +5,13 @@ mod configuration_files;
 mod host_root;
 mod program_repair;
 mod rescue_image;
+mod vfs_module;
 use crate::Result;
 pub(crate) use configuration_files::{
     ConfigurationFiles, ParentSnapshot, SAMBA_PATH, SYSTEMD_PATH,
 };
 pub(crate) use host_root::HostRoot;
+pub(crate) use vfs_module::VfsDestination;
 use platform_io::fs_safety::{
     AtomicCommitError, EntryName,
     linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},

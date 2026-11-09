@@ -7,15 +7,30 @@
   <link rel="stylesheet" href="/console.css">
   <script src="/console.js" defer></script>
   <script src="/first-install.js" defer></script>
+  <script src="/vfs-install.js" defer></script>
 </head>
 <body>
   <main>
     <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、首装与部署准备</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、在新空布局创建 ZXS 管理员、重置其密码、首次登记受支持的本地 Samba 账户或重置既有 Samba 密码、初始化明确选择的首批空盘目录或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序和同版 VFS、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、在新空布局创建 ZXS 管理员、重置其密码、首次登记受支持的本地 Samba 账户或重置既有 Samba 密码、初始化明确选择的首批空盘目录或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
+    <section class="card" id="vfs-install">
+      <h2>离线安装同版 ZXS Samba VFS</h2>
+      <p>只使用本 helper 内置、与 ZXS 相同源码 commit／tree 的 Debian 13 amd64 VFS 构建。不接受上传、自报摘要或下载地址，不运行安装脚本／包管理器。</p>
+      <p>前提：已安装准确内置 ZXS 与 Debian 13 Samba 4.22.11+dfsg-0+deb13u1，固定 /usr/lib/x86_64-linux-gnu/samba/vfs 已存在。只在该目录新建 zxs.so，或持久核验已存在的同字节安全文件；不同内容、链接、身份／权限变化均拒绝，不覆盖或修复。</p>
+      <p class="muted">所有 Samba 单元须已停止。辅助工具不替你停服、不 reload／start、不改默认配置、密码或 Unix 账户。停止声明与目录建议锁不排除外部 root 管理者，须持续自行排除；完成回执不是动态加载、SMB 登录或完整安装就绪证明。</p>
+      <button id="vfs-install-preview" type="button">核对离线来源、宿主与固定目标</button>
+      <label class="ack"><input id="vfs-install-ack" type="checkbox"> 已停止全部 Samba、软件包、配置和服务管理操作，并在本次文件安装期间持续保持。</label>
+      <button id="vfs-install-commit" type="button" disabled>确认只安装本次准确 VFS</button>
+      <label>原请求摘要 <input id="vfs-install-original" maxlength="64" autocomplete="off" spellcheck="false"></label>
+      <button id="vfs-install-status" type="button" class="secondary">读取原请求与当前字节</button>
+      <button id="vfs-install-resume" type="button" class="secondary" disabled>显式续作同一原请求</button>
+      <p class="muted">写入前在本浏览器保留无密码摘要；刷新不自动执行。未知结果保留原文件与意图，不清理或换载荷重做。已完成后模块缺失不由普通安装补造。</p>
+      <pre id="vfs-install-report"></pre>
+    </section>
     <section class="card" id="first-install">
       <h2>空目录首装：同一输入逐步完成并启动</h2>
       <p>只填一次服务身份、完整目录批次和配置。按顺序复用现有原生安装、初始化与启动接口，每步先核对准确计划，再单独确认；不复制核心事务、不自动重试或清空失败材料。</p>

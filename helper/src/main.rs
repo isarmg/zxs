@@ -30,7 +30,7 @@ Offline export validates one published version, not the entire pool or current p
 Disk-databases reads selected local SQLite inventories without SYSTEM; local consistency is not publication authority or content health.
 Object-database exports object-local metadata and reconstructs standalone rescue SQLite from that archive; it never installs an active database or grants authority.
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
-The matching release helper can install only its embedded ZXS executable at /usr/local/bin/zxs without overwriting different bytes.
+The matching release helper can install its embedded ZXS executable at /usr/local/bin/zxs and explicitly install its sealed same-source VFS at the fixed Debian Samba path, without overwriting different bytes or starting services.
 Engine recovery commands require the current-daemon /zxs lifetime lease; host preview/prepare can create that root without initializing the system.
 A selected existing non-root local account can receive an empty private data layout; this creates no administrator, database or disk.
 Systemd/Samba configuration can be prepared as an inactive bundle or installed at fixed paths without overwriting different files, reloading, starting or enabling services.
@@ -39,7 +39,7 @@ The independent Web console can reset an existing ZXS administrator password wit
 The Web console can initialize the exact first production batch of existing empty primary roots through a non-root worker; it neither mounts/formats devices nor starts a service.
 The independent Web console can add and initialize an exact empty directory batch in an existing production pool, retaining original membership intents and native receipts; this is not foreign import or an independent-authority migration.
 The independent Web console can copy an exact foreign level 2/3 source into all explicitly selected lower roots as one recoverable material batch; it does not admit the source or any lower member.
-The Web console can explicitly enroll a missing local tdbsam Samba account for an existing independent non-root Unix user, including native creation of a missing passdb in its existing private directory. Existing-account password resets remain separate; Unix account/OS dependency/VFS installation and other backends are not implemented.
+The Web console can explicitly enroll a missing local tdbsam Samba account for an existing independent non-root Unix user, including native creation of a missing passdb in its existing private directory. Existing-account password resets remain separate; Unix account/OS dependency installation and other backends are not implemented. VFS installation is a separate exact offline-payload confirmation, not package installation or SMB login validation.
 The independent Web console can explicitly deregister an exact non-final-voter member with original D3/receipt checks; disk bytes remain, but current pool visibility/content access may be lost.
 Complete installation readiness/all-path clean-start gating, final-voter terminal removal and foreign admission remain incomplete. Explicit activation starts only verified installed service units; it does not install dependencies or attest network SMB/file I/O. No planned-offline action is offered."
 )]
@@ -67,7 +67,7 @@ struct Args {
 enum Command {
     /// Manually serve the independent maintenance console; no login or autostart.
     Serve(console::Options),
-    /// Inspect or install the matching embedded ZXS program only; no service setup.
+    /// Inspect or install the matching embedded ZXS/VFS bytes; no implicit service setup.
     Install {
         #[command(subcommand)]
         command: installation::Command,

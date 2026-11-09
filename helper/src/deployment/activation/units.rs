@@ -34,6 +34,14 @@ impl Unit {
     pub fn may_start(&self) -> Result<bool> {
         Ok(self.absent()? || matches!(self.value("ActiveState")?, "inactive" | "failed"))
     }
+    pub fn require_stopped_for_vfs(&self) -> Result<()> {
+        if !self.absent()?
+            && (!self.may_start()? || self.value("MainPID")?.parse::<u32>()? != 0)
+        {
+            return Err(format!("{} is active or changing; stop it explicitly before VFS installation, no service was stopped by this helper", self.name).into());
+        }
+        Ok(())
+    }
     pub fn require_loaded(&self, path: &str, command: &str, user: &str, group: &str) -> Result<()> {
         let exec = self.value("ExecStart")?;
         let argv = exec

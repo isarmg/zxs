@@ -247,6 +247,23 @@ impl Prepared {
         )
     }
 }
+pub(crate) fn samba_module_host() -> Result<Executable> {
+    samba::module_host()
+}
+
+pub(crate) fn require_samba_stopped_for_vfs(program: &Executable) -> Result<()> {
+    for name in [
+        units::SMB,
+        "smbd.service",
+        "samba.service",
+        "samba-ad-dc.service",
+        "nmbd.service",
+    ] {
+        units::read(program, name)?.require_stopped_for_vfs()?;
+    }
+    Ok(())
+}
+
 pub(crate) fn preview(input: Input) -> Result<Value> {
     let prepared = Prepared::open(input)?;
     let smb_unit_present = if prepared.samba.is_some() {

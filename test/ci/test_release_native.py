@@ -43,6 +43,13 @@ class NativeRelease(unittest.TestCase):
                           "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
                           "file_count": 5}
         self.enterContext(patch.object(MODULE, "legal_materials", return_value=self.materials))
+        vfs_module, vfs_receipt = self.output / "zxs.so", self.output / "VFS-BUILD.json"
+        vfs_module.write_bytes(b"fixture module")
+        vfs_receipt.write_bytes(b"fixture VFS receipt")
+        self.vfs = {"module": vfs_module, "receipt": vfs_receipt,
+                    "module_sha256": hashlib.sha256(vfs_module.read_bytes()).hexdigest(),
+                    "receipt_sha256": hashlib.sha256(vfs_receipt.read_bytes()).hexdigest()}
+        self.enterContext(patch.object(MODULE, "embedded_vfs", return_value=self.vfs))
         self.receipt = self.output / "BUILD.txt"
         self.receipt.write_text("stale successful build")
         self.enterContext(patch.object(MODULE, "__file__", str(self.root / ".github/scripts/release-native.py")))

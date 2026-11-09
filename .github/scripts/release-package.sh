@@ -44,7 +44,7 @@ if hashlib.sha256((snapshot.parent / 'web/build-manifest.json').read_bytes()).he
 vfs_dir = os.open('target/smb-debian13/product', os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
 try:
     vfs_bytes = validator['read_metadata'](vfs_dir, 'VFS-BUILD.json')
-    vfs = validator['vfs_identity'](vfs_bytes, fields)
+    vfs = validator['embedded_vfs_identity'](vfs_bytes, fields)
     with validator['open_regular'](vfs_dir, 'zxs.so') as source, (snapshot / 'zxs.so').open('xb') as output:
         shutil.copyfileobj(source, output)
 finally:

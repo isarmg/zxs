@@ -77,6 +77,50 @@ def legal_materials(root, version, commit, tree, payload_sha256):
     return builder["prepare"](root, root / OUTPUT, version, commit, tree, payload_sha256)
 
 
+def embedded_vfs(root, commit, tree):
+    """Snapshot the already-produced same-source SDK module, without executing it."""
+    validator = runpy.run_path(str(root / ".github/scripts/verify-release-assets.py"))
+    source = os.open(root / "target/smb-debian13/product",
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    try:
+        receipt_bytes = validator["read_metadata"](source, "VFS-BUILD.json")
+        receipt = validator["vfs_identity"](receipt_bytes,
+                                           {"commit": commit, "native-web-tree": tree})
+        target = json.loads((root / ".github/samba-debian-target.json").read_bytes())
+        keys = set(target) | {"commit", "tree", "module_sha256", "sdk_recipe_sha256",
+                              "sdk_config_sha256", "validation_mode", "runtime_acceptance", "host_version"}
+        if set(receipt) != keys or any(receipt.get(key) != value for key, value in target.items()):
+            raise RuntimeError("VFS receipt differs from the exact Debian SDK source target")
+        recipe_inputs = "".join(f"{digest(root / path)}  {path}\n" for path in
+                                (".github/scripts/smb-sdk.sh", ".github/samba-debian-target.json"))
+        host_version = f"Version {target['upstream_version']}-Debian-{target['package_version'].split(':', 1)[1]}"
+        if (receipt.get("sdk_recipe_sha256") != hashlib.sha256(recipe_inputs.encode()).hexdigest()
+                or not re.fullmatch(r"[0-9a-f]{64}", receipt.get("sdk_config_sha256", ""))
+                or receipt.get("host_version") != host_version
+                or receipt.get("validation_mode") not in ("full", "build-only")
+                or receipt.get("runtime_acceptance") != "not-run-by-build-script"):
+            raise RuntimeError("VFS receipt does not bind the current SDK recipe and host")
+        with validator["open_regular"](source, "zxs.so") as module:
+            if os.fstat(module.fileno()).st_size > 64 * 1024 * 1024:
+                raise RuntimeError("VFS module exceeds its embedded size bound")
+            data = module.read(64 * 1024 * 1024 + 1)
+        if len(data) > 64 * 1024 * 1024:
+            raise RuntimeError("VFS module grew beyond its embedded size bound")
+        validator["elf_identity"](data[:64], module=True)
+        checksum = hashlib.sha256(data).hexdigest()
+        if checksum != receipt["module_sha256"]:
+            raise RuntimeError("VFS product differs from the matching SDK receipt")
+    finally:
+        os.close(source)
+    output = root / OUTPUT / "helper-vfs"
+    output.mkdir(exist_ok=True)
+    module_path, receipt_path = output / "zxs.so", output / "VFS-BUILD.json"
+    module_path.write_bytes(data)
+    receipt_path.write_bytes(receipt_bytes)
+    return {"module": module_path, "receipt": receipt_path, "module_sha256": checksum,
+            "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest()}
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     os.chdir(root)
@@ -117,10 +161,15 @@ def main():
     payload_path = root / OUTPUT / "zxs"
     payload_sha256 = digest(payload_path)
     materials = legal_materials(root, version, commit, tree, payload_sha256)
+    vfs = embedded_vfs(root, commit, tree)
     helper_environment = dict(build_environment, ZXS_HELPER_PAYLOAD=str(payload_path),
                               ZXS_HELPER_PAYLOAD_COMMIT=commit, ZXS_HELPER_PAYLOAD_TREE=tree,
                               ZXS_HELPER_PAYLOAD_VERSION=version,
                               ZXS_HELPER_PAYLOAD_SHA256=payload_sha256,
+                              ZXS_HELPER_VFS=str(vfs["module"]),
+                              ZXS_HELPER_VFS_SHA256=vfs["module_sha256"],
+                              ZXS_HELPER_VFS_RECEIPT=str(vfs["receipt"]),
+                              ZXS_HELPER_VFS_RECEIPT_SHA256=vfs["receipt_sha256"],
                               ZXS_HELPER_MATERIALS=str(materials["archive"]),
                               ZXS_HELPER_MATERIALS_SHA256=materials["archive_sha256"],
                               ZXS_HELPER_MATERIALS_MANIFEST=str(materials["manifest"]),
@@ -132,6 +181,9 @@ def main():
     if (digest(materials["archive"]) != materials["archive_sha256"]
             or digest(materials["manifest"]) != materials["manifest_sha256"]):
         raise RuntimeError("embedded helper license materials changed during build")
+    if (digest(vfs["module"]) != vfs["module_sha256"]
+            or digest(vfs["receipt"]) != vfs["receipt_sha256"]):
+        raise RuntimeError("embedded helper VFS snapshot changed during build")
     if commit != subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip():
         raise RuntimeError("native release source commit changed during build")
     require_clean_source()
@@ -149,6 +201,9 @@ def main():
         "native-profile": "release", "native-rustc": json.dumps(rustc),
         "native-helper-embedded-zxs": "true",
         "native-helper-payload-sha256": payload_sha256,
+        "native-helper-embedded-vfs": "true",
+        "native-helper-vfs-payload-sha256": vfs["module_sha256"],
+        "native-helper-vfs-build-sha256": vfs["receipt_sha256"],
         "native-helper-license-materials-embedded": "true",
         "native-helper-license-materials-sha256": materials["archive_sha256"],
         "native-helper-license-manifest-sha256": materials["manifest_sha256"],

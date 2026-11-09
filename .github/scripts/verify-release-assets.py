@@ -54,6 +54,11 @@ def build_identity(build, version, commit=None):
     if (fields.get("native-helper-embedded-zxs") != "true"
             or fields.get("native-helper-payload-sha256") != fields["native-zxs-sha256"]):
         raise ValueError("helper must embed the exact standalone ZXS build payload")
+    if fields.get("native-helper-embedded-vfs") != "true":
+        raise ValueError("helper must embed the matching offline VFS product")
+    for key in ("native-helper-vfs-payload-sha256", "native-helper-vfs-build-sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", fields.get(key, "")):
+            raise ValueError("helper VFS byte identities are missing or invalid")
     if (fields.get("native-helper-license-materials-embedded") != "true"
             or fields.get("native-helper-license-commit") != fields["commit"]
             or fields.get("native-helper-license-tree") != fields.get("native-web-tree")
@@ -118,6 +123,14 @@ def vfs_identity(data, fields):
     return receipt
 
 
+def embedded_vfs_identity(data, fields):
+    receipt = vfs_identity(data, fields)
+    if (fields["native-helper-vfs-payload-sha256"] != receipt["module_sha256"]
+            or fields["native-helper-vfs-build-sha256"] != hashlib.sha256(data).hexdigest()):
+        raise ValueError("embedded helper VFS differs from the separate same-source release product")
+    return receipt
+
+
 def verify(directory, version, commit, stage=None):
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?", version):
         raise ValueError("invalid release version")
@@ -150,7 +163,7 @@ def verify_opened(directory_fd, version, commit, stage):
     if fields.get("materials-archive-sha256") != hashes[f"zxs-materials-{version}.tar.gz"]:
         raise ValueError("materials archive differs from build identity")
     vfs_bytes = read_metadata(directory_fd, "VFS-BUILD.json")
-    vfs = vfs_identity(vfs_bytes, fields)
+    vfs = embedded_vfs_identity(vfs_bytes, fields)
     if vfs["module_sha256"] != hashes[f"zxs-vfs-{version}-debian13-amd64.so"]:
         raise ValueError("VFS module differs from build identity")
     if stage is not None:

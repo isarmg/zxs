@@ -54,6 +54,12 @@ def add_runtime_fields(fields):
     fields["native-runtime-dependencies-sha256"] = hashlib.sha256(text.encode()).hexdigest()
 
 
+def add_vfs_fields(fields, receipt, module):
+    fields.update({"native-helper-embedded-vfs": "true",
+                   "native-helper-vfs-payload-sha256": hashlib.sha256(module).hexdigest(),
+                   "native-helper-vfs-build-sha256": hashlib.sha256(receipt).hexdigest()})
+
+
 def prepare(root):
     root = Path(root)
     spec = json.loads((ROOT / SPEC).read_text())
@@ -95,6 +101,8 @@ def prepare(root):
     vfs.mkdir(parents=True, exist_ok=True)
     (vfs / "zxs.so").write_bytes(elf_fixture(module=True))
     (vfs / "VFS-BUILD.json").write_text(json.dumps(vfs_receipt(fields["commit"], fields["native-web-tree"], (vfs / "zxs.so").read_bytes())))
+    add_vfs_fields(fields, (vfs / "VFS-BUILD.json").read_bytes(), (vfs / "zxs.so").read_bytes())
+    (native / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
     return manifest
 
 
@@ -122,8 +130,9 @@ def write_release_assets(directory, commit, version="0.1.0"):
               "native-web-manifest-sha256": "c" * 64}
     fields.update({"native-helper-embedded-zxs": "true", "native-helper-payload-sha256": fields["native-zxs-sha256"]})
     add_runtime_fields(fields)
-    (directory / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
     (directory / "VFS-BUILD.json").write_text(json.dumps(vfs_receipt(commit, "b" * 40, elf_fixture(module=True))))
+    add_vfs_fields(fields, (directory / "VFS-BUILD.json").read_bytes(), elf_fixture(module=True))
+    (directory / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
     return fields
 
 

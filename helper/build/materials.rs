@@ -35,7 +35,7 @@ pub fn absent(out: &Path) {
     .expect("write explicit development material absence");
 }
 
-fn snapshot(
+pub(super) fn snapshot(
     out: &Path,
     variable: &str,
     checksum: &str,
