@@ -28,10 +28,12 @@ pub(crate) async fn verify(connection: &mut SqliteConnection) -> Result<()> {
         });
     // quick_check deliberately omits index/table correspondence. A damaged
     // index could otherwise hide retained rows from every ordered read.
+    // The table-valued wrapper quotes arguments, so 1 names a table instead
+    // of limiting diagnostics. Omit the argument to check the whole database.
     // Bound both the number and size of diagnostics supplied by SQLite.
     let result = async {
         let reports: Vec<String> = sqlite_access::query_scalar(
-            "SELECT substr(integrity_check,1,512) FROM pragma_integrity_check(1) LIMIT 2",
+            "SELECT substr(integrity_check,1,512) FROM pragma_integrity_check() LIMIT 2",
         )
         .fetch_all(&mut *connection)
         .await

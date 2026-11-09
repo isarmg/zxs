@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`95a78b8c`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`619b4d32`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -53,6 +53,8 @@
 
 
 ### T00 最新 GitHub 验证与格式修复
+
+- [短 CI #945](https://github.com/isarmg/zxs/actions/runs/42650286254) 在准确 `95a78b8c207d33ca7ed03d70e4e4b167040b9803` 的 build-tools job `129277251920` 已完成编译，browser-smoke 为 49 通过／8 失败。八项均在创建真实夹具时进入 FILE 库物理检查，报 `no such table: 1`，不是已证实的八处材料损坏。根因是共用查询误用 `pragma_integrity_check(1)`：SQLite 3.54.1 的表值包装将参数引号化，而完整性检查把该值当表名；它不同于直接数值 PRAGMA 的诊断上限。本候选只改为无参数的全库 `pragma_integrity_check()`，保留最多两行／每行 512 字符、原 VM 步数预算、唯一 `ok` 成功、错误来源及 handler 清理，不改用 quick_check 或单表检查，不忽略损坏。FILE、目录库、盘根 current/history 与 SYSTEM 准备镜像的现有共用入口同步受益，原格式、权威和大小预算不变；SQLite 内部使用默认诊断上限，外层仍严格有界。原候选基于 `95a78b8c`，现对齐 `619b4d32`；仅业务修复与 TASKS，既有回归不删改；未本地运行程序、格式器、编译或测试，未触发 workflow，仅准备 GitHub tree 交协调者串行提交，仍待准确提交的 GitHub 复验，不能称八项已通过。
 
 - `95a78b8c` 已合入 #941 官方日志的 20 文件／56 处纯格式修复，保留服务激活、move 准入与 Web 夹具修正。[push CI #945](https://github.com/isarmg/zxs/actions/runs/42650286254) 准确运行 `95a78b8c207d33ca7ed03d70e4e4b167040b9803`，于 2026-11-09 16:07 UTC 结束：static、contracts、security、foundation-platform、smb-protocol、web 成功；quality、build-tools 失败，4 项长 job 按策略跳过。Web 主单测 900／900 通过，#941 的共同目录 fixture 故障已不再出现；这不代替真实浏览器或生产 WASM 验收。
 - #945 quality 仅报告新合入的 9 个 helper 服务激活／有界命令文件及 `test/web/unit/files/staging_tests.rs`，共 10 文件／74 处 rustfmt diff；#941 的 20 个文件不再列出。当前候选按完整官方 diff 的原文和行号逐片应用，只改变格式，不改激活、权限、命令预算、业务条件或测试语义；Clippy 仍未执行，未在本地运行程序、formatter、编译或测试，尚未复验。
