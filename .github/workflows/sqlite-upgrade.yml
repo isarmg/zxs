@@ -1,0 +1,47 @@
+# Temporary, manual, fixed-source patch preparation. Never publishes a commit.
+name: SQLite 0.39.1 upgrade patch
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sqlite-0391-maintenance
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: ${{ github.repository == 'isarmg/zxs' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CARGO_NET_OFFLINE: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Select the repository Rust toolchain for offline metadata only
+        run: rustup show active-toolchain
+      - name: Prepare fixed SQLite source upgrade, never compile or publish
+        run: python3 .github/scripts/sqlite-upgrade-maintenance.py
+      - name: Retain source evidence, including an explicit failed stage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sqlite-0391-source-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zxs-sqlite-0391/evidence/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain complete patch only after all source gates succeed
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sqlite-0391-upgrade-patch-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zxs-sqlite-0391/candidate.patch
+          if-no-files-found: error
+          retention-days: 7
