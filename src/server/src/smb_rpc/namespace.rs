@@ -178,6 +178,59 @@ impl Session {
         self.namespace_admitted(input, admission)
     }
 
+    fn soft_delete_unlink(
+        &self,
+        path: &name_policy::LookupPath,
+        operation_id: OperationId,
+        record: &Path,
+    ) -> Result<Value, ApiError> {
+        let entry = self.find(path)?.ok_or_else(|| {
+            ApiError::new(
+                http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::FileNotFound,
+                "unlink target missing",
+            )
+        })?;
+        if entry.kind != storage_contract::NamespaceEntryKind::File {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::IsDirectory,
+                "unlink cannot remove a directory",
+            ));
+        }
+        let file_id = storage_contract::history_window::HistoryFileId::parse(&entry.file_id)
+            .map_err(ApiError::contract_input)?;
+        // Preserve the exact identity before submission. A later failure does
+        // not prove non-publication; query this operation instead of replaying
+        // the path against a different file or constructing another workspace.
+        write_namespace_record(
+            record,
+            &json!({
+                "format":"smb-file-soft-deletion", "principal":self.identity.principal,
+                "branch_id":self.branch, "operation_id":operation_id,
+                "publication_outcome":"unconfirmed",
+                "delete_request":{"path":path.as_str(),"file_id":file_id.as_str(),"entry_id":entry.entry_id}
+            }),
+        )?;
+        let result = self
+            .shared
+            .backend
+            .delete_current_file(
+                &self.identity,
+                crate::DeleteCurrentFile {
+                    branch_id: self.branch.clone(),
+                    path: path.clone(),
+                    expected_entry_id: entry.entry_id,
+                    file_id,
+                    operation_id,
+                },
+            )
+            .and_then(|result| crate::operation_wire::operation_wire(result.into()));
+        if result.is_ok() {
+            cleanup_namespace_record(record);
+        }
+        result
+    }
+
     pub(super) fn namespace_admitted(
         &mut self,
         input: NamespaceInput,
@@ -198,7 +251,28 @@ impl Session {
         if let Some(target) = destination.as_deref() {
             affected.push(target);
         }
+        // Disk-root files have the reversible lifecycle. Named legacy shares
+        // retain their existing namespace policy; unsupported initialized
+        // directory scopes fail in the core, never fall back after an error.
+        let soft_delete = if kind == NamespaceOperation::Unlink {
+            match &self.identity.smb_binding {
+                Some(binding) => {
+                    self.shared
+                        .backend
+                        .repository_snapshot(&self.identity, &binding.repository_id)?
+                        .file_manager_root
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
         let reserved = self.reserve_paths(&affected)?;
+        if soft_delete {
+            let result = self.soft_delete_unlink(&source_path, operation_id, record);
+            self.release_paths(&reserved);
+            return result;
+        }
         let mut pending_workspace = None;
         let mut submission_started = false;
         let mut record_durable = false;

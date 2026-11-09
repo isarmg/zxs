@@ -5711,6 +5711,32 @@
         "branches": [],
         "shared_contents": []
       }
+    },
+    {
+      "name": "file-deletions-page-bounded",
+      "schema": "FileDeletionsPage",
+      "layer": "schema",
+      "value": {
+        "snapshot": "root",
+        "entries": [
+          {
+            "file_id": "file_11111111111111111111111111111111",
+            "deletion_node_id": "fdel_11111111111111111111111111111111",
+            "repository_id": "repo_11111111111111111111111111111111",
+            "path": "A.txt"
+          }
+        ],
+        "next_after": null
+      }
+    },
+    {
+      "name": "file-deletion-exact-undo",
+      "schema": "UndoFileDeletionBody",
+      "layer": "schema",
+      "value": {
+        "deletion_node_id": "fdel_11111111111111111111111111111111",
+        "operation_id": "op_11111111111111111111111111111111"
+      }
     }
   ],
   "negative": [
@@ -20224,6 +20250,25 @@
             }
           ]
         }
+      }
+    },
+    {
+      "name": "file-deletion-undo-rejects-force",
+      "schema": "UndoFileDeletionBody",
+      "layer": "schema",
+      "value": {
+        "deletion_node_id": "fdel_11111111111111111111111111111111",
+        "operation_id": "op_11111111111111111111111111111111",
+        "force": true
+      }
+    },
+    {
+      "name": "file-deletions-page-requires-explicit-end",
+      "schema": "FileDeletionsPage",
+      "layer": "schema",
+      "value": {
+        "snapshot": "root",
+        "entries": []
       }
     }
   ],

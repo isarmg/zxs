@@ -53,6 +53,8 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid file deletion response: {0}")]
+    FileDeletion(#[source] json_codec::Error),
     #[error("{0}")]
     StorageManagement(#[source] crate::admin::StorageManagementError),
     #[error("invalid SMB account response: {0}")]

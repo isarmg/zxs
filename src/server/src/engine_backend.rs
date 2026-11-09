@@ -18,6 +18,7 @@ mod directory_scopes;
 mod directory_selection;
 mod disk_monitor;
 mod error_registry;
+mod file_deletion;
 mod file_manager;
 mod foreign_intent;
 pub(crate) mod foreign_plan;
@@ -614,8 +615,15 @@ impl Backend for EngineBackend {
         version: &str,
     ) -> Result<(), crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
-        authorized_version(&engine, version)?;
+        let current = current_protected_identity(&engine, identity)?;
+        let version = authorized_version(&engine, version)?;
+        if current.smb_binding.is_some() && engine.file_deletion(&version.file_id).is_some() {
+            return Err(ApiError::new(
+                http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::FileNotFound,
+                "file is deleted",
+            ));
+        }
         Ok(())
     }
     fn repository_snapshot(
@@ -1372,6 +1380,52 @@ impl Backend for EngineBackend {
                 request.operation_id,
             )
             .map_err(error)
+    }
+    fn delete_current_file(
+        &self,
+        identity: &Identity,
+        command: crate::DeleteCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.delete_current_file_admitted(identity, command)
+    }
+    fn current_file_deletion(
+        &self,
+        identity: &Identity,
+        file: &storage_contract::history_window::HistoryFileId,
+    ) -> Result<Option<storage_contract::FileDeletionNode>, ApiError> {
+        self.current_file_deletion_admitted(identity, file)
+    }
+    fn file_deletions(
+        &self,
+        identity: &Identity,
+        request: crate::ReadFileDeletions,
+    ) -> Result<crate::FileDeletionsPage, ApiError> {
+        self.file_deletions_admitted(identity, request)
+    }
+    fn restore_deleted_file(
+        &self,
+        identity: &Identity,
+        command: crate::RestoreDeletedFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.restore_deleted_file_admitted(identity, command)
+    }
+    fn authorize_listing_snapshot(
+        &self,
+        identity: &Identity,
+        snapshot: &str,
+    ) -> Result<(), ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        if engine.listing_snapshot() != snapshot {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::ListingChanged,
+                "directory changed; restart from its first page",
+            ));
+        }
+        Ok(())
     }
     fn listing(
         &self,

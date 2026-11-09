@@ -139,11 +139,60 @@ fn retained_copy_of_copy_flattens_its_own_receipt_prefix_and_later_native_d() {
     let original = entry(&engine, &source, "source.txt");
     delete_undo(&mut engine, &source, &original);
     let first = request(&engine, &source, &target);
-    engine
+    let copied_receipt = engine
         .copy_retained_file_history(&first, "admin", op())
         .unwrap();
     let first_file = entry(&engine, &target, "copied.txt");
-    delete_undo(&mut engine, &target, &first_file);
+    let current = delete(&mut engine, &target, &first_file);
+    let imported_node = copied_receipt.result["retained_lifecycle"]["events"][0]["node"]["node_id"]
+        .as_str()
+        .unwrap();
+    let before = engine.state().clone();
+    assert_eq!(
+        engine
+            .undo_file_deletion(UndoFileDeletionRequest {
+                file_id: &HistoryFileId::parse(&first_file.file_id).unwrap(),
+                deletion_node_id: imported_node,
+                principal: "admin",
+                operation_id: op(),
+            })
+            .unwrap_err()
+            .code(),
+        ErrorCode::FileNodeNotFound
+    );
+    assert_eq!(engine.state(), &before);
+    let first_db = database(&engine, &target, &first_file.file_id, "D04", "copied.txt");
+    let retained = audit(&first_db);
+    assert_eq!(retained.len(), 3);
+    drop(engine);
+    fs::remove_file(&first_db).unwrap();
+    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    // Imported rows repeat source operation IDs but are not extra live
+    // receipts. The target's own current D survives cold State admission.
+    assert_eq!(audit(&first_db), retained);
+    assert_eq!(engine.file_deletion(&first_file.file_id), Some(&current));
+    assert!(
+        engine
+            .namespace_tree(&target.main_branch_id)
+            .unwrap()
+            .get("copied.txt")
+            .is_none()
+    );
+    save(
+        &mut engine,
+        &source,
+        "source.txt",
+        b"source remains independently writable",
+    );
+    assert_eq!(audit(&first_db), retained);
+    engine
+        .undo_file_deletion(UndoFileDeletionRequest {
+            file_id: &HistoryFileId::parse(&first_file.file_id).unwrap(),
+            deletion_node_id: &current.node_id,
+            principal: "admin",
+            operation_id: op(),
+        })
+        .unwrap();
     save(
         &mut engine,
         &target,

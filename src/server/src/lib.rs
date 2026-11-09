@@ -44,6 +44,12 @@ mod uploads;
 mod verified_chunk;
 mod web_assets;
 
+mod backend_file_deletion;
+mod http_file_deletion;
+pub use backend_file_deletion::{
+    DeleteCurrentFile, FileDeletionSummary, FileDeletionsPage, ReadFileDeletions,
+    RestoreDeletedFile,
+};
 mod backend_file_history;
 mod bounded_history_http;
 mod history_window_encode;
@@ -734,6 +740,41 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: RenameFileBranch,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn delete_current_file(
+        &self,
+        _identity: &Identity,
+        _command: crate::DeleteCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn current_file_deletion(
+        &self,
+        _identity: &Identity,
+        _file: &storage_contract::history_window::HistoryFileId,
+    ) -> Result<Option<storage_contract::FileDeletionNode>, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn file_deletions(
+        &self,
+        _identity: &Identity,
+        _request: crate::ReadFileDeletions,
+    ) -> Result<crate::FileDeletionsPage, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn restore_deleted_file(
+        &self,
+        _identity: &Identity,
+        _command: crate::RestoreDeletedFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn authorize_listing_snapshot(
+        &self,
+        _identity: &Identity,
+        _snapshot: &str,
+    ) -> Result<(), ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn listing(
         &self,
         identity: &Identity,
@@ -1510,6 +1551,46 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.backend
             .rename_file_branch(&self.current(identity)?, request)
+    }
+    fn delete_current_file(
+        &self,
+        identity: &Identity,
+        command: crate::DeleteCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .delete_current_file(&self.current(identity)?, command)
+    }
+    fn current_file_deletion(
+        &self,
+        identity: &Identity,
+        file: &storage_contract::history_window::HistoryFileId,
+    ) -> Result<Option<storage_contract::FileDeletionNode>, ApiError> {
+        self.backend
+            .current_file_deletion(&self.current(identity)?, file)
+    }
+    fn file_deletions(
+        &self,
+        identity: &Identity,
+        request: crate::ReadFileDeletions,
+    ) -> Result<crate::FileDeletionsPage, ApiError> {
+        self.backend
+            .file_deletions(&self.current(identity)?, request)
+    }
+    fn restore_deleted_file(
+        &self,
+        identity: &Identity,
+        command: crate::RestoreDeletedFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .restore_deleted_file(&self.current(identity)?, command)
+    }
+    fn authorize_listing_snapshot(
+        &self,
+        identity: &Identity,
+        snapshot: &str,
+    ) -> Result<(), ApiError> {
+        self.backend
+            .authorize_listing_snapshot(&self.current(identity)?, snapshot)
     }
     fn listing(
         &self,
@@ -2402,6 +2483,12 @@ fn router_shared(
         .route("/api/versions/{version}", get(version))
         .route("/api/versions/{version}/placement", get(placement))
         .route("/api/versions/{version}/checksums", get(checksums))
+        .route("/api/file-deletions", get(http_file_deletion::list))
+        .route("/api/files/{file}/deletion", get(http_file_deletion::read))
+        .route(
+            "/api/files/{file}/deletion/undo",
+            post(http_file_deletion::undo),
+        )
         .route(
             "/api/files/{file}/history",
             get(history_window_http::versions),

@@ -18,6 +18,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <section class="zxs-content-stack zxs-file-manager zxs-stack" aria-busy=move ||state.with(|s|s.files.loading||s.files.loading_disks).to_string()>
             {super::review::recovery_view(state)}
+            {super::deletion::view(state)}
             {move ||if slot.get().is_empty(){disk_roots(state).into_any()}else{directory(state).into_any()}}
         </section>
     }

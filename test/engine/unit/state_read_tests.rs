@@ -532,3 +532,194 @@ fn stored_event_sequences_admit_duplicates_and_reject_rehashed_invalid_sequences
         &original
     );
 }
+
+// These regressions re-encode real Engine snapshots with valid object hashes.
+// They check cold semantic admission, not forged publication acceptance.
+struct DeletedAdmissionFixture {
+    engine: Engine,
+    file: String,
+    fixture: Fixture,
+}
+impl DeletedAdmissionFixture {
+    fn new() -> Self {
+        let fixture = Fixture::new();
+        let mut engine = fixture.initialize();
+        let repository = engine
+            .create_disk_root("P01", "admin", OperationId::generate().unwrap())
+            .unwrap();
+        save(
+            &mut engine,
+            &repository.main_branch_id,
+            "deleted.txt",
+            b"retained",
+        );
+        let file = engine
+            .namespace_tree(&repository.main_branch_id)
+            .unwrap()
+            .get("deleted.txt")
+            .unwrap()
+            .file_id
+            .clone();
+        let repository_id =
+            storage_contract::history_window::HistoryRepositoryId::parse(&repository.repository_id)
+                .unwrap();
+        let file_id = storage_contract::history_window::HistoryFileId::parse(&file).unwrap();
+        let path = name_policy::LookupPath::parse("deleted.txt").unwrap();
+        engine
+            .soft_delete_file(crate::DeleteFileRequest {
+                target: crate::FileDeletionTarget {
+                    repository_id: &repository_id,
+                    file_id: &file_id,
+                    path: &path,
+                },
+                principal: "admin",
+                operation_id: OperationId::generate().unwrap(),
+            })
+            .unwrap();
+        Self {
+            engine,
+            file,
+            fixture,
+        }
+    }
+    fn admit_snapshot(&self, state: &State) -> Result<State> {
+        let hash = store_snapshot(&self.fixture.config.disks, state).unwrap();
+        load_snapshot(&self.fixture.config.disks[0], &hash)
+    }
+    fn reject_lifecycle(&self, state: &State) {
+        let error = self.admit_snapshot(state).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PublicationInvalid, "{error}");
+    }
+}
+
+#[test]
+fn soft_delete_cold_admission_rejects_missing_current_marker_without_an_undo_receipt() {
+    let deleted = DeletedAdmissionFixture::new();
+    let original = deleted.engine.state().clone();
+    assert_eq!(deleted.admit_snapshot(&original).unwrap(), original);
+    let mut missing = original.clone();
+    missing.file_deletions.remove(&deleted.file).unwrap();
+    assert_eq!(missing.operations, original.operations);
+    assert_eq!(missing.operation_principals, original.operation_principals);
+    assert_eq!(missing.events, original.events);
+    deleted.reject_lifecycle(&missing);
+}
+
+#[test]
+fn soft_delete_cold_admission_rejects_a_creation_receipts_different_internal_operation_id() {
+    let deleted = DeletedAdmissionFixture::new();
+    let original = deleted.engine.state().clone();
+    assert_eq!(deleted.admit_snapshot(&original).unwrap(), original);
+    let operation = original.file_deletions[&deleted.file].operation_id;
+    let mut altered = original.clone();
+    altered.operations.get_mut(&operation).unwrap().operation_id = OperationId::generate().unwrap();
+    assert_eq!(altered.file_deletions, original.file_deletions);
+    assert_eq!(altered.events, original.events);
+    deleted.reject_lifecycle(&altered);
+}
+
+#[test]
+fn soft_delete_cold_admission_replays_undo_then_redelete_without_resurrecting_old_markers() {
+    let mut deleted = DeletedAdmissionFixture::new();
+    let node = deleted.engine.state().file_deletions[&deleted.file].clone();
+    let file = storage_contract::history_window::HistoryFileId::parse(&deleted.file).unwrap();
+    deleted
+        .engine
+        .undo_file_deletion(crate::UndoFileDeletionRequest {
+            file_id: &file,
+            deletion_node_id: &node.node_id,
+            principal: "admin",
+            operation_id: OperationId::generate().unwrap(),
+        })
+        .unwrap();
+    let undone = deleted.engine.state().clone();
+    assert_eq!(deleted.admit_snapshot(&undone).unwrap(), undone);
+    let mut resurrected = undone.clone();
+    resurrected
+        .file_deletions
+        .insert(deleted.file.clone(), node.clone());
+    deleted.reject_lifecycle(&resurrected);
+    let branch = deleted.engine.state().repositories[&node.repository_id]
+        .main_branch_id
+        .clone();
+    // The old D and its undo remain valid after a genuine later content save.
+    // Neither cold State admission nor the SQLite projection may compare that
+    // historical D frontier with today's changed HEAD.
+    save(
+        &mut deleted.engine,
+        &branch,
+        node.path.as_str(),
+        b"changed after undo",
+    );
+    deleted
+        .engine
+        .soft_delete_file(crate::DeleteFileRequest {
+            target: crate::FileDeletionTarget {
+                repository_id: &storage_contract::history_window::HistoryRepositoryId::parse(
+                    &node.repository_id,
+                )
+                .unwrap(),
+                file_id: &file,
+                path: &name_policy::LookupPath::parse(node.path.as_str()).unwrap(),
+            },
+            principal: "admin",
+            operation_id: OperationId::generate().unwrap(),
+        })
+        .unwrap();
+    let again = deleted.engine.state().clone();
+    assert_ne!(again.file_deletions[&deleted.file].node_id, node.node_id);
+    assert_ne!(
+        again.file_deletions[&deleted.file].branch_heads,
+        node.branch_heads
+    );
+    assert_eq!(deleted.admit_snapshot(&again).unwrap(), again);
+    let mut stale = again.clone();
+    stale.file_deletions.insert(deleted.file.clone(), node);
+    deleted.reject_lifecycle(&stale);
+}
+
+#[test]
+fn soft_delete_cold_admission_requires_one_matching_event_and_exact_undo_consumption() {
+    let mut deleted = DeletedAdmissionFixture::new();
+    let original = deleted.engine.state().clone();
+    let node = original.file_deletions[&deleted.file].clone();
+    let mut missing_event = original.clone();
+    missing_event
+        .events
+        .retain(|event| event.operation_id != node.operation_id);
+    deleted.reject_lifecycle(&missing_event);
+    let mut duplicate_event = original.clone();
+    let event = duplicate_event.events.last().unwrap().clone();
+    duplicate_event.events.push(event);
+    deleted.reject_lifecycle(&duplicate_event);
+    let operation = OperationId::generate().unwrap();
+    deleted
+        .engine
+        .undo_file_deletion(crate::UndoFileDeletionRequest {
+            file_id: &storage_contract::history_window::HistoryFileId::parse(&deleted.file)
+                .unwrap(),
+            deletion_node_id: &node.node_id,
+            principal: "admin",
+            operation_id: operation,
+        })
+        .unwrap();
+    let mut wrong_node = deleted.engine.state().clone();
+    let unknown = new_id("fdel").unwrap();
+    let receipt = wrong_node.operations.get_mut(&operation).unwrap();
+    receipt.result["removed_deletion_node"]["node_id"] = unknown.clone().into();
+    // Even a self-consistent request digest does not prove that this D existed.
+    receipt.request_digest = Engine::native_request_digest(
+        "file.delete.undo",
+        "admin",
+        &json_codec::json!({"file_id":deleted.file,"deletion_node_id":unknown}),
+    )
+    .unwrap();
+    deleted.reject_lifecycle(&wrong_node);
+    let mut internal_id = deleted.engine.state().clone();
+    internal_id
+        .operations
+        .get_mut(&operation)
+        .unwrap()
+        .operation_id = OperationId::generate().unwrap();
+    deleted.reject_lifecycle(&internal_id);
+}

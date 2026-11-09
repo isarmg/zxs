@@ -57,6 +57,7 @@ fn navigation_resets_only_location_owned_state() {
         ];
         // Enumerate the model so a new state owner requires an explicit choice.
         let mut model = Model {
+            deletion: Default::default(),
             disks: disks.clone(),
             disks_loaded: true,
             loading_disks: true,

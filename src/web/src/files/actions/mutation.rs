@@ -573,7 +573,7 @@ fn file_mutation(
 
 /// Definite HTTP rejection releases only this operation; ambiguous transport or
 /// malformed-success responses stay tied to the original ID for polling.
-fn record_failure(state: RwSignal<State>, epoch: u64, id: &str, error: api::Error) {
+pub(crate) fn record_failure(state: RwSignal<State>, epoch: u64, id: &str, error: api::Error) {
     let unknown = error.mutation_outcome_unknown();
     let operation = if unknown {
         FileOperation::unknown(id)

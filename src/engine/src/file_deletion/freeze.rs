@@ -90,6 +90,46 @@ fn verify_selections(previous: &State, next: &State) -> Result<()> {
     Ok(())
 }
 
+fn verify_notes(previous: &State, next: &State) -> Result<()> {
+    for key in changed_keys(&previous.file_notes, &next.file_notes) {
+        if previous.file_notes.get(&key) != next.file_notes.get(&key)
+            && previous.file_deletions.contains_key(&key)
+        {
+            return Err(frozen());
+        }
+    }
+    for key in changed_keys(&previous.version_notes, &next.version_notes) {
+        if previous.version_notes.get(&key) != next.version_notes.get(&key)
+            && previous
+                .versions
+                .get(&key)
+                .is_some_and(|version| previous.file_deletions.contains_key(&version.file_id))
+        {
+            return Err(frozen());
+        }
+    }
+    // These note owners are immutable retained nodes. The direct node guards
+    // reject creating, removing or retargeting a frozen owner's node first.
+    for key in changed_keys(&previous.file_path_notes, &next.file_path_notes) {
+        let owner = previous
+            .file_path_nodes
+            .get(&key)
+            .map(|node| &node.file_id)
+            .or_else(|| {
+                previous
+                    .file_metadata_nodes
+                    .get(&key)
+                    .map(|node| &node.file_id)
+            });
+        if previous.file_path_notes.get(&key) != next.file_path_notes.get(&key)
+            && owner.is_some_and(|file| previous.file_deletions.contains_key(file))
+        {
+            return Err(frozen());
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn verify(previous: &State, next: &State) -> Result<()> {
     if previous.file_deletions.is_empty() {
         return Ok(());
@@ -115,6 +155,7 @@ pub(crate) fn verify(previous: &State, next: &State) -> Result<()> {
     direct!(file_path_nodes);
     direct!(file_metadata_nodes);
     direct!(file_branch_merges);
+    verify_notes(previous, next)?;
     verify_selections(previous, next)?;
     // Immutable content uses the persistent records collection rather than a map.
     let keys = match next.versions.changes_since(&previous.versions) {

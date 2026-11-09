@@ -1368,6 +1368,45 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.rename_file_branch(identity, request)
     }
+    fn delete_current_file(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::DeleteCurrentFile,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.delete_current_file(identity, command)
+    }
+    fn current_file_deletion(
+        &self,
+        identity: &crate::auth::Identity,
+        file: &storage_contract::history_window::HistoryFileId,
+    ) -> Result<Option<storage_contract::FileDeletionNode>, crate::ApiError> {
+        self.inner.backend()?.current_file_deletion(identity, file)
+    }
+    fn file_deletions(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileDeletions,
+    ) -> Result<crate::FileDeletionsPage, crate::ApiError> {
+        self.inner.backend()?.file_deletions(identity, request)
+    }
+    fn restore_deleted_file(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::RestoreDeletedFile,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner
+            .backend()?
+            .restore_deleted_file(identity, command)
+    }
+    fn authorize_listing_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        snapshot: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner
+            .backend()?
+            .authorize_listing_snapshot(identity, snapshot)
+    }
     fn listing(
         &self,
         identity: &crate::auth::Identity,

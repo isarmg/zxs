@@ -4,6 +4,9 @@ use crate::{CommitState, FileDeletionNode, OperationId, OperationResult, Protect
 use json_codec::json;
 use storage_contract::{MapChanges, SequenceChanges, TrackedOperations};
 
+mod cold;
+pub(crate) use cold::admit_current;
+
 fn invalid() -> Error {
     Error::new(
         ErrorCode::PublicationInvalid,
@@ -55,7 +58,7 @@ pub(crate) fn verify(
             return Ok(());
         }
         let receipt = after.ok_or_else(invalid)?;
-        if before.is_some() || lifecycle.replace(receipt).is_some() {
+        if receipt.operation_id != *id || before.is_some() || lifecycle.replace(receipt).is_some() {
             return Err(invalid());
         }
         Ok(())
@@ -161,17 +164,24 @@ fn verify_receipt(
     receipt: &OperationResult,
     undo: bool,
 ) -> Result<()> {
-    let principal = next
+    if admit_receipt(next, receipt, undo)? != *node
+        || receipt.sequence != next.sequence
+        || previous.operations.contains_key(&receipt.operation_id)
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// One envelope rule serves hot publication and cold lifecycle replay. A past
+/// node's frontier may legitimately differ from current heads after its undo.
+fn admit_receipt(state: &State, receipt: &OperationResult, undo: bool) -> Result<FileDeletionNode> {
+    let principal = state
         .operation_principals
         .get(&receipt.operation_id)
         .ok_or_else(invalid)?;
     Engine::require_actor(principal)?;
-    let input = if undo {
-        json!({"file_id": node.file_id, "deletion_node_id": node.node_id})
-    } else {
-        json!({"repository_id": node.repository_id, "file_id": node.file_id, "path": node.path.key()})
-    };
-    let result_node: FileDeletionNode = json_codec::from_value(
+    let node: FileDeletionNode = json_codec::from_value(
         receipt
             .result
             .get(if undo {
@@ -182,11 +192,38 @@ fn verify_receipt(
             .ok_or_else(invalid)?
             .clone(),
     )?;
-    if result_node != *node
-        || receipt.sequence != next.sequence
+    storage_contract::validate_id(&node.node_id, "fdel")?;
+    HistoryFileId::parse(&node.file_id)?;
+    HistoryRepositoryId::parse(&node.repository_id)?;
+    storage_contract::history_window::HistoryTreeId::parse(&node.history_tree_id)?;
+    for (branch, head) in &node.branch_heads {
+        storage_contract::history_window::HistoryBranchId::parse(branch)?;
+        storage_contract::history_window::HistoryNodeId::parse(head)?;
+    }
+    let parents = node
+        .branch_heads
+        .values()
+        .collect::<std::collections::BTreeSet<_>>();
+    if node.branch_heads.is_empty() || parents.into_iter().ne(node.parent_node_ids.iter()) {
+        return Err(invalid());
+    }
+    let input = if undo {
+        json!({"file_id": node.file_id, "deletion_node_id": node.node_id})
+    } else {
+        json!({"repository_id": node.repository_id, "file_id": node.file_id, "path": node.path.key()})
+    };
+    if receipt.kind
+        != if undo {
+            "file.delete.undo"
+        } else {
+            "file.delete"
+        }
+        || receipt.sequence == 0
+        || receipt.sequence > state.sequence
+        || node.sequence == 0
+        || node.sequence > receipt.sequence
         || receipt.request_digest
             != Engine::native_request_digest(&receipt.kind, principal, &input)?
-        || previous.operations.contains_key(&receipt.operation_id)
         || receipt.commit_id.is_some()
         || receipt.history_tree_id.is_some()
         || receipt.branch_id.is_some()
@@ -197,9 +234,11 @@ fn verify_receipt(
         || receipt.protection_at_publish != ProtectionAtPublish::NotApplicable
         || (!undo
             && (node.operation_id != receipt.operation_id
-                || node.sequence != next.sequence
+                || node.sequence != receipt.sequence
                 || node.author != *principal))
-        || (undo && receipt.result["restored_file_id"].as_str() != Some(node.file_id.as_str()))
+        || (undo
+            && (node.sequence == receipt.sequence
+                || receipt.result["restored_file_id"].as_str() != Some(node.file_id.as_str())))
         || receipt.result["version_protection"] != json!([])
         || !receipt.result["timestamp"]
             .as_str()
@@ -214,7 +253,7 @@ fn verify_receipt(
     {
         return Err(invalid());
     }
-    Ok(())
+    Ok(node)
 }
 
 fn appended<T: PartialEq>(
@@ -308,34 +347,6 @@ fn verify_shape(previous: &State, next: &State, receipt: &OperationResult) -> Re
         || event.object_id != receipt.operation_id.to_string()
     {
         return Err(invalid());
-    }
-    Ok(())
-}
-
-/// An independently decoded snapshot must bind every current deletion to its
-/// original successful receipt and actor, not merely to a graph-shaped record.
-pub(crate) fn admit_current(state: &State) -> Result<()> {
-    for node in state.file_deletions.values() {
-        let receipt = state
-            .operations
-            .get(&node.operation_id)
-            .ok_or_else(invalid)?;
-        let input = json!({"repository_id": node.repository_id, "file_id": node.file_id, "path": node.path.key()});
-        if receipt.kind != "file.delete"
-            || receipt.sequence != node.sequence
-            || node.sequence > state.sequence
-            || node.sequence == 0
-            || state.operation_principals.get(&node.operation_id) != Some(&node.author)
-            || receipt.request_digest
-                != Engine::native_request_digest("file.delete", &node.author, &input)?
-            || !matches!(
-                receipt.commit_state,
-                CommitState::Published | CommitState::PublishedDegraded
-            )
-            || receipt.result.get("deletion_node") != Some(&json_codec::to_value(node)?)
-        {
-            return Err(invalid());
-        }
     }
     Ok(())
 }

@@ -11,7 +11,7 @@ const MAX_BUFFERED_DISK_PAGES: usize = 8;
 
 pub(super) struct VirtualDirectory {
     scope: VirtualScope,
-    pending: Option<DirectoryPage>,
+    pending: Option<(DirectoryPage, String)>,
     next_cursor: Option<String>,
     exhausted: bool,
     namespace: Option<SessionKey>,
@@ -34,6 +34,7 @@ enum VirtualScope {
 
 struct DiskPage {
     page: DirectoryPage,
+    snapshot: String,
     next_cursor: Option<String>,
     namespace: Option<SessionKey>,
 }
@@ -77,6 +78,7 @@ impl DefaultShare {
                 }
                 let DiskPage {
                     page,
+                    snapshot,
                     next_cursor,
                     namespace,
                 } = self.disk_page(&slot.slot_id, None)?;
@@ -89,7 +91,7 @@ impl DefaultShare {
                         disk_id: slot.disk_id,
                         binding_generation: slot.binding_generation,
                     },
-                    Some(page),
+                    Some((page, snapshot)),
                     next_cursor,
                     exhausted,
                     namespace,
@@ -203,6 +205,7 @@ impl DefaultShare {
         }
         Ok(DiskPage {
             page,
+            snapshot: snapshot.snapshot,
             next_cursor: snapshot.next_cursor,
             namespace,
         })
@@ -336,8 +339,22 @@ impl DefaultShare {
         slot: &str,
         restart: bool,
     ) -> Result<DirectoryPage, ApiError> {
-        if !restart && let Some(page) = self.virtual_directory_mut(id).pending.take() {
-            return Ok(page);
+        if !restart {
+            let pending_snapshot = self
+                .virtual_directory_mut(id)
+                .pending
+                .as_ref()
+                .map(|(_, snapshot)| snapshot.clone());
+            if let Some(snapshot) = pending_snapshot {
+                self.shared
+                    .backend
+                    .authorize_listing_snapshot(&self.identity, &snapshot)?;
+                let (page, _) =
+                    self.virtual_directory_mut(id).pending.take().expect(
+                        "invariant: pending page remains owned during synchronous admission",
+                    );
+                return Ok(page);
+            }
         }
         let directory = self.virtual_directory_mut(id);
         if !restart && directory.exhausted {
@@ -353,6 +370,7 @@ impl DefaultShare {
         };
         let DiskPage {
             page,
+            snapshot: _,
             next_cursor,
             namespace,
         } = self.disk_page(slot, cursor)?;

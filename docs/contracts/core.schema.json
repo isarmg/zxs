@@ -10754,6 +10754,80 @@
         }
       ],
       "description": "Exact original publication-time separation, never today's topology or body cleanup. Original files are sorted/unique, include the selected origin, and are covered once by disjoint sorted components. Bound to the original request root. The permanent native decision freezes and authenticates the complete original live version cohort; cold admission recomputes this historical partition without filtering later retirements or adding later saves. terminated_files is sorted/unique and exactly matches operation.result.retirement.file_terminations.files. Each terminal file is a singleton original component with every retained version permanently retired; no future version may reuse that stable file_id. Current namespace/D termination is not supported. Each native terminal record requires retained_frontier with canonical branch_ids and digest. Native admission freezes exact branch records, HEAD commits, aliases, merges, selection, write origin and selection generation; those branch HEADs remain immutable evidence, never writable identities."
+    },
+    "FileDeletionSummary": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "deletion_node_id": {
+          "$ref": "#/$defs/FileDeletionNodeId"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "file_id",
+        "deletion_node_id",
+        "repository_id",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "FileDeletionsPage": {
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/FileDeletionSummary"
+          }
+        },
+        "next_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "snapshot",
+        "entries",
+        "next_after"
+      ],
+      "additionalProperties": false
+    },
+    "UndoFileDeletionBody": {
+      "type": "object",
+      "properties": {
+        "deletion_node_id": {
+          "$ref": "#/$defs/FileDeletionNodeId"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "deletion_node_id",
+        "operation_id"
+      ],
+      "additionalProperties": false
     }
   }
 }
