@@ -1,5 +1,6 @@
-//! Bounded, read-only directory composition history. It owns no file versions
-//! and never initializes a directory scope merely to display a graph.
+//! Bounded directory composition history. Reads confer no write authority;
+//! separate branch commands require admitted, writable current-folder status.
+//! Displaying a graph never initializes a directory or creates a file version.
 use crate::{
     api,
     ui::{State, accept_read_response},
@@ -40,6 +41,7 @@ impl From<DecodeError> for api::Error {
 enum Scope {
     Selected,
     CurrentDirectory {
+        initialized: bool,
         generation: u64,
         repository_path: String,
         namespace_head: String,
@@ -96,11 +98,24 @@ impl Target {
             path: state.files.directory.clone(),
             preview: false,
             scope: Scope::CurrentDirectory {
+                initialized: status.initialized,
                 generation: state.files.generation,
                 repository_path: status.path.clone(),
                 namespace_head: state.files.namespace_head.clone(),
             },
         }
+    }
+
+    fn can_manage_branches(&self, state: &State) -> bool {
+        matches!(
+            &self.scope,
+            Scope::CurrentDirectory {
+                initialized: true,
+                ..
+            }
+        ) && self.current(state)
+            && state.files.directory_branches_supported
+            && super::actions::write_allowed(state)
     }
 
     fn current(&self, state: &State) -> bool {
@@ -110,6 +125,7 @@ impl Target {
                 generation,
                 repository_path,
                 namespace_head,
+                ..
             } => {
                 state.session_active()
                     && state.session_epoch == self.epoch

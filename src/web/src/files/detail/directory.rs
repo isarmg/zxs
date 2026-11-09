@@ -2,7 +2,7 @@
 use super::super::model::{
     directory_branch_name, directory_branch_value, selected_directory_branch,
 };
-use super::super::{actions, backup, branch, inline};
+use super::super::{actions, backup, inline};
 use crate::ui::State;
 use web_interface::components::{Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
@@ -57,19 +57,12 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 || s.files.directory_branches.is_empty()
         })
     });
-    let create_branch_disabled = Signal::derive(move || {
-        state.with(|s| {
-            !actions::write_allowed(s) || !s.files.loaded || !s.files.directory_branches_supported
-        })
-    });
-
     let mutation_disabled = Signal::derive(move || state.with(|s| !actions::write_allowed(s)));
     view! {
         <article class="zxs-content-panel zxs-entry-content zxs-frame zxs-stack" data-zxs-current-directory-controls="true" aria-label=t("当前目录详情", "Current folder details")>
             <h2 class="zxs-row">{t("当前目录详情", "Current folder details")}</h2>
             <p class="zxs-row">{move ||state.with(|s|super::super::model::join_path(&s.files.slot,&s.files.directory))}</p>
             <div class="zxs-file-toolbar zxs-flow">
-            {branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::CurrentDirectory,create_branch_disabled)}
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||!actions::write_allowed(s)) on:click=move |_|super::super::placement::start_current(state)>{t("主盘规则","Primary placement")}</button>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::recursive::start_current(state)>{t("逐级备份","Recursive backups")}</button>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::start_current(state)>{t("自定义备份前缀","Custom backup prefixes")}</button>

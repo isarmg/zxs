@@ -1,6 +1,6 @@
 //! Explicit independent directory repositories and reviewed child references.
 mod layout;
-use super::actions;
+use super::{actions, branch};
 use crate::{
     api,
     ui::{State, accept_read_response},
@@ -344,6 +344,15 @@ fn owned_review(state: &State, model: &Model) -> Option<Review> {
         index_generation: status.index_generation,
     })
 }
+fn branch_ready(state: &State, model: &Model) -> bool {
+    if !state.files.directory_branches_supported {
+        return false;
+    }
+    model.ready(state).is_some_and(|(_, status)| {
+        status.initialized && !status.staged && !status.unstaged && !status.needs_restage
+    })
+}
+
 fn child_review(state: &State, model: &Model, id: &str) -> Option<Review> {
     let (target, status) = model.ready(state)?;
     if !status.initialized {
@@ -450,6 +459,8 @@ fn child_view(
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Model::default());
     let target = Memo::new(move |_| state.with(Target::capture));
+    let branch_disabled =
+        Signal::derive(move || state.with(|state| model.with(|model| !branch_ready(state, model))));
     let history_target = Memo::new(move |_| {
         state.with(|state| {
             if state.files.selected.is_some() {
@@ -495,6 +506,17 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|initialize_review(state,model)));submit(state,review);}>{t("初始化此目录仓库","Initialize this directory repository")}</button>
             </Show>
             <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|status.initialized))>
+                <div class="zxs-file-toolbar zxs-flow">
+                    {branch::control(
+                        state,
+                        t("创建目录分支", "Create folder branch"),
+                        branch::Target::CurrentDirectory,
+                        branch_disabled,
+                    )}
+                </div>
+                <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|status.staged||status.unstaged||status.needs_restage))>
+                    <p class="zxs-row">{t("先暂存并提交本仓库的更改，再从当前提交创建分支。子仓库的未提交工作仍由各自处理。", "Stage and commit this repository's changes before creating a branch from its current commit. Uncommitted child work remains independent.")}</p>
+                </Show>
                 <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|status.unstaged||status.needs_restage))>
                     <p class="zxs-row" role="status">{t("工作内容尚未暂存，或独立子仓库边界有变化。暂存将固定本仓库当前工作内容，不会自动跟随子仓库的新提交；之后保存的更改保留在工作区。","Working contents are unstaged, or independent child boundaries changed. Staging freezes this repository’s current work without following child commits. Later saves remain in the working tree.")}</p>
                     <button type="button" class="zxs-button" data-stage-directory-owned="" disabled=move ||state.with(|state|model.with(|model|owned_review(state,model).is_none()))

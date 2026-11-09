@@ -176,8 +176,9 @@ fn begin_directory_snapshot(
     state.change_page(crate::ui::Page::Files);
     true
 }
-/// Only a node from the validated, current directory-history page supplies this
-/// immutable read target. It never acquires branch-checkout authority.
+/// Only a node or committed branch reference from a validated, current
+/// directory-history page supplies this immutable read target. It never
+/// acquires branch-checkout authority.
 pub(crate) fn preview_directory_snapshot(
     state: RwSignal<State>,
     path: String,

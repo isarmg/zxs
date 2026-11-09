@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use storage_contract::history_window::HistoryEndpoint;
 use web_interface::i18n::t;
 
+mod branches;
+
 pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
     let Some(target) = state.with_untracked(Target::capture) else {
         return view! { <section class="zxs-entry-section zxs-directory-history zxs-stack"><h3 class="zxs-row">{t("目录分支树","Folder branch tree")}</h3><p class="zxs-row">{t("此目录是磁盘或备份的汇总视图，没有独立的目录历史。请打开原始仓库中的具体文件夹查看。","This is a disk or backup aggregate, with no independent folder history. Open the original folder in its repository to view its history.")}</p></section> }.into_any();
@@ -148,18 +150,7 @@ fn graph(state: RwSignal<State>, target: Target) -> impl IntoView {
                     </details>
                 </article>}
             })}
-            <section class="zxs-stack zxs-directory-history-branches"><p class="zxs-row" role="heading" {web_interface::attr::custom::custom_attribute("aria-level", "4")}>{t("目录分支","Folder branches")}</p>
-                <p class="zxs-row">{t("下列分支名称来自独立分页；点击可定位该分支引用的真实节点。这里只查看历史，不改变默认分支。","Branch names are independently paginated. Locate the real node referenced by a branch. Viewing this history does not change the default branch.")}</p>
-                <For each=move ||model.with(|model|model.branches.as_ref().map(|page|page.branches.clone()).unwrap_or_default()) key=|branch|branch.directory_branch_id.clone() children=move |branch| {
-                    let staged=branch.staged;
-                    let tree=StoredValue::new(branch.committed_tree_id);
-                    view!{<div class="zxs-file-toolbar zxs-flow zxs-hover-row" data-directory-branch-id=branch.directory_branch_id><span class="zxs-row">{branch.name}</span>{staged.then(||view!{<span class="zxs-row">{t("有待提交更改","Staged changes")}</span>})}{branch.current.then(||view!{<span class="zxs-row">{t("默认","Default")}</span>})}{(!branch.materialized).then(||view!{<span class="zxs-row">{t("尚未写入，引用父节点","Unwritten, references parent node")}</span>})}<button class="zxs-button" disabled=move ||disabled.get()||tree.get_value().is_none() on:click=move |_|if let Some(id)=tree.get_value(){load(state,model,target,Read::Nodes{cursor:None,anchor:Some(id)})}>{t("定位分支节点","Locate branch node")}</button></div>}
-                }/>
-                <div class="zxs-file-toolbar zxs-flow">
-                    <button class="zxs-button" disabled=move ||disabled.get()||model.with(|model|model.branches.as_ref().is_none_or(|page|page.page.previous_cursor.is_none())) on:click=move |_|page(state,model,target,true,false)>{t("上一页目录分支","Previous folder branch page")}</button>
-                    <button class="zxs-button" disabled=move ||disabled.get()||model.with(|model|model.branches.as_ref().is_none_or(|page|page.page.next_cursor.is_none())) on:click=move |_|page(state,model,target,true,true)>{t("下一页目录分支","Next folder branch page")}</button>
-                </div>
-            </section>
+            {branches::view(state, model, target, disabled)}
         </section>
     }.into_any()
 }
