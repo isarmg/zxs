@@ -32,6 +32,15 @@ pub(in crate::engine) fn encode_move_draft(
     })
 }
 
+/// Candidate outcome remains private and unaccepted. Encoding it does not
+/// create a published index, final operation receipt or journal decision.
+pub(in crate::engine) fn encode_move_candidate(
+    draft: &crate::business::NativeMoveCandidate,
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
+    encode_state(draft.state(), checkpoint)
+}
+
 fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<Vec<u8>> {
     checkpoint()?;
     // Bound the entire input before SQL rows duplicate parts of it. This is a

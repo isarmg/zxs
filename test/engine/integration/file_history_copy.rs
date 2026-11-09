@@ -706,3 +706,6 @@ mod move_scopes;
 
 #[path = "file_history_copy/move_choice.rs"]
 mod move_choice;
+
+#[path = "file_history_copy/move_candidate.rs"]
+mod move_candidate;

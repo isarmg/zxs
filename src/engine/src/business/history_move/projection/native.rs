@@ -103,6 +103,33 @@ impl NativeMoveDraft {
     pub(crate) fn digest(&self) -> &str { &self.digest }
 }
 
+/// Prospective successful snapshot for one frozen candidate. This is not an
+/// admitted State or a returned receipt; ordinary publication still rejects it.
+pub(crate) struct NativeMoveCandidate {
+    state: State,
+    operation: OperationId,
+}
+impl NativeMoveCandidate {
+    pub(crate) fn state(&self) -> &State { &self.state }
+    pub(crate) fn result(&self) -> &OperationResult {
+        &self.state.operations[&self.operation]
+    }
+}
+impl NativeMoveDraft {
+    pub(crate) fn candidate_draft(&self) -> Result<NativeMoveCandidate> {
+        let mut state = self.proposed_state.clone();
+        let result = state.operations.get_mut(&self.operation)
+            .expect("invariant: native move draft contains its one operation");
+        // Ordinary publication also freezes its prospective result before the
+        // first vote. The result remains private until a real joint publication.
+        result.commit_state = CommitState::Published;
+        result.protection_at_publish = ProtectionAtPublish::TargetMet;
+        result.current_health = CurrentHealth::Healthy;
+        history_copy::retained::bounded(&state)?;
+        Ok(NativeMoveCandidate { state, operation: self.operation })
+    }
+}
+
 fn versions(engine: &Engine, projection: &FileHistoryMoveProjection) -> Result<Vec<Version>> {
     projection.version_mapping().values().map(|id| {
         let placement = &projection.writes.next.placements[id];

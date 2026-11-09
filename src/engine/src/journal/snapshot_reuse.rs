@@ -18,6 +18,22 @@ impl PreparedSnapshot {
         }
         Ok(())
     }
+    /// Store this full preparation's own immutable objects with bounded
+    /// cancellation checkpoints. Callers separately verify complete closure;
+    /// incremental plans must not use this to claim predecessor installation.
+    pub(crate) fn store_prepared_objects_observed_at(
+        &self,
+        resources: &DiskResources,
+        members: &[DiskConfig],
+        checkpoint: &mut impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        self.root();
+        for object in &self.objects {
+            checkpoint()?;
+            object.store_at(resources, members)?;
+        }
+        Ok(())
+    }
     /// Every entry here came from this encoder invocation, even if its digest
     /// names an older object. Installation therefore always compares and syncs.
     #[cfg(test)]

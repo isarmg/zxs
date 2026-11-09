@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`a058628`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`2cb21721`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -34,7 +34,7 @@
 | --- | --- | --- |
 | T00 | **自动 CI 暂停**：已合入 `376ccf19`，移除 CI 的 push／PR 和 Release 的 tag push 触发，保留所有 job、历史记录及人工入口，并同步固定策略校验器。 | 仅源码变更，未运行 CI 或本地测试；远端定义已核回。未经用户明确恢复，不 dispatch／rerun；既有运行不取消。本片同步 helper 改名后保留工作流的摘要记录，不改变任何触发入口，未执行校验。 |
 | T01 | **SMB/Web 普通软删除与撤销接线**：Engine 生命周期核心已合入；未合入后继在 cb99 基线通过 20 项所选 Engine／进程内 HTTP 回归及 Engine Clippy。Web 与 Server/Web Clippy 未跑，真实 SMB socket 受环境限制；尚未实际验证与 2189 的组合。 | 完成准确组合的受影响入口验证；D 连接原文件全部分支最新节点、冻结其新节点／分支，撤销当前 D 才恢复 SMB 可见与编辑。保留永久原操作和同路径身份边界；所选回归不是全套或真实 SMB 验收。 |
-| T02 | **跨盘 SMB move**：`5c14a7a` 已合入原 FULL/FILE、单一 native STAGING operation、完整 SYSTEM 历史及参与盘原/提议 scoped 库。本片续接[原输入/下一槽选择与冷围栏](docs/design/file-history-move-joint-choice.md)：全根完整重验后无覆盖同步同一原 operation/配置/材料/槽，Engine 普通写及已脱锁提交拒绝越过；冷启动先发现任一存活选择，再只重放原已发布源。八项集成/两项单元测试仅源码，未审查/编译/格式化/测试/CI，无真实盘操作。 | 选择不是共同决定：不写 Candidate/ACCEPT/PUBLISHED，不安装普通库、不隐藏源、不返回 SMB 成功，五项义务不解除。缺副本只经原封套重建及全材料再验后显式补齐；损坏/冲突/更晚日志/torn tail 保留拒绝，不回滚或清槽。尚无解除选择 API，不自动接 SMB；永久最终准入、N 成员决定/故障收束、三范围共同安装和双端读取围栏仍未完成。 |
+| T02 | **跨盘 SMB move**：`5c14a7a` 的完整源历史/scoped 材料在主线；`ccf3f49c` 已合入原 choice/写围栏。本片接[唯一普通 Candidate 与逐成员冷读](docs/design/file-history-move-native-candidate.md)：原 choice 确定 tx/槽/候选，单一 prospective 结果仍同时绑定源 D 和完整目标；真实 snapshot/history/Candidate 安装到全部原元数据根，各根独立普通冷读、全 State/图比较，原 FILE/盘根投影不得漂移。六项新集成仅源码，未审查/编译/格式化/测试/CI，无真实盘操作。 | 普通对象不是决定：无 journal PREPARE/ACCEPT/PUBLISHED、无活动库安装或源/目标可见切换，不返回 SMB 成功，五项义务不解除。孤立无原清单/损坏候选保留拒绝；单成员缺对象不借别盘宣称完整，只原材料显式补齐。完整普通正文/三范围共同安装、N 成员决定及失败收束、双端读取围栏和 choice 解除仍缺，不自动接 SMB。 |
 | T03 | **整体备份迁移**：`160a642f` 已合入原首笔通用冷重放；本片接[普通原生对象安装](docs/design/backup-ordinary-native-metadata.md)，在全部原盘／目标的真实 `metadata/objects` 和 seal 地址无覆盖安装完整 State／history／registry／Publication，目标从自身普通字节重放只读 Current；原任务可辨识未激活的部分 metadata 并按原决定续作。**六项临时目录测试源码未运行；未审查、编译、测试或 CI，未实际操作盘。** | 普通对象不是活动 Current：不写活动 selector／disk.json／writer；第二笔、活动 Config／locator、SYSTEM 解静默及安全源解围栏仍未完成。任一完成标记后全体缺件拒绝补造，旧数据／永久回执和原围栏保留，不开放 H03；仍缺普通设置自动触发和完整进度入口，完整单元／父子同层同盘／一次性完整低级链约束不放宽。 |
 | T04 | **三范围数据库与逐盘可移植性**：`c1f254fb` 已合入盘根递归目录/空目录清单与历史，`a8a128f2` 已合入[对象库独立救援归档与重建](docs/design/object-database-material-reconstruction.md)。本候选接[盘根救援归档与独立 SQLite 重建](docs/design/disk-database-rescue-reconstruction.md)：保存明确盘身份和完整所选 current/history，在原 SYSTEM/原盘缺失时按显式 stored-current/history/current-from-history 生成新镜像，重新解码逐条比较且校验全归档前后关系；helper 不覆盖或安装活动库，不改备份 writer。九条新增回归仅源码，未审查、编译、格式化、静态检查、测试或 CI，无真实盘操作。 | 对象库与盘根库均仅自摘要/本地结构，不认证原 publication/正文，不恢复全局权限或退役节点。仍缺无归档完整来源重建、全部主目录/alias/标签历史、代际及三范围共同恢复/活动安装。所选库侧车、损坏/不支持材料、已有输出均保留拒绝，无双读迁移；缺 history 不从 current 伪造，选择单一输出也不隐藏归档中的另一份矛盾。 |
 | T05 | **辅助工具改名及归属迁移**：`34e0bffb` 已接原生 generation 日志与普通对象安装。本片续接[准确 generation 冷选择](docs/design/terminal-chain-generation-selector.md)：SYSTEM 原请求/完成和原目标 descriptor 绑定实际 epoch/日志，持有安装后冻结读者并在独立 Web 返回真实 Current 统计；来源查询不探目标，原请求明确续作，缺完成材料不补造。 | 未审查/编译/测试/CI，无实际系统操作。六项 native/一项 HTTP 新测试源码未运行。冷选择不等于通用活动 authority：不改活动 selector、seal、bootstrap/Stop 或数据库，不启 Engine writer、不完成 readmission/H03；可信普通冷启动、serving/数据库闭包及共同活动切换仍缺。 |

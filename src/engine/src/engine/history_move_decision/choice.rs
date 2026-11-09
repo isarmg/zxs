@@ -95,6 +95,8 @@ impl Choice {
         Ok(Self { record, bytes: bytes.to_vec() })
     }
 
+    pub(super) fn storage_bytes(&self) -> u64 { self.bytes.len() as u64 + 4096 }
+
     pub(in crate::engine) fn source_sequence(&self) -> u64 { self.record.source_sequence }
 
     fn require_baseline(&self, engine: &Engine) -> Result<()> {
@@ -237,6 +239,16 @@ impl Engine {
         recovery: &FileHistoryMoveRecoveryDigest,
         cancellation: &HistoryWindowCancellation,
     ) -> Result<FileHistoryMoveJointChoice> {
+        let (_, _, _, report) = self.selected_move_inputs(projection, recovery, cancellation)?;
+        Ok(report)
+    }
+
+    pub(super) fn selected_move_inputs(
+        &self,
+        projection: &FileHistoryMoveProjection,
+        recovery: &FileHistoryMoveRecoveryDigest,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<(Materials, crate::business::NativeMoveDraft, scopes::Scopes, FileHistoryMoveJointChoice)> {
         let (materials, native, scopes) = self.move_scoped_inputs(projection, recovery, cancellation)?;
         let expected = Choice::capture(self, projection, recovery, &materials, &scopes)?;
         if self.history_move_choice.as_ref() != Some(&expected) {
@@ -244,7 +256,7 @@ impl Engine {
         }
         self.verify_joint_choice(&materials, &expected, cancellation)?;
         self.verify_move_scopes(projection, recovery, &materials, &native, &scopes, cancellation)?;
-        Ok(expected.report())
+        Ok((materials, native, scopes, expected.report()))
     }
 
     fn verify_joint_choice(

@@ -14,3 +14,16 @@ pub(in crate::engine) fn prepare_move_current(
     }
     Ok(bytes)
 }
+
+/// Check the candidate outcome against the same scoped current image. Only
+/// SYSTEM receipt status changes; no disk inventory can silently drift.
+pub(in crate::engine) fn require_same_move_current(
+    native: &crate::business::NativeMoveDraft,
+    candidate: &crate::business::NativeMoveCandidate,
+    identity: DiskRegistrationIdentity,
+) -> Result<()> {
+    if snapshot(native.proposed_state(), identity.clone())? != snapshot(candidate.state(), identity)? {
+        return Err(invalid("native move candidate changes its original scoped disk inventory"));
+    }
+    Ok(())
+}

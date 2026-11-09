@@ -112,17 +112,52 @@ pub(crate) fn prepare_history_manifests(
     state: &State,
     maximum: usize,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
+    prepare_history_manifests_inner(state, maximum, None)
+}
+
+/// Full preparation with an aggregate retained-output budget. Each history is
+/// checked before extending the shared output, not after collecting all roots.
+pub(crate) fn prepare_history_manifests_bounded(
+    state: &State,
+    maximum: usize,
+    maximum_bytes: usize,
+    maximum_objects: usize,
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
+    prepare_history_manifests_inner(state, maximum, Some((maximum_bytes, maximum_objects)))
+}
+
+fn prepare_history_manifests_inner(
+    state: &State,
+    maximum: usize,
+    limits: Option<(usize, usize)>,
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     let mut bindings = BTreeMap::new();
     let mut objects = Vec::new();
+    let mut bytes = 0usize;
+    let mut append = |incoming: Vec<PreparedMetadataObject>| -> Result<()> {
+        if let Some((maximum_bytes, maximum_objects)) = limits {
+            for object in &incoming {
+                bytes = bytes.checked_add(object.bytes().len()).ok_or_else(|| {
+                    Error::new(ErrorCode::ResourceLimit, "history preparation size overflow")
+                })?;
+            }
+            if bytes > maximum_bytes || objects.len().saturating_add(incoming.len()) > maximum_objects {
+                return Err(Error::new(ErrorCode::ResourceLimit,
+                    "history preparation exceeds its aggregate object budget"));
+            }
+        }
+        objects.extend(incoming);
+        Ok(())
+    };
     for id in state.histories.keys() {
         let manifest = HistoryManifest::from_state(state, id)?;
         let prepared = graph::prepare_encoded(&manifest, maximum)?;
         bindings.insert(id.clone(), prepared.binding);
-        objects.extend(prepared.objects);
+        append(prepared.objects)?;
     }
     let mut encoder = crate::metadata_map::Encoder::new(maximum);
     let catalog = encoder.map_catalog(&bindings)?;
-    objects.extend(encoder.finish());
+    append(encoder.finish())?;
     Ok((catalog, unique_prepared_objects(objects)?))
 }
 /// All old graph dependencies are still authenticated and installed. Only dirty

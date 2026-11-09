@@ -85,7 +85,7 @@ mod history_move_decision;
 pub use history_move_decision::{
     FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,
     FileHistoryMoveDecisionObligation, FileHistoryMoveNativePreparation,
-    FileHistoryMoveScopedPreparation, FileHistoryMoveJointChoice,
+    FileHistoryMoveScopedPreparation, FileHistoryMoveJointChoice, FileHistoryMoveCandidatePreparation,
 };
 mod history_move_target;
 pub use history_move_target::FileHistoryMoveTargetReport;

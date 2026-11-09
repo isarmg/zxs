@@ -19,7 +19,7 @@ pub use history_move::{
     FileHistoryMoveProjection, FileHistoryMoveRequest, FileHistoryMoveSourceDigest,
 };
 pub(crate) use history_move::{
-    FileHistoryMoveReplay, NATIVE_KIND as FILE_HISTORY_MOVE_KIND, NativeMoveDraft,
+    FileHistoryMoveReplay, NATIVE_KIND as FILE_HISTORY_MOVE_KIND, NativeMoveDraft, NativeMoveCandidate,
     reject_unclosed_publication as reject_unclosed_file_history_move,
 };
 pub(crate) mod file_ancestry;

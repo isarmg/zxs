@@ -77,7 +77,7 @@ impl Artifact<'_> {
     fn name(&self) -> &str {
         match self { Self::Exact { name, .. } | Self::Scoped { name, .. } | Self::Database { name, .. } => name }
     }
-    fn bytes(&self) -> &[u8] {
+    pub(super) fn bytes(&self) -> &[u8] {
         match self { Self::Exact { bytes, .. } | Self::Scoped { bytes, .. } => bytes, Self::Database { prepared, .. } => prepared.bytes() }
     }
     fn maximum(&self) -> usize {
@@ -298,6 +298,49 @@ impl Store {
         Ok(())
     }
 
+    pub(super) fn require_candidate_space(&self, candidate: &candidate::FrozenCandidate, ordinary_missing: u64) -> Result<()> {
+        self.check_names()?;
+        let metadata = matches!(self.scope, Scope::Metadata);
+        let artifacts = candidate.artifacts(metadata);
+        let original = self.root.open_optional_read_regular(&self.root.path().join(candidate::MANIFEST))?;
+        if original.is_none() {
+            for artifact in artifacts.iter().skip(1) {
+                if self.root.open_optional_read_regular(&self.root.path().join(artifact.name()))?.is_some() {
+                    return Err(Error::new(ErrorCode::RecoveryRequired,
+                        "move candidate stage has no original manifest; preserve it"));
+                }
+            }
+            if let Owner::Disk { disk, handle, .. } = &self.owner
+                && metadata
+                && !crate::journal::existing_object_paths_at(&handle.root, disk, "candidate", candidate.hash())?.is_empty()
+            {
+                return Err(Error::new(ErrorCode::RecoveryRequired,
+                    "ordinary move candidate has no original input manifest; preserve it"));
+            }
+        }
+        let mut required = ordinary_missing.checked_add(self.reserve).ok_or_else(limit)?;
+        for artifact in artifacts {
+            if self.root.open_optional_read_regular(&self.root.path().join(artifact.name()))?.is_none() {
+                required = required.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
+            } else {
+                self.read_artifact(&artifact, false)?;
+            }
+        }
+        if self.root.available()? < required {
+            return Err(Error::new(ErrorCode::NoSpace,
+                "move candidate dependencies and stage would consume metadata reserve"));
+        }
+        self.check_names()
+    }
+
+    pub(super) fn install_candidate(&self, candidate: &candidate::FrozenCandidate, cancellation: &HistoryWindowCancellation) -> Result<()> {
+        self.install_artifacts(&candidate.artifacts(matches!(self.scope, Scope::Metadata)), cancellation)
+    }
+
+    pub(super) fn verify_candidate(&self, candidate: &candidate::FrozenCandidate, cancellation: &HistoryWindowCancellation) -> Result<()> {
+        self.verify_artifacts(&candidate.artifacts(matches!(self.scope, Scope::Metadata)), cancellation)
+    }
+
     fn install_artifacts(&self, artifacts: &[Artifact<'_>], cancellation: &HistoryWindowCancellation) -> Result<()> {
         self.check_names()?;
         let mut remaining = 0u64;
@@ -408,7 +451,7 @@ fn native_storage_bytes(
     Ok(required)
 }
 
-fn scoped_storage_bytes(
+pub(super) fn scoped_storage_bytes(
     materials: &Materials,
     participant: &DiskScope,
     native: &crate::business::NativeMoveDraft,
