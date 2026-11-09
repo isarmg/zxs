@@ -2,10 +2,7 @@
 //! mismatches and replaced roots are loss, never instructions to initialize.
 use super::*;
 use crate::disk::{DiskResources, DiskWriter, FenceOwner, WriterLocks};
-use platform_io::fs_safety::{
-    AdvisoryLock,
-    linux::{FileIdentity, SingleLinkRequirement},
-};
+use platform_io::fs_safety::linux::{AdvisoryLock, FileIdentity, SingleLinkRequirement};
 use std::path::PathBuf;
 
 pub(in crate::engine) struct PreparedBackupResume {
@@ -156,7 +153,10 @@ pub(in crate::engine) fn prepare_resume(
     let system = lock_existing(&system_root, "writer.lock")?;
     let mut writers = BTreeMap::new();
     for (disk, held) in &roots {
-        let reservation = Arc::new(AdvisoryLock::directory(&held.directory(held.path())?)?);
+        let reservation = Arc::new(
+            AdvisoryLock::directory(&held.directory(held.path())?)
+                .map_err(crate::disk::fs_error)?,
+        );
         let writer = lock_existing(held, ".writer.lock")?;
         writers.insert(
             disk.disk_id.clone(),

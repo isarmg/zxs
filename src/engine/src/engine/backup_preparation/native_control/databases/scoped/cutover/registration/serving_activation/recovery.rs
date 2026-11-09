@@ -214,9 +214,12 @@ impl Engine {
         completion(&system, &admitted, &bytes)?;
         let barrier = barrier(&admitted, &selection)?;
         let mut replay = BackupNamespaceReplay::new(admitted.first())?;
-        admitted.replay_source(&AtomicBool::new(false), &mut |candidate, state| {
-            replay.observe(candidate, state)
-        })?;
+        admitted.replay_source(
+            &AtomicBool::new(false),
+            |candidate: &crate::journal::Candidate, state: &AdmittedState| {
+                replay.observe(candidate, state)
+            },
+        )?;
         let current = Arc::new(replay.finish_serving(
             admitted.publication(),
             admitted.first(),
