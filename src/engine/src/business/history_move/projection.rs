@@ -252,7 +252,7 @@ fn compose(
         previous,
         &mut next,
         view,
-        request,
+        history_copy::Destination::MoveIntoDiskRoot(request),
         input.route,
         input.principal,
         input.operation,

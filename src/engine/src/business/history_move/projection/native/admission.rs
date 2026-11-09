@@ -142,7 +142,15 @@ impl ReadBody {
             .get(&request.target_repository_id)
             .ok_or_else(invalid)?;
         let arrival = state.commits.get(&self.commit_id).ok_or_else(invalid)?;
+        let previous = state
+            .commits
+            .get(&request.expected_target_head)
+            .ok_or_else(invalid)?;
         if request.source_repository_id == request.target_repository_id
+            || !source.file_manager_root
+            || !target.file_manager_root
+            || previous.history_tree_id != target.history_tree_id
+            || previous.sequence >= receipt.sequence
             || source.history_tree_id == target.history_tree_id
             || source.history_tree_id != self.deletion_node.history_tree_id
             || target.history_tree_id != self.history_tree_id
@@ -154,12 +162,19 @@ impl ReadBody {
             || arrival.author != principal
             || arrival.kind != "file_history_move"
             || arrival.parent_commit_ids != [request.expected_target_head.clone()]
-            || arrival.entries.len() != 1
         {
             return Err(invalid());
         }
-        let entry = &arrival.entries[0];
-        if entry.kind != NamespaceEntryKind::File
+        let added = arrival
+            .entries
+            .strip_prefix(previous.entries.as_slice())
+            .ok_or_else(invalid)?;
+        let [entry] = added else {
+            return Err(invalid());
+        };
+        let path = name_policy::LookupPath::parse(&request.target_name)?;
+        if namespace::find_unordered_key(&previous.entries, path.key()).is_some()
+            || entry.kind != NamespaceEntryKind::File
             || entry.file_id != self.file_id
             || entry.path() != request.target_name
             || !self

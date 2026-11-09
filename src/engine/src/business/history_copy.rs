@@ -81,7 +81,7 @@ pub(crate) fn invalid() -> Error {
 fn unsupported() -> Error {
     Error::new(
         ErrorCode::UnsupportedOperation,
-        "history copy requires an available, uniformly placed single-file history, unconfigured source and target placement/backup policies, and an empty uninitialized repository on another primary",
+        "history copy/move requires an available uniformly placed file history, unchanged placement/backup policies, and its supported destination scope on another primary",
     )
 }
 
@@ -102,11 +102,42 @@ pub(crate) struct CopySources {
     pub branches: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::business) enum Destination<'a> {
+    EmptyRepository(&'a FileHistoryCopyRequest),
+    MoveIntoDiskRoot(&'a FileHistoryCopyRequest),
+}
+
+impl<'a> Destination<'a> {
+    fn request(self) -> &'a FileHistoryCopyRequest {
+        match self {
+            Self::EmptyRepository(request) | Self::MoveIntoDiskRoot(request) => request,
+        }
+    }
+}
+
 pub(crate) fn sources(
     previous: &State,
     view: Option<&crate::engine::CurrentNamespaces>,
     request: &FileHistoryCopyRequest,
 ) -> Result<CopySources> {
+    sources_for(previous, view, Destination::EmptyRepository(request))
+}
+
+pub(in crate::business) fn move_sources(
+    previous: &State,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    request: &FileHistoryCopyRequest,
+) -> Result<CopySources> {
+    sources_for(previous, view, Destination::MoveIntoDiskRoot(request))
+}
+
+fn sources_for(
+    previous: &State,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    destination: Destination<'_>,
+) -> Result<CopySources> {
+    let request = destination.request();
     let source_path = name_policy::PortablePath::parse(&request.source_path)?;
     name_policy::validate_name(&request.target_name)?;
     let source = previous
@@ -168,9 +199,10 @@ pub(crate) fn sources(
     let source_entries = if let Some(view) = view {
         view.require_branch_write(previous, &source.main_branch_id)?;
         view.require_branch_write(previous, &target.main_branch_id)?;
-        if !view
-            .branch_entries(&target.main_branch_id, &target_branch.head_commit_id)?
-            .is_empty()
+        if matches!(destination, Destination::MoveIntoDiskRoot(_))
+            || !view
+                .branch_entries(&target.main_branch_id, &target_branch.head_commit_id)?
+                .is_empty()
         {
             return Err(unsupported());
         }
@@ -178,16 +210,43 @@ pub(crate) fn sources(
     } else {
         &previous.commits[&source_branch.head_commit_id].entries
     };
-    // A masked old destination is not an empty root, nor is a parked target.
-    if !previous.commits[&target_branch.head_commit_id]
-        .entries
-        .is_empty()
-        || previous.branches.values().any(|branch| {
-            branch.history_tree_id == target.history_tree_id
-                && branch.branch_id != target.main_branch_id
-        })
-    {
-        return Err(unsupported());
+    let target_entries = &previous.commits[&target_branch.head_commit_id].entries;
+    match destination {
+        Destination::EmptyRepository(_) => {
+            // Copy keeps its original empty-root contract, including masked entries.
+            if !target_entries.is_empty()
+                || previous.branches.values().any(|branch| {
+                    branch.history_tree_id == target.history_tree_id
+                        && branch.branch_id != target.main_branch_id
+                })
+            {
+                return Err(unsupported());
+            }
+        }
+        Destination::MoveIntoDiskRoot(_) => {
+            if !source.file_manager_root
+                || !target.file_manager_root
+                || !target_branch.pending_file_versions.is_empty()
+                || previous.histories[&target.history_tree_id].provenance.is_some()
+                || previous.history_boundaries.values().any(|boundary| {
+                    boundary.history_tree_id == target.history_tree_id
+                })
+                || previous.branches.values().any(|branch| {
+                    branch.history_tree_id == target.history_tree_id
+                        && branch.branch_id != target.main_branch_id
+                        && branch.file_id.is_none()
+                })
+            {
+                return Err(unsupported());
+            }
+            let path = name_policy::LookupPath::parse(&request.target_name)?;
+            if namespace::find_unordered_key(target_entries, path.key()).is_some() {
+                return Err(Error::new(
+                    ErrorCode::NameCollision,
+                    "history move cannot replace a retained target entry",
+                ));
+            }
+        }
     }
     let entry = namespace::find_unordered_key(source_entries, source_path.key())
         .filter(|entry| entry.kind == NamespaceEntryKind::File)
@@ -274,7 +333,28 @@ pub(crate) fn apply(
     principal: &str,
     operation: OperationId,
 ) -> Result<Value> {
-    let source = sources(previous, view, request)?;
+    apply_scoped(
+        previous,
+        next,
+        view,
+        Destination::EmptyRepository(request),
+        route,
+        principal,
+        operation,
+    )
+}
+
+pub(in crate::business) fn apply_scoped(
+    previous: &State,
+    next: &mut State,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    destination: Destination<'_>,
+    route: &CopyRoute,
+    principal: &str,
+    operation: OperationId,
+) -> Result<Value> {
+    let source = sources_for(previous, view, destination)?;
+    let request = destination.request();
     let source_repo = &previous.repositories[&request.source_repository_id];
     let target = &previous.repositories[&request.target_repository_id];
     let old_entry = namespace::find_unordered(
@@ -619,6 +699,10 @@ pub(crate) fn apply(
     let id = generated(operation, "commit", "arrival")?;
     let selected_head = next.branches[&selected].head_commit_id.clone();
     let pending = next.branches[&selected].pending_file_versions.clone();
+    // Keep the target's exact old namespace prefix. The copied FILE branch
+    // below remains a one-file snapshot, not a clone of unrelated target files.
+    let mut entries = previous.commits[&request.expected_target_head].entries.clone();
+    entries.push(entry.clone());
     next.commits.insert(
         id.clone(),
         Commit {
@@ -631,13 +715,14 @@ pub(crate) fn apply(
             operation_id: operation,
             author: principal.into(),
             message: "Copy complete file history; retain source".into(),
-            entries: vec![entry],
+            entries,
             namespace_deletions: None,
             pending_file_versions: pending,
             provenance: None,
         },
     );
     let mut file_snapshot = next.commits[&id].clone();
+    file_snapshot.entries = vec![entry];
     file_snapshot.commit_id = file_commit.clone();
     file_snapshot.tree_id = generated(operation, "tree", "arrival-file")?;
     file_snapshot.parent_commit_ids = vec![selected_head];

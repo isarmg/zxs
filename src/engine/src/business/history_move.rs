@@ -136,7 +136,7 @@ impl Engine {
     /// Capture the complete source before any move preparation is allowed to
     /// start. This method makes no mutation, writes no durable intent and never
     /// hides the source. It preserves the current retained-copy restrictions:
-    /// available uniform routes, no backup overrides, empty target, no import
+    /// available uniform routes, no backup overrides, no target replacement, no import
     /// provenance or graph-only copy whose D/undo prefix cannot be proven.
     ///
     /// Move additionally requires one disk-root occurrence outside initialized
@@ -182,7 +182,7 @@ impl Engine {
             &deletion.repository().history_tree_id,
         )?;
         checkpoint(cancellation)?;
-        let source = history_copy::sources(
+        let source = history_copy::move_sources(
             self.state(),
             self.admitted_current_namespaces()?,
             request.namespace,
@@ -196,6 +196,13 @@ impl Engine {
         );
         require_idle(self, request.namespace)?;
         let target = &self.state().repositories[&request.namespace.target_repository_id];
+        let target_head = &self.state().branches[&target.main_branch_id].head_commit_id;
+        if self.state().commits[target_head].entries.len() >= self.config.max_entries {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "move destination has reached its namespace entry limit",
+            ));
+        }
         let target_slots = self.route(&target.primary_slot_id, target.target_copies)?;
         let source_namespace = self.namespace_snapshot(&deletion.repository().main_branch_id)?;
         let target_namespace = self.namespace_snapshot(&target.main_branch_id)?;

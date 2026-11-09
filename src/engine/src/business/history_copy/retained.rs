@@ -132,7 +132,15 @@ pub(super) fn apply(
     let RetainedProjection {
         mut result,
         lifecycle,
-    } = project(previous, next, view, request, route, principal, operation)?;
+    } = project(
+        previous,
+        next,
+        view,
+        Destination::EmptyRepository(request),
+        route,
+        principal,
+        operation,
+    )?;
     result[FIELD] = json!(lifecycle);
     Ok(result)
 }
@@ -149,19 +157,28 @@ pub(in crate::business) fn project(
     previous: &State,
     next: &mut State,
     view: Option<&crate::engine::CurrentNamespaces>,
-    request: &FileHistoryCopyRequest,
+    destination: Destination<'_>,
     route: &CopyRoute,
     principal: &str,
     operation: OperationId,
 ) -> Result<RetainedProjection> {
-    let source = sources(previous, view, request)?;
+    let source = sources_for(previous, view, destination)?;
+    let request = destination.request();
     let source_history = &previous.repositories[&request.source_repository_id].history_tree_id;
     let capture = crate::container_storage::file_database::capture_copy(
         previous,
         &source.file,
         source_history,
     )?;
-    let result = super::apply(previous, next, view, request, route, principal, operation)?;
+    let result = super::apply_scoped(
+        previous,
+        next,
+        view,
+        destination,
+        route,
+        principal,
+        operation,
+    )?;
     let file = identity(operation, &source.file)?;
     let history = &previous.repositories[&request.target_repository_id].history_tree_id;
     let mut events = capture.events;
