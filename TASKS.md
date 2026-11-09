@@ -1,13 +1,13 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`d405db0a`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`d81ffbf1`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
 - **每次相关代码、测试或文档提交，同步更新本文件对应任务的状态、实际验证和下一步。** 合入前重新核对最新主线及组合结果，不沿用旧基线的通过结论。
 - 只有远端 `main` 已包含的切片才能写“已合入”；本地候选、测试源码、编译和独立模型分别标明，不算交付完成。任务 ID 保持稳定，不靠新增重复行掩盖未完成工作。
 - 本清单负责当前任务状态；产品规则链接到各自规范，详细日志留在 CI 或验收归档，不在这里重复堆积。根目录旧日期快照和全面规划是历史材料，不作为当前状态来源。
-- 2026-11-09 最新要求是继续修复已确认问题，本地不运行程序、编译、formatter 或测试，验证改在 GitHub。经明确授权已手动运行当前主线短 CI #929 一次；后续触发仍由协调者按授权安排，不重复触发或重跑不确定轮次，不启用 schedule 或长套件。仓内配置、实际 run、源码修复与尚未复验分别记录，不把未验证修复说成通过；提交由协调者串行安排，不删除历史。见 [短 CI 与暂停范围](docs/ci/development-short-ci.md)。
+- 2026-11-09 最新要求是继续修复已确认问题，CI 在 GitHub；用户现另行允许本地编译服务，这不代表启动本地测试或扩大验证范围。本 SQLite 导入修复仍只读连接器并编辑源码，未本地运行程序、格式器、编译或测试。经明确授权已手动运行指定 SHA 的短 CI #929 及下述 SQLite 维护/导入轮次；后续触发仍由协调者按授权安排，不重复触发不确定轮次，不启用 schedule 或长套件。仓内配置、实际 run、源码修复与尚未复验分别记录，不把未验证修复说成通过；提交由协调者串行安排，不删除历史。见 [短 CI 与暂停范围](docs/ci/development-short-ci.md)。
 - 不承诺旧格式兼容，不增加双读或隐式升级；拒绝不支持的材料时保留数据。更新任务、改名和测试均不是操作真实磁盘、重置实际密码或部署的指令。
 
 状态含义：**已合入**仅指列明切片；**进行中**尚未交付或尚在验证；**阻塞**须先满足明确前提；**未完成**仍有目标缺口；**撤销**不得继续按旧方案实现。
@@ -42,9 +42,10 @@
 
 - SQLite 维护入口 `4898cf90` 的 [#1](https://github.com/isarmg/zxs/actions/runs/42622510157) 因维护器错误改写冻结 `compliance/NOTICE.md` 而失败。`a8890879` 已合入仅删除该写入及移出 patch 允许路径的修复，不改不可变证据、来源校验器或安全门；[维护 #2](https://github.com/isarmg/zxs/actions/runs/42624756203) 在准确 `a88908793c0f1863885601b17f79e34065636a17` 成功完成旧/新来源 verify 与完整补丁生成，记录 224 个活动、107 个退役、4 个 superseded 来源。该 run 明确未编译、测试、audit、commit 或 push，main 仍为受公告影响的 0.37.0，不把准备成功写成已安装或 security 通过。
 - #2 的唯一升级 patch artifact 为 `13678456327`，ZIP SHA-256 `4253f5cdce73040a24a7b3c93422a2f4d7ecf80a23934181f113122720540c43`；来源证据 artifact 为 `13678596175`，ZIP SHA-256 `4446c49d11c6bd5fa387cc3a08929b5228a758176e65484872259460b38ffee0`，2026-11-16 到期。连接器可下载 ZIP，但当前文件能力未能读取其中原始 patch；未通过本地解压或程序运行绕过用户约束。
-- 用户已明确同意临时、受限的 GitHub Actions `contents: write`，只导入上述固定 artifact 并生成待提交 Git 对象。本片基于准确 `d405db0a` 准备 `.github/workflows/sqlite-import.yml`：无任意输入/自动触发，单 job 最长 15 分钟（脚本内部 11 分钟），仅该 job 拥有 `contents: write` 与读取固定 artifact 所需的 `actions: read`，checkout 不保留凭据。API 写入口只允许 blob/tree，不创建 commit/ref、不更新 main、不 push；源码策略只另允许这一完整字节匹配的可移除入口，原三个工作流/七套短矩阵及只读升级入口不变。
-- 导入器须先核原成功 run、两个固定 ZIP 的真实字节摘要、唯一有界条目、证据中的 patch 摘要及官方 0.39.1 完整归档，再检查触发时准确 main 是原 `a8890879` 的后继。记录完整基线差异；patch 涉及路径相对原基线的内容/模式有任何变化即失败，不做模糊合流/三方覆盖。当前 `d405db0a` 相对原基线仅有 move 源码、两份 move 说明与 TASKS，未碰 SQLite 路径；这不代替运行时核对。前后完整来源/metadata 与当前许可/原测试归档链必须通过；所有校验后才上传对象，并核实际远端 tree、未变的 main。拒绝、超时或父变化不得产出成功结论，可能已上传的不可达对象须记录，不自动重试或发布。
-- 固定官方来源仍为 `libsqlite3-sys 0.39.1`，原归档 SHA-256 `14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3`，SQLite C/header/bindings 3.54.1；保留本地 path/改名、bindgen 0.72 适配、完整 MIT 原文和旧证据，不导入 vcpkg/openssl-sys/sqlcipher-src，bundled SQLCipher 明确拒绝。导入入口及组合尚未运行，待唯一合并槽与协调者另行授权触发；完成后移除临时写权限入口。此轮仅连接器读取及源码编辑，没有本地程序/格式化/编译/测试，没有触发流程、创建 Git 对象或推送。实际 SQLite 编译、读写/恢复与 security 均待 GitHub 后续验证；小时 CI 仍暂停。
+- 用户已明确同意临时、受限的 GitHub Actions `contents: write`，只导入上述固定 artifact 并生成待提交 Git 对象。`.github/workflows/sqlite-import.yml` 已于 `d81ffbf1` 合入：无任意输入/自动触发，单 job 最长 15 分钟（脚本内部 11 分钟），仅该 job 拥有 `contents: write` 与读取固定 artifact 所需的 `actions: read`，checkout 不保留凭据。API 写入口只允许 blob/tree，不创建 commit/ref、不更新 main、不 push；源码策略只另允许这一完整字节匹配的可移除入口，原三个工作流/七套短矩阵及只读升级入口不变。
+- 导入器须先核原成功 run、两个固定 ZIP 的真实字节摘要、唯一有界条目、证据中的 patch 摘要及官方 0.39.1 完整归档，再检查触发时准确 main 是原 `a8890879` 的后继。记录完整基线差异；patch 涉及路径相对原基线的内容/模式有任何变化即失败，不做模糊合流/三方覆盖。固定 artifact 仍以原 `a8890879` 为基准；后续业务/维护源码只允许在不改变其 patch 路径及已验证来源契约的条件下保留，不以早期差异记录代替运行时核对。前后完整来源/metadata 与当前许可/原测试归档链必须通过；所有校验后才上传对象，并核实际远端 tree、未变的 main。拒绝、超时或父变化不得产出成功结论，可能已上传的不可达对象须记录，不自动重试或发布。
+- [SQLite 导入 #1](https://github.com/isarmg/zxs/actions/runs/42630224478) 在准确 `d81ffbf145302f38725fc8adf7017869e555383b` 于 2026-11-09 14:00 UTC 失败：`artifact predecessor receipts differ from current main`。错误发生在应用 patch 和上传 Git 对象之前，仅保留失败 evidence artifact `13679224362`。根因是导入器误把 raw external-test mapping 与含 `origin_directory`、`file_count`、`bytes` 的完整 catalog 回执直接全等比较，不是已证实的历史材料漂移。本修复继续核 raw mapping 与已通过 `manage.verify` 的 catalog 原字段完全相同，再将完整 catalog 回执与 artifact 全等比较，并把同一完整回执交给后继 `superseded` 历史核验；不删三个派生字段、不降级路径/原文件哈希/旧来源/许可校验，不改 artifact 摘要或任何 workflow 权限。仅 importer 与必要 TASKS，源码候选待唯一合并槽；未复验，不称导入或 security 已通过。
+- 固定官方来源仍为 `libsqlite3-sys 0.39.1`，原归档 SHA-256 `14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3`，SQLite C/header/bindings 3.54.1；保留本地 path/改名、bindgen 0.72 适配、完整 MIT 原文和旧证据，不导入 vcpkg/openssl-sys/sqlcipher-src，bundled SQLCipher 明确拒绝。导入入口已运行 #1，但未成功生成待提交 tree；修复后仍须协调者另行授权触发，完成后移除临时写权限入口。此轮修复仅连接器读取及源码编辑，没有本地程序/格式化/编译/测试，没有重触发流程、创建 Git 对象或推送。实际 SQLite 编译、读写/恢复与 security 均待 GitHub 后续验证；小时 CI 仍暂停。
 
 - [短 CI #929](https://github.com/isarmg/zxs/actions/runs/42611651585) 于 2026-11-09 11:46 UTC 手动触发一次，准确运行 `372b26cc859b11b7bcb0bda842b8f36103629509`，6 分 39 秒后失败：static、contracts、foundation-platform、smb-protocol 通过；quality、security、build-tools、web 失败，4 项长 job 按策略跳过。以下 T00 表格中的较早 run 均为历史证据，不覆盖本轮组合。
 - quality 官方日志列出的 14 个第一方 Rust 文件已逐块手工应用其准确格式 diff，仅换行、缩进、导入排序及 rustfmt 标准尾逗号/闭包布局，不修改业务条件、字符串、接口或 lint；没有运行本地程序、formatter、编译、测试或复验 CI。这是未提交、未验证的纯格式候选，等待唯一合并槽，不宣称 quality 或 Clippy 已通过。

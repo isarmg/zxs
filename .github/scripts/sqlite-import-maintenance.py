@@ -88,7 +88,14 @@ def require_paths(source, previous, original, current):
                 mappings.append((path.relative_to(ROOT).as_posix(), owner))
     if len(mappings) != 1:
         raise ValueError("predecessor external-test owner is not unique")
-    mapping, owner = mappings[0]
+    mapping, mapping_owner = mappings[0]
+    # manage.verify has authenticated the catalog's origin and content totals.
+    # The mapping stores only raw fields; the artifact archives the FULL receipt.
+    owner = previous["external_tests"][DIRECTORY]
+    derived = ("origin_directory", "file_count", "bytes")
+    raw_owner = {key: value for key, value in owner.items() if key not in derived}
+    if mapping_owner != raw_owner:
+        raise ValueError("raw predecessor mapping differs from the verified catalog receipt")
     packages = source["upgrade_plan"]["packages"]
     if (len(packages) != 1 or packages[0]["directory"] != DIRECTORY
             or packages[0]["package"] != previous["packages"][DIRECTORY]
