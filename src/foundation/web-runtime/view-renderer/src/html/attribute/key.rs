@@ -151,6 +151,9 @@ attributes! {
     /// The `role` attribute defines the role of an element in the context of a web application.
     role "role",
 
+    /// The `rows` attribute specifies the visible number of lines in a text area.
+    rows "rows",
+
     /// The `scope` attribute specifies whether a header cell is a header for a column, row, or group of columns or rows.
     scope "scope",
 

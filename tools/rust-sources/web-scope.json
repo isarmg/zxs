@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "derivation_git_head": "9e54eca136b03baa6264c0f9efa5406b5811c274",
-  "derivation": "WASM MIR plus maintained source, documentation and browser fixtures; not a claim of a minimal runtime feature set",
+  "derivation": "Original WASM MIR plus maintained source, documentation and browser fixtures; textarea/rows added for the exact-request transfer controls after 5e9bb6a, without claiming a new MIR run or a minimal runtime feature set",
   "mir_inputs_sha256": {
     "web_interface-f5a680af9349815e.mir": "efe545fd262dc755c4fcd1fe3335d7e30dcbbd6c9590a315084c750ac2fe3c71",
     "web_app.mir": "1ea31b1ac26b85aa4eef506ad5241a745a82daa188eb97650b1ea724ccffc96d"
@@ -43,6 +43,7 @@
     "tbody",
     "td",
     "template",
+    "textarea",
     "th",
     "thead",
     "time",
@@ -113,6 +114,7 @@
     "readonly",
     "required",
     "role",
+    "rows",
     "scope",
     "size",
     "span",
@@ -163,6 +165,7 @@
     "HtmlTableRowElement",
     "HtmlTableSectionElement",
     "HtmlTemplateElement",
+    "HtmlTextAreaElement",
     "HtmlTimeElement",
     "HtmlTitleElement",
     "HtmlUListElement"
@@ -212,6 +215,7 @@
     "HtmlTableRowElement",
     "HtmlTableSectionElement",
     "HtmlTemplateElement",
+    "HtmlTextAreaElement",
     "HtmlTimeElement",
     "HtmlTitleElement",
     "HtmlUListElement",

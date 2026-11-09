@@ -102,6 +102,7 @@ fn navigation_resets_only_location_owned_state() {
             placement: None,
             tag_edit: None,
             checked_nodes: crate::files::tags::tests::selection(&["old-node"]),
+            node_retirement: Default::default(),
             tag_submission: None,
             publications: [(
                 Kind::Tags,

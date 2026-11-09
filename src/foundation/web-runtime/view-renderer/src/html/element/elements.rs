@@ -294,6 +294,9 @@ html_elements! {
     /// The `<template>` HTML element is a mechanism for holding HTML that is not to be rendered immediately when a page is loaded but may be instantiated subsequently during runtime using JavaScript.
     template HtmlTemplateElement [] true,
 
+    /// The `<textarea>` HTML element is a multiline plain-text editing control.
+    textarea HtmlTextAreaElement [autocomplete, maxlength, readonly, rows] true,
+
     /// The `<th>` HTML element defines a cell as header of a group of table cells. The exact nature of this group is defined by the scope and headers attributes.
     th HtmlTableCellElement [headers, scope] true,
     /// The `<thead>` HTML element defines a set of rows defining the head of the columns of the table.
