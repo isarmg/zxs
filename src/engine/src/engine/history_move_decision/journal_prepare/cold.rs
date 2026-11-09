@@ -58,7 +58,7 @@ impl Engine {
                         operation: candidate.operation_id,
                         sequence: candidate.sequence,
                         candidate_hash: hash.clone(),
-                        snapshot_hash: candidate.snapshot_hash,
+                        snapshot_hash: candidate.snapshot_hash.clone(),
                     };
                     binding.require_record(&receipt.record)?;
                     if observed

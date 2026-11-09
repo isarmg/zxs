@@ -65,6 +65,33 @@ fn application_has_no_file_content_transport_or_picker_entry_points() {
 }
 
 #[test]
+fn retirement_recovery_request_text_stays_bounded_and_account_scoped() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/files/node_retirement");
+    let recovery = std::fs::read_to_string(root.join("recovery.rs")).unwrap();
+    assert!(recovery.contains("mod request_text;"));
+    assert!(recovery.contains("request_text::import_view(state)"));
+    assert!(recovery.contains("request_text::export_view(state, epoch, record)"));
+    assert!(!root.join("recovery/transfer.rs").exists());
+    let source = std::fs::read_to_string(root.join("recovery/request_text.rs")).unwrap();
+    // This is bounded metadata entered as text, not a file picker or body
+    // transport. Keep the whole-application forbidden list above unchanged.
+    for required in [
+        "wire::MAX_REQUEST_BYTES + 4096",
+        "transfer.origin != origin",
+        "transfer.record.principal != principal",
+        "retain_original(&candidate.record)",
+        "<textarea",
+        "maxlength=MAX_TRANSFER_BYTES",
+        "file-node-retirement-transfer",
+    ] {
+        assert!(
+            source.contains(required),
+            "missing request-text boundary {required}"
+        );
+    }
+}
+
+#[test]
 fn management_views_and_bounded_json_transport_remain() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let api = std::fs::read_to_string(root.join("api.rs")).unwrap();

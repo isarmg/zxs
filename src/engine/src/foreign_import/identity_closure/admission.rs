@@ -175,7 +175,7 @@ impl ForeignAdmissionRecipe {
         &self.identities
     }
     pub(crate) fn digest(&self) -> Result<String> {
-        object_hash("foreign-joint-state-recipe", self)
+        Ok(object_hash("foreign-joint-state-recipe", self)?)
     }
     pub(crate) fn first_sequence(&self, fence: u64) -> Result<u64> {
         fence

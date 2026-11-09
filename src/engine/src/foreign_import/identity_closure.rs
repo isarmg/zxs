@@ -108,7 +108,6 @@ struct Mapping<'a> {
     baseline: &'a ForeignIdentityBaseline,
     original: &'a ForeignOriginalStateReport,
     objects: BTreeMap<catalog::Domain, BTreeMap<String, String>>,
-    principals: BTreeMap<String, String>,
     // Separate tags deliberately cannot be parsed as local op/user/plan IDs.
     archived_operations: BTreeMap<String, String>,
     archived_principals: BTreeMap<String, String>,
@@ -190,7 +189,7 @@ impl Engine {
         let baseline = ForeignIdentityBaseline {
             pool_id: current.pool_id.clone(),
             sequence: self.state.sequence,
-            state_hash: object_hash("foreign-identity-current-state", &self.state)?,
+            state_hash: object_hash("foreign-identity-current-state", self.state.as_ref())?,
             configuration_hash: object_hash("foreign-identity-current-configuration", current)?,
             proposed_configuration_hash: object_hash(
                 "foreign-identity-proposed-configuration",
@@ -214,7 +213,7 @@ impl Engine {
         self.require_write()?;
         if self.config.pool_id != target.baseline.pool_id
             || self.state.sequence != target.baseline.sequence
-            || object_hash("foreign-identity-current-state", &self.state)?
+            || object_hash("foreign-identity-current-state", self.state.as_ref())?
                 != target.baseline.state_hash
             || object_hash("foreign-identity-current-configuration", self.config())?
                 != target.baseline.configuration_hash

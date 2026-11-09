@@ -65,7 +65,7 @@ impl BackupCore {
             identity: &'a crate::DiskRegistrationIdentity,
         }
         let decision = AdmittedBackupDecision::from_certificate(self.decision.clone())?;
-        decision
+        Ok(decision
             .projection()
             .selected_nodes()
             .iter()
@@ -79,7 +79,7 @@ impl BackupCore {
                     },
                 )
             })
-            .transpose()
+            .transpose()?)
     }
 
     pub(in crate::engine::membership_transition) fn writer_targets(

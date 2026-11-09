@@ -119,7 +119,7 @@ impl Engine {
             writer.verify_retained_name()?;
             let handle = self.disk_resources.get(disk)?;
             let lease = handle.root.admit_io()?;
-            let seal = validate_seal_observed(&self.config, disk, &mut || lease.check_running())?;
+            let seal = validate_seal_observed(&self.config, disk, &mut |_| lease.check_running())?;
             validate_stored_seal(&handle.seal, &seal)?;
             let scan = crate::journal::scan_configured_at(&handle.root, disk, &self.config)?;
             if scan.torn_tail {

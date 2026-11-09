@@ -1,4 +1,4 @@
-//! Transfer boundary cases; no browser storage, clipboard or network.
+//! Original-request text boundary cases; no browser storage, clipboard or network.
 use super::*;
 
 const ORIGIN: &str = "https://zxs.example:8443";

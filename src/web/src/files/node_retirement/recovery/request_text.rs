@@ -237,5 +237,5 @@ pub(super) fn import_view(state: RwSignal<State>) -> impl IntoView {
 }
 
 #[cfg(test)]
-#[path = "../../../../../../test/web/unit/files/node_retirement/recovery/transfer.rs"]
+#[path = "../../../../../../test/web/unit/files/node_retirement/recovery/request_text.rs"]
 mod tests;

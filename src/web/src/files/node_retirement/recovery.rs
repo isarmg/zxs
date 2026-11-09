@@ -4,7 +4,7 @@ use super::*;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{ErrorCode, OperationId};
 mod receipt_lookup;
-mod transfer;
+mod request_text;
 
 const PREFIX: &str = "zxs:node-retirement:";
 const MAX_RECORDS: usize = 32;
@@ -397,7 +397,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     });
     view! {
         {receipt_lookup::view(state)}
-        {transfer::import_view(state)}
+        {request_text::import_view(state)}
         <Show when=move ||state.with(|s|s.session_active() && (s.files.node_retirement.attempt.is_some() || !s.files.node_retirement.recovery.records.is_empty() || s.files.node_retirement.recovery.error.is_some()))>
             <aside class="zxs-entry-section zxs-stack" data-zxs-node-retirement-recovery="true">
                 <h2 class="zxs-row">{t("节点永久退役：原操作恢复", "Permanent node retirement: original-operation recovery")}</h2>
@@ -408,7 +408,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     let label = format!("{} · {} · {}", record.label, record.file_id, operation);
                     view! { <div class="zxs-stack">
                         <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending||s.files.node_retirement.attempt.as_ref().is_some_and(|attempt|attempt.operation==operation.to_string())) on:click=move |_|open(state,operation,epoch)>{label}</button>
-                        {transfer::export_view(state, epoch, record)}
+                        {request_text::export_view(state, epoch, record)}
                     </div> }
                 }/>
                 {super::view::attempt_view(state)}
