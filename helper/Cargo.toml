@@ -18,7 +18,6 @@ command-line.workspace = true
 data-serialization.workspace = true
 json-codec.workspace = true
 storage-engine.workspace = true
-storage-server.workspace = true
 tokio.workspace = true
 sha2 = { version = "0.11.0", path = "../src/foundation/cryptography/sha2" }
 http-routing = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"], path = "../src/foundation/networking/http-routing" }
@@ -27,6 +26,7 @@ http-routing = { version = "0.8.9", default-features = false, features = ["http1
 sha2 = { version = "0.11.0", path = "../src/foundation/cryptography/sha2" }
 
 [dev-dependencies]
+storage-server.workspace = true
 service-stack = { version = "0.5", features = ["util"], path = "../src/foundation/networking/service-stack" }
 tempfile.workspace = true
 

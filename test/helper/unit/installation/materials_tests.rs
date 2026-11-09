@@ -1,18 +1,33 @@
 use super::*;
 
 fn checksum(bytes: &[u8]) -> &'static str {
-    Box::leak(format!("{:x}", Sha256::digest(bytes)).into_boxed_str())
+    Box::leak(platform_io::lower_hex(&Sha256::digest(bytes)).into_boxed_str())
 }
 fn fixture() -> (Embedded, super::super::payload::Payload) {
     let payload = super::super::payload::Payload {
-        bytes: b"bounded payload fixture", version: "fixture", commit: "source", tree: "tree",
-        target: "x86_64-unknown-linux-gnu", sha256: "payload-digest",
+        bytes: b"bounded payload fixture",
+        version: "fixture",
+        commit: "source",
+        tree: "tree",
+        target: "x86_64-unknown-linux-gnu",
+        sha256: "payload-digest",
     };
     let archive = b"\x1f\x8b\x08bounded byte-binding fixture, not an executable archive";
     let manifest = b"{\"scope\":\"fixture only\"}\n";
-    (Embedded { archive, manifest, archive_sha256: checksum(archive), manifest_sha256: checksum(manifest),
-        version: payload.version, commit: payload.commit, tree: payload.tree,
-        target: payload.target, payload_sha256: payload.sha256 }, payload)
+    (
+        Embedded {
+            archive,
+            manifest,
+            archive_sha256: checksum(archive),
+            manifest_sha256: checksum(manifest),
+            version: payload.version,
+            commit: payload.commit,
+            tree: payload.tree,
+            target: payload.target,
+            payload_sha256: payload.sha256,
+        },
+        payload,
+    )
 }
 
 #[test]
@@ -29,10 +44,24 @@ fn verified_material_bytes_bind_payload_source_and_exact_manifest_without_extrac
 #[test]
 fn altered_materials_or_payload_identity_never_produce_a_verified_export() {
     let (materials, payload) = fixture();
-    for altered in [Embedded { archive: b"different", ..materials },
-                    Embedded { manifest: b"different", ..materials },
-                    Embedded { commit: "another source", ..materials },
-                    Embedded { payload_sha256: "another program", ..materials }] {
+    for altered in [
+        Embedded {
+            archive: b"different",
+            ..materials
+        },
+        Embedded {
+            manifest: b"different",
+            ..materials
+        },
+        Embedded {
+            commit: "another source",
+            ..materials
+        },
+        Embedded {
+            payload_sha256: "another program",
+            ..materials
+        },
+    ] {
         assert!(altered.verify(payload).is_err());
     }
 }

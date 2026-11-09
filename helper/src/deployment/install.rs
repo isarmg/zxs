@@ -163,7 +163,7 @@ fn build(input: Input) -> Result<Prepared> {
         unit,
         samba,
     };
-    let request_digest = format!("{:x}", Sha256::digest(json_codec::to_vec(&plan)?));
+    let request_digest = platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(&plan)?));
     let preview = Preview {
         intent_directory: format!("/zxs/.zxs-helper-config-intent-{request_digest}"),
         completion_directory: format!("/zxs/.zxs-helper-config-installed-{request_digest}"),

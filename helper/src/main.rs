@@ -3,23 +3,16 @@ mod account;
 mod authority;
 mod configuration;
 mod console;
-mod credentials;
 mod deployment;
-mod disk_addition;
-mod disk_databases;
-mod object_databases;
 mod disk_database_rescue;
-mod disk_readmission;
-mod disk_removal;
-mod foreign_chain;
+mod disk_databases;
 mod host;
 mod initialization;
 mod installation;
-mod managed_layout;
-mod managed_pool;
+mod maintenance;
+mod object_databases;
 mod private_io;
 mod scrub;
-mod service_worker;
 mod system_program;
 use command_line::{Parser, Subcommand};
 use json_codec::json;
@@ -72,24 +65,6 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Internal privilege-separated worker, never an alternate public initializer.
-    #[command(hide = true)]
-    InternalStorageWorker,
-    /// Internal current-pool addition owner under the configured service UID.
-    #[command(hide = true)]
-    InternalAdditionWorker,
-    #[command(hide = true)]
-    InternalForeignChainWorker,
-    #[command(hide = true)]
-    InternalRemovalWorker,
-    #[command(hide = true)]
-    InternalReadmissionWorker,
-    #[command(hide = true)]
-    InternalTerminalChainWorker,
-    #[command(hide = true)]
-    InternalChainReadmissionWorker,
-    #[command(hide = true)]
-    InternalChainTargetWorker,
     /// Manually serve the independent maintenance console; no login or autostart.
     Serve(console::Options),
     /// Inspect or install the matching embedded ZXS program only; no service setup.
@@ -288,14 +263,6 @@ fn run(args: Args) -> Result<()> {
         None
     };
     match command {
-        Command::InternalRemovalWorker => disk_removal::worker_entry(),
-        Command::InternalReadmissionWorker => disk_readmission::worker_entry(),
-        Command::InternalChainTargetWorker => disk_removal::chain_target::worker_entry(),
-        Command::InternalChainReadmissionWorker => disk_removal::chain_readmission::worker_entry(),
-        Command::InternalTerminalChainWorker => disk_removal::chain_archive::worker_entry(),
-        Command::InternalAdditionWorker => disk_addition::worker_entry(),
-        Command::InternalForeignChainWorker => foreign_chain::worker_entry(),
-        Command::InternalStorageWorker => initialization::storage::process::entry(),
         Command::Serve(options) => console::run(options),
         Command::Install { command } => installation::run(command),
         Command::Initialization { command } => initialization::run(command),
@@ -429,8 +396,12 @@ fn run(args: Args) -> Result<()> {
 /// export. Keep its host lease until the synchronous command and all owners end.
 fn requires_service_exclusion(command: &Command) -> bool {
     match command {
-        Command::ObjectDatabase { command } => object_databases::requires_service_exclusion(command),
-        Command::DiskDatabaseRescue { command } => disk_database_rescue::requires_service_exclusion(command),
+        Command::ObjectDatabase { command } => {
+            object_databases::requires_service_exclusion(command)
+        }
+        Command::DiskDatabaseRescue { command } => {
+            disk_database_rescue::requires_service_exclusion(command)
+        }
         Command::RestoreSystem { .. }
         | Command::DiskDatabases(_)
         | Command::RecoveryPreview { .. }
@@ -442,14 +413,7 @@ fn requires_service_exclusion(command: &Command) -> bool {
             accept_permanent_loss,
             ..
         } => *accept_permanent_loss,
-        Command::InternalChainTargetWorker
-        | Command::InternalChainReadmissionWorker
-        | Command::InternalTerminalChainWorker
-        | Command::InternalReadmissionWorker
-        | Command::InternalRemovalWorker
-        | Command::InternalAdditionWorker
-        | Command::InternalStorageWorker
-        | Command::Serve(_)
+        Command::Serve(_)
         | Command::Install { .. }
         | Command::Host { .. }
         | Command::Initialization { .. }

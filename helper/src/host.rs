@@ -57,7 +57,7 @@ fn build() -> Result<(HostRoot, Preview)> {
         owner_uid: 0,
         mode: "0755",
     };
-    let request_digest = format!("{:x}", Sha256::digest(json_codec::to_vec(&plan)?));
+    let request_digest = platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(&plan)?));
     Ok((
         root,
         Preview {

@@ -261,7 +261,7 @@ fn snapshot(file: &File, path: &str) -> Result<Snapshot> {
     Ok(Snapshot {
         path: path.into(),
         metadata,
-        sha256: format!("{:x}", hash.finalize()),
+        sha256: platform_io::lower_hex(&hash.finalize()),
     })
 }
 struct Joined {

@@ -1,14 +1,28 @@
 # 辅助工具
 
-`storage-helper` 生成 `zxs-helper`。它是在本机显式运行的离线辅助工具，不是远程管理客户端，不启动 ZXS 守护进程。普通文件访问和日常账户管理仍由主服务 Web 与独立 SMB 提供。辅助工具须配备自身独立 Web 控制台，以 root 手工运行、默认监听 `0.0.0.0`、无需认证直接打开，不依赖 systemd 或自启，退出即停止；并负责首次账户/系统及必要磁盘配置初始化、ZXS 管理员与 SMB 密码重置、一条龙 ZXS 安装及 systemd/SMB 配置。发行物还须内置匹配 ZXS 载荷，用于离线首装或仅程序文件修复。本片加入独立 Web 控制台源码，提供逐盘正文检查、核验后下载、真实退出及内置 ZXS 程序的固定路径首装；完整控制台、初始化/重置、配置和覆盖修复仍未实现，当前组合未构建或运行。具体接口和限制见[Web 首片](../design/helper-console.md)及[程序首装](../design/helper-program-installation.md)。
+`storage-helper` 生成 `zxs-helper`。它是在本机显式运行的离线辅助工具，不是远程管理客户端，不启动 ZXS 守护进程。普通文件访问和日常账户管理仍由主服务 Web 与独立 SMB 提供。辅助工具须配备自身独立 Web 控制台，以 root 手工运行、默认监听 `0.0.0.0`、无需认证直接打开，不依赖 systemd 或自启，退出即停止；并负责首次账户/系统及必要磁盘配置初始化、ZXS 管理员与 SMB 密码重置、一条龙 ZXS 安装及 systemd/SMB 配置。发行物还须内置匹配 ZXS 载荷，用于离线首装或仅程序文件修复。已实现细项及未完成的一条龙准备、真实部署和服务启用边界以根 TASKS 为准，不能把单独原操作或本地定向检查当完整安装验收。具体接口和限制见[Web 首片](../design/helper-console.md)及[程序首装](../design/helper-program-installation.md)。
 
-源码放在项目根 [`helper/`](../../helper/)，测试集中在 `test/helper/`；与服务共享根工作区、锁文件及 ZXS 的通用格式、验证和持久化能力。辅助工具专用流程、参数、报告和退出策略在本目录实现。构建命令为 `cargo build --locked --offline -p storage-helper`；当前只生成 `zxs-helper`，不安装旧名称别名。
+独立 Web、CLI 和救援工具源码放在项目根 [`helper/`](../../helper/)，其测试集中在 `test/helper/`；服务语义的离线管理协调器位于 `src/server/src/offline/`，对应测试在 `test/server/unit/offline/`，通用平台原语测试在 `test/platform/`。各部分共享根工作区、锁文件及 ZXS 的通用格式、验证和持久化能力，管理协调器不另起网络服务。构建命令为 `cargo build --locked --offline -p storage-helper`；当前只生成 `zxs-helper`，不安装旧名称别名。
 
 已确定将**磁盘添加、注销/移除、外来磁盘接入和磁盘初始化**移入此工具，并取消用户发起的“计划下线”动作。失联、不可用和既有 Disabled 状态仍须如实展示。这是职责决策，不表示四项操作已经迁完；分项现状、原操作恢复及切换门槛见[辅助工具磁盘管理](../design/helper-disk-management.md)和[架构决策](../adr/0017-helper-disk-management.md)。当前可执行命令以下述各节及 `--help` 为准，不注册只会假报成功的磁盘管理占位命令。
 
-所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；独立 Web 已有管理员密码重置，需手动输入和独立确认；实际 SMB 密码重置尚未实现。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
+所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；独立 Web 已有管理员密码重置，需手动输入和独立确认；实际 SMB 密码重置已有受限本地 tdbsam 入口，真实认证仍待验收。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
 
 需要打开或恢复池的命令支持[四项保留证据运行期上限](../19-capacity-and-performance.md#runtime-retained-workspace-limits)，作为全局参数同时提供；不带时使用原配置基线。`offline-check` / `offline-export` 直接核验单盘，不借这些参数改变证明或载荷规则。恢复前应配置足够额度，不能通过删除已提交清单释放名额。
+
+## 管理语义与独立进程边界
+
+辅助 Web 的使用入口仍是独立 `zxs-helper`，不依赖已安装的守护进程或网络管理服务。首次管理员、现有密码重置、首次存储批次与磁盘成员/退役协调由 `src/server/src/offline/` 单一实现拥有，通过内嵌同版 `zxs` 的隐藏 `internal-maintenance` 入口执行。该分支先于日志初始化、普通启动准入、Tokio 与监听器退出；不会启动、启用或重新加载任何系统服务。
+
+helper 生产 Cargo 图只消费既定 authentication/platform-io/storage-engine；storage-server 仅留给真实启动集成测试。协议枚举位于可移植 contract，通过 engine 的既有契约边界导出。未知格式/操作/字段仍拒绝。HTTP origin/CSRF、停机状态、单操作槽与 64 KiB 请求上限仍由 helper 控制，ZXS 在真实 IPC 边界解析原操作的严格类型，管理权限、目录身份、lease 和永久回执语义保持原实现。需要服务 UID 的操作仍由同一 ZXS 程序再降权运行，真实/effective UID/GID 和 supplementary groups 检查不变。
+
+程序只来自经过发行绑定和 SHA-256 核验的内嵌载荷：写入匿名 memfd、设为 0555 并封住写入/增长/缩短后，通过持有 FD 执行；不选择用户提供的路径、不回退 PATH 或已安装文件、不落盘解包、不下载。宿主拒绝匿名执行时明确失败，不修改安全策略。无内嵌载荷的开发构建仍可显示控制台与做原有离线核验，但这些管理操作明确返回 `maintenance_payload_unavailable`，不会借用其他版本程序。
+
+管道头限制 16 KiB，请求正文限制 64 KiB；一般回复限制 64 KiB，完整终态链/重入提案保留原来的 128 MiB 加 64 KiB 上限。JSON 正文只在真正传输处编码，helper 转发原响应字节，不把领域对象编码再解析以调用自己。密码不进 argv/环境/日志/落盘临时文件；请求缓冲用 SecretBytes 清除，仍不宣称能清除系统/库的每一份临时拷贝。失败、过长输出与浏览器断开均排空并等待所有子进程，不自动重试或宣称回滚，原计划和实际回执继续决定恢复。
+
+额外代价是每次管理操作核验并复制最多 256 MiB 的内嵌程序到匿名内存，以及一个根协调进程；原降权工作进程与 fsync 顺序不减少。原子文件与 bundle 发布只是 platform-io 的通用文件系统原语，未把业务信封或认证政策降到底层。
+
+本轮准确组合的定向验证以 TASKS T00 为准：helper/zxs 生产目标、管道与原操作门禁、所选文件发布测试已验证；下列历史切片中“未编译/未运行”的描述不是本轮组合结论。未运行的专项、完整发行内嵌进程、真实密码/系统盘及全套验收仍不计为通过。
 
 ## 同载荷程序修复
 
@@ -31,7 +45,7 @@ zxs-helper --root /srv/zxs/new-system restore-system \
 
 上述为多成员示例。实际至少需要固定配置的 Q = floor(N/2)+1 个可信原元数据成员，N ≥ 1；单成员池可只传唯一旧盘。不能拿空盘、替换盘或任意目录替代，不能按在线数量重算成员集合。所有新初始化盘保存池配置锚；缺锚旧盘不兼容，不自动补锚或迁移。核心校验发布证据、成员与池身份并保留冲突拒绝规则。工具不格式化磁盘、不自动重置、不在多成员池中根据不足 Q 个旧成员推断整个池的最终状态。单成员盘永久丢失不具备原池恢复保证。
 
-输出中的 `credential_recovery_snapshot_available` 只表示恢复后的池中存在凭据灾备快照，不表示已创建或替换管理面权威凭据。工具不写旧 `auth.json` 缓存，也不覆盖独立系统目录中的 `management-auth.json`。随后启动守护进程或重试存储发现都不会自动导入该快照，无论是否已有权威标记。有效的本机管理凭据继续作为唯一权威；凭据缺失或损坏时保持认证关闭。需要恢复管理凭据时，保留此次恢复目录作为核验依据，停止相关服务，并在另行准备的干净系统状态目录中走受本机 bootstrap 授权保护、明确接受旧凭据风险的恢复流程。不要删除或覆盖现有管理凭据、权威标记或部分恢复目录来绕过保护；工具不提供凭据重置命令。
+输出中的 `credential_recovery_snapshot_available` 只表示恢复后的池中存在凭据灾备快照，不表示已创建或替换管理面权威凭据。工具不写旧 `auth.json` 缓存，也不覆盖独立系统目录中的 `management-auth.json`。随后启动守护进程或重试存储发现都不会自动导入该快照，无论是否已有权威标记。有效的本机管理凭据继续作为唯一权威；凭据缺失或损坏时保持认证关闭。需要恢复管理凭据时，保留此次恢复目录作为核验依据，停止相关服务，并在另行准备的干净系统状态目录中走受本机 bootstrap 授权保护、明确接受旧凭据风险的恢复流程。不要删除或覆盖现有管理凭据、权威标记或部分恢复目录来绕过保护；`restore-system` 不自动重置凭据；独立管理员重置须另走显式预览和确认。
 
 `restore-system` 的 `restored:true` 只表示原权威 State 恢复。新增 `restored_scope:authoritative-system-state`、`all_database_scopes_restored:false` 和逐盘当前/历史派生状态，避免把某一可选库失败或尚未实现的三范围恢复报告为全部完成。权威恢复后才维护派生盘库；错误不授权删除恢复材料或重复原决定。
 
@@ -49,7 +63,7 @@ zxs-helper --root /srv/zxs/system recovery-commit RECOVERY_ID \
 
 仅支持已经获得 ACCEPT 但尚未发布、所有原始数据盘都可访问且正文确已不可修复的操作。执行时必须持有池的独占锁及适当本机权限。先审查持久预览和损失范围，再提交完全匹配的摘要并明确接受永久数据损失。缺盘替换、自动重试发布、自动 reset 和任意撤销已发布历史均不属于此能力。
 
-`recovery-commit` 若在原操作已发布之后因索引重建或工作区核对失败，仍以非零退出码报告本次恢复未就绪；诊断明确包含原 operation ID、已发布事实、恢复阶段及具体来源。这个退出码不表示原操作未发生，不能换新操作号或另一恢复计划重做。保留原计划、摘要及恢复材料，排除故障后按既有严格恢复准入核对；此工具尚未提供绕过 Engine 重开失败的独立收据查询。
+`recovery-commit` 若在原操作已发布之后因索引重建或工作区核对失败，仍以非零退出码报告本次恢复未就绪；诊断明确包含原 operation ID、已发布事实、恢复阶段及具体来源。这个退出码不表示原操作未发生，不能换新操作号或另一恢复计划重做。保留原计划、摘要及恢复材料，排除故障后按既有严格恢复准入核对；此恢复命令尚未提供绕过 Engine 重开失败的独立收据查询。
 
 <a id="integrity-scrub"></a>
 
@@ -193,7 +207,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 
 ## 首批空目录存储初始化
 
-独立 Web 可在已完成管理账户后，预览并明确初始化 `/zxs/data/disks` 下全部已存在的空直接子目录。root 编排通过同一二进制的非 root 服务身份工作进程使用现有 activation/Engine 协议，完成前发布凭据灾备快照并核系统及逐盘 current/history SQLite。它不挂载、格式化、创建 Unix 账户或启动服务，不接纳外来盘；完整安装就绪与正常运行最终门禁仍未完成。原计划、生命周期交接、部分失败及未运行验证见[首批存储](../design/helper-first-storage-batch.md)。
+独立 Web 可在已完成管理账户后，预览并明确初始化 `/zxs/data/disks` 下全部已存在的空直接子目录。root 编排通过内嵌同版 ZXS 的非 root 服务身份工作进程使用现有 activation/Engine 协议，完成前发布凭据灾备快照并核系统及逐盘 current/history SQLite。它不挂载、格式化、创建 Unix 账户或启动服务，不接纳外来盘；完整安装就绪与正常运行最终门禁仍未完成。原计划、生命周期交接、部分失败及未运行验证见[首批存储](../design/helper-first-storage-batch.md)。
 
 ## 独立 Web 的本地 Samba 密码重置
 
@@ -201,7 +215,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 
 ## 已有池的空目录 Add 纵切
 
-独立 Web 可预览、明确添加并初始化当前 production 池的准确空目录批次，或核对/继续原意图。root 计划与服务 UID worker 在 helper，现有服务和工具共用原生 Add 控制记录、archive/joint/activation 及永久回执。只接受固定布局中完整原根集合和本批新空根，不格式化、不接纳外来盘、不提供计划下线；移除、外来完整链接纳及完整就绪仍未完成。源码未编译/测试/审查/CI，无真实系统操作，见[范围与失败语义](../design/helper-active-disk-addition.md)。
+独立 Web 可预览、明确添加并初始化当前 production 池的准确空目录批次，或核对/继续原意图。root 计划与服务 UID worker 位于 ZXS 无监听协调器，由 helper 经准确内嵌程序请求；现有服务和工具共用原生 Add 控制记录、archive/joint/activation 及永久回执。只接受固定布局中完整原根集合和本批新空根，不格式化、不接纳外来盘、不提供计划下线；移除、外来完整链接纳及完整就绪仍未完成。源码未编译/测试/审查/CI，无真实系统操作，见[范围与失败语义](../design/helper-active-disk-addition.md)。
 
 ## 非最终元数据成员的注销
 

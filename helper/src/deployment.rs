@@ -1,9 +1,9 @@
 //! Version-bound deployment preparation and confirmed fixed-path configuration
 //! installation. Never reloads, starts or enables a service/account manager.
 pub(crate) mod install;
-pub(crate) mod samba_password;
 mod model;
 mod render;
+pub(crate) mod samba_password;
 
 use crate::{
     Result, installation, print,
@@ -147,7 +147,7 @@ fn build(input: Input) -> Result<(BundleDestination, Preview)> {
         unit,
         samba,
     };
-    let request_digest = format!("{:x}", Sha256::digest(json_codec::to_vec(&plan)?));
+    let request_digest = platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(&plan)?));
     let destination = format!("{PARENT}/.zxs-helper-deployment-{request_digest}");
     Ok((
         parent,

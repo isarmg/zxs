@@ -125,7 +125,9 @@ fn hex(value: &str, length: usize) -> Result<()> {
     Ok(())
 }
 fn digest(plan: &Plan) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(json_codec::to_vec(plan)?)))
+    Ok(platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(
+        plan,
+    )?)))
 }
 fn prepare(input: Input) -> Result<Prepared> {
     if rustix::process::getuid().as_raw() != 0 || rustix::process::geteuid().as_raw() != 0 {

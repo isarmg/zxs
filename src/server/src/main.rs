@@ -1,3 +1,4 @@
+mod offline;
 use command_line::Parser;
 use std::{net::SocketAddr, path::PathBuf};
 use storage_server::ServerConfig;
@@ -31,6 +32,8 @@ fn log_filter_from_env() -> std::result::Result<EnvFilter, LogFilterError> {
     after_help = "The current daemon requires an existing root-owned /zxs maintenance root and holds its exclusive OS lease until all runtime workers exit. Prepare the root with zxs-helper host preview/prepare. The root is not proof of completed system initialization. Before any listener or automatic directory creation, normal startup requires existing private SYSTEM/management directories, storage configuration and completed initial activation; finish first preparation with the independent zxs-helper. Existing storage/authentication faults remain faults, never a fresh account setup. Stop older or nonparticipating writers separately; no service manager is invoked."
 )]
 struct Args {
+    #[command(subcommand)]
+    command: Option<offline::Command>,
     /// Host retained-workspace record limit; supply all four limits or none.
     #[arg(long, requires_all = ["max_retained_workspaces_per_principal", "max_retained_workspace_metadata_bytes", "max_retained_workspace_metadata_bytes_per_principal"])]
     max_retained_workspaces: Option<std::num::NonZeroUsize>,
@@ -139,6 +142,16 @@ impl Args {
 
 fn main() -> std::process::ExitCode {
     let mut args = Args::parse();
+    // This branch must precede logging, host startup admission, Tokio and listeners.
+    if let Some(command) = args.command.take() {
+        return match offline::run(command) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("zxs: offline maintenance failed: {error}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
     let log_filter = match log_filter_from_env() {
         Ok(filter) => filter,
         Err(error) => {

@@ -38,7 +38,7 @@ impl Payload {
             || self.target != "x86_64-unknown-linux-gnu"
             || self.bytes.len() < 64
             || self.bytes.len() > 256 * 1024 * 1024
-            || format!("{:x}", Sha256::digest(self.bytes)) != self.sha256
+            || platform_io::lower_hex(&Sha256::digest(self.bytes)) != self.sha256
         {
             return Err("embedded ZXS payload identity, size or SHA-256 mismatch; no installation was attempted".into());
         }

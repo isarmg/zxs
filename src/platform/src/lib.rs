@@ -16,13 +16,16 @@ compile_error!(
 
 pub mod disk_smart;
 pub mod fs_safety;
+pub mod local_account;
 pub mod payload;
+pub mod publication;
 pub mod schema_identity;
 pub mod secret;
 pub mod service_lease;
 pub mod sqlite;
 
-fn lower_hex(bytes: &[u8]) -> String {
+/// Canonical lowercase hexadecimal for already-computed digest bytes.
+pub fn lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

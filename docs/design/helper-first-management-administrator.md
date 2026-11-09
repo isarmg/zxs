@@ -16,7 +16,7 @@
 
 通用 AuthStore 新增类型化初始候选与 no-clobber 安装，原正常初始化也共用该候选生成，保留当前用户名/密码规则、代数 1 和空会话。首次候选包含 verifier，不保存初始密码明文，不公开返回或打印。管理初始化意图编码和管理权威 marker 字节与现有 ZXS writer 共用，不复制另一份格式或增加旧格式兼容。
 
-root 选择、空树证明、计划、日志、Web 与中断编排均放 `helper/src/initialization/administrator*`。平台新增由已持有 fd 构造行政私有目录的通用能力，保持原 UID/GID，无路径重开；原 owner-only 运行时入口不放宽。所有 marker/凭据写入锚定原目录，身份变化阻断发布，不把新路径对象当原计划目标。
+Web 准入与入口在 helper；root 选择、空树证明、计划、日志和中断协调的单一实现位于 `src/server/src/offline/initialization/administrator*`，由同版内嵌程序的无监听管道入口调用。平台新增由已持有 fd 构造行政私有目录的通用能力，保持原 UID/GID，无路径重开；原 owner-only 运行时入口不放宽。所有 marker/凭据写入锚定原目录，身份变化阻断发布，不把新路径对象当原计划目标。
 
 ## 原子文件与跨文件持久顺序
 

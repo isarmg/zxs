@@ -28,6 +28,7 @@ tokio = { version = "1.53.2", default-features = false, features = ["rt"], optio
 zeroize = {version = "1.8", path = "../foundation/cryptography/zeroize"}
 
 [dev-dependencies]
+tracing = { version = "0.1", default-features = false, features = ["fmt"], path = "../foundation/diagnostics/tracing" }
 json-codec.workspace = true
 log = { path = "../foundation/diagnostics/log", features = ["std"] }
 tokio = { version = "1.53.2", default-features = false, features = ["rt-multi-thread", "macros"], path = "../foundation/concurrency/tokio" }

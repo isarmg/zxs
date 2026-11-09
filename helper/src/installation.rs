@@ -1,9 +1,11 @@
 //! Embedded program-only installation and separately confirmed same-payload
-//! repair. Neither initializes storage, configures services, nor executes ZXS.
-mod payload;
+//! repair. Install/repair never initialize storage, configure or start services.
+//! The separate maintenance transport runs only the sealed matching payload.
 mod baseline;
-pub(crate) mod repair;
 pub(crate) mod materials;
+mod payload;
+pub(crate) mod repair;
+pub(crate) mod worker;
 pub(crate) use payload::Metadata as PayloadMetadata;
 pub(crate) fn verified_payload_metadata() -> Result<PayloadMetadata> {
     Ok(payload::required()?.metadata())
@@ -38,7 +40,10 @@ impl InstalledProgram {
         Ok(())
     }
 }
-use crate::{Result, print, private_io::{BundleDestination, ProgramDestination}};
+use crate::{
+    Result, print,
+    private_io::{BundleDestination, ProgramDestination},
+};
 use command_line::Subcommand;
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
@@ -131,7 +136,7 @@ fn prepare(payload: payload::Payload) -> Result<(BundleDestination, ProgramDesti
         host_inode: host.identity().inode.to_string(),
         payload: payload.metadata(),
     };
-    let digest = format!("{:x}", Sha256::digest(json_codec::to_vec(&plan)?));
+    let digest = platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(&plan)?));
     Ok((
         host,
         destination,
@@ -167,7 +172,10 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     host.publish(baseline::NAME, &[("receipt.json", &baseline)])?;
     host.recheck()?;
     if !destination.matches_or_absent(payload.bytes)? {
-        return Err("program disappeared after baseline publication; no successful installation is claimed".into());
+        return Err(
+            "program disappeared after baseline publication; no successful installation is claimed"
+                .into(),
+        );
     }
     Ok(
         json!({"state":if created {"new_program_installed"} else {"matching_program_durably_verified"}, "destination":DESTINATION, "payload":payload.metadata(), "request_digest":preview.request_digest, "same_payload_baseline_recorded":true, "system_initialized":false, "service_configured":false, "service_started":false, "replaced_different_program":false}),
@@ -179,13 +187,22 @@ pub(crate) fn availability() -> json_codec::Value {
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
         Command::RepairPreview => print(repair::preview()?),
-        Command::RepairRecoverPreview { request_digest } => print(repair::recover_preview(repair::Original { request_digest })?),
-        Command::RepairCommit { request_digest, confirm_same_payload_program_only, external_administration_stopped } => {
+        Command::RepairRecoverPreview { request_digest } => {
+            print(repair::recover_preview(repair::Original {
+                request_digest,
+            })?)
+        }
+        Command::RepairCommit {
+            request_digest,
+            confirm_same_payload_program_only,
+            external_administration_stopped,
+        } => {
             if !confirm_same_payload_program_only {
                 return Err("review the exact repair and pass --confirm-same-payload-program-only; no program was inspected or changed".into());
             }
             print(repair::commit(repair::Commit {
-                request_digest, confirmation: "repair-same-payload-program-only".into(),
+                request_digest,
+                confirmation: "repair-same-payload-program-only".into(),
                 external_administration_stopped,
             })?)
         }

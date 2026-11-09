@@ -94,7 +94,7 @@ fn main() {
             && matches!(u16::from_le_bytes([bytes[16], bytes[17]]), 2 | 3),
         "payload must be an ELF64 little-endian x86_64 executable"
     );
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest = crate::lower_hex(&Sha256::digest(&bytes));
     assert_eq!(
         digest,
         required("ZXS_HELPER_PAYLOAD_SHA256"),
@@ -106,7 +106,25 @@ fn main() {
         "pub(super) const EMBEDDED: Option<Payload> = Some(Payload {{ bytes: include_bytes!(concat!(env!(\"OUT_DIR\"), \"/payload-zxs\")), version: {version:?}, commit: {commit:?}, tree: {tree:?}, target: {TARGET:?}, sha256: {digest:?} }});\n"
     );
     fs::write(out.join("install_payload.rs"), generated).expect("write embedded payload identity");
-    materials::prepare(&out, materials::Binding {
-        version: &version, commit: &commit, tree: &tree, target: TARGET, payload_sha256: &digest,
-    });
+    materials::prepare(
+        &out,
+        materials::Binding {
+            version: &version,
+            commit: &commit,
+            tree: &tree,
+            target: TARGET,
+            payload_sha256: &digest,
+        },
+    );
+}
+
+// Build scripts cannot depend on platform-io; this byte formatter has no I/O.
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push(HEX[usize::from(byte >> 4)] as char);
+        text.push(HEX[usize::from(byte & 15)] as char);
+    }
+    text
 }

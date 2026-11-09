@@ -123,7 +123,7 @@ fn build(input: Input) -> Result<Prepared> {
         service_account: account.snapshot(),
         directories: directories.policies(),
     };
-    let request_digest = format!("{:x}", Sha256::digest(json_codec::to_vec(&plan)?));
+    let request_digest = platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(&plan)?));
     let (intent, completion) = names(&request_digest);
     let observed_directories = directories.inspect(&request_digest)?;
     let prepared = Prepared {
@@ -149,16 +149,32 @@ fn build(input: Input) -> Result<Prepared> {
 
 fn bind_original(mut prepared: Prepared) -> Result<Prepared> {
     let (intent, completion) = names(&prepared.preview.request_digest);
-    let original = prepared.host.read_operation(&intent, "plan.json", MAX_RECORD_BYTES)?;
+    let original = prepared
+        .host
+        .read_operation(&intent, "plan.json", MAX_RECORD_BYTES)?;
     if let Some(bytes) = &original {
         if *bytes != json_codec::to_vec_pretty(&prepared.preview.plan)? {
-            return Err("runtime directory intent differs from the exact plan; all material was preserved".into());
+            return Err(
+                "runtime directory intent differs from the exact plan; all material was preserved"
+                    .into(),
+            );
         }
     }
-    if prepared.preview.observed_directories.iter().any(|entry| matches!(entry, directories::Observation::OriginalPending { .. })) && original.is_none() {
-        return Err("runtime pending directories have no complete original intent; nothing was repaired".into());
+    if prepared
+        .preview
+        .observed_directories
+        .iter()
+        .any(|entry| matches!(entry, directories::Observation::OriginalPending { .. }))
+        && original.is_none()
+    {
+        return Err(
+            "runtime pending directories have no complete original intent; nothing was repaired"
+                .into(),
+        );
     }
-    let receipt = prepared.host.read_operation(&completion, "receipt.json", MAX_RECORD_BYTES)?;
+    let receipt = prepared
+        .host
+        .read_operation(&completion, "receipt.json", MAX_RECORD_BYTES)?;
     let phase = prepared.directories.completion_phase(&completion)?;
     match receipt {
         Some(bytes) => {
@@ -171,11 +187,15 @@ fn bind_original(mut prepared: Prepared) -> Result<Prepared> {
             directories::CompletionPhase::Absent => {}
             directories::CompletionPhase::PendingBundle => {
                 if original.is_none() {
-                    return Err("runtime completion started without its complete original intent".into());
+                    return Err(
+                        "runtime completion started without its complete original intent".into(),
+                    );
                 }
                 // Completion staging is created only after every path exists.
                 // Its absence of a receipt is not authority to recreate paths.
-                prepared.directories.completed(&prepared.preview.request_digest)?;
+                prepared
+                    .directories
+                    .completed(&prepared.preview.request_digest)?;
             }
             directories::CompletionPhase::FinalBundle => {
                 return Err("published runtime completion is missing its receipt; preserve the damaged record and all directories".into());
@@ -192,7 +212,8 @@ pub(crate) fn preview(input: Input) -> Result<Preview> {
 }
 
 pub(crate) fn prepare(input: Prepare) -> Result<Outcome> {
-    if input.confirmation != "prepare-empty-runtime-only" || !input.external_administration_stopped {
+    if input.confirmation != "prepare-empty-runtime-only" || !input.external_administration_stopped
+    {
         return Err("explicit prepare-empty-runtime-only confirmation and acknowledgment that external service/host administration is stopped are required before inspecting or writing paths; that acknowledgment is not an exclusion proof".into());
     }
     let prepared = build(input.input)?;
@@ -219,12 +240,16 @@ fn publish(prepared: &Prepared) -> Result<Outcome> {
         prepared.directories.sync_completed(digest)?;
         Vec::new()
     } else {
-        prepared.directories.publish(digest, || prepared.recheck())?
+        prepared
+            .directories
+            .publish(digest, || prepared.recheck())?
     };
     prepared.recheck()?;
     let receipt = prepared.receipt()?;
     let bytes = json_codec::to_vec_pretty(&receipt)?;
-    prepared.host.publish(&completion, &[("receipt.json", &bytes)])?;
+    prepared
+        .host
+        .publish(&completion, &[("receipt.json", &bytes)])?;
     prepared.recheck()?;
     if json_codec::to_vec_pretty(&prepared.receipt()?)? != bytes {
         return Err("runtime directories changed after the completion receipt; it is not current readiness evidence".into());
@@ -250,7 +275,11 @@ struct Pending {
 }
 impl std::fmt::Display for Pending {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "runtime preparation {} is incomplete or publication is uncertain; preserve {} and all pending/final directories, retry only the original request; no rollback or service start is claimed", self.digest, self.intent)
+        write!(
+            f,
+            "runtime preparation {} is incomplete or publication is uncertain; preserve {} and all pending/final directories, retry only the original request; no rollback or service start is claimed",
+            self.digest, self.intent
+        )
     }
 }
 impl std::error::Error for Pending {

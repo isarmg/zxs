@@ -154,9 +154,18 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/disks/add-preview", post(disk_addition_preview))
         .route("/api/disks/add-original", post(disk_addition_original))
         .route("/api/disks/add-commit", post(disk_addition_commit))
-        .route("/api/disks/foreign-chain-preview", post(foreign_chain_preview))
-        .route("/api/disks/foreign-chain-original", post(foreign_chain_original))
-        .route("/api/disks/foreign-chain-prepare", post(foreign_chain_prepare))
+        .route(
+            "/api/disks/foreign-chain-preview",
+            post(foreign_chain_preview),
+        )
+        .route(
+            "/api/disks/foreign-chain-original",
+            post(foreign_chain_original),
+        )
+        .route(
+            "/api/disks/foreign-chain-prepare",
+            post(foreign_chain_prepare),
+        )
         .route("/api/authority/check", post(check))
         .route("/api/authority/export", post(export))
         .route("/api/shutdown", post(shutdown))
@@ -166,7 +175,10 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/install/preview", post(install_preview))
         .route("/api/install/commit", post(install_commit))
         .route("/api/install/repair-preview", post(repair_preview))
-        .route("/api/install/repair-recover-preview", post(repair_recover_preview))
+        .route(
+            "/api/install/repair-recover-preview",
+            post(repair_recover_preview),
+        )
         .route("/api/install/repair-commit", post(repair_commit))
         .route("/api/deployment/preview", post(deployment_preview))
         .route("/api/deployment/prepare", post(deployment_prepare))
@@ -426,35 +438,72 @@ fn install_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
     )
 }
 
-async fn repair_preview(ExtractState(state): ExtractState<State>, request: Request) -> Result<Response, Failure> {
+async fn repair_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
     let _: InstallPreviewRequest = input(request).await?;
     let preview = tokio::task::spawn_blocking(move || {
         let _owner = permit;
         crate::installation::repair::preview().map_err(repair_failure)
-    }).await.map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "program_repair_worker", error))??;
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "program_repair_worker",
+            error,
+        )
+    })??;
     Ok(Json(preview).into_response())
 }
-async fn repair_recover_preview(ExtractState(state): ExtractState<State>, request: Request) -> Result<Response, Failure> {
+async fn repair_recover_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
     let input: crate::installation::repair::Original = input(request).await?;
     let preview = tokio::task::spawn_blocking(move || {
         let _owner = permit;
         crate::installation::repair::recover_preview(input).map_err(repair_failure)
-    }).await.map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "program_repair_worker", error))??;
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "program_repair_worker",
+            error,
+        )
+    })??;
     Ok(Json(preview).into_response())
 }
-async fn repair_commit(ExtractState(state): ExtractState<State>, request: Request) -> Result<Response, Failure> {
+async fn repair_commit(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
     let input: crate::installation::repair::Commit = input(request).await?;
     let receipt = tokio::task::spawn_blocking(move || {
         let _owner = permit;
         crate::installation::repair::commit(input).map_err(repair_failure)
-    }).await.map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "program_repair_worker", error))??;
+    })
+    .await
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "program_repair_worker",
+            error,
+        )
+    })??;
     Ok(Json(receipt).into_response())
 }
 fn repair_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(StatusCode::CONFLICT, "same_payload_program_repair", &crate::diagnostic_chain(error.as_ref()))
+    Failure::message(
+        StatusCode::CONFLICT,
+        "same_payload_program_repair",
+        &crate::diagnostic_chain(error.as_ref()),
+    )
 }
 
 async fn deployment_preview(
@@ -600,7 +649,13 @@ async fn runtime_preview(
         crate::initialization::runtime::preview(input).map_err(runtime_failure)
     })
     .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "runtime_directory_worker", error))??;
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime_directory_worker",
+            error,
+        )
+    })??;
     Ok(Json(preview).into_response())
 }
 
@@ -615,7 +670,13 @@ async fn runtime_prepare(
         crate::initialization::runtime::prepare(input).map_err(runtime_failure)
     })
     .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "runtime_directory_worker", error))??;
+    .map_err(|error| {
+        Failure::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime_directory_worker",
+            error,
+        )
+    })??;
     Ok(Json(receipt).into_response())
 }
 
@@ -679,71 +740,35 @@ async fn administrator_reset_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::credentials::Input = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::credentials::preview(input).map_err(credential_failure)
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::AdministratorResetPreview,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "credential_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
 }
 async fn administrator_reset(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::credentials::Reset = secret_input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::credentials::reset(input).map_err(credential_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "credential_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-fn credential_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    // The top-level pending error contains the original request digest, not the
-    // private verifier or the lower-level protected-record diagnostic chain.
-    Failure::message(
-        StatusCode::CONFLICT,
-        "administrator_password_reset",
-        &error.to_string(),
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::AdministratorReset,
     )
+    .await
 }
 
 async fn administrator_reset_recover_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::credentials::RecoverPreview = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::credentials::recover_preview(input).map_err(credential_failure)
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::AdministratorResetRecoverPreview,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "credential_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
 }
 
 async fn secret_input<T: DeserializeOwned>(request: Request) -> Result<T, Failure> {
@@ -778,137 +803,68 @@ async fn first_administrator_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::administrator::Input = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::administrator::preview(input).map_err(first_administrator_failure)
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::FirstAdministratorPreview,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "administrator_initialization_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
 }
 async fn first_administrator_recover_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::administrator::RecoverPreview = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::administrator::recover_preview(input)
-            .map_err(first_administrator_failure)
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::FirstAdministratorRecoverPreview,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "administrator_initialization_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
 }
 async fn first_administrator_create(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::administrator::Create = secret_input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::administrator::create(input).map_err(first_administrator_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "administrator_initialization_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-fn first_administrator_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "first_management_administrator",
-        &error.to_string(),
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::FirstAdministratorCreate,
     )
+    .await
 }
 
 async fn first_storage_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::storage::Input = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::storage::preview(input).map_err(first_storage_failure)
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::FirstStoragePreview,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "first_storage_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
 }
 async fn first_storage_recover(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::storage::Original = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::storage::recover_preview(input).map_err(first_storage_failure)
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::FirstStorageRecover,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "first_storage_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
 }
 async fn first_storage_create(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::storage::Commit = input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::storage::commit(input).map_err(first_storage_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "first_storage_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-fn first_storage_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "first_storage_initialization",
-        &error.to_string(),
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::FirstStorageCreate,
     )
+    .await
 }
 
 async fn samba_reset_preview(
@@ -984,727 +940,378 @@ async fn foreign_chain_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::foreign_chain::Input = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::foreign_chain::preview(input).map_err(foreign_chain_failure)
-    }).await.map_err(|error| {
-        Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "foreign_chain_worker", error)
-    })??;
-    Ok(Json(result).into_response())
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::ForeignChainPreview,
+    )
+    .await
 }
 async fn foreign_chain_original(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::foreign_chain::Original = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::foreign_chain::original(input).map_err(foreign_chain_failure)
-    }).await.map_err(|error| {
-        Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "foreign_chain_worker", error)
-    })??;
-    Ok(Json(result).into_response())
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::ForeignChainOriginal,
+    )
+    .await
 }
 async fn foreign_chain_prepare(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::foreign_chain::Prepare = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::foreign_chain::prepare(input).map_err(foreign_chain_failure)
-    }).await.map_err(|error| {
-        Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "foreign_chain_worker", error)
-    })??;
-    Ok(Json(result).into_response())
-}
-fn foreign_chain_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(StatusCode::CONFLICT, "foreign_chain_material", &crate::diagnostic_chain(error.as_ref()))
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::ForeignChainPrepare,
+    )
+    .await
 }
 
 async fn disk_addition_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_addition::Input = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_addition::preview(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "active_disk_addition",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskAdditionPreview,
+    )
     .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "addition_worker", error))??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_addition_original(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_addition::Original = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_addition::recover_preview(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "active_disk_addition",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskAdditionOriginal,
+    )
     .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "addition_worker", error))??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_addition_commit(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_addition::Commit = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_addition::commit(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "active_disk_addition",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskAdditionCommit,
+    )
     .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "addition_worker", error))??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_removal_inventory(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::InventoryInput = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_removal::inventory(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "active_disk_deregistration",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskRemovalInventory,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "deregistration_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_removal_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::Input = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_removal::preview(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "active_disk_deregistration",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskRemovalPreview,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "deregistration_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_removal_original(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::Original = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_removal::recover_preview(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "active_disk_deregistration",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskRemovalOriginal,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "deregistration_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_removal_commit(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::Commit = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_removal::commit(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "active_disk_deregistration",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskRemovalCommit,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "deregistration_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn terminal_removal_inspect(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::terminal::Input = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_removal::terminal::run(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_removal_inspection",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalRemovalInspect,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "deregistration_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn terminal_retirement_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::Input = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_removal::terminal_action::preview(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_retirement",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalRetirementPreview,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "terminal_retirement_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn terminal_retirement_original(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::Original = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_removal::terminal_action::original(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_retirement",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalRetirementOriginal,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "terminal_retirement_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn terminal_retirement_commit(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::terminal_action::Commit = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_removal::terminal_action::commit(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_retirement",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalRetirementCommit,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "terminal_retirement_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_readmission_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_readmission::Input = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_readmission::preview(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_readmission",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskReadmissionPreview,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "readmission_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_readmission_original(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_readmission::Original = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_readmission::original(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_readmission",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskReadmissionOriginal,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "readmission_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn disk_readmission_commit(
     ExtractState(state): ExtractState<State>,
     request: Request,
 ) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_readmission::Commit = input(request).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::disk_readmission::commit(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_readmission",
-                &error.to_string(),
-            )
-        })
-    })
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::DiskReadmissionCommit,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "readmission_worker",
-            error,
-        )
-    })??;
-    Ok(Json(result).into_response())
 }
 
 async fn terminal_chain_export(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_archive::Export>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::InventoryInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_archive::export(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_checkpoint",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainExport,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "terminal_checkpoint_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_readmission_proposal(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_readmission::Export>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::Input = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_readmission::export(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "terminal_chain_readmission_proposal",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainReadmissionProposal,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_readmission_proposal_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_target_status(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::InventoryInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::status(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_target_status",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainTargetStatus,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_target_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 async fn terminal_chain_target_synchronize(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::Commit = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::synchronize(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_target_pending",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainTargetSynchronize,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_target_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_first_prepare(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::FirstInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::prepare_first(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_first_inputs_pending",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainFirstPrepare,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_first_inputs_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_first_publish(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::PublicationInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::publish_first(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_first_publication_pending",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainFirstPublish,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_first_publication_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_current(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::CurrentInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::inspect_current(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_published_current",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainCurrent,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_published_current_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_activation_plan(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::ActivationPlanInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::prepare_activation(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_activation_plan_pending",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainActivationPlan,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_activation_plan_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_io_decide(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::IoDecisionInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::decide_io(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_io_decision_pending",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainIoDecide,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_io_decision_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_generation_log(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::GenerationLogInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::prepare_generation_log(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_generation_log_pending",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainGenerationLog,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_generation_log_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_generation_select(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::GenerationSelectionInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::select_generation(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_generation_select_pending",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
-    })
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainGenerationSelect,
+    )
     .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_generation_select_worker",
-            error,
-        )
-    })??;
-    Ok(Json(output))
 }
 
 async fn terminal_chain_generation_read(
     ExtractState(state): ExtractState<State>,
     request: Request,
-) -> Result<Json<crate::disk_removal::chain_target::Status>, Failure> {
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::TerminalChainGenerationRead,
+    )
+    .await
+}
+
+/// The helper is only the HTTP transport for management semantics. The matching
+/// embedded program parses the exact typed request before any host access.
+async fn maintenance_operation(
+    state: State,
+    request: Request,
+    operation: storage_engine::offline_maintenance::Operation,
+) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
-    let input: crate::disk_removal::chain_target::CurrentInput = input(request).await?;
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        crate::disk_removal::chain_target::inspect_generation(input).map_err(|error| {
-            Failure::message(
-                StatusCode::CONFLICT,
-                "chain_generation_read_pending",
-                &crate::diagnostic_chain(error.as_ref()),
-            )
-        })
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(15),
+        to_bytes(request.into_body(), MAX_REQUEST_BYTES),
+    )
+    .await
+    .map_err(|error| Failure::new(StatusCode::REQUEST_TIMEOUT, "request_timeout", error))?
+    .map_err(|error| Failure::new(StatusCode::BAD_REQUEST, "request_body", error))?;
+    let body = platform_io::secret::SecretBytes::new(bytes.to_vec());
+    if let Ok(mut unique) = bytes.try_into_mut() {
+        unique.fill(0);
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        let _owner = permit;
+        crate::maintenance::run(operation, body)
     })
     .await
     .map_err(|error| {
         Failure::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "chain_generation_read_worker",
+            "maintenance_worker",
             error,
         )
-    })??;
-    Ok(Json(output))
+    })?
+    .map_err(|error| Failure::message(error.status(), error.code(operation), &error.to_string()))?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], result).into_response())
 }

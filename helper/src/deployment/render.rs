@@ -10,7 +10,7 @@ pub(super) struct ConfigurationFile {
 }
 impl ConfigurationFile {
     fn new(name: &'static str, content: String) -> Self {
-        let sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
+        let sha256 = platform_io::lower_hex(&Sha256::digest(content.as_bytes()));
         Self {
             name,
             sha256,

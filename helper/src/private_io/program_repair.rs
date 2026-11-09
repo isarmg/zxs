@@ -35,13 +35,19 @@ enum Position {
 }
 
 impl ProgramDestination {
-    pub(crate) fn repair_recheck(&self) -> Result<()> { self.recheck_parent() }
+    pub(crate) fn repair_recheck(&self) -> Result<()> {
+        self.recheck_parent()
+    }
 
     fn capture_at(&self, name: &EntryName) -> Result<Option<Captured>> {
         self.recheck_parent()?;
         let file = match self.target.directory.open_file(&name.as_relative(), false) {
             Ok(file) => file,
-            Err(platform_io::fs_safety::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(None);
+            }
             Err(error) => return Err(error.into()),
         };
         let metadata = file.metadata()?;
@@ -53,7 +59,9 @@ impl ProgramDestination {
         }
         let identity = SingleLinkRequirement::check(&file)?;
         let mut bytes = Vec::new();
-        (&file).take(MAX_PROGRAM_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+        (&file)
+            .take(MAX_PROGRAM_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
         if bytes.len() > MAX_PROGRAM_BYTES || bytes.len() as u64 != metadata.len() {
             return Err("repair program changed length or exceeded its byte budget".into());
         }
@@ -64,11 +72,15 @@ impl ProgramDestination {
             gid: metadata.gid(),
             mode: metadata.mode() & 0o7777,
             bytes: metadata.len(),
-            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            sha256: platform_io::lower_hex(&Sha256::digest(&bytes)),
         };
         self.check_repair_name(name, identity)?;
         self.recheck_parent()?;
-        Ok(Some(Captured { file, snapshot, bytes }))
+        Ok(Some(Captured {
+            file,
+            snapshot,
+            bytes,
+        }))
     }
 
     pub(crate) fn repair_snapshot(&self, payload: &[u8]) -> Result<Option<ProgramSnapshot>> {
@@ -116,18 +128,40 @@ impl ProgramDestination {
         original: &Option<ProgramSnapshot>,
         payload: &[u8],
     ) -> Result<Option<Vec<u8>>> {
-        Ok(self.repair_position(digest, original, payload)?.1.map(|original| original.bytes))
+        Ok(self
+            .repair_position(digest, original, payload)?
+            .1
+            .map(|original| original.bytes))
     }
 
-    pub(crate) fn repair_is_published(&self, digest: &str, original: &Option<ProgramSnapshot>, payload: &[u8]) -> Result<bool> {
-        Ok(matches!(self.repair_position(digest, original, payload)?.0, Position::After))
+    pub(crate) fn repair_is_published(
+        &self,
+        digest: &str,
+        original: &Option<ProgramSnapshot>,
+        payload: &[u8],
+    ) -> Result<bool> {
+        Ok(matches!(
+            self.repair_position(digest, original, payload)?.0,
+            Position::After
+        ))
     }
 
-    pub(crate) fn completed_repair_snapshot(&self, digest: &str, original: &Option<ProgramSnapshot>, payload: &[u8]) -> Result<ProgramSnapshot> {
-        if !matches!(self.repair_position(digest, original, payload)?.0, Position::After) {
+    pub(crate) fn completed_repair_snapshot(
+        &self,
+        digest: &str,
+        original: &Option<ProgramSnapshot>,
+        payload: &[u8],
+    ) -> Result<ProgramSnapshot> {
+        if !matches!(
+            self.repair_position(digest, original, payload)?.0,
+            Position::After
+        ) {
             return Err("completed repair lost its exact target; it was not recreated".into());
         }
-        Ok(self.capture_at(&self.target.name)?.ok_or("completed repair target disappeared")?.snapshot)
+        Ok(self
+            .capture_at(&self.target.name)?
+            .ok_or("completed repair target disappeared")?
+            .snapshot)
     }
 
     pub(crate) fn repair_install(
@@ -143,18 +177,30 @@ impl ProgramDestination {
         if matches!(position, Position::Before) {
             match self.capture_at(&stage)? {
                 Some(file) => file.file.sync_all()?,
-                None => write_atomic_at_mode(&self.target.directory, &stage, payload, false, 0o555)?,
+                None => {
+                    write_atomic_at_mode(&self.target.directory, &stage, payload, false, 0o555)?
+                }
             }
             revalidate()?;
             let (position, _) = self.repair_position(digest, original, payload)?;
             if !matches!(position, Position::Before) {
-                return Err("repair position changed before exchange; no exchange was attempted".into());
+                return Err(
+                    "repair position changed before exchange; no exchange was attempted".into(),
+                );
             }
-            let flags = if original.is_some() { RenameFlags::EXCHANGE } else { RenameFlags::NOREPLACE };
+            let flags = if original.is_some() {
+                RenameFlags::EXCHANGE
+            } else {
+                RenameFlags::NOREPLACE
+            };
             renameat_with(
-                self.target.directory.directory(), stage.as_os_str(),
-                self.target.directory.directory(), self.target.name.as_os_str(), flags,
-            ).map_err(|error| RepairPublication {
+                self.target.directory.directory(),
+                stage.as_os_str(),
+                self.target.directory.directory(),
+                self.target.name.as_os_str(),
+                flags,
+            )
+            .map_err(|error| RepairPublication {
                 parent: self.parent_identity(),
                 stage: stage.as_os_str().to_string_lossy().into_owned(),
                 source: AtomicCommitError::Unknown(platform_io::fs_safety::Error::Io(error.into())),
@@ -172,30 +218,46 @@ impl ProgramDestination {
     ) -> Result<ProgramSnapshot> {
         let (position, retained) = self.repair_position(digest, original, payload)?;
         if !matches!(position, Position::After) {
-            return Err("repair has no completed program publication; all evidence was retained".into());
+            return Err(
+                "repair has no completed program publication; all evidence was retained".into(),
+            );
         }
         if let Some(old) = retained {
             old.file.sync_all()?;
         }
-        let current = self.capture_at(&self.target.name)?
+        let current = self
+            .capture_at(&self.target.name)?
             .ok_or("repaired executable disappeared before synchronization")?;
         current.file.sync_all()?;
-        self.target.directory.directory().sync_all().map_err(|error| RepairPublication {
-            parent: self.parent_identity(),
-            stage: format!(".zxs-helper-repair-{digest}.program"),
-            source: AtomicCommitError::Published(platform_io::fs_safety::Error::PublishedDurabilityUnknown(error)),
-        })?;
+        self.target
+            .directory
+            .directory()
+            .sync_all()
+            .map_err(|error| RepairPublication {
+                parent: self.parent_identity(),
+                stage: format!(".zxs-helper-repair-{digest}.program"),
+                source: AtomicCommitError::Published(
+                    platform_io::fs_safety::Error::PublishedDurabilityUnknown(error),
+                ),
+            })?;
         revalidate()?;
-        let final_file = self.capture_at(&self.target.name)?
+        let final_file = self
+            .capture_at(&self.target.name)?
             .ok_or("repaired executable disappeared after synchronization")?;
         if final_file.snapshot != current.snapshot || !final_file.matches_payload(payload) {
-            return Err("repaired executable changed before completion; no success is claimed".into());
+            return Err(
+                "repaired executable changed before completion; no success is claimed".into(),
+            );
         }
         Ok(final_file.snapshot)
     }
 
     fn check_repair_name(&self, name: &EntryName, identity: FileIdentity) -> Result<()> {
-        let named = statat(self.target.directory.directory(), name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW)?;
+        let named = statat(
+            self.target.directory.directory(),
+            name.as_os_str(),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )?;
         if (named.st_dev, named.st_ino) != (identity.device, identity.inode) {
             return Err("program identity changed during repair inspection".into());
         }
@@ -204,7 +266,9 @@ impl ProgramDestination {
 }
 
 fn repair_stage(digest: &str) -> Result<EntryName> {
-    Ok(EntryName::new(format!(".zxs-helper-repair-{digest}.program"))?)
+    Ok(EntryName::new(format!(
+        ".zxs-helper-repair-{digest}.program"
+    ))?)
 }
 
 #[derive(Debug)]
@@ -215,11 +279,17 @@ struct RepairPublication {
 }
 impl std::fmt::Display for RepairPublication {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "program repair exchange/publication under {:?}, stage {}; preserve the target, original inode and backup", self.parent, self.stage)
+        write!(
+            f,
+            "program repair exchange/publication under {:?}, stage {}; preserve the target, original inode and backup",
+            self.parent, self.stage
+        )
     }
 }
 impl std::error::Error for RepairPublication {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.source) }
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
 }
 
 #[cfg(test)]

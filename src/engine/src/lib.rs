@@ -4,6 +4,7 @@
 //! authenticate the sole administrator before calling it. Operation principals
 //! bind audit authorship, workspace ownership and idempotency, never repository ACLs.
 #![forbid(unsafe_code)]
+pub use storage_contract::offline_maintenance;
 mod error;
 pub use error::{
     CheckpointError, Error, PublishedRecoveryReconciliation, PublishedWorkspaceReconciliation,
@@ -22,7 +23,7 @@ mod container_storage;
 mod database_install;
 pub use container_storage::{
     DirectoryLayoutReceipt, MAX_OBJECT_DATABASE_ARCHIVE_BYTES, ObjectDatabaseMaterial,
-    ObjectDatabaseRecord, ObjectDatabaseReconstruction, ObjectDatabaseScope,
+    ObjectDatabaseReconstruction, ObjectDatabaseRecord, ObjectDatabaseScope,
     inspect_object_database_material, reconstruct_object_database_material,
 };
 mod directory_layout;
@@ -39,8 +40,8 @@ pub use directory_conversion::{
 mod disk;
 pub mod disk_authority;
 mod engine;
-pub use engine::FileHistoryMoveTargetReport;
 pub use engine::DetachedHistoryRead;
+pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
@@ -48,11 +49,11 @@ pub use engine::{
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupFirstFinalizeReport,
     BackupFirstPublicationHash, BackupFirstPublicationReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
-    BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
-    BackupRegistryDecisionHash, BackupRegistryRecoveryReport, BackupRootDatabasesReport,
-    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupNativeMetadataReport, BackupSystemDatabaseReport, BackupTargetPublicationReport,
+    BackupNamespaceScope, BackupNativeMetadataReport, BackupOriginalDatabaseReport,
+    BackupPublishedRegistryReport, BackupPublishedScopeTargetReport, BackupPublishedScopesReport,
+    BackupRecoveredContent, BackupRegistryDecisionHash, BackupRegistryRecoveryReport,
+    BackupRootDatabasesReport, BackupServingContent, BackupServingImagesReport, BackupServingRead,
+    BackupServingTargetReport, BackupSystemDatabaseReport, BackupTargetPublicationReport,
     BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use engine::{
@@ -66,9 +67,9 @@ pub use engine::{
     offline_check_backup_preparation_batch, offline_check_backup_scoped_databases,
 };
 pub use engine::{
-    FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,
-    FileHistoryMoveDecisionObligation, FileHistoryMoveNativePreparation,
-    FileHistoryMoveScopedPreparation, FileHistoryMoveJointChoice, FileHistoryMoveCandidatePreparation,
+    FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
+    FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation, FileHistoryMoveJointChoice,
+    FileHistoryMoveNativePreparation, FileHistoryMoveScopedPreparation,
 };
 pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub use engine::{
@@ -77,8 +78,7 @@ pub use engine::{
     TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
     TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
     TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalChainSelectedGeneration,
-    TerminalMetadataResume,
-    TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
+    TerminalMetadataResume, TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };
@@ -93,8 +93,8 @@ pub use foreign_import::{
     ForeignImportIntentInfo, ForeignImportIntentRequest, ForeignImportIntentSource,
     ForeignImportIntentTarget, ForeignImportLimits, ForeignImportMapping, ForeignImportPreview,
     ForeignLocalBinding, ForeignMappedHistory, ForeignMigrationPlan, ForeignMigrationReceipt,
-    ForeignMigrationStatus, ForeignMigrationTransaction, ForeignPrimaryOrigin, ForeignSourceIdentity,
-    ForeignVersionAvailability, PreparedForeignImportIntent,
+    ForeignMigrationStatus, ForeignMigrationTransaction, ForeignPrimaryOrigin,
+    ForeignSourceIdentity, ForeignVersionAvailability, PreparedForeignImportIntent,
 };
 mod historical_save;
 pub use engine::{
@@ -150,22 +150,20 @@ pub use disk::{
 #[cfg(feature = "fault-injection")]
 pub use engine::DiskQuiesceFault;
 pub use engine::{
-    ContentMatchRead, ContentReadPlan, CoupledNodeRetirement, DiskCatalogFailure,
-    DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
+    ContentMatchRead, ContentReadPlan, CoupledNodeRetirement, DiskCatalogDirectory,
+    DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
     DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
-    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskCatalogDirectory,
-    DiskDatabaseRebuildSource, DiskDatabaseReconstruction, MAX_DISK_DATABASE_ARCHIVE_BYTES,
-    reconstruct_disk_database_material,
-    DiskDatabaseMaterial,
-    DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
-    DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation, DiskHistoryReceipt,
-    DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus, DiskObservation,
-    DiskObservationFailure, DiskObservationPlan, DiskObservationStage, Engine,
-    FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead, IndexFailure,
-    IndexFailureStage, IndexHealth, IntegrityScrubArea, IntegrityScrubBatch,
-    IntegrityScrubBatchAdmission, IntegrityScrubCancellation, IntegrityScrubCompletion,
-    IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport,
-    IntegrityScrubSchedule, IntegrityScrubTarget, MembershipAbortStatus,
+    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskDatabaseMaterial,
+    DiskDatabaseReadScope, DiskDatabaseRebuildSource, DiskDatabaseReconstruction,
+    DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure, DiskHistoryHeader,
+    DiskHistoryMaintenanceState, DiskHistoryObservation, DiskHistoryReceipt, DiskHistoryRecord,
+    DiskHistorySnapshot, DiskHistoryStatus, DiskObservation, DiskObservationFailure,
+    DiskObservationPlan, DiskObservationStage, Engine, FileHistorySourceRead,
+    HistoryWindowCancellation, HistoryWindowRead, IndexFailure, IndexFailureStage, IndexHealth,
+    IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
+    IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
+    IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
+    IntegrityScrubTarget, MAX_DISK_DATABASE_ARCHIVE_BYTES, MembershipAbortStatus,
     MembershipArchiveInspection, MembershipControlArchive, MembershipExitAction,
     MembershipFenceStatus, MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
     MembershipJournalInspection, MetadataMemberProbe, MetadataView, ObservedDiskStatus,
@@ -178,7 +176,8 @@ pub use engine::{
     SystemAuditEvent, SystemCatalogKind, SystemCatalogRecord, SystemCatalogValue,
     SystemChangeCursor, SystemChangePage, SystemChangeReadError, SystemOperationPrincipal,
     SystemStateMetadata, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
-    WorkspaceReadPlan, inspect_disk_database_material, verify_membership_control_archive,
+    WorkspaceReadPlan, inspect_disk_database_material, reconstruct_disk_database_material,
+    verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

@@ -1387,6 +1387,7 @@ dependencies = [
  "platform-io",
  "rustix",
  "service-stack",
+ "sha2",
  "smb-protocol",
  "sqlite-access",
  "storage-client",

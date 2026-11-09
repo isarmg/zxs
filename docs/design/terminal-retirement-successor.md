@@ -32,7 +32,7 @@ D3 在这里仅表示该 no-voter 管理登记/永久结果的最终发布，**�
 
 ## Helper 入口与权限
 
-专用模块 `helper/src/disk_removal/terminal_action.rs` 提供 `/api/disks/terminal-retirement-preview`、`terminal-retirement-original`、`terminal-retirement-commit`。预览是 native 私有 Plan 的 DTO 显示投影，提交由当前服务 UID owner 重建并比较全部字段。原计划先保存于 root-owned `.zxs-helper-terminal-retirement-<sha256>/plan.json`，主凭据 revision、宿主 lease、固定布局和账户身份持续绑定。原计划可下载；断连使用同一个根摘要查询/续作。
+helper 的独立 Web 经有界同版程序管道调用专用模块 `src/server/src/offline/disk_removal/terminal_action.rs`，提供 `/api/disks/terminal-retirement-preview`、`terminal-retirement-original`、`terminal-retirement-commit`。预览是 native 私有 Plan 的 DTO 显示投影，提交由当前服务 UID owner 重建并比较全部字段。原计划先保存于 root-owned `.zxs-helper-terminal-retirement-<sha256>/plan.json`，主凭据 revision、宿主 lease、固定布局和账户身份持续绑定。原计划可下载；断连使用同一个根摘要查询/续作。
 
 确认文本为 `retire-terminal-member-without-metadata-restart`，另需当前访问损失及本阶段无 metadata restart/第二笔的独立 acknowledgment；在系统访问前检查。沿用无认证 root / 默认 `0.0.0.0`、Origin/CSRF、单任务和停服租约，不新增登录或修改网络。没有执行真实服务、擦盘、卸载或启动。访问暴露风险仍按辅助工具首页提示处理。
 

@@ -1,8 +1,6 @@
 //! Staged offline first installation: layout, administrator, and initial storage.
-pub(crate) mod administrator;
-pub(crate) mod runtime;
-pub(crate) mod storage;
 mod layout;
+pub(crate) mod runtime;
 use crate::{
     Result,
     account::{LocalAccount, Name, Snapshot},
@@ -93,7 +91,7 @@ fn build(input: Input) -> Result<(LocalAccount, layout::Destination, Preview)> {
         child_directories: layout::CHILDREN,
         mode: "0700",
     };
-    let request_digest = format!("{:x}", Sha256::digest(json_codec::to_vec(&plan)?));
+    let request_digest = platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(&plan)?));
     Ok((
         account,
         destination,
@@ -129,7 +127,9 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
 }
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
-        Command::RuntimePreview { service_user } => print(runtime::preview(Input { service_user })?),
+        Command::RuntimePreview { service_user } => {
+            print(runtime::preview(Input { service_user })?)
+        }
         Command::RuntimePrepare {
             service_user,
             request_digest,
