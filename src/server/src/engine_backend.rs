@@ -1057,6 +1057,18 @@ impl Backend for EngineBackend {
         let current = current_protected_identity(&engine, identity)?;
         file_manager::mkdir(&mut engine, &current, request)
     }
+    fn move_disk_file(
+        &self,
+        identity: &Identity,
+        request: crate::MoveDiskFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        file_manager::move_file(&mut engine, &current, request)
+    }
     fn create_disk_write_session(
         &self,
         identity: &Identity,

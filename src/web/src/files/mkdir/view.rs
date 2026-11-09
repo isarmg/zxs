@@ -5,10 +5,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||state.with(blocks_writes)>
             <aside class="zxs-surface zxs-stack" data-zxs-folder-create-recovery="">
-                <h2>{t("新建文件夹：原操作恢复", "New folder: original-operation recovery")}</h2>
+                <h2>{t("文件路径操作：原请求恢复", "File paths: original-request recovery")}</h2>
                 <p>{t(
-                    "原账号、磁盘、完整路径和操作编号已按站点保留。离开目录或刷新不会重新创建文件夹；只有核对原回执才能解除未确认状态。",
-                    "The original account, disk, full path and operation ID are retained for this site. Navigation or refresh never creates the folder again. Only a matching original receipt confirms the outcome.",
+                    "原账号、磁盘、完整路径和操作编号已按站点保留；文件移动另绑定原文件身份和目录依据。导航或刷新只查询原结果，不自动重发。",
+                    "The original account, disk, paths and operation ID are retained. File moves also bind the original identity and namespace basis. Navigation and refresh only query; they never resend.",
                 )}</p>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending)
                     on:click=move |_|restore(state)>{t("重新读取本机原请求", "Reload local original requests")}</button>
@@ -22,8 +22,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                                 <p>{label}</p>
                                 <Show when=move ||state.with(|s|s.files.mkdir.records.iter().any(|retained|retained.record.operation()==operation&&retained.phase!=Phase::Settled))>
                                     <p>{t(
-                                        "重试保留同一编号和原路径。若尚未创建，这会实际创建原文件夹；若已经发布，服务端只返回原收据。找不到操作或重试被拒绝都不能证明原请求未发布。",
-                                        "Retry keeps the same ID and original path. It can create the original folder if still uncommitted; an already published request returns its original receipt. A missing lookup or rejected retry does not prove that the first request never published.",
+                                        "重试保留同一编号和完整原输入。尚未发布时会实际执行原建目录或文件移动；已发布时只返回原收据。查询缺失或重试被拒绝不证明原请求未发布。",
+                                        "Retry retains the same ID and complete original input. It can perform the original folder creation or file move if uncommitted; a published request returns its original receipt. A missing lookup or rejected retry does not prove that the first request never published.",
                                     )}</p>
                                     {requires_post.then(||view! {
                                         <p>{t(
@@ -33,7 +33,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                                     })}
                                     <button class="zxs-button" data-zxs-folder-create-retry=""
                                         disabled=move ||state.with(|s|retry_record(s,epoch,operation).is_none())
-                                        on:click=move |_|retry(state,epoch,operation)>{t("重试原文件夹创建，不生成新编号", "Retry original folder creation, without a new ID")}</button>
+                                        on:click=move |_|retry(state,epoch,operation)>{t("确认重试原请求，不生成新编号", "Confirm original-request retry, without a new ID")}</button>
                                 </Show>
                                 <Show when=move ||state.with(|s|s.files.mkdir.records.iter().any(|retained|retained.record.operation()==operation&&retained.phase==Phase::Settled))>
                                     <p>{t("原操作已有明确结果；仅本机记录清理未完成，不会再次提交。", "The original outcome is confirmed. Only local record cleanup remains; it never resubmits.")}</p>

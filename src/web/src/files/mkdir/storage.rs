@@ -12,11 +12,16 @@ const MAX_STORAGE_KEYS: u32 = 4096;
 enum Format {
     #[serialization(rename = "folder-create-original-request")]
     OriginalRequest,
+    #[serialization(rename = "ordinary-file-relocation-original-request")]
+    FileRelocation,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Namespace {
     UninitializedRoot,
+    FileRelocation {
+        relocation: storage_contract::file_relocation::FileRelocation,
+    },
     Repository {
         repository: HistoryRepositoryId,
         path: name_policy::PortablePath,
@@ -37,6 +42,7 @@ pub(super) struct Record {
     stored: Stored,
     pub(super) bytes: Arc<str>,
     digest: Option<String>,
+    relocation_digests: std::collections::BTreeMap<&'static str, String>,
 }
 impl Record {
     pub(super) fn operation(&self) -> OperationId {
@@ -46,20 +52,31 @@ impl Record {
         &self.stored.principal
     }
     pub(super) fn label(&self) -> String {
-        format!(
-            "{}/{} · {}",
-            self.stored.slot,
-            self.stored.path.as_str(),
-            self.operation()
-        )
+        let path = match &self.stored.namespace {
+            Namespace::FileRelocation { relocation } => format!(
+                "{} → {} (repository {})",
+                self.stored.path.as_str(), relocation.destination.as_str(),
+                relocation.repository_id.as_str(),
+            ),
+            Namespace::UninitializedRoot | Namespace::Repository { .. } => {
+                self.stored.path.as_str().to_owned()
+            }
+        };
+        format!("{}/{} · {}", self.stored.slot, path, self.operation())
     }
     pub(super) fn can_lookup(&self) -> bool {
-        self.digest.is_some()
+        self.digest.is_some() || matches!(&self.stored.namespace, Namespace::FileRelocation { .. })
     }
     fn key(&self) -> String {
         format!("{}{}", prefix(self.principal()), self.operation())
     }
     pub(super) fn request(&self) -> (String, Value) {
+        if let Namespace::FileRelocation { relocation } = &self.stored.namespace {
+            return (
+                format!("/api/file-manager/disks/{}/file-relocation", api::segment(&self.stored.slot)),
+                json!({"operation_id":self.operation(),"relocation":relocation}),
+            );
+        }
         (
             format!(
                 "/api/file-manager/disks/{}/namespace",
@@ -72,7 +89,23 @@ impl Record {
         )
     }
     pub(super) fn matches_receipt(&self, receipt: &Value, origin: ReceiptOrigin) -> bool {
+        if let Namespace::FileRelocation { relocation } = &self.stored.namespace {
+            let Some(kind) = receipt["operation_kind"].as_str() else {
+                return false;
+            };
+            if !matches!(kind, "file.namespace" | "file.namespace.recursive"
+                | "file.namespace.recursive-directories" | "file.namespace.recursive-routes")
+            {
+                return false;
+            }
+            return self.relocation_digests.get(kind).map(String::as_str)
+                == receipt["request_digest"].as_str()
+                && receipt["result"]["original_file"] == json!(relocation)
+                && receipt["result"]["action"] == "rename"
+                && receipt["result"]["path"].as_str() == Some(relocation.source.as_str());
+        }
         let path = match &self.stored.namespace {
+            Namespace::FileRelocation { .. } => unreachable!("invariant: relocation handled above"),
             Namespace::UninitializedRoot => self.stored.path.as_str(),
             Namespace::Repository { path, .. } => path.as_str(),
         };
@@ -132,6 +165,40 @@ impl Record {
         }
         Self::bind(stored, Arc::from(bytes))
     }
+    pub(super) fn capture_relocation(
+        state: &State,
+        operation: OperationId,
+        relocation: storage_contract::file_relocation::FileRelocation,
+    ) -> Result<Self, api::Error> {
+        let entry = state.files.entries.iter().find(|entry| {
+            entry.entry_id() == relocation.entry_id.as_str()
+                && entry.file_id() == relocation.file_id.as_str()
+                && entry.repository_path() == Some(relocation.source.as_str())
+                && entry.repository_id() == Some(relocation.repository_id.as_str())
+                && !entry.read_only() && !entry.backup() && !entry.retained_history()
+        }).ok_or_else(|| failure("The captured file is no longer in the current listing."))?;
+        if state.files.repository_id != relocation.repository_id.as_str()
+            || state.files.namespace_head != relocation.expected_head.as_str()
+            || state.files.directory_branches_supported
+        {
+            return Err(failure("The original ordinary namespace changed; review it again."));
+        }
+        let stored = Stored {
+            format: Format::FileRelocation,
+            principal: state.principal.clone(),
+            operation,
+            slot: state.files.slot.clone(),
+            path: name_policy::PortablePath::parse(entry.path())
+                .map_err(|source| decode_error(source.into()))?,
+            namespace: Namespace::FileRelocation { relocation },
+        };
+        let bytes = storage_contract::canonical_json(&stored).map_err(decode_error)?;
+        let bytes = String::from_utf8(bytes).expect("invariant: canonical JSON is UTF-8");
+        if bytes.len() > MAX_RECORD_BYTES {
+            return Err(limit("The original file move exceeds 32 KiB; no request was sent."));
+        }
+        Self::bind(stored, Arc::from(bytes))
+    }
     fn decode(key: &str, principal: &str, bytes: &str) -> Result<Self, api::Error> {
         if bytes.len() > MAX_RECORD_BYTES {
             return Err(limit(
@@ -160,7 +227,21 @@ impl Record {
             return Err(failure("The folder recovery account is invalid."));
         }
         name_policy::validate_slot(&stored.slot).map_err(|source| decode_error(source.into()))?;
+        if matches!(stored.format, Format::FileRelocation)
+            != matches!(&stored.namespace, Namespace::FileRelocation { .. })
+        {
+            return Err(failure("The retained request format and action disagree."));
+        }
         let digest = match &stored.namespace {
+            Namespace::FileRelocation { relocation } => {
+                let source = relocation.source.as_str();
+                if source != stored.path.as_str()
+                    && stored.path.as_str().split_once('/').map(|(_, tail)| tail) != Some(source)
+                {
+                    return Err(failure("The original file paths do not share one namespace."));
+                }
+                None
+            }
             Namespace::UninitializedRoot => {
                 name_policy::validate_name(stored.path.as_str())
                     .map_err(|source| decode_error(source.into()))?;
@@ -190,10 +271,22 @@ impl Record {
                 )
             }
         };
+        let mut relocation_digests = std::collections::BTreeMap::new();
+        if let Namespace::FileRelocation { relocation } = &stored.namespace {
+            for kind in ["file.namespace", "file.namespace.recursive",
+                "file.namespace.recursive-directories", "file.namespace.recursive-routes"]
+            {
+                let digest = storage_contract::object_hash("request", &json!({
+                    "kind":kind, "principal":stored.principal, "body":relocation.request(),
+                })).map_err(decode_error)?;
+                relocation_digests.insert(kind, digest);
+            }
+        }
         Ok(Self {
             stored,
             bytes,
             digest,
+            relocation_digests,
         })
     }
 }

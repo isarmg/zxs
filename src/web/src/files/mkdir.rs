@@ -1,4 +1,4 @@
-//! Recover one exact folder creation across navigation and session restoration.
+//! Recover exact folder creations and ordinary file moves across sessions.
 //! The server retains authority; browser storage only retains the original input.
 use super::{FileOperation, SaveStatus, actions};
 use crate::{
@@ -108,6 +108,33 @@ pub(crate) fn start(state: RwSignal<State>, name: &str) -> Option<String> {
             return None;
         }
     };
+    retain(state, record)
+}
+
+pub(super) fn start_relocation(
+    state: RwSignal<State>,
+    relocation: storage_contract::file_relocation::FileRelocation,
+) -> Option<String> {
+    if !state
+        .with_untracked(|s| actions::write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s))
+    {
+        return None;
+    }
+    let operation = crate::ui::file_operation_id(state)?
+        .parse()
+        .expect("invariant: UI generated a canonical operation ID");
+    let record = match state.with_untracked(|s| Record::capture_relocation(s, operation, relocation)) {
+        Ok(record) => Arc::new(record),
+        Err(error) => {
+            fail(state, error);
+            return None;
+        }
+    };
+    retain(state, record)
+}
+
+fn retain(state: RwSignal<State>, record: Arc<Record>) -> Option<String> {
+    let id = record.operation().to_string();
     if let Err(error) = storage::save(&record) {
         state.update(|s| {
             s.files.mkdir.error = Some(error);

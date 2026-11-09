@@ -11,6 +11,7 @@ pub mod directory_staging;
 pub mod disk_details;
 pub mod encoding;
 pub mod file_history_merge;
+pub mod file_relocation;
 pub mod history_window;
 mod integer_json;
 pub mod node_retirement;

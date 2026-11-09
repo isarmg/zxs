@@ -105,6 +105,9 @@ pub use backend_file_tags::UpdateFileNodeTags;
 mod backend_disk_mkdir;
 mod http_disk_mkdir;
 pub use backend_disk_mkdir::CreateDiskDirectory;
+mod backend_file_relocation;
+mod http_file_relocation;
+pub use backend_file_relocation::MoveDiskFile;
 mod backend_disk_write_session;
 mod http_disk_write_session;
 pub use backend_disk_write_session::{
@@ -687,6 +690,13 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: CreateDiskDirectory,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn move_disk_file(
+        &self,
+        _identity: &Identity,
+        _request: MoveDiskFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn create_disk_write_session(
         &self,
         identity: &Identity,
@@ -1505,6 +1515,13 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.backend
             .create_disk_directory(&self.current(identity)?, request)
+    }
+    fn move_disk_file(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MoveDiskFile,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend.move_disk_file(&self.current(identity)?, request)
     }
     fn create_disk_write_session(
         &self,

@@ -20,6 +20,10 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_disk_mkdir::submit),
         )
         .route(
+            "/api/file-manager/disks/{slot}/file-relocation",
+            post(http_file_relocation::submit),
+        )
+        .route(
             "/api/file-manager/disks/{slot}/namespace-batch",
             post(http_namespace_batch::submit),
         )

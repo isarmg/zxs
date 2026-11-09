@@ -800,6 +800,43 @@ pub(super) fn mkdir(
         .map_err(error)
 }
 
+pub(super) fn move_file(
+    engine: &mut Engine,
+    identity: &Identity,
+    command: crate::MoveDiskFile,
+) -> Result<storage_contract::OperationResult, ApiError> {
+    let request = &command.relocation;
+    let repo = engine
+        .state()
+        .repositories
+        .get(request.repository_id.as_str())
+        .ok_or_else(|| ApiError::invalid("the captured repository is no longer registered"))?;
+    if repo.primary_slot_id != command.slot_id {
+        return Err(ApiError::invalid(
+            "the captured repository is not on this primary disk",
+        ));
+    }
+    let repository_id = repo.repository_id.clone();
+    for path in [&request.source, &request.destination] {
+        let displayed = if repo.file_manager_root {
+            path.as_str().to_owned()
+        } else {
+            format!("{}/{}", repo.name, path.as_str())
+        };
+        let (resolved, relative) =
+            resolve_existing(engine, &command.slot_id, &displayed, DiskAccess::Write)?
+                .ok_or_else(empty_directory)?;
+        if resolved.repository_id != repository_id || relative != path.as_str() {
+            return Err(ApiError::invalid(
+                "the destination leaves the captured disk namespace",
+            ));
+        }
+    }
+    engine
+        .relocate_ordinary_file(request, &identity.principal, command.operation_id)
+        .map_err(error)
+}
+
 pub(super) fn write_session(
     engine: &mut Engine,
     identity: &Identity,

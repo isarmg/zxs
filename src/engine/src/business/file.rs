@@ -808,12 +808,41 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
+        self.file_namespace_input(repository, change, None, principal, operation)
+    }
+
+    pub fn relocate_ordinary_file(
+        &mut self,
+        request: &storage_contract::file_relocation::FileRelocation,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
+        self.file_namespace_input(
+            request.repository_id.as_str(),
+            request.change(),
+            Some(request),
+            principal,
+            operation,
+        )
+    }
+
+    fn file_namespace_input(
+        &mut self,
+        repository: &str,
+        change: NamespaceOperation,
+        original: Option<&storage_contract::file_relocation::FileRelocation>,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
         let kind = self.namespace_mutation_kind(
             "file.namespace",
             operation,
             matches!(change, NamespaceOperation::Rename { .. }),
         );
-        let request = json!({"repository_id":repository,"change":change});
+        let request = match original {
+            Some(original) => original.request(),
+            None => json!({"repository_id":repository,"change":change}),
+        };
         self.mutate(kind,principal,operation,request.clone(),|engine,state,_|{
             let repo=engine.state.repositories.get(repository).ok_or_else(||Error::new(storage_contract::ErrorCode::RepositoryNotFound,"directory namespace missing"))?;
 
@@ -825,6 +854,9 @@ impl Engine {
                 view.require_namespace_operation(&change)?;
                 previous.entries = view.branch_entries(&repo.main_branch_id, &previous.commit_id)?.to_vec();
                 view.remove_hidden_contexts(state, repository, &repo.main_branch_id);
+            }
+            if let Some(original) = original {
+                super::file_relocation::require(state, original, &branch.head_commit_id, &previous.entries)?;
             }
             let mut entries=previous.entries.clone();let deleted=super::apply_namespace(&mut entries,&change)?;
             validate_entries(&mut entries,engine.config.max_entries)?;
@@ -842,6 +874,7 @@ impl Engine {
             if let Some(destination)=&change.destination() {changed_paths.push(destination.as_str().to_owned());}
             let directories=super::directory::record_projected_directory_edits(state,repository,&changed_paths,None,engine.current_namespaces.as_deref())?;
             let mut result = json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"path":change.path(),"action":change.kind(),"directory_branch_ids":directories,"file_node_ids":file_paths::operation_nodes(state,operation)});
+            if let Some(original) = original { result["original_file"] = json!(original); }
             if crate::engine::CurrentNamespaces::recursive_namespace_kind(kind) { result["namespace_request"] = request; }
             Ok(result)
         })

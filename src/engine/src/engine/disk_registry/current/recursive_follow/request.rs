@@ -9,6 +9,7 @@ use name_policy::PortablePath;
 struct FileRequest {
     repository_id: String,
     change: NamespaceOperation,
+    original_file: Option<storage_contract::file_relocation::FileRelocation>,
 }
 
 #[derive(Deserialize)]
@@ -171,6 +172,20 @@ impl CurrentNamespaces {
             .get(&repo.main_branch_id)
             .ok_or_else(invalid)?;
         let entries = self.branch_entries(&repo.main_branch_id, &branch.head_commit_id)?;
+        if let Some(original) = &request.original_file {
+            if original.repository_id.as_str() != request.repository_id
+                || original.source.as_str() != source.as_str()
+                || &original.destination != destination
+            {
+                return Err(invalid());
+            }
+            crate::business::file_relocation::require(
+                state,
+                original,
+                &branch.head_commit_id,
+                entries,
+            )?;
+        }
         let entry = entries
             .iter()
             .find(|entry| entry.lookup_key() == source.key())

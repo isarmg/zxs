@@ -19,6 +19,7 @@ mod node_retirement;
 mod page;
 mod placement;
 mod review;
+mod relocation;
 mod rows;
 mod shared_history;
 mod staging;
