@@ -84,6 +84,34 @@ fn directory_git_decode_keeps_large_generations_and_exact_location() {
 }
 
 #[test]
+fn empty_directory_git_status_keeps_unborn_head_staged() {
+    let mut value = wire();
+    value["index_generation"] = "1".into();
+    for field in ["added", "modified", "deleted"] {
+        value[field] = "0".into();
+    }
+    let (state, model) = reviewed(value.clone());
+    let status = model.status.as_ref().unwrap();
+    assert!(status.initialized && status.head_tree_id.is_none() && status.staged);
+    assert_eq!(status.index_generation, 1);
+    assert!(commit_review(&state, &model).is_some());
+
+    value["staged"] = false.into();
+    assert_eq!(
+        decode(value.clone(), &target()).unwrap_err().code,
+        storage_contract::ErrorCode::InvalidResponse
+    );
+
+    value["head_tree_id"] = id("dtree", 1).into();
+    value["index_generation"] = "2".into();
+    let (state, model) = reviewed(value);
+    let status = model.status.as_ref().unwrap();
+    assert_eq!(status.head_tree_id.as_deref(), Some(id("dtree", 1).as_str()));
+    assert!(!status.staged);
+    assert!(commit_review(&state, &model).is_none());
+}
+
+#[test]
 fn directory_git_nullable_fields_are_required_not_legacy_defaults() {
     for field in [
         "owner",

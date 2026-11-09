@@ -23,7 +23,9 @@ fn fixture() -> (State, Model) {
     state.files.repository_id = target.repository.clone();
     state.files.repository_path = target.path.clone();
     state.files.namespace_head = target.namespace_head.clone();
-    let status = super::super::decode(json!({"repository_id":id("repo",1),"directory_id":id("entry",1),"path":"docs","initialized":true,"owner":{"directory_id":id("entry",1),"path":"docs"},"directory_branch_id":id("dbr",1),"working_tree_id":id("dtree",1),"head_tree_id":null,"index_generation":"0","staged":false,"unstaged":false,"needs_restage":false,"added":"0","modified":"0","deleted":"0","children":[],"legacy_history":false}), &target).unwrap();
+    // A newly initialized empty repository has an index but no user commit.
+    // The production status therefore reports generation 1 and staged=true.
+    let status = super::super::decode(json!({"repository_id":id("repo",1),"directory_id":id("entry",1),"path":"docs","initialized":true,"owner":{"directory_id":id("entry",1),"path":"docs"},"directory_branch_id":id("dbr",1),"working_tree_id":id("dtree",1),"head_tree_id":null,"index_generation":"1","staged":true,"unstaged":false,"needs_restage":false,"added":"0","modified":"0","deleted":"0","children":[],"legacy_history":false}), &target).unwrap();
     let mut model = Model::default();
     model.begin(Some(target.clone()));
     model.status = Some(status);

@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`5dbcb151`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`e7eb9a37`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -53,6 +53,8 @@
 
 
 ### T00 最新 GitHub 验证与格式修复
+
+- [短 CI #941](https://github.com/isarmg/zxs/actions/runs/42647364819) 的 web job `129266850463` 在准确 `903ceb4d986df6780b59750c6d89b649614b6ed0` 报 886 通过、13 失败；13 项均在 `directory_layout_tests.rs:26:443` 的共同状态夹具解码失败，尚未进入布局操作断言。原夹具同时声明已初始化、无用户 HEAD、`staged=false`，与真实 Engine 的 `head_tree_id.is_none() || …` 规则矛盾；初始化实际 index generation 为 1 而不是 0。本候选只修共同夹具为真实初始空目录状态，并补准确接受“无 HEAD／已暂存”、拒绝“无 HEAD／未暂存”、接受已提交 clean 状态的解码／提交门回归。生产校验、布局逻辑及原 13 项会话、未知结果、取消和锁门断言均不修改，不靠删 guard 或忽略用例求绿。原候选基于 `903ceb4d`，本片对齐准确主线 `e7eb9a37`，未本地运行程序、formatter、编译或测试，未触发新 workflow，候选仅准备 GitHub tree 交协调者串行提交，仍待 GitHub 复验，不能称 13 项已通过。
 
 - SQLite 维护入口 `4898cf90` 的 [#1](https://github.com/isarmg/zxs/actions/runs/42622510157) 因维护器错误改写冻结 `compliance/NOTICE.md` 而失败。`a8890879` 已合入仅删除该写入及移出 patch 允许路径的修复，不改不可变证据、来源校验器或安全门；[维护 #2](https://github.com/isarmg/zxs/actions/runs/42624756203) 在准确 `a88908793c0f1863885601b17f79e34065636a17` 成功完成旧/新来源 verify 与完整补丁生成，记录 224 个活动、107 个退役、4 个 superseded 来源。该 run 明确未编译、测试、audit、commit 或 push，该轮结束时 main 仍为受公告影响的 0.37.0，不把准备成功写成已安装或 security 通过。
 - #2 的唯一升级 patch artifact 为 `13678456327`，ZIP SHA-256 `4253f5cdce73040a24a7b3c93422a2f4d7ecf80a23934181f113122720540c43`；来源证据 artifact 为 `13678596175`，ZIP SHA-256 `4446c49d11c6bd5fa387cc3a08929b5228a758176e65484872259460b38ffee0`，2026-11-16 到期。连接器可下载 ZIP，但当前文件能力未能读取其中原始 patch；未通过本地解压或程序运行绕过用户约束。
