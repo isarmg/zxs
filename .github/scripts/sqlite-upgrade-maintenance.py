@@ -58,7 +58,7 @@ def emit_patch(destination, mapping_path):
         "Cargo.lock", "src/platform/Cargo.toml",
         "src/foundation/data-storage/sqlite-access/Cargo.toml",
         "compliance/provenance/origins.json", "compliance/rust-sources.json",
-        "compliance/NOTICE.md", "docs/THIRD_PARTY_RUST_SOURCES.md",
+        "docs/THIRD_PARTY_RUST_SOURCES.md",
         "docs/architecture/foundation-consumers.md",
         "compliance/external-tests/sqlite-0.39.1.json", mapping_path,
     }

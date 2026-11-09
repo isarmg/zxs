@@ -271,16 +271,8 @@ def upgrade(root, release, manage, run, evidence):
     # The second transition separates the authenticated successor unit module
     # back beneath root test/. Its new origin is explicit; old labels stay archived.
     successor_tests(root, release, head, module)
-    notice = root / "compliance/NOTICE.md"
-    text = notice.read_text()
-    if "libsqlite3-sys@0.39.1" in text:
-        raise ValueError("successor notice already exists")
-    old_notice = [line for line in text.splitlines() if line.startswith("| `libsqlite3-sys@0.37.0` |")]
-    if len(old_notice) != 1:
-        raise ValueError("missing exact predecessor notice")
-    new_notice = "| `libsqlite3-sys@0.39.1` | MIT | [LICENSE](licenses/upstream/" + IDENTITY + "/LICENSE) |"
-    text = replace_once(text, old_notice[0] + "\n", old_notice[0] + "\n" + new_notice + "\n")
-    write(root, "compliance/NOTICE.md", text.encode())
+    # NOTICE.md is immutable pre-layout evidence. The complete successor license
+    # is registered through origins/catalog and the generated current source index.
     manage.refresh(root)
     manage.verify(root, metadata=True)
     run(["python3", "tools/rust-sources/architecture.py", "refresh"])
