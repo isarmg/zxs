@@ -1,5 +1,6 @@
 """Restore one authenticated linked-SQLCipher binding, not its C implementation."""
 from copy import deepcopy
+import tomllib
 
 from sqlite_upgrade.archive import IDENTITY, NAME, SHA256, URL, VERSION, sha256
 from sqlite_upgrade.upgrade import DIRECTORY, PROVENANCE
@@ -122,6 +123,25 @@ def prepare_coverage(api, head, root, manage, run, previous, evidence):
         raise ValueError("coverage repair only fills the one missing SQLite superseded record")
     expected = deepcopy(before)
     expected["retired"] = retired
+    sqlite = [package for package in expected["packages"] if package["directory"] == DIRECTORY]
+    if len(sqlite) != 1 or sqlite[0]["package"] != NAME:
+        raise ValueError("coverage repair requires the unique SQLite package projection")
+    minimum_before = "min_sqlite_version_3_34_1"
+    minimum_after = "min_sqlite_version_3_45_3"
+    manifest = tomllib.loads((root / DIRECTORY / "Cargo.toml").read_text())
+    if (manifest["features"]["default"] != [minimum_after]
+            or manifest["features"][minimum_after] != ["pkg-config"]):
+        raise ValueError("coverage repair requires the authenticated SQLite minimum feature")
+    feature_rows = [*sqlite[0]["profiles"].values(), *sqlite[0]["consumers"]]
+    old_features = ["bundled", "bundled_bindings", "cc", "default", minimum_before, "pkg-config"]
+    if len(feature_rows) != 6 or any(row["features"] != old_features for row in feature_rows):
+        raise ValueError("coverage repair requires the six original SQLite feature rows")
+    for row in feature_rows:
+        row["features"] = [minimum_after if feature == minimum_before else feature
+                           for feature in row["features"]]
+    evidence["coverage_feature_projection"] = {
+        "package": NAME, "from": minimum_before, "to": minimum_after, "rows": len(feature_rows),
+    }
     evidence.update({
         "task": "refresh-fixed-sqlite-superseded-coverage",
         "source_binding_commit": BINDING_COMMIT,
@@ -141,7 +161,7 @@ def prepare_coverage(api, head, root, manage, run, previous, evidence):
         evidence["coverage_difference_truncated"] = len(difference) > 65536
         evidence["coverage_difference"] = difference[:65536].decode("utf-8", errors="replace")
         print(evidence["coverage_difference"], flush=True)
-        raise ValueError("coverage generation changed more than the authenticated SQLite history entry")
+        raise ValueError("coverage generation changed more than the SQLite history and minimum-feature projection")
     if manage.read_json(root / manage.CATALOG) != previous:
         raise ValueError("coverage generation changed the source catalog")
     allowed = [COVERAGE_JSON, COVERAGE_DOC]
