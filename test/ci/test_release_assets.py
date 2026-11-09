@@ -132,6 +132,19 @@ class ReleaseAssets(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.verify()
 
+    def test_helper_payload_binding_is_required_even_with_consistent_asset_checksums(self):
+        build = self.assets / "BUILD.txt"
+        fields = dict(line.split("=", 1) for line in build.read_text().splitlines())
+        for key, value in (("native-helper-embedded-zxs", "false"),
+                           ("native-helper-payload-sha256", "0" * 64),
+                           ("native-helper-payload-sha256", "missing")):
+            with self.subTest(key=key, value=value):
+                changed = dict(fields, **{key: value})
+                build.write_text("".join(f"{name}={text}\n" for name, text in changed.items()))
+                self.checksums()
+                with self.assertRaisesRegex(ValueError, "helper must embed the exact standalone ZXS build payload"):
+                    self.verify()
+
     def test_elf_type_and_abi_are_required_even_with_consistent_hashes(self):
         binary = self.assets / "zxs-0.1.0-debian13-amd64"
         build = self.assets / "BUILD.txt"
@@ -145,6 +158,9 @@ class ReleaseAssets(unittest.TestCase):
             binary.write_bytes(data)
             fields = dict(line.split("=", 1) for line in original.splitlines())
             fields["native-zxs-sha256"] = hashlib.sha256(data).hexdigest()
+            # This case targets ELF validation, not the earlier helper-payload
+            # identity gate. Keep both declared payload digests consistent.
+            fields["native-helper-payload-sha256"] = fields["native-zxs-sha256"]
             add_runtime_fields(fields)
             build.write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
             self.checksums()
