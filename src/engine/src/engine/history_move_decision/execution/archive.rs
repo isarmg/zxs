@@ -94,7 +94,7 @@ fn retire_one(
     let retained = root.optional_metadata(&destination)?;
     match (old, retained) {
         (Some(_), None) => {
-            marker(root, &source, kind, published, &choice)?;
+            marker(root, &source, kind, published, choice)?;
             let identity = root.directory_identity(&source)?;
             let held = root.private_child_matching(&source, identity)?;
             root.rename_noreplace_destination_first_synced(&source, &destination)?;
@@ -105,10 +105,10 @@ fn retire_one(
                     "move preparation changed during preserving retirement",
                 ));
             }
-            marker(root, &destination, kind, published, &choice)?;
+            marker(root, &destination, kind, published, choice)?;
         }
         (None, Some(_)) => {
-            marker(root, &destination, kind, published, &choice)?;
+            marker(root, &destination, kind, published, choice)?;
             // A prior rename may have succeeded before its final directory sync.
             root.sync_dir(&operation)?;
             root.sync_dir(root.path())?;

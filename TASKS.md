@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`619b4d32`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`2cd47c57`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -53,6 +53,8 @@
 
 
 ### T00 最新 GitHub 验证与格式修复
+
+- [短 CI #946](https://github.com/isarmg/zxs/actions/runs/42651998795) 的 quality job `129283198978` 在准确 `619b4d32` 已越过 rustfmt，随后 Engine Clippy 报 26 条错误。本片仅修跨盘归档的 3 处冗余 `&choice`、普通正文同步父路径的 1 处冗余借用，以及 `shared_file_topology::partition` 的显式计数循环：改用 `enumerate()`，仍在每条记录处理前调用原 step／取消检查，并在相同的第 `MAX_SHARED_HISTORY_NODES + 1` 条记录或外部文件成员处拒绝。归档原 choice、正文 inode/完整性和所有同步屏障、拓扑预算及分组语义不变；不改 lint、忽略项、测试或其它代理负责的大枚举。原候选基于 `2cd47c57`，仅 3 份业务源码及 TASKS；未本地运行程序、格式器、编译或测试，未触发 CI／写远端，尚未复验，不能称 quality 或跨盘业务已通过。
 
 - [短 CI #945](https://github.com/isarmg/zxs/actions/runs/42650286254) 在准确 `95a78b8c207d33ca7ed03d70e4e4b167040b9803` 的 build-tools job `129277251920` 已完成编译，browser-smoke 为 49 通过／8 失败。八项均在创建真实夹具时进入 FILE 库物理检查，报 `no such table: 1`，不是已证实的八处材料损坏。根因是共用查询误用 `pragma_integrity_check(1)`：SQLite 3.54.1 的表值包装将参数引号化，而完整性检查把该值当表名；它不同于直接数值 PRAGMA 的诊断上限。本候选只改为无参数的全库 `pragma_integrity_check()`，保留最多两行／每行 512 字符、原 VM 步数预算、唯一 `ok` 成功、错误来源及 handler 清理，不改用 quick_check 或单表检查，不忽略损坏。FILE、目录库、盘根 current/history 与 SYSTEM 准备镜像的现有共用入口同步受益，原格式、权威和大小预算不变；SQLite 内部使用默认诊断上限，外层仍严格有界。原候选基于 `95a78b8c`，现对齐 `619b4d32`；仅业务修复与 TASKS，既有回归不删改；未本地运行程序、格式器、编译或测试，未触发 workflow，仅准备 GitHub tree 交协调者串行提交，仍待准确提交的 GitHub 复验，不能称八项已通过。
 

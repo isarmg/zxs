@@ -153,13 +153,11 @@ pub(crate) fn partition<'a>(
         return Err(exhausted());
     }
     let mut groups = BTreeMap::<ContentKey, BTreeSet<&str>>::new();
-    let mut count = 0;
-    for version in versions {
+    for (count, version) in versions.into_iter().enumerate() {
         step()?;
         if count == MAX_SHARED_HISTORY_NODES || !files.contains(version.file) {
             return Err(exhausted());
         }
-        count += 1;
         if version.content.1 != 0 && !excluded.contains(version.version) {
             groups
                 .entry(version.content)

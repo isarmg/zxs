@@ -278,8 +278,7 @@ impl store::Target {
                 .expect("invariant: version parent"),
         )?;
         root.sync_dir(
-            &self
-                .staged_version(version)
+            self.staged_version(version)
                 .parent()
                 .expect("invariant: staging parent"),
         )?;
