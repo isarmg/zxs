@@ -20,7 +20,8 @@ pub use history_move::{
 };
 pub(crate) use history_move::{
     FileHistoryMoveReplay, NATIVE_KIND as FILE_HISTORY_MOVE_KIND, NativeMoveCandidate,
-    NativeMoveDraft, reject_unclosed_publication as reject_unclosed_file_history_move,
+    NativeMoveDraft, admit_source_deletion as admit_file_history_move_deletion,
+    reject_unclosed_publication as reject_unclosed_file_history_move,
 };
 pub(crate) mod file_ancestry;
 mod file_history_merges;

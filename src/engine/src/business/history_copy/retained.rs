@@ -57,6 +57,15 @@ pub(crate) struct CopiedLifecycle {
 
 pub(crate) fn read(receipt: &OperationResult, file: &str) -> Result<CopiedLifecycle> {
     let raw = receipt.result.get(FIELD).ok_or_else(invalid)?;
+    require_event_budget(raw)?;
+    bounded(raw)?;
+    let value: CopiedLifecycle = json_codec::from_value(raw.clone())?;
+    validate(receipt, file, &value)?;
+    Ok(value)
+}
+
+/// Fence the vector before either reader clones or decodes its envelope.
+pub(in crate::business) fn require_event_budget(raw: &Value) -> Result<()> {
     // State is already bounded by publication admission; retain a stricter
     // per-file limit before decoding/copying the retained vector.
     if raw
@@ -71,8 +80,16 @@ pub(crate) fn read(receipt: &OperationResult, file: &str) -> Result<CopiedLifecy
             "retained audit exceeds its event budget",
         ));
     }
-    bounded(raw)?;
-    let value: CopiedLifecycle = json_codec::from_value(raw.clone())?;
+    Ok(())
+}
+
+/// The native move reader already decoded the same bounded result envelope.
+/// Reuse this ownership rule without decoding or cloning its audit again.
+pub(in crate::business) fn validate(
+    receipt: &OperationResult,
+    file: &str,
+    value: &CopiedLifecycle,
+) -> Result<()> {
     if !matches!(
         receipt.kind.as_str(),
         RETAINED_KIND | crate::business::FILE_HISTORY_MOVE_KIND
@@ -100,7 +117,7 @@ pub(crate) fn read(receipt: &OperationResult, file: &str) -> Result<CopiedLifecy
     storage_contract::validate_id(&value.source_file_id, "file")?;
     storage_contract::validate_id(&value.source_history_tree_id, "history")?;
     storage_contract::validate_id(&value.history_tree_id, "history")?;
-    Ok(value)
+    Ok(())
 }
 
 pub(super) fn apply(

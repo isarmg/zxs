@@ -1,10 +1,13 @@
 //! One unpublished native operation, never a fabricated copy + delete pair.
 //! This completes receipt-shaped logical inputs, not publication authority.
 use super::*;
-use data_serialization::Serialize;
+use data_serialization::{Deserialize, Serialize};
 use storage_contract::{CommitState, CurrentHealth, Event, OperationResult, ProtectionAtPublish};
 
 pub(crate) const KIND: &str = "file.history.move";
+
+mod admission;
+pub(crate) use admission::admit_source_deletion;
 
 #[derive(Serialize)]
 #[serialization(deny_unknown_fields)]
@@ -13,13 +16,13 @@ struct Request<'a> {
     source_file_id: &'a str,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serialization(rename_all = "SCREAMING_SNAKE_CASE")]
 enum SlotState {
     CompleteVerified,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 struct Slot {
     slot_id: String,
@@ -29,7 +32,7 @@ struct Slot {
     binding_generation: u64,
     state: SlotState,
 }
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serialization(deny_unknown_fields)]
 struct Version {
     version_id: String,
@@ -340,3 +343,7 @@ pub(crate) fn reject_unclosed_publication(
 #[cfg(test)]
 #[path = "../../../../../../test/engine/unit/business/history_move_native_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/business/history_move_native_lifecycle_tests.rs"]
+mod lifecycle_tests;

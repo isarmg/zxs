@@ -192,21 +192,7 @@ fn admit_receipt(state: &State, receipt: &OperationResult, undo: bool) -> Result
             .ok_or_else(invalid)?
             .clone(),
     )?;
-    storage_contract::validate_id(&node.node_id, "fdel")?;
-    HistoryFileId::parse(&node.file_id)?;
-    HistoryRepositoryId::parse(&node.repository_id)?;
-    storage_contract::history_window::HistoryTreeId::parse(&node.history_tree_id)?;
-    for (branch, head) in &node.branch_heads {
-        storage_contract::history_window::HistoryBranchId::parse(branch)?;
-        storage_contract::history_window::HistoryNodeId::parse(head)?;
-    }
-    let parents = node
-        .branch_heads
-        .values()
-        .collect::<std::collections::BTreeSet<_>>();
-    if node.branch_heads.is_empty() || parents.into_iter().ne(node.parent_node_ids.iter()) {
-        return Err(invalid());
-    }
+    admit_node_shape(&node)?;
     let input = if undo {
         json!({"file_id": node.file_id, "deletion_node_id": node.node_id})
     } else {
@@ -254,6 +240,26 @@ fn admit_receipt(state: &State, receipt: &OperationResult, undo: bool) -> Result
         return Err(invalid());
     }
     Ok(node)
+}
+
+/// Shared wire-shape rule; current-frontier and publication authority are separate.
+pub(crate) fn admit_node_shape(node: &FileDeletionNode) -> Result<()> {
+    storage_contract::validate_id(&node.node_id, "fdel")?;
+    HistoryFileId::parse(&node.file_id)?;
+    HistoryRepositoryId::parse(&node.repository_id)?;
+    storage_contract::history_window::HistoryTreeId::parse(&node.history_tree_id)?;
+    for (branch, head) in &node.branch_heads {
+        storage_contract::history_window::HistoryBranchId::parse(branch)?;
+        storage_contract::history_window::HistoryNodeId::parse(head)?;
+    }
+    let parents = node
+        .branch_heads
+        .values()
+        .collect::<std::collections::BTreeSet<_>>();
+    if node.branch_heads.is_empty() || parents.into_iter().ne(node.parent_node_ids.iter()) {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 fn appended<T: PartialEq>(

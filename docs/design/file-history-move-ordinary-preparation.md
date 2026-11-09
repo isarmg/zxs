@@ -77,3 +77,6 @@
 只读 capture 暴露了 `optional_metadata` 不吞中间目录不存在的契约。最终源码已在 capture 与保留容量核算中按固定两级逐层观察 `.zxs-layout`、`database-installs`，保持只读与其它 I/O 错误传播，不把任意错误视作材料不存在。**此修正及 `e03c1caf`、`90450cf0` 上的组合未再编译或测试**：用户随后要求“本地也不再编译，直接提交”，全部后续本地验证计划已取消。
 
 通用安装器单测、完整套件、Clippy、真实 SMB／磁盘／断电均未执行；未重新触发 GitHub CI。此前格式检查只覆盖当时源码，不替代最终组合的编译或运行。
+
+
+冷逻辑后继：[单一 move 收据与冷 D 生命周期](file-history-move-receipt-lifecycle.md) 接原源 D 的准确收据/撤销准入，不改变本片原安装对、普通 publication 硬门禁或五项未完成义务。

@@ -3,11 +3,18 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+fn is_lifecycle(kind: &str) -> bool {
+    matches!(
+        kind,
+        "file.delete" | "file.delete.undo" | crate::business::FILE_HISTORY_MOVE_KIND
+    )
+}
+
 pub(crate) fn admit_current(state: &State) -> Result<()> {
     let mut receipts = BTreeMap::new();
     let mut operations = BTreeSet::new();
     for (id, receipt) in state.operations.iter() {
-        if !matches!(receipt.kind.as_str(), "file.delete" | "file.delete.undo") {
+        if !is_lifecycle(&receipt.kind) {
             continue;
         }
         if receipt.operation_id != *id
@@ -20,16 +27,19 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
     let mut witnessed = BTreeSet::new();
     for event in state.events.iter() {
         if let Some((id, receipt)) = receipts.get(&event.sequence) {
+            let owns_object = if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
+                receipt.commit_id.as_deref() == Some(event.object_id.as_str())
+            } else {
+                event.object_id == id.to_string()
+            };
             if event.operation_id != *id
                 || event.kind != receipt.kind
-                || event.object_id != id.to_string()
+                || !owns_object
                 || !witnessed.insert(*id)
             {
                 return Err(invalid());
             }
-        } else if operations.contains(&event.operation_id)
-            || matches!(event.kind.as_str(), "file.delete" | "file.delete.undo")
-        {
+        } else if operations.contains(&event.operation_id) || is_lifecycle(&event.kind) {
             return Err(invalid());
         }
     }
@@ -40,7 +50,11 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
     let mut created = BTreeSet::new();
     for (_, receipt) in receipts.values() {
         let undo = receipt.kind == "file.delete.undo";
-        let node = admit_receipt(state, receipt, undo)?;
+        let node = if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
+            crate::business::admit_file_history_move_deletion(state, receipt)?
+        } else {
+            admit_receipt(state, receipt, undo)?
+        };
         if undo {
             if active.remove(&node.file_id).as_ref() != Some(&node) {
                 return Err(invalid());

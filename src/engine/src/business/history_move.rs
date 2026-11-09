@@ -11,7 +11,7 @@ mod projection;
 pub use projection::{CurrentFileHistoryMoveProjection, FileHistoryMoveProjection};
 pub(crate) use projection::{
     FileHistoryMoveReplay, NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft,
-    reject_unclosed_publication,
+    admit_source_deletion, reject_unclosed_publication,
 };
 
 /// Exact source identity in addition to the two namespace heads. The history

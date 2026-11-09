@@ -6,7 +6,8 @@ use json_codec::json;
 
 mod native;
 pub(crate) use native::{
-    KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, reject_unclosed_publication,
+    KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, admit_source_deletion,
+    reject_unclosed_publication,
 };
 
 struct ProjectionInput<'a> {
