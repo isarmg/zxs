@@ -1,4 +1,4 @@
-//! Core execution regressions. Source only in the no-CI development slice.
+//! Core execution, retained database and cold-recovery regressions.
 use super::*;
 use storage_engine::ContentState;
 
@@ -405,6 +405,27 @@ fn detached_last_node_retires_and_resumes_without_reviving_the_old_file_identity
     assert_eq!(resumed.publication(), &receipt);
     assert!(resumed.cleanup().unwrap().all_required_bindings_absent());
     assert!(pool.engine.open_content(&old.version_id).is_err());
+    assert_eq!(
+        pool.engine
+            .file_node_version(&old.file_id, &old.version_id)
+            .unwrap_err()
+            .code(),
+        ErrorCode::FileNodeNotFound
+    );
+    assert_eq!(
+        pool.engine
+            .file_node_tags(&old.file_id, &old.version_id)
+            .unwrap_err()
+            .code(),
+        ErrorCode::FileNodeNotFound
+    );
+    assert_eq!(
+        pool.engine
+            .file_node_parents(&old.file_id, &old.version_id)
+            .unwrap_err()
+            .code(),
+        ErrorCode::FileNodeNotFound
+    );
     assert!(pool.engine.file_history(&old.file_id).unwrap().is_empty());
     pool.save(&[("gone", b"new unrelated file")]);
     assert_ne!(pool.entry("gone").file_id, old.file_id);
@@ -435,6 +456,10 @@ fn detached_file_branches_become_frozen_terminal_evidence_and_cannot_open_worksp
         .values()
         .filter(|branch| branch.file_id.as_deref() == Some(old.file_id.as_str()))
         .map(|branch| (branch.branch_id.clone(), branch.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let heads = branches
+        .keys()
+        .map(|id| (id.clone(), pool.engine.file_branch_head(id).unwrap()))
         .collect::<std::collections::BTreeMap<_, _>>();
     pool.engine
         .file_namespace(
@@ -478,10 +503,62 @@ fn detached_file_branches_become_frozen_terminal_evidence_and_cannot_open_worksp
             original,
             "terminal archival does not rewrite branch evidence"
         );
+        assert_eq!(
+            pool.engine.file_branch_head(id).unwrap_err().code(),
+            ErrorCode::FileNodeNotFound
+        );
         assert!(pool.engine.create_workspace(id, "admin").is_err());
     }
+    let container = pool.engine.config().disks[0]
+        .root
+        .join("histories")
+        .join(&pool.history)
+        .join("file-containers")
+        .join(&old.file_id)
+        .join("namespace")
+        .join(old.path());
+    let scope = storage_engine::ObjectDatabaseScope::File {
+        file_id: old.file_id.clone(),
+        history_tree_id: pool.history.clone(),
+    };
+    let inspect = || {
+        storage_engine::inspect_object_database_material(
+            std::fs::File::open(&container).unwrap(),
+            container.clone(),
+            &scope,
+        )
+        .unwrap()
+    };
     let root = pool.root.clone();
     drop(pool.engine);
+    let database = inspect();
+    let stored_heads = database
+        .records()
+        .iter()
+        .filter(|row| row.kind() == "branch")
+        .map(|row| {
+            let body: json_codec::Value = json_codec::from_str(row.body_json()).unwrap();
+            (
+                row.id().to_owned(),
+                body["head_node_id"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        stored_heads, heads,
+        "SQLite retains the original archival HEAD identities"
+    );
+    let version = database
+        .records()
+        .iter()
+        .find(|row| row.kind() == "version" && row.id() == old.version_id)
+        .unwrap();
+    let version: json_codec::Value = json_codec::from_str(version.body_json()).unwrap();
+    assert_eq!(
+        version["content_state"],
+        json_codec::to_value(ContentState::Retired).unwrap()
+    );
+    std::fs::remove_file(container.join(".zxs-file.sqlite")).unwrap();
     pool.engine = Engine::open(&root).unwrap();
     assert!(
         pool.engine
@@ -492,14 +569,25 @@ fn detached_file_branches_become_frozen_terminal_evidence_and_cannot_open_worksp
             .all_required_bindings_absent()
     );
     for id in branches.keys() {
+        assert_eq!(
+            pool.engine.file_branch_head(id).unwrap_err().code(),
+            ErrorCode::FileNodeNotFound
+        );
         assert!(pool.engine.create_workspace(id, "admin").is_err());
     }
+    drop(pool.engine);
+    assert_eq!(
+        inspect(),
+        database,
+        "cold reconstruction retains the exact archival projection"
+    );
+    pool.engine = Engine::open(&root).unwrap();
     pool.save(&[("unrelated", b"still writable")]);
     assert_ne!(pool.entry("unrelated").file_id, old.file_id);
 }
 
 #[test]
-fn retained_file_branch_terminal_decision_does_not_override_current_namespace_or_D() {
+fn retained_file_branch_terminal_decision_does_not_override_current_namespace_or_d() {
     let mut pool = Pool::new();
     pool.save(&[("a", b"not detached")]);
     let old = pool.entry("a");

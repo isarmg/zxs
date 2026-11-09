@@ -17,24 +17,35 @@ pub struct FileNodeSummary {
 }
 
 pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<String> {
+    let version = retained_node_version(state, file, node)?;
+    if crate::node_retirement_engine::is_retired(state, version) {
+        return Err(Error::new(
+            storage_contract::ErrorCode::FileNodeNotFound,
+            "node is permanently retired",
+        ));
+    }
+    Ok(version.to_owned())
+}
+
+fn retained_node_version<'a>(state: &'a State, file: &str, node: &str) -> Result<&'a str> {
     let version = state
         .versions
         .get(node)
         .filter(|v| v.file_id == file)
-        .map(|v| v.version_id.clone())
+        .map(|v| v.version_id.as_str())
         .or_else(|| {
             state
                 .file_path_nodes
                 .get(node)
                 .filter(|n| n.file_id == file)
-                .map(|n| n.version_id.clone())
+                .map(|n| n.version_id.as_str())
         })
         .or_else(|| {
             state
                 .file_metadata_nodes
                 .get(node)
                 .filter(|n| n.file_id == file)
-                .map(|n| n.version_id.clone())
+                .map(|n| n.version_id.as_str())
         })
         .ok_or_else(|| {
             Error::new(
@@ -42,15 +53,9 @@ pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<Stri
                 "node does not belong to this file",
             )
         })?;
-    if crate::node_retirement_engine::is_retired(state, &version) {
-        return Err(Error::new(
-            storage_contract::ErrorCode::FileNodeNotFound,
-            "node is permanently retired",
-        ));
-    }
     let body = state
         .versions
-        .get(&version)
+        .get(version)
         .expect("invariant: admitted file nodes reference an existing body");
     debug_assert_eq!(
         body.file_id, file,
@@ -259,6 +264,20 @@ impl<'a> NodeProjection<'a> {
 }
 
 pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
+    let (file, node) = branch_head_record(state, branch)?;
+    node_version(state, file, node)?;
+    Ok(node.to_owned())
+}
+
+/// A derived audit row may preserve a retired HEAD. This validates its retained
+/// ownership, not live-node access or the terminal publication's receipt closure.
+pub(crate) fn retained_branch_head(state: &State, branch: &str) -> Result<String> {
+    let (file, node) = branch_head_record(state, branch)?;
+    retained_node_version(state, file, node)?;
+    Ok(node.to_owned())
+}
+
+fn branch_head_record<'a>(state: &'a State, branch: &str) -> Result<(&'a str, &'a str)> {
     let branch = state.branches.get(branch).ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::FileBranchNotFound,
@@ -273,7 +292,7 @@ pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
     })?;
     let node = branch
         .file_node_id
-        .clone()
+        .as_deref()
         .or_else(|| {
             state
                 .commits
@@ -283,7 +302,7 @@ pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
                         .iter()
                         .find(|e| e.kind == NamespaceEntryKind::File && e.file_id == file)
                 })
-                .map(|e| e.version_id.clone())
+                .map(|e| e.version_id.as_str())
         })
         .ok_or_else(|| {
             Error::new(
@@ -291,8 +310,7 @@ pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
                 "file branch head is missing",
             )
         })?;
-    node_version(state, file, &node)?;
-    Ok(node)
+    Ok((file, node))
 }
 
 impl MetadataView {

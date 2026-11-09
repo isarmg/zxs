@@ -128,7 +128,7 @@ fn with_events(
                     name: branch.name.clone(),
                     state: branch.state,
                     generation: branch.generation,
-                    head_node_id: file_nodes::branch_head(state, id)?,
+                    head_node_id: file_nodes::retained_branch_head(state, id)?,
                     pending_version_id: branch.pending_file_versions.get(file).cloned(),
                     alias_of: state.file_branch_aliases.get(id).cloned(),
                 },

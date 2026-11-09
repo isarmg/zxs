@@ -1331,7 +1331,7 @@ fn chain_first_native_candidate_preserves_full_receipts_but_never_admits_live_st
     )
     .unwrap();
     let next = crate::journal::resolve_admitted_snapshot(snapshot, read).unwrap();
-    for (id, result) in &fixture.terminal.state().operations {
+    for (id, result) in fixture.terminal.state().operations.iter() {
         assert_eq!(next.state().operations.get(id), Some(result));
         assert_eq!(
             next.state().operation_principals.get(id),
@@ -2965,7 +2965,7 @@ fn selected_chain_generation_reads_actual_current_without_active_marker_or_stop(
         )
         .unwrap();
     assert_eq!(reader.report().unwrap().selector_hash, report.selector_hash);
-    let state = fixture.terminal.published_state();
+    let state = fixture.terminal.state();
     for id in state.branches.keys() {
         reader.branch_entries(id).unwrap();
     }
@@ -3226,7 +3226,7 @@ fn chain_selected_reader_never_falls_back_after_installed_object_is_removed() {
     assert_eq!(fs::read(&isolated).unwrap(), bytes);
     fs::remove_file(&installed).unwrap();
     assert!(reader.report().is_err());
-    for id in fixture.terminal.published_state().branches.keys() {
+    for id in fixture.terminal.state().branches.keys() {
         assert!(reader.branch_entries(id).is_err());
     }
     assert!(!installed.exists());
