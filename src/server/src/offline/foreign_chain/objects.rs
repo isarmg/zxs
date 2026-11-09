@@ -91,7 +91,7 @@ pub(crate) fn preview(input: Original) -> Result<json_codec::Value> {
     let envelope = WorkerRequest {
         context: root.context.clone(),
         action: Action::Objects {
-            plan: plan.clone(),
+            plan: Box::new(plan.clone()),
             databases,
             prepare: None,
             completed: completion.is_some(),
@@ -136,7 +136,7 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     let envelope = WorkerRequest {
         context: root.context.clone(),
         action: Action::Objects {
-            plan: plan.clone(),
+            plan: Box::new(plan.clone()),
             databases,
             prepare: Some(input.expected.clone()),
             completed: completion.is_some(),

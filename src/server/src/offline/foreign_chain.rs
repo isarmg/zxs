@@ -262,7 +262,7 @@ enum Action {
         expected: databases::Expected,
     },
     Objects {
-        plan: Plan,
+        plan: Box<Plan>,
         databases: databases::Expected,
         prepare: Option<storage_engine::ForeignIdentityClosureReport>,
         completed: bool,
@@ -271,7 +271,7 @@ enum Action {
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Output {
-    Preview { plan: Plan },
+    Preview { plan: Box<Plan> },
     Report { report: Report },
     Databases { report: databases::Observation },
     Identity { proposal: identity::Proposal },
@@ -415,7 +415,7 @@ pub(crate) fn preview(input: Input) -> Result<json_codec::Value> {
     };
     plan.validate()?;
     Root::open(input.service_user)?.check(&plan)?;
-    preview_result(plan, None, false)
+    preview_result(*plan, None, false)
 }
 pub(crate) fn original(input: Original) -> Result<json_codec::Value> {
     stopped(input.external_writers_stopped)?;

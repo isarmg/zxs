@@ -134,7 +134,7 @@ fn graph_budget_counts_before_allocating_output() {
     let expected = canonical_json(&value).unwrap().len();
     assert_eq!(encoded_length(&value, expected).unwrap(), expected);
     assert_eq!(
-        encoded_length(&value, expected - 1).unwrap_err().code,
+        encoded_length(&value, expected - 1).unwrap_err().code(),
         ErrorCode::ResourceLimit
     );
 }

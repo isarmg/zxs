@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`0a152e5e`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`fe55a7b9`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -53,6 +53,8 @@
 
 
 ### T00 最新 GitHub 验证与格式修复
+
+- [短 CI #955 quality](https://github.com/isarmg/zxs/actions/runs/42660997622/job/129314790605) 在准确 `3d9d8a50a32611ecc9345cc04dfd7f65b18e18ee` 新报 Foreign worker 两个 `large_enum_variant` 及既有历史图预算测试的 E0615。本片对齐准确主线 `fe55a7b9940d901bb7c0bae82530d04471cbdfdc` 并保留此前独立修复，只将最大 `Action::Objects` 的 plan 和 `Output::Preview` 的 plan 改为拥有的 Box，按真实构造点装箱，在调用原 preview 消费函数时移出；其他验证继续借用同一完整 Plan。JSON action/kind/plan 字段、摘要、64 KiB 管道预算、原请求／账户／根身份检查及准备顺序不变，不加 allow、不调整 lint。相应变体在构造／解码时增加一层计划分配，不声称性能已验。既有 `graph_budget_counts_before_allocating_output` 只按实际 Error API 调用 `.code()`，仍断言相同 `ResourceLimit`，不删断言或跳过预算。本片仅三份生产源码、一份既有测试适配与 TASKS，其他 #955 诊断由独立切片处理；未新增测试／文档，未本地运行程序、formatter、编译、测试或 CI，仅准备 GitHub tree 交协调者，不创建 commit/ref 或更新 main，仍待准确提交的 GitHub 复验。暂停的完整 Foreign 接纳 WIP 未混入，不能据此称 quality 通过。
 
 - [短 CI #955](https://github.com/isarmg/zxs/actions/runs/42660997622) 的 quality job `129314790605` 在准确 `3d9d8a50a32611ecc9345cc04dfd7f65b18e18ee` 继续到 Engine lib test，暴露 `index/preparation_readback_tests.rs` 私有 `change` helper 的 E0521。按实际 Execute／SqlSafeStr 契约，helper 改接 `'static` 的 typed Execute；原字面量 SQL 保留原执行方式，唯一按实际 kind 拼接的 DELETE 改为静态 SQL 与 `.bind(kind)`，继续遍历全部实际 system_changes family，不枚举硬编码子集、不使用 AssertSqlSafe 或泄漏字符串。全部八项既有测试及损坏注入／精确 State、原 principal、未知 schema、完整 u64、取消断言保留，不改生产接口或拒绝门。仅这份既有测试源码和 TASKS，未本地运行程序、formatter、编译、Clippy 或测试，未另行触发 workflow；提交后仍待准确 head 的 GitHub 复验，不将源码修正视为 SYSTEM 回验已通过。
 

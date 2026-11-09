@@ -111,7 +111,9 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             };
             plan.validate()?;
             original(&target, &configuration, &plan)?;
-            Ok(Output::Preview { plan })
+            Ok(Output::Preview {
+                plan: Box::new(plan),
+            })
         }
         Action::Status { plan } => {
             original(&target, &configuration, &plan)?;
