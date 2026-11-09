@@ -38,14 +38,19 @@ fn node(operation: &str) -> storage_contract::FileDeletionNode {
         "operation_id":operation,"author":"alice","sequence":"1","created_at":"123"})).unwrap()
 }
 fn receipt(intent: &Intent, operation: &str) -> Value {
-    let (kind, result) = match intent {
+    let (kind, mut result) = match intent {
         Intent::Delete(_) => ("file.delete", json!({"deletion_node":node(operation)})),
+        Intent::DeleteBatch(_) => panic!("single-file fixture does not construct batch receipts"),
         Intent::Undo(node) => (
             "file.delete.undo",
             json!({"restored_file_id":node.file_id,"removed_deletion_node":node.as_ref()}),
         ),
     };
-    json!({"operation_id":operation,"operation_kind":kind,"request_digest":intent.digest("alice").unwrap(),"state":"completed","commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","publication_sequence":"1","result":result,"error":null})
+    result["timestamp"] = "123".into();
+    result["membership_epoch"] = "1".into();
+    result["version_protection"] = json!([]);
+    let sequence = if matches!(intent, Intent::Undo(_)) { "2" } else { "1" };
+    json!({"operation_id":operation,"operation_kind":kind,"request_digest":intent.digest("alice").unwrap(),"state":"completed","commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","publication_sequence":sequence,"result":result,"error":null})
 }
 fn attempt(intent: Intent, operation: &str) -> Attempt {
     Attempt {

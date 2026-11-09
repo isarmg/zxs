@@ -34,6 +34,10 @@ enum StoredIntent {
         repository_id: HistoryRepositoryId,
         path: name_policy::PortablePath,
     },
+    DeleteBatch {
+        #[serialization(deserialize_with = "batch::stored")]
+        request: batch::Stored,
+    },
     Undo {
         #[serialization(deserialize_with = "stored_node")]
         deletion_node: storage_contract::FileDeletionNode,
@@ -94,6 +98,9 @@ impl Record {
                 repository: repository_id,
                 path,
             }),
+            StoredIntent::DeleteBatch { request } => {
+                request::Intent::DeleteBatch(Arc::new(request.admit()?))
+            }
             StoredIntent::Undo { deletion_node } => {
                 wire::validate_node(&deletion_node).map_err(|mut error| {
                     error.status = 0;
@@ -124,6 +131,9 @@ impl Record {
                 file_id: target.file.clone(),
                 repository_id: target.repository.clone(),
                 path: target.path.clone(),
+            },
+            request::Intent::DeleteBatch(request) => StoredIntent::DeleteBatch {
+                request: request.stored(),
             },
             request::Intent::Undo(node) => StoredIntent::Undo {
                 deletion_node: node.as_ref().clone(),

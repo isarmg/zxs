@@ -10,6 +10,12 @@ fn description(record: &Record) -> String {
             target.file,
             record.operation
         ),
+        request::Intent::DeleteBatch(request) => format!(
+            "{} · {} · {}",
+            t("整批软删除文件", "Atomic file soft deletion"),
+            request.label(),
+            record.operation,
+        ),
         request::Intent::Undo(node) => format!(
             "{} · {} · {} · {} · {}",
             t("撤销准确删除节点", "Undo exact deletion node"),
@@ -20,6 +26,13 @@ fn description(record: &Record) -> String {
         ),
     }
 }
+fn batch_details(record: &Record) -> impl IntoView + use<> {
+    match &record.intent {
+        request::Intent::DeleteBatch(request) => Some(batch::retained_view(request)),
+        request::Intent::Delete(_) | request::Intent::Undo(_) => None,
+    }
+}
+
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     // Login/session admission hydrates before admitting more browser events.
     // Rendering, navigation and opening this panel never perform a mutation.
@@ -45,6 +58,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     view! {
                         <section class="zxs-stack">
                             <p><code>{description(&record)}</code></p>
+                            {batch_details(&record)}
                             <Show when=move ||state.with(|s|s.files.deletion.recovery.records.iter().any(|r|r.record.operation==operation&&r.settled.is_none()))>
                                 <p>{t("结果尚未确认。查询返回找不到或重试遭到拒绝，都不证明原操作未发布。", "The outcome is unconfirmed. A missing lookup or rejected retry does not prove the original operation never published.")}</p>
                                 {
@@ -69,7 +83,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                         <section class="zxs-stack" data-zxs-file-deletion-retry-review="">
                             <h3>{t("确认续发同一原请求", "Confirm the same original request")}</h3>
                             <p><code>{description(&review.record)}</code></p>
-                            <p>{t("仅使用原账号、文件、路径或准确删除节点以及原 operation ID。若原请求尚未发布，这会实际执行原删除或撤销；若已发布，只取回原收据。当前权限与状态仍由服务端决定。本机材料不是授权。", "Only the original account, file, path or exact deletion node and original operation ID are used. If it never published, this can perform the original deletion or restoration; otherwise it retrieves the original receipt. The server checks current permission and state. Local material grants no authority.")}</p>
+                            {batch_details(&review.record)}
+                            <p>{t("仅使用原账号、文件、路径或准确删除节点以及原 operation ID；多选保持完整原批次、目录分支和依据树，不重读当前选择替换任何项。若原请求尚未发布，这会实际执行原删除或撤销；若已发布，只取回原收据。当前权限与状态仍由服务端决定。本机材料不是授权。", "Only the original account, file, path or exact deletion node and original operation ID are used. A multi-file request keeps the complete original batch, folder branch and baseline tree; today's selection never replaces any item. If it never published, this can perform the original deletion or restoration; otherwise it retrieves the original receipt. The server checks current permission and state. Local material grants no authority.")}</p>
                             <button class="zxs-button" data-zxs-confirm-deletion-retry="" disabled=move ||state.with(|s|reviewed(s,epoch,generation).is_none()) on:click=move |_|retry(state,epoch,generation)>{t("确认续发原操作，不生成新 ID", "Retry original operation, without a new ID")}</button>
                             <button class="zxs-button" on:click=move |_|state.update(|s| {
                                 if s.session_epoch==epoch && s.files.deletion.recovery.review.as_ref().is_some_and(|r|r.generation==generation) {

@@ -1,5 +1,6 @@
 //! Deleted files remain discoverable outside the visible SMB namespace. Reads
 //! belong to a session/generation; undo belongs to the global operation ledger.
+mod batch;
 mod recovery;
 mod request;
 mod restore;
@@ -23,6 +24,7 @@ use wire::{Page, Summary};
 pub(crate) struct Model {
     review_generation: u64,
     review: Option<request::Review>,
+    batch_review: Option<batch::Review>,
     restore_review: Option<restore::Review>,
     attempt: Option<request::Attempt>,
     recovery: recovery::Queue,
@@ -38,6 +40,7 @@ impl Model {
     pub(crate) fn cancel_review(&mut self) {
         self.review_generation += 1;
         self.review = None;
+        self.batch_review = None;
         self.restore_review = None;
     }
 

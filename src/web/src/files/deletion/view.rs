@@ -5,6 +5,7 @@ const FRONTIER_PAGE: usize = 100;
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <section class="zxs-stack" data-file-deletions="">
+            {batch::view(state)}
             {move ||state.with(|s|s.files.deletion.review.clone()).map(|review| {
                 let generation = review.generation;
                 let epoch = review.epoch;

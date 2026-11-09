@@ -26,6 +26,7 @@ pub(super) struct Review {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Intent {
     Delete(Target),
+    DeleteBatch(Arc<batch::Request>),
     Undo(Arc<storage_contract::FileDeletionNode>),
 }
 #[derive(Clone)]
@@ -38,7 +39,7 @@ pub(super) struct Attempt {
     pub(super) in_flight: bool,
 }
 
-fn eligible(entry: &Entry) -> bool {
+pub(super) fn eligible(entry: &Entry) -> bool {
     entry.kind() == storage_contract::NamespaceEntryKind::File
         && !entry.read_only()
         && !entry.preview()
@@ -83,7 +84,7 @@ fn chosen<'a>(state: &'a State, explicit: Option<&'a Entry>) -> Option<&'a Entry
     Some(entry)
 }
 pub(crate) fn available(state: &State) -> bool {
-    chosen(state, None).is_some()
+    chosen(state, None).is_some() || batch::available(state)
 }
 fn identity_error(source: storage_contract::Error) -> api::Error {
     api::Error {
@@ -119,9 +120,14 @@ fn capture(state: &State, explicit: Option<&Entry>) -> Result<Option<Review>, ap
     }))
 }
 pub(crate) fn start(state: RwSignal<State>, entry: Option<Entry>) {
+    if entry.is_none() && state.with_untracked(|s| s.files.checked_entries.len() > 1) {
+        batch::start(state);
+        return;
+    }
     match state.with_untracked(|s| capture(s, entry.as_ref())) {
         Ok(Some(review)) => state.update(|s| {
             s.files.deletion.restore_review = None;
+            s.files.deletion.batch_review = None;
             s.files.deletion.review_generation = review.generation;
             s.files.deletion.review = Some(review);
         }),
@@ -189,6 +195,7 @@ impl Intent {
                 format!("/api/files/{}/deletion", api::segment(target.file.as_str())),
                 json!({"repository_id":target.repository.as_str(),"path":target.path.as_str(),"operation_id":operation}),
             ),
+            Self::DeleteBatch(request) => request.request(operation),
             Self::Undo(node) => (
                 format!("/api/files/{}/deletion/undo", api::segment(&node.file_id)),
                 json!({"deletion_node_id":node.node_id,"operation_id":operation}),
@@ -203,6 +210,7 @@ impl Intent {
                     "repository_id":target.repository.as_str(), "file_id":target.file.as_str(), "path":target.path.key(),
                 }),
             ),
+            Self::DeleteBatch(request) => ("file.delete.batch", request.input()),
             Self::Undo(node) => (
                 "file.delete.undo",
                 json!({
@@ -222,13 +230,10 @@ impl Intent {
                 if receipt["operation_kind"] != "file.delete" {
                     return false;
                 }
-                let result = &receipt["result"];
-                let Some(object) = result.as_object().filter(|object| object.len() == 1) else {
+                let Some(sequence) = wire::publication_sequence(receipt, &["deletion_node"]) else {
                     return false;
                 };
-                let Some(value) = object.get("deletion_node") else {
-                    return false;
-                };
+                let value = &receipt["result"]["deletion_node"];
                 // Complete bodyless frontier validation is shared with the read
                 // boundary. Neither a different file nor a generic receipt can
                 // release this exact request's unknown-outcome fence.
@@ -244,20 +249,23 @@ impl Intent {
                     deletion_node_id: deletion_id.into(),
                     path: target.path.clone(),
                 };
-                matches!(wire::node(value.clone(), &summary), Ok(Some(node)) if node.operation_id.to_string() == id && node.author == principal)
+                matches!(wire::node(value.clone(), &summary), Ok(Some(node)) if node.operation_id.to_string() == id && node.author == principal && node.sequence == sequence)
             }
+            Self::DeleteBatch(request) => request.receipt_matches(id, principal, receipt),
             Self::Undo(node) => {
                 receipt["operation_kind"] == "file.delete.undo"
-                    && receipt["result"]
-                        .as_object()
-                        .is_some_and(|result| result.len() == 2)
+                    && wire::publication_sequence(
+                        receipt,
+                        &["restored_file_id", "removed_deletion_node"],
+                    )
+                    .is_some_and(|sequence| node.sequence < sequence)
                     && receipt["result"]["restored_file_id"] == node.file_id
                     && receipt["result"]["removed_deletion_node"] == json!(node.as_ref())
             }
         }
     }
 }
-fn submit(state: RwSignal<State>, intent: Intent) {
+pub(super) fn submit(state: RwSignal<State>, intent: Intent) {
     // Admission is checked before generating an operation ID or touching storage.
     // A review alone does not authorize bypassing the restored-request queue.
     if !state.with_untracked(|s| s.files.deletion.recovery.ready_for_new(s)) {

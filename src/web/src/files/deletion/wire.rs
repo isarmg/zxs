@@ -128,3 +128,25 @@ pub(super) fn validate_node(node: &FileDeletionNode) -> Result<(), api::Error> {
     }
     Ok(())
 }
+
+/// Native metadata-only publications retain these planner fields in both POST
+/// and outcome responses. Missing fields are not an older supported receipt.
+pub(super) fn publication_sequence(receipt: &Value, fields: &[&str]) -> Option<u64> {
+    let result = receipt["result"].as_object()?;
+    if result.len() != fields.len() + 3
+        || fields.iter().any(|field| !result.contains_key(*field))
+        || receipt["protection_at_publish"] != "NOT_APPLICABLE"
+        || !result.get("version_protection")?.as_array()?.is_empty()
+    {
+        return None;
+    }
+    decimal(result.get("timestamp")?)?;
+    decimal(result.get("membership_epoch")?)?;
+    let sequence = decimal(&receipt["publication_sequence"])?;
+    (sequence > 0).then_some(sequence)
+}
+fn decimal(value: &Value) -> Option<u64> {
+    let text = value.as_str()?;
+    let parsed = text.parse::<u64>().ok()?;
+    (parsed.to_string() == text).then_some(parsed)
+}

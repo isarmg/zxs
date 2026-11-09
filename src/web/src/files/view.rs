@@ -170,7 +170,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Copy,None)>{t("复制","Copy")}</button>
             <button class="zxs-button" disabled=move ||batch_disabled.get()||state.with(|s|!batch::separation_available(&s.files)) on:click=move |_|batch::start(state,batch::Kind::Separate,None)>{t("分离为独立文件","Separate file")}</button>
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Rename,None)><FileIcon name="rename"/>{t("重命名","Rename")}</button>
-            <button class="zxs-button" title=t("软删除目前只支持单个当前可写文件", "Soft deletion currently supports one current writable file") disabled=move ||!state.with(super::deletion::available) on:click=move |_|batch::start(state,batch::Kind::Delete,None)><FileIcon name="delete"/>{t("删除","Delete")}</button>
+            <button class="zxs-button" title=t("单个当前文件，或当前目录仓库本页的 2–100 个文件；整批保留一个原操作，目录项不可选", "One current file, or 2–100 files on this folder repository page; one original operation per batch, no folder entries") disabled=move ||!state.with(super::deletion::available) on:click=move |_|batch::start(state,batch::Kind::Delete,None)><FileIcon name="delete"/>{t("删除","Delete")}</button>
             <button class="zxs-button" data-zxs-current-directory-details="true" disabled=move ||state.with(|s|!s.session_active()||actions::pending(s)) on:click=move |_|super::detail::open_current_directory(state)>{t("当前目录详情","Current folder details")}</button>
             <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||!actions::write_allowed(s)) on:click=move |_|super::placement::start_current(state)>{t("主盘规则","Primary placement")}</button>
             <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::recursive::start_current(state)>{t("逐级备份","Recursive backups")}</button>
@@ -194,6 +194,12 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
         </div>
 
         {directory_preview::view(state)}
+        <Show when=move ||state.with(|s|s.files.checked_entries.len()>1)>
+            <p class="zxs-row">{t(
+                "多选软删除仅支持当前已初始化目录工作分支内本页的 2–100 个文件，不包含目录或未加载项。同一稳定文件的全部路径都会隐藏；整批只保留一个原操作，恢复时逐个核对准确 D。",
+                "Multi-file soft deletion supports 2–100 files on this page in the current initialized folder workspace, excluding folders and unloaded entries. All paths of each stable file become hidden. One original operation owns the batch; restoration checks each exact D individually.",
+            )}</p>
+        </Show>
         <Show when=move ||state.with(|s|s.files.loaded&&s.files.writable&&!s.files.directory_branches_supported)><p class="zxs-row">{t("目录分支管理需要先手动初始化当前目录的独立仓库。","Initialize this directory as an independent repository before managing its branches.")}</p></Show>
         <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable&&s.files.directory_preview.is_none())><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
         {backup::view(state)}
