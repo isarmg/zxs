@@ -626,9 +626,15 @@ fn apply(
                 "rename preserves its directory branch; use move for transfer",
             ));
         }
-        if matches!(request.kind, DirectoryBatchKind::Move | DirectoryBatchKind::Rename) {
+        if matches!(
+            request.kind,
+            DirectoryBatchKind::Move | DirectoryBatchKind::Rename
+        ) {
             directory_git::export::require_direct_scope_transfer(
-                state, source_scope, target_original, &source,
+                state,
+                source_scope,
+                target_original,
+                &source,
             )?;
         }
         if source.kind == NamespaceEntryKind::Directory

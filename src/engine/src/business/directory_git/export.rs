@@ -31,7 +31,8 @@ fn committed_departure(
         return Ok(false);
     }
     rename::has_committed_departure(
-        state, &BTreeMap::from([(owner, BTreeSet::from([source.file_id.as_str()]))]),
+        state,
+        &BTreeMap::from([(owner, BTreeSet::from([source.file_id.as_str()]))]),
     )
 }
 
@@ -47,14 +48,19 @@ pub(in crate::business) fn require_direct_scope_transfer(
     if source.directory_id == target.directory_id {
         return Ok(());
     }
-    let files = source.entries.iter()
-        .filter(|member| member.kind == NamespaceEntryKind::File
-            && (member.lookup_key() == entry.lookup_key()
-                || namespace::is_descendant(member.lookup_key(), entry.lookup_key())))
+    let files = source
+        .entries
+        .iter()
+        .filter(|member| {
+            member.kind == NamespaceEntryKind::File
+                && (member.lookup_key() == entry.lookup_key()
+                    || namespace::is_descendant(member.lookup_key(), entry.lookup_key()))
+        })
         .map(|member| member.file_id.as_str())
         .collect::<BTreeSet<_>>();
     if rename::has_committed_departure(
-        state, &BTreeMap::from([(source.directory_id.as_str(), files)]),
+        state,
+        &BTreeMap::from([(source.directory_id.as_str(), files)]),
     )? {
         return Err(unsupported());
     }
@@ -77,7 +83,10 @@ pub(in crate::business) fn require_scope(
     let retained = &state.commits[&request.expected_source_head].entries;
     if entries != retained.as_slice()
         || !main.pending_file_versions.is_empty()
-        || state.file_deletions.values().any(|node| node.history_tree_id == repo.history_tree_id)
+        || state
+            .file_deletions
+            .values()
+            .any(|node| node.history_tree_id == repo.history_tree_id)
     {
         return Err(unsupported());
     }
@@ -90,11 +99,17 @@ pub(in crate::business) fn require_scope(
         return Err(unsupported());
     }
     if namespace::find_unordered_key(entries, destination.key()).is_some()
-        || state.file_contexts.contains_key(
-            &directory::context_key_from_key(&repo.repository_id, destination.key()),
-        )
+        || state
+            .file_contexts
+            .contains_key(&directory::context_key_from_key(
+                &repo.repository_id,
+                destination.key(),
+            ))
     {
-        return Err(Error::new(ErrorCode::NameCollision, "directory export never replaces a target"));
+        return Err(Error::new(
+            ErrorCode::NameCollision,
+            "directory export never replaces a target",
+        ));
     }
     let mut parent = destination.parent();
     while let Some(path) = parent {
@@ -115,7 +130,10 @@ pub(in crate::business) fn require_scope(
             && state.directory_selections.get(&branch.directory_id)
                 == Some(&branch.directory_branch_id)
             && (branch.path.is_empty()
-                || namespace::is_descendant(destination.key(), &name_policy::path_key(&branch.path)))
+                || namespace::is_descendant(
+                    destination.key(),
+                    &name_policy::path_key(&branch.path),
+                ))
     }) {
         if state.directory_tree_selections.get(&branch.directory_id) != Some(&branch.head_tree_id) {
             return Err(unsupported());
@@ -139,8 +157,13 @@ pub(in crate::business) fn apply(
     operation: OperationId,
 ) -> Result<Value> {
     let projection = history_copy::retained::project(
-        previous, next, view, Destination::DirectoryExport(request),
-        route, principal, operation,
+        previous,
+        next,
+        view,
+        Destination::DirectoryExport(request),
+        route,
+        principal,
+        operation,
     )?;
     let mut ordinal = 0u64;
     let mut ids = |prefix: &str| -> Result<String> {
@@ -149,7 +172,10 @@ pub(in crate::business) fn apply(
             &json!({"operation_id":operation,"prefix":prefix,"ordinal":ordinal.to_string()}),
         )?;
         ordinal = ordinal.checked_add(1).ok_or_else(|| {
-            Error::new(ErrorCode::ResourceLimit, "directory export identity budget exceeded")
+            Error::new(
+                ErrorCode::ResourceLimit,
+                "directory export identity budget exceeded",
+            )
         })?;
         let id = format!("{prefix}_{}", &hash[..32]);
         if previous.commits.contains_key(&id)
@@ -162,8 +188,11 @@ pub(in crate::business) fn apply(
         Ok(id)
     };
     directory::record_directory_edits_with_ids(
-        next, &request.target_repository_id,
-        std::slice::from_ref(&request.target_name), None, &mut ids,
+        next,
+        &request.target_repository_id,
+        std::slice::from_ref(&request.target_name),
+        None,
+        &mut ids,
     )?;
     let mut result = projection.result;
     result["retained_lifecycle"] = json!(projection.lifecycle);
@@ -180,7 +209,9 @@ impl Engine {
         destination: &name_policy::PortablePath,
     ) -> Result<Option<FileHistoryCopyRequest>> {
         let state = self.state();
-        let repo = state.repositories.get(repository)
+        let repo = state
+            .repositories
+            .get(repository)
             .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "repository missing"))?;
         let view = self.admitted_current_namespaces()?;
         let entries = current_entries(state, view, repository)?;

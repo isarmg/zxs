@@ -429,7 +429,8 @@ impl DefaultShare {
             if kind == NamespaceOperation::Rename
                 && let Some(reply) = self.resume_directory_export(
                     &path,
-                    destination.as_deref()
+                    destination
+                        .as_deref()
                         .expect("invariant: rename destination was validated"),
                     replace,
                     operation_id,
@@ -476,7 +477,9 @@ impl DefaultShare {
                     // its durable, exact native-move request, never by Lookup.
                     let reply = match self.resolve(&path, SmbPathIntent::Lookup) {
                         Ok(target) => self.move_file(source, target, admission)?,
-                        Err(error) if error.code == storage_contract::ErrorCode::DirectoryNotFound => {
+                        Err(error)
+                            if error.code == storage_contract::ErrorCode::DirectoryNotFound =>
+                        {
                             self.move_file_to_empty_disk(source, &path, admission)?
                         }
                         Err(error) => return Err(error),

@@ -257,9 +257,11 @@ impl CurrentNamespaces {
         // Directory export advances selected working checkpoints in the same
         // closed transformation. The exact full-state replay above, not a raw
         // serialized directory tree, grants these new scopes their authority.
-        for (id, branch) in next.directory_branches.iter().filter(|(id, branch)| {
-            previous.directory_branches.get(*id) != Some(*branch)
-        }) {
+        for (id, branch) in next
+            .directory_branches
+            .iter()
+            .filter(|(id, branch)| previous.directory_branches.get(*id) != Some(*branch))
+        {
             Arc::make_mut(&mut view.directories).insert(
                 id.clone(),
                 Arc::new(CurrentScope {

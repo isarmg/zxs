@@ -18,7 +18,10 @@ impl EngineBackend {
         identity: &Identity,
         command: crate::MoveCurrentFileToEmptyDisk,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self.engine.lock().expect("invariant: service state lock poisoned");
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
         let mut current = current_protected_identity(&engine, identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
@@ -41,7 +44,8 @@ impl EngineBackend {
                 "an empty disk has no destination parent directory",
             ));
         }
-        let disk = engine.registered_disks()
+        let disk = engine
+            .registered_disks()
             .find(|disk| disk.slot_id == command.target_slot_id)
             .ok_or_else(changed)?;
         if disk.disk_id != command.target_disk_id
@@ -64,29 +68,45 @@ impl EngineBackend {
         let digest = storage_contract::object_hash(
             "smb-file-history-move-empty-root",
             &json!([
-                command.operation_id, current.principal,
-                command.source_binding.repository_id, command.source_binding.branch_id,
-                command.source_binding.generation.to_string(), command.source_path.as_str(),
-                command.expected_source_entry_id, command.expected_source_file_id.as_str(),
-                command.target_slot_id, command.target_disk_id,
-                command.target_binding_generation.to_string(), command.target_name.as_str()
+                command.operation_id,
+                current.principal,
+                command.source_binding.repository_id,
+                command.source_binding.branch_id,
+                command.source_binding.generation.to_string(),
+                command.source_path.as_str(),
+                command.expected_source_entry_id,
+                command.expected_source_file_id.as_str(),
+                command.target_slot_id,
+                command.target_disk_id,
+                command.target_binding_generation.to_string(),
+                command.target_name.as_str()
             ]),
-        ).map_err(ApiError::contract_input)?;
-        let root_operation: storage_contract::OperationId =
-            format!("op_{}", &digest[..32]).parse().map_err(ApiError::contract_input)?;
+        )
+        .map_err(ApiError::contract_input)?;
+        let root_operation: storage_contract::OperationId = format!("op_{}", &digest[..32])
+            .parse()
+            .map_err(ApiError::contract_input)?;
         let root_recorded = engine.state().operations.contains_key(&root_operation);
-        let published = engine.state().operations.contains_key(&command.operation_id);
+        let published = engine
+            .state()
+            .operations
+            .contains_key(&command.operation_id);
         if (!root_recorded && published)
-            || (!root_recorded && engine.state().repositories.values().any(|repository| {
-                repository.file_manager_root
-                    && repository.primary_slot_id == command.target_slot_id
-            }))
+            || (!root_recorded
+                && engine.state().repositories.values().any(|repository| {
+                    repository.file_manager_root
+                        && repository.primary_slot_id == command.target_slot_id
+                }))
         {
             return Err(changed());
         }
         if !published {
-            let namespace = engine.namespace_tree(&command.source_binding.branch_id).map_err(error)?;
-            let entry = namespace.get_key(command.source_path.key()).ok_or_else(changed)?;
+            let namespace = engine
+                .namespace_tree(&command.source_binding.branch_id)
+                .map_err(error)?;
+            let entry = namespace
+                .get_key(command.source_path.key())
+                .ok_or_else(changed)?;
             if entry.kind != storage_contract::NamespaceEntryKind::File
                 || entry.entry_id != command.expected_source_entry_id
                 || entry.file_id != command.expected_source_file_id.as_str()
@@ -94,9 +114,9 @@ impl EngineBackend {
                 return Err(changed());
             }
         }
-        let created = engine.create_disk_root(
-            &command.target_slot_id, &current.principal, root_operation,
-        ).map_err(error)?;
+        let created = engine
+            .create_disk_root(&command.target_slot_id, &current.principal, root_operation)
+            .map_err(error)?;
         let live = repository(&engine, &created.repository_id)?;
         if !created.file_manager_root
             || live.primary_slot_id != command.target_slot_id
@@ -113,14 +133,18 @@ impl EngineBackend {
         };
         // Recheck both real bindings and source entry through the same ordinary
         // native adapter. No guessed branch and no second deletion operation.
-        move_current_file_locked(&mut engine, identity, crate::MoveCurrentFile {
-            source_binding: command.source_binding,
-            target_binding,
-            source_path: command.source_path,
-            target_name: command.target_name,
-            expected_source_entry_id: command.expected_source_entry_id,
-            expected_source_file_id: command.expected_source_file_id,
-            operation_id: command.operation_id,
-        })
+        move_current_file_locked(
+            &mut engine,
+            identity,
+            crate::MoveCurrentFile {
+                source_binding: command.source_binding,
+                target_binding,
+                source_path: command.source_path,
+                target_name: command.target_name,
+                expected_source_entry_id: command.expected_source_entry_id,
+                expected_source_file_id: command.expected_source_file_id,
+                operation_id: command.operation_id,
+            },
+        )
     }
 }

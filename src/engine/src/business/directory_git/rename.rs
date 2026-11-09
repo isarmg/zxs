@@ -117,7 +117,10 @@ pub(super) fn has_committed_departure(
         let branch = &state.directory_branches[&tree.directory_branch_id];
         let count = 1 + tree.entries.len();
         remaining = remaining.checked_sub(count).ok_or_else(|| {
-            Error::new(ErrorCode::ResourceLimit, "directory ownership history scan budget exceeded")
+            Error::new(
+                ErrorCode::ResourceLimit,
+                "directory ownership history scan budget exceeded",
+            )
         })?;
         if let Some(files) = departures.get(branch.directory_id.as_str())
             && storage_contract::directory_staging::directory_tree_is_committed(state, tree)

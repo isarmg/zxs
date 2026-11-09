@@ -1193,9 +1193,9 @@ pub(crate) fn record_directory_edits(
     changed_paths: &[String],
     exclude: Option<&str>,
 ) -> Result<Vec<String>> {
-    record_directory_edits_with_ids(
-        state, repository, changed_paths, exclude, &mut |prefix| Ok(new_id(prefix)?),
-    )
+    record_directory_edits_with_ids(state, repository, changed_paths, exclude, &mut |prefix| {
+        Ok(new_id(prefix)?)
+    })
 }
 
 /// Native history exports must reconstruct these same working checkpoints from

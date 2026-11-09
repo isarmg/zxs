@@ -202,9 +202,13 @@ fn sources_for(
     if (!directory_export
         && (source.primary_slot_id == target.primary_slot_id
             || source.history_tree_id == target.history_tree_id
-            || previous.directory_branches.values()
+            || previous
+                .directory_branches
+                .values()
                 .any(|branch| branch.repository_id == target.repository_id)
-            || previous.directory_git_repositories.contains_key(&target.repository_id)))
+            || previous
+                .directory_git_repositories
+                .contains_key(&target.repository_id)))
         || source_branch.state != BranchState::Active
         || target_branch.state != BranchState::Active
         || previous.protection_policies.values().any(|policy| {
@@ -279,10 +283,13 @@ fn sources_for(
             if !source.file_manager_root
                 || !target.file_manager_root
                 || !target_branch.pending_file_versions.is_empty()
-                || previous.histories[&target.history_tree_id].provenance.is_some()
-                || previous.history_boundaries.values().any(|boundary| {
-                    boundary.history_tree_id == target.history_tree_id
-                })
+                || previous.histories[&target.history_tree_id]
+                    .provenance
+                    .is_some()
+                || previous
+                    .history_boundaries
+                    .values()
+                    .any(|boundary| boundary.history_tree_id == target.history_tree_id)
                 || previous.branches.values().any(|branch| {
                     branch.history_tree_id == target.history_tree_id
                         && branch.branch_id != target.main_branch_id
@@ -722,7 +729,12 @@ pub(in crate::business) fn apply_scoped(
     next.file_selections.insert(file.clone(), selected.clone());
     next.file_names.insert(
         file.clone(),
-        request.target_name.rsplit('/').next().expect("invariant: target path is nonempty").into(),
+        request
+            .target_name
+            .rsplit('/')
+            .next()
+            .expect("invariant: target path is nonempty")
+            .into(),
     );
     next.file_locations
         .insert(file.clone(), request.target_name.clone());
@@ -772,7 +784,9 @@ pub(in crate::business) fn apply_scoped(
     let pending = next.branches[&selected].pending_file_versions.clone();
     // Preserve every old entry and add exactly one non-overwriting file.
     // Published namespaces are sorted by lookup key, not insertion order.
-    let mut entries = previous.commits[&request.expected_target_head].entries.clone();
+    let mut entries = previous.commits[&request.expected_target_head]
+        .entries
+        .clone();
     entries.push(entry.clone());
     namespace::validate_entries(&mut entries, usize::MAX)?;
     next.commits.insert(

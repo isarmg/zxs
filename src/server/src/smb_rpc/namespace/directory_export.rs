@@ -63,7 +63,9 @@ impl RetainedExport {
             || record.operation_id != operation
             || record.publication_outcome != "unconfirmed"
         {
-            return Err(recovery("retained directory export belongs to another original request"));
+            return Err(recovery(
+                "retained directory export belongs to another original request",
+            ));
         }
         storage_contract::validate_id(&record.request.repository_id, "repo")
             .map_err(ApiError::invalid_source)?;
@@ -105,11 +107,17 @@ impl Session {
                 source_path: source.clone(),
                 destination: destination.clone(),
             },
-        )? else {
+        )?
+        else {
             return Ok(None);
         };
-        let binding = self.identity.smb_binding.as_ref().ok_or_else(ApiError::forbidden)?;
-        if binding.repository_id != request.repository_id || binding.branch_id != request.branch_id {
+        let binding = self
+            .identity
+            .smb_binding
+            .as_ref()
+            .ok_or_else(ApiError::forbidden)?;
+        if binding.repository_id != request.repository_id || binding.branch_id != request.branch_id
+        {
             return Err(ApiError::forbidden());
         }
         admission.record_intent(&json!({
@@ -136,7 +144,11 @@ impl Session {
         input: &NamespaceInput,
         retained: RetainedExport,
     ) -> Result<Value, ApiError> {
-        let binding = self.identity.smb_binding.as_ref().ok_or_else(ApiError::forbidden)?;
+        let binding = self
+            .identity
+            .smb_binding
+            .as_ref()
+            .ok_or_else(ApiError::forbidden)?;
         if input.kind != NamespaceOperation::Rename
             || input.replace != retained.replace
             || input.source_path.key() != retained.request.source_path.key()
@@ -147,7 +159,9 @@ impl Session {
             || binding.branch_id != retained.request.branch_id
             || self.branch != retained.request.branch_id
         {
-            return Err(recovery("directory export retry differs from the captured request or binding"));
+            return Err(recovery(
+                "directory export retry differs from the captured request or binding",
+            ));
         }
         let reserved = self.reserve_paths(&[
             retained.request.source_path.as_str(),
@@ -166,16 +180,23 @@ impl Session {
         let operation = admission.operation_id();
         let result = self.shared.backend.export_directory_file(
             &self.identity,
-            crate::ExportDirectoryFile { request, operation_id: operation },
+            crate::ExportDirectoryFile {
+                request,
+                operation_id: operation,
+            },
         )?;
         if result.operation_id != operation || result.kind != "file.directory.export" {
-            return Err(recovery("directory export returned a different permanent receipt"));
+            return Err(recovery(
+                "directory export returned a different permanent receipt",
+            ));
         }
         if result.commit_state != storage_contract::CommitState::Published
             || result.protection_at_publish != storage_contract::ProtectionAtPublish::TargetMet
             || result.current_health != storage_contract::CurrentHealth::Healthy
         {
-            return Err(recovery("directory export is not fully published; retain the original operation"));
+            return Err(recovery(
+                "directory export is not fully published; retain the original operation",
+            ));
         }
         let reply = crate::operation_wire::operation_wire(result.into())?;
         admission.finish_published();

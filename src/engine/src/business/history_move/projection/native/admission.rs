@@ -169,9 +169,13 @@ impl ReadBody {
         let _ = super::super::super::target_path::ancestors(&previous.entries, &target_path)
             .map_err(|_| invalid())?;
         let path = name_policy::LookupPath::from(&target_path);
-        let entry = namespace::find_unordered_key(&arrival.entries, path.key()).ok_or_else(invalid)?;
+        let entry =
+            namespace::find_unordered_key(&arrival.entries, path.key()).ok_or_else(invalid)?;
         if arrival.entries.len() != previous.entries.len() + 1
-            || arrival.entries.iter().filter(|entry| entry.lookup_key() != path.key())
+            || arrival
+                .entries
+                .iter()
+                .filter(|entry| entry.lookup_key() != path.key())
                 .ne(previous.entries.iter())
             || namespace::find_unordered_key(&previous.entries, path.key()).is_some()
             || entry.kind != NamespaceEntryKind::File

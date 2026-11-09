@@ -2,8 +2,8 @@
 use super::*;
 use crate::smb_rpc::{namespace::NamespaceAdmission, path_reservation::MovePaths};
 
-mod resume;
 mod empty_target;
+mod resume;
 
 impl DefaultShare {
     pub(super) fn move_file(

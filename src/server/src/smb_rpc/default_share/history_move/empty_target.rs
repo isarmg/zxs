@@ -74,14 +74,20 @@ impl DefaultShare {
             .map_err(ApiError::invalid_source)?;
         let source = self.pin_binding(source.repository)?;
         let source_identity = self.bound_identity(&source);
-        self.shared.backend.authorize_repository(&source_identity, &source.repository)?;
-        let entry = self.shared.backend.lookup_current(
-            &source_identity, &source.branch, &source_path,
-        )?.ok_or_else(|| ApiError::new(
-            http::StatusCode::NOT_FOUND,
-            storage_contract::ErrorCode::FileNotFound,
-            "move source is no longer visible",
-        ))?;
+        self.shared
+            .backend
+            .authorize_repository(&source_identity, &source.repository)?;
+        let entry = self
+            .shared
+            .backend
+            .lookup_current(&source_identity, &source.branch, &source_path)?
+            .ok_or_else(|| {
+                ApiError::new(
+                    http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::FileNotFound,
+                    "move source is no longer visible",
+                )
+            })?;
         if entry.kind != storage_contract::NamespaceEntryKind::File {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::IsDirectory,
@@ -111,7 +117,8 @@ impl DefaultShare {
         };
         // This is durable before the backend may create even an empty control
         // namespace. Failure preserves this same request, not a random retry.
-        admission.record_intent(&json_codec::to_value(&intent).map_err(ApiError::invalid_source)?)?;
+        admission
+            .record_intent(&json_codec::to_value(&intent).map_err(ApiError::invalid_source)?)?;
         let bytes = admission.retained_move_bytes()?;
         self.submit_empty_disk_move(intent, admission, &bytes)
     }
@@ -123,16 +130,26 @@ impl DefaultShare {
         admission: NamespaceAdmission,
         bytes: &[u8],
     ) -> Result<Value, ApiError> {
-        let intent: Intent = storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
-        let Location::Path { slot: source_slot, path: source_path } = self.locate(source)? else {
+        let intent: Intent =
+            storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
+        let Location::Path {
+            slot: source_slot,
+            path: source_path,
+        } = self.locate(source)?
+        else {
             return Err(changed());
         };
-        let Location::Path { slot: target_slot, path: target_path } = self.locate(target)? else {
+        let Location::Path {
+            slot: target_slot,
+            path: target_path,
+        } = self.locate(target)?
+        else {
             return Err(changed());
         };
-        let source_repository = self.shared.backend.repository_snapshot(
-            &self.identity, &intent.source_binding.repository_id,
-        )?;
+        let source_repository = self
+            .shared
+            .backend
+            .repository_snapshot(&self.identity, &intent.source_binding.repository_id)?;
         if source_slot.slot_id != source_repository.primary_slot_id
             || source_path.key() != name_policy::path_key(&intent.source_path)
             || target_slot.slot_id != intent.target_slot_id
@@ -159,9 +176,10 @@ impl DefaultShare {
         {
             return Err(changed());
         }
-        let repository = self.shared.backend.repository_snapshot(
-            &self.identity, &intent.source_binding.repository_id,
-        )?;
+        let repository = self
+            .shared
+            .backend
+            .repository_snapshot(&self.identity, &intent.source_binding.repository_id)?;
         if !repository.file_manager_root || repository.primary_slot_id == intent.target_slot_id {
             return Err(changed());
         }
@@ -170,9 +188,17 @@ impl DefaultShare {
             return Err(changed());
         }
         let source_identity = self.bound_identity(&source);
-        self.shared.backend.authorize_repository(&source_identity, &source.repository)?;
-        let target = self.shared.backend.topology_snapshot(&self.identity)?.slots.into_iter()
-            .find(|disk| disk.slot_id == intent.target_slot_id).ok_or_else(changed)?;
+        self.shared
+            .backend
+            .authorize_repository(&source_identity, &source.repository)?;
+        let target = self
+            .shared
+            .backend
+            .topology_snapshot(&self.identity)?
+            .slots
+            .into_iter()
+            .find(|disk| disk.slot_id == intent.target_slot_id)
+            .ok_or_else(changed)?;
         if target.disk_id != intent.target_disk_id
             || target.binding_generation != intent.target_binding_generation
             || target.level != 1
@@ -190,11 +216,16 @@ impl DefaultShare {
         // address while the backend owner lock creates/admits the real binding;
         // native move separately rejects any live target write workspace.
         let target_key = format!(
-            "@empty-disk:{}:{}", intent.target_slot_id, intent.target_binding_generation,
+            "@empty-disk:{}:{}",
+            intent.target_slot_id, intent.target_binding_generation,
         );
-        let _paths = MovePaths::acquire(&self.shared, [
-            (&source.branch, source_path.as_str()), (&target_key, target_name.as_str()),
-        ])?;
+        let _paths = MovePaths::acquire(
+            &self.shared,
+            [
+                (&source.branch, source_path.as_str()),
+                (&target_key, target_name.as_str()),
+            ],
+        )?;
         if admission.retained_move_bytes()?.as_slice() != bytes {
             return Err(changed());
         }
@@ -202,7 +233,8 @@ impl DefaultShare {
         let result = self.shared.backend.move_current_file_to_empty_disk(
             &self.identity,
             crate::MoveCurrentFileToEmptyDisk {
-                source_binding: source_identity.smb_binding
+                source_binding: source_identity
+                    .smb_binding
                     .expect("invariant: pinned source binding"),
                 target_slot_id: intent.target_slot_id,
                 target_disk_id: intent.target_disk_id,

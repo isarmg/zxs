@@ -1648,14 +1648,16 @@ impl Backend for AuthorizedBackend {
         identity: &Identity,
         command: crate::PrepareDirectoryFileExport,
     ) -> Result<Option<crate::DirectoryFileExport>, ApiError> {
-        self.backend.prepare_directory_file_export(&self.current(identity)?, command)
+        self.backend
+            .prepare_directory_file_export(&self.current(identity)?, command)
     }
     fn export_directory_file(
         &self,
         identity: &Identity,
         command: crate::ExportDirectoryFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        self.backend.export_directory_file(&self.current(identity)?, command)
+        self.backend
+            .export_directory_file(&self.current(identity)?, command)
     }
     fn move_current_file(
         &self,

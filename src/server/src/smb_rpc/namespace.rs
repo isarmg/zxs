@@ -348,7 +348,8 @@ impl Session {
         };
         let reserved = self.reserve_paths(&affected)?;
         if kind == NamespaceOperation::Rename {
-            let target = destination_path.as_ref()
+            let target = destination_path
+                .as_ref()
                 .expect("invariant: rename input has a typed destination");
             match self.try_directory_file_export(&source_path, target, replace, &admission) {
                 Ok(None) => {}

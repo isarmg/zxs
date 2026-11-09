@@ -10,7 +10,10 @@ pub(in crate::business) fn ancestors<'a>(
     let mut key = target.key();
     while let Some((parent, _)) = key.rsplit_once('/') {
         let entry = namespace::find_unordered_key(entries, parent).ok_or_else(|| {
-            Error::new(ErrorCode::DirectoryNotFound, "move destination parent is absent")
+            Error::new(
+                ErrorCode::DirectoryNotFound,
+                "move destination parent is absent",
+            )
         })?;
         if entry.kind != NamespaceEntryKind::Directory {
             return Err(Error::new(
@@ -30,7 +33,10 @@ pub(in crate::business) fn require_parent(
     target: &name_policy::PortablePath,
 ) -> Result<()> {
     for entry in ancestors(entries, target)? {
-        if state.directory_git_repositories.contains_key(&entry.entry_id) {
+        if state
+            .directory_git_repositories
+            .contains_key(&entry.entry_id)
+        {
             return Err(Error::new(
                 ErrorCode::DirectoryScopeRequired,
                 "move destination is inside an initialized directory repository",

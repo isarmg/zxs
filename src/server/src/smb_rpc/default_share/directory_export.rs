@@ -28,10 +28,13 @@ impl DefaultShare {
         }
         let key = self.session_key(source.repository)?;
         let input = NamespaceInput::parse(
-            NamespaceOperation::Rename, source.relative_path,
-            Some(target.relative_path), replace,
+            NamespaceOperation::Rename,
+            source.relative_path,
+            Some(target.relative_path),
+            replace,
         )?;
-        self.sessions.get_mut(&key)
+        self.sessions
+            .get_mut(&key)
             .expect("invariant: export session was inserted")
             .retry_directory_export(&input, retained)
             .map(Some)
