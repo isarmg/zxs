@@ -1,6 +1,7 @@
 //! One explicitly confirmed reset of an existing local Samba account. External
 //! Samba commands have no exactly-once token: unknown outcomes are retained and
 //! must not be automatically replayed or represented as a rollback.
+pub(crate) mod enrollment;
 mod state;
 use super::{Input as DeploymentInput, install};
 use crate::{

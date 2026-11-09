@@ -1,5 +1,6 @@
 //! Supported existing local tdbsam target. No database creation, credential
 //! extraction, remote/LDAP backend or password-format translation lives here.
+pub(super) mod enrollment;
 use crate::{
     Result,
     account::Snapshot,
@@ -59,13 +60,10 @@ pub(super) struct Database {
 }
 impl Database {
     pub(super) fn open() -> Result<Self> {
-        let var = Parent::checked(
-            "/var",
-            OpenAt2Root::open(Path::new("/var"), MountPolicy::AllowNestedMounts)?,
-        )?;
-        let lib = var.child("lib", "/var/lib")?;
-        let samba = lib.child("samba", "/var/lib/samba")?;
-        let private = samba.child("private", PRIVATE)?;
+        let parents = parents()?;
+        let private = parents
+            .last()
+            .expect("invariant: fixed Samba private parent");
         let lock = AdvisoryLock::directory(private.root.directory())?;
         let file = private
             .root
@@ -77,7 +75,7 @@ impl Database {
             file: FileStamp::of(&file.metadata()?),
         };
         let result = Self {
-            parents: vec![var, lib, samba, private],
+            parents,
             file,
             identity,
             original,
@@ -121,6 +119,16 @@ impl Database {
         self.private().root.directory().sync_all()?;
         self.revision()
     }
+}
+fn parents() -> Result<Vec<Parent>> {
+    let var = Parent::checked(
+        "/var",
+        OpenAt2Root::open(Path::new("/var"), MountPolicy::AllowNestedMounts)?,
+    )?;
+    let lib = var.child("lib", "/var/lib")?;
+    let samba = lib.child("samba", "/var/lib/samba")?;
+    let private = samba.child("private", PRIVATE)?;
+    Ok(vec![var, lib, samba, private])
 }
 fn check_parent(file: &File, private: bool) -> Result<()> {
     let metadata = file.metadata()?;

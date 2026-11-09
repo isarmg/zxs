@@ -784,59 +784,109 @@ function invalidateSambaPreview() {
   sambaPasswordPreview = null; clearSambaPasswords();
   byId("samba-password-form").hidden = true; byId("samba-reset-plan").hidden = true;
 }
+function sambaAction(kind) {
+  if (kind === "create_missing") return {
+    preview:"/api/credentials/samba-account-preview", commit:"/api/credentials/samba-account-create",
+    status:"/api/credentials/samba-account-status", confirmation:"create-missing-local-samba-account",
+    title:"首次登记缺失的本地 Samba 账户"
+  };
+  if (kind === "reset_existing") return {
+    preview:"/api/credentials/samba-preview", commit:"/api/credentials/samba-reset",
+    status:"/api/credentials/samba-status", confirmation:"reset-existing-local-samba-password",
+    title:"重置已存在的本地 Samba 密码"
+  };
+  throw new Error("请选择明确的 Samba 操作类型。");
+}
+const sambaOriginalKey = "zxs-helper-samba-original:";
+function preserveSambaOriginal(original) {
+  const text = JSON.stringify(original);
+  const key = sambaOriginalKey + original.kind + ":" + original.request_digest;
+  const previous = localStorage.getItem(key);
+  if (previous !== null && previous !== text) throw new Error("本机保存的原 Samba 请求不同，未发送命令；请保留原记录。");
+  localStorage.setItem(key,text);
+  localStorage.setItem(sambaOriginalKey + "last",text);
+}
+function restoreSambaOriginal() {
+  const text = localStorage.getItem(sambaOriginalKey + "last");
+  if (text === null) return;
+  const original = JSON.parse(text);
+  sambaAction(original.kind);
+  if (!/^[0-9a-f]{64}$/.test(original.request_digest) || !original.input ||
+      !/^[0-9a-f]{32}$/.test(original.input.operation_id)) throw new Error("本机 Samba 原请求记录无效，未重放操作。");
+  sambaPasswordOriginal = original;
+  byId("samba-status-kind").value = original.kind;
+  byId("samba-reset-digest").value = original.request_digest;
+  byId("samba-reset-save").hidden = false;
+  byId("samba-reset-receipt").textContent = "已恢复无密码的原操作索引。请显式查询；刷新不会提交或重放密码命令。";
+  byId("samba-reset-receipt").hidden = false;
+}
 byId("deployment-form").addEventListener("input",invalidateSambaPreview);
-byId("samba-writers-stopped").addEventListener("change",invalidateSambaPreview);
+byId("samba-reset-form").addEventListener("input",invalidateSambaPreview);
 byId("samba-reset-form").addEventListener("submit",async event => {
   event.preventDefault(); if (busy || stopping) return;
   invalidateSambaPreview(); error("");
-  let input;
+  let input, action, kind;
   try {
+    kind = byId("samba-operation-kind").value; action = sambaAction(kind);
     const nonce = crypto.getRandomValues(new Uint8Array(16));
     const operation_id = Array.from(nonce,byte => byte.toString(16).padStart(2,"0")).join("");
     input = {deployment:sambaDeploymentInput(),operation_id,external_writers_stopped:byId("samba-writers-stopped").checked};
   } catch (failure) { error(failure.message); return; }
   setBusy(true);
   try {
-    const preview = await (await post("/api/credentials/samba-preview",input)).json();
-    sambaPasswordPreview = {input,request_digest:preview.request_digest};
+    const preview = await (await post(action.preview,input)).json();
+    sambaPasswordPreview = {kind,input,request_digest:preview.request_digest};
     sambaPasswordOriginal = sambaPasswordPreview;
+    byId("samba-status-kind").value = kind;
     byId("samba-reset-digest").value = preview.request_digest;
     byId("samba-reset-plan").textContent = JSON.stringify(preview,null,2);
+    byId("samba-password-submit").textContent = "确认" + action.title;
     for (const id of ["samba-reset-plan","samba-reset-save","samba-password-form"]) byId(id).hidden = false;
     byId("samba-reset-receipt").hidden = true;
   } catch (failure) { error(failure.message); } finally { setBusy(false); }
 });
 byId("samba-reset-save").addEventListener("click",() => {
   if (!sambaPasswordOriginal) return;
-  save(new Blob([JSON.stringify(sambaPasswordOriginal,null,2)],{type:"application/json"}),`zxs-samba-reset-${sambaPasswordOriginal.request_digest}.json`);
+  save(new Blob([JSON.stringify(sambaPasswordOriginal,null,2)],{type:"application/json"}),`zxs-samba-${sambaPasswordOriginal.kind}-${sambaPasswordOriginal.request_digest}.json`);
 });
 byId("samba-password-form").addEventListener("submit",async event => {
   event.preventDefault(); if (busy || stopping || !sambaPasswordPreview) return;
   if (byId("samba-new-password").value !== byId("samba-repeat-password").value) { error("两次 Samba 新密码不一致。"); return; }
-  const name = sambaPasswordPreview.input.deployment.smb.account;
-  if (!window.confirm(`确认真实重置本地 Samba 账户 ${name} 的密码？不创建或启用账户，不更改 ZXS/Unix 密码，不启动服务。结果不明时只查询原请求，不自动重放。`)) return;
-  const body = {...sambaPasswordPreview,confirmation:"reset-existing-local-samba-password",
+  const original = sambaPasswordPreview;
+  const action = sambaAction(original.kind);
+  const name = original.input.deployment.smb.account;
+  const effect = original.kind === "create_missing"
+    ? "只准已核缺失的名称及 UID；将新建原生 Samba 账户，并可能初始化本机 passdb/身份。原生 -a 不是原子只创建命令，外部写入者必须持续停止，否则并发出现的账户可能被改密。"
+    : "只重置已存在账户，不创建或主动启用账户。";
+  if (!window.confirm(`确认${action.title} ${name}？${effect}不更改 ZXS/Unix 密码，不启动服务。结果不明时只查询原请求，不自动重放。`)) return;
+  try { preserveSambaOriginal(original); }
+  catch (failure) { clearSambaPasswords(); error(`无法保留无密码原请求，命令未发送：${failure.message}`); return; }
+  const body = {input:original.input,request_digest:original.request_digest,confirmation:action.confirmation,
     new_password:byId("samba-new-password").value,repeat_password:byId("samba-repeat-password").value};
   sambaPasswordPreview = null; clearSambaPasswords(); byId("samba-password-form").hidden = true;
   error(""); setBusy(true);
   try {
-    const receipt = await (await post("/api/credentials/samba-reset",body)).json();
+    const receipt = await (await post(action.commit,body)).json();
     byId("samba-reset-receipt").textContent = JSON.stringify(receipt,null,2);
     byId("samba-reset-receipt").hidden = false;
-  } catch (failure) { error(`${failure.message}。密码可能已改变。保留原摘要并查询结果，不重复提交原操作，也不要恢复旧 passdb 覆盖其他账户。`); }
+  } catch (failure) { error(`${failure.message}。账户或密码可能已改变。保留原摘要和操作类型并查询结果，不重复提交原操作，也不要恢复旧 passdb 覆盖其他账户。`); }
   finally { body.new_password = ""; body.repeat_password = ""; clearSambaPasswords(); setBusy(false); }
 });
 byId("samba-reset-status-form").addEventListener("submit",async event => {
   event.preventDefault(); if (busy || stopping) return;
   const request_digest = byId("samba-reset-digest").value;
   if (!/^[0-9a-f]{64}$/.test(request_digest)) { error("请输入原 Samba 操作的完整摘要。"); return; }
+  let action;
+  try { action = sambaAction(byId("samba-status-kind").value); }
+  catch (failure) { error(failure.message); return; }
   error(""); setBusy(true);
   try {
-    const result = await (await post("/api/credentials/samba-status",{request_digest})).json();
+    const result = await (await post(action.status,{request_digest})).json();
     byId("samba-reset-receipt").textContent = JSON.stringify(result,null,2); byId("samba-reset-receipt").hidden = false;
   } catch (failure) { error(failure.message); } finally { setBusy(false); }
 });
 window.addEventListener("pagehide",clearSambaPasswords);
+try { restoreSambaOriginal(); } catch (failure) { error(failure.message); }
 
 function resetDiskAddition() {
   diskAdditionPreview = null;

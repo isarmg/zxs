@@ -13,7 +13,7 @@
     <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、首装与部署准备</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、在新空布局创建 ZXS 管理员、重置其密码及受支持的既有本地 Samba 密码、初始化明确选择的首批空盘目录或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、在新空布局创建 ZXS 管理员、重置其密码、首次登记受支持的本地 Samba 账户或重置既有 Samba 密码、初始化明确选择的首批空盘目录或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
     <section class="card" id="first-install">
@@ -424,11 +424,12 @@
       <pre id="administrator-reset-receipt" hidden></pre>
     </section>
     <section class="card">
-      <h2>重置已存在的本地 Samba 密码</h2>
-      <p>先在上方配置表中填写与已安装文件完全一致的 ZXS 服务账户、主组、监听地址和独立 Samba 账户。本入口仅支持当前独立 <code>/etc/samba/zxs.conf</code>、既有本地 <code>tdbsam</code> 及 <code>/var/lib/samba/private/passdb.tdb</code>；不创建 Samba/Unix 账户，不更改 ZXS 管理员或 Unix 密码，不启用服务。</p>
+      <h2>首次登记或重置本地 Samba 账户</h2>
+      <p>先在上方配置表中填写与已安装文件完全一致的 ZXS 服务账户、主组、监听地址和独立 Samba 账户。仅支持独立 <code>/etc/samba/zxs.conf</code>、本地 <code>tdbsam</code> 及固定 <code>/var/lib/samba/private/passdb.tdb</code>。首次登记要求名称和 UID 均尚无 Samba 账户，可由原生工具创建缺失的 passdb；已有账户只能走明确的密码重置。原生 <code>smbpasswd -a</code> 对已存在名称会退化为改密，因此外部 Samba／账户管理员必须持续停止；本工具会重核原库，但其目录锁不是 Samba 的跨程序事务锁。Unix 账户和 root:0700 的 Samba private 目录须已存在，本工具不创建 Unix 用户、不安装 OS/VFS、不更改 ZXS/Unix 密码、不启用服务。</p>
       <form id="samba-reset-form">
+        <label>操作类型 <select id="samba-operation-kind" required><option value="create_missing">首次登记缺失账户</option><option value="reset_existing">重置已存在账户密码</option></select></label>
         <label class="ack"><input id="samba-writers-stopped" type="checkbox" required> 我已停止 Samba、旧版 ZXS 和外部账户/配置写入者。参与 ZXS 的主机租约不锁住 Samba，此项是我的确认，不是全部进程停服证明。</label>
-        <button type="submit">检查已安装配置并准备一次密码重置</button>
+        <button type="submit">检查准确配置和账户，预览本次操作</button>
       </form>
       <pre id="samba-reset-plan" hidden></pre>
       <button id="samba-reset-save" type="button" class="secondary" hidden>保存无密码的本次请求</button>
@@ -437,15 +438,16 @@
           <label>手动输入新的 Samba 密码 <input id="samba-new-password" type="password" autocomplete="new-password" required></label>
           <label>再次输入新密码 <input id="samba-repeat-password" type="password" autocomplete="new-password" required></label>
         </div>
-        <p class="muted">会通过已核验的本机 smbpasswd 执行真实密码变更。无登录、明文 HTTP，只在可信隔离网络使用；密码只经请求正文和子进程 stdin，不放入 URL、argv、日志或回执。账户必须已存在，禁用状态不会被主动启用。不会撤销已有 SMB 会话，也不验证一次真实网络登录。</p>
-        <button type="submit">确认仅重置该本地 Samba 账户密码</button>
+        <p class="muted">会通过已核验的本机 smbpasswd 执行真实密码变更。无登录、明文 HTTP，只在可信隔离网络使用；密码只经请求正文和子进程 stdin，不放入 URL、argv、日志或回执。首次登记会创建原生凭据，已有账户重置不主动启用禁用账户。不会撤销已有 SMB 会话，也不验证一次真实网络登录。</p>
+        <button id="samba-password-submit" type="submit">确认本次 Samba 操作</button>
       </form>
       <form id="samba-reset-status-form">
+        <label>原操作类型 <select id="samba-status-kind" required><option value="create_missing">首次登记缺失账户</option><option value="reset_existing">重置已存在账户密码</option></select></label>
         <label>原操作摘要 <input id="samba-reset-digest" maxlength="64" required autocomplete="off" spellcheck="false"></label>
         <button type="submit" class="secondary">查询保留结果，不重放密码操作</button>
       </form>
       <pre id="samba-reset-receipt" hidden></pre>
-      <p class="muted">Samba 外部命令没有本工具的幂等令牌。响应丢失、断电或非零退出后密码可能已经改变，原请求不自动重放、不回滚整个 passdb。先查询并保留证据；确需再次重置时重新预览和手动确认新请求。完成回执只证明当时命令成功、目标账户读回和数据库同步，不保证现在的密码或服务状态。</p>
+      <p class="muted">Samba 外部命令没有本工具的幂等令牌。响应丢失、断电或非零退出后密码可能已经改变，原请求不自动重放、不回滚整个 passdb。先查询并保留证据；确需再次重置时重新预览和手动确认新请求。首次登记回执还要求其他账户的名称、UID 和描述列表未变；不声称检查了其他密码。无密码原请求在发送前按操作摘要保存到本浏览器，刷新只恢复查询索引、不重放。完成回执只证明当时命令成功、目标账户读回和数据库同步，不保证现在的密码或服务状态。</p>
     </section>
     <section class="card">
       <h2>选择准确的独立磁盘</h2>
@@ -466,7 +468,7 @@
       <details><summary>完整报告与来源身份</summary><pre id="report"></pre></details>
     </section>
     <p id="error" class="error" role="alert" hidden></p>
-    <section class="card pending"><h2>尚未完成的能力</h2><p>完整首次安装就绪与干净启动门禁、后续磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、其他 Samba 后端与账户创建、程序覆盖修复、依赖安装、已有配置的替换和 systemd/SMB 的加载/启动/启用尚未提供。程序首装、空布局和固定配置文件安装都不是系统初始化或服务启用完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
+    <section class="card pending"><h2>尚未完成的能力</h2><p>完整首次安装就绪与干净启动门禁、后续磁盘添加/注销、外来盘完整低级链接纳、在线池磁盘初始化、完整系统汇总重建、其他 Samba 后端与 Unix 账户创建、程序覆盖修复、依赖安装、已有配置的替换和 systemd/SMB 的加载/启动/启用尚未提供。程序首装、空布局和固定配置文件安装都不是系统初始化或服务启用完成。现有 CLI 仍单独可用。页面不会用保存草稿或意图冒充这些操作已经完成。</p></section>
     <footer>手动运行，不注册 systemd，不设置开机自启。关闭页面不会结束进程；请点“退出辅助工具”或在启动终端按 Ctrl+C，并等进程真正退出再移除磁盘。</footer>
   </main>
 </body>
