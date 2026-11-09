@@ -9,14 +9,7 @@ pub(in crate::files::deletion) fn retained_view(request: &Request) -> impl IntoV
     let entries = request
         .entries
         .iter()
-        .map(|entry| {
-            format!(
-                "{} · {} · {}",
-                entry.path.as_str(),
-                entry.file,
-                entry.entry
-            )
-        })
+        .map(|entry| format!("{} · {} · {}", entry.path.as_str(), entry.file, entry.entry))
         .collect::<Vec<_>>();
     view! {
         <details class="zxs-stack">

@@ -168,8 +168,7 @@ fn selection(state: &State) -> Option<(&DirectoryBranch, Vec<&Entry>)> {
         .collect::<Vec<_>>();
     if entries.len() != checked.len()
         || entries.iter().any(|entry| {
-            !request::eligible(entry)
-                || entry.repository_id() != Some(branch.repository_id())
+            !request::eligible(entry) || entry.repository_id() != Some(branch.repository_id())
         })
     {
         return None;

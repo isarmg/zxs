@@ -49,7 +49,11 @@ fn receipt(intent: &Intent, operation: &str) -> Value {
     result["timestamp"] = "123".into();
     result["membership_epoch"] = "1".into();
     result["version_protection"] = json!([]);
-    let sequence = if matches!(intent, Intent::Undo(_)) { "2" } else { "1" };
+    let sequence = if matches!(intent, Intent::Undo(_)) {
+        "2"
+    } else {
+        "1"
+    };
     json!({"operation_id":operation,"operation_kind":kind,"request_digest":intent.digest("alice").unwrap(),"state":"completed","commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","publication_sequence":sequence,"result":result,"error":null})
 }
 fn attempt(intent: Intent, operation: &str) -> Attempt {
