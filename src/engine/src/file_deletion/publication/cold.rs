@@ -7,6 +7,7 @@ fn is_lifecycle(kind: &str) -> bool {
     matches!(
         kind,
         "file.delete" | "file.delete.undo" | crate::business::FILE_HISTORY_MOVE_KIND
+            | crate::file_deletion::batch::KIND
     )
 }
 
@@ -49,6 +50,16 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
     let mut active = BTreeMap::new();
     let mut created = BTreeSet::new();
     for (_, receipt) in receipts.values() {
+        if receipt.kind == crate::file_deletion::batch::KIND {
+            for node in crate::file_deletion::batch::admit(state, receipt)?.nodes {
+                if !created.insert(node.node_id.clone())
+                    || active.insert(node.file_id.clone(), node).is_some()
+                {
+                    return Err(invalid());
+                }
+            }
+            continue;
+        }
         let undo = receipt.kind == "file.delete.undo";
         let node = if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
             crate::business::admit_file_history_move_deletion(state, receipt)?

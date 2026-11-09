@@ -92,10 +92,15 @@ pub(crate) fn affected(previous: &State, next: &State) -> BTreeSet<String> {
             .into_iter()
             .chain(next.operations.get(&id))
         {
-            if let crate::state_projection::lifecycles::DeletionOwner::File(file) =
-                crate::state_projection::lifecycles::owner(receipt)
-            {
-                files.insert(file.to_owned());
+            match crate::state_projection::lifecycles::owner(receipt) {
+                crate::state_projection::lifecycles::DeletionOwner::File(file) => {
+                    files.insert(file.to_owned());
+                }
+                crate::state_projection::lifecycles::DeletionOwner::Files(owners) => {
+                    files.extend(owners.into_iter().map(str::to_owned));
+                }
+                crate::state_projection::lifecycles::DeletionOwner::Other
+                | crate::state_projection::lifecycles::DeletionOwner::Malformed => {}
             }
             if let crate::state_projection::lifecycles::DeletionOwner::File(file) =
                 crate::state_projection::lifecycles::history_copy_owner(receipt)

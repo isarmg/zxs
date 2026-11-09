@@ -330,9 +330,9 @@ impl Session {
         if let Some(target) = destination.as_deref() {
             affected.push(target);
         }
-        // Disk-root files have the reversible lifecycle. Named legacy shares
-        // retain their existing namespace policy; unsupported initialized
-        // directory scopes fail in the core, never fall back after an error.
+        // Disk-root files, including initialized directory working scopes, use
+        // the same reversible lifecycle. Named legacy shares retain their
+        // existing policy; no failed lifecycle request falls back to hard delete.
         let soft_delete = if kind == NamespaceOperation::Unlink {
             match &self.identity.smb_binding {
                 Some(binding) => {

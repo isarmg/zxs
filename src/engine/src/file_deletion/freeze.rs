@@ -20,13 +20,45 @@ fn changed_keys<T>(
 }
 
 fn frozen_entries<'a>(state: &State, entries: &'a [Entry]) -> Vec<&'a Entry> {
-    entries
-        .iter()
-        .filter(|entry| {
-            entry.kind == NamespaceEntryKind::File
-                && state.file_deletions.contains_key(&entry.file_id)
-        })
-        .collect()
+    let mut paths = std::collections::BTreeSet::new();
+    for entry in entries.iter().filter(|entry| {
+        entry.kind == NamespaceEntryKind::File && state.file_deletions.contains_key(&entry.file_id)
+    }) {
+        let mut path = entry.lookup_key();
+        paths.insert(path);
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            paths.insert(parent);
+            path = parent;
+        }
+    }
+    // A replacement ancestor must not silently change the deleted occurrence's
+    // stable directory ownership while leaving its file Entry byte-identical.
+    entries.iter().filter(|entry| paths.contains(entry.lookup_key())).collect()
+}
+
+fn verify_directory_contexts(
+    previous: &State,
+    before: Option<&crate::DirectoryBranch>,
+    after: Option<&crate::DirectoryBranch>,
+) -> Result<()> {
+    let (Some(before), Some(after)) = (before, after) else {
+        return Ok(()); // Frozen occurrence additions/removals are checked first.
+    };
+    for entry in before.entries.iter().filter(|entry| {
+        entry.kind == NamespaceEntryKind::File
+            && previous.file_deletions.contains_key(&entry.file_id)
+    }) {
+        if before.repository_id != after.repository_id
+            || before.directory_id != after.directory_id
+            || before.file_contexts.get(entry.lookup_key())
+                != after.file_contexts.get(entry.lookup_key())
+            || before.file_branches.get(&entry.file_id) != after.file_branches.get(&entry.file_id)
+            || before.inherited_files.get(&entry.file_id) != after.inherited_files.get(&entry.file_id)
+        {
+            return Err(frozen());
+        }
+    }
+    Ok(())
 }
 
 // A removed or retargeted context must not escape via its new branch owner.
@@ -215,6 +247,7 @@ pub(crate) fn verify(previous: &State, next: &State) -> Result<()> {
         {
             return Err(frozen());
         }
+        verify_directory_contexts(previous, before, after)?;
     }
     Ok(())
 }

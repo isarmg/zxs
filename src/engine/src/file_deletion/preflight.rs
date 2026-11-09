@@ -22,7 +22,7 @@ fn limit() -> Error {
 fn scope() -> Error {
     Error::new(
         ErrorCode::FileBranchScope,
-        "file deletion preflight requires a disk-root file outside initialized directory repositories",
+        "file deletion requires a disk-root history with independently recorded file branches",
     )
 }
 
@@ -33,30 +33,68 @@ fn entry_at<'a>(entries: &'a [Entry], key: &str) -> Option<&'a Entry> {
         .map(|index| &entries[index])
 }
 
-fn require_ordinary_occurrence(
+/// A D freezes every current occurrence of this stable file. Each initialized
+/// owner must therefore still authorize its selected working composition.
+pub(super) fn require_scope_writable(
     state: &State,
+    current: Option<&crate::engine::CurrentNamespaces>,
+    repository: &Repository,
     entries: &[Entry],
-    entry: &Entry,
+    file: &str,
     cancellation: &HistoryWindowCancellation,
 ) -> Result<()> {
-    let mut key = entry.lookup_key();
-    while let Some((parent, _)) = key.rsplit_once('/') {
+    let main = &state.branches[&repository.main_branch_id];
+    if main.state != crate::BranchState::Active {
+        return Err(Error::new(ErrorCode::BranchNotActive, "file namespace is not writable"));
+    }
+    if let Some(view) = current {
+        view.require_branch_write(state, &repository.main_branch_id)?;
+    }
+    if let Some(git) = state.directory_git_repositories.get(&repository.repository_id) {
+        require_directory_owner(state, current, repository, git)?;
+    }
+    let mut checked = BTreeSet::new();
+    for entry in entries.iter().filter(|entry| {
+        entry.kind == NamespaceEntryKind::File && entry.file_id == file
+    }) {
         checkpoint(cancellation)?;
-        let directory = entry_at(entries, parent)
-            .expect("invariant: admitted namespace entries have directory parents");
-        if state
-            .directory_git_repositories
-            .contains_key(&directory.entry_id)
-        {
-            return Err(scope());
+        let mut key = entry.lookup_key();
+        while let Some((parent, _)) = key.rsplit_once('/') {
+            checkpoint(cancellation)?;
+            let directory = entry_at(entries, parent)
+                .expect("invariant: admitted namespace entries have directory parents");
+            if checked.insert(directory.entry_id.as_str())
+                && let Some(git) = state.directory_git_repositories.get(&directory.entry_id)
+            {
+                require_directory_owner(state, current, repository, git)?;
+            }
+            key = parent;
         }
-        key = parent;
+    }
+    Ok(())
+}
+
+fn require_directory_owner(
+    state: &State,
+    current: Option<&crate::engine::CurrentNamespaces>,
+    repository: &Repository,
+    git: &crate::DirectoryGitRepository,
+) -> Result<()> {
+    if git.repository_id != repository.repository_id
+        || state.directory_selections.get(&git.directory_id) != Some(&git.current_branch_id)
+    {
+        return Err(Error::new(
+            ErrorCode::DirectoryBranchConflict,
+            "deletion requires the exact selected directory working owner",
+        ));
+    }
+    if let Some(view) = current {
+        view.require_directory_branch_write(state, &git.current_branch_id)?;
     }
     Ok(())
 }
 
 fn occurrences<'a>(
-    state: &State,
     entries: &'a [Entry],
     file: &str,
     maximum: usize,
@@ -71,7 +109,6 @@ fn occurrences<'a>(
         if occurrences.len() == maximum {
             return Err(limit());
         }
-        require_ordinary_occurrence(state, entries, entry, cancellation)?;
         occurrences.push(entry);
     }
     Ok(occurrences)
@@ -166,14 +203,10 @@ pub(crate) fn capture<'a>(
                 "file is not present at this logical path",
             )
         })?;
-    if !repository.file_manager_root
-        || state
-            .directory_git_repositories
-            .contains_key(&repository.repository_id)
-    {
+    if !repository.file_manager_root {
         return Err(scope());
     }
-    let occurrences = occurrences(state, entries, &selected.file_id, maximum, cancellation)?;
+    let occurrences = occurrences(entries, &selected.file_id, maximum, cancellation)?;
     let branches = branch_heads(state, repository, &selected.file_id, maximum, cancellation)?;
     let mut parents = BTreeSet::new();
     for branch in &branches {
@@ -188,4 +221,38 @@ pub(crate) fn capture<'a>(
         occurrences,
         parent_node_ids: parents.into_iter().collect(),
     })
+}
+
+/// Structural workspace deletion cannot stand in for a reversible file D.
+/// Rename keeps entry identity and is unaffected; initialized containers are
+/// retained until a directory lifecycle can also restore their exact ownership.
+pub(crate) fn require_reversible_removals(
+    state: &State,
+    repository: &str,
+    before: &[Entry],
+    after: &[Entry],
+) -> Result<()> {
+    let retained = after.iter().map(|entry| entry.entry_id.as_str()).collect::<BTreeSet<_>>();
+    let parents = before.iter().map(|entry| (entry.lookup_key(), entry))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for entry in before.iter().filter(|entry| !retained.contains(entry.entry_id.as_str())) {
+        let mut initialized = state.directory_git_repositories.contains_key(repository)
+            || (entry.kind == NamespaceEntryKind::Directory
+                && state.directory_git_repositories.contains_key(&entry.entry_id));
+        let mut path = entry.lookup_key();
+        while !initialized {
+            let Some((parent, _)) = path.rsplit_once('/') else { break };
+            initialized = parents.get(parent).is_some_and(|parent| {
+                state.directory_git_repositories.contains_key(&parent.entry_id)
+            });
+            path = parent;
+        }
+        if initialized {
+            return Err(Error::new(
+                ErrorCode::UnsupportedOperation,
+                "initialized directory deletion requires the reversible lifecycle; use explicit whole-file deletion",
+            ));
+        }
+    }
+    Ok(())
 }

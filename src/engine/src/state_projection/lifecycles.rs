@@ -4,13 +4,33 @@
 use super::{DerivedOwners, FileRows, State, Writes};
 use storage_contract::{OperationId, OperationResult, SharedRecords};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DeletionOwner<'a> {
     Other,
     File(&'a str),
+    Files(Vec<&'a str>),
     Malformed,
 }
 pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
+    if receipt.kind == crate::file_deletion::batch::KIND {
+        let Some(nodes) = receipt.result.get("deletion_nodes").and_then(json_codec::Value::as_array)
+        else {
+            return DeletionOwner::Malformed;
+        };
+        if nodes.is_empty() || nodes.len() > crate::file_deletion::batch::MAX_FILES {
+            return DeletionOwner::Malformed;
+        }
+        let mut files = std::collections::BTreeSet::new();
+        for node in nodes {
+            let Some(file) = node.get("file_id").and_then(json_codec::Value::as_str) else {
+                return DeletionOwner::Malformed;
+            };
+            if storage_contract::validate_id(file, "file").is_err() || !files.insert(file) {
+                return DeletionOwner::Malformed;
+            }
+        }
+        return DeletionOwner::Files(files.into_iter().collect());
+    }
     let field = match receipt.kind.as_str() {
         "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND => "deletion_node",
         "file.delete.undo" => "removed_deletion_node",
@@ -60,23 +80,29 @@ impl DerivedOwners {
     fn receipt_member(
         &mut self,
         id: OperationId,
-        owner: DeletionOwner<'_>,
+        owner: &DeletionOwner<'_>,
         membership: Membership,
         add: bool,
     ) {
         let rows = match owner {
             DeletionOwner::Other => return,
+            DeletionOwner::Files(files) => {
+                for file in files {
+                    self.receipt_member(id, &DeletionOwner::File(file), membership, add);
+                }
+                return;
+            }
             DeletionOwner::Malformed => match membership {
                 Membership::Deletion => &mut self.unscoped_deletions,
                 Membership::HistoryCopy => &mut self.unscoped_history_copies,
             },
             DeletionOwner::File(file) => {
-                if add && !self.file_rows.contains_key(file) {
-                    self.file_rows.insert(file.to_owned(), FileRows::default());
+                if add && !self.file_rows.contains_key(*file) {
+                    self.file_rows.insert((*file).to_owned(), FileRows::default());
                 }
                 let rows = self
                     .file_rows
-                    .get_mut(file)
+                    .get_mut(*file)
                     .expect("invariant: retained receipt has its file membership");
                 match membership {
                     Membership::Deletion => &mut rows.deletion_operations,
@@ -97,20 +123,20 @@ impl DerivedOwners {
             if let DeletionOwner::File(file) = owner
                 && self
                     .file_rows
-                    .get(file)
+                    .get(*file)
                     .expect("invariant: file group exists")
                     .is_empty()
             {
-                self.file_rows.remove_discard(file);
+                self.file_rows.remove_discard(*file);
             }
         }
     }
     pub(super) fn build_deletion_rows(&mut self, state: &State) {
         for (id, receipt) in state.operations.iter() {
-            self.receipt_member(*id, owner(receipt), Membership::Deletion, true);
+            self.receipt_member(*id, &owner(receipt), Membership::Deletion, true);
             self.receipt_member(
                 *id,
-                history_copy_owner(receipt),
+                &history_copy_owner(receipt),
                 Membership::HistoryCopy,
                 true,
             );
@@ -124,8 +150,8 @@ impl DerivedOwners {
                 .map_or(DeletionOwner::Other, owner);
             let next = after.operations.get(id).map_or(DeletionOwner::Other, owner);
             if previous != next {
-                self.receipt_member(*id, previous, Membership::Deletion, false);
-                self.receipt_member(*id, next, Membership::Deletion, true);
+                self.receipt_member(*id, &previous, Membership::Deletion, false);
+                self.receipt_member(*id, &next, Membership::Deletion, true);
             }
             let previous = before
                 .operations
@@ -136,8 +162,8 @@ impl DerivedOwners {
                 .get(id)
                 .map_or(DeletionOwner::Other, history_copy_owner);
             if previous != next {
-                self.receipt_member(*id, previous, Membership::HistoryCopy, false);
-                self.receipt_member(*id, next, Membership::HistoryCopy, true);
+                self.receipt_member(*id, &previous, Membership::HistoryCopy, false);
+                self.receipt_member(*id, &next, Membership::HistoryCopy, true);
             }
         }
     }

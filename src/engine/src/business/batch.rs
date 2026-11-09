@@ -1243,6 +1243,14 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
+        if request.kind == DirectoryBatchKind::Delete
+            && self.state().operations.get(&operation)
+                .is_none_or(|receipt| receipt.kind == crate::file_deletion::batch::KIND)
+        {
+            return self.soft_delete_directory_files(repository, request, principal, operation);
+        }
+        // An already retained legacy operation keeps its own exact receipt.
+        // New deletes never reach the destructive composition editor below.
         let kind = self.namespace_mutation_kind(
             "directory.namespace.batch",
             operation,

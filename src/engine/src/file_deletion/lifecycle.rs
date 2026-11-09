@@ -40,6 +40,37 @@ pub(super) fn require_writable(engine: &Engine, repository: &Repository) -> Resu
     Ok(())
 }
 
+pub(super) fn deletion_node(
+    capture: &FileDeletionPreflight<'_>,
+    path: &name_policy::LookupPath,
+    principal: &str,
+    operation: OperationId,
+    sequence: u64,
+) -> Result<FileDeletionNode> {
+    let selected = capture
+        .occurrences()
+        .iter()
+        .find(|entry| entry.lookup_key() == path.key())
+        .expect("invariant: preflight admitted the exact requested occurrence");
+    Ok(FileDeletionNode {
+        node_id: crate::new_id("fdel")?,
+        repository_id: capture.repository().repository_id.clone(),
+        history_tree_id: capture.repository().history_tree_id.clone(),
+        file_id: capture.file_id().into(),
+        path: selected.path.clone(),
+        branch_heads: capture
+            .branches()
+            .iter()
+            .map(|head| (head.branch().branch_id.clone(), head.node_id().into()))
+            .collect(),
+        parent_node_ids: capture.parent_node_ids().to_vec(),
+        operation_id: operation,
+        author: principal.into(),
+        sequence,
+        created_at: crate::business::now()?,
+    })
+}
+
 impl Engine {
     /// Publish one bodyless deletion node and freeze this stable file only.
     ///
@@ -62,24 +93,13 @@ impl Engine {
                 }
                 let capture = engine.file_deletion_preflight(target, &HistoryWindowCancellation::default())?;
                 require_writable(engine, capture.repository())?;
-                let selected = capture.occurrences().iter()
-                    .find(|entry| entry.lookup_key() == target.path.key())
-                    .expect("invariant: preflight admitted the exact requested occurrence");
-                let node = FileDeletionNode {
-                    node_id: crate::new_id("fdel")?,
-                    repository_id: capture.repository().repository_id.clone(),
-                    history_tree_id: capture.repository().history_tree_id.clone(),
-                    file_id: target.file_id.as_str().into(),
-                    path: selected.path.clone(),
-                    branch_heads: capture.branches().iter()
-                        .map(|head| (head.branch().branch_id.clone(), head.node_id().into()))
-                        .collect(),
-                    parent_node_ids: capture.parent_node_ids().to_vec(),
+                let node = deletion_node(
+                    &capture,
+                    target.path,
+                    principal,
                     operation_id,
-                    author: principal.into(),
-                    sequence: state.sequence,
-                    created_at: crate::business::now()?,
-                };
+                    state.sequence,
+                )?;
                 state.file_deletions.insert(node.file_id.clone(), node.clone());
                 Ok(json!({"deletion_node": node}))
             },
@@ -117,6 +137,15 @@ impl Engine {
                     })?;
                 let repository = engine.repository_for_history(&deletion.history_tree_id)?;
                 require_writable(engine, repository)?;
+                let namespace = engine.namespace_tree(&repository.main_branch_id)?;
+                preflight::require_scope_writable(
+                    engine.state(),
+                    engine.admitted_current_namespaces()?,
+                    repository,
+                    namespace.entries(),
+                    file_id.as_str(),
+                    &HistoryWindowCancellation::default(),
+                )?;
                 let node = state
                     .file_deletions
                     .remove(file_id.as_str())

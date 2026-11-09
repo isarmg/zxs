@@ -61,14 +61,17 @@ fn invalid() -> Error {
 fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
     let receipt = &state.operations[&id];
     let (action, key) = match receipt.kind.as_str() {
-        "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND => {
+        "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND | super::batch::KIND => {
             (DeletionAction::Delete, "deletion_node")
         }
         "file.delete.undo" => (DeletionAction::Undo, "removed_deletion_node"),
         _ => return Err(invalid()),
     };
-    let source: crate::FileDeletionNode =
-        json_codec::from_value(receipt.result.get(key).ok_or_else(invalid)?.clone())?;
+    let source: crate::FileDeletionNode = if receipt.kind == super::batch::KIND {
+        super::batch::node_for(receipt, file)?
+    } else {
+        json_codec::from_value(receipt.result.get(key).ok_or_else(invalid)?.clone())?
+    };
     let author = state.operation_principals.get(&id).ok_or_else(invalid)?;
     if receipt.operation_id != id
         || source.file_id != file

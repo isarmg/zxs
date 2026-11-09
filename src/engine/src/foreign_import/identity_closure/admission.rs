@@ -207,6 +207,7 @@ impl ForeignAdmissionRecipe {
             matches!(
                 receipt.kind.as_str(),
                 "file.delete"
+                    | crate::file_deletion::batch::KIND
                     | "file.delete.undo"
                     | crate::business::FILE_HISTORY_MOVE_KIND
                     | crate::business::history_copy::RETAINED_KIND

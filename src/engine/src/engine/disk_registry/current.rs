@@ -225,6 +225,7 @@ impl CurrentNamespaces {
             || kind == "workspace.namespace.admit"
             || kind == "directory.import.stop"
             || kind == "file.delete"
+            || kind == crate::file_deletion::batch::KIND
             || kind == "file.delete.undo"
             || kind == "file.namespace"
             || recursive_follow::is_kind(kind)

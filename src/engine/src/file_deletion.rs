@@ -9,6 +9,7 @@ pub(crate) mod lifecycle;
 pub(crate) mod publication;
 pub(crate) mod retained;
 pub use lifecycle::{DeleteFileRequest, UndoFileDeletionRequest};
+pub(crate) mod batch;
 mod head;
 pub(crate) mod preflight;
 
@@ -93,8 +94,9 @@ impl Engine {
     ///
     /// The caller authenticates before using this trusted local API. The current
     /// namespace uses ordinary repository/history and published-view admission.
-    /// Named repositories, initialized directory-repository occurrences and files
-    /// without independent branches are explicitly outside this preparatory slice.
+    /// Named repositories and files without independent branches remain outside
+    /// this entrance. Initialized directory occurrences retain their exact working
+    /// composition and are admitted only under the selected writable owners.
     /// A missing path/file, foreign retained branch, cancellation or exceeded
     /// current entry budget is an error; partial branch lists are never returned.
     ///
@@ -115,6 +117,14 @@ impl Engine {
             .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "repository not found"))?;
         self.repository_for_history(&repository.history_tree_id)?;
         let namespace = self.namespace_tree(&repository.main_branch_id)?;
+        preflight::require_scope_writable(
+            self.state(),
+            self.admitted_current_namespaces()?,
+            repository,
+            namespace.entries(),
+            target.file_id.as_str(),
+            cancellation,
+        )?;
         preflight::capture(
             self.state(),
             repository,
