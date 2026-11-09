@@ -522,3 +522,42 @@ fn embedded_material_export_requires_an_explicit_new_output_and_has_no_extractio
         .is_err()
     );
 }
+
+#[test]
+fn original_configuration_recovery_takes_only_the_original_digest_and_explicit_acknowledgments() {
+    let args = Args::try_parse_from([
+        "zxs-helper",
+        "deployment",
+        "install-recover-files",
+        "--request-digest",
+        "original",
+        "--confirm-original-configuration-files-only",
+        "--external-administration-stopped",
+    ])
+    .unwrap();
+    assert!(matches!(
+        args.command,
+        Some(Command::Deployment {
+            command: deployment::Command::InstallRecoverFiles {
+                confirm_original_configuration_files_only: true,
+                external_administration_stopped: true,
+                ..
+            }
+        })
+    ));
+    for option in ["--service-user", "--destination", "--start-service"] {
+        assert!(
+            Args::try_parse_from([
+                "zxs-helper",
+                "deployment",
+                "install-recover-preview",
+                "--request-digest",
+                "original",
+                option,
+                "other",
+            ])
+            .is_err()
+        );
+    }
+    assert!(Args::try_parse_from(["zxs-helper", "deployment", "install-recover-preview"]).is_err());
+}

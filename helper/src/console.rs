@@ -109,3 +109,7 @@ mod program_repair_tests;
 #[cfg(test)]
 #[path = "../../test/helper/unit/console/materials_tests.rs"]
 mod materials_tests;
+
+#[cfg(test)]
+#[path = "../../test/helper/unit/console/configuration_recovery_tests.rs"]
+mod configuration_recovery_tests;

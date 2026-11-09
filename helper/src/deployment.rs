@@ -23,6 +23,20 @@ pub(crate) enum Command {
     Preview(Options),
     /// Preview fixed systemd/Samba file installation, not service activation.
     InstallPreview(Options),
+    /// Recover the exact recorded configuration request without re-entering settings.
+    InstallRecoverPreview {
+        #[arg(long)]
+        request_digest: String,
+    },
+    /// Continue only the original recorded configuration installation, never activate it.
+    InstallRecoverFiles {
+        #[arg(long)]
+        request_digest: String,
+        #[arg(long)]
+        confirm_original_configuration_files_only: bool,
+        #[arg(long)]
+        external_administration_stopped: bool,
+    },
     /// Install matching configuration files without replacement, reload or start.
     InstallFiles {
         #[command(flatten)]
@@ -73,7 +87,7 @@ impl Options {
         })
     }
 }
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Input {
     pub service_user: String,
@@ -81,7 +95,7 @@ pub(crate) struct Input {
     pub listen: SocketAddr,
     pub smb: Option<SmbInput>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct SmbInput {
     pub account: String,
@@ -200,6 +214,25 @@ pub(crate) fn run(command: Command) -> Result<()> {
     match command {
         Command::Preview(options) => print(preview(options.input()?)?),
         Command::InstallPreview(options) => print(install::preview(options.input()?)?),
+        Command::InstallRecoverPreview { request_digest } => {
+            print(install::recovery::preview(install::recovery::Original {
+                request_digest,
+            })?)
+        }
+        Command::InstallRecoverFiles {
+            request_digest,
+            confirm_original_configuration_files_only,
+            external_administration_stopped,
+        } => {
+            if !confirm_original_configuration_files_only {
+                return Err("review the recorded configuration request and pass --confirm-original-configuration-files-only; no host path was inspected".into());
+            }
+            print(install::recovery::commit(install::recovery::Commit {
+                request_digest,
+                confirmation: "resume-original-configuration-files-only".into(),
+                external_administration_stopped,
+            })?)
+        }
         Command::InstallFiles {
             options,
             request_digest,

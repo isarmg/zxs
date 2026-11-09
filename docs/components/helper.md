@@ -26,6 +26,10 @@ helper 生产 Cargo 图只消费既定 authentication/platform-io/storage-engine
 
 本轮准确组合的定向验证以 TASKS T00 为准：helper/zxs 生产目标、管道与原操作门禁、所选文件发布测试已验证；下列历史切片中“未编译/未运行”的描述不是本轮组合结论。未运行的专项、完整发行内嵌进程、真实密码/系统盘及全套验收仍不计为通过。
 
+## 原配置安装续作
+
+固定 systemd/Samba 配置安装现在先保留准确原输入，CLI/Web 只凭原摘要即可读取当前阶段并明确确认续作，不用当前表单猜回或改写原请求。已开始完成记录后丢失的配置、身份变化及不同/不完整权威材料均保留拒绝，不替代配置修复、服务激活或完整安装 ready。只读阶段识别复用 platform-io 的通用 bundle 边界，详见[原配置安装恢复](../design/helper-original-configuration-recovery.md)及 TASKS H07。
+
 ## 同载荷程序修复
 
 `install repair-preview/repair-recover-preview/repair-commit` 与独立 Web 已接[同载荷程序修复](../design/helper-same-payload-program-repair.md)。首装保存不可变安装基线；修复只恢复它绑定的内置程序，先独立备份原字节并保留交换原 inode，支持准确原请求续作。不打开数据/配置，不启动服务，不升级或降级；缺基线及未知状态保留拒绝。源码未审查、编译、测试或 CI。

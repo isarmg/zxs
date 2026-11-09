@@ -1,5 +1,6 @@
 //! Confirmed, no-overwrite installation of fixed configuration files. This is
 //! deliberately not daemon reload/start/enable, Samba passdb, or a ready marker.
+pub(crate) mod recovery;
 use super::{Input, model, render};
 use crate::{
     Result,
@@ -59,6 +60,7 @@ const REQUIREMENTS: &[&str] = &[
 ];
 pub(super) struct Prepared {
     host: BundleDestination,
+    original_input: Input,
     program: InstalledProgram,
     account: LocalAccount,
     group: LocalGroup,
@@ -113,11 +115,22 @@ pub(super) fn existing(input: Input) -> Result<Prepared> {
     Ok(prepared)
 }
 
-fn build(input: Input) -> Result<Prepared> {
-    if rustix::process::geteuid().as_raw() != 0 {
-        return Err("configuration file installation requires the manually run root helper".into());
+fn require_root() -> Result<()> {
+    if rustix::process::getuid().as_raw() != 0 || rustix::process::geteuid().as_raw() != 0 {
+        return Err(
+            "configuration file installation requires the manually run real/effective root helper"
+                .into(),
+        );
     }
-    let settings = model::Settings::try_from(input)?;
+    Ok(())
+}
+fn build(input: Input) -> Result<Prepared> {
+    require_root()?;
+    let host = BundleDestination::open(Path::new("/zxs"))?;
+    build_at(input, host)
+}
+fn build_at(input: Input, host: BundleDestination) -> Result<Prepared> {
+    let settings = model::Settings::try_from(input.clone())?;
     let account = LocalAccount::resolve(settings.user.clone())?;
     let group = LocalGroup::resolve(settings.group.clone())?;
     if group.gid() != account.owner().1 {
@@ -136,9 +149,6 @@ fn build(input: Input) -> Result<Prepared> {
         }
         None => None,
     };
-    // This is the same stable /zxs directory lock used for the full lifetime of
-    // the current daemon. A console does not hold this lease between requests.
-    let host = BundleDestination::open(Path::new("/zxs"))?;
     let program = InstalledProgram::open()?;
     let destinations = ConfigurationFiles::open(settings.smb.is_some())?;
     let (unit, samba) = render::files(&settings);
@@ -149,7 +159,7 @@ fn build(input: Input) -> Result<Prepared> {
     let identity = host.identity();
     let plan = Plan {
         format: "zxs-helper-configuration-file-installation",
-        revision: 1,
+        revision: 2,
         host_device: identity.device.to_string(),
         host_inode: identity.inode.to_string(),
         configuration_parents: destinations.parents(),
@@ -178,6 +188,7 @@ fn build(input: Input) -> Result<Prepared> {
     };
     let result = Prepared {
         host,
+        original_input: input,
         program,
         account,
         group,
@@ -224,7 +235,10 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     if input.request_digest != prepared.preview.request_digest {
         return Err("configuration, payload, account/group source or parent identity differs from the exact preview; no installation was attempted".into());
     }
-    publish(&prepared).map_err(|source| {
+    publish_pending(&prepared)
+}
+fn publish_pending(prepared: &Prepared) -> Result<json_codec::Value> {
+    publish(prepared).map_err(|source| {
         Box::new(InstallationPending {
             request_digest: prepared.preview.request_digest.clone(),
             intent_directory: prepared.preview.intent_directory.clone(),
@@ -235,6 +249,13 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
 fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
     let plan = &prepared.preview.plan;
     let digest = &prepared.preview.request_digest;
+    prepared.recheck()?;
+    recovery::check_records(prepared)?;
+    let original = recovery::record_bytes(prepared)?;
+    prepared.host.publish(
+        &recovery::request_name(digest),
+        &[("request.json", original.as_slice())],
+    )?;
     prepared.recheck()?;
     let manifest = json_codec::to_vec_pretty(plan)?;
     let mut files = vec![
@@ -270,11 +291,7 @@ fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
             "a configuration file disappeared before the durable completion receipt".into(),
         );
     }
-    let receipt = json!({"format":"zxs-helper-configuration-files-installed", "revision":1,
-        "request_digest":digest,"unit_destination":SYSTEMD_PATH,"samba_destination":plan.samba_destination,
-        "service_reloaded":false,"service_started":false,"autostart_enabled":false,
-        "samba_default_configuration_changed":false,"samba_passdb_changed":false,
-        "system_initialized":false,"activation_verified":false});
+    let receipt = completion_receipt(prepared);
     let bytes = json_codec::to_vec_pretty(&receipt)?;
     prepared.host.publish(
         &format!(".zxs-helper-config-installed-{digest}"),
@@ -295,4 +312,13 @@ fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
         "current_daemon_exclusion":"held_during_this_operation_only","all_external_writers_excluded":false,
         "required_before_start":REQUIREMENTS}),
     )
+}
+
+fn completion_receipt(prepared: &Prepared) -> json_codec::Value {
+    json!({"format":"zxs-helper-configuration-files-installed", "revision":2,
+        "request_digest":prepared.preview.request_digest,"unit_destination":SYSTEMD_PATH,
+        "samba_destination":prepared.preview.plan.samba_destination,
+        "service_reloaded":false,"service_started":false,"autostart_enabled":false,
+        "samba_default_configuration_changed":false,"samba_passdb_changed":false,
+        "system_initialized":false,"activation_verified":false})
 }

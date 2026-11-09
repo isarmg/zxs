@@ -19,6 +19,13 @@ pub enum BundlePublication {
     Resumed,
     Existing,
 }
+/// Current retained publication stage, without completing or syncing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleState {
+    Absent,
+    Pending,
+    Published,
+}
 pub struct BundleDestination {
     path: PathBuf,
     parent: OpenAt2Root,
@@ -142,6 +149,36 @@ impl BundleDestination {
         check_named(&self.parent, &named, directory.identity())?;
         self.recheck()?;
         Ok(Some(bytes))
+    }
+    /// Read-only verification of the exact expected bundle. Pending directories
+    /// may lack expected files, but unknown or differing material is rejected.
+    /// Published directories must be complete. No bytes or durability barriers
+    /// are written, and the held parent/name identities are rechecked.
+    pub fn inspect(&self, name: &str, files: &[(&str, &[u8])]) -> Result<BundleState> {
+        self.recheck()?;
+        let target = EntryName::new(name)?;
+        let pending = EntryName::new(format!("{name}.pending"))?;
+        let (named, directory, state) =
+            match (self.open_bundle(&target)?, self.open_bundle(&pending)?) {
+                (None, None) => return Ok(BundleState::Absent),
+                (Some(directory), None) => (target, directory, BundleState::Published),
+                (None, Some(directory)) => (pending, directory, BundleState::Pending),
+                (Some(_), Some(_)) => {
+                    return Err(
+                        "both final and pending bundles exist; preserve the conflicting records"
+                            .into(),
+                    );
+                }
+            };
+        check_entries(&directory, files)?;
+        for (entry, bytes) in files {
+            if verify_file(&directory, entry, bytes)?.is_none() && state == BundleState::Published {
+                return Err("published bundle is missing a required original file; no material was reconstructed".into());
+            }
+        }
+        check_named(&self.parent, &named, directory.identity())?;
+        self.recheck()?;
+        Ok(state)
     }
     pub fn publish(&self, name: &str, files: &[(&str, &[u8])]) -> Result<BundlePublication> {
         let target = EntryName::new(name)?;

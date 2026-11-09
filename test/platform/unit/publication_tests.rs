@@ -89,3 +89,93 @@ fn cleanup_failure_keeps_both_typed_causes() {
     assert!(failure.source().unwrap().to_string().contains("os error 5"));
     assert!(failure.to_string().contains("os error 21"));
 }
+
+#[test]
+fn bundle_inspection_is_read_only_and_final_missing_files_refuse() {
+    let temp = tempfile::tempdir().unwrap();
+    let host = BundleDestination::open(temp.path()).unwrap();
+    let files: &[(&str, &[u8])] = &[("plan.json", b"plan"), ("zxs.service", b"unit")];
+    assert!(matches!(
+        host.inspect("intent", files).unwrap(),
+        BundleState::Absent
+    ));
+    let pending = temp.path().join("intent.pending");
+    private_dir(&pending);
+    private_file(&pending.join("plan.json"), b"plan");
+    assert!(matches!(
+        host.inspect("intent", files).unwrap(),
+        BundleState::Pending
+    ));
+    assert!(!pending.join("zxs.service").exists());
+    fs::rename(&pending, temp.path().join("intent")).unwrap();
+    assert!(host.inspect("intent", files).is_err());
+    assert!(!temp.path().join("intent/zxs.service").exists());
+}
+
+#[test]
+fn conflicting_or_different_bundle_evidence_is_retained() {
+    let temp = tempfile::tempdir().unwrap();
+    let host = BundleDestination::open(temp.path()).unwrap();
+    let files: &[(&str, &[u8])] = &[("plan.json", b"plan")];
+    host.publish("intent", files).unwrap();
+    assert!(matches!(
+        host.inspect("intent", files).unwrap(),
+        BundleState::Published
+    ));
+    assert!(
+        host.inspect("intent", &[("plan.json", b"changed")])
+            .is_err()
+    );
+    private_dir(&temp.path().join("intent.pending"));
+    assert!(host.inspect("intent", files).is_err());
+    assert_eq!(
+        fs::read(temp.path().join("intent/plan.json")).unwrap(),
+        b"plan"
+    );
+    let other = temp.path().join("other.pending");
+    private_dir(&other);
+    private_file(&other.join("unknown"), b"retain");
+    assert!(host.inspect("other", files).is_err());
+    assert_eq!(fs::read(other.join("unknown")).unwrap(), b"retain");
+}
+
+fn private_dir(path: &std::path::Path) {
+    fs::create_dir(path).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+fn private_file(path: &std::path::Path, bytes: &[u8]) {
+    fs::write(path, bytes).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[test]
+fn bundle_inspection_rejects_unsafe_or_linked_files_without_mutation() {
+    use std::os::unix::fs::symlink;
+    for kind in ["mode", "hardlink", "symlink"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let folder = temporary.path().join("operation.pending");
+        private_dir(&folder);
+        let entry = folder.join("record");
+        let outside = temporary.path().join("outside");
+        private_file(&outside, b"original");
+        match kind {
+            "mode" => {
+                private_file(&entry, b"original");
+                fs::set_permissions(&entry, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            "hardlink" => fs::hard_link(&outside, &entry).unwrap(),
+            "symlink" => symlink(&outside, &entry).unwrap(),
+            _ => unreachable!(),
+        }
+        let host = BundleDestination::open(temporary.path()).unwrap();
+        assert!(
+            host.inspect("operation", &[("record", b"original")])
+                .is_err(),
+            "{kind}"
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"original");
+        assert_eq!(fs::read(&entry).unwrap(), b"original");
+        assert!(!temporary.path().join("operation").exists());
+        assert!(folder.is_dir());
+    }
+}

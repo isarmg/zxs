@@ -13,7 +13,7 @@ use platform_io::fs_safety::{
     AtomicCommitError, EntryName,
     linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},
 };
-pub(crate) use platform_io::publication::{BundleDestination, BundlePublication};
+pub(crate) use platform_io::publication::{BundleDestination, BundlePublication, BundleState};
 use platform_io::publication::{PublicationFailure, write_atomic_at, write_atomic_at_mode};
 pub(crate) use program_repair::ProgramSnapshot;
 use rustix::fs::{AtFlags, RenameFlags, renameat_with, statat};

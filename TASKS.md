@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`04af3778`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`ef0f35cb`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -56,7 +56,7 @@
 | H04 | 正常 ZXS 启动／运行只接纳已完整处理、正式纳入且一致的数据、数据库、标签和磁盘，不展示待初始化／待接入任务。 | 本片新增[首启前置门禁](docs/design/helper-normal-start-prerequisites.md)：runtime/监听前拒绝缺根/缺配置/当前激活中断，正常后台不重建管理权威标记；持有既有目录能力，终态/损坏仍交原权威诊断。本轮所属生产目标 check 通过，启动门禁专项测试及真实部署未验，尚非全盘/数据库一致性或未知外来项的全路径门禁，完整安装 ready 仍为 false，不隐藏失联、清空材料或声称全部完成。 |
 | H05 | 保留离线检查、导出可验证文件、重建系统盘汇总、精确恢复中断操作。 | 已有逐版本 CLI 和独立 Web 元数据/正文重验，`a8a128f2` 对象内部库 inspect/export/rebuild 已合入；本候选新增盘根 `disk-database-rescue export/rebuild`，保留 current/history 完整记录并在无原 SYSTEM/原盘时生成独立救援 SQLite。两类均只写新救援文件、不安装活动库/选新权威；所属生产目标本轮 check 通过，本片九项及原对象库七项回归仍未运行，完整三范围及任意单盘系统恢复仍未实现。 |
 | H06 | 增加 ZXS 管理员密码及实际 SMB 账户密码重置。 | 已有管理员重置；本片新增[既有本地 tdbsam 重置](docs/design/helper-samba-password-reset.md)：准确已安装配置/账户/程序/数据库元数据，持久单次意图、手动秘密 stdin 调用 smbpasswd、账户读回与同步、历史回执查询；未知结果不自动重放或回滚旧 passdb。所属生产目标本轮 check 通过，所选 HTTP 准入/秘密不回显已验；未验证真实改密或认证，未改真实密码。其他 Samba 后端/布局与账户创建、真实认证验证、会话撤销和外部 Samba 强制互斥仍缺；管理员灾备副本同步不在此片。 |
-| H07 | 一条龙安装和配置：安装 ZXS、设置 **ZXS 主服务**的 systemd 与 SMB，并衔接首次初始化和磁盘设置。 | 已有固定配置安装、初始存储及受限 Samba 参数核验；本片新增[首装运行目录准备](docs/design/helper-runtime-directory-preparation.md)：CLI/Web 准确账户与原意图、六个服务私有空目录及 root 独立空 export、逐目录 no-clobber 持久发布和绑定 inode 的完成回执。已使用/不安全目录不清空或修权，完成后缺失/替换不补造。所属生产目标本轮 check 通过；本运行目录的 15 项专项测试（含一项显式 root 临时目录用例）仍未运行，无新 CI 或真实主机操作。完整首装、依赖/VFS、既有配置替换回滚、systemd 目标验证及明确 reload/start/enable 仍未完成；总体 ready=false，helper 自身无自启。 |
+| H07 | 一条龙安装和配置：安装 ZXS、设置 **ZXS 主服务**的 systemd 与 SMB，并衔接首次初始化和磁盘设置。 | 已有固定配置安装、初始存储、受限 Samba 核验及[首装运行目录准备](docs/design/helper-runtime-directory-preparation.md)。本片续接[准确原配置恢复](docs/design/helper-original-configuration-recovery.md)：先持久保存原输入，CLI/Web 只凭原摘要读取状态并明确确认续作，重核原载荷/账户/目录；完成阶段丢失配置、旧格式或不一致材料均保留拒绝。通用 bundle 只读状态识别在 platform-io，不恢复 helper → server 生产边；原 `6f4d8a90` 候选保留，当前新分支适配已发布边界。在 `ef0f35cb` 上复验 helper 恢复 7 项、HTTP/CLI 4 项及 platform publication 7 项（含 3 项新增）通过，helper 生产 bin check 无 warning；helper/platform 格式、JS 语法、原架构与来源/消费者/依赖文档 verify 通过。运行目录 15 项专项、真实 root `/etc` 安装及浏览器全流程未在本片执行，没有操作实际系统。完整首装、依赖/VFS、既有配置替换回滚、systemd 目标验证及明确 reload/start/enable 仍缺，总体 ready=false，helper 自身无自启。 |
 | H08 | 辅助工具内携带 ZXS 安装包，用于首次安装及 ZXS 主程序被破坏后的修复。 | 既有非递归内置 ELF 流程绑定版本/Git/目标/摘要；`9277f41c` [同载荷程序修复](docs/design/helper-same-payload-program-repair.md) 已合入：首装保存不可变 payload/主机基线，准确确认后备份原字节、原子交换保留原 inode，并按原摘要续作；缺基线、不同版本或未知状态保留拒绝。本片独立补[内置许可材料](docs/design/helper-embedded-legal-materials.md)：从准确 Git tree 取中央许可证/NOTICE/未关闭事项及来源索引，生成绑定 payload 的确定性归档/清单，随 helper 嵌入并接 CLI/Web 核验导出，不在主机解包或改数据/配置。本轮安装/材料/匿名程序 8 项和文件层程序修复 5 项定向通过，构建侧材料测试及完整载荷打包仍未执行，无新 CI 或系统操作。实际载荷仍未构建，完整 VFS/OS 依赖/源码包、任意历史安装修复与最终四类 Release 收敛未完成；不作法律完整性或整体 ready 声明。 |
 
 **部署风险必须显著提示**：无认证的 root 控制台监听所有接口，网络可达者可能操作磁盘或重置密码，只应临时用于可信隔离网络。保留不依赖登录的同源／CSRF、防误触确认、身份和完整性检查；它们不等于网络访问认证或 TLS。不得自行修改防火墙、启用自启或假称可以安全暴露公网。

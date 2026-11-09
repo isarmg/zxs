@@ -5,7 +5,7 @@ use crate::fs_safety::{
     AtomicCommitError, EntryName,
     linux::{FileIdentity, OpenAt2Root, SingleLinkRequirement},
 };
-pub use bundle::{BundleDestination, BundlePublication};
+pub use bundle::{BundleDestination, BundlePublication, BundleState};
 use rustix::fs::{
     AtFlags, Mode, OFlags, RenameFlags, openat, renameat, renameat_with, statat, unlinkat,
 };

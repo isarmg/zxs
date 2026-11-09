@@ -305,6 +305,19 @@
       <label class="ack"><input id="external-administration-stopped" type="checkbox"> 我已停止外部配置/服务管理操作，并理解这只是我的确认，不是工具已取得所有外部进程锁。</label>
       <button id="configuration-install" type="button" hidden>确认仅安装这些固定配置文件</button>
       <pre id="configuration-receipt" hidden></pre>
+      <h3>恢复原配置安装</h3>
+      <p>断开页面后只需原摘要，不必重新猜填账户、监听或 SMB 参数。读取主机保留的原请求并核对当前准确身份；此入口不接收新配置、替换目标或启动服务。旧格式、缺失/损坏记录及完成后缺件均保留并拒绝。</p>
+      <form id="configuration-recovery-form">
+        <label>原安装请求摘要 <input id="configuration-recovery-digest" required minlength="64" maxlength="64" pattern="[0-9a-f]{64}" autocomplete="off" spellcheck="false"></label>
+        <button type="submit" class="secondary">读取原配置与恢复状态</button>
+      </form>
+      <pre id="configuration-recovery-plan" hidden></pre>
+      <button id="configuration-original-save" class="secondary" type="button" hidden>保存原配置恢复摘要</button>
+      <form id="configuration-recovery-commit-form" hidden>
+        <label class="ack"><input id="configuration-recovery-external-stopped" type="checkbox" required> 已停止外部配置/服务管理者；此声明不是它们参与系统锁的证明。</label>
+        <button type="submit">确认仅续作这个原配置安装</button>
+      </form>
+      <pre id="configuration-recovery-receipt" hidden></pre>
     </section>
     <section class="card">
       <h2>重置已存在的 ZXS 管理员密码</h2>
