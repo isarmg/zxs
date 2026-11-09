@@ -9,7 +9,12 @@ use storage_engine::{
     inspect_object_database_material,
 };
 
-fn hide_last_index_row(path: &Path, original_id_query: &str, insert: &str, index: &str) -> Vec<u8> {
+fn hide_last_index_row(
+    path: &Path,
+    original_id_query: &'static str,
+    insert: &'static str,
+    index: &str,
+) -> Vec<u8> {
     let original = fs::read(path).unwrap();
     let (original_id, hidden_id, page, mut bytes) =
         platform_io::sqlite::block_on_sqlite_connection(async {

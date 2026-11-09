@@ -11,7 +11,7 @@ use storage_engine::{
     inspect_object_database_material,
 };
 
-fn rewrite(path: &Path, statements: &[&str]) -> Vec<u8> {
+fn rewrite(path: &Path, statements: &[&'static str]) -> Vec<u8> {
     let original = fs::read(path).unwrap();
     let bytes = platform_io::sqlite::block_on_sqlite_connection(async {
         let mut connection =
