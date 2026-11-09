@@ -86,13 +86,12 @@ impl PreparedService {
         if read_optional(&prepared.system, "config.json", MAX_CONFIGURATION_BYTES)?.is_none() {
             return Err(Error::StorageNotPrepared);
         }
-        if let Some(intent) = read_optional(&prepared.system, INITIALIZATION, 4096)? {
-            if intent != crate::setup_recovery::management_initialization_record()
+        if let Some(intent) = read_optional(&prepared.system, INITIALIZATION, 4096)?
+            && (intent != crate::setup_recovery::management_initialization_record()
                 || read_optional(&prepared.system, AUTHORITY, 4096)?.as_deref()
-                    != Some(crate::management::MANAGEMENT_AUTHORITY_BYTES)
-            {
-                return Err(Error::InitialAuthority);
-            }
+                    != Some(crate::management::MANAGEMENT_AUTHORITY_BYTES))
+        {
+            return Err(Error::InitialAuthority);
         }
         // Existing recovered systems without an initial helper activation
         // intent retain their current core recovery semantics. This does not

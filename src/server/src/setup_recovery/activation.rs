@@ -397,13 +397,13 @@ impl SetupRecovery {
     ) -> Result<(), ApiError> {
         revalidate(identity)?;
         let _lock = self.lock()?;
-        if let Some(expected) = expected {
-            if !self.initial_activation_matches(expected)? {
-                return Err(ApiError::conflict(
-                    storage_contract::ErrorCode::SetupProofInvalid,
-                    "exact activation recovery requires its original intent",
-                ));
-            }
+        if let Some(expected) = expected
+            && !self.initial_activation_matches(expected)?
+        {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::SetupProofInvalid,
+                "exact activation recovery requires its original intent",
+            ));
         }
         if present(&self.data_root.join(ACTIVATION_COMPLETE))? {
             self.activation_admitted()?;
