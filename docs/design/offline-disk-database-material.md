@@ -62,3 +62,7 @@ zxs-helper disk-databases selected-disk.json --scope history --records
 ## 对象内部库的独立材料
 
 盘根 current/history 与文件/目录内部库仍是不同范围。后继 [对象库救援归档与重建](object-database-material-reconstruction.md) 只处理明确选中的单对象SQLite，允许从已保留归档生成独立救援镜像；不依据盘根owner路径选对象、不安装活动库、不授予本入口新的系统恢复权威。
+
+## 独立救援镜像后继
+
+[盘根救援归档与独立重建](disk-database-rescue-reconstruction.md) 将本入口已冻结的完整记录保存为新归档，允许在原 SYSTEM/原盘都不可用时，从明确身份和 `stored-current`、`history` 或 `current-from-history` 生成新的独立 SQLite。原 `inspect` 仍不安装任何数据库；重建也不能取得活动安装权威。所选 SQLite 的未知侧车现在在读取前后保留拒绝，未选择的一份不受访问。九项新增回归仅源码，未执行审查、编译、格式检查、测试或 CI。

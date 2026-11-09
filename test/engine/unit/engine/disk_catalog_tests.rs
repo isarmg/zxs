@@ -208,3 +208,6 @@ fn invalid_bulk_target_list_has_no_partial_database_creation() {
     );
     assert!(!path.exists());
 }
+
+#[path = "disk_catalog_rescue_tests.rs"]
+mod rescue;

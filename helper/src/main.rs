@@ -8,6 +8,7 @@ mod deployment;
 mod disk_addition;
 mod disk_databases;
 mod object_databases;
+mod disk_database_rescue;
 mod disk_readmission;
 mod disk_removal;
 mod foreign_chain;
@@ -156,6 +157,11 @@ enum Command {
         #[command(subcommand)]
         command: object_databases::Command,
     },
+    /// Export/rebuild standalone disk SQLite rescue material, never install active databases.
+    DiskDatabaseRescue {
+        #[command(subcommand)]
+        command: disk_database_rescue::Command,
+    },
     OfflineExport {
         disk: PathBuf,
         version: String,
@@ -299,6 +305,7 @@ fn run(args: Args) -> Result<()> {
         Command::Authority { command } => authority::run(command),
         Command::DiskDatabases(options) => disk_databases::run(options),
         Command::ObjectDatabase { command } => object_databases::run(command),
+        Command::DiskDatabaseRescue { command } => disk_database_rescue::run(command),
         Command::Package { command } => match command {
             PackageCommand::Check { package } => {
                 print(storage_engine::offline_check_history_package(&package)?)
@@ -423,6 +430,7 @@ fn run(args: Args) -> Result<()> {
 fn requires_service_exclusion(command: &Command) -> bool {
     match command {
         Command::ObjectDatabase { command } => object_databases::requires_service_exclusion(command),
+        Command::DiskDatabaseRescue { command } => disk_database_rescue::requires_service_exclusion(command),
         Command::RestoreSystem { .. }
         | Command::DiskDatabases(_)
         | Command::RecoveryPreview { .. }

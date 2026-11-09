@@ -7,14 +7,14 @@ use platform_io::fs_safety::{
     PrivateDirectory,
     linux::{MountPolicy, OpenAt2Root},
 };
-use std::{io::Write, path::PathBuf};
+use std::{io::Write, path::{Path, PathBuf}};
 use storage_engine::{
     DiskCatalogMaintenanceState, DiskDatabaseReadScope, DiskHistoryMaintenanceState,
     DiskRegistrationIdentity, Engine, IndexHealth,
 };
 
 #[derive(Clone, Copy, ValueEnum)]
-enum Scope {
+pub(crate) enum Scope {
     Both,
     Current,
     History,
@@ -49,23 +49,24 @@ enum Record<'a> {
     HistoryInventoryBackupDirectory(&'a storage_engine::DiskCatalogDirectory),
 }
 
-pub(crate) fn run(options: Options) -> Result<()> {
+pub(crate) fn inspect(path: &Path, scope: Scope) -> Result<storage_engine::DiskDatabaseMaterial> {
     let selection: Selection =
-        storage_engine::decode_strict(&private_io::read_owned(&options.selection, 64 * 1024)?)?;
+        storage_engine::decode_strict(&private_io::read_owned(path, 64 * 1024)?)?;
     let directory = PrivateDirectory::open_existing(&selection.root)?;
     let path = directory.path().to_path_buf();
     let directory = OpenAt2Root::from_private_directory(directory, MountPolicy::SameMount)?;
-    let scope = match options.scope {
+    let scope = match scope {
         Scope::Both => DiskDatabaseReadScope::Both,
         Scope::Current => DiskDatabaseReadScope::Current,
         Scope::History => DiskDatabaseReadScope::History,
     };
-    let material = storage_engine::inspect_disk_database_material(
-        directory.into_directory(),
-        path,
-        &selection.expected_identity,
-        scope,
-    )?;
+    Ok(storage_engine::inspect_disk_database_material(
+        directory.into_directory(), path, &selection.expected_identity, scope,
+    )?)
+}
+
+pub(crate) fn run(options: Options) -> Result<()> {
+    let material = inspect(&options.selection, options.scope)?;
     let summary = json!({
         "format":"disk-database-material",
         "scope":material.scope(),

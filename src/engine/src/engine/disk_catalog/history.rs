@@ -14,6 +14,8 @@ pub(in crate::engine) use replay::visit_published_prefix;
 pub(super) use maintenance::Maintenance;
 pub use maintenance::{DiskHistoryFailure, DiskHistoryMaintenanceState, DiskHistoryStatus};
 pub use offline::{
+    DiskDatabaseRebuildSource, DiskDatabaseReconstruction, MAX_DISK_DATABASE_ARCHIVE_BYTES,
+    reconstruct_disk_database_material,
     DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRelation,
     inspect_disk_database_material,
 };

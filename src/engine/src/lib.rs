@@ -151,6 +151,8 @@ pub use engine::{
     DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
     DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
     DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskCatalogDirectory,
+    DiskDatabaseRebuildSource, DiskDatabaseReconstruction, MAX_DISK_DATABASE_ARCHIVE_BYTES,
+    reconstruct_disk_database_material,
     DiskDatabaseMaterial,
     DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
     DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation, DiskHistoryReceipt,

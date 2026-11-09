@@ -147,3 +147,29 @@ fn directory_projection_uses_exact_original_binding_and_each_states_policy() {
     assert!(snapshot(&next, identity()).unwrap().is_empty());
     assert_eq!(snapshot(&state, identity()).unwrap().backup_directories.len(), 1);
 }
+
+#[test]
+fn history_only_rescue_rebuilds_empty_directory_paths_without_original_sqlite() {
+    let before = directory("backup/empty");
+    let after = directory("backup/renamed");
+    let second = OperationId::generate().unwrap();
+    // Sort same-sequence records by the original entity/path key, not action kind.
+    let snapshot = history(vec![
+        record(1, before.operation_id, DiskHistoryChange::BackupDirectoryEntered { after: before.clone() }),
+        record(2, second, DiskHistoryChange::BackupDirectoryDeparted { before }),
+        record(2, second, DiskHistoryChange::BackupDirectoryEntered { after: after.clone() }),
+    ], 2);
+    let material = json_codec::json!({
+        "scope":"history", "identity":identity(), "current":null, "history":snapshot,
+    });
+    let bytes = canonical_json(&json_codec::json!({
+        "format":"disk-local-database-rescue-material",
+        "records_hash":storage_contract::object_hash("disk-database-rescue-material", &material).unwrap(),
+        "material":material,
+    })).unwrap();
+    let image = reconstruct_disk_database_material(&bytes, &identity(), DiskDatabaseRebuildSource::CurrentFromHistory).unwrap();
+    let recovered = database::read(image.database_bytes(), &identity()).unwrap();
+    assert_eq!(recovered, current(after, 2));
+    assert!(recovered.versions.is_empty());
+    assert_eq!(image.records(), 1);
+}

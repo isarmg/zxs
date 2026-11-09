@@ -277,3 +277,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 ### 对象内部数据库救援文件
 
 `object-database inspect/export/rebuild` 现在对应实际文件/目录内部SQLite读取、完整救援归档和独立镜像重建。重建只读归档与显式scope，不依赖原SYSTEM/原盘；输出限定新 `.object-db.json` / `.recovered.sqlite`，无覆盖且不使用活动数据库名。Inspect/Export持有当前服务生命周期租约并要求全部写者停止；Rebuild不接入服务。完整边界、格式、路径范围及未运行状态见 [对象库救援规范](../design/object-database-material-reconstruction.md)，这不是全盘/全系统恢复或自动接纳。
+
+### 盘根救援归档和独立数据库重建
+
+`disk-database-rescue export SELECTION OUTPUT.disk-db.json [--scope both|current|history]` 保存完整冻结材料；`disk-database-rescue rebuild ARCHIVE IDENTITY --source stored-current|history|current-from-history OUTPUT.recovered.sqlite` 在原 SYSTEM/原盘均不存在时也可重建一个独立 SQLite，并完整读回比较。来源必须明确，归档中的矛盾记录不能被输出选项隐藏；不凭 current 伪造缺失 history、不安装活动库。只生成新安全文件、拒绝覆盖和活动库名；export 需要停写及现有服务租约，纯归档 rebuild 不触原主机状态。未新增 Web 写入口。详见[范围、示例与未认证边界](../design/disk-database-rescue-reconstruction.md)。九项测试仅源码，未审查/编译/格式化/测试/CI，无实际盘操作。

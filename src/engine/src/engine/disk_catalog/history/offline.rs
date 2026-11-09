@@ -5,9 +5,15 @@ use super::*;
 use crate::disk::{DiskRoot, HeldRegular, MAX_METADATA};
 use std::{fs::File, path::PathBuf};
 
+mod archive;
+pub use archive::{
+    DiskDatabaseRebuildSource, DiskDatabaseReconstruction, MAX_DISK_DATABASE_ARCHIVE_BYTES,
+    reconstruct_disk_database_material,
+};
+
 /// Explicitly selecting one intact file permits salvage when the other is
 /// corrupt. An unselected file is not read, classified as absent, or repaired.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serialization(rename_all = "kebab-case")]
 pub enum DiskDatabaseReadScope {
     Both,
@@ -92,6 +98,7 @@ pub fn inspect_disk_database_material(
             "selected disk differs from the explicit database inspection identity",
         ));
     }
+    no_sidecars(&root, scope)?;
     let mut current_file = if scope.current() {
         HeldRegular::capture(&root, DISK_DATABASE_NAME, MAX_DATABASE_BYTES)?
     } else {
@@ -156,6 +163,7 @@ pub fn inspect_disk_database_material(
             MAX_DATABASE_BYTES,
         )?;
     }
+    no_sidecars(&root, scope)?;
     let after =
         crate::disk::recognize_disk(root.directory(root.path())?, root.path().to_path_buf())?;
     if after != recognized {
@@ -172,6 +180,18 @@ pub fn inspect_disk_database_material(
         history_inventory,
         relation,
     })
+}
+
+fn no_sidecars(root: &DiskRoot, scope: DiskDatabaseReadScope) -> Result<()> {
+    for (selected, leaf) in [(scope.current(), DISK_DATABASE_NAME), (scope.history(), DISK_HISTORY_DATABASE_NAME)] {
+        if !selected { continue; }
+        for suffix in ["-wal", "-shm", "-journal"] {
+            if root.optional_metadata(&root.path().join(format!("{leaf}{suffix}")))?.is_some() {
+                return Err(invalid("selected disk database has a live or unknown SQLite sidecar; preserve all files"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn recheck(

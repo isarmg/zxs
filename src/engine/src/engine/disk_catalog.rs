@@ -20,6 +20,8 @@ mod maintenance;
 pub(in crate::engine) mod root_install;
 pub(in crate::engine) use history::preparation::PreparedDiskScopes;
 pub use history::{
+    DiskDatabaseRebuildSource, DiskDatabaseReconstruction, MAX_DISK_DATABASE_ARCHIVE_BYTES,
+    reconstruct_disk_database_material,
     DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange,
     DiskHistoryFailure, DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation,
     DiskHistoryReceipt, DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus,
