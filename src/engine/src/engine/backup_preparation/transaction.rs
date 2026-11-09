@@ -7,7 +7,9 @@ const REQUEST: &str = "backup-preparation/transaction.json";
 const MAX_REQUEST: usize = 64 * 1024;
 mod cancellation;
 pub use cancellation::{BackupTransactionCancelOutcome, BackupTransactionCancellation};
-pub(super) use cancellation::{cancellation_pending, require_not_cancelling, require_operation_open};
+pub(super) use cancellation::{
+    cancellation_pending, require_not_cancelling, require_operation_open,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -177,16 +179,26 @@ impl Engine {
             &request.targets,
         )?;
         if self.config.generation().is_some() || self.snapshot.is_none() {
-            return Err(Error::new(ErrorCode::UnsupportedOperation,
-                "Backup preparation requires its original fixed-genesis published source"));
+            return Err(Error::new(
+                ErrorCode::UnsupportedOperation,
+                "Backup preparation requires its original fixed-genesis published source",
+            ));
         }
-        if self.state.operations.contains_key(&request.preparation.operation_id)
+        if self
+            .state
+            .operations
+            .contains_key(&request.preparation.operation_id)
             || self.backup_preparation.is_some()
             || crate::history_package::preparation_path_exists(&system, &system.path().join(JOB))?
-            || crate::history_package::preparation_path_exists(&system, &system.path().join(batch::BATCH_JOB))?
+            || crate::history_package::preparation_path_exists(
+                &system,
+                &system.path().join(batch::BATCH_JOB),
+            )?
         {
-            return Err(Error::new(ErrorCode::IdempotencyKeyReused,
-                "an existing operation or preparation must retain its original task"));
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "an existing operation or preparation must retain its original task",
+            ));
         }
         if directories.len() != request.targets.len() {
             return Err(Error::new(
@@ -207,13 +219,17 @@ impl Engine {
             }
             bindings.push(physical);
             if root.entries(root.path())?.next().transpose()?.is_some() {
-                return Err(Error::new(ErrorCode::ObjectCollision,
-                    "a new Backup transaction requires empty targets; existing bytes are preserved"));
+                return Err(Error::new(
+                    ErrorCode::ObjectCollision,
+                    "a new Backup transaction requires empty targets; existing bytes are preserved",
+                ));
             }
             roots.push(root);
         }
         self.check_batch_targets(&roots)?;
-        let admitted = roots.iter().map(|root| root.directory(root.path()))
+        let admitted = roots
+            .iter()
+            .map(|root| root.directory(root.path()))
             .collect::<Result<Vec<_>>>()?;
         let saved = Retained {
             format: "zxs-backup-user-transaction".into(),

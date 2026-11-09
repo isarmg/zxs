@@ -351,14 +351,18 @@ async fn check(
     let input: work::Check = input(request).await?;
     work::admit(&input.selection, input.writers_stopped)?;
     let response = tokio::task::spawn_blocking(move || {
-        let report = crate::authority::check::collect(&input.selection).map_err(work::disk_error)?;
+        let report =
+            crate::authority::check::collect(&input.selection).map_err(work::disk_error)?;
         let bytes = json_codec::to_vec(&report).map_err(|error| {
             Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "report_json", error)
         })?;
-        Ok::<_, Failure>((
-            [(header::CONTENT_TYPE, "application/json")],
-            response_body::owned(bytes.into(), permit),
-        ).into_response())
+        Ok::<_, Failure>(
+            (
+                [(header::CONTENT_TYPE, "application/json")],
+                response_body::owned(bytes.into(), permit),
+            )
+                .into_response(),
+        )
     })
     .await
     .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "read_worker", error))??;
@@ -1409,5 +1413,6 @@ async fn maintenance_operation(
     Ok((
         [(header::CONTENT_TYPE, "application/json")],
         response_body::owned(result.into(), permit),
-    ).into_response())
+    )
+        .into_response())
 }

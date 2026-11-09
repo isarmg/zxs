@@ -41,7 +41,6 @@ pub use directory_conversion::{
 mod disk;
 pub mod disk_authority;
 mod engine;
-pub use engine::{BackupTransactionRequest, BackupTransactionCancellation, BackupTransactionCancelOutcome};
 pub use engine::DetachedHistoryRead;
 pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{
@@ -72,6 +71,9 @@ pub use engine::{
     offline_check_backup_cutover_inputs, offline_check_backup_native_preparation,
     offline_check_backup_object_databases, offline_check_backup_preparation,
     offline_check_backup_preparation_batch, offline_check_backup_scoped_databases,
+};
+pub use engine::{
+    BackupTransactionCancelOutcome, BackupTransactionCancellation, BackupTransactionRequest,
 };
 pub use engine::{
     FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,

@@ -35,11 +35,21 @@ impl Topology {
         targets: &[BackupTopologyTarget],
     ) -> Result<Self> {
         if !(1..=8).contains(&selection.jobs().len()) {
-            return Err(invalid("topology requires a nonempty bounded original target set"));
+            return Err(invalid(
+                "topology requires a nonempty bounded original target set",
+            ));
         }
-        let paths = selection.jobs().iter()
-            .map(|job| job.request.target_paths[0].as_path()).collect::<Vec<_>>();
-        Self::derive_request(config, &selection.first().request.source_slot_id, &paths, targets)
+        let paths = selection
+            .jobs()
+            .iter()
+            .map(|job| job.request.target_paths[0].as_path())
+            .collect::<Vec<_>>();
+        Self::derive_request(
+            config,
+            &selection.first().request.source_slot_id,
+            &paths,
+            targets,
+        )
     }
 
     fn derive_request(

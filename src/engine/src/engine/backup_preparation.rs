@@ -54,7 +54,9 @@ mod target_resources;
 mod transaction;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
 pub use inspection::{BackupPreparationReport, offline_check_backup_preparation};
-pub use transaction::{BackupTransactionRequest, BackupTransactionCancellation, BackupTransactionCancelOutcome};
+pub use transaction::{
+    BackupTransactionCancelOutcome, BackupTransactionCancellation, BackupTransactionRequest,
+};
 
 const FORMAT: &str = "zxs-backup-history-preparation";
 const JOB: &str = "backup-preparation/job.json";

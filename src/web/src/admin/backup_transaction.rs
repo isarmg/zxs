@@ -81,8 +81,11 @@ impl Model {
     fn can_approve(&self, approval: Approval) -> bool {
         match approval {
             Approval::Cancel => !self.completed() && !self.cancelled(),
-            Approval::Prepare | Approval::Resume | Approval::Fence
-            | Approval::Decide | Approval::Activate => self.can_continue(),
+            Approval::Prepare
+            | Approval::Resume
+            | Approval::Fence
+            | Approval::Decide
+            | Approval::Activate => self.can_continue(),
         }
     }
     fn can_restart(&self) -> bool {

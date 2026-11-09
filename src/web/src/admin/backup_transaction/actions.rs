@@ -11,10 +11,15 @@ pub(super) fn load(state: RwSignal<State>) {
         Ok(Some(record)) => {
             let accepted = state.try_update(|s| {
                 let model = &mut s.admin_console.backup;
-                if model.operation().is_some_and(|id| id != record.operation_id)
+                if model
+                    .operation()
+                    .is_some_and(|id| id != record.operation_id)
                     || record.original_start.as_ref().is_some_and(|original| {
                         !model.accepts_request(&original_request(original))
-                            || model.original_start.as_ref().is_some_and(|captured| captured != original)
+                            || model
+                                .original_start
+                                .as_ref()
+                                .is_some_and(|captured| captured != original)
                     })
                 {
                     return Err(invalid());
@@ -205,7 +210,8 @@ fn send_start(state: RwSignal<State>, original: wire::StartRequest) {
 
 pub(super) fn retry_start(state: RwSignal<State>) {
     if !state.with_untracked(|s| {
-        available(s) && s.admin_console.backup.can_continue()
+        available(s)
+            && s.admin_console.backup.can_continue()
             && s.admin_console.backup.approval == Some(Approval::Prepare)
     }) {
         return;
@@ -274,20 +280,33 @@ pub(super) fn cancel(state: RwSignal<State>) {
         }
     };
     let original_start = state.with_untracked(|s| s.admin_console.backup.original_start.clone());
-    request(state, Request::Continue {
-        operation,
-        command: wire::Command::CancelPreparation {
-            confirmation: wire::CancellationConfirmation::PreserveFilesAndCancelBeforeSourceStop,
-            original_start,
+    request(
+        state,
+        Request::Continue {
+            operation,
+            command: wire::Command::CancelPreparation {
+                confirmation:
+                    wire::CancellationConfirmation::PreserveFilesAndCancelBeforeSourceStop,
+                original_start,
+            },
         },
-    });
+    );
 }
 
 pub(super) fn restart(state: RwSignal<State>) {
     let Some((epoch, principal, original)) = state.with_untracked(|s| {
         (s.session_active() && s.admin_console.backup.can_restart()).then(|| {
-            (s.session_epoch, s.principal.clone(), s.admin_console.backup.snapshot.as_ref()
-                .expect("invariant: confirmed cancellation has an original snapshot").request.clone())
+            (
+                s.session_epoch,
+                s.principal.clone(),
+                s.admin_console
+                    .backup
+                    .snapshot
+                    .as_ref()
+                    .expect("invariant: confirmed cancellation has an original snapshot")
+                    .request
+                    .clone(),
+            )
         })
     }) else {
         return;
@@ -329,9 +348,13 @@ fn request(state: RwSignal<State>, request: Request) {
     }
     let mutation = !matches!(&request, Request::Read(_));
     let command_response = matches!(&request, Request::Continue { .. });
-    let cancelling = matches!(&request, Request::Continue {
-        command: wire::Command::CancelPreparation { .. }, ..
-    });
+    let cancelling = matches!(
+        &request,
+        Request::Continue {
+            command: wire::Command::CancelPreparation { .. },
+            ..
+        }
+    );
     let (operation, path, body) = match request {
         Request::Read(operation) => (
             operation,
@@ -355,7 +378,10 @@ fn request(state: RwSignal<State>, request: Request) {
     };
     let method = if mutation { "POST" } else { "GET" };
     let (principal, original_start) = state.with_untracked(|s| {
-        (s.principal.clone(), s.admin_console.backup.original_start.clone())
+        (
+            s.principal.clone(),
+            s.admin_console.backup.original_start.clone(),
+        )
     });
     let epoch = state.with_untracked(|s| s.session_epoch);
     state.update(|s| {
@@ -377,7 +403,11 @@ fn request(state: RwSignal<State>, request: Request) {
             return;
         }
         if mutation {
-            let intent = if cancelling { recovery::Intent::Cancel } else { recovery::Intent::Continue };
+            let intent = if cancelling {
+                recovery::Intent::Cancel
+            } else {
+                recovery::Intent::Continue
+            };
             let saved = recovery::remember(&principal, operation, original_start, intent).await;
             if !current_session(state, epoch) {
                 return;
@@ -401,9 +431,14 @@ fn request(state: RwSignal<State>, request: Request) {
             match &response {
                 wire::CommandResponse::Observed { snapshot }
                 | wire::CommandResponse::CancellationRejected { snapshot } => {
-                    if matches!(&response, wire::CommandResponse::CancellationRejected { .. })
-                        && (!cancelling || matches!(snapshot.progress.observation,
-                            wire::Observation::CancellationPending | wire::Observation::Cancelled))
+                    if matches!(
+                        &response,
+                        wire::CommandResponse::CancellationRejected { .. }
+                    ) && (!cancelling
+                        || matches!(
+                            snapshot.progress.observation,
+                            wire::Observation::CancellationPending | wire::Observation::Cancelled
+                        ))
                     {
                         return Err(invalid());
                     }
@@ -422,21 +457,19 @@ fn request(state: RwSignal<State>, request: Request) {
         })
         .await;
         match result {
-            Ok(wire::CommandResponse::Observed { snapshot }) => {
-                finish(state, epoch, Ok(snapshot))
-            }
+            Ok(wire::CommandResponse::Observed { snapshot }) => finish(state, epoch, Ok(snapshot)),
             Ok(wire::CommandResponse::CancellationRejected { snapshot }) => {
                 if !current_session(state, epoch) {
                     return;
                 }
-                let accepted = state.with_untracked(|s| {
-                    s.admin_console.backup.accepts_request(&snapshot.request)
-                });
+                let accepted = state
+                    .with_untracked(|s| s.admin_console.backup.accepts_request(&snapshot.request));
                 if !accepted {
                     finish(state, epoch, Err(invalid()));
                     return;
                 }
-                let cleared = recovery::reject_cancellation(&principal, snapshot.request.clone()).await;
+                let cleared =
+                    recovery::reject_cancellation(&principal, snapshot.request.clone()).await;
                 if !current_session(state, epoch) {
                     return;
                 }
@@ -472,11 +505,7 @@ fn request(state: RwSignal<State>, request: Request) {
     });
 }
 
-fn finish(
-    state: RwSignal<State>,
-    epoch: u64,
-    result: Result<wire::Snapshot, api::Error>,
-) {
+fn finish(state: RwSignal<State>, epoch: u64, result: Result<wire::Snapshot, api::Error>) {
     if !current_session(state, epoch) {
         return;
     }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use storage_contract::{CommitState, ErrorCode, OperationId, backup_transaction as wire};
 use storage_engine::{
     BackupPreparationPhase, BackupPreparationRequest, BackupTopologyTarget,
-    BackupTransactionRequest, BackupTransactionCancellation, BackupTransactionCancelOutcome,
+    BackupTransactionCancelOutcome, BackupTransactionCancellation, BackupTransactionRequest,
 };
 
 fn administrator(engine: &AdmissionEngine, caller: &Identity) -> Result<Identity, ApiError> {
@@ -136,13 +136,20 @@ impl EngineBackend {
                 confirmation: wire::CancellationConfirmation::PreserveFilesAndCancelBeforeSourceStop,
                 original_start,
             } => {
-                let original = original_start.as_ref().map(|request| core_request(request, &current.principal));
-                let outcome = engine.cancel_backup_transaction(operation, &current.principal, original)
+                let original = original_start
+                    .as_ref()
+                    .map(|request| core_request(request, &current.principal));
+                let outcome = engine
+                    .cancel_backup_transaction(operation, &current.principal, original)
                     .map_err(error)?;
                 let snapshot = snapshot(&engine, &current, operation)?;
                 return Ok(match outcome {
-                    BackupTransactionCancelOutcome::Cancelled => wire::CommandResponse::Observed { snapshot },
-                    BackupTransactionCancelOutcome::ContinuationRequired => wire::CommandResponse::CancellationRejected { snapshot },
+                    BackupTransactionCancelOutcome::Cancelled => {
+                        wire::CommandResponse::Observed { snapshot }
+                    }
+                    BackupTransactionCancelOutcome::ContinuationRequired => {
+                        wire::CommandResponse::CancellationRejected { snapshot }
+                    }
                 });
             }
             wire::Command::ContinuePreparation {} => {
@@ -179,7 +186,9 @@ impl EngineBackend {
                     .map_err(error)?;
             }
         }
-        Ok(wire::CommandResponse::Observed { snapshot: snapshot(&engine, &current, operation)? })
+        Ok(wire::CommandResponse::Observed {
+            snapshot: snapshot(&engine, &current, operation)?,
+        })
     }
 }
 
@@ -268,21 +277,35 @@ fn snapshot(
     operation: OperationId,
 ) -> Result<wire::Snapshot, ApiError> {
     let original = require_request(engine, operation, &current.principal)?;
-    if let Some(cancellation) = engine.backup_transaction_cancellation(operation, &current.principal)
+    if let Some(cancellation) = engine
+        .backup_transaction_cancellation(operation, &current.principal)
         .map_err(error)?
     {
         let (observation, stage, detail) = match cancellation {
-            BackupTransactionCancellation::Pending => (wire::Observation::CancellationPending,
-                "CancellationPending", "cancellation is retained; explicitly retry cancellation to stop the original worker and finish preserving its task"),
-            BackupTransactionCancellation::Cancelled => (wire::Observation::Cancelled,
-                "Cancelled", "preparation was cancelled and archived; all original and target bytes were preserved; a new task requires a new operation and empty targets"),
+            BackupTransactionCancellation::Pending => (
+                wire::Observation::CancellationPending,
+                "CancellationPending",
+                "cancellation is retained; explicitly retry cancellation to stop the original worker and finish preserving its task",
+            ),
+            BackupTransactionCancellation::Cancelled => (
+                wire::Observation::Cancelled,
+                "Cancelled",
+                "preparation was cancelled and archived; all original and target bytes were preserved; a new task requires a new operation and empty targets",
+            ),
         };
         return inactive_snapshot(original, observation, stage, None, detail);
     }
-    let Some(status) = engine.backup_preparation_status().filter(|status| status.operation_id == operation) else {
-        return inactive_snapshot(original, wire::Observation::Blocked, "RetainedRequest",
+    let Some(status) = engine
+        .backup_preparation_status()
+        .filter(|status| status.operation_id == operation)
+    else {
+        return inactive_snapshot(
+            original,
+            wire::Observation::Blocked,
+            "RetainedRequest",
             Some(ErrorCode::RecoveryRequired),
-            "the original input is retained but its runtime observation is unavailable; resume this same operation or explicitly cancel before source stop");
+            "the original input is retained but its runtime observation is unavailable; resume this same operation or explicitly cancel before source stop",
+        );
     };
     let observation = match status.phase {
         BackupPreparationPhase::Blocked => wire::Observation::Blocked,
@@ -369,8 +392,14 @@ fn inactive_snapshot(
     Ok(wire::Snapshot {
         request: original_wire(original)?,
         progress: wire::Progress {
-            observation, stage: stage.into(), completed_files: 0, total_files: 0,
-            completed_bytes: 0, total_bytes: 0, error_code, detail: detail.into(),
+            observation,
+            stage: stage.into(),
+            completed_files: 0,
+            total_files: 0,
+            completed_bytes: 0,
+            total_bytes: 0,
+            error_code,
+            detail: detail.into(),
         },
         completion: None,
     })

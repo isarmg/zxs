@@ -8,7 +8,6 @@ use std::{
 };
 
 mod backup_preparation;
-pub use backup_preparation::{BackupTransactionRequest, BackupTransactionCancellation, BackupTransactionCancelOutcome};
 pub use backup_preparation::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
@@ -35,6 +34,9 @@ pub use backup_preparation::{
     offline_check_backup_cutover_inputs, offline_check_backup_native_preparation,
     offline_check_backup_object_databases, offline_check_backup_preparation,
     offline_check_backup_preparation_batch, offline_check_backup_scoped_databases,
+};
+pub use backup_preparation::{
+    BackupTransactionCancelOutcome, BackupTransactionCancellation, BackupTransactionRequest,
 };
 pub use membership_transition::{
     BackupFirstFinalizeReport, BackupFirstPublicationHash, BackupFirstPublicationReport,

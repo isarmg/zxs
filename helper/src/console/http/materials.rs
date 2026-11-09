@@ -48,7 +48,8 @@ async fn download(state: State, request: Request, kind: Kind) -> Result<Response
         ),
     };
     let mut response = Response::new(response_body::owned(
-        http_routing::body::Bytes::from_static(bytes), permit,
+        http_routing::body::Bytes::from_static(bytes),
+        permit,
     ));
     response
         .headers_mut()

@@ -101,7 +101,8 @@ impl ManagementBackend {
         if let wire::CommandResponse::CancellationRejected { snapshot } = &response {
             self.require_backup_serving(&backend, snapshot)?;
         }
-        if matches!(&response, wire::CommandResponse::Observed { snapshot } if snapshot.completion.is_some()) {
+        if matches!(&response, wire::CommandResponse::Observed { snapshot } if snapshot.completion.is_some())
+        {
             // Core activation is necessary but not sufficient for the service.
             // Keep existing auth replication/capabilities/ready admission owned
             // by its normal recovery worker; GET never schedules it.

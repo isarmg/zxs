@@ -20,5 +20,8 @@ pub(super) fn owned(bytes: Bytes, permit: OwnedSemaphorePermit) -> Body {
     // so queued body buffers keep their owner until drained or disconnected.
     // If a request disappears during spawn_blocking, its producer still owns
     // the permit; the abandoned result drops both bytes and permit together.
-    Body::from(Bytes::from_owner(OwnedBytes { bytes, _permit: permit }))
+    Body::from(Bytes::from_owner(OwnedBytes {
+        bytes,
+        _permit: permit,
+    }))
 }
