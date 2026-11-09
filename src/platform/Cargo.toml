@@ -17,7 +17,7 @@ blake3.workspace = true
 futures = { version = "0.3.34", path = "../foundation/concurrency/futures", default-features = false, features = ["executor", "std"] }
 system-entropy = {version = "0.4", path = "../foundation/cryptography/system-entropy"}
 libc = {version = "0.2", path = "../foundation/platform/libc"}
-libsqlite3-sys = { version = "=0.37.0", features = ["bundled"], path = "../foundation/data-storage/libsqlite3-sys"}
+libsqlite3-sys = { version = "=0.39.1", features = ["bundled"], path = "../foundation/data-storage/libsqlite3-sys"}
 rustix.workspace = true
 data-serialization.workspace = true
 sha2 = {version = "0.11.0", path = "../foundation/cryptography/sha2"}

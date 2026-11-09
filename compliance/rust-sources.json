@@ -52062,9 +52062,10 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
-    "compliance/external-tests/foundation.json": "7553f119ba2b1a530ea7c8126701f0410a88945425a76ceb7e7643f6cbb1fecf",
+    "compliance/external-tests/foundation.json": "ca01f70f0eeb45d7407ac784e262534256024d5697990640a5520f1dcb17732d",
     "compliance/external-tests/integrated.json": "0943bc896113069591dd8b1a0f3042f5e2aa33760b85f0ae5ee6ebc932ff3743",
-    "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
+    "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9",
+    "compliance/external-tests/sqlite-0.39.1.json": "9c59a550e15da11a6998f2fa63f188fc3c787f6249e20be465c68970e83b4d1c"
   },
   "external_tests": {
     "src/foundation/code-generation/derive-where": {
@@ -65534,11 +65535,11 @@
         {
           "path": "test/foundation/libsqlite3-sys/unit/src/error/test_160.rs",
           "sha256": "79b1a2687ef99f5c1d3f4cdaa96bc0fbecf18ab3651b822da172d4db06a67b52",
-          "source": "src/foundation/libsqlite3-sys/src/error.rs",
-          "source_sha256_before": "9685678a8752bf47e5e39923bb2cf466cc312a25848d91cc206bf89eaccfb7d6"
+          "source": "src/foundation/data-storage/libsqlite3-sys/src/error.rs",
+          "source_sha256_before": "eea43c9e7e05a58002a406ce1bf518299284798a64158a2114516c2fcc7df524"
         }
       ],
-      "origin_directory": "vendor/rust/libsqlite3-sys-0.37.0",
+      "origin_directory": "vendor/rust/libsqlite3-sys-0.39.1",
       "roots": [
         "test/foundation/libsqlite3-sys"
       ]
@@ -79498,7 +79499,7 @@
     "16f5b39477c05e0df34e296682097f028f028797f6ed2ecc7e2d1e227a984fe1"
   ],
   "lockfiles_sha256": {
-    "Cargo.lock": "66e9add5221f86be9e14a0976fb74c829659447dcc0ed72ac7e8ea9325becdf3"
+    "Cargo.lock": "6614c732be4234259b355b2ae73950bdbb5667433c8196abc9fd3c88f041ab8b"
   },
   "manifests_sha256": {
     "Cargo.toml": "5654bb35c6dced1e90ce89f5c28fe2d03d05c253188c1ea34c25f3b9c11c736d",
@@ -79624,10 +79625,10 @@
     "src/foundation/data-storage/json-codec/Cargo.toml": "6a4c148579cf709c9191f9f7fb0df953560dc73cd0f917fa58d15f6bc984ab43",
     "src/foundation/data-storage/leb128/Cargo.toml": "c36669e975918a242808c362dc45e12bf5ab1416b3abb1e41bc88b9d9547d8a4",
     "src/foundation/data-storage/leb128fmt/Cargo.toml": "312057693af4139f7ecb5d76b763f3751456fdac029c08bd2c4830c7cbcb4b6f",
-    "src/foundation/data-storage/libsqlite3-sys/Cargo.toml": "88fa3d599d15d790dda5669b26d4098cfb33ac6aff4ddc7b9724e4be8d432c87",
+    "src/foundation/data-storage/libsqlite3-sys/Cargo.toml": "5f624beab48edb919c4ea9db00682928f2d2a59079cdab80dca18fe72a70c6a0",
     "src/foundation/data-storage/schema-validation/Cargo.toml": "e1f0ba8e8f2599b2dc6ae773f7601195c8d170d6fa7c8fc2bd28f6af6efb361a",
     "src/foundation/data-storage/serialization-derive/Cargo.toml": "591ee524da95815434169fdfd904aead9f019711971cc041f963fa63b548b739",
-    "src/foundation/data-storage/sqlite-access/Cargo.toml": "f6f4f257e5c645f7f0b15f87d8c9e7b0f9e664ea96a37ec660f3ab02549cfbea",
+    "src/foundation/data-storage/sqlite-access/Cargo.toml": "cf4fb2ebc205d032bea47192f219020633eccfd76299401a38111eadcb9b507a",
     "src/foundation/data-storage/toml/Cargo.toml": "143abd83039d84b93bc64bc4e73b770228f900ebf33256fa8c5f1befdcc2e30e",
     "src/foundation/diagnostics/anyhow/Cargo.toml": "95a1a32da1e601b3c34c339bc425b52f269ba3559274a0a54d8bb2178009bb9e",
     "src/foundation/diagnostics/console_error_panic_hook/Cargo.toml": "0303b55fc441e7bc1487d98521d6eb45bba98f00168be199a8d38f4932d16cb5",
@@ -79732,7 +79733,7 @@
     "src/interface/Cargo.toml": "b2829ad76c14374ddc8b74d5901395894578930e8b5ef0dca7ba7c22a71755d8",
     "src/macros/Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
     "src/naming/Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
-    "src/platform/Cargo.toml": "97dd31f6484373155594fd5f042ac1b747e2ac82c8794b032cdb893c79d635df",
+    "src/platform/Cargo.toml": "3b2c264383bc19f1475be6879c6b6372b0e258462e1105b6b2f0710f556f0522",
     "src/server/Cargo.toml": "bde0f1796c96f59eb58c8229b410674083c67007688dfa4d690e55e13d17cabf",
     "src/smb-vfs/Cargo.toml": "c31cbf9f660ee8cd4b99a6fbe1dde835444ce189db1e6a68a02cb87d0141fc0b",
     "src/smb/Cargo.toml": "62c7175cf2e4e98ea75380065be3e4e4d1e535bbe313ede6577f216543456ec5",
@@ -81081,7 +81082,7 @@
       "description": "Core of SQLx, the rust SQL toolkit. Not intended to be used directly.",
       "directory": "src/foundation/data-storage/sqlite-access",
       "files_sha256": {
-        "Cargo.toml": "f6f4f257e5c645f7f0b15f87d8c9e7b0f9e664ea96a37ec660f3ab02549cfbea",
+        "Cargo.toml": "cf4fb2ebc205d032bea47192f219020633eccfd76299401a38111eadcb9b507a",
         "benches/sqlite/describe.rs": "e3846b1cd17054663e135116aecde934c2d20f3b83592562a3e34596168f0e94",
         "contrib/ide/vscode/settings.json": "af1e5804fd68126c54f709b71aee3c7dd4dca964f509257c2dd331006dda66ad",
         "gen-changelog.sh": "be0292a711d7a7bb03b57b9b3534dbb34d084189ed85d32c528d0a39e2e156a7",
@@ -81204,7 +81205,7 @@
       "description": "SQLite driver implementation for SQLx. Not for direct use; see the `sqlx` crate for details.",
       "directory": "src/foundation/data-storage/sqlite-access",
       "files_sha256": {
-        "Cargo.toml": "f6f4f257e5c645f7f0b15f87d8c9e7b0f9e664ea96a37ec660f3ab02549cfbea",
+        "Cargo.toml": "cf4fb2ebc205d032bea47192f219020633eccfd76299401a38111eadcb9b507a",
         "benches/sqlite/describe.rs": "e3846b1cd17054663e135116aecde934c2d20f3b83592562a3e34596168f0e94",
         "contrib/ide/vscode/settings.json": "af1e5804fd68126c54f709b71aee3c7dd4dca964f509257c2dd331006dda66ad",
         "gen-changelog.sh": "be0292a711d7a7bb03b57b9b3534dbb34d084189ed85d32c528d0a39e2e156a7",
@@ -89050,6 +89051,7 @@
     "vendor/rust/libc-0.2.191": "020f7f47fd8d75e7ea14d5028e710ecdb4e8dfe49376a929340798ac79cc84d1",
     "vendor/rust/libloading-0.8.9": "1c10b251e033312c3150a637cf1b0ecc8b22da12456dd04c90c1f14087ad6b39",
     "vendor/rust/libsqlite3-sys-0.37.0": "acf83bbcac453acf6341d2c0df3be8025eda6a5c54b388bc38a0426aebbd5b57",
+    "vendor/rust/libsqlite3-sys-0.39.1": "98bbcd90acede53e61a22eee55dc02e49460c48ea42a86f956a8eef6971eea1d",
     "vendor/rust/linux-raw-sys-0.12.1": "1373b0e89173d736058357019fbc943b7168e8481674692d79c0174700fb4de3",
     "vendor/rust/litemap-0.8.3": "c4b13163201e6cad632f89a90d0359306b33ed8c69feed1cbfe9f6894d05f91d",
     "vendor/rust/lock_api-0.4.14": "67a3413bc4f857824ee9e195ee340ae4f75a5b92319629a8841b8b6de0029f11",
@@ -89294,7 +89296,7 @@
     "vendor/web/zxs-web-core": "40a8fa17ccce7e3ac0f748ce5d76dedc3d8cd29cc8af9ca37ef19d5bd582df1c",
     "vendor/web/zxs-web-macro": "1f6b0ad8a9ac0ec3310cb65537b4d85032f15787bbd3d2a72133ee93462573c9"
   },
-  "origins_sha256": "980016489c5cc34cc85d53ae6271dad5521e95e1b268ba780289e58635961775",
+  "origins_sha256": "366f70f6dbaf5d9f1d0d255df1907aa9f8ecf1615764d5d0189c8a27885e3c88",
   "packages": {
     "src/foundation/code-generation/derive-where": {
       "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
@@ -95732,52 +95734,47 @@
       "version": "0.1.0"
     },
     "src/foundation/data-storage/libsqlite3-sys": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：原生平台收敛为 Linux amd64；移除仅供 MSVC 使用的 vcpkg 构建依赖、feature 转发与探测分支，保留 bundled SQLite、pkg-config、显式库路径及 Linux ABI 预留。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：原生平台收敛为 Linux amd64；移除仅供 MSVC 使用的 vcpkg 构建依赖、feature 转发与探测分支，保留 bundled SQLite、pkg-config、显式库路径及 Linux ABI 预留。；上游发布包升级：RUSTSEC-2026-0459: authenticated libsqlite3-sys 0.39.1 / SQLite 3.54.1; preserve local path dependencies and complete predecessor history",
       "description": "Native bindings to the libsqlite3 library",
       "directory": "src/foundation/data-storage/libsqlite3-sys",
       "files_sha256": {
-        "Cargo.toml": "88fa3d599d15d790dda5669b26d4098cfb33ac6aff4ddc7b9724e4be8d432c87",
-        "bindgen-bindings/bindgen_3.34.1.rs": "4f94d0192ec890b62773368cb026daf219f5182094952c007d28ed6d3812fd68",
-        "bindgen-bindings/bindgen_3.34.1_ext.rs": "44ff11f09886f8c41494f65043ac2ddba4e476bb17a81fe93a8c10c7bffdf4a8",
-        "build.rs": "277ae93642f3bd5655f8c86930955704637664f25a60e3736881b0f0e08a5765",
-        "sqlcipher/bindgen_bundled_version.rs": "eb685154c9825ed324e3e7e2eb11efd1a6fd53634e65342856ec459bcbf2f536",
-        "sqlcipher/sqlite3.c": "de78ef087cbc26e8fe584de05f1790f3e34897db8731e8154dc674d3f2df28cb",
-        "sqlcipher/sqlite3.h": "d02f73fba63a21a6f5df9f2eef5df8bff5d7bace10aba54910ee28050f7eb573",
-        "sqlcipher/sqlite3ext.h": "9a91de0d5e5ccc04ec59041275c67972d6f8894f7543a10033e387b69987beb5",
-        "sqlite3/bindgen_bundled_version.rs": "3640b99203cb2c2dfa5797043cf01dc8dcee8cef62c6b88e937e364a8614744b",
-        "sqlite3/bindgen_bundled_version_ext.rs": "037f54e88e052f8d309b60966c282c47264ab450fd97d8a409b32f67f3cb3983",
-        "sqlite3/sqlite3.c": "9512509b1bccb7461f79bea8aad6280ae4699e925fa4804381b71f59e7efb0c5",
-        "sqlite3/sqlite3.h": "19585c8b5230e9d4f223bf31b709ece7b6a0bb3faf00d8310625d8e58cda1b1d",
-        "sqlite3/sqlite3ext.h": "ea81fb7bd05882e0e0b92c4d60f677b205f7f1fbf085f218b12f0b5b3f0b9e48",
+        "Cargo.toml": "5f624beab48edb919c4ea9db00682928f2d2a59079cdab80dca18fe72a70c6a0",
+        "bindgen-bindings/bindgen_3.45.3.rs": "2633a8b90cded7bc2c8464fc423891a6dda7f68a72fcf433b3a5408aaa8f37ce",
+        "bindgen-bindings/bindgen_3.45.3_ext.rs": "35d3d3f2388bfeb6d950242f0efa217541d2eb0d686195f41eb9ce9cef86f99d",
+        "build.rs": "ae492583476332cf947f5e4922ee6aa085ad91bb0dfcac683dae96a825e124ab",
+        "sqlite3/bindgen_bundled_version.rs": "a25057a06d8cb5053a61c8f0ff746cc3d81b3bd778fbd3199ba12c8a6ee2945d",
+        "sqlite3/bindgen_bundled_version_ext.rs": "b4757194d9f463c9c9168d38f943eedfd2a06d7c402374a75062e6fda8d4ff2c",
+        "sqlite3/sqlite3.c": "0c657666d819f261cc4007526ad57e1669de9949df7a8ea847aa284a2bf0ee52",
+        "sqlite3/sqlite3.h": "d6c84557261893439b341d2e6c35187ae3ea24fbfd843ad94616f72d89242b8c",
+        "sqlite3/sqlite3ext.h": "48963abfefb41ac329ef9d706acb5eadba952a99a748285c9ded6b5e0942721b",
         "sqlite3/wasm32-wasi-vfs.c": "b95842044da2b8777876b7d3fef8c9711e8c201fb4a4255dbac98729a456bb5d",
-        "src/error.rs": "b282a2c104f7c45da8675262dcead59bc388f744a83f0846e67c9cd3ca3d6c25",
-        "src/lib.rs": "f61d8e306e11357479e20999f7b7adc5f3dbaea40cd17361853574001cf79360",
+        "src/error.rs": "ab60feae043ed9ea64dafd249dfa9ef66119f4c632237e23c379615c2a43f89c",
+        "src/lib.rs": "a3f2109bd548e866ba2b2d51719a8cc6efab7ae2e67bd73f3d061c26822f50c1",
         "wrapper.h": "b78f576f7eeabf316e183d476b0f16344b6897680b4df47628d3ce38c0aa979a",
         "wrapper_ext.h": "fa7a53fea99318ee29d75e6d5fab4d7ed26e9599803268e6a24396265f2a6f3a"
       },
       "license": "MIT",
       "license_materials": [
-        "compliance/licenses/upstream/libsqlite3-sys-0.37.0/LICENSE",
-        "compliance/licenses/upstream/libsqlite3-sys-0.37.0/sqlcipher/LICENSE"
+        "compliance/licenses/upstream/libsqlite3-sys-0.39.1/LICENSE"
       ],
       "merged_into": "无；通过统一内部源码源接入",
       "name": "libsqlite3-sys",
-      "origin_directory": "vendor/rust/libsqlite3-sys-0.37.0",
+      "origin_directory": "vendor/rust/libsqlite3-sys-0.39.1",
       "repository": "https://github.com/rusqlite/rusqlite",
       "status": "内部维护源码",
       "upstream": {
-        "archive_sha256": "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1",
-        "archive_url": "https://static.crates.io/crates/libsqlite3-sys/libsqlite3-sys-0.37.0.crate",
+        "archive_sha256": "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3",
+        "archive_url": "https://static.crates.io/crates/libsqlite3-sys/libsqlite3-sys-0.39.1.crate",
         "name": "libsqlite3-sys",
-        "version": "0.37.0"
+        "version": "0.39.1"
       },
       "vcs": {
         "git": {
-          "sha1": "2a1790a69107cd03dae85d501dcbdb11c5b32ef3"
+          "sha1": "fb7c711f4e988db149f43cac68f7865b25d0b10e"
         },
         "path_in_vcs": "libsqlite3-sys"
       },
-      "version": "0.37.0"
+      "version": "0.39.1"
     },
     "src/foundation/data-storage/schema-validation": {
       "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
@@ -96043,7 +96040,7 @@
       "description": "🧰 The Rust SQL Toolkit. An async, pure Rust SQL crate featuring compile-time checked queries without a DSL. Supports PostgreSQL, MySQL, and SQLite.",
       "directory": "src/foundation/data-storage/sqlite-access",
       "files_sha256": {
-        "Cargo.toml": "f6f4f257e5c645f7f0b15f87d8c9e7b0f9e664ea96a37ec660f3ab02549cfbea",
+        "Cargo.toml": "cf4fb2ebc205d032bea47192f219020633eccfd76299401a38111eadcb9b507a",
         "benches/sqlite/describe.rs": "e3846b1cd17054663e135116aecde934c2d20f3b83592562a3e34596168f0e94",
         "contrib/ide/vscode/settings.json": "af1e5804fd68126c54f709b71aee3c7dd4dca964f509257c2dd331006dda66ad",
         "gen-changelog.sh": "be0292a711d7a7bb03b57b9b3534dbb34d084189ed85d32c528d0a39e2e156a7",
@@ -102715,6 +102712,7 @@
     "compliance/licenses/upstream/libloading-0.8.9/LICENSE": "b29f8b01452350c20dd1af16ef83b598fea3053578ccc1c7a0ef40e57be2620f",
     "compliance/licenses/upstream/libsqlite3-sys-0.37.0/LICENSE": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f",
     "compliance/licenses/upstream/libsqlite3-sys-0.37.0/sqlcipher/LICENSE": "ea4fcb309f14a22065e1ea45362d494d320012249ed865fe9c7c0946db754131",
+    "compliance/licenses/upstream/libsqlite3-sys-0.39.1/LICENSE": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f",
     "compliance/licenses/upstream/linux-raw-sys-0.12.1/COPYRIGHT": "3290ae0fbc9ddb77d2239121d710f0bb9d31b3b4744e6d97fe01e652b4c1870b",
     "compliance/licenses/upstream/linux-raw-sys-0.12.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "compliance/licenses/upstream/linux-raw-sys-0.12.1/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
@@ -103670,7 +103668,7 @@
     "compliance/provenance/merged-components/vendor/web/zxs-web-core/Cargo.toml.txt": "8d893574a8f08f87bddad5443bff82c7640f5dd34a74dbe1f919a76400181fa4",
     "compliance/provenance/merged-components/vendor/web/zxs-web-core/README.md": "5a22efb04cfa9cef41afb32626f8e9637f8284ce71397a6f06aac22bdb64d52e",
     "compliance/provenance/merged-components/vendor/web/zxs-web-core/src/lib.rs": "498acdebfbb39557a40cbb0b28c1dfbd3175ad939795a0421b0fa2dbe8ff609c",
-    "compliance/provenance/origins.json": "980016489c5cc34cc85d53ae6271dad5521e95e1b268ba780289e58635961775",
+    "compliance/provenance/origins.json": "366f70f6dbaf5d9f1d0d255df1907aa9f8ecf1615764d5d0189c8a27885e3c88",
     "compliance/provenance/packages/adler2-2.0.1/Cargo.lock.txt": "3e44ced212a9e7ddc0a5450bcebb48ec67f32a058529856458efa36415554e53",
     "compliance/provenance/packages/adler2-2.0.1/Cargo.toml.orig.txt": "077df9094ac86443a4d05305f74782bd237c1f15fa39640463e4c62e9e4a310a",
     "compliance/provenance/packages/adler2-2.0.1/cargo-checksum.json.txt": "1fea7b818407db360ba16278b91e5488d7b78c4e411dd29a2b35a85a6f08026e",
@@ -104443,6 +104441,15 @@
     "compliance/provenance/packages/libsqlite3-sys-0.37.0/Cargo.toml.orig.txt": "e0f5f73f6a36336b53d0e4321f48e852aa2fff8f8d2e0033025a4bdc6c5625ed",
     "compliance/provenance/packages/libsqlite3-sys-0.37.0/cargo-checksum.json.txt": "2a46641ba9637210e466289df19829c7ce0380b5f9749db0c2f27f45064a753a",
     "compliance/provenance/packages/libsqlite3-sys-0.37.0/cargo_vcs_info.json.txt": "51cd79ec7d1b5b4c72b29c0552369d2715bfed17ba97cc47c80f8b168cf5f2e0",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/original/.cargo_vcs_info.json.txt": "f410bda919d68f688b35fb4fe324b8a506dfcfebcc4b5b6a31a1885d806485b7",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/original/.gitignore.txt": "d89b7a44f37a816f5b0ca8297e0d17067ca5f41e45d1455b0a56d072679a00a6",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/original/Cargo.lock.txt": "2d92ba6eb01ec3fd049051d66dbe040062139e380b475ccb7d5ee62e89c2e5b2",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/original/Cargo.toml.orig.txt": "be5ec76809a60444ceccf8fc823d2c0a660f549f270f664ba0a8256b574bedcb",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/original/Cargo.toml.txt": "3fb7e11b7b71251e7e360511000befe692e5aee8d31415d477774f060577bb15",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/original/sqlcipher/bindgen_bundled_version.rs.txt": "4ce4a6519255f9d1c22c9f894b7f0452f1ae11d54dc9bf3205265ec9142f1da3",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/predecessor-tests.json": "ed7b17ce8febf3c5b2a74353a429074232b4dd4ab0fe04355417096a9f659897",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/predecessor-tests/test/foundation/libsqlite3-sys/unit/src/error/test_160.rs.txt": "79b1a2687ef99f5c1d3f4cdaa96bc0fbecf18ab3651b822da172d4db06a67b52",
+    "compliance/provenance/packages/libsqlite3-sys-0.39.1/source-disposition.json": "e421327896d3c2544c61326970d1512ab443846dfb1f6aafa1f6dbcd1853d602",
     "compliance/provenance/packages/linux-raw-sys-0.12.1/Cargo.lock.txt": "121ae7ced4747ed900eb5b6ea827714d83fe14c175d8ecb5caaa7cc6a3d3d062",
     "compliance/provenance/packages/linux-raw-sys-0.12.1/Cargo.toml.orig.txt": "c972347a632304bfd9e9283040f7ae31dc2376d409f1d6c87a3269c5d47445cf",
     "compliance/provenance/packages/linux-raw-sys-0.12.1/cargo-checksum.json.txt": "807f3b945cb60ec3cd905124f3391dfa6e7d117146bc4fc6ae962e96887013cc",
@@ -106160,6 +106167,8 @@
     "docs/upstream/libloading-0.8.9/README.mkd": "707e1cae9fa4b691ce5cb8a3976573158fc60b67cb89948f8f5d51c5908bd0a8",
     "docs/upstream/libsqlite3-sys-0.37.0/README.md": "5b18c0bcfdca043d0d69560fe900083bca053c6a507f51d5c388bab4e7deb34b",
     "docs/upstream/libsqlite3-sys-0.37.0/Upgrade.md": "d151a67d4bbb1a5a300d084d210d6cd238d833a6d4bd5d958ae7469a9deccb36",
+    "docs/upstream/libsqlite3-sys-0.39.1/README.md": "37bc68dfc68170cb60f5dad7cfa64a6bc74893947e9d466575ca2c4c00ad6061",
+    "docs/upstream/libsqlite3-sys-0.39.1/Upgrade.md": "d151a67d4bbb1a5a300d084d210d6cd238d833a6d4bd5d958ae7469a9deccb36",
     "docs/upstream/linux-raw-sys-0.12.1/CODE_OF_CONDUCT.md": "ccd9e538ce44713a2486cc8e4c01b8c8b846d1ccff15de728d8d6fa9a7f846cd",
     "docs/upstream/linux-raw-sys-0.12.1/ORG_CODE_OF_CONDUCT.md": "a62b69bf86e605ee1bcbb2f0a12ba79e4cebb6983a7b6491949750aecc4f2178",
     "docs/upstream/linux-raw-sys-0.12.1/README.md": "3d4ae2ec9429adfd329b4506f7ca6faa84dca30d1c3b416f8f4e6f57bdb3aa96",
@@ -113683,7 +113692,7 @@
             "bundled_bindings",
             "cc",
             "default",
-            "min_sqlite_version_3_34_1",
+            "min_sqlite_version_3_45_3",
             "pkg-config"
           ],
           "roles": [
@@ -116636,7 +116645,7 @@
             "bundled_bindings",
             "cc",
             "default",
-            "min_sqlite_version_3_34_1",
+            "min_sqlite_version_3_45_3",
             "pkg-config"
           ],
           "roles": [
@@ -117779,7 +117788,7 @@
             "bundled_bindings",
             "cc",
             "default",
-            "min_sqlite_version_3_34_1",
+            "min_sqlite_version_3_45_3",
             "pkg-config"
           ],
           "roles": [
@@ -141757,6 +141766,80 @@
       ],
       "successor_origin_directory": "vendor/rust/ctutils-0.4.4"
     },
+    "vendor/rust/libsqlite3-sys-0.37.0": {
+      "external_tests": {
+        "bytes": 1418,
+        "directory": "src/foundation/data-storage/libsqlite3-sys",
+        "file_count": 1,
+        "files": [
+          {
+            "path": "test/foundation/libsqlite3-sys/unit/src/error/test_160.rs",
+            "sha256": "79b1a2687ef99f5c1d3f4cdaa96bc0fbecf18ab3651b822da172d4db06a67b52",
+            "source": "src/foundation/libsqlite3-sys/src/error.rs",
+            "source_sha256_before": "9685678a8752bf47e5e39923bb2cf466cc312a25848d91cc206bf89eaccfb7d6"
+          }
+        ],
+        "origin_directory": "vendor/rust/libsqlite3-sys-0.37.0",
+        "roots": [
+          "test/foundation/libsqlite3-sys"
+        ]
+      },
+      "package": {
+        "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：原生平台收敛为 Linux amd64；移除仅供 MSVC 使用的 vcpkg 构建依赖、feature 转发与探测分支，保留 bundled SQLite、pkg-config、显式库路径及 Linux ABI 预留。",
+        "description": "Native bindings to the libsqlite3 library",
+        "directory": "src/foundation/data-storage/libsqlite3-sys",
+        "files_sha256": {
+          "Cargo.toml": "88fa3d599d15d790dda5669b26d4098cfb33ac6aff4ddc7b9724e4be8d432c87",
+          "bindgen-bindings/bindgen_3.34.1.rs": "4f94d0192ec890b62773368cb026daf219f5182094952c007d28ed6d3812fd68",
+          "bindgen-bindings/bindgen_3.34.1_ext.rs": "44ff11f09886f8c41494f65043ac2ddba4e476bb17a81fe93a8c10c7bffdf4a8",
+          "build.rs": "277ae93642f3bd5655f8c86930955704637664f25a60e3736881b0f0e08a5765",
+          "sqlcipher/bindgen_bundled_version.rs": "eb685154c9825ed324e3e7e2eb11efd1a6fd53634e65342856ec459bcbf2f536",
+          "sqlcipher/sqlite3.c": "de78ef087cbc26e8fe584de05f1790f3e34897db8731e8154dc674d3f2df28cb",
+          "sqlcipher/sqlite3.h": "d02f73fba63a21a6f5df9f2eef5df8bff5d7bace10aba54910ee28050f7eb573",
+          "sqlcipher/sqlite3ext.h": "9a91de0d5e5ccc04ec59041275c67972d6f8894f7543a10033e387b69987beb5",
+          "sqlite3/bindgen_bundled_version.rs": "3640b99203cb2c2dfa5797043cf01dc8dcee8cef62c6b88e937e364a8614744b",
+          "sqlite3/bindgen_bundled_version_ext.rs": "037f54e88e052f8d309b60966c282c47264ab450fd97d8a409b32f67f3cb3983",
+          "sqlite3/sqlite3.c": "9512509b1bccb7461f79bea8aad6280ae4699e925fa4804381b71f59e7efb0c5",
+          "sqlite3/sqlite3.h": "19585c8b5230e9d4f223bf31b709ece7b6a0bb3faf00d8310625d8e58cda1b1d",
+          "sqlite3/sqlite3ext.h": "ea81fb7bd05882e0e0b92c4d60f677b205f7f1fbf085f218b12f0b5b3f0b9e48",
+          "sqlite3/wasm32-wasi-vfs.c": "b95842044da2b8777876b7d3fef8c9711e8c201fb4a4255dbac98729a456bb5d",
+          "src/error.rs": "b282a2c104f7c45da8675262dcead59bc388f744a83f0846e67c9cd3ca3d6c25",
+          "src/lib.rs": "f61d8e306e11357479e20999f7b7adc5f3dbaea40cd17361853574001cf79360",
+          "wrapper.h": "b78f576f7eeabf316e183d476b0f16344b6897680b4df47628d3ce38c0aa979a",
+          "wrapper_ext.h": "fa7a53fea99318ee29d75e6d5fab4d7ed26e9599803268e6a24396265f2a6f3a"
+        },
+        "license": "MIT",
+        "license_materials": [
+          "compliance/licenses/upstream/libsqlite3-sys-0.37.0/LICENSE",
+          "compliance/licenses/upstream/libsqlite3-sys-0.37.0/sqlcipher/LICENSE"
+        ],
+        "merged_into": "无；通过统一内部源码源接入",
+        "name": "libsqlite3-sys",
+        "origin_directory": "vendor/rust/libsqlite3-sys-0.37.0",
+        "repository": "https://github.com/rusqlite/rusqlite",
+        "status": "内部维护源码",
+        "upstream": {
+          "archive_sha256": "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1",
+          "archive_url": "https://static.crates.io/crates/libsqlite3-sys/libsqlite3-sys-0.37.0.crate",
+          "name": "libsqlite3-sys",
+          "version": "0.37.0"
+        },
+        "vcs": {
+          "git": {
+            "sha1": "2a1790a69107cd03dae85d501dcbdb11c5b32ef3"
+          },
+          "path_in_vcs": "libsqlite3-sys"
+        },
+        "version": "0.37.0"
+      },
+      "reason": "RUSTSEC-2026-0459: authenticated libsqlite3-sys 0.39.1 / SQLite 3.54.1; preserve local path dependencies and complete predecessor history",
+      "source_prefixes": [
+        "src/",
+        "sqlite3/",
+        "bindgen-bindings/"
+      ],
+      "successor_origin_directory": "vendor/rust/libsqlite3-sys-0.39.1"
+    },
     "vendor/rust/rustls-webpki-0.103.15": {
       "package": {
         "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
@@ -141862,6 +141945,7 @@
   },
   "superseded_records_sha256": {
     "vendor/rust/ctutils-0.4.3": "269c202c888dda91ea575e9231ebb856fc4520ba6b36bce3eeb8e54515958ba7",
+    "vendor/rust/libsqlite3-sys-0.37.0": "1328981bb7d44f4794706d10b177824865a15a514b86cad78e21600d1926cbc0",
     "vendor/rust/rustls-webpki-0.103.15": "c135f78400cf97844c0a76e3ce88372689c67eb1e9a1de177ab44fccac3eca04",
     "vendor/rust/webpki-roots-1.0.9": "ab27e4eff55798d801493547b9c28844c0861a692161807856a626437a709c7b"
   },
@@ -144340,6 +144424,12 @@
       "archive_url": "https://static.crates.io/crates/unicode-width/unicode-width-0.2.2.crate",
       "name": "unicode-width",
       "version": "0.2.2"
+    },
+    {
+      "archive_sha256": "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3",
+      "archive_url": "https://static.crates.io/crates/libsqlite3-sys/libsqlite3-sys-0.39.1.crate",
+      "name": "libsqlite3-sys",
+      "version": "0.39.1"
     }
   ]
 }

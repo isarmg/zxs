@@ -1,0 +1,19 @@
+{
+  "owners": [
+    {
+      "directory": "src/foundation/data-storage/libsqlite3-sys",
+      "files": [
+        {
+          "path": "test/foundation/libsqlite3-sys/unit/src/error/test_160.rs",
+          "sha256": "79b1a2687ef99f5c1d3f4cdaa96bc0fbecf18ab3651b822da172d4db06a67b52",
+          "source": "src/foundation/data-storage/libsqlite3-sys/src/error.rs",
+          "source_sha256_before": "eea43c9e7e05a58002a406ce1bf518299284798a64158a2114516c2fcc7df524"
+        }
+      ],
+      "roots": [
+        "test/foundation/libsqlite3-sys"
+      ]
+    }
+  ],
+  "schema_version": 1
+}

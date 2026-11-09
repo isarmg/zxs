@@ -4066,11 +4066,11 @@
           "source_sha256_before": "b7cf85cc69af3b891d78803f2862e7b18b674b1d3e27c139f830f41be689ffe9"
         },
         {
-          "source_kind": "project-authored",
-          "source": "test/foundation/date-time/unit/src/parsing/combinator/tests.rs",
-          "source_sha256_before": "120006edcb27c061ebf14c0717be5996db9b18c9dbebf9742c4a555804a78a26",
           "path": "test/foundation/date-time/unit/src/parsing/combinator/tests.rs",
-          "sha256": "120006edcb27c061ebf14c0717be5996db9b18c9dbebf9742c4a555804a78a26"
+          "sha256": "120006edcb27c061ebf14c0717be5996db9b18c9dbebf9742c4a555804a78a26",
+          "source": "test/foundation/date-time/unit/src/parsing/combinator/tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "120006edcb27c061ebf14c0717be5996db9b18c9dbebf9742c4a555804a78a26"
         }
       ],
       "roots": [
@@ -9451,11 +9451,11 @@
           "source_sha256_before": "eac453f58776b7d84eaf5e640306cd3c3651c602f19bbfb1b3e9a7aeee5917d8"
         },
         {
-          "source_kind": "project-authored",
-          "source": "test/foundation/ipnet/unit/subnets_contract.rs",
-          "source_sha256_before": "4ea9288448b302e1f234afce29ff9d732671557d763f0c2afcf043c16199f002",
           "path": "test/foundation/ipnet/unit/subnets_contract.rs",
-          "sha256": "4ea9288448b302e1f234afce29ff9d732671557d763f0c2afcf043c16199f002"
+          "sha256": "4ea9288448b302e1f234afce29ff9d732671557d763f0c2afcf043c16199f002",
+          "source": "test/foundation/ipnet/unit/subnets_contract.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "4ea9288448b302e1f234afce29ff9d732671557d763f0c2afcf043c16199f002"
         }
       ],
       "roots": [
@@ -10004,20 +10004,6 @@
       ],
       "roots": [
         "test/foundation/libloading"
-      ]
-    },
-    {
-      "directory": "src/foundation/data-storage/libsqlite3-sys",
-      "files": [
-        {
-          "path": "test/foundation/libsqlite3-sys/unit/src/error/test_160.rs",
-          "sha256": "79b1a2687ef99f5c1d3f4cdaa96bc0fbecf18ab3651b822da172d4db06a67b52",
-          "source": "src/foundation/libsqlite3-sys/src/error.rs",
-          "source_sha256_before": "9685678a8752bf47e5e39923bb2cf466cc312a25848d91cc206bf89eaccfb7d6"
-        }
-      ],
-      "roots": [
-        "test/foundation/libsqlite3-sys"
       ]
     },
     {
@@ -10597,8 +10583,8 @@
           "path": "test/foundation/nu-ansi-term/modules/readme.rs",
           "sha256": "fbbd7b43ea41768fcd66cef23328ce402a4b8023a03568897754e98fbae81233",
           "source": "test/foundation/nu-ansi-term/modules/readme.rs",
-          "source_sha256_before": "fbbd7b43ea41768fcd66cef23328ce402a4b8023a03568897754e98fbae81233",
-          "source_kind": "project-authored"
+          "source_kind": "project-authored",
+          "source_sha256_before": "fbbd7b43ea41768fcd66cef23328ce402a4b8023a03568897754e98fbae81233"
         },
         {
           "path": "test/foundation/nu-ansi-term/tests/style.rs",
@@ -12061,11 +12047,11 @@
           "source_sha256_before": "e5a0e79cdae4fabb87ba1b3f92f039f9069ec3c4ebbca3c7f44a6c3138460387"
         },
         {
-          "source_kind": "project-authored",
-          "source": "test/foundation/proc-macro2-diagnostics/unit/diagnostic_tests.rs",
-          "source_sha256_before": "ec617ba7176912d77b664df6e801fb233bd04b0c55a4ba4117f64bba2fc040be",
           "path": "test/foundation/proc-macro2-diagnostics/unit/diagnostic_tests.rs",
-          "sha256": "ec617ba7176912d77b664df6e801fb233bd04b0c55a4ba4117f64bba2fc040be"
+          "sha256": "ec617ba7176912d77b664df6e801fb233bd04b0c55a4ba4117f64bba2fc040be",
+          "source": "test/foundation/proc-macro2-diagnostics/unit/diagnostic_tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "ec617ba7176912d77b664df6e801fb233bd04b0c55a4ba4117f64bba2fc040be"
         }
       ],
       "roots": [
@@ -13028,11 +13014,11 @@
           "source_sha256_before": "50236f8bdf6764ff2587ccd78c3b2fd37902411f65ed4b422495003474667c48"
         },
         {
-          "source_kind": "project-authored",
-          "source": "test/foundation/reactive-state/unit/src/graph/subscriber_scope.rs",
-          "source_sha256_before": "f6b56a46dda3183ddc7c93598c0256879056fe4aa6dddfb5d65a4cedcbfba446",
           "path": "test/foundation/reactive-state/unit/src/graph/subscriber_scope.rs",
-          "sha256": "f6b56a46dda3183ddc7c93598c0256879056fe4aa6dddfb5d65a4cedcbfba446"
+          "sha256": "f6b56a46dda3183ddc7c93598c0256879056fe4aa6dddfb5d65a4cedcbfba446",
+          "source": "test/foundation/reactive-state/unit/src/graph/subscriber_scope.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "f6b56a46dda3183ddc7c93598c0256879056fe4aa6dddfb5d65a4cedcbfba446"
         }
       ],
       "roots": [
@@ -18290,11 +18276,11 @@
           "source_sha256_before": "f3c3db1e577c3100d49c09d1f49567c04cb5992743441b4172cd15847444d5f1"
         },
         {
-          "source_kind": "project-authored",
-          "source": "test/foundation/tempfile/unit/src/error/tests.rs",
-          "source_sha256_before": "1ab789c519dcae5df888474643e7848dfd2841b87e3506caed640864d471bfa4",
           "path": "test/foundation/tempfile/unit/src/error/tests.rs",
-          "sha256": "1ab789c519dcae5df888474643e7848dfd2841b87e3506caed640864d471bfa4"
+          "sha256": "1ab789c519dcae5df888474643e7848dfd2841b87e3506caed640864d471bfa4",
+          "source": "test/foundation/tempfile/unit/src/error/tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "1ab789c519dcae5df888474643e7848dfd2841b87e3506caed640864d471bfa4"
         }
       ],
       "roots": [

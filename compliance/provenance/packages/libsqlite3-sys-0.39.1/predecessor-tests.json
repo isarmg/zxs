@@ -1,0 +1,26 @@
+{
+  "bytes": [
+    {
+      "path": "test/foundation/libsqlite3-sys/unit/src/error/test_160.rs",
+      "retained_at": "compliance/provenance/packages/libsqlite3-sys-0.39.1/predecessor-tests/test/foundation/libsqlite3-sys/unit/src/error/test_160.rs.txt",
+      "sha256": "79b1a2687ef99f5c1d3f4cdaa96bc0fbecf18ab3651b822da172d4db06a67b52"
+    }
+  ],
+  "owner": {
+    "bytes": 1418,
+    "directory": "src/foundation/data-storage/libsqlite3-sys",
+    "file_count": 1,
+    "files": [
+      {
+        "path": "test/foundation/libsqlite3-sys/unit/src/error/test_160.rs",
+        "sha256": "79b1a2687ef99f5c1d3f4cdaa96bc0fbecf18ab3651b822da172d4db06a67b52",
+        "source": "src/foundation/libsqlite3-sys/src/error.rs",
+        "source_sha256_before": "9685678a8752bf47e5e39923bb2cf466cc312a25848d91cc206bf89eaccfb7d6"
+      }
+    ],
+    "origin_directory": "vendor/rust/libsqlite3-sys-0.37.0",
+    "roots": [
+      "test/foundation/libsqlite3-sys"
+    ]
+  }
+}

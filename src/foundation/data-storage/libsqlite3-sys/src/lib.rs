@@ -1,8 +1,5 @@
 #![expect(non_snake_case, non_camel_case_types)]
 #![cfg_attr(not(test), no_std)]
-// force linking to openssl
-#[cfg(feature = "bundled-sqlcipher-vendored-openssl")]
-extern crate openssl_sys;
 
 pub use self::error::*;
 

@@ -1,9 +1,10 @@
 # Internal source component. Original manifest and origin: compliance/provenance.
 
 [package]
-edition = "2021"
+edition = "2024"
+rust-version = "1.88.0"
 name = "libsqlite3-sys"
-version = "0.37.0"
+version = "0.39.1"
 authors = ["The rusqlite developers"]
 build = "build.rs"
 links = "sqlite3"
@@ -14,7 +15,7 @@ autoexamples = false
 autotests = false
 autobenches = false
 description = "Native bindings to the libsqlite3 library"
-readme = "../../../../docs/upstream/libsqlite3-sys-0.37.0/README.md"
+readme = "../../../../docs/upstream/libsqlite3-sys-0.39.1/README.md"
 keywords = [
     "sqlite",
     "sqlcipher",
@@ -32,10 +33,10 @@ bundled-sqlcipher-vendored-openssl = ["bundled-sqlcipher"]
 bundled-windows = ["cc", "bundled_bindings"]
 bundled_bindings = []
 column_metadata = []
-default = ["min_sqlite_version_3_34_1"]
+default = ["min_sqlite_version_3_45_3"]
 in_gecko = []
 loadable_extension = ["rust-source-format", "quote", "rust-syntax"]
-min_sqlite_version_3_34_1 = ["pkg-config"]
+min_sqlite_version_3_45_3 = ["pkg-config"]
 preupdate_hook = ["buildtime_bindgen"]
 session = ["preupdate_hook", "buildtime_bindgen"]
 sqlcipher = []
