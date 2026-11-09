@@ -28,19 +28,16 @@ SNAPSHOT_SHA256 = {
 PAUSE = '    if: ${{ false }}\n'
 PUBLISH_CONDITION = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
 HEADER = '# Development short CI: long checks are paused, not passed. See docs/ci/development-short-ci.md.\n'
-HOURLY_CRON = '17 * * * *'
 
 
 def development_workflow(name, original):
     """The complete original jobs remain; only these reviewed edits are allowed."""
     source = HEADER + original
-    # Only hourly short CI is reauthorized; push/PR/tag entrypoints stay paused.
+    # Recurring checks are dispatched externally, never by GitHub schedule.
     if name == 'ci.yml':
         source = source.replace('on:\n  push:\n  pull_request:\n',
-                                'on:\n  # User-approved hourly short CI, UTC; avoid the busy start of each hour.\n'
-                                '  schedule:\n'
-                                f"    - cron: '{HOURLY_CRON}'\n")
-        # A scheduled run must not cancel an already running manual check.
+                                'on:\n  # Manual dispatch only; GitHub automatic triggers remain paused.\n')
+        # A later manual check must not cancel one already in progress.
         source = source.replace('  cancel-in-progress: true\n',
                                 '  cancel-in-progress: false\n', 1)
     elif name == 'release.yml':
@@ -87,9 +84,7 @@ def check_workflows(root):
 def receipt():
     return {
         'mode': 'development-short-ci',
-        'automatic_triggers': True,
-        'scheduled_workflow': 'ci.yml',
-        'schedule': {'cron': HOURLY_CRON, 'timezone': 'UTC', 'ref': 'default_branch_head'},
+        'automatic_triggers': False,
         'suites': list(SHORT_SUITES),
         'paused_suites': list(PAUSED_SUITES),
         'paused_jobs': {name: list(jobs) for name, jobs in PAUSED_JOBS.items()},

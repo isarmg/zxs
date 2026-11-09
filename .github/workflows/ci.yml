@@ -2,9 +2,7 @@
 name: CI
 
 on:
-  # User-approved hourly short CI, UTC; avoid the busy start of each hour.
-  schedule:
-    - cron: '17 * * * *'
+  # Manual dispatch only; GitHub automatic triggers remain paused.
   workflow_dispatch:
 
 permissions:

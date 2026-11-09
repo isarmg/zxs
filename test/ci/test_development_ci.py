@@ -54,8 +54,8 @@ class DevelopmentCiPolicy(unittest.TestCase):
         POLICY.check_workflows(ROOT)
         POLICY.check_workflows(self.root)
 
-    def test_hourly_ci_keeps_dispatch_and_other_entrypoints_paused(self):
-        for name, triggers in (('ci.yml', ['schedule', 'workflow_dispatch']),
+    def test_manual_ci_keeps_dispatch_and_all_automatic_entrypoints_paused(self):
+        for name, triggers in (('ci.yml', ['workflow_dispatch']),
                                ('release.yml', ['workflow_dispatch']),
                                ('smb-sdk.yml', ['workflow_call'])):
             source = (ROOT / '.github/workflows' / name).read_text()
@@ -63,12 +63,11 @@ class DevelopmentCiPolicy(unittest.TestCase):
             self.assertEqual(re.findall(r'^  ([a-z_]+):', events, flags=re.MULTILINE),
                              triggers)
             crons = re.findall(r"^    - cron: '([^']+)'$", events, flags=re.MULTILINE)
-            self.assertEqual(crons, ['17 * * * *'] if name == 'ci.yml' else [])
+            self.assertEqual(crons, [])
         receipt = POLICY.receipt()
-        self.assertTrue(receipt['automatic_triggers'])
-        self.assertEqual(receipt['scheduled_workflow'], 'ci.yml')
-        self.assertEqual(receipt['schedule'],
-                         {'cron': '17 * * * *', 'timezone': 'UTC', 'ref': 'default_branch_head'})
+        self.assertFalse(receipt['automatic_triggers'])
+        self.assertNotIn('scheduled_workflow', receipt)
+        self.assertNotIn('schedule', receipt)
 
     def test_unapproved_or_duplicate_automatic_triggers_are_rejected(self):
         for name in ('ci.yml', 'release.yml', 'smb-sdk.yml'):
@@ -77,10 +76,9 @@ class DevelopmentCiPolicy(unittest.TestCase):
                 with self.subTest(workflow=name, event=event):
                     self.reject_edit(name, 'on:\n', f'on:\n  {event}:\n')
 
-    def test_hourly_frequency_and_running_checks_cannot_be_changed_silently(self):
-        for cron in ('* * * * *', '17 */2 * * *', '17 0 * * *'):
-            self.reject_edit('ci.yml', "cron: '17 * * * *'", f"cron: '{cron}'")
-        self.reject_edit('ci.yml', "  schedule:\n    - cron: '17 * * * *'\n", '')
+    def test_schedule_cannot_return_or_cancel_running_manual_checks(self):
+        for cron in ('17 * * * *', '* * * * *', '17 */2 * * *', '17 0 * * *'):
+            self.reject_edit('ci.yml', 'on:\n', f"on:\n  schedule:\n    - cron: '{cron}'\n")
         self.reject_edit('ci.yml', '  cancel-in-progress: false\n',
                          '  cancel-in-progress: true\n')
 
@@ -96,7 +94,7 @@ class DevelopmentCiPolicy(unittest.TestCase):
                 output = self.root / f'{event or "missing"}.out'
                 summary = self.root / f'{event or "missing"}.summary'
                 event_path = self.root / 'event.json'
-                event_path.write_text(json.dumps({'schedule': POLICY.HOURLY_CRON,
+                event_path.write_text(json.dumps({'schedule': '17 * * * *',
                                                   'inputs': {'full_ci': True, 'suite': 'workspace'}}))
                 env = dict(os.environ, GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary),
                            GITHUB_EVENT_NAME=event, GITHUB_EVENT_PATH=str(event_path),
