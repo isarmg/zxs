@@ -339,8 +339,19 @@ impl PreparedArchive {
             capture.journals.push(bytes);
         }
         let mut refs = BTreeMap::<u64, (String, String)>::new();
-        for journal in engine.journals.values() {
-            for (record, _) in journal.records() {
+        let mut frames = 0usize;
+        // The writer cache retains only its current slot. Discover the complete
+        // object set from the same original journal bytes archived above; the
+        // full verifier below still authenticates every member's receipts.
+        for bytes in &capture.journals {
+            let mut reader = JournalFrameReader::new(bytes.as_slice());
+            while let Some((record, _)) =
+                reader.next_record_observed(&mut |count| capture.budget.account(count))?
+            {
+                frames = frames.checked_add(1).ok_or_else(budget_error)?;
+                if frames > MAX_FRAMES {
+                    return Err(budget_error());
+                }
                 if record.record_type != RecordType::Publication {
                     continue;
                 }
@@ -355,6 +366,9 @@ impl PreparedArchive {
                 if refs.len() > MAX_PUBLICATIONS {
                     return Err(budget_error());
                 }
+            }
+            if reader.torn_tail || reader.valid_bytes != bytes.len() as u64 {
+                return Err(invalid("original journal has an incomplete frame"));
             }
         }
         let mut publications = Vec::with_capacity(refs.len());

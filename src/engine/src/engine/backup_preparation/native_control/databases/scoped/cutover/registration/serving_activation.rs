@@ -421,12 +421,12 @@ fn install_engine(
             &AtomicBool::new(false),
         )?;
         let opened = OpenJournal::scan_configured_at(root, disk, &config)?;
-        let (writer, scan) = opened.into_writer()?;
-        if scan.torn_tail || scan.records.len() != 3 {
+        if opened.scan.torn_tail || opened.scan.records.len() != 3 {
             return Err(invalid(
                 "live first Backup switch changed its exact original three-frame journal",
             ));
         }
+        let (writer, _) = opened.into_writer()?;
         journals.insert(disk.disk_id.clone(), writer);
     }
     let (_, history_roots) = crate::history_package::bound_history_objects_with_roots_at(
