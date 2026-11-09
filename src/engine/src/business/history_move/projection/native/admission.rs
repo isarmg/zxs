@@ -165,15 +165,15 @@ impl ReadBody {
         {
             return Err(invalid());
         }
-        let added = arrival
-            .entries
-            .strip_prefix(previous.entries.as_slice())
-            .ok_or_else(invalid)?;
-        let [entry] = added else {
-            return Err(invalid());
-        };
-        let path = name_policy::LookupPath::parse(&request.target_name)?;
-        if namespace::find_unordered_key(&previous.entries, path.key()).is_some()
+        let target_path = name_policy::PortablePath::parse(&request.target_name)?;
+        let _ = super::super::super::target_path::ancestors(&previous.entries, &target_path)
+            .map_err(|_| invalid())?;
+        let path = name_policy::LookupPath::from(&target_path);
+        let entry = namespace::find_unordered_key(&arrival.entries, path.key()).ok_or_else(invalid)?;
+        if arrival.entries.len() != previous.entries.len() + 1
+            || arrival.entries.iter().filter(|entry| entry.lookup_key() != path.key())
+                .ne(previous.entries.iter())
+            || namespace::find_unordered_key(&previous.entries, path.key()).is_some()
             || entry.kind != NamespaceEntryKind::File
             || entry.file_id != self.file_id
             || entry.path() != request.target_name
@@ -223,7 +223,7 @@ pub(crate) fn admit_source_deletion(
     storage_contract::validate_id(&request.namespace.expected_target_head, "commit")?;
     storage_contract::validate_id(&body.branch_id, "br")?;
     storage_contract::validate_id(&body.history_tree_id, "history")?;
-    name_policy::validate_name(&request.namespace.target_name)?;
+    name_policy::PortablePath::parse(&request.namespace.target_name)?;
     let source_path = name_policy::LookupPath::parse(&request.namespace.source_path)?;
     for hash in [
         &body.source_records_hash,

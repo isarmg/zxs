@@ -8,6 +8,7 @@ use std::{
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 mod projection;
+pub(in crate::business) mod target_path;
 pub use projection::{CurrentFileHistoryMoveProjection, FileHistoryMoveProjection};
 pub(crate) use projection::{
     FileHistoryMoveReplay, NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft,

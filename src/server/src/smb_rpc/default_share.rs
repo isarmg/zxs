@@ -460,10 +460,15 @@ impl DefaultShare {
                     if replace {
                         return Err(ApiError::unsupported());
                     }
-                    // Lookup must not initialize an empty destination disk
-                    // or manufacture a repository before native admission.
-                    let target = self.resolve(&path, SmbPathIntent::Lookup)?;
-                    let reply = self.move_file(source, target, admission)?;
+                    // A missing disk-root namespace is initialized only through
+                    // its durable, exact native-move request, never by Lookup.
+                    let reply = match self.resolve(&path, SmbPathIntent::Lookup) {
+                        Ok(target) => self.move_file(source, target, admission)?,
+                        Err(error) if error.code == storage_contract::ErrorCode::DirectoryNotFound => {
+                            self.move_file_to_empty_disk(source, &path, admission)?
+                        }
+                        Err(error) => return Err(error),
+                    };
                     return Ok((Reply::Json(reply), None));
                 }
                 let target = self.resolve(&path, SmbPathIntent::Lookup)?;

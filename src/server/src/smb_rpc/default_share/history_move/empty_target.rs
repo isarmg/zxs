@@ -1,0 +1,221 @@
+//! Explicit retry across lazy destination-root initialization. The saved disk
+//! binding and source entry survive creation without inventing a target branch.
+use super::*;
+use data_serialization::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize)]
+#[serialization(deny_unknown_fields)]
+struct Binding {
+    repository_id: String,
+    branch_id: String,
+    #[serialization(with = "storage_contract::u64_string")]
+    generation: u64,
+}
+impl Binding {
+    fn matches(&self, key: &SessionKey) -> bool {
+        self.repository_id == key.repository
+            && self.branch_id == key.branch
+            && self.generation == key.generation
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serialization(deny_unknown_fields)]
+struct Intent {
+    format: String,
+    principal: String,
+    operation_id: OperationId,
+    publication_outcome: String,
+    source_binding: Binding,
+    source_path: String,
+    source_entry_id: String,
+    source_file_id: String,
+    target_slot_id: String,
+    target_disk_id: String,
+    #[serialization(with = "storage_contract::u64_string")]
+    target_binding_generation: u64,
+    target_name: String,
+    #[serialization(with = "storage_contract::u64_string")]
+    account_generation: u64,
+}
+
+fn changed() -> ApiError {
+    ApiError::conflict(
+        storage_contract::ErrorCode::IdempotencyKeyReused,
+        "empty-target move retry differs from its original actor, disk, source or paths",
+    )
+}
+
+impl DefaultShare {
+    pub(in crate::smb_rpc::default_share) fn move_file_to_empty_disk(
+        &mut self,
+        source: SmbPathLocation,
+        destination: &str,
+        admission: NamespaceAdmission,
+    ) -> Result<Value, ApiError> {
+        let Location::Path { slot, path } = self.locate(destination)? else {
+            return Err(ApiError::unsupported());
+        };
+        let target = crate::MoveTargetName::parse(path.as_str())?;
+        if path.as_str().contains('/') {
+            return Err(ApiError::new(
+                http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::DirectoryNotFound,
+                "an empty disk has no destination parent directory",
+            ));
+        }
+        if !source.repository.file_manager_root
+            || source.repository.primary_slot_id == slot.slot_id
+            || source.relative_path.is_empty()
+        {
+            return Err(ApiError::unsupported());
+        }
+        let source_path = name_policy::LookupPath::parse(&source.relative_path)
+            .map_err(ApiError::invalid_source)?;
+        let source = self.pin_binding(source.repository)?;
+        let source_identity = self.bound_identity(&source);
+        self.shared.backend.authorize_repository(&source_identity, &source.repository)?;
+        let entry = self.shared.backend.lookup_current(
+            &source_identity, &source.branch, &source_path,
+        )?.ok_or_else(|| ApiError::new(
+            http::StatusCode::NOT_FOUND,
+            storage_contract::ErrorCode::FileNotFound,
+            "move source is no longer visible",
+        ))?;
+        if entry.kind != storage_contract::NamespaceEntryKind::File {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::IsDirectory,
+                "cross-disk history move requires a single file",
+            ));
+        }
+        let file = storage_contract::history_window::HistoryFileId::parse(&entry.file_id)
+            .map_err(ApiError::contract_input)?;
+        let intent = Intent {
+            format: "smb-file-history-move-empty-target".into(),
+            principal: self.identity.principal.clone(),
+            operation_id: admission.operation_id(),
+            publication_outcome: "unconfirmed".into(),
+            source_binding: Binding {
+                repository_id: source.repository,
+                branch_id: source.branch,
+                generation: source.generation,
+            },
+            source_path: source_path.as_str().into(),
+            source_entry_id: entry.entry_id,
+            source_file_id: file.as_str().into(),
+            target_slot_id: slot.slot_id,
+            target_disk_id: slot.disk_id,
+            target_binding_generation: slot.binding_generation,
+            target_name: target.as_str().into(),
+            account_generation: self.account_generation,
+        };
+        // This is durable before the backend may create even an empty control
+        // namespace. Failure preserves this same request, not a random retry.
+        admission.record_intent(&json_codec::to_value(&intent).map_err(ApiError::invalid_source)?)?;
+        let bytes = admission.retained_move_bytes()?;
+        self.submit_empty_disk_move(intent, admission, &bytes)
+    }
+
+    pub(in crate::smb_rpc::default_share::history_move) fn resume_empty_disk_move(
+        &mut self,
+        source: &str,
+        target: &str,
+        admission: NamespaceAdmission,
+        bytes: &[u8],
+    ) -> Result<Value, ApiError> {
+        let intent: Intent = storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
+        let Location::Path { slot: source_slot, path: source_path } = self.locate(source)? else {
+            return Err(changed());
+        };
+        let Location::Path { slot: target_slot, path: target_path } = self.locate(target)? else {
+            return Err(changed());
+        };
+        let source_repository = self.shared.backend.repository_snapshot(
+            &self.identity, &intent.source_binding.repository_id,
+        )?;
+        if source_slot.slot_id != source_repository.primary_slot_id
+            || source_path.key() != name_policy::path_key(&intent.source_path)
+            || target_slot.slot_id != intent.target_slot_id
+            || target_slot.disk_id != intent.target_disk_id
+            || target_slot.binding_generation != intent.target_binding_generation
+            || target_path.as_str() != intent.target_name
+        {
+            return Err(changed());
+        }
+        self.submit_empty_disk_move(intent, admission, bytes)
+    }
+
+    fn submit_empty_disk_move(
+        &mut self,
+        intent: Intent,
+        admission: NamespaceAdmission,
+        bytes: &[u8],
+    ) -> Result<Value, ApiError> {
+        if intent.format != "smb-file-history-move-empty-target"
+            || intent.publication_outcome != "unconfirmed"
+            || intent.operation_id != admission.operation_id()
+            || intent.principal != self.identity.principal
+            || intent.account_generation != self.account_generation
+        {
+            return Err(changed());
+        }
+        let repository = self.shared.backend.repository_snapshot(
+            &self.identity, &intent.source_binding.repository_id,
+        )?;
+        if !repository.file_manager_root || repository.primary_slot_id == intent.target_slot_id {
+            return Err(changed());
+        }
+        let source = self.pin_binding(repository)?;
+        if !intent.source_binding.matches(&source) {
+            return Err(changed());
+        }
+        let source_identity = self.bound_identity(&source);
+        self.shared.backend.authorize_repository(&source_identity, &source.repository)?;
+        let target = self.shared.backend.topology_snapshot(&self.identity)?.slots.into_iter()
+            .find(|disk| disk.slot_id == intent.target_slot_id).ok_or_else(changed)?;
+        if target.disk_id != intent.target_disk_id
+            || target.binding_generation != intent.target_binding_generation
+            || target.level != 1
+        {
+            return Err(changed());
+        }
+        let source_path = name_policy::LookupPath::parse(&intent.source_path)
+            .map_err(ApiError::invalid_source)?;
+        let target_name = crate::MoveTargetName::parse(&intent.target_name)?;
+        storage_contract::validate_id(&intent.source_entry_id, "entry")
+            .map_err(ApiError::contract_input)?;
+        let file = storage_contract::history_window::HistoryFileId::parse(&intent.source_file_id)
+            .map_err(ApiError::contract_input)?;
+        // There is no target branch to impersonate. Reserve the original disk
+        // address while the backend owner lock creates/admits the real binding;
+        // native move separately rejects any live target write workspace.
+        let target_key = format!(
+            "@empty-disk:{}:{}", intent.target_slot_id, intent.target_binding_generation,
+        );
+        let _paths = MovePaths::acquire(&self.shared, [
+            (&source.branch, source_path.as_str()), (&target_key, target_name.as_str()),
+        ])?;
+        if admission.retained_move_bytes()?.as_slice() != bytes {
+            return Err(changed());
+        }
+        let operation = intent.operation_id;
+        let result = self.shared.backend.move_current_file_to_empty_disk(
+            &self.identity,
+            crate::MoveCurrentFileToEmptyDisk {
+                source_binding: source_identity.smb_binding
+                    .expect("invariant: pinned source binding"),
+                target_slot_id: intent.target_slot_id,
+                target_disk_id: intent.target_disk_id,
+                target_binding_generation: intent.target_binding_generation,
+                source_path,
+                target_name,
+                expected_source_entry_id: intent.source_entry_id,
+                expected_source_file_id: file,
+                operation_id: operation,
+            },
+        )?;
+        let reply = published_reply(result, operation)?;
+        admission.finish_published();
+        Ok(reply)
+    }
+}

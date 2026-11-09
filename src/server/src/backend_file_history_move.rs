@@ -13,7 +13,7 @@ pub struct MoveCurrentFile {
     pub operation_id: OperationId,
 }
 
-/// A creation name at the target disk root, never a directory path.
+/// A strict creation path inside the admitted target disk-root namespace.
 #[derive(Debug)]
 pub struct MoveTargetName(name_policy::PortablePath);
 
@@ -21,9 +21,6 @@ impl MoveTargetName {
     pub fn parse(name: &str) -> Result<Self, crate::ApiError> {
         let path =
             name_policy::PortablePath::parse(name).map_err(crate::ApiError::invalid_source)?;
-        if path.parent().is_some() {
-            return Err(crate::ApiError::unsupported());
-        }
         Ok(Self(path))
     }
 
@@ -34,4 +31,19 @@ impl MoveTargetName {
     pub(crate) fn lookup(&self) -> name_policy::LookupPath {
         name_policy::LookupPath::from(&self.0)
     }
+}
+
+/// The destination disk was still an empty displayed root at admission. Its
+/// stable binding, not a fabricated repository or branch, is the retry address.
+#[derive(Debug)]
+pub struct MoveCurrentFileToEmptyDisk {
+    pub source_binding: SmbBinding,
+    pub target_slot_id: String,
+    pub target_disk_id: String,
+    pub target_binding_generation: u64,
+    pub source_path: name_policy::LookupPath,
+    pub target_name: MoveTargetName,
+    pub expected_source_entry_id: String,
+    pub expected_source_file_id: HistoryFileId,
+    pub operation_id: OperationId,
 }

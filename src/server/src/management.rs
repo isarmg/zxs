@@ -1417,6 +1417,13 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.move_current_file(identity, command)
     }
+    fn move_current_file_to_empty_disk(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::MoveCurrentFileToEmptyDisk,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.move_current_file_to_empty_disk(identity, command)
+    }
     fn delete_current_file(
         &self,
         identity: &crate::auth::Identity,

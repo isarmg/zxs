@@ -61,6 +61,11 @@ impl DefaultShare {
             return Ok(None);
         };
         let bytes = admission.retained_move_bytes()?;
+        let format: Value = storage_contract::decode_strict(&bytes)
+            .map_err(ApiError::contract_input)?;
+        if format.get("format").and_then(Value::as_str) == Some("smb-file-history-move-empty-target") {
+            return self.resume_empty_disk_move(source, target, admission, &bytes).map(Some);
+        }
         let original: Intent =
             storage_contract::decode_strict(&bytes).map_err(ApiError::contract_input)?;
         let request = &original.move_request;

@@ -99,7 +99,11 @@ impl Target {
         let file = projection.target_file_id().as_str().to_owned();
         let target =
             &frozen.state().repositories[&projection.capture().namespace().target_repository_id];
-        let name = &projection.capture().namespace().target_name;
+        // The logical destination may contain ordinary directory parents.
+        // A physical FILE container keeps one basename below its stable ID.
+        let name = frozen.state().file_names.get(&file)
+            .ok_or_else(|| invalid("ordinary move target has no admitted basename"))?;
+        name_policy::validate_name(name)?;
         let manifest = encode_metadata(
             &Intent {
                 format: "file-history-move-ordinary-inputs",

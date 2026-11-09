@@ -47,7 +47,7 @@ mod verified_chunk;
 mod web_assets;
 
 mod backend_file_history_move;
-pub use backend_file_history_move::{MoveCurrentFile, MoveTargetName};
+pub use backend_file_history_move::{MoveCurrentFile, MoveCurrentFileToEmptyDisk, MoveTargetName};
 mod backend_file_deletion;
 mod http_file_deletion;
 pub use backend_file_deletion::{
@@ -795,6 +795,13 @@ pub trait Backend: Send + Sync {
         &self,
         _identity: &Identity,
         _command: crate::MoveCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn move_current_file_to_empty_disk(
+        &self,
+        _identity: &Identity,
+        _command: crate::MoveCurrentFileToEmptyDisk,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -1625,6 +1632,14 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.backend
             .move_current_file(&self.current(identity)?, command)
+    }
+    fn move_current_file_to_empty_disk(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentFileToEmptyDisk,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .move_current_file_to_empty_disk(&self.current(identity)?, command)
     }
     fn delete_current_file(
         &self,

@@ -209,8 +209,8 @@ impl RecoveryRecord {
         storage_contract::validate_id(&self.namespace.target_repository_id, "repo")?;
         storage_contract::validate_id(&self.namespace.expected_source_head, "commit")?;
         storage_contract::validate_id(&self.namespace.expected_target_head, "commit")?;
-        name_policy::PortablePath::parse(&self.namespace.source_path)?;
-        name_policy::validate_name(&self.namespace.target_name)?;
+        name_policy::LookupPath::parse(&self.namespace.source_path)?;
+        name_policy::PortablePath::parse(&self.namespace.target_name)?;
         for hash in [
             &self.snapshot,
             &self.configuration_hash,

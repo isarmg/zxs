@@ -1398,6 +1398,13 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.move_current_file_admitted(identity, command)
     }
+    fn move_current_file_to_empty_disk(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentFileToEmptyDisk,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.move_current_file_to_empty_disk_admitted(identity, command)
+    }
     fn delete_current_file(
         &self,
         identity: &Identity,

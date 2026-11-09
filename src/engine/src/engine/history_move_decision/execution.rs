@@ -23,8 +23,8 @@ impl FileHistoryMovePathRequest {
     fn validate(&self) -> Result<()> {
         storage_contract::validate_id(&self.source_repository_id, "repo")?;
         storage_contract::validate_id(&self.target_repository_id, "repo")?;
-        name_policy::PortablePath::parse(&self.source_path)?;
-        name_policy::validate_name(&self.target_name)?;
+        name_policy::LookupPath::parse(&self.source_path)?;
+        name_policy::PortablePath::parse(&self.target_name)?;
         Ok(())
     }
     pub(crate) fn matches(&self, original: &FileHistoryCopyRequest) -> bool {

@@ -138,8 +138,12 @@ fn sources_for(
     destination: Destination<'_>,
 ) -> Result<CopySources> {
     let request = destination.request();
-    let source_path = name_policy::PortablePath::parse(&request.source_path)?;
-    name_policy::validate_name(&request.target_name)?;
+    let source_path = name_policy::LookupPath::parse(&request.source_path)?;
+    if matches!(destination, Destination::MoveIntoDiskRoot(_)) {
+        name_policy::PortablePath::parse(&request.target_name)?;
+    } else {
+        name_policy::validate_name(&request.target_name)?;
+    }
     let source = previous
         .repositories
         .get(&request.source_repository_id)
@@ -258,7 +262,9 @@ fn sources_for(
             {
                 return Err(unsupported());
             }
-            let path = name_policy::LookupPath::parse(&request.target_name)?;
+            let target_path = name_policy::PortablePath::parse(&request.target_name)?;
+            history_move::target_path::require_parent(previous, target_entries, &target_path)?;
+            let path = name_policy::LookupPath::from(&target_path);
             if namespace::find_unordered_key(target_entries, path.key()).is_some() {
                 return Err(Error::new(
                     ErrorCode::NameCollision,
@@ -682,8 +688,10 @@ pub(in crate::business) fn apply_scoped(
     }
     let selected = mapped(&context.branch_id)?;
     next.file_selections.insert(file.clone(), selected.clone());
-    next.file_names
-        .insert(file.clone(), request.target_name.clone());
+    next.file_names.insert(
+        file.clone(),
+        request.target_name.rsplit('/').next().expect("invariant: target path is nonempty").into(),
+    );
     next.file_locations
         .insert(file.clone(), request.target_name.clone());
     let mut entry = old_entry.clone();
@@ -730,10 +738,11 @@ pub(in crate::business) fn apply_scoped(
     let id = generated(operation, "commit", "arrival")?;
     let selected_head = next.branches[&selected].head_commit_id.clone();
     let pending = next.branches[&selected].pending_file_versions.clone();
-    // Keep the target's exact old namespace prefix. The copied FILE branch
-    // below remains a one-file snapshot, not a clone of unrelated target files.
+    // Preserve every old entry and add exactly one non-overwriting file.
+    // Published namespaces are sorted by lookup key, not insertion order.
     let mut entries = previous.commits[&request.expected_target_head].entries.clone();
     entries.push(entry.clone());
+    namespace::validate_entries(&mut entries, usize::MAX)?;
     next.commits.insert(
         id.clone(),
         Commit {
@@ -753,7 +762,10 @@ pub(in crate::business) fn apply_scoped(
         },
     );
     let mut file_snapshot = next.commits[&id].clone();
-    file_snapshot.entries = vec![entry];
+    file_snapshot.entries = history_move::target_path::file_snapshot(
+        &previous.commits[&request.expected_target_head].entries,
+        entry,
+    )?;
     file_snapshot.commit_id = file_commit.clone();
     file_snapshot.tree_id = generated(operation, "tree", "arrival-file")?;
     file_snapshot.parent_commit_ids = vec![selected_head];
