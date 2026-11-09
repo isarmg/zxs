@@ -54,22 +54,35 @@ class DevelopmentCiPolicy(unittest.TestCase):
         POLICY.check_workflows(ROOT)
         POLICY.check_workflows(self.root)
 
-    def test_only_manual_and_reusable_entrypoints_remain(self):
-        for name, trigger in (('ci.yml', 'workflow_dispatch'),
-                              ('release.yml', 'workflow_dispatch'),
-                              ('smb-sdk.yml', 'workflow_call')):
+    def test_hourly_ci_keeps_dispatch_and_other_entrypoints_paused(self):
+        for name, triggers in (('ci.yml', ['schedule', 'workflow_dispatch']),
+                               ('release.yml', ['workflow_dispatch']),
+                               ('smb-sdk.yml', ['workflow_call'])):
             source = (ROOT / '.github/workflows' / name).read_text()
             events = source.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
             self.assertEqual(re.findall(r'^  ([a-z_]+):', events, flags=re.MULTILINE),
-                             [trigger])
-        self.assertFalse(POLICY.receipt()['automatic_triggers'])
+                             triggers)
+            crons = re.findall(r"^    - cron: '([^']+)'$", events, flags=re.MULTILINE)
+            self.assertEqual(crons, ['17 * * * *'] if name == 'ci.yml' else [])
+        receipt = POLICY.receipt()
+        self.assertTrue(receipt['automatic_triggers'])
+        self.assertEqual(receipt['scheduled_workflow'], 'ci.yml')
+        self.assertEqual(receipt['schedule'],
+                         {'cron': '17 * * * *', 'timezone': 'UTC', 'ref': 'default_branch_head'})
 
-    def test_automatic_triggers_cannot_be_reintroduced_silently(self):
+    def test_unapproved_or_duplicate_automatic_triggers_are_rejected(self):
         for name in ('ci.yml', 'release.yml', 'smb-sdk.yml'):
             for event in ('push', 'pull_request', 'schedule', 'workflow_run',
                           'repository_dispatch'):
                 with self.subTest(workflow=name, event=event):
                     self.reject_edit(name, 'on:\n', f'on:\n  {event}:\n')
+
+    def test_hourly_frequency_and_running_checks_cannot_be_changed_silently(self):
+        for cron in ('* * * * *', '17 */2 * * *', '17 0 * * *'):
+            self.reject_edit('ci.yml', "cron: '17 * * * *'", f"cron: '{cron}'")
+        self.reject_edit('ci.yml', "  schedule:\n    - cron: '17 * * * *'\n", '')
+        self.reject_edit('ci.yml', '  cancel-in-progress: false\n',
+                         '  cancel-in-progress: true\n')
 
     def test_actual_workflow_command_emits_exact_seven_with_no_reuse(self):
         source = (ROOT / '.github/workflows/ci.yml').read_text()
@@ -78,12 +91,13 @@ class DevelopmentCiPolicy(unittest.TestCase):
         self.assertIn('id: suites\n        run: python3 .github/scripts/development-ci.py select', static)
         command = [sys.executable, str(SCRIPT), 'select']
         # Even malicious inputs/environment/event data cannot re-enable long suites.
-        for event in ('push', 'pull_request', 'workflow_dispatch', 'workflow_call', ''):
+        for event in ('schedule', 'push', 'pull_request', 'workflow_dispatch', 'workflow_call', ''):
             with self.subTest(event=event):
                 output = self.root / f'{event or "missing"}.out'
                 summary = self.root / f'{event or "missing"}.summary'
                 event_path = self.root / 'event.json'
-                event_path.write_text(json.dumps({'inputs': {'full_ci': True, 'suite': 'workspace'}}))
+                event_path.write_text(json.dumps({'schedule': POLICY.HOURLY_CRON,
+                                                  'inputs': {'full_ci': True, 'suite': 'workspace'}}))
                 env = dict(os.environ, GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary),
                            GITHUB_EVENT_NAME=event, GITHUB_EVENT_PATH=str(event_path),
                            INPUT_FULL_CI='true', ZXS_FULL_CI='1', CI_SUITES=json.dumps(PAUSED))
@@ -161,6 +175,8 @@ class DevelopmentCiPolicy(unittest.TestCase):
             ('    timeout-minutes: 10\n', '    timeout-minutes: 11\n'),
             ('  tests:\n', '  tests:\n    continue-on-error: true\n'),
             ('  static:\n', '  static:\n    if: false\n'),
+            ('  static:\n', "  static:\n    if: github.event_name == 'workflow_dispatch'\n"),
+            ('  tests:\n', "  tests:\n    if: github.event_name == 'workflow_dispatch'\n"),
             ('      fail-fast: false\n', '      fail-fast: false\n      max-parallel: 1\n'),
             ('        run: bash .github/scripts/check.sh "${{ matrix.suite }}"', '        run: true'),
             ('        run: bash .github/scripts/check.sh "${{ matrix.suite }}"',

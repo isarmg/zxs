@@ -2,7 +2,9 @@
 name: CI
 
 on:
-  # Automatic runs paused by user request; restore explicitly before re-enabling.
+  # User-approved hourly short CI, UTC; avoid the busy start of each hour.
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -10,7 +12,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
