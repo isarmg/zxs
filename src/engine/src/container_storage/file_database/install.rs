@@ -55,6 +55,34 @@ impl PreparedFile {
         }
         Ok(())
     }
+    pub(in crate::container_storage) fn stage_unpublished(
+        &mut self,
+        root: &DiskRoot,
+        path: &Path,
+        observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<()> {
+        self.check_entity(root, path)?;
+        self.install.stage_unpublished(root, observe)?;
+        self.check_entity(root, path)
+    }
+    pub(in crate::container_storage) fn verify_unpublished(
+        &self,
+        root: &DiskRoot,
+        path: &Path,
+    ) -> Result<()> {
+        self.check_entity(root, path)?;
+        self.install.verify_unpublished(root)
+    }
+    pub(in crate::container_storage) fn unpublished_identity(
+        &self,
+        root: &DiskRoot,
+        path: &Path,
+    ) -> Result<String> {
+        self.check_entity(root, path)?;
+        let identity = self.install.unpublished_identity(root)?;
+        self.check_entity(root, path)?;
+        Ok(identity)
+    }
     pub(in crate::container_storage) fn apply(
         self,
         root: &DiskRoot,

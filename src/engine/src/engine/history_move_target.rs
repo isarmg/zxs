@@ -246,3 +246,45 @@ impl Engine {
         Ok(identities)
     }
 }
+
+/// Held original target source for copying into ordinary payload addresses.
+/// Its opener always rechecks the saved copy identity; it is not a public path
+/// escape or permission to publish the move.
+pub(in crate::engine) struct OriginalMoveTarget {
+    target: store::Target,
+}
+impl OriginalMoveTarget {
+    pub(in crate::engine) fn open(
+        engine: &Engine,
+        projection: &FileHistoryMoveProjection,
+        reviewed: &FileHistoryMoveRecoveryDigest,
+        slot: &str,
+    ) -> Result<Self> {
+        let materials = Materials::capture(projection)?;
+        let target = store::Target::open(
+            engine,
+            projection,
+            reviewed,
+            &materials,
+            slot,
+            store::Mode::Read,
+        )?;
+        target.verify_metadata(&materials)?;
+        Ok(Self { target })
+    }
+    pub(in crate::engine) fn source(
+        &self,
+        version: &FileVersion,
+        expected_copy: &str,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<ReadFile> {
+        let (copy, source) = payloads::open_original(&self.target, version, cancellation)?;
+        if copy != expected_copy {
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "ordinary move payload source differs from the original selected target copy",
+            ));
+        }
+        Ok(source)
+    }
+}

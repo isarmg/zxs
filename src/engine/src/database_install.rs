@@ -123,6 +123,7 @@ pub(crate) struct PreparedInstall {
     maximum: usize,
     resume: Option<(DiskRoot, Envelope)>,
     already_current: bool,
+    recovered_displaced: bool,
     admission: InstallAdmission,
 }
 
@@ -163,7 +164,8 @@ impl PreparedInstall {
             digest: blake3::hash(&bytes).to_hex().to_string(),
         };
         let path = history.join(".zxs-layout/database-installs");
-        root.private_dir(&path)?;
+        // Capture is also used by cold read-only move verification. Creating
+        // retention directories belongs to prepare_stage, never to observation.
         let mut prepared = Self {
             entity: held,
             source,
@@ -173,10 +175,11 @@ impl PreparedInstall {
             maximum,
             resume: None,
             already_current,
+            recovered_displaced: false,
             admission,
         };
         let generation = path.join(prepared.binding()?);
-        if root.optional_metadata(&generation)?.is_some() {
+        if installations_exist(root, history)? && root.optional_metadata(&generation)?.is_some() {
             prepared.resume = prepared.recover_envelope(&root.private_child(&generation)?)?;
         }
         Ok(prepared)
@@ -212,11 +215,107 @@ impl PreparedInstall {
         root: &DiskRoot,
         observe: &mut impl FnMut(&'static str) -> Result<()>,
     ) -> Result<()> {
+        self.prepare_stage(root, observe)?;
+        match self.resume.take() {
+            Some((stage, envelope)) => self.finish(stage, envelope, observe),
+            None => Ok(()),
+        }
+    }
+
+    /// Freeze the normal preserving-exchange intent without touching the live
+    /// alias. Only a later independently admitted joint decision may call apply.
+    /// In particular an already-exchanged candidate is not an unpublished stage.
+    pub(crate) fn stage_unpublished(
+        &mut self,
+        root: &DiskRoot,
+        observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<()> {
+        if self.already_current || self.recovered_displaced {
+            return Err(invalid(
+                "unpublished database has an exposed or displaced original install; all files retained",
+            ));
+        }
+        self.prepare_stage(root, observe)?;
+        self.verify_unpublished(root)?;
+        let (stage, _) = self
+            .resume
+            .as_ref()
+            .expect("invariant: verified unpublished intent exists");
+        for leaf in ["payload", "intent.json"] {
+            stage
+                .open_read_regular(&stage.path().join(leaf))?
+                .sync_all()?;
+        }
+        stage.sync_dir(stage.path())?;
+        root.sync_dir(
+            stage
+                .path()
+                .parent()
+                .expect("invariant: stage has a generation parent"),
+        )?;
+        root.sync_dir(&self.history.join(".zxs-layout/database-installs"))?;
+        root.sync_dir(&self.history.join(".zxs-layout"))?;
+        root.sync_dir(&self.history)?;
+        self.verify_unpublished(root)
+    }
+
+    pub(crate) fn verify_unpublished(&self, root: &DiskRoot) -> Result<()> {
+        if self.already_current || self.recovered_displaced {
+            return Err(invalid(
+                "an exposed or displaced database is not an unpublished intent",
+            ));
+        }
+        let (stage, envelope) = self
+            .resume
+            .as_ref()
+            .ok_or_else(|| invalid("unpublished database has no original install intent"))?;
+        let inode = root.directory_identity(stage.path())?;
+        if inode.device != envelope.stage_device
+            || inode.inode != envelope.stage_inode
+            || stage.read_bytes(&stage.path().join("intent.json"), MAX_ENVELOPE)?
+                != crate::disk::encode_metadata(envelope, MAX_ENVELOPE)?
+        {
+            return Err(invalid(
+                "unpublished install intent or its original directory changed",
+            ));
+        }
+        let target = HeldRegular::capture(&self.entity, self.source.scope.leaf(), self.maximum)?;
+        let payload = HeldRegular::capture(stage, "payload", self.maximum)?;
+        if target.as_ref().map(HeldRegular::stamp) != envelope.old.as_ref()
+            || payload.as_ref().map(HeldRegular::stamp) != Some(&envelope.new)
+        {
+            return Err(invalid(
+                "unpublished database no longer retains the original old/new pair",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Bind the original old/new inode pair and retained attempt, not just the
+    /// expected SQLite bytes. A move freezes this identity before reporting a
+    /// complete preparation; it cannot replace a lost pair on a later retry.
+    pub(crate) fn unpublished_identity(&self, root: &DiskRoot) -> Result<String> {
+        self.verify_unpublished(root)?;
+        let (_, envelope) = self
+            .resume
+            .as_ref()
+            .expect("invariant: verified unpublished install has an envelope");
+        Ok(storage_contract::object_hash(
+            "scoped-database-unpublished",
+            envelope,
+        )?)
+    }
+
+    fn prepare_stage(
+        &mut self,
+        root: &DiskRoot,
+        observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<()> {
         if let Some(old) = &self.old {
             old.check_running()?;
         }
-        if let Some((stage, envelope)) = self.resume.take() {
-            return self.finish(stage, envelope, observe);
+        if self.resume.is_some() {
+            return Ok(());
         }
         let current = HeldRegular::capture(&self.entity, self.source.scope.leaf(), self.maximum)?;
         if current
@@ -263,10 +362,11 @@ impl PreparedInstall {
         let encoded = crate::disk::encode_metadata(&envelope, MAX_ENVELOPE)?;
         stage.write_install_intent(&encoded, observe)?;
         observe("after_database_intent")?;
-        self.finish(stage, envelope, observe)
+        self.resume = Some((stage, envelope));
+        Ok(())
     }
 
-    fn recover_envelope(&self, generation: &DiskRoot) -> Result<Option<(DiskRoot, Envelope)>> {
+    fn recover_envelope(&mut self, generation: &DiskRoot) -> Result<Option<(DiskRoot, Envelope)>> {
         let mut found = None;
         let mut count = 0;
         let target = HeldRegular::capture(&self.entity, self.source.scope.leaf(), self.maximum)?;
@@ -303,6 +403,9 @@ impl PreparedInstall {
                 // It cannot authorize a replay. The current admitted State may
                 // independently repair a missing/revalidated target with a new
                 // no-clobber/preserving attempt; do not resurrect this receipt.
+                // An unpublished move has no such repair authority: remember
+                // the displaced intent so it cannot silently create a new pair.
+                self.recovered_displaced = true;
                 continue;
             }
             if payload_stamp != Some(&envelope.new) && payload_stamp != envelope.old.as_ref() {
@@ -359,6 +462,19 @@ fn retention_limit() -> Error {
     )
 }
 
+fn installations_exist(root: &DiskRoot, history: &Path) -> Result<bool> {
+    // optional_metadata handles a missing final component; it does not hide a
+    // missing intermediate directory. Observe this fixed two-level hierarchy
+    // in order without creating it or suppressing other filesystem failures.
+    let layout = history.join(".zxs-layout");
+    if root.optional_metadata(&layout)?.is_none() {
+        return Ok(false);
+    }
+    Ok(root
+        .optional_metadata(&layout.join("database-installs"))?
+        .is_some())
+}
+
 /// Bounded accounting, not recognition or cleanup. Unknown bytes stay intact.
 /// No recursive attacker-defined paths: the fixed hierarchy is generation,
 /// attempt, leaf. Refuse deeper objects instead of interpreting their contents.
@@ -375,7 +491,7 @@ pub(crate) fn check_budget(
         return Ok(());
     }
     let parent = history.join(".zxs-layout/database-installs");
-    if root.optional_metadata(&parent)?.is_none() {
+    if !installations_exist(root, history)? {
         return Ok(());
     }
     let held = root.private_child(&parent)?;

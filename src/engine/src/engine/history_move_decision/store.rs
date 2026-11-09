@@ -557,7 +557,7 @@ impl Store {
         )
     }
 
-    fn install_artifacts(
+    pub(super) fn install_artifacts(
         &self,
         artifacts: &[Artifact<'_>],
         cancellation: &HistoryWindowCancellation,
@@ -646,7 +646,7 @@ impl Store {
         Ok(())
     }
 
-    fn verify_artifacts(
+    pub(super) fn verify_artifacts(
         &self,
         artifacts: &[Artifact<'_>],
         cancellation: &HistoryWindowCancellation,
@@ -657,6 +657,27 @@ impl Store {
             self.read_artifact(artifact, false)?;
         }
         self.check_names()
+    }
+
+    pub(super) fn read_optional_artifact(
+        &self,
+        name: &str,
+        maximum: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        self.check_names()?;
+        let held = HeldRegular::capture(&self.root, name, maximum)?;
+        let named = HeldRegular::capture(&self.root, name, maximum)?;
+        if held.as_ref().map(HeldRegular::stamp) != named.as_ref().map(HeldRegular::stamp) {
+            return Err(invalid(
+                "joint move retained artifact changed during observation",
+            ));
+        }
+        self.check_names()?;
+        held.map(|held| {
+            held.check_running()?;
+            Ok(held.bytes().to_vec())
+        })
+        .transpose()
     }
 
     fn read_artifact(&self, artifact: &Artifact<'_>, synchronize: bool) -> Result<()> {

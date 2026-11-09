@@ -101,7 +101,7 @@ fn budget() -> Error {
     )
 }
 impl FrozenCandidate {
-    fn capture(
+    pub(super) fn capture(
         engine: &Engine,
         projection: &FileHistoryMoveProjection,
         native: &NativeMoveDraft,
@@ -239,6 +239,28 @@ impl FrozenCandidate {
         &self.candidate_object.hash
     }
 
+    pub(super) fn state(&self) -> &State {
+        self.outcome.state()
+    }
+    pub(super) fn native(&self) -> &NativeMoveCandidate {
+        &self.outcome
+    }
+    pub(super) fn versions(&self) -> &[VersionEvidence] {
+        &self.candidate.versions
+    }
+    pub(super) fn choice_digest(&self) -> &str {
+        &self.choice_digest
+    }
+    pub(super) fn retained_bytes(&self, metadata: bool) -> u64 {
+        let objects = if metadata { self.ordinary_bytes } else { 0 };
+        objects
+            + self
+                .artifacts(metadata)
+                .iter()
+                .map(|artifact| artifact.bytes().len() as u64 + 4096)
+                .sum::<u64>()
+    }
+
     pub(super) fn artifacts(&self, metadata: bool) -> Vec<store::Artifact<'_>> {
         let mut artifacts = vec![store::Artifact::Exact {
             name: MANIFEST,
@@ -257,7 +279,7 @@ impl FrozenCandidate {
         artifacts
     }
 
-    fn report(&self) -> FileHistoryMoveCandidatePreparation {
+    pub(super) fn report(&self) -> FileHistoryMoveCandidatePreparation {
         FileHistoryMoveCandidatePreparation {
             operation: self.candidate.operation_id,
             choice_digest: self.choice_digest.clone(),
@@ -322,7 +344,7 @@ impl Engine {
         Ok(frozen.report())
     }
 
-    fn verify_move_candidate(
+    pub(super) fn verify_move_candidate(
         &self,
         materials: &Materials,
         frozen: &FrozenCandidate,

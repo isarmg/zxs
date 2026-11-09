@@ -1,6 +1,6 @@
 # 跨盘移动的唯一普通 Candidate 与逐成员冷读
 
-[任务清单](../../TASKS.md) · [原输入选择与围栏](file-history-move-joint-choice.md) · [完整历史数据库材料](file-history-move-scoped-databases.md)
+[任务清单](../../TASKS.md) · [原输入选择与围栏](file-history-move-joint-choice.md) · [完整历史数据库材料](file-history-move-scoped-databases.md) · [普通正文与未发布安装意图](file-history-move-ordinary-preparation.md)
 
 本片最初基于本地 `557c1fe4` 的独立后继，串行发布对齐 `2cb21721`；前片选择/围栏现已发布为 `ccf3f49c`，本片保留主线其它切片。本片把选定原材料接到真实普通 `Candidate`、完整 State snapshot 和 history graph 对象，不另造 sidecar 投票协议。**仍没有普通 PREPARE/ACCEPT/FINALIZE/PUBLICATION，没有源 D 或目标可见性切换，也不返回 SMB 成功。** 未审查、编译、格式化、测试或 CI，未操作真实数据；新增六项集成测试仅源码。
 

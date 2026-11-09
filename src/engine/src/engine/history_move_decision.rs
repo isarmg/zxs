@@ -5,6 +5,8 @@ use crate::{disk::*, *};
 use data_serialization::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod ordinary;
+pub use ordinary::FileHistoryMoveOrdinaryPreparation;
 mod candidate;
 pub use candidate::FileHistoryMoveCandidatePreparation;
 mod choice;

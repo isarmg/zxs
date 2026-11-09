@@ -870,7 +870,7 @@ fn decode_checksum_manifest(checks: &[u8], version: &FileVersion) -> Result<Chec
     decode_authenticated_checksums(checks, version)
 }
 
-fn decode_authenticated_checksums(
+pub(crate) fn decode_authenticated_checksums(
     checks: &[u8],
     version: &FileVersion,
 ) -> Result<ChecksumManifest> {

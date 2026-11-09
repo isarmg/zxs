@@ -138,6 +138,14 @@ pub(super) fn verify(
     version: &FileVersion,
     cancellation: &HistoryWindowCancellation,
 ) -> Result<String> {
+    open_original(target, version, cancellation).map(|(identity, _)| identity)
+}
+
+pub(super) fn open_original(
+    target: &store::Target,
+    version: &FileVersion,
+    cancellation: &HistoryWindowCancellation,
+) -> Result<(String, ReadFile)> {
     checkpoint(cancellation)?;
     let root = &target.root;
     let directory = target.version_directory(version);
@@ -162,5 +170,5 @@ pub(super) fn verify(
         ));
     }
     target.check_names()?;
-    Ok(blake3::hash(&stamp).to_hex().to_string())
+    Ok((blake3::hash(&stamp).to_hex().to_string(), held))
 }

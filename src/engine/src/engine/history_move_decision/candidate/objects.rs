@@ -50,7 +50,7 @@ impl FrozenCandidate {
         Ok(())
     }
 
-    pub(super) fn preflight(
+    pub(in crate::engine::history_move_decision) fn preflight(
         &self,
         engine: &Engine,
         materials: &Materials,

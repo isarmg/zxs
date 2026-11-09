@@ -709,3 +709,6 @@ mod move_choice;
 
 #[path = "file_history_copy/move_candidate.rs"]
 mod move_candidate;
+
+#[path = "file_history_copy/move_ordinary.rs"]
+mod move_ordinary;

@@ -1034,6 +1034,8 @@ pub(crate) struct PreparedNames {
     cache: Option<PreparedNameCache>,
     layouts: shared_layout::PreparedLayouts,
 }
+mod unpublished;
+pub(crate) use unpublished::read_unpublished_file_databases;
 struct PreparedNameCache {
     items: Vec<PreparedName>,
     // Lazily create one anonymous file only when a projection exists. Keeping
@@ -1052,6 +1054,125 @@ struct PreparedName {
     database: Option<file_database::install::PreparedFile>,
 }
 impl PreparedNames {
+    pub(crate) fn unpublished_file_database_identities(
+        &self,
+    ) -> Result<BTreeMap<(String, String, String), String>> {
+        let mut identities = BTreeMap::new();
+        if let Some(cache) = &self.cache {
+            for item in &cache.items {
+                let Some(database) = &item.database else {
+                    continue;
+                };
+                let root = &item.disk.root;
+                let current = container_at(
+                    root,
+                    &item.history,
+                    Some(&item.history_id),
+                    &item.file,
+                    &mut |_| Ok(()),
+                )?
+                .ok_or_else(|| invalid("unpublished FILE container disappeared"))?;
+                let identity = database.unpublished_identity(root, &current)?;
+                let scope = (
+                    item.disk.seal.slot_id.clone(),
+                    item.history_id.clone(),
+                    item.file.clone(),
+                );
+                if identities.insert(scope, identity).is_some() {
+                    return Err(invalid("duplicate unpublished FILE identity"));
+                }
+            }
+        }
+        Ok(identities)
+    }
+    /// Exact source/target FILE obligations. A missing container must not be
+    /// silently skipped by the ordinary namespace preparation's cache policy.
+    pub(crate) fn unpublished_file_database_reservations(
+        &self,
+        expected: &BTreeSet<(String, String, String)>,
+    ) -> Result<BTreeMap<String, (u64, u64)>> {
+        let mut found = BTreeSet::new();
+        let mut reservations = BTreeMap::<String, (u64, u64)>::new();
+        if let Some(cache) = &self.cache {
+            for item in &cache.items {
+                let Some(database) = &item.database else {
+                    continue;
+                };
+                if !found.insert((
+                    item.disk.seal.slot_id.clone(),
+                    item.history_id.clone(),
+                    item.file.clone(),
+                )) {
+                    return Err(invalid("duplicate unpublished FILE obligation"));
+                }
+                let entry = reservations
+                    .entry(item.disk.seal.slot_id.clone())
+                    .or_default();
+                entry.0 = entry
+                    .0
+                    .checked_add(database.reservation().0)
+                    .ok_or_else(|| invalid("unpublished FILE reservation overflow"))?;
+                entry.1 = entry
+                    .1
+                    .checked_add(database.byte_len() as u64 + 8192)
+                    .ok_or_else(|| invalid("unpublished FILE size overflow"))?;
+            }
+        }
+        if &found != expected {
+            return Err(invalid(
+                "unpublished FILE scopes differ from all original move placements",
+            ));
+        }
+        Ok(reservations)
+    }
+    pub(crate) fn stage_unpublished_file_databases(
+        &mut self,
+        observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<usize> {
+        let Some(cache) = &mut self.cache else {
+            return Ok(0);
+        };
+        let mut count = 0;
+        for item in &mut cache.items {
+            let Some(database) = &mut item.database else {
+                continue;
+            };
+            let root = &item.disk.root;
+            let current = container_at(
+                root,
+                &item.history,
+                Some(&item.history_id),
+                &item.file,
+                &mut |_| Ok(()),
+            )?
+            .ok_or_else(|| invalid("unpublished FILE container disappeared"))?;
+            database.stage_unpublished(root, &current, observe)?;
+            count += 1;
+        }
+        // No layouts.apply, synchronize_location, container descriptor or owner
+        // marker. Existing source aliases remain on the published State.
+        Ok(count)
+    }
+    pub(crate) fn verify_unpublished_file_databases(&self) -> Result<()> {
+        if let Some(cache) = &self.cache {
+            for item in &cache.items {
+                let Some(database) = &item.database else {
+                    continue;
+                };
+                let root = &item.disk.root;
+                let current = container_at(
+                    root,
+                    &item.history,
+                    Some(&item.history_id),
+                    &item.file,
+                    &mut |_| Ok(()),
+                )?
+                .ok_or_else(|| invalid("unpublished FILE container disappeared"))?;
+                database.verify_unpublished(root, &current)?;
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn apply(self) -> Result<()> {
         self.apply_with_receipt().map(|_| ())
     }
