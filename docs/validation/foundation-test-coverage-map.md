@@ -10,7 +10,7 @@
 | 完整配方缺执行门禁（高／中／低风险 0／0／0） | 0 |
 | 仅参考 | 17 |
 | 活动合计 | 222 |
-| 已退役／被取代记录（无残留测试根） | 107／3 |
+| 已退役／被取代记录（无残留测试根） | 107／4 |
 
 声明种类：U 保留上游测试，P 项目新作测试或夹具，F 由完整配方套件展开的伴随宏；I 仅编译或链接，不计为执行门禁。消费者列出经 normal／build 边到达该包的一方入口及其 profile；特性取该消费者单独解析的结果。测试属性数为静态计数，不代表执行。
 
@@ -111,7 +111,7 @@
 | `leb128fmt` | — | binding-test-tools-validation：x86_64／compile／无<br>build-tools：x86_64／compile／无 | wasm-text-parser、web-bindings | 1 文件／15 属性 | U check-foundation-behaviour.py |
 | `libc` | — | root-native：x86_64／runtime／default, std<br>schema-async-validation：x86_64／compile／default, std<br>smb：x86_64／compile、runtime／default, std<br>sqlite-pool-validation：x86_64／compile／default, std<br>validation-tools：x86_64／compile／default, std | authentication、browser-smoke、contract-check、perf-check、platform-io、smb-protocol、smb-vfs、storage-client、storage-contract、storage-engine、storage-helper、storage-server | 3 文件／17 属性 | P check_libc_abi.py |
 | `libloading` | — | smb：x86_64／compile／无 | smb-vfs | 7 文件／39 属性 | P check-foundation-behaviour.py |
-| `libsqlite3-sys` | — | root-native：x86_64／runtime／bundled, bundled_bindings, cc, default, min_sqlite_version_3_34_1, pkg-config<br>sqlite-pool-validation：x86_64／compile／bundled, bundled_bindings, cc, default, min_sqlite_version_3_34_1, pkg-config<br>validation-tools：x86_64／compile／bundled, bundled_bindings, cc, default, min_sqlite_version_3_34_1, pkg-config | browser-smoke、perf-check、platform-io、storage-engine、storage-helper、storage-server | 1 文件／1 属性 | I check-sqlite-family.py<br>U check-foundation-behaviour.py |
+| `libsqlite3-sys` | — | root-native：x86_64／runtime／bundled, bundled_bindings, cc, default, min_sqlite_version_3_45_3, pkg-config<br>sqlite-pool-validation：x86_64／compile／bundled, bundled_bindings, cc, default, min_sqlite_version_3_45_3, pkg-config<br>validation-tools：x86_64／compile／bundled, bundled_bindings, cc, default, min_sqlite_version_3_45_3, pkg-config | browser-smoke、perf-check、platform-io、storage-engine、storage-helper、storage-server | 1 文件／1 属性 | I check-sqlite-family.py<br>U check-foundation-behaviour.py |
 | `linux-raw-sys` | — | root-native：x86_64／runtime／auxvec, elf, errno, general, ioctl, no_std, prctl<br>sqlite-pool-validation：x86_64／compile／auxvec, elf, errno, general, ioctl, no_std, prctl<br>validation-tools：x86_64／compile／auxvec, elf, errno, general, ioctl, no_std, prctl | browser-smoke、perf-check、platform-io、storage-client、storage-engine、storage-helper、storage-server | 1 文件／3 属性 | U check-linux-uapi.py |
 | `litemap` | — | root-native：x86_64／runtime／无<br>schema-async-validation：x86_64／compile／无<br>sqlite-pool-validation：x86_64／compile／无<br>validation-tools：x86_64／compile／无 | authentication、browser-smoke、storage-client、storage-helper、storage-server | 7 文件／32 属性 | P check-foundation-behaviour.py |
 | `log` | — | build-tools：x86_64／compile／alloc, std<br>root-native：x86_64／runtime／alloc, std<br>smb：x86_64／compile／alloc, std<br>sqlite-pool-validation：x86_64／compile／alloc, std<br>validation-tools：x86_64／compile／alloc, std | browser-smoke、perf-check、platform-io、smb-vfs、storage-client、storage-engine、storage-helper、storage-server、web-bindings | 8 文件／85 属性 | P check-terminal-style.py |
