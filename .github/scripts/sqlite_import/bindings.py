@@ -134,6 +134,13 @@ def prepare_coverage(api, head, root, manage, run, previous, evidence):
     run(["python3", "tools/rust-sources/foundation_coverage.py", "--write"])
     run(["python3", "tools/rust-sources/foundation_coverage.py", "--check"])
     if manage.read_json(root / COVERAGE_JSON) != expected:
+        difference = run(["git", "diff", "--no-ext-diff", "--unified=1", "--",
+                          COVERAGE_JSON, COVERAGE_DOC])
+        evidence["coverage_difference_bytes"] = len(difference)
+        evidence["coverage_difference_sha256"] = sha256(difference)
+        evidence["coverage_difference_truncated"] = len(difference) > 65536
+        evidence["coverage_difference"] = difference[:65536].decode("utf-8", errors="replace")
+        print(evidence["coverage_difference"], flush=True)
         raise ValueError("coverage generation changed more than the authenticated SQLite history entry")
     if manage.read_json(root / manage.CATALOG) != previous:
         raise ValueError("coverage generation changed the source catalog")
