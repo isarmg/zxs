@@ -278,7 +278,7 @@ impl CurrentNamespaces {
         Ok(Some(view))
     }
 
-    fn reserve_history_copy_identities(&mut self, previous: &State, next: &State) {
+    pub(super) fn reserve_history_copy_identities(&mut self, previous: &State, next: &State) {
         // Historical occurrences reserve IDs too, even outside every HEAD.
         // Tracking may legitimately fall back to All at its bounded key budget.
         let mut reserve = |commit: &Commit| {

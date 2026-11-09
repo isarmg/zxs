@@ -40,7 +40,7 @@ pub(crate) enum DeletionAction {
     Delete,
     Undo,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct LifecycleRow {
     pub operation_id: OperationId,

@@ -60,6 +60,44 @@ fn conflict() -> Error {
 }
 
 impl Engine {
+    pub(in crate::engine) fn require_native_move_authority(&self) -> Result<()> {
+        let view = self.admitted_current_namespaces()?;
+        match (self.config.generation(), view) {
+            (None, None) => Ok(()),
+            (Some(generation), Some(view))
+                if !generation.portable.is_backup()
+                    && !generation.portable.is_foreign()
+                    && generation.registry() == Some(view.registry())
+                    && self.generation_activation_published()
+                    && view.matches_source(&self.state) =>
+            {
+                // Disabled/detached historical definitions are not I/O grants.
+                // Every remaining enabled identity must still have its exact
+                // held definition. The payload/full checks enforce the route.
+                for registered in self
+                    .registered_disks()
+                    .filter(|disk| disk.registration_mode == RegistrationMode::Enabled)
+                {
+                    let disk = self.disk(registered.slot_id)?;
+                    if registered.pool_id != self.config.pool_id
+                        || registered.disk_id != disk.disk_id
+                        || registered.binding_generation != disk.binding_generation
+                        || registered.metadata_member != disk.metadata_member
+                    {
+                        return Err(invalid(
+                            "move Current differs from the held original bindings",
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(Error::new(
+                ErrorCode::UnsupportedOperation,
+                "native move requires admitted original bindings and a replayable Current generation; Backup/Foreign cutovers remain fenced",
+            )),
+        }
+    }
+
     /// Execute one native cross-disk move. The only returned success is the
     /// original Published receipt after target FULL, both FILEs, disk current /
     /// complete history and SYSTEM have joined the same ordinary decision.
@@ -89,12 +127,7 @@ impl Engine {
         }
         self.require_move_source_read()?;
         self.require_unfenced_membership()?;
-        if self.config.generation().is_some() || self.current_namespaces.is_some() {
-            return Err(Error::new(
-                ErrorCode::UnsupportedOperation,
-                "native move currently requires original fixed genesis bindings",
-            ));
-        }
+        self.require_native_move_authority()?;
         let cancellation = HistoryWindowCancellation::default();
         let projection = if let Some(original) =
             self.original_move_path_intent(request, principal, operation)?
@@ -193,7 +226,7 @@ impl Engine {
             .history_move_choice
             .as_ref()
             .expect("invariant: selected move recovery retains its exact choice");
-        choice.require_prepare_candidate(&candidate)?;
+        choice.require_prepare_candidate(&self.config, &candidate)?;
         let (projection, native) =
             crate::business::replay_selected_move(self, next, candidate.operation_id)?;
         choice.require_native(&native)?;
@@ -227,6 +260,17 @@ impl Engine {
         decided: bool,
     ) -> Result<OperationResult> {
         self.require_move_choice_baseline()?;
+        self.require_native_move_authority()?;
+        let next_namespaces = self
+            .admitted_current_namespaces()?
+            .map(|view| {
+                let advanced = view.advance(&self.state, outcome.state())?;
+                if !view.verify_history_move_candidate(&self.state, outcome.state(), &candidate)? {
+                    return Err(invalid("move candidate has no exact Current transition"));
+                }
+                Ok(std::sync::Arc::new(advanced))
+            })
+            .transpose()?;
         let files = scopes::file_scopes(self, projection, &candidate);
         scopes::require_resources(self, &candidate)?;
         scopes::verify_full(self, projection, &candidate)?;
@@ -302,6 +346,7 @@ impl Engine {
             let result = published.outcome.result().clone();
             let snapshot = published.candidate.snapshot_hash.clone();
             self.state = std::sync::Arc::new(published.outcome.into_state());
+            self.current_namespaces = next_namespaces;
             self.bind_recovered_history_roots(roots);
             self.snapshot = Some(snapshot);
             self.published_state_base = None;

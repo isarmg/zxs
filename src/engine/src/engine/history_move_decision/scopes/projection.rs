@@ -96,7 +96,7 @@ impl Scopes {
         cancellation: &HistoryWindowCancellation,
     ) -> Result<Self> {
         checkpoint(cancellation)?;
-        let mut disks = Some(PreparedDiskScopes::new(&engine.config)?);
+        let mut disks = Some(PreparedDiskScopes::new_for_move(engine)?);
         let stop = AtomicBool::new(false);
         let mut scopes = Self {
             databases: Vec::new(),
@@ -115,13 +115,13 @@ impl Scopes {
             &|| checkpoint(cancellation),
             |candidate, candidate_hash, publication, publication_hash, admitted| {
                 checkpoint(cancellation)?;
-                // Recovery overlays and generation archives need their own exact
-                // timeline recipe. Do not present original snapshots as those
+                // Recovery overlays need their own exact timeline recipe.
+                // Do not present original snapshots as those
                 // different visible outcomes or silently start coverage later.
                 if publication.recovery.is_some() {
                     return Err(Error::new(
                         ErrorCode::UnsupportedOperation,
-                        "move scoped databases require the complete non-recovery genesis prefix",
+                        "move scoped databases require the complete non-recovery authenticated prefix",
                     ));
                 }
                 scopes.add(

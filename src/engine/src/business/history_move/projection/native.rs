@@ -7,7 +7,10 @@ use storage_contract::{CommitState, CurrentHealth, Event, OperationResult, Prote
 pub(crate) const KIND: &str = "file.history.move";
 
 mod admission;
-pub(crate) use admission::{admit_source_deletion, original_move_namespace, replay_selected_move};
+pub(crate) use admission::{
+    admit_source_deletion, original_move_namespace, replay_selected_move,
+    verify_current_move_transition,
+};
 
 #[derive(Serialize)]
 #[serialization(deny_unknown_fields)]
@@ -32,7 +35,7 @@ struct Slot {
     binding_generation: u64,
     state: SlotState,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 struct Version {
     version_id: String,

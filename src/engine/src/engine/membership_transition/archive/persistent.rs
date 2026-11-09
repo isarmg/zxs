@@ -6,6 +6,9 @@ use platform_io::fs_safety::linux::FileIdentity;
 use platform_io::fs_safety::{AdvisoryLock, RelativePath};
 use std::path::{Path, PathBuf};
 
+#[path = "native_replay.rs"]
+pub(in crate::engine::membership_transition) mod native_replay;
+
 #[path = "namespace_replay.rs"]
 pub(in crate::engine::membership_transition) mod namespace_replay;
 

@@ -7,6 +7,7 @@ use crate::{
 };
 
 mod backup;
+mod current;
 mod journals;
 
 struct Source {
@@ -67,16 +68,13 @@ pub(in crate::engine) fn visit_published_prefix(
     ) -> Result<()>,
 ) -> Result<()> {
     checkpoint()?;
-    if engine.config.generation().is_some() {
-        return Err(Error::new(
-            ErrorCode::InvalidRequest,
-            "this publication visitor requires fixed Genesis; Backup disk history uses its native archive admission",
-        ));
-    }
     if through > engine.state.sequence {
         return Err(invalid(
             "disk history claims a publication beyond the admitted head",
         ));
+    }
+    if engine.config.generation().is_some() {
+        return current::visit(engine, through, checkpoint, visit);
     }
     let sources = journals::sources(engine, through, checkpoint)?;
     let mut prefix = Prefix::default();
@@ -190,7 +188,11 @@ pub(super) fn capture(
             header.publications += 1;
             Ok(())
         };
-    if engine.config.generation().is_some() {
+    if engine
+        .config
+        .generation()
+        .is_some_and(|generation| generation.portable.is_backup())
+    {
         backup::visit(engine, &identity, through, &mut observe)?;
     } else {
         visit_published_prefix(

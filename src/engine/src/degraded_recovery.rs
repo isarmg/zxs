@@ -606,6 +606,7 @@ impl Engine {
         self.verify_current_recovery_candidate(&candidate, state.state())?;
         crate::engine::CurrentNamespaces::reject_degraded_backup(&candidate, state.state())?;
         crate::engine::CurrentNamespaces::reject_degraded_history_copy(&candidate, state.state())?;
+        crate::engine::CurrentNamespaces::reject_degraded_history_move(&candidate, state.state())?;
         exclude_publication(self, &candidate, &hash)?;
         Ok((candidate, state, witnesses, accepts))
     }

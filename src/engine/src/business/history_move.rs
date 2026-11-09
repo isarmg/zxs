@@ -13,7 +13,7 @@ pub use projection::{CurrentFileHistoryMoveProjection, FileHistoryMoveProjection
 pub(crate) use projection::{
     FileHistoryMoveReplay, NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft,
     admit_source_deletion, original_move_namespace, reject_unclosed_publication,
-    replay_selected_move,
+    replay_selected_move, verify_current_move_transition,
 };
 
 /// Exact source identity in addition to the two namespace heads. The history
@@ -133,6 +133,27 @@ fn require_idle(engine: &Engine, namespace: &FileHistoryCopyRequest) -> Result<(
     Ok(())
 }
 
+fn require_ordinary_move_source(
+    state: &State,
+    repository: &Repository,
+    entries: &[Entry],
+    path: &name_policy::LookupPath,
+) -> Result<()> {
+    if !repository.file_manager_root
+        || state
+            .directory_git_repositories
+            .contains_key(&repository.repository_id)
+    {
+        return Err(Error::new(
+            ErrorCode::FileBranchScope,
+            "history move requires an ordinary disk-root source",
+        ));
+    }
+    let entry = namespace::find_unordered_key(entries, path.key())
+        .ok_or_else(|| Error::new(ErrorCode::FileNotFound, "move source is absent"))?;
+    target_path::require_parent(state, entries, &entry.path)
+}
+
 impl Engine {
     /// Capture the complete source before any move preparation is allowed to
     /// start. This method makes no mutation, writes no durable intent and never
@@ -183,6 +204,13 @@ impl Engine {
             &deletion.repository().history_tree_id,
         )?;
         checkpoint(cancellation)?;
+        let source_entries = self.namespace_tree(&deletion.repository().main_branch_id)?;
+        require_ordinary_move_source(
+            self.state(),
+            deletion.repository(),
+            source_entries.entries(),
+            &path,
+        )?;
         let source = history_copy::move_sources(
             self.state(),
             self.admitted_current_namespaces()?,

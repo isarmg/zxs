@@ -8,10 +8,30 @@ mod native;
 pub(crate) use native::{
     KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, admit_source_deletion,
     original_move_namespace, reject_unclosed_publication, replay_selected_move,
+    verify_current_move_transition,
 };
 
+struct ProjectionSource<'a> {
+    namespace: &'a FileHistoryCopyRequest,
+    file: &'a HistoryFileId,
+    branch_heads: &'a BTreeMap<String, String>,
+    parents: &'a [String],
+    versions: &'a [String],
+}
+impl<'a> From<&'a FileHistoryMoveCapture> for ProjectionSource<'a> {
+    fn from(capture: &'a FileHistoryMoveCapture) -> Self {
+        Self {
+            namespace: &capture.namespace,
+            file: &capture.source_file_id,
+            branch_heads: &capture.branch_heads,
+            parents: &capture.parent_node_ids,
+            versions: &capture.version_ids,
+        }
+    }
+}
+
 struct ProjectionInput<'a> {
-    capture: &'a FileHistoryMoveCapture,
+    source: ProjectionSource<'a>,
     route: &'a CopyRoute,
     principal: &'a str,
     operation: OperationId,
@@ -187,8 +207,8 @@ fn map_ids<'a>(
 }
 
 fn deletion(previous: &State, input: &ProjectionInput<'_>) -> Result<FileDeletionNode> {
-    let capture = input.capture;
-    let request = &capture.namespace;
+    let source_input = &input.source;
+    let request = source_input.namespace;
     let source = &previous.repositories[&request.source_repository_id];
     let entry = namespace::find_unordered(
         &previous.commits[&request.expected_source_head].entries,
@@ -197,16 +217,16 @@ fn deletion(previous: &State, input: &ProjectionInput<'_>) -> Result<FileDeletio
     .expect("invariant: a current move capture has the exact source occurrence");
     let hash = object_hash(
         "file-history-move-deletion",
-        &json!([input.operation, capture.source_file_id.as_str()]),
+        &json!([input.operation, source_input.file.as_str()]),
     )?;
     Ok(FileDeletionNode {
         node_id: format!("fdel_{}", &hash[..32]),
         repository_id: source.repository_id.clone(),
         history_tree_id: source.history_tree_id.clone(),
-        file_id: capture.source_file_id.as_str().into(),
+        file_id: source_input.file.as_str().into(),
         path: entry.path.clone(),
-        branch_heads: capture.branch_heads.clone(),
-        parent_node_ids: capture.parent_node_ids.clone(),
+        branch_heads: source_input.branch_heads.clone(),
+        parent_node_ids: source_input.parents.to_vec(),
         operation_id: input.operation,
         author: input.principal.into(),
         sequence: input.sequence,
@@ -247,7 +267,7 @@ fn compose(
         .business_generation
         .checked_add(1)
         .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "business generation exhausted"))?;
-    let request = &input.capture.namespace;
+    let request = input.source.namespace;
     let copied = history_copy::retained::project(
         previous,
         &mut next,
@@ -273,8 +293,8 @@ fn compose(
     Ok(WriteSet {
         next,
         target_file,
-        version_mapping: map_ids(input.operation, input.capture.version_ids.iter())?,
-        branch_mapping: map_ids(input.operation, input.capture.branch_heads.keys())?,
+        version_mapping: map_ids(input.operation, input.source.versions.iter())?,
+        branch_mapping: map_ids(input.operation, input.source.branch_heads.keys())?,
         lifecycle: copied.lifecycle,
     })
 }
@@ -355,7 +375,7 @@ impl Engine {
             self.state(),
             self.admitted_current_namespaces()?,
             &ProjectionInput {
-                capture: &capture,
+                source: ProjectionSource::from(&capture),
                 route: &replay.route,
                 principal: &replay.principal,
                 operation: replay.operation,

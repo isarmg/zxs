@@ -29,14 +29,41 @@ impl PreparedDiskScopes {
                 "prepared disk scopes require at most 32 fixed genesis bindings",
             ));
         }
-        Ok(Self {
-            disks: config
-                .disks
-                .iter()
+        Ok(Self::from_disks(&config.pool_id, config.disks.iter()))
+    }
+
+    pub(in crate::engine) fn new_for_move(engine: &Engine) -> Result<Self> {
+        engine.require_native_move_authority()?;
+        let enabled = engine
+            .registered_disks()
+            .filter(|disk| disk.registration_mode == crate::RegistrationMode::Enabled)
+            .map(|disk| disk.identity())
+            .collect::<Vec<_>>();
+        if enabled.len() > MAX_DISKS || enabled.is_empty() {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "move has no bounded enabled disk scopes",
+            ));
+        }
+        Ok(Self::from_disks(
+            &engine.config.pool_id,
+            engine.config.disks.iter().filter(|disk| {
+                enabled.iter().any(|identity| {
+                    identity.slot_id == disk.slot_id
+                        && identity.disk_id == disk.disk_id
+                        && identity.binding_generation == disk.binding_generation
+                })
+            }),
+        ))
+    }
+
+    fn from_disks<'a>(pool: &str, disks: impl Iterator<Item = &'a crate::DiskConfig>) -> Self {
+        Self {
+            disks: disks
                 .map(|disk| DiskScope {
                     header: DiskHistoryHeader {
                         identity: DiskRegistrationIdentity {
-                            pool_id: config.pool_id.clone(),
+                            pool_id: pool.into(),
                             disk_id: disk.disk_id.clone(),
                             slot_id: disk.slot_id.clone(),
                             binding_generation: disk.binding_generation,
@@ -46,7 +73,7 @@ impl PreparedDiskScopes {
                         publications: 0,
                     },
                     previous: DiskCatalogSnapshot::empty(DiskRegistrationIdentity {
-                        pool_id: config.pool_id.clone(),
+                        pool_id: pool.into(),
                         disk_id: disk.disk_id.clone(),
                         slot_id: disk.slot_id.clone(),
                         binding_generation: disk.binding_generation,
@@ -58,7 +85,7 @@ impl PreparedDiskScopes {
                     record_bytes: 0,
                 })
                 .collect(),
-        })
+        }
     }
 
     pub(in crate::engine) fn observe(
@@ -76,13 +103,13 @@ impl PreparedDiskScopes {
         for disk in &mut self.disks {
             preparation_checkpoint(stop)?;
             if candidate.pool_id != disk.header.identity.pool_id
-                || candidate.sequence != disk.header.through_sequence + 1
+                || candidate.sequence <= disk.header.through_sequence
                 || candidate.previous_snapshot != disk.header.through_snapshot
                 || admitted.state().sequence != candidate.sequence
                 || disk.header.publications as usize == MAX_PUBLICATIONS
             {
                 return Err(invalid(
-                    "prepared disk scopes do not extend their exact genesis prefix",
+                    "prepared disk scopes do not extend their exact authenticated prefix",
                 ));
             }
             let next = snapshot(admitted.state(), disk.header.identity.clone())?;

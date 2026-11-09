@@ -223,6 +223,31 @@ impl Generation {
             maximum_objects,
         )
     }
+    pub(in crate::engine) fn visit_native_archive(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        checkpoint: &impl Fn() -> Result<()>,
+        visit: impl FnMut(
+            &Candidate,
+            &str,
+            &Publication,
+            &str,
+            &crate::history_package::AdmittedState,
+        ) -> Result<()>,
+    ) -> Result<()> {
+        let transition = object_hash(INTENT_KIND, &self.intent)?;
+        super::super::archive::persistent::native_replay::visit(
+            root.private_child(
+                &member_directory(disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY),
+            )?,
+            &self.portable.archive_hash()?,
+            &self.portable.archive_transition()?,
+            checkpoint,
+            visit,
+        )
+    }
+
     pub(crate) fn original(&self) -> &ValidatedConfig {
         &self.original
     }

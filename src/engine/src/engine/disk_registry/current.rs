@@ -21,6 +21,7 @@ mod file_branches;
 mod file_synchronization;
 mod file_tags;
 mod history_copy;
+mod history_move;
 mod history_merges;
 mod merge_links;
 mod new_scope;
@@ -218,6 +219,7 @@ impl CurrentNamespaces {
         // Admitted planners must verify their own projected sources and
         // reference closure before a resulting state can be published.
         if crate::business::history_copy::is_kind(kind)
+            || kind == crate::business::FILE_HISTORY_MOVE_KIND
             || kind == "repository.create"
             || kind == "workspace.commit"
             || kind == "workspace.namespace.admit"
@@ -514,6 +516,9 @@ impl CurrentNamespaces {
     /// result atomically with its State; failure leaves the previous view intact.
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
         crate::node_retirement_engine::verify(previous, next)?;
+        if let Some(view) = self.advance_history_move(previous, next)? {
+            return Ok(view);
+        }
         if let Some(view) = self.advance_history_copy(previous, next)? {
             return Ok(view);
         }

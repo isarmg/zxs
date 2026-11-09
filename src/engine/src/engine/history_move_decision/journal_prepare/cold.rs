@@ -66,7 +66,7 @@ impl Engine {
                     let candidate: Candidate =
                         crate::journal::load_object_at(root, disk, "candidate", hash)?;
                     self.verify_candidate_membership(&candidate)?;
-                    choice.require_prepare_candidate(&candidate)?;
+                    choice.require_prepare_candidate(&self.config, &candidate)?;
                     let phase = match receipt.record.record_type {
                         RecordType::Prepare => 1,
                         RecordType::Accept => 2,

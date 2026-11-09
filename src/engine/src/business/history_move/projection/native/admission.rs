@@ -3,6 +3,9 @@
 use super::*;
 use std::collections::BTreeSet;
 
+mod transition;
+pub(crate) use transition::verify_current_move_transition;
+
 #[derive(Deserialize, Serialize)]
 #[serialization(deny_unknown_fields)]
 struct ReadRequest {
@@ -196,6 +199,10 @@ pub(crate) fn admit_source_deletion(
     state: &State,
     receipt: &OperationResult,
 ) -> Result<FileDeletionNode> {
+    Ok(admit_body(state, receipt)?.deletion_node)
+}
+
+fn admit_body(state: &State, receipt: &OperationResult) -> Result<ReadBody> {
     if receipt.kind != KIND
         || receipt.sequence == 0
         || receipt.sequence > state.sequence
@@ -255,7 +262,7 @@ pub(crate) fn admit_source_deletion(
         || body.source_sequence == 0
         || body.source_sequence >= receipt.sequence
         || body.branch_generation == 0
-        || body.membership_epoch != 1
+        || body.membership_epoch == 0
         || receipt.request_digest
             != Engine::native_request_digest(KIND, principal, &json!(request))?
         || receipt.commit_id.as_deref() != Some(body.commit_id.as_str())
@@ -271,7 +278,7 @@ pub(crate) fn admit_source_deletion(
     history_copy::retained::validate(receipt, &body.file_id, &body.retained_lifecycle)?;
     body.require_versions(receipt.operation_id)?;
     body.require_arrival(state, receipt, principal)?;
-    Ok(body.deletion_node)
+    Ok(body)
 }
 
 /// Read only original operation intent. A later rename, D undo or HEAD change
@@ -294,8 +301,7 @@ pub(crate) fn replay_selected_move(
     operation: OperationId,
 ) -> Result<(FileHistoryMoveProjection, NativeMoveDraft)> {
     let receipt = next.operations.get(&operation).ok_or_else(invalid)?;
-    admit_source_deletion(next, receipt)?;
-    let body: ReadBody = json_codec::from_value(receipt.result.clone())?;
+    let body = admit_body(next, receipt)?;
     let principal = next
         .operation_principals
         .get(&operation)

@@ -147,7 +147,7 @@ fn branch_heads<'a>(
     Ok(branches)
 }
 
-pub(super) fn capture<'a>(
+pub(crate) fn capture<'a>(
     state: &'a State,
     repository: &'a Repository,
     entries: &'a [Entry],

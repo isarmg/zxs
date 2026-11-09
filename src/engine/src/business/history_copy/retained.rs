@@ -42,7 +42,7 @@ pub(in crate::business) fn bounded<T: Serialize + ?Sized>(value: &T) -> Result<(
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct CopiedLifecycle {
     pub source_file_id: String,

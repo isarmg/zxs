@@ -47,12 +47,12 @@ pub(super) fn file_scopes(
 }
 
 pub(super) fn require_resources(engine: &Engine, candidate: &Candidate) -> Result<()> {
-    if engine.config.generation().is_some() || engine.current_namespaces.is_some() {
-        return Err(invalid(
-            "selected move cannot change original membership authority",
-        ));
-    }
-    for disk in &engine.config.disks {
+    engine.require_native_move_authority()?;
+    for registered in engine
+        .registered_disks()
+        .filter(|disk| disk.registration_mode == RegistrationMode::Enabled)
+    {
+        let disk = engine.disk(registered.slot_id)?;
         let handle = engine.disk_resources.get(disk)?;
         let lease = handle.root.admit_io()?;
         let seal = validate_seal_observed(&engine.config, disk, &mut |_| lease.check_running())?;
@@ -122,7 +122,7 @@ impl Databases {
         decided: bool,
     ) -> Result<Self> {
         let stop = AtomicBool::new(false);
-        let mut scopes = PreparedDiskScopes::new(&engine.config)?;
+        let mut scopes = PreparedDiskScopes::new_for_move(engine)?;
         crate::engine::disk_catalog::visit_published_prefix(
             engine,
             engine.state.sequence,

@@ -202,7 +202,7 @@ fn move_reconstruction_keeps_the_exact_frozen_clock_slot_route_and_identities() 
         fixture.engine.state(),
         fixture.engine.admitted_current_namespaces().unwrap(),
         &ProjectionInput {
-            capture: &projection.capture,
+            source: ProjectionSource::from(&projection.capture),
             route: &projection.route,
             principal: &projection.principal,
             operation: projection.operation,

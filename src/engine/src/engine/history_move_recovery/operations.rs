@@ -121,6 +121,7 @@ impl Engine {
         }
         if let Some(record) = original {
             if record.pool_id != self.config.pool_id
+                || record.generation != ConfigurationGeneration::current(self)
                 || record.configuration_hash
                     != object_hash("file-history-move-config", &self.config)?
             {

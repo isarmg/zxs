@@ -122,32 +122,45 @@ impl FrozenCandidate {
         // No fresh random transaction identity on retry or after restart. The
         // chosen operation and all original material hashes determine one slot.
         let transaction = object_hash("file-history-move-candidate-transaction", &choice.digest())?;
-        let candidate = Candidate::new(
-            CandidateData {
-                pool_id: engine.config.pool_id.clone(),
-                sequence: result.sequence,
-                transaction_id: format!("tx_{}", &transaction[..32]),
-                operation_id: result.operation_id,
-                request_digest: result.request_digest.clone(),
-                previous_snapshot: engine.snapshot.clone(),
-                snapshot_hash: snapshot.hash.clone(),
-                versions: projection
-                    .version_mapping()
-                    .values()
-                    .map(|id| VersionEvidence {
-                        version: outcome.state().versions[id].clone(),
-                        placement: outcome.state().placements[id].clone(),
-                    })
-                    .collect(),
-                metadata_disk_ids: engine
-                    .members()
-                    .iter()
-                    .map(|disk| disk.disk_id.clone())
-                    .collect(),
-                history_roots: history_root.reference().clone(),
-            },
-            None,
-        );
+        engine.require_native_move_authority()?;
+        let data = CandidateData {
+            pool_id: engine.config.pool_id.clone(),
+            sequence: result.sequence,
+            transaction_id: format!("tx_{}", &transaction[..32]),
+            operation_id: result.operation_id,
+            request_digest: result.request_digest.clone(),
+            previous_snapshot: engine.snapshot.clone(),
+            snapshot_hash: snapshot.hash.clone(),
+            versions: projection
+                .version_mapping()
+                .values()
+                .map(|id| VersionEvidence {
+                    version: outcome.state().versions[id].clone(),
+                    placement: outcome.state().placements[id].clone(),
+                })
+                .collect(),
+            metadata_disk_ids: engine
+                .members()
+                .iter()
+                .map(|disk| disk.disk_id.clone())
+                .collect(),
+            history_roots: history_root.reference().clone(),
+        };
+        let candidate = match engine
+            .config
+            .generation()
+            .and_then(|generation| generation.registry())
+        {
+            Some(registry) => Candidate::new_with_registry(
+                data,
+                engine
+                    .config
+                    .generation_hash()
+                    .expect("invariant: Current has a generation"),
+                registry,
+            ),
+            None => Candidate::new(data, engine.config.generation_hash()),
+        };
         engine.verify_candidate_membership(&candidate)?;
         crate::metadata_budget::preflight_publication_prepared(
             &engine.planning_context(),

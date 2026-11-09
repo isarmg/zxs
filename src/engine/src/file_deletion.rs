@@ -10,7 +10,7 @@ pub(crate) mod publication;
 pub(crate) mod retained;
 pub use lifecycle::{DeleteFileRequest, UndoFileDeletionRequest};
 mod head;
-mod preflight;
+pub(crate) mod preflight;
 
 pub use head::{FileDeletionHead, FileDeletionNodeKind};
 

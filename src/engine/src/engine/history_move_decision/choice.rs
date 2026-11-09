@@ -70,6 +70,22 @@ impl FileHistoryMoveJointChoice {
     }
 }
 
+// Genesis retains its exact original bytes. Current choices additionally bind
+// the authenticated authority and registry, which Config serialization omits.
+fn configuration_hash(config: &ValidatedConfig) -> Result<String> {
+    Ok(match config.generation() {
+        None => object_hash("file-history-move-config", config)?,
+        Some(generation) => object_hash(
+            "file-history-move-current-config",
+            &json_codec::json!({
+                "configuration": config,
+                "authority": generation.hash,
+                "registry": generation.registry(),
+            }),
+        )?,
+    })
+}
+
 impl Choice {
     fn capture(
         engine: &Engine,
@@ -78,13 +94,14 @@ impl Choice {
         materials: &Materials,
         scopes: &scopes::Scopes,
     ) -> Result<Self> {
+        engine.require_native_move_authority()?;
         let scoped = scopes.report();
         let record = Record {
             format: FORMAT.into(),
             operation_id: projection.operation_id(),
             principal: projection.principal().into(),
             pool_id: engine.config.pool_id.clone(),
-            configuration_hash: object_hash("file-history-move-config", &engine.config)?,
+            configuration_hash: configuration_hash(&engine.config)?,
             source_snapshot: engine
                 .snapshot
                 .clone()
@@ -154,6 +171,7 @@ impl Choice {
     }
 
     fn require_baseline(&self, engine: &Engine) -> Result<()> {
+        self.record.require_config(&engine.config)?;
         self.require_source(engine)?;
         let next_slot = if let Some(prepared) = &engine.history_move_prepare {
             if !prepared.matches(self.record.operation_id, self.record.decision_slot) {
@@ -191,8 +209,11 @@ impl Choice {
 
     pub(super) fn require_prepare_candidate(
         &self,
+        config: &ValidatedConfig,
         candidate: &crate::journal::Candidate,
     ) -> Result<()> {
+        self.record.require_config(config)?;
+        config.verify_candidate_membership(candidate)?;
         let transaction = object_hash(
             "file-history-move-candidate-transaction",
             &self.report().digest(),
@@ -202,7 +223,8 @@ impl Choice {
             || candidate.operation_id != self.record.operation_id
             || candidate.previous_snapshot.as_deref() != Some(self.record.source_snapshot.as_str())
             || candidate.transaction_id != format!("tx_{}", &transaction[..32])
-            || candidate.registry().is_some()
+            || candidate.generation() != config.generation_hash()
+            || candidate.registry() != config.generation().and_then(|generation| generation.registry())
         {
             return Err(invalid(
                 "journal PREPARE is not the original selected native move candidate",
@@ -256,12 +278,15 @@ impl Record {
                 "unsupported joint move choice; retain its original bytes",
             ));
         }
-        if config.generation().is_some()
-            || self.pool_id != config.pool_id
-            || self.configuration_hash != object_hash("file-history-move-config", config)?
+        if config.generation().is_some_and(|generation| {
+            generation.portable.is_backup()
+                || generation.portable.is_foreign()
+                || generation.registry().is_none()
+        }) || self.pool_id != config.pool_id
+            || self.configuration_hash != configuration_hash(config)?
         {
             return Err(invalid(
-                "move choice requires its exact original fixed genesis configuration",
+                "move choice requires its exact original configuration, authority and registry",
             ));
         }
         Engine::require_actor(&self.principal)?;
