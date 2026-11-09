@@ -56,6 +56,8 @@
       <button id="first-install-save" type="button" class="secondary">导出无密码原请求</button>
       <p id="first-install-progress" role="status"></p>
       <button id="first-install-inspect" type="button">只读核对当前原步骤</button>
+      <button id="first-install-refresh-preview" type="button" class="secondary" hidden>撤回本标签页尚未发送的当前预览</button>
+      <p class="muted">预览后环境发生变化时，仅当前步骤从未在本标签页发送，才可明确撤回该预览并重新核对，完整输入和此前步骤仍保留。已发送、结果未知或历史完成的步骤不能这样重选；其他窗口与磁盘原材料仍由原生接口决定能否继续。</p>
       <pre id="first-install-report"></pre>
       <div id="first-install-directory-note" hidden>
         <p>首次管理员已完成。若原批次空目录尚不存在，可先在这里预览并明确创建。仅限管理账户已完成、存储池尚未开始初始化；当前池、额外目录、未知内容或已有权限不符均拒绝。新目录原 inode 先持久记录再交接／无覆盖发布，完成后缺件不重建。</p>
@@ -470,6 +472,8 @@
         <button type="submit" class="secondary">查询保留结果，不重放密码操作</button>
       </form>
       <pre id="samba-reset-receipt" hidden></pre>
+      <button id="samba-return-first-install" type="button" class="secondary" hidden>回到同一首装请求，重新核对后继续</button>
+      <p class="muted">从首装向导带入配置后，可回到原步骤继续。返回会清除未提交的密码与预览，但保留无密码原请求索引；不把登记／改密的历史回执当作存储或服务已就绪。结果未知仍只查询原操作，不自动重放。</p>
       <p class="muted">Samba 外部命令没有本工具的幂等令牌。响应丢失、断电或非零退出后密码可能已经改变，原请求不自动重放、不回滚整个 passdb。先查询并保留证据；确需再次重置时重新预览和手动确认新请求。首次登记回执还要求其他账户的名称、UID 和描述列表未变；不声称检查了其他密码。无密码原请求在发送前按操作摘要保存到本浏览器，刷新只恢复查询索引、不重放。完成回执只证明当时命令成功、目标账户读回和数据库同步，不保证现在的密码或服务状态。</p>
     </section>
     <section class="card">

@@ -154,6 +154,10 @@
     element("import").disabled = locked || record !== null;
     element("save").disabled = locked || record === null;
     element("inspect").disabled = locked || record === null;
+    element("refresh-preview").disabled = locked || record === null;
+    element("refresh-preview").hidden = true;
+    byId("samba-return-first-install").disabled = locked || record === null;
+    byId("samba-return-first-install").hidden = record === null || record.input.deployment.smb === null;
     element("commit").disabled = locked || record === null || !inspected;
     element("ack").disabled = locked;
     element("samba-settings").disabled = locked || record === null;
@@ -167,6 +171,8 @@
       return;
     }
     const step = index(), original = record.steps[step];
+    element("refresh-preview").hidden = !original || original.issued || original.completed;
+    byId("samba-return-first-install").hidden = record.input.deployment.smb === null || step < 4;
     const input = record.input, deployment = input.deployment;
     for (const [name, value] of [
       ["user", deployment.service_user], ["group", deployment.service_group],
@@ -268,6 +274,24 @@
     } catch (failure) { error(failure.message); }
   });
   element("inspect").addEventListener("click", inspect);
+  element("refresh-preview").addEventListener("click", () => {
+    if (busy || stopping || !csrf || blocked || !record) return;
+    const step = index(), original = record.steps[step];
+    if (!original || original.issued || original.completed || step !== record.steps.length - 1) return;
+    if (!window.confirm("撤回本标签页尚未发送的第 " + (step + 1) + " 步预览？\n原摘要："
+      + original.request_digest + "\n保留完整首装输入和此前全部原步骤，只允许重新只读核对。"
+      + "\n不撤销任何磁盘或服务动作；其他标签页及原生保留材料仍须由后端重新准入。")) return;
+    try {
+      const next = structuredClone(record);
+      next.steps.pop();
+      persist(next);
+      ++epoch; inspected = false; directoryInspected = false; liveReady = false;
+      clearPasswords(); element("ack").checked = false; element("open").hidden = true;
+      show({original_input:record.input, released_unissued_preview:original.request_digest,
+        next:"明确点击只读核对当前原步骤；没有发出或重放任何系统动作。"});
+      error(""); render();
+    } catch (failure) { error(failure.message); }
+  });
   element("commit").addEventListener("click", async () => {
     if (busy || stopping || !csrf || blocked || !record || !inspected) return;
     const step = index(), original = record.steps[step];
@@ -397,6 +421,31 @@
     byId("smb-enabled").dispatchEvent(new Event("input", {bubbles:true}));
     byId("samba-reset-form").scrollIntoView({block:"start"});
     error("已带入同一配置，未执行密码或账户操作。完成独立预览与确认后回到首装向导。");
+  });
+  byId("samba-return-first-install").addEventListener("click", () => {
+    if (busy || stopping || !csrf || blocked || !record?.input.deployment.smb) return;
+    try {
+      if (!same(sambaDeploymentInput(), record.input.deployment)) {
+        throw new Error("Samba 卡片当前配置与首装冻结输入不同；保留两边原操作，不把它当作本次首装的完成。");
+      }
+      if (sessionStorage.getItem(key) !== encoded(record)) {
+        throw new Error("首装原请求已改变；没有覆盖它或继续操作。");
+      }
+      const original = sambaPasswordOriginal;
+      const reference = original && same(original.input?.deployment, record.input.deployment)
+        && /^[0-9a-f]{64}$/.test(original.request_digest)
+        ? {kind:original.kind, request_digest:original.request_digest} : null;
+      // Returning never imports a credential receipt into installation progress.
+      // A successful historical password command is not a live service proof.
+      invalidateSambaPreview();
+      ++epoch; inspected = false; directoryInspected = false; liveReady = false;
+      clearPasswords(); element("ack").checked = false; element("open").hidden = true;
+      show({original_input:record.input, samba_original_reference:reference,
+        next:"已返回同一首装请求。若 Samba 结果未知，仍须在原卡片查询；此处不会重放登记、改密或跳步。明确核对当前原步骤后再继续。"});
+      error(""); render();
+      byId("first-install").scrollIntoView({block:"start"});
+      element("inspect").focus({preventScroll:true});
+    } catch (failure) { error(failure.message); }
   });
   element("save").addEventListener("click", () => {
     if (busy || stopping || !record || blocked) return;
