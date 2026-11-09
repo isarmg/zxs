@@ -175,7 +175,10 @@ impl Engine {
         let Some(generation) = self.config.generation().cloned() else {
             return Ok(());
         };
-        let Some(registry) = generation.portable.exit_registry() else {
+        if generation.portable.is_backup() {
+            return self.restore_backup_current();
+        }
+        let Some(registry) = generation.registry() else {
             return Ok(());
         };
         let first = generation.first_sequence()?;
@@ -222,7 +225,6 @@ impl Engine {
             }
         }
         let registry = generation
-            .portable
             .verified_registry()?
             .expect("invariant: registry-bearing activation");
         let expected = generation.result()?;

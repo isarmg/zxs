@@ -178,15 +178,19 @@ impl crate::engine::PlanningContext<'_> {
             .map(|r| r.primary_slot_id.clone())
             .unwrap_or_else(|| repo.primary_slot_id.clone());
         let current_entries = self.current_branch_entries(&repo.main_branch_id)?;
-        let copies = backup_paths::effective_policy_in(
+        let policy = backup_paths::effective_policy_in(
             self.state,
             current_entries,
             repository,
             file_id,
             path,
-        )
-        .map(|p| p.target_copies)
-        .unwrap_or(repo.target_copies);
+        );
+        let copies = policy
+            .map(|p| p.target_copies)
+            .unwrap_or(repo.target_copies);
+        let copies = self.current_namespaces.map_or(copies, |view| {
+            view.inherited_backup_copies(repo, policy, &primary, copies)
+        });
         Ok((primary, copies))
     }
 }

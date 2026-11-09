@@ -223,7 +223,7 @@ impl Engine {
         if self
             .config
             .generation()
-            .is_some_and(|generation| generation.portable.exit_registry().is_some())
+            .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(invalid("registry source has not been admitted"));
         }

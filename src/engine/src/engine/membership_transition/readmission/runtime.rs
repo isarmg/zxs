@@ -17,7 +17,7 @@ impl Engine {
                 "readmission requires a published Disabled generation",
             )
         })?;
-        let registry = generation.portable.verified_registry()?.ok_or_else(|| {
+        let registry = generation.verified_registry()?.ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,
                 "readmission requires an authenticated registry",
@@ -117,7 +117,7 @@ impl Engine {
                 "readmission requires a published Disabled generation",
             )
         })?;
-        let registry = generation.portable.verified_registry()?.ok_or_else(|| {
+        let registry = generation.verified_registry()?.ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,
                 "readmission requires an authenticated registry",
@@ -395,7 +395,7 @@ impl Engine {
             && self
                 .current_namespaces
                 .as_ref()
-                .is_some_and(|view| Some(view.registry()) == generation.portable.exit_registry())
+                .is_some_and(|view| Some(view.registry()) == generation.registry())
         {
             DiskReadmissionPhase::Published
         } else {

@@ -430,7 +430,7 @@ impl Engine {
         Self::require_actor(principal)?;
         self.require_no_commit_preparation()?;
         if let Some(generation) = self.config.generation()
-            && let Some(registry) = generation.portable.exit_registry()
+            && let Some(registry) = generation.registry()
             && self.current_namespaces.as_ref().is_none_or(|view| {
                 view.registry() != registry
                     || view.activation_sequence()

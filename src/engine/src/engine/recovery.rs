@@ -325,7 +325,7 @@ impl Engine {
         let exit_generation = self
             .config
             .generation()
-            .is_some_and(|generation| generation.portable.exit_registry().is_some());
+            .is_some_and(|generation| generation.registry().is_some());
         let checkpoint = if can_repair && !torn_tail && !exit_generation {
             match super::recovery_checkpoint::load(self, &prefixes, &records) {
                 Ok(checkpoint) => checkpoint.filter(|c| {

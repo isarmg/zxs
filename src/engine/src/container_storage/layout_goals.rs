@@ -1,4 +1,4 @@
-//! Owned, pure primary-placement goals over an admitted State.
+//! Owned, pure primary and explicitly admitted Backup goals over a State.
 //! Current homes are resolved by the pure planner before retained version routing.
 //! Bindings describe exact metadata choices; they grant no registry or filesystem authority.
 use super::layout_locator::{DirectoryId, FileAddress, HistoryRelative, LayoutBinding};
@@ -9,6 +9,8 @@ use crate::{
 use data_serialization::Serialize;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use storage_contract::{FileContext, FileVersion, Placement, Repository, State};
+
+mod backup;
 
 pub(super) const EXTRA_NAME: &str = ".zxs-retained-files";
 const MAX_GOALS: usize = 1_000_000;
@@ -586,6 +588,7 @@ fn add_tree(
     repository: &Repository,
     plan: &LayoutPlan<'_>,
     coverage: &mut Coverage,
+    targets: &[backup::Target<'_>],
 ) -> Result<()> {
     builder.state_sequence = plan.state_sequence();
     let skeleton = Skeleton::new(plan)?;
@@ -625,10 +628,15 @@ fn add_tree(
             )?;
         }
     }
-    Ok(())
+    backup::add_tree(builder, state, repository, plan, targets)
 }
 
-fn add_outer(builder: &mut Builder, state: &State, repository: &Repository) -> Result<()> {
+fn add_outer(
+    builder: &mut Builder,
+    state: &State,
+    repository: &Repository,
+    targets: &[backup::Target<'_>],
+) -> Result<()> {
     builder.history(
         &repository.primary_slot_id,
         &repository.history_tree_id,
@@ -643,7 +651,7 @@ fn add_outer(builder: &mut Builder, state: &State, repository: &Repository) -> R
             directory_layout::plan_root(state, &repository.repository_id, root, EXTRA_NAME)?
         };
         builder.budget.charge(0)?;
-        add_tree(builder, state, repository, &plan, &mut coverage)?;
+        add_tree(builder, state, repository, &plan, &mut coverage, targets)?;
     }
     let unplaced = registered
         .iter()
@@ -684,6 +692,26 @@ pub(super) fn build(
     state: &State,
     selected_outer_ids: Option<&BTreeSet<String>>,
 ) -> Result<LayoutGoals> {
+    build_with_targets(state, selected_outer_ids, &[])
+}
+
+/// Ordinary active-generation maintenance only. The generation supplies the
+/// original native Backup target selection; State supplies the current logical
+/// forest and each retained version's actual route. No other backup is inferred.
+pub(super) fn build_for_config(
+    config: &crate::ValidatedConfig,
+    state: &State,
+    selected_outer_ids: Option<&BTreeSet<String>>,
+) -> Result<LayoutGoals> {
+    let targets = backup::selected(config)?;
+    build_with_targets(state, selected_outer_ids, &targets)
+}
+
+fn build_with_targets(
+    state: &State,
+    selected_outer_ids: Option<&BTreeSet<String>>,
+    targets: &[backup::Target<'_>],
+) -> Result<LayoutGoals> {
     if let Some(selected) = selected_outer_ids {
         for outer in selected {
             storage_contract::validate_id(outer, "repo")?;
@@ -701,7 +729,7 @@ pub(super) fn build(
     };
     for repository in state.repositories.values() {
         if selected_outer_ids.is_none_or(|selected| selected.contains(&repository.repository_id)) {
-            add_outer(&mut builder, state, repository)?;
+            add_outer(&mut builder, state, repository, targets)?;
         }
     }
     Ok(builder.finish())

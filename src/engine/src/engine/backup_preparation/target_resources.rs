@@ -7,8 +7,8 @@ use platform_io::fs_safety::linux::FileIdentity;
 
 struct WriterIo {
     plan_hash: String,
-    handle: DiskHandle,
-    _writer: DiskWriter,
+    handle: Arc<DiskHandle>,
+    writer: DiskWriter,
 }
 
 pub(super) struct Target {
@@ -216,8 +216,8 @@ impl Target {
             // permanent shared binding also governs aliases created earlier.
             *io = Some(WriterIo {
                 plan_hash: plan_hash.into(),
-                handle,
-                _writer: writer,
+                handle: Arc::new(handle),
+                writer,
             });
         }
         let current = io.as_ref().expect("invariant: writer I/O was retained");
@@ -240,6 +240,36 @@ impl Target {
     /// Config parsed from progress or a target-local diagnostic record.
     pub(super) fn writer_seal(&self, plan_hash: &str) -> Result<DiskSeal> {
         self.with_writer_handle(plan_hash, |handle| Ok(handle.seal.clone()))
+    }
+
+    /// Hand over the same native gate and writer description after final
+    /// admission. Cloning retains ownership; no lock is released or reacquired.
+    pub(super) fn serving_resources(
+        &self,
+        plan_hash: &str,
+    ) -> Result<(Arc<DiskHandle>, DiskWriter)> {
+        let io = self.io.lock().map_err(|_| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup target writer I/O ownership is poisoned",
+            )
+        })?;
+        let held = io.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup serving target lost its retained native writer",
+            )
+        })?;
+        if held.plan_hash != plan_hash {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "Backup serving handoff changed the original writer plan",
+            ));
+        }
+        let lease = held.handle.root.admit_io()?;
+        self.recheck_writer()?;
+        lease.check_running()?;
+        Ok((Arc::clone(&held.handle), held.writer.clone()))
     }
 
     fn with_writer_handle<T>(

@@ -81,7 +81,9 @@ impl Engine {
                     break;
                 }
             };
-            if candidate.candidate.registry().is_some() {
+            if candidate.candidate.registry().is_some()
+                || self.is_backup_first_candidate(&candidate.candidate)?
+            {
                 if candidate.next_namespaces.is_none()
                     && let Err(source) =
                         self.preflight_registry_barrier(&prepared.online, receipts, &seal)
@@ -101,6 +103,16 @@ impl Engine {
                 let original = admitted.for_candidate(&candidate.candidate)?;
                 namespaces = Some(match candidate.next_namespaces.take() {
                     Some(view) => view,
+                    None if self.is_backup_first_candidate(&candidate.candidate)? => self
+                        .preflight_backup_first_current(
+                            &candidate.candidate,
+                            original,
+                            candidate
+                                .publication
+                                .as_ref()
+                                .expect("invariant: published barrier"),
+                            &seal,
+                        )?,
                     None => self.preflight_registry_activation(
                         &candidate.candidate,
                         original,
@@ -219,48 +231,49 @@ impl Engine {
         // this slot against its exact admitted predecessor before that search;
         // receipt labels alone cannot grant permission to inspect payloads.
         let mut next_namespaces = None;
-        let snapshot = if candidate.registry().is_some() {
-            let admitted = verified_recovery_snapshot_at(
-                &self.disk_resources,
-                online,
-                &candidate.snapshot_hash,
-            )?;
-            let original = admitted.for_candidate(&candidate)?;
-            crate::history_package::bound_history_objects_at(
-                &self.disk_resources,
-                online,
-                &candidate,
-                Some(original),
-            )?;
-            if let Some(view) = prefix.namespaces {
-                next_namespaces = Some(verify_current_candidate_transition(
-                    view,
-                    prefix.state,
-                    original.state(),
+        let snapshot =
+            if candidate.registry().is_some() || self.is_backup_first_candidate(&candidate)? {
+                let admitted = verified_recovery_snapshot_at(
+                    &self.disk_resources,
+                    online,
+                    &candidate.snapshot_hash,
+                )?;
+                let original = admitted.for_candidate(&candidate)?;
+                crate::history_package::bound_history_objects_at(
+                    &self.disk_resources,
+                    online,
                     &candidate,
-                )?);
-            } else {
-                // The exact prescribed activation has no payload vector. Only
-                // its verified publication barrier can establish the pure view
-                // used to check following slots. Pending activation grants none.
-                let generation = self.config.generation().ok_or_else(|| {
-                    Error::new(
-                        ErrorCode::PublicationInvalid,
-                        "registry candidate has no generation",
-                    )
-                })?;
-                if prefix.snapshot != &generation.snapshot() {
-                    return Err(Error::new(
-                        ErrorCode::PublicationInvalid,
-                        "registry candidate precedes its verified activation",
-                    ));
+                    Some(original),
+                )?;
+                if let Some(view) = prefix.namespaces {
+                    next_namespaces = Some(verify_current_candidate_transition(
+                        view,
+                        prefix.state,
+                        original.state(),
+                        &candidate,
+                    )?);
+                } else {
+                    // The exact prescribed activation has no payload vector. Only
+                    // its verified publication barrier can establish the pure view
+                    // used to check following slots. Pending activation grants none.
+                    let generation = self.config.generation().ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::PublicationInvalid,
+                            "registry candidate has no generation",
+                        )
+                    })?;
+                    if prefix.snapshot != &generation.snapshot() {
+                        return Err(Error::new(
+                            ErrorCode::PublicationInvalid,
+                            "registry candidate precedes its verified activation",
+                        ));
+                    }
+                    generation.verify_activation_candidate(&candidate)?;
                 }
-                generation.verify_activation_candidate(&candidate)?;
-            }
-            Some(admitted.into_shared())
-        } else {
-            None
-        };
+                Some(admitted.into_shared())
+            } else {
+                None
+            };
         let publication = match receipts
             .iter()
             .find(|receipt| receipt.record.record_type == RecordType::Publication)

@@ -10,6 +10,7 @@
 //! No API here grants writes, verifies publication, removes registrations, clears
 //! a stop, or re-enables a root. Explicit recovery must use a separate authority
 //! verifier. Directory identities do not imply independent physical devices.
+pub(in crate::engine) mod backup_root_extension;
 mod format;
 mod resume_observations;
 pub(crate) mod runtime;

@@ -221,7 +221,10 @@ impl CurrentNamespaces {
         copies: u32,
     ) -> Result<Vec<String>> {
         self.backup_configuration_disk(primary)?;
-        let route = self.route_topology()?.unique_prefix(primary, copies)?;
+        let route = match self.native_backup_route(primary, copies) {
+            Some(route) => route.to_vec(),
+            None => self.route_topology()?.unique_prefix(primary, copies)?,
+        };
         for slot in &route {
             self.backup_configuration_disk(slot)?;
         }

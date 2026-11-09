@@ -896,7 +896,7 @@ impl PortableAuthority {
         ))
     }
 
-    pub(in crate::engine::membership_transition) fn is_backup(&self) -> bool {
+    pub(in crate::engine) fn is_backup(&self) -> bool {
         matches!(self.head, AuthorityCore::Backup(_))
     }
     pub(super) fn backup_core(&self) -> Option<&BackupCore> {

@@ -53,6 +53,10 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid backup transaction response: {0}")]
+    BackupTransaction(#[source] json_codec::Error),
+    #[error("invalid original backup input: {0}")]
+    BackupInput(#[source] storage_contract::Error),
     #[error("invalid file deletion response: {0}")]
     FileDeletion(#[source] json_codec::Error),
     #[error("{0}")]

@@ -5,7 +5,10 @@ use super::*;
 use crate::engine::membership_transition::backup::BackupCore;
 use std::sync::atomic::AtomicBool;
 
+mod continuation;
+pub(in crate::engine) use continuation::BackupContinuation;
 mod locator;
+pub(in crate::engine) mod startup;
 pub(in crate::engine) use locator::PreparedBackupTargetLocator;
 
 /// Private task capability, not an Engine config or a persisted selector.
@@ -30,6 +33,7 @@ impl BackupWriterIoConfig {
         crate::history_package::preparation_checkpoint(stop)?;
         let config = portable.effective_config()?;
         let generation = Arc::new(Generation {
+            backup_continuation: None,
             hash: portable.hash()?,
             workspace_roots: portable.workspace_root_aliases()?,
             intent: portable.intent()?,

@@ -312,12 +312,33 @@ pub(super) fn with_archive_namespaces<T>(
         &crate::engine::disk_registry::current::backup::BackupNamespaceAdmission<'_>,
     ) -> Result<T>,
 ) -> Result<T> {
+    let replay = archive_replay(prepared, index, inputs.candidate, stop)?;
+    let view = replay.finish(
+        inputs.publication,
+        inputs.candidate,
+        inputs.registry,
+        inputs.published,
+    )?;
+    let result = action(&view)?;
+    preparation_checkpoint(stop)?;
+    named_target(
+        &prepared.targets[index].root,
+        &prepared.task.selection().jobs()[index],
+    )?;
+    Ok(result)
+}
+
+pub(super) fn archive_replay(
+    prepared: &PreparedBackupRegistry,
+    index: usize,
+    candidate: &crate::engine::membership_transition::PreparedBackupFirstCandidate,
+    stop: &AtomicBool,
+) -> Result<crate::engine::disk_registry::current::backup::BackupNamespaceReplay> {
     let target = &prepared.targets[index];
     let job = &prepared.task.selection().jobs()[index];
     named_target(&target.root, job)?;
-    let mut replay = crate::engine::disk_registry::current::backup::BackupNamespaceReplay::new(
-        inputs.candidate,
-    )?;
+    let mut replay =
+        crate::engine::disk_registry::current::backup::BackupNamespaceReplay::new(candidate)?;
     let (control, _) = crate::engine::backup_preparation::native_control::archive::read_observed(
         &target.root,
         job,
@@ -334,23 +355,14 @@ pub(super) fn with_archive_namespaces<T>(
         &mut |_, candidate, _, state| replay.observe(candidate, state),
     )?;
     if control.state_hash != prepared.source_evidence().state_hash()
-        || inputs.candidate.candidate().previous_snapshot.as_deref()
+        || candidate.candidate().previous_snapshot.as_deref()
             != Some(control.snapshot_hash.as_str())
     {
         return Err(invalid(
             "Backup Current archive does not bind the original complete source",
         ));
     }
-    let view = replay.finish(
-        inputs.publication,
-        inputs.candidate,
-        inputs.registry,
-        inputs.published,
-    )?;
-    let result = action(&view)?;
-    preparation_checkpoint(stop)?;
-    named_target(&target.root, job)?;
-    Ok(result)
+    Ok(replay)
 }
 
 /// This is called only after the real first Publication, under the same held

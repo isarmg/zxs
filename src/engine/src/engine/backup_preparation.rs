@@ -50,14 +50,254 @@ pub(in crate::engine) use native_control::{
 };
 mod snapshot;
 mod target_resources;
+mod transaction;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
 pub use inspection::{BackupPreparationReport, offline_check_backup_preparation};
+pub use transaction::BackupTransactionRequest;
 
 const FORMAT: &str = "zxs-backup-history-preparation";
 const JOB: &str = "backup-preparation/job.json";
 const PROGRESS: &str = "backup-preparation/progress.json";
 const TARGET_INTENT: &str = "backup-preparation.json";
 const RESERVE: u64 = 16 * 1024 * 1024;
+
+/// Produced only by the final same-operation coordinator after actual ordinary
+/// entities, original object databases, selectors, seals and writer ownership
+/// have crossed the common durable barrier. No stored JSON deserializes to it.
+/// Keep construction inside backup_preparation, not ordinary namespace code.
+#[derive(Clone)]
+pub(in crate::engine) struct ServingBarrier {
+    operation: OperationId,
+    authority: String,
+    candidate: String,
+    publication: String,
+    registry: DiskRegistryCommitment,
+    config_hash: String,
+    first_sequence: u64,
+    first_snapshot: String,
+    system_database_hash: String,
+    replayed_current: bool,
+}
+impl ServingBarrier {
+    pub(in crate::engine) fn require_native(
+        &self,
+        first: &super::membership_transition::PreparedBackupFirstCandidate,
+        publication: &super::membership_transition::PreparedBackupFirstPublication,
+        registry: &DiskRegistryCommitment,
+    ) -> Result<()> {
+        publication.require_namespace_candidate(first)?;
+        if self.operation != first.candidate().operation_id
+            || self.authority != first.authority_hash()
+            || self.candidate != first.hash()
+            || self.publication != publication.report().publication_hash
+            || &self.registry != registry
+        {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "Backup serving barrier differs from its actual original native Publication",
+            ));
+        }
+        Ok(())
+    }
+    pub(in crate::engine) fn require_config(&self, config: &ValidatedConfig) -> Result<()> {
+        if config.generation_hash() != Some(self.authority.as_str())
+            || object_hash("backup-effective-config", config)? != self.config_hash
+            || config
+                .generation()
+                .and_then(|generation| generation.registry())
+                != Some(&self.registry)
+        {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "Backup serving resources differ from their completed native configuration",
+            ));
+        }
+        Ok(())
+    }
+    pub(in crate::engine) fn require_current(&self, engine: &Engine) -> Result<()> {
+        self.require_config(&engine.config)?;
+        if engine.state.sequence < self.first_sequence
+            || (engine.state.sequence == self.first_sequence
+                && engine.snapshot.as_deref() != Some(self.first_snapshot.as_str()))
+            || engine.current_namespaces.as_ref().is_none_or(|view| {
+                view.registry() != &self.registry
+                    || view.activation_sequence() != self.first_sequence
+            })
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup serving barrier has no exact replayed active Current",
+            ));
+        }
+        Ok(())
+    }
+    pub(in crate::engine) fn authority(&self) -> &str {
+        &self.authority
+    }
+    pub(in crate::engine) fn first_sequence(&self) -> u64 {
+        self.first_sequence
+    }
+    pub(in crate::engine) fn system_database_hash(&self) -> &str {
+        &self.system_database_hash
+    }
+    pub(in crate::engine) fn uses_replayed_current(&self) -> bool {
+        self.replayed_current
+    }
+}
+
+/// Native cold admission caches the pure first view, not a late raw snapshot.
+/// Every later slot still advances it through the ordinary exact-write verifier.
+pub(super) struct ServingAdmission {
+    barrier: ServingBarrier,
+    first: Arc<crate::engine::disk_registry::current::CurrentNamespaces>,
+    result: OperationResult,
+    status: BackupPreparationStatus,
+}
+impl ServingAdmission {
+    fn capture(
+        barrier: ServingBarrier,
+        current: Arc<crate::engine::disk_registry::current::CurrentNamespaces>,
+        first: &super::membership_transition::PreparedBackupFirstCandidate,
+        target_count: usize,
+    ) -> Result<Self> {
+        let files = (first.available_versions() as u64)
+            .checked_mul(target_count as u64)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ResourceLimit,
+                    "Backup serving file count overflow",
+                )
+            })?;
+        let bytes = first
+            .candidate()
+            .versions
+            .iter()
+            .try_fold(0u64, |sum, version| {
+                sum.checked_add(version.version.logical_size)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::ResourceLimit,
+                            "Backup serving byte count overflow",
+                        )
+                    })
+            })?
+            .checked_mul(target_count as u64)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ResourceLimit,
+                    "Backup serving copy byte count overflow",
+                )
+            })?;
+        let status = BackupPreparationStatus {
+            operation_id: first.result().operation_id, phase: BackupPreparationPhase::GenerationServingActive,
+            completed_files: files, total_files: files, completed_bytes: bytes, total_bytes: bytes,
+            error_code: None, detail: "original Backup operation installed actual Current, all retained writers and SYSTEM; original data remains retained".into(),
+        };
+        Ok(Self {
+            barrier,
+            first: current,
+            result: first.result().clone(),
+            status,
+        })
+    }
+}
+impl Engine {
+    pub(in crate::engine) fn is_backup_first_candidate(
+        &self,
+        candidate: &crate::journal::Candidate,
+    ) -> Result<bool> {
+        let Some(generation) = self.config.generation() else {
+            return Ok(false);
+        };
+        Ok(generation.portable.is_backup() && candidate.sequence == generation.first_sequence()?)
+    }
+    pub(in crate::engine) fn preflight_backup_first_current(
+        &self,
+        candidate: &crate::journal::Candidate,
+        published: &crate::history_package::AdmittedState,
+        publication: &crate::journal::Publication,
+        seal: &crate::journal::PublicationSeal,
+    ) -> Result<crate::engine::disk_registry::current::CurrentNamespaces> {
+        let admission = self.backup_serving.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup Current lacks completed all-root native admission",
+            )
+        })?;
+        let barrier = &admission.barrier;
+        crate::journal::verify_publication_seal(candidate, publication, seal)?;
+        if candidate.sequence != barrier.first_sequence
+            || candidate.snapshot_hash != barrier.first_snapshot
+            || candidate.operation_id != barrier.operation
+            || object_hash("candidate", candidate)? != barrier.candidate
+            || object_hash("publication", publication)? != barrier.publication
+            || publication.result != admission.result
+            || published.state().sequence != barrier.first_sequence
+            || !admission.first.matches_source(published.state())
+        {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "Backup first Current differs from its actual native cold publication barrier",
+            ));
+        }
+        Ok((*admission.first).clone())
+    }
+    pub(in crate::engine) fn restore_backup_current(&mut self) -> Result<()> {
+        let admission = self.backup_serving.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup recovery has no all-root completed serving admission",
+            )
+        })?;
+        let barrier = &admission.barrier;
+        if self.state.sequence < barrier.first_sequence {
+            return Ok(());
+        }
+        if let Some(view) = &self.current_namespaces {
+            if view.registry() != &barrier.registry
+                || view.activation_sequence() != barrier.first_sequence
+            {
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "Backup Current changed its native first registry",
+                ));
+            }
+            return Ok(());
+        }
+        if self.state.sequence != barrier.first_sequence
+            || self.snapshot.as_deref() != Some(barrier.first_snapshot.as_str())
+            || !admission.first.matches_source(&self.state)
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup Current must replay its exact first publication before any later snapshot",
+            ));
+        }
+        self.workspace_namespace_baselines.clear();
+        self.current_namespaces = Some(Arc::clone(&admission.first));
+        Ok(())
+    }
+    pub(in crate::engine) fn complete_backup_serving_open(&mut self) -> Result<OperationResult> {
+        self.restore_backup_current()?;
+        let admitted = self.backup_serving.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup serving open lacks its native completion",
+            )
+        })?;
+        if self.state.operations.get(&admitted.barrier.operation) != Some(&admitted.result) {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "Backup replay did not retain its exact original operation result",
+            ));
+        }
+        self.reopen_backup_system_index(&admitted.barrier)?;
+        write_json(&self.root.join("config.json"), &self.config, true)?;
+        // Preserve any later pending-operation/fence status. Completing the
+        // first Backup is not permission to clear a successor's write stop.
+        Ok(admitted.result.clone())
+    }
+}
 
 /// Explicit complete-copy selection, never an inferred replica policy. The
 /// single-target API accepts one path; the batch API accepts two to eight. Both
@@ -179,6 +419,8 @@ pub enum BackupPreparationPhase {
     /// Complete native-reader target containers/SQLite/locators, still task-local.
     /// No active Current, source selector, next Publication or fence release.
     GenerationOrdinaryServingInstalled,
+    /// Actual native Current, retained writers and SYSTEM are serving.
+    GenerationServingActive,
     Blocked,
     SourceChanged,
 }
@@ -427,6 +669,24 @@ impl Engine {
     /// Runtime observation. A later source publication cannot silently become
     /// the old task's new baseline or be described as fully prepared.
     pub fn backup_preparation_status(&self) -> Option<BackupPreparationStatus> {
+        if let Some(admitted) = &self.backup_serving {
+            let mut status = admitted.status.clone();
+            let ready = admitted.barrier.require_current(self).and_then(|()| {
+                if self.state.operations.get(&admitted.barrier.operation) != Some(&admitted.result)
+                    || !matches!(self.index_health(), super::index::IndexHealth::Ready { sequence } if sequence == self.state.sequence)
+                {
+                    return Err(Error::new(ErrorCode::RecoveryRequired,
+                        "Backup native switch is retained, but current receipt or SYSTEM query admission is not ready"));
+                }
+                Ok(())
+            });
+            if let Err(error) = ready {
+                status.phase = BackupPreparationPhase::Blocked;
+                status.error_code = Some(error.code());
+                status.detail = error.to_string();
+            }
+            return Some(status);
+        }
         let worker = self.backup_preparation.as_ref()?;
         let mut status = worker.status();
         match worker.job.binding_matches(self) {
@@ -467,6 +727,15 @@ impl Engine {
     }
 
     pub(super) fn resume_backup_preparation(&mut self) -> Result<()> {
+        if self
+            .config
+            .generation()
+            .is_some_and(|generation| generation.portable.is_backup())
+        {
+            // Active native Backup has its own completed/partial cold boundary;
+            // old preparation files cannot restart a copier in the successor.
+            return Ok(());
+        }
         let system = DiskRoot::open(&self.root)?;
         if native_control::resume_fenced(self, &system)? {
             return Ok(());

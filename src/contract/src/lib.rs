@@ -1,6 +1,7 @@
 //! Portable ZXS wire and disk contracts. No server or platform dependencies.
 #![forbid(unsafe_code)]
 pub mod api_path;
+pub mod backup_transaction;
 pub mod client_protocol;
 mod content_hash;
 pub mod content_matches;

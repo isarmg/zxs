@@ -100,6 +100,7 @@ pub(crate) struct CurrentNamespaces {
     pub(in crate::engine::disk_registry) known_files: Arc<BTreeSet<String>>,
     pub(in crate::engine::disk_registry) unavailable_versions: Arc<BTreeSet<String>>,
     pub(in crate::engine::disk_registry) recursive_policies: Arc<recursive_follow::PolicyIndex>,
+    pub(in crate::engine::disk_registry) backup_routing: Option<Arc<backup::BackupRouting>>,
 }
 
 #[derive(Clone)]
@@ -719,7 +720,7 @@ impl Engine {
             None if self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some()) =>
+                .is_some_and(|generation| generation.registry().is_some()) =>
             {
                 NamespaceReadView::AwaitingPublication
             }
@@ -733,7 +734,7 @@ impl Engine {
             None if self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some()) =>
+                .is_some_and(|generation| generation.registry().is_some()) =>
             {
                 Err(pending_publication())
             }
@@ -837,7 +838,7 @@ impl<'a> crate::engine::PlanningContext<'a> {
             None if self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some()) =>
+                .is_some_and(|generation| generation.registry().is_some()) =>
             {
                 Err(pending_publication())
             }

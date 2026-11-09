@@ -20,6 +20,7 @@ use std::{
     },
 };
 
+mod backup_transaction;
 mod discovery;
 mod disk_notes;
 mod foreign_plan;
@@ -798,6 +799,40 @@ fn disk_hardware_root<'a>(mode: &storage_contract::Mode, root: &'a Path) -> Opti
 }
 
 impl Backend for ManagementBackend {
+    fn backup_transaction_context(
+        &self,
+        identity: &Identity,
+    ) -> Result<storage_contract::backup_transaction::Context, ApiError> {
+        self.read_backup_context(identity)
+    }
+    fn current_backup_transaction(
+        &self,
+        identity: &Identity,
+    ) -> Result<storage_contract::backup_transaction::Current, ApiError> {
+        self.read_current_backup(identity)
+    }
+    fn backup_transaction_status(
+        &self,
+        identity: &Identity,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::backup_transaction::Snapshot, ApiError> {
+        self.read_backup(identity, operation)
+    }
+    fn start_backup_transaction(
+        &self,
+        identity: &Identity,
+        request: storage_contract::backup_transaction::StartRequest,
+    ) -> Result<storage_contract::backup_transaction::Snapshot, ApiError> {
+        self.begin_backup(identity, request)
+    }
+    fn continue_backup_transaction(
+        &self,
+        identity: &Identity,
+        operation: storage_contract::OperationId,
+        command: storage_contract::backup_transaction::Command,
+    ) -> Result<storage_contract::backup_transaction::CommandResponse, ApiError> {
+        self.advance_backup(identity, operation, command)
+    }
     fn operation(
         &self,
         identity: &Identity,

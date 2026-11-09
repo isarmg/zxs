@@ -74,6 +74,16 @@ fn discover_startup_with_io(
     })?;
     let store = open_store(root)?;
     super::super::exit::stop_plan::require_no_pending_stop(root, &store)?;
+    if let Some(admission) =
+        super::super::backup::startup::discover_completed(root, &projected, &store)?
+    {
+        let config = admission.config().clone();
+        super::super::root_extension::require_selected_activation(root, &config)?;
+        if let Some(terminal) = terminal {
+            terminal.verify_selected(&config)?;
+        }
+        return Ok((config, store));
+    }
     let config = discover_startup_in_store_with_io(&store, projected, io)?;
     super::super::root_extension::require_selected_activation(root, &config)?;
     if let Some(terminal) = terminal {
@@ -554,6 +564,7 @@ fn verify_held_generation_from(
             portable.verify_registry_source(&state)?;
             if config.is_none() {
                 config = Some(effective.clone().with_generation(Arc::new(Generation {
+                    backup_continuation: None,
                     hash: hash.clone(),
                     workspace_roots: portable.workspace_root_aliases()?,
                     portable: portable.clone(),

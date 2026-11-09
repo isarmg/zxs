@@ -84,7 +84,13 @@ impl<'a> PlanningContext<'a> {
                     level: disk.level,
                 }
             }))?;
-        let route = topology.unique_prefix(primary, copies)?;
+        let route = match self
+            .current_namespaces
+            .and_then(|view| view.native_backup_route(primary, copies))
+        {
+            Some(route) => route.to_vec(),
+            None => topology.unique_prefix(primary, copies)?,
+        };
         if let Some(view) = self.current_namespaces {
             for slot in &route {
                 view.require_write_slot(slot)?;
@@ -177,7 +183,7 @@ impl<'a> PlanningContext<'a> {
         } else if self
             .config
             .generation()
-            .is_some_and(|generation| generation.portable.exit_registry().is_some())
+            .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(super::disk_registry::current::pending_publication());
         }
@@ -202,7 +208,7 @@ impl<'a> PlanningContext<'a> {
             && self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+                .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(super::disk_registry::current::pending_publication());
         }
@@ -251,7 +257,7 @@ impl<'a> PlanningContext<'a> {
             && self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+                .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(super::disk_registry::current::pending_publication());
         }
@@ -294,7 +300,7 @@ impl<'a> PlanningContext<'a> {
             && self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+                .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(super::disk_registry::current::pending_publication());
         }
@@ -338,7 +344,7 @@ impl<'a> PlanningContext<'a> {
             && self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+                .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(super::disk_registry::current::pending_publication());
         }
@@ -373,7 +379,7 @@ impl<'a> PlanningContext<'a> {
             && self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+                .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(super::disk_registry::current::pending_publication());
         }
@@ -419,7 +425,7 @@ impl<'a> PlanningContext<'a> {
             && self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+                .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(super::disk_registry::current::pending_publication());
         }
@@ -462,7 +468,7 @@ impl<'a> PlanningContext<'a> {
             && self
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+                .is_some_and(|generation| generation.registry().is_some())
         {
             return Err(super::disk_registry::current::pending_publication());
         }

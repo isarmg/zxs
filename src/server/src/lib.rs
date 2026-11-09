@@ -10,6 +10,8 @@ mod disk_hardware;
 pub mod engine_backend;
 mod file_manager;
 mod http_auth;
+#[cfg(feature = "core")]
+mod http_backup_transaction;
 mod http_boundary;
 mod http_disk_details;
 #[cfg(feature = "core")]
@@ -454,6 +456,46 @@ pub trait Backend: Send + Sync {
         StorageStatus::EmbeddedReady
     }
     fn retry_storage(&self, _identity: &Identity) -> Result<StorageStatus, ApiError> {
+        Err(ApiError::unsupported())
+    }
+
+    #[cfg(feature = "core")]
+    fn backup_transaction_context(
+        &self,
+        _identity: &Identity,
+    ) -> Result<storage_contract::backup_transaction::Context, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    #[cfg(feature = "core")]
+    fn current_backup_transaction(
+        &self,
+        _identity: &Identity,
+    ) -> Result<storage_contract::backup_transaction::Current, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    #[cfg(feature = "core")]
+    fn backup_transaction_status(
+        &self,
+        _identity: &Identity,
+        _operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::backup_transaction::Snapshot, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    #[cfg(feature = "core")]
+    fn start_backup_transaction(
+        &self,
+        _identity: &Identity,
+        _request: storage_contract::backup_transaction::StartRequest,
+    ) -> Result<storage_contract::backup_transaction::Snapshot, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    #[cfg(feature = "core")]
+    fn continue_backup_transaction(
+        &self,
+        _identity: &Identity,
+        _operation: storage_contract::OperationId,
+        _command: storage_contract::backup_transaction::Command,
+    ) -> Result<storage_contract::backup_transaction::CommandResponse, ApiError> {
         Err(ApiError::unsupported())
     }
 
@@ -2012,6 +2054,51 @@ impl Backend for AuthorizedBackend {
             .cancel_integrity_scrub(&self.current(identity)?, job)
     }
 
+    #[cfg(feature = "core")]
+    fn backup_transaction_context(
+        &self,
+        identity: &Identity,
+    ) -> Result<storage_contract::backup_transaction::Context, ApiError> {
+        self.backend
+            .backup_transaction_context(&self.current(identity)?)
+    }
+    #[cfg(feature = "core")]
+    fn current_backup_transaction(
+        &self,
+        identity: &Identity,
+    ) -> Result<storage_contract::backup_transaction::Current, ApiError> {
+        self.backend
+            .current_backup_transaction(&self.current(identity)?)
+    }
+    #[cfg(feature = "core")]
+    fn backup_transaction_status(
+        &self,
+        identity: &Identity,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::backup_transaction::Snapshot, ApiError> {
+        self.backend
+            .backup_transaction_status(&self.current(identity)?, operation)
+    }
+    #[cfg(feature = "core")]
+    fn start_backup_transaction(
+        &self,
+        identity: &Identity,
+        request: storage_contract::backup_transaction::StartRequest,
+    ) -> Result<storage_contract::backup_transaction::Snapshot, ApiError> {
+        self.backend
+            .start_backup_transaction(&self.current(identity)?, request)
+    }
+    #[cfg(feature = "core")]
+    fn continue_backup_transaction(
+        &self,
+        identity: &Identity,
+        operation: storage_contract::OperationId,
+        command: storage_contract::backup_transaction::Command,
+    ) -> Result<storage_contract::backup_transaction::CommandResponse, ApiError> {
+        self.backend
+            .continue_backup_transaction(&self.current(identity)?, operation, command)
+    }
+
     // Startup runs on the raw backend before this wrapper is constructed;
     // telemetry also retains that raw backend for private disk sampling. Keep
     // start_management and observe_disks on their inert defaults here.
@@ -2384,7 +2471,8 @@ fn router_shared(
     #[cfg(feature = "core")]
     let protected = protected
         .merge(setup_recovery::protected_routes())
-        .merge(http_integrity_scrub::routes());
+        .merge(http_integrity_scrub::routes())
+        .merge(http_backup_transaction::routes());
     let protected = protected
         .merge(file_manager::routes())
         .route("/api/system/storage", get(storage_status))

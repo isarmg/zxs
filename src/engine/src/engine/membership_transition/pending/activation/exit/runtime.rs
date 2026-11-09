@@ -234,6 +234,7 @@ impl Engine {
         let intent = portable.intent()?;
         let (base, history) = pending.source.generation_base(&intent)?;
         let generation = Arc::new(Generation {
+            backup_continuation: None,
             hash: portable.hash()?,
             workspace_roots: portable.workspace_root_aliases()?,
             original: portable.genesis_config()?,

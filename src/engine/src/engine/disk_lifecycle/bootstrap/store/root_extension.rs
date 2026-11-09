@@ -108,6 +108,22 @@ impl BootstrapStore {
         })
     }
 
+    /// Completion callers may verify an exact installed head, never promote a
+    /// merely planned/orphan successor by treating a SYSTEM marker as authority.
+    pub(in crate::engine) fn require_published_root_extension(
+        &self,
+        plan: &PreparedRootExtension,
+    ) -> Result<()> {
+        let expected = self.root_extension_locator(plan)?;
+        let current = self.reload(&plan.previous.pool_id)?;
+        if current.head != expected.head || current.record != expected.record {
+            return Err(BootstrapError::ManagementOnly(
+                "completed root extension lacks its exact installed head",
+            ));
+        }
+        self.sync_current(&current)
+    }
+
     /// Replays only this one exact successor. The supplied observations must
     /// come from the caller's independently authenticated operation/held roots.
     /// A serialized plan or a matching caller-supplied hash is never enough.

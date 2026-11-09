@@ -12,6 +12,7 @@ mod native_metadata;
 mod ordinary_serving;
 mod original_control;
 mod root_databases;
+mod serving_activation;
 mod system_database;
 mod target_locator;
 mod target_seals;

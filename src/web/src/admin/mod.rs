@@ -1,4 +1,5 @@
 //! Storage administration for the sole authenticated account.
+mod backup_transaction;
 mod disks;
 mod messages;
 mod navigation;
@@ -17,6 +18,7 @@ pub use disks::DecodeError as DiskDetailsError;
 pub use storage::ResponseError as StorageManagementError;
 pub(crate) fn poll_storage_activation(state: RwSignal<State>) {
     storage::poll(state);
+    backup_transaction::poll(state);
 }
 pub(crate) fn can_load_disks(state: &State) -> bool {
     storage::can_load(state) && disks::can_load(state)
@@ -81,6 +83,7 @@ impl UncertainOperation {
 
 #[derive(Clone)]
 pub(crate) struct Model {
+    backup: backup_transaction::Model,
     disks: disks::Model,
     storage: storage::Model,
     fields: request::Fields,
@@ -95,6 +98,7 @@ pub(crate) struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            backup: backup_transaction::Model::default(),
             disks: disks::Model::default(),
             storage: storage::Model::default(),
             fields: request::Fields::new(),
@@ -110,7 +114,8 @@ impl Default for Model {
 }
 impl Model {
     pub(crate) fn reload_blocked(&self) -> bool {
-        self.busy
+        self.backup.reload_blocked()
+            || self.busy
             || self.uncertain_operation.is_some()
             || self.disks.saving()
             || self.storage.reload_blocked()
@@ -322,8 +327,9 @@ fn query(state: RwSignal<State>, kind: QueryKind) {
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {<section class="zxs-content-stack zxs-stack" data-zxs-admin-section="storage">
         <h1 class="zxs-row">{web_interface::i18n::t("磁盘与接入", "Disks and admission")}</h1>
-        <p class="zxs-row">{web_interface::i18n::t("更换下一级备份盘必须迁移所有数据，并按真实迁移进度和完成回执确认。此处尚未提供该迁移入口；添加磁盘或保存路径规则不代表替换已完成。", "Replacing the next backup disk must migrate all data and be confirmed by real migration progress and a completion receipt. That migration is not available here yet; adding a disk or saving a path rule does not complete replacement.")}</p>
+        <p class="zxs-row">{web_interface::i18n::t("更换下一级备份盘必须迁移所有数据，并按真实迁移进度和完成回执确认。下方完整备份事务只覆盖其明确列出的受限初始场景；添加磁盘或保存路径规则不代表替换已完成。", "Replacing the next backup disk must migrate all data and be confirmed by real migration progress and a completion receipt. The complete-backup transaction below covers only its explicitly listed initial scope; adding a disk or saving a path rule does not complete replacement.")}</p>
         {operation_status(state)}
+        {backup_transaction::view(state)}
         {storage::view(state)}
         {disks::view(state)}
     </section>}

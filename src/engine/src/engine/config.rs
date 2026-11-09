@@ -144,6 +144,54 @@ impl ValidatedConfig {
         Ok(self)
     }
 
+    /// Bind the actual first Publication's registry to the SAME replayed native
+    /// Backup context. Retain the existing target-only resource restriction;
+    /// only the final all-root cutover may promote it to a serving pool.
+    pub(in crate::engine) fn with_backup_continuation_generation(
+        mut self,
+        generation: Arc<super::membership_transition::pending::activation::Generation>,
+    ) -> Result<Self> {
+        let original = self.generation().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup continuation lacks a native generation",
+            )
+        })?;
+        if !original.portable.is_backup()
+            || original.hash != generation.hash
+            || !Arc::ptr_eq(&original.base, &generation.base)
+            || generation.registry().is_none()
+        {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "Backup continuation changes its original native authority or replayed source",
+            ));
+        }
+        Arc::make_mut(&mut self.admitted).generation = Some(generation);
+        Ok(self)
+    }
+
+    pub(in crate::engine) fn with_backup_startup_resources(
+        mut self,
+        admission: &super::membership_transition::pending::activation::backup::startup::BackupStartupAdmission,
+    ) -> Result<Self> {
+        admission.require_config(&self)?;
+        Arc::make_mut(&mut self.admitted).io_disks = None;
+        Ok(self)
+    }
+
+    pub(in crate::engine) fn with_backup_serving_resources(
+        mut self,
+        barrier: &super::backup_preparation::ServingBarrier,
+    ) -> Result<Self> {
+        barrier.require_config(&self)?;
+        // No retired/rebound identities exist in this fixed-Genesis Backup
+        // recipe. Both retained originals and explicitly selected new targets
+        // have actual locked resources at the coordinator's common barrier.
+        Arc::make_mut(&mut self.admitted).io_disks = None;
+        Ok(self)
+    }
+
     /// Actual startup resources are a subset of the authenticated configuration.
     /// Historical registration and fixed voter denominators remain unchanged.
     pub(crate) fn io_disks(&self) -> impl Iterator<Item = &DiskConfig> {

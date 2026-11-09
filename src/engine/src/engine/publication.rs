@@ -1078,7 +1078,7 @@ impl crate::engine::PlanningContext<'_> {
         let candidate = match self
             .config
             .generation()
-            .and_then(|generation| generation.portable.exit_registry())
+            .and_then(|generation| generation.registry())
         {
             Some(registry) => Candidate::new_with_registry(
                 candidate_data,

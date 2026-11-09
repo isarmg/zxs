@@ -21,6 +21,13 @@ impl RawState {
 pub(crate) struct AdmittedState(State);
 
 impl AdmittedState {
+    /// Preserve full State admission for native archive consumers that already
+    /// replayed typed state, without a serialize/deserialize round trip.
+    pub(crate) fn admit_replayed(state: State) -> Result<Self> {
+        validate(&state)?;
+        Ok(Self(state))
+    }
+
     pub(crate) fn state(&self) -> &State {
         &self.0
     }

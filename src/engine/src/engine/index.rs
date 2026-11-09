@@ -49,6 +49,9 @@ pub(super) struct QueryProof {
     // All escaped SQLite snapshots must close before a SYSTEM alias exchange.
     read_leases: Arc<()>,
     backup_quiesced: bool,
+    // Native all-root serving proof, not reconstructed from the presence of a
+    // marker. Cold Engine construction starts without this grant.
+    backup_serving: Option<String>,
     availability: IndexAvailability,
     #[cfg(test)]
     indexed_reads: usize,

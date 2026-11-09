@@ -480,7 +480,11 @@ pub(crate) fn apply_backup_paths(
     file: &str,
     path: &str,
     route: &[String],
+    current: Option<&CurrentNamespaces>,
 ) -> Result<()> {
+    if let Some(current) = current {
+        current.apply_native_backup_paths(state, file, path, route)?;
+    }
     let Some(policy) =
         effective_policy_in(state, current_entries, repository, Some(file), path).cloned()
     else {
@@ -501,6 +505,7 @@ pub(crate) fn apply_backup_paths(
     let locations = route
         .iter()
         .skip(1)
+        .filter(|slot| current.is_none_or(|view| view.native_backup_prefix(slot).is_none()))
         .map(|slot| {
             let prefix = policy.backup_prefixes.get(slot).ok_or_else(|| {
                 Error::new(

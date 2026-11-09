@@ -74,7 +74,7 @@ impl<'a> CurrentDiskRegistry<'a> {
                 None if engine
                     .config
                     .generation()
-                    .is_some_and(|generation| generation.portable.exit_registry().is_some()) =>
+                    .is_some_and(|generation| generation.registry().is_some()) =>
                 {
                     RegistryView::AwaitingPublication
                 }

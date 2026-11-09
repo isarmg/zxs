@@ -1214,6 +1214,7 @@ impl crate::engine::PlanningContext<'_> {
                 file_id,
                 path,
                 &route,
+                self.current_namespaces.map(AsRef::as_ref),
             )?;
         }
         let placement = Placement {

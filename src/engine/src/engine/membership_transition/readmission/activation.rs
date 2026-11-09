@@ -50,6 +50,7 @@ fn generation(
     let (base, history) = source.generation_base(&intent)?;
     portable.verify_registry_source(&base)?;
     let generation = Arc::new(Generation {
+        backup_continuation: None,
         hash: portable.hash()?,
         workspace_roots: portable.workspace_root_aliases()?,
         original: portable.genesis_config()?,

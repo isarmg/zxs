@@ -78,9 +78,7 @@ pub(in crate::engine::membership_transition) fn install_marker(
     let directory = generation_directory(disk, &generation.hash);
     root.private_dir(&directory)?;
     root.private_dir(&disk.root.join("metadata/pool-membership"))?;
-    if (generation.portable.is_abort() || generation.portable.exit_registry().is_some())
-        && disk.metadata_member
-    {
+    if (generation.portable.is_abort() || generation.registry().is_some()) && disk.metadata_member {
         let current_marker =
             match root.open_optional_read_regular(&disk.root.join(GENERATION_FILE))? {
                 Some(file) => {
@@ -185,7 +183,7 @@ pub(crate) fn predecessor_seal_matches(
     if value.get("format").and_then(json_codec::Value::as_str) != Some("membership-pending") {
         let stored = decode_seal(bytes)?;
         if stored.format == expected.format {
-            if (generation.portable.is_abort() || generation.portable.exit_registry().is_some())
+            if (generation.portable.is_abort() || generation.registry().is_some())
                 && disk.metadata_member
                 && root
                     .open_optional_read_regular(&log_path(config, disk))?
@@ -434,7 +432,7 @@ impl Engine {
         let registry = match self
             .config
             .generation()
-            .map(|generation| generation.portable.verified_registry())
+            .map(|generation| generation.verified_registry())
             .transpose()?
             .flatten()
         {
@@ -472,6 +470,7 @@ impl Engine {
         let original = portable.genesis_config()?;
         let epoch = portable.epoch()?;
         let generation = Arc::new(Generation {
+            backup_continuation: None,
             hash: portable.hash()?,
             workspace_roots: portable.workspace_root_aliases()?,
             portable,
@@ -482,7 +481,7 @@ impl Engine {
             base: Arc::new(base),
         });
         generation.next_state()?;
-        if generation.portable.exit_registry().is_some() {
+        if generation.registry().is_some() {
             generation.portable.prepare_namespace_activation(
                 &generation.base,
                 self.current_namespaces.as_deref(),
@@ -728,12 +727,7 @@ impl Engine {
                 Error::new(ErrorCode::RecoveryRequired, "no generation authority")
             })?;
         if generation.portable.is_backup() {
-            // A real reserved Publication can now be semantically replayed,
-            // but the Add completion path must not persist a second empty-
-            // payload result, rebuild selected SQLite, or release any fence.
-            return Err(
-                crate::engine::membership_transition::backup::BackupCore::activation_required(),
-            );
+            return self.complete_backup_serving_open();
         }
         if generation.portable.is_exit() {
             return self.complete_disk_exit_generation();

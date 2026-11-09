@@ -515,7 +515,7 @@ pub(super) fn prepare(
         Some(selected) => selected.clone(),
         None => active_outer_ids(config, resources, &[previous, next])?,
     };
-    let goals = layout_goals::build(next, Some(&selected))?;
+    let goals = layout_goals::build_for_config(config, next, Some(&selected))?;
     let mut prepared = PreparedLayouts {
         sequence: goals.state_sequence,
         ..Default::default()
@@ -904,6 +904,21 @@ pub(super) fn prepare(
             files,
             databases: database_owners,
         };
+        // Native Backup forests add fixed upstream-prefix metadata wrappers
+        // below directory-repositories/ID. First-installed forests retain these
+        // parents; a newly initialized forest needs the same exact wrappers.
+        // This creates no directory entity or locator, moves nothing, and does
+        // not repair a lost entity: all existing locators were resolved above.
+        if let Some(goal) = goal {
+            for id in &goal.root_directory_ids {
+                let target = history.join(goal.directories[id].to.as_path());
+                held.root.private_dir(
+                    target
+                        .parent()
+                        .expect("invariant: root forest has a metadata parent"),
+                )?;
+            }
+        }
         // Stage parents are metadata only; needed by the zero-rename preflight.
         held.root
             .private_dir(&history.join(".zxs-layout/staging"))?;

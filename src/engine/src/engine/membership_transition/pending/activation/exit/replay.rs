@@ -165,8 +165,7 @@ impl Engine {
         let proof = AdmittedDiskExitPublication {
             admission: PublicationAdmission::Preflight,
             registry: generation
-                .portable
-                .exit_registry()
+                .registry()
                 .expect("invariant: registry activation")
                 .clone(),
             occurrence_mask_hash: generation.portable.activation_mask_hash()?,

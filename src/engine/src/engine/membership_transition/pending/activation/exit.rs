@@ -314,7 +314,7 @@ impl ExitCore {
         let continuation = match engine
             .config
             .generation()
-            .map(|generation| generation.portable.verified_registry())
+            .map(|generation| generation.verified_registry())
             .transpose()?
             .flatten()
         {

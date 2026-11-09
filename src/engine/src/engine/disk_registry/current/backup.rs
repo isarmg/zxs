@@ -8,6 +8,8 @@ use crate::engine::membership_transition::{
 };
 use crate::history_package::AdmittedState;
 use crate::journal::Candidate;
+mod routing;
+pub(in crate::engine::disk_registry) use routing::BackupRouting;
 
 /// A private replay accumulator, never a serving Current or writer capability.
 /// The archive owner calls observe only for authenticated native publications,
@@ -42,6 +44,7 @@ impl BackupNamespaceReplay {
                 known_files: Arc::new(BTreeSet::new()),
                 unavailable_versions: Arc::new(BTreeSet::new()),
                 recursive_policies: Arc::default(),
+                backup_routing: None,
             },
             previous: State::default(),
             snapshot: None,
@@ -76,6 +79,39 @@ impl BackupNamespaceReplay {
     }
 
     pub(in crate::engine) fn finish<'a>(
+        self,
+        publication: &'a PreparedBackupFirstPublication,
+        candidate: &PreparedBackupFirstCandidate,
+        registry: &super::super::VerifiedDiskRegistry,
+        published: &'a AdmittedState,
+    ) -> Result<BackupNamespaceAdmission<'a>> {
+        let mut admitted = self.finish_native(publication, candidate, registry, published)?;
+        for scope in Arc::make_mut(&mut admitted.view.branches)
+            .values_mut()
+            .chain(Arc::make_mut(&mut admitted.view.directories).values_mut())
+        {
+            Arc::make_mut(scope).writable = false;
+        }
+        Ok(admitted)
+    }
+
+    pub(in crate::engine) fn finish_serving(
+        self,
+        publication: &PreparedBackupFirstPublication,
+        candidate: &PreparedBackupFirstCandidate,
+        registry: &super::super::VerifiedDiskRegistry,
+        published: &AdmittedState,
+        barrier: &crate::engine::backup_preparation::ServingBarrier,
+    ) -> Result<CurrentNamespaces> {
+        barrier.require_native(candidate, publication, registry.commitment())?;
+        // Keep the writability proved by full original replay. Never turn an
+        // originally frozen/retired namespace writable by flipping all flags.
+        Ok(self
+            .finish_native(publication, candidate, registry, published)?
+            .view)
+    }
+
+    fn finish_native<'a>(
         mut self,
         publication: &'a PreparedBackupFirstPublication,
         candidate: &PreparedBackupFirstCandidate,
@@ -111,6 +147,10 @@ impl BackupNamespaceReplay {
                 return Err(stale());
             }
         }
+        self.view.backup_routing = Some(Arc::new(BackupRouting::capture(
+            candidate,
+            published.state(),
+        )?));
         self.view.registry = registry.commitment().clone();
         self.view.registry_state = Arc::new(registry.clone());
         self.view.source_snapshot = self
@@ -119,14 +159,6 @@ impl BackupNamespaceReplay {
         self.view.source_sequence = self.previous.sequence;
         self.view.source_business_generation = self.previous.business_generation;
         self.view.activation_sequence = candidate.sequence();
-        // This consumer grants reads only. A later live installation needs
-        // separate complete resource/alias/Current proof, not this opaque loan.
-        for scope in Arc::make_mut(&mut self.view.branches)
-            .values_mut()
-            .chain(Arc::make_mut(&mut self.view.directories).values_mut())
-        {
-            Arc::make_mut(scope).writable = false;
-        }
         Ok(BackupNamespaceAdmission {
             published,
             view: self.view,

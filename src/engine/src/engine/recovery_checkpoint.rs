@@ -67,7 +67,7 @@ impl<'a> CheckpointScope<'a> {
             || engine
                 .config
                 .generation()
-                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+                .is_some_and(|generation| generation.registry().is_some())
             || engine
                 .config
                 .disks

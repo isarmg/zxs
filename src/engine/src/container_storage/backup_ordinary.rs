@@ -54,7 +54,10 @@ fn relative(path: &Path) -> Result<HistoryRelative> {
 /// Preserve the ordinary shared-forest namespace, so its existing absence
 /// inventory still finds a file if a required locator is lost. The hop prefix
 /// sits below the fixed root repository ID, not outside the history boundary.
-fn target_directory(goal: &HistoryRelative, prefix: &[String]) -> Result<HistoryRelative> {
+pub(super) fn target_directory(
+    goal: &HistoryRelative,
+    prefix: &[String],
+) -> Result<HistoryRelative> {
     let within = goal
         .as_path()
         .strip_prefix("directory-repositories")

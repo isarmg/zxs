@@ -3,6 +3,7 @@ use crate::{disk::*, *};
 pub(crate) mod backup_databases;
 pub(crate) mod backup_entities;
 pub(crate) mod backup_ordinary;
+pub(crate) mod backup_original_objects;
 mod changes;
 mod directory_database;
 mod object_database;
@@ -1217,7 +1218,8 @@ impl PreparedNames {
                 .history
                 .join(".zxs-layout/files")
                 .join(format!("{}.json", item.file));
-            let named = if path_exists_at(root, &item.history, &locator)? {
+            let relocated = path_exists_at(root, &item.history, &locator)?;
+            let named = if relocated {
                 // The bulk executor already placed this whole closure. Applying
                 // the legacy per-file projection would undo its shared address.
                 current
@@ -1231,8 +1233,17 @@ impl PreparedNames {
                     &item.name,
                 )?
             };
-            // Seal even a rename made visible by an earlier interrupted attempt.
-            root.sync_dir(&stable)?;
+            // A shared/Backup locator can put the actual whole container
+            // outside the old per-file parent. Seal its real parent; probing
+            // an absent legacy directory would strand the next Publication.
+            let parent = if relocated {
+                named
+                    .parent()
+                    .expect("invariant: admitted container has a parent")
+            } else {
+                &stable
+            };
+            root.sync_dir(parent)?;
             cache.file.seek(std::io::SeekFrom::Start(item.offset))?;
             let mut bytes = vec![0; item.length];
             cache.file.read_exact(&mut bytes)?;

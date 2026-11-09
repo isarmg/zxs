@@ -8,6 +8,7 @@ use std::{
 };
 
 mod backup_preparation;
+pub use backup_preparation::BackupTransactionRequest;
 pub use backup_preparation::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,
@@ -245,6 +246,7 @@ pub struct Engine {
     history_move_choice: Option<history_move_decision::Choice>,
     history_move_prepare: Option<history_move_decision::PrepareBinding>,
     backup_preparation: Option<backup_preparation::Worker>,
+    backup_serving: Option<backup_preparation::ServingAdmission>,
     membership_fence: Option<membership_transition::AdmittedFence>,
     pending_membership: Option<membership_transition::pending::PendingMembership>,
     pending_disk_exit: Option<membership_transition::pending::activation::exit::PendingDiskExit>,
@@ -647,6 +649,7 @@ impl Engine {
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
+            backup_serving: None,
             membership_fence: None,
             pending_membership: None,
             pending_disk_exit: None,
@@ -838,6 +841,7 @@ impl Engine {
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
+            backup_serving: None,
             membership_fence: None,
             pending_membership: None,
             pending_disk_exit: None,

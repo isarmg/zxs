@@ -12,6 +12,7 @@ impl Engine {
         let transition = object_hash(INTENT_KIND, &intent)?;
         let (base, history) = source.generation_base(&intent)?;
         let generation = Arc::new(Generation {
+            backup_continuation: None,
             hash: portable.hash()?,
             workspace_roots: portable.workspace_root_aliases()?,
             original: portable.genesis_config()?,
@@ -22,7 +23,7 @@ impl Engine {
             base: Arc::new(base),
         });
         generation.next_state()?;
-        if generation.portable.exit_registry().is_some() {
+        if generation.registry().is_some() {
             generation.portable.prepare_namespace_activation(
                 &generation.base,
                 self.current_namespaces.as_deref(),

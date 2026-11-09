@@ -50,7 +50,7 @@ impl Engine {
             ));
         }
         let generation = self.config.generation().ok_or_else(pending_publication)?;
-        if generation.portable.exit_registry() != Some(publication.registry())
+        if generation.registry() != Some(publication.registry())
             || generation.first_sequence()? != publication.published_sequence()
             || generation.snapshot().as_deref() != Some(publication.source_snapshot())
         {

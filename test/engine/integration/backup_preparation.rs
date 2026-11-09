@@ -8,6 +8,8 @@ mod progress_io;
 mod snapshot;
 #[path = "backup_preparation_target_admission.rs"]
 mod target_admission;
+#[path = "backup_transaction_serving.rs"]
+mod transaction_serving;
 use std::{
     fs,
     os::unix::fs::DirBuilderExt,

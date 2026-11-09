@@ -22,6 +22,7 @@ spool、管理及初始化恢复直接使用 Unix 权限与链接检查，不保
 | `transfer` / `uploads` | HTTP 内容流/范围/读租约；上传进度的有界读取与持久化 |
 | `web_assets` | 静态资源准入和 ETag，保留 `/api` API 命名空间 |
 | `engine_backend` / `file_manager` | 核心业务约束、业务动作和文件管理响应适配 |
+| `http_backup_transaction` / `management/backup_transaction` / `engine_backend/backup_transaction` | 管理员同操作完整备份的严格输入、受限目录句柄与原核心调用；明确停写／决定／激活，最终真实回执仍须通过普通服务准入，见[用户入口边界](../design/backup-transaction-user-entry.md) |
 | `management/foreign_preview`、`management/foreign_plan` / `engine_backend/foreign_plan` | 显式只读来源验证、一级空目录映射及系统盘不可覆盖审核记录；查询与重验不赋予迁入执行能力 |
 | `engine_backend/file_manager/activity`、`backend_activity` | 在当前授权锁内捕获提交、文件元数据操作、目录分支操作、备份配置、路径节点及目录树六类活动的 typed 快照；按序号降序和事件 ID 保留最新 200 行，锁外转换 DTO/UTC 时间 |
 | `telemetry` | 有界可重建的主机采样和历史，不参与存储提交真相 |

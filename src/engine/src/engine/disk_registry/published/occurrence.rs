@@ -526,6 +526,9 @@ impl FrozenDetachSource<'_> {
         }
         Ok(PreparedCurrentNamespaces {
             view: CurrentNamespaces {
+                // A different lifecycle must prove its own routing. Never carry
+                // a Backup continuation through a generic registry projection.
+                backup_routing: None,
                 registry: successor.commitment.clone(),
                 registry_state: Arc::new(successor.clone()),
                 mask_hash: mask_hash.map(str::to_owned),

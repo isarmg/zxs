@@ -349,6 +349,7 @@ fn admit_discovered(
         })
     })?;
     let generation = Arc::new(Generation {
+        backup_continuation: None,
         hash,
         workspace_roots: portable.workspace_root_aliases()?,
         portable,
@@ -449,6 +450,7 @@ pub(crate) fn restore_anchor(
         .read_archive_base(parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?)?;
     portable.verify_registry_source(&state)?;
     let generation = Arc::new(Generation {
+        backup_continuation: None,
         hash,
         workspace_roots: portable.workspace_root_aliases()?,
         original: portable.genesis_config()?,
@@ -514,6 +516,9 @@ impl Engine {
         let Some(generation) = self.config.generation().cloned() else {
             return Ok(Vec::new());
         };
+        if generation.portable.is_backup() {
+            return self.prepare_backup_serving_resources();
+        }
         generation
             .portable
             .verify_registry_source(&generation.base)?;
@@ -566,7 +571,7 @@ impl Engine {
                         disk,
                     )?;
                 }
-                if generation.portable.exit_registry().is_some() {
+                if generation.registry().is_some() {
                     require_abort_journal(&handle.root, disk, &generation.hash)?;
                 }
                 generation.portable.read_archive_base(
@@ -679,7 +684,7 @@ fn activation_namespace_present(
         && root
             .optional_metadata(&generation_directory(disk, &generation.hash))?
             .is_some()
-        && (!(generation.portable.is_abort() || generation.portable.exit_registry().is_some())
+        && (!(generation.portable.is_abort() || generation.registry().is_some())
             || root
                 .open_optional_read_regular(
                     &generation_directory(disk, &generation.hash).join("journal.bin"),

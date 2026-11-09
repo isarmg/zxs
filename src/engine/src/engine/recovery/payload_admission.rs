@@ -66,6 +66,7 @@ fn verify_fresh_payload_delta(
         {
             return Err(invalid());
         }
+        view.verify_backup_payload_route(previous, next, &evidence.version, &evidence.placement)?;
         for slot in &evidence.placement.route_slot_ids {
             view.require_write_slot(slot).map_err(|source| {
                 source.context(

@@ -180,3 +180,108 @@ fn ordinary_root_extension_cannot_authorize_a_terminal_record() {
     );
     assert!(terminal.select(&fixture.config).is_err());
 }
+
+#[test]
+fn completed_extension_requires_actual_new_head_not_only_prepared_locator() {
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    fixture.store.root_extension_locator(&plan).unwrap();
+    assert!(
+        fixture
+            .store
+            .require_published_root_extension(&plan)
+            .is_err()
+    );
+    let observations = fixture.roots();
+    fixture
+        .store
+        .resume_root_extension(&plan, observations)
+        .unwrap();
+    fixture
+        .store
+        .require_published_root_extension(&plan)
+        .unwrap();
+}
+
+#[test]
+fn backup_full_root_probes_refuse_an_online_subset() {
+    let fixture = Fixture::new();
+    let config = crate::ValidatedConfig::try_from(fixture.config.clone()).unwrap();
+    assert!(
+        crate::engine::disk_lifecycle::bootstrap::backup_root_extension::open_fixed_roots(
+            &fixture.previous,
+            &config
+        )
+        .is_err()
+    );
+    let selected = fixture
+        .store
+        .root_extension_locator(&fixture.plan())
+        .unwrap();
+    let roots = crate::engine::disk_lifecycle::bootstrap::backup_root_extension::open_fixed_roots(
+        &selected, &config,
+    )
+    .unwrap();
+    assert_eq!(roots.len(), config.disks.len());
+}
+
+#[test]
+fn backup_full_root_probes_refuse_missing_or_replaced_target_without_creation() {
+    let fixture = Fixture::new();
+    let config = crate::ValidatedConfig::try_from(fixture.config.clone()).unwrap();
+    let selected = fixture
+        .store
+        .root_extension_locator(&fixture.plan())
+        .unwrap();
+    let path = &config.disks[2].root;
+    let retained = path.with_extension("retained");
+    fs::rename(path, &retained).unwrap();
+    assert!(
+        crate::engine::disk_lifecycle::bootstrap::backup_root_extension::open_fixed_roots(
+            &selected, &config
+        )
+        .is_err()
+    );
+    assert!(!path.exists());
+    fs::create_dir(path).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        crate::engine::disk_lifecycle::bootstrap::backup_root_extension::open_fixed_roots(
+            &selected, &config
+        )
+        .is_err()
+    );
+    assert!(retained.is_dir());
+}
+
+#[test]
+fn backup_full_root_probes_do_not_clear_prior_stops() {
+    let mut fixture = Fixture::new();
+    let original = binding(&fixture.config, &fixture.config.disks[0]);
+    let stopped = fixture
+        .store
+        .append_stop(&fixture.previous, &original, operation(), digest())
+        .unwrap();
+    let plan = fixture
+        .store
+        .prepare_root_extension(&stopped, fixture.roots())
+        .unwrap()
+        .unwrap();
+    let selected = fixture.store.root_extension_locator(&plan).unwrap();
+    let config = crate::ValidatedConfig::try_from(fixture.config.clone()).unwrap();
+    assert!(
+        crate::engine::disk_lifecycle::bootstrap::backup_root_extension::open_fixed_roots(
+            &selected, &config
+        )
+        .is_err()
+    );
+    assert_eq!(
+        fixture
+            .store
+            .reload(&config.pool_id)
+            .unwrap()
+            .stop_hints()
+            .count(),
+        1
+    );
+}

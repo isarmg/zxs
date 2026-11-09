@@ -69,6 +69,7 @@ pub(in crate::engine::membership_transition::pending) fn activate(
     let (base, history) = source.generation_base(core.archive_intent())?;
     core.verify_source(&base)?;
     let generation = Arc::new(Generation {
+        backup_continuation: None,
         hash: portable.hash()?,
         workspace_roots: portable.workspace_root_aliases()?,
         original: portable.genesis_config()?,
@@ -329,11 +330,7 @@ impl Engine {
     ) -> Result<OperationResult> {
         let expected = generation.result()?;
         if self.current_namespaces.as_ref().is_none_or(|view| {
-            view.registry()
-                != generation
-                    .portable
-                    .exit_registry()
-                    .expect("invariant: resume registry")
+            view.registry() != generation.registry().expect("invariant: resume registry")
         }) || self.state.operations.get(&expected.operation_id) != Some(&expected)
         {
             return Err(Error::new(
@@ -574,6 +571,7 @@ pub(in crate::engine) fn completed_selector(
     }
     core.verify_source(&verified.state)?;
     let generation = Generation {
+        backup_continuation: None,
         hash: portable.hash()?,
         workspace_roots: portable.workspace_root_aliases()?,
         original: portable.genesis_config()?,

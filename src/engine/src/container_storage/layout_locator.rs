@@ -56,6 +56,10 @@ impl DirectoryId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct LayoutBinding(String);
 impl LayoutBinding {
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+
     pub(super) fn parse(value: &str) -> Result<Self> {
         if value.len() != 64
             || !value

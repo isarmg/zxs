@@ -12,7 +12,7 @@ const GENERATION_FILE: &str = "metadata/pool-membership/generation.json";
 type WorkspaceRootAliases = BTreeMap<(String, String, u64), BTreeSet<PathBuf>>;
 
 mod authority;
-mod backup;
+pub(in crate::engine) mod backup;
 mod foreign;
 pub(in crate::engine) use backup::{BackupWriterIoConfig, PreparedBackupTargetLocator};
 pub(in crate::engine) mod exit;
@@ -32,6 +32,7 @@ pub(crate) struct Generation {
     epoch: u64,
     workspace_roots: WorkspaceRootAliases,
     pub(crate) base: Arc<State>,
+    backup_continuation: Option<backup::BackupContinuation>,
 }
 impl Generation {
     pub(crate) fn historical_workspace_roots(
@@ -50,6 +51,11 @@ impl Generation {
     pub(crate) fn verify_candidate(&self, candidate: &Candidate) -> Result<()> {
         match candidate.generation() {
             Some(hash) if hash == self.hash && candidate.sequence > self.intent.fence_sequence => {
+                if self.portable.is_backup() && candidate.sequence > self.first_sequence()? {
+                    return self.backup_continuation.as_ref()
+                        .ok_or_else(crate::engine::membership_transition::backup::BackupCore::activation_required)?
+                        .verify_later(candidate);
+                }
                 self.portable.verify_candidate(candidate).map(|_| ())
             }
             _ if self.history.get(&candidate.sequence)
@@ -227,6 +233,7 @@ pub(in crate::engine::membership_transition) fn verify_frozen_activation(
     candidate: &Candidate,
 ) -> Result<()> {
     let generation = Generation {
+        backup_continuation: None,
         hash: portable.hash()?,
         workspace_roots: portable.workspace_root_aliases()?,
         portable: portable.clone(),

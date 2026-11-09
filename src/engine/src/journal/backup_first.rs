@@ -18,6 +18,98 @@ pub(crate) struct BackupFirstJournal<'a> {
     state: Option<SlotState>,
 }
 impl<'a> BackupFirstJournal<'a> {
+    /// Cold active-generation admission reads exactly the immutable first
+    /// three frames. Later ordinary slots belong to normal full replay, not to
+    /// first-slot recovery; the existing bounded repair path stays unchanged.
+    pub(crate) fn verify_published_prefix(
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        candidate: &PreparedBackupFirstCandidate,
+        seal: &PublicationSeal,
+        stop: &std::sync::atomic::AtomicBool,
+        allow_later: bool,
+    ) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        // Pure read-only cold inspection deliberately does not borrow a task
+        // I/O binding. Its caller already holds locator-limited roots and, for
+        // explicit resume, all existing writers. No journal repair is exposed.
+        let expected = candidate
+            .original_config()
+            .metadata_members()
+            .find(|member| member.disk_id == disk.disk_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ConfigConflict,
+                    "cold Backup prefix requires an original voter",
+                )
+            })?;
+        if root.path() != disk.root || canonical_json(expected)? != canonical_json(disk)? {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "cold Backup journal has another original binding",
+            ));
+        }
+        let path =
+            activation::generation_directory(disk, candidate.authority_hash()).join("journal.bin");
+        let mut file = root.open_read_regular(&path)?;
+        let before = crate::file_stamp::FileStamp::from_metadata(&file.metadata()?);
+        if file.metadata()?.nlink() != 1 || seal.candidate_hash != candidate.hash() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "Backup journal prefix has another owner or native seal",
+            ));
+        }
+        let mut reader = JournalFrameReader::new((&mut file).take(MAX_SLOT_BYTES as u64));
+        let mut records = Vec::with_capacity(3);
+        for _ in 0..3 {
+            records.push(
+                reader
+                    .next_record_observed(&mut |_| {
+                        crate::history_package::preparation_checkpoint(stop)
+                    })?
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::LogCorrupt,
+                            "Backup first Publication journal prefix is incomplete",
+                        )
+                    })?,
+            );
+        }
+        let scan = Scan {
+            records,
+            valid_bytes: reader.valid_bytes,
+            torn_tail: reader.torn_tail,
+        };
+        drop(reader);
+        validate_prefix(&scan, candidate)?;
+        if !allow_later && (scan.valid_bytes != before.size || scan.torn_tail) {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "unfinished Backup requires the unchanged original three-frame journal",
+            ));
+        }
+        let (record, frame_hash) = &scan.records[2];
+        let receipt = Receipt {
+            disk_id: disk.disk_id.clone(),
+            slot_id: disk.slot_id.clone(),
+            record: record.clone(),
+            frame_hash: frame_hash.clone(),
+        };
+        if record.object_hash != seal.publication_hash
+            || !seal.receipts.iter().any(|expected| expected == &receipt)
+            || crate::file_stamp::FileStamp::from_metadata(&file.metadata()?) != before
+            || crate::file_stamp::FileStamp::from_metadata(
+                &root.open_read_regular(&path)?.metadata()?,
+            ) != before
+        {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "Backup journal first Publication differs or changed during admission",
+            ));
+        }
+        file.check_running()
+    }
+
     /// Read the actual completed ordinary-address journal through one retained
     /// descriptor. No copied receipt vector may create or repair this file.
     pub(crate) fn published_binding(

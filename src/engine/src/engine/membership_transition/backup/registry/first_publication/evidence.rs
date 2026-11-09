@@ -40,31 +40,6 @@ impl PreparedBackupFirstPublication {
         publication: Publication,
         seal: PublicationSeal,
     ) -> Result<Self> {
-        verify_publication_seal(candidate.candidate(), &publication, &seal)?;
-        if publication.recovery.is_some()
-            || publication.finalize.recovery_id.is_some()
-            || canonical_json(&publication.result)? != canonical_json(candidate.result())?
-        {
-            return Err(invalid(
-                "Backup Publication differs from its original exact first result",
-            ));
-        }
-        // The native seal checks the all-member frame chain. Bind its slot
-        // labels to the actual archived Config as well; a target cannot rename
-        // an original voter or make a later slot look like the first slot.
-        for accept in &publication.finalize.accepts {
-            let disk = candidate
-                .original_config()
-                .metadata_members()
-                .find(|disk| disk.disk_id == accept.disk_id)
-                .ok_or_else(|| invalid("Backup Publication names a non-original voter"))?;
-            if accept.slot_id != disk.slot_id || accept.record.previous_frame_hash != "0".repeat(64)
-            {
-                return Err(invalid(
-                    "Backup Publication changes an original voter or first-slot boundary",
-                ));
-            }
-        }
         let retained = prepared.source_evidence().retained_payload_slots();
         let nodes = prepared.projection().selected_nodes();
         let mut bindings: BTreeMap<&str, (&str, u64)> = BTreeMap::new();
@@ -90,6 +65,40 @@ impl PreparedBackupFirstPublication {
             {
                 return Err(invalid(
                     "Backup selected target overlaps its retained source route",
+                ));
+            }
+        }
+        Self::checked_bindings(candidate, publication, seal, bindings)
+    }
+
+    fn checked_bindings(
+        candidate: &PreparedBackupFirstCandidate,
+        publication: Publication,
+        seal: PublicationSeal,
+        bindings: BTreeMap<&str, (&str, u64)>,
+    ) -> Result<Self> {
+        verify_publication_seal(candidate.candidate(), &publication, &seal)?;
+        if publication.recovery.is_some()
+            || publication.finalize.recovery_id.is_some()
+            || canonical_json(&publication.result)? != canonical_json(candidate.result())?
+        {
+            return Err(invalid(
+                "Backup Publication differs from its original exact first result",
+            ));
+        }
+        // The native seal checks the all-member frame chain. Bind its slot
+        // labels to the actual archived Config as well; a target cannot rename
+        // an original voter or make a later slot look like the first slot.
+        for accept in &publication.finalize.accepts {
+            let disk = candidate
+                .original_config()
+                .metadata_members()
+                .find(|disk| disk.disk_id == accept.disk_id)
+                .ok_or_else(|| invalid("Backup Publication names a non-original voter"))?;
+            if accept.slot_id != disk.slot_id || accept.record.previous_frame_hash != "0".repeat(64)
+            {
+                return Err(invalid(
+                    "Backup Publication changes an original voter or first-slot boundary",
                 ));
             }
         }
@@ -193,6 +202,60 @@ impl PreparedBackupFirstPublication {
         Ok(admitted)
     }
 
+    /// Cold Backup admission only. The candidate was independently rebuilt
+    /// from this root's complete native archive; the effective topology comes
+    /// from that same verified Backup core, never from target JSON or SQLite.
+    pub(in crate::engine::membership_transition) fn from_native_bytes(
+        candidate: &PreparedBackupFirstCandidate,
+        effective: &ValidatedConfig,
+        expected: &BackupFirstPublicationHash,
+        publication: &[u8],
+        seal: &[u8],
+    ) -> Result<Self> {
+        if publication.len() > MAX_METADATA || seal.len() > MAX_METADATA {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "cold Backup Publication exceeds its native byte bound",
+            ));
+        }
+        let mut bindings = BTreeMap::new();
+        if let Some(version) = candidate.candidate().versions.first() {
+            for slot in &version.placement.route_slot_ids {
+                let disk = effective
+                    .disks
+                    .iter()
+                    .find(|disk| &disk.slot_id == slot)
+                    .ok_or_else(|| {
+                        invalid("cold Backup route is outside its native configuration")
+                    })?;
+                if bindings
+                    .insert(
+                        slot.as_str(),
+                        (disk.disk_id.as_str(), disk.binding_generation),
+                    )
+                    .is_some()
+                {
+                    return Err(invalid("cold Backup route repeats a binding"));
+                }
+            }
+        }
+        let admitted = Self::checked_bindings(
+            candidate,
+            decode_proof(publication)?,
+            decode_proof(seal)?,
+            bindings,
+        )?;
+        if admitted.object.hash != expected.as_str()
+            || admitted.object.bytes() != publication
+            || admitted.seal_bytes != seal
+        {
+            return Err(invalid(
+                "cold Backup Publication differs from the protected original selection",
+            ));
+        }
+        Ok(admitted)
+    }
+
     /// Consume native Publication evidence, not a public diagnostic report or
     /// the prospective PUBLISHED receipt embedded in a prepared snapshot.
     pub(in crate::engine) fn require_namespace_candidate(
@@ -228,6 +291,97 @@ impl PreparedBackupFirstPublication {
         crate::journal::BackupFirstJournal::published_binding(
             root, disk, candidate, &self.seal, stop,
         )
+    }
+
+    pub(in crate::engine::membership_transition) fn verify_original_prefix(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        candidate: &PreparedBackupFirstCandidate,
+        stop: &AtomicBool,
+        allow_later: bool,
+    ) -> Result<()> {
+        self.require_namespace_candidate(candidate)?;
+        crate::journal::BackupFirstJournal::verify_published_prefix(
+            root,
+            disk,
+            candidate,
+            &self.seal,
+            stop,
+            allow_later,
+        )
+    }
+
+    /// Actual complete bodies and exact native first proofs at this ordinary
+    /// routed root. Used only before the first serving activation. A later
+    /// normal Publication may legitimately retire or purge an initial version.
+    pub(in crate::engine) fn verify_initial_ordinary_payloads(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        first: &PreparedBackupFirstCandidate,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        self.require_namespace_candidate(first)?;
+        for evidence in &first.candidate().versions {
+            preparation_checkpoint(stop)?;
+            if !evidence.placement.route_slot_ids.contains(&disk.slot_id) {
+                continue;
+            }
+            if evidence.placement.binding_generations.get(&disk.slot_id)
+                != Some(&disk.binding_generation)
+            {
+                return Err(invalid(
+                    "Backup ordinary proof changed its exact payload binding",
+                ));
+            }
+            let version = &evidence.version;
+            let directory = root
+                .path()
+                .join("histories")
+                .join(&version.history_tree_id)
+                .join("versions")
+                .join(&version.version_id);
+            let path =
+                crate::container_storage::content_path_at(root, &directory, version, &mut |_| {
+                    preparation_checkpoint(stop)
+                })?;
+            if path.starts_with(&directory) {
+                return Err(invalid(
+                    "Backup activation requires actual ordinary payloads, not an isolated package fallback",
+                ));
+            }
+            let (file, _, manifest) = crate::disk::open_payload_at(root, &directory, version)?;
+            crate::disk::verify_open_payload_observed(file, manifest, version, &mut |_| {
+                preparation_checkpoint(stop)
+            })?
+            .check_running()?;
+            let local = crate::journal::local_proof_directory_at(root, &directory, first.hash())?;
+            let proof = CommitProof {
+                candidate_hash: first.hash().into(),
+                finalize: self.publication.finalize.clone(),
+                version_hash: object_hash("version", version)?,
+                disk_id: disk.disk_id.clone(),
+                slot_id: disk.slot_id.clone(),
+                route_slot_ids: evidence.placement.route_slot_ids.clone(),
+            };
+            let publication = crate::journal::LocalPublicationRef {
+                candidate: first.candidate(),
+                publication: &self.publication,
+                commit_proof: &proof,
+                publication_receipts: &self.seal.receipts,
+            };
+            if root.read_bytes(&local.join("commit-proof.json"), MAX_METADATA)?
+                != encode_metadata(&proof, MAX_METADATA)?
+                || root.read_bytes(&local.join("publication-proof.json"), MAX_METADATA)?
+                    != encode_metadata(&publication, MAX_METADATA)?
+            {
+                return Err(invalid(
+                    "Backup ordinary root lost its exact original payload Publication proof",
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::engine) fn report(&self) -> &BackupFirstPublicationReport {

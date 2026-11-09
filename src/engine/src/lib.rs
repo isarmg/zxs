@@ -41,6 +41,7 @@ pub use directory_conversion::{
 mod disk;
 pub mod disk_authority;
 mod engine;
+pub use engine::BackupTransactionRequest;
 pub use engine::DetachedHistoryRead;
 pub use engine::FileHistoryMoveTargetReport;
 pub use engine::{

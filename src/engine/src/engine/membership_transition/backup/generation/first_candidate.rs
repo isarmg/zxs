@@ -29,6 +29,7 @@ pub(crate) struct PreparedBackupFirstCandidate {
     files: BTreeMap<PathBuf, NativeBytes>,
     original: ValidatedConfig,
     decision_hash: BackupRegistryDecisionHash,
+    targets: Vec<crate::engine::backup_preparation::BackupPreparedTopologyNode>,
     authority: PreparedMetadataObject,
     bytes: usize,
     state_hash: String,
@@ -170,13 +171,15 @@ impl BackupCore {
             Some(authority_hash),
         );
         let object = PreparedMetadataObject::new("candidate", &candidate, MAX_METADATA)?;
+        let decision = AdmittedBackupDecision::from_certificate(self.decision.clone())?;
         let mut prepared = PreparedBackupFirstCandidate {
             candidate,
             result: result.clone(),
             object,
             files: BTreeMap::new(),
             original: intent.origin.config().clone(),
-            decision_hash: AdmittedBackupDecision::from_certificate(self.decision.clone())?.hash(),
+            decision_hash: decision.hash(),
+            targets: decision.projection().selected_nodes(),
             authority: authority.clone(),
             bytes: 0,
             state_hash: object_hash("backup-first-candidate-state", &next)?,
@@ -207,6 +210,14 @@ impl PreparedBackupAuthority {
 }
 
 impl PreparedBackupFirstCandidate {
+    /// Exact selected topology from the native decision, not a caller's path
+    /// projection or a persisted completion record.
+    pub(in crate::engine) fn targets(
+        &self,
+    ) -> &[crate::engine::backup_preparation::BackupPreparedTopologyNode] {
+        &self.targets
+    }
+
     pub(in crate::engine) fn writer_configuration(
         &self,
         publication: &crate::engine::membership_transition::PreparedBackupFirstPublication,
