@@ -145,7 +145,7 @@ fn http_whole_file_deletion_retains_all_branches_replays_after_undo_and_cold_ope
 #[test]
 fn soft_delete_adapter_checks_current_auth_and_preserves_cross_interface_receipt_identity() {
     let (root, engine, repo, a, _) = seed();
-    let backend = EngineBackend::new(engine);
+    let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend
         .protect_auth(
             AuthStore::initialize(
