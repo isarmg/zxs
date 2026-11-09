@@ -93,7 +93,7 @@ pub use foreign_import::{
     ForeignImportIntentInfo, ForeignImportIntentRequest, ForeignImportIntentSource,
     ForeignImportIntentTarget, ForeignImportLimits, ForeignImportMapping, ForeignImportPreview,
     ForeignLocalBinding, ForeignMappedHistory, ForeignMigrationPlan, ForeignMigrationReceipt,
-    ForeignMigrationTransaction, ForeignPrimaryOrigin, ForeignSourceIdentity,
+    ForeignMigrationStatus, ForeignMigrationTransaction, ForeignPrimaryOrigin, ForeignSourceIdentity,
     ForeignVersionAvailability, PreparedForeignImportIntent,
 };
 mod historical_save;

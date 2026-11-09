@@ -135,6 +135,17 @@ impl Layout {
     pub fn management(&self) -> Result<PrivateDirectory> {
         private(&self.management, MANAGEMENT)
     }
+
+    /// Open only one explicitly selected immediate child through the retained
+    /// discovery descriptor. Does not create, adopt, chmod or follow links.
+    pub fn disk_root(&self, path: &str) -> Result<OpenAt2Root> {
+        let names = all_names(&[path.to_owned()])?;
+        let name = names.first().expect("invariant: one validated disk root");
+        let file = self.disks.open_directory(&EntryName::new(name)?.as_relative())?;
+        owner(&file, self.account.owner())?;
+        self.recheck()?;
+        Ok(OpenAt2Root::from_directory(file, MountPolicy::SameMount)?)
+    }
     /// Require every actual direct child to be selected. Unknown, missing,
     /// foreign, extra or inaccessible material cannot become a hidden candidate.
     pub fn inventory(&self, paths: &[String]) -> Result<()> {

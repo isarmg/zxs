@@ -1,5 +1,7 @@
 > 当前阶段：独立 Web、停服 host lease、首批初始化、既有管理员/本地 Samba 重置与空目录 Add 已有源码；均按各片记录区分未验证状态。四类磁盘职责未全迁入；活动成员及最后元数据成员注销已有源码；逐笔终态移除已有原生 mask/Stop/D3 闭包；本片接仍保留原终态元数据登记的受限 readmission。终态移除链后的恢复、外来完整链接纳和最终干净运行证明仍缺。本片见[原目录重新接纳](helper-terminal-retained-readmission.md)。
 
+> 后继切片：[外来高级盘完整低级链实物准备](helper-foreign-complete-chain-material.md)已写出独立 Web、全部真实低级根同批冻结/复制和原请求续作；只产生隔离材料，不完成正式接纳，按该片记录全部未验范围。
+
 # 辅助工具的磁盘管理职责与迁移边界
 
 [辅助工具](../components/helper.md) · [架构决策](../adr/0017-helper-disk-management.md) · [现有协调器](online-disk-management.md)

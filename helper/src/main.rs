@@ -10,6 +10,7 @@ mod disk_databases;
 mod object_databases;
 mod disk_readmission;
 mod disk_removal;
+mod foreign_chain;
 mod host;
 mod initialization;
 mod installation;
@@ -43,6 +44,7 @@ The independent Web console can create the first management-only administrator i
 The independent Web console can reset an existing ZXS administrator password with exact confirmation; it revokes ZXS sessions but does not update disaster-recovery credential replicas or Samba passwords.
 The Web console can initialize the exact first production batch of existing empty primary roots through a non-root worker; it neither mounts/formats devices nor starts a service.
 The independent Web console can add and initialize an exact empty directory batch in an existing production pool, retaining original membership intents and native receipts; this is not foreign import or an independent-authority migration.
+The independent Web console can copy an exact foreign level 2/3 source into all explicitly selected lower roots as one recoverable material batch; it does not admit the source or any lower member.
 The Web console can reset a supported existing local tdbsam Samba password with explicit confirmation; other backends/account creation are not implemented.
 The independent Web console can explicitly deregister an exact non-final-voter member with original D3/receipt checks; disk bytes remain, but current pool visibility/content access may be lost.
 Complete installation readiness/all-path clean-start gating, final-voter terminal removal, foreign admission, program repair and systemd/SMB activation are not yet implemented. No planned-offline action is offered."
@@ -75,6 +77,8 @@ enum Command {
     /// Internal current-pool addition owner under the configured service UID.
     #[command(hide = true)]
     InternalAdditionWorker,
+    #[command(hide = true)]
+    InternalForeignChainWorker,
     #[command(hide = true)]
     InternalRemovalWorker,
     #[command(hide = true)]
@@ -284,6 +288,7 @@ fn run(args: Args) -> Result<()> {
         Command::InternalChainReadmissionWorker => disk_removal::chain_readmission::worker_entry(),
         Command::InternalTerminalChainWorker => disk_removal::chain_archive::worker_entry(),
         Command::InternalAdditionWorker => disk_addition::worker_entry(),
+        Command::InternalForeignChainWorker => foreign_chain::worker_entry(),
         Command::InternalStorageWorker => initialization::storage::process::entry(),
         Command::Serve(options) => console::run(options),
         Command::Install { command } => installation::run(command),

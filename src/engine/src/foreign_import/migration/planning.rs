@@ -7,6 +7,26 @@ impl ForeignMigrationPlan {
         Self::build(source, operation_id, Placement::Primary, None)
     }
 
+    /// Freeze unchanged source material for one explicitly selected lower
+    /// member. The caller binds its complete batch and real roots in this
+    /// digest. Publication remains an inert capsule, never an Add operation.
+    pub fn chain_material(
+        source: &ForeignImportPreview,
+        operation_id: OperationId,
+        chain_digest: &ForeignEvidenceDigest,
+        target_level: u32,
+    ) -> Result<Self> {
+        Self::build(
+            source,
+            operation_id,
+            Placement::ChainMaterial {
+                chain_digest: chain_digest.to_string(),
+                target_level,
+            },
+            None,
+        )
+    }
+
     /// Plan a level 2 reconstruction under one existing empty logical directory.
     /// Every original primary gets one distinct child, including all its histories.
     pub fn rebuild(
@@ -211,6 +231,13 @@ impl PlanRecord {
         }
         match &self.placement {
             Placement::Primary if (1..=3).contains(&self.source_level) => (),
+            Placement::ChainMaterial { chain_digest, target_level }
+                if (2..=3).contains(&self.source_level)
+                    && (1..self.source_level).contains(target_level) =>
+            {
+                chain_digest.parse::<ForeignEvidenceDigest>()
+                    .map_err(|error| Error::from(std::io::Error::other(error)))?;
+            }
             Placement::Rebuild { directory, .. } if self.source_level == 2 => {
                 PortablePath::parse(directory)?;
                 for group in &self.groups {
@@ -233,7 +260,7 @@ impl PlanRecord {
         engine: Option<&Engine>,
     ) -> Result<()> {
         let primary = match &self.placement {
-            Placement::Primary => return Ok(()),
+            Placement::Primary | Placement::ChainMaterial { .. } => return Ok(()),
             Placement::Rebuild { primary, .. } | Placement::Secondary { primary } => primary,
         };
         let engine =

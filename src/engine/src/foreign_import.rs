@@ -12,7 +12,10 @@ pub use intent::{
 mod mapping;
 mod migration;
 mod model;
-pub use migration::{ForeignMigrationPlan, ForeignMigrationReceipt, ForeignMigrationTransaction};
+pub use migration::{
+    ForeignMigrationPlan, ForeignMigrationReceipt, ForeignMigrationStatus,
+    ForeignMigrationTransaction,
+};
 pub use model::{
     ForeignCheckpoint, ForeignEvidenceDigest, ForeignHistory, ForeignImportLimits,
     ForeignImportMapping, ForeignImportPreview, ForeignLocalBinding, ForeignMappedHistory,

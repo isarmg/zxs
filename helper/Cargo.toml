@@ -18,6 +18,7 @@ command-line.workspace = true
 data-serialization.workspace = true
 json-codec.workspace = true
 storage-contract.workspace = true
+name-policy.workspace = true
 storage-engine.workspace = true
 storage-server.workspace = true
 tokio.workspace = true

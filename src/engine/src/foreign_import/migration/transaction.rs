@@ -12,7 +12,23 @@ impl ForeignMigrationPlan {
     /// durable parent intent precedes staging creation, so even that first mkdir
     /// window can be resumed without deleting or adopting unrelated contents.
     pub fn begin(self, destination: &Path) -> Result<ForeignMigrationTransaction> {
-        let (parent, name) = open_parent(destination)?;
+        let (parent, name) = open_parent(destination, None)?;
+        self.begin_parent(parent, name, destination)
+    }
+
+    /// Consume the caller's selected real parent instead of reopening its path
+    /// after empty-root/identity review. Named-path rebinding still rejects.
+    pub fn begin_in(self, parent: File, destination: &Path) -> Result<ForeignMigrationTransaction> {
+        let (parent, name) = open_parent(destination, Some(parent))?;
+        self.begin_parent(parent, name, destination)
+    }
+
+    fn begin_parent(
+        self,
+        parent: DiskRoot,
+        name: String,
+        destination: &Path,
+    ) -> Result<ForeignMigrationTransaction> {
         let lock = AdvisoryLock::directory(&parent.directory(parent.path())?)?;
         reject_overlap(&self.record, &parent, destination)?;
         let stage = staging_path(&parent, &self.record.operation_id);
@@ -40,7 +56,27 @@ impl ForeignMigrationTransaction {
         operation: &OperationId,
         expected: &ForeignEvidenceDigest,
     ) -> Result<Self> {
-        let (parent, name) = open_parent(destination)?;
+        let (parent, name) = open_parent(destination, None)?;
+        Self::resume_parent(parent, name, operation, expected)
+    }
+
+    /// Exact original-operation continuation from a still-held selected parent.
+    pub fn resume_in(
+        parent: File,
+        destination: &Path,
+        operation: &OperationId,
+        expected: &ForeignEvidenceDigest,
+    ) -> Result<Self> {
+        let (parent, name) = open_parent(destination, Some(parent))?;
+        Self::resume_parent(parent, name, operation, expected)
+    }
+
+    fn resume_parent(
+        parent: DiskRoot,
+        name: String,
+        operation: &OperationId,
+        expected: &ForeignEvidenceDigest,
+    ) -> Result<Self> {
         let lock = AdvisoryLock::directory(&parent.directory(parent.path())?)?;
         let intent: Intent =
             decode_strict(&parent.read_bytes(&reservation_path(&parent, operation), MAX_INTENT)?)?;
@@ -57,6 +93,92 @@ impl ForeignMigrationTransaction {
         }
         parent.sync_dir(parent.path())?;
         open_reserved(parent, intent, *expected, lock)
+    }
+
+    /// Observe an exact original operation without mkdir, repair, copy or sync.
+    /// A final capsule is fully reverified; missing original reservations are
+    /// not inferred from a portable copy's marker.
+    pub fn status_in(
+        parent: File,
+        destination: &Path,
+        operation: &OperationId,
+        expected: &ForeignEvidenceDigest,
+    ) -> Result<ForeignMigrationStatus> {
+        let (parent, name) = open_parent(destination, Some(parent))?;
+        let lock = AdvisoryLock::directory(&parent.directory(parent.path())?)?;
+        let stage = staging_path(&parent, operation);
+        let final_path = parent.path().join(&name);
+        let stage_exists = parent.optional_metadata(&stage)?.is_some();
+        let published = parent.optional_metadata(&final_path)?.is_some();
+        let Some(file) = parent.open_optional_read_regular(&reservation_path(&parent, operation))?
+        else {
+            if stage_exists || published {
+                return Err(changed("capsule material lacks its original parent reservation"));
+            }
+            return Ok(ForeignMigrationStatus::Unstarted);
+        };
+        let intent: Intent = decode_strict(&read_file_bytes(file, MAX_INTENT)?)?;
+        intent.plan.validate()?;
+        if intent.destination != name
+            || intent.parent_path != parent.path()
+            || intent.plan.operation_id != *operation
+            || digest(&intent.plan)? != *expected
+            || intent.parent != PhysicalBinding::of(&parent)?
+        {
+            return Err(changed("capsule status does not match the original plan and parent"));
+        }
+        if stage_exists && published {
+            return Err(changed("both migration staging and destination exist"));
+        }
+        if !stage_exists && !published {
+            return Ok(ForeignMigrationStatus::Reserved);
+        }
+        let path = if published { &final_path } else { &stage };
+        let capsule = parent.private_child(path)?;
+        if capsule.optional_metadata(&path.join("binding.json"))?.is_none() {
+            if published {
+                return Err(invalid("final capsule lacks its original physical binding"));
+            }
+            check_unbound(&capsule)?;
+            return Ok(ForeignMigrationStatus::Reserved);
+        }
+        let transaction = Self {
+            parent,
+            capsule,
+            intent,
+            digest: *expected,
+            published,
+            _lock: lock,
+        };
+        transaction.check_names()?;
+        if !published {
+            return Ok(ForeignMigrationStatus::Reserved);
+        }
+        let replica = transaction.verify_replica()?;
+        projection::Projection::from_replica(&transaction.intent.plan, &replica)?
+            .verify(&transaction.capsule, &transaction.intent.plan.budget)?;
+        if transaction.capsule.read_bytes(
+            &transaction.capsule.path().join("intent.json"), MAX_INTENT,
+        )? != canonical_json(&transaction.intent)? {
+            return Err(changed("published capsule portable intent differs"));
+        }
+        transaction.check_names()?;
+        Ok(ForeignMigrationStatus::Published)
+    }
+
+    /// A sealed original stage can finish without the original source. A bad
+    /// marker is an error, never treated as an unstarted copy.
+    pub fn is_sealed(&self) -> Result<bool> {
+        self.check_names()?;
+        let Some(file) = self.capsule.open_optional_read_regular(
+            &self.capsule.path().join("sealed.json"),
+        )? else {
+            return Ok(false);
+        };
+        if read_file_bytes(file, MAX_METADATA)? != self.marker()? {
+            return Err(changed("capsule sealed marker differs from the original binding"));
+        }
+        Ok(true)
     }
 
     /// Copy independently into the reserved tree. Existing exact bytes are
@@ -248,7 +370,7 @@ impl ForeignMigrationTransaction {
     }
 }
 
-fn open_parent(destination: &Path) -> Result<(DiskRoot, String)> {
+fn open_parent(destination: &Path, held: Option<File>) -> Result<(DiskRoot, String)> {
     let absolute = absolute_path(destination)?;
     let parent_path = absolute
         .parent()
@@ -261,7 +383,11 @@ fn open_parent(destination: &Path) -> Result<(DiskRoot, String)> {
     if name.starts_with(".zxs-foreign-") {
         return Err(invalid("capsule name uses the reserved transaction prefix"));
     }
-    Ok((DiskRoot::open(parent_path)?, name.into()))
+    let parent = match held {
+        Some(directory) => DiskRoot::from_directory(parent_path.into(), directory)?,
+        None => DiskRoot::open(parent_path)?,
+    };
+    Ok((parent, name.into()))
 }
 
 fn staging_path(parent: &DiskRoot, operation: &OperationId) -> PathBuf {
@@ -317,15 +443,7 @@ fn open_reserved(
         }
         // The durable parent reservation owns this name. Before the first
         // binding, only atomic writer residue from that reservation is allowed.
-        for entry in capsule.entries(capsule.path())? {
-            let entry = entry?;
-            if !platform_io::fs_safety::AtomicFile::is_temporary_name(&entry) {
-                return Err(changed(
-                    "unbound reserved stage contains unrelated material",
-                ));
-            }
-            capsule.open_read_regular(&path.join(entry.as_path()))?;
-        }
+        check_unbound(&capsule)?;
         let binding = StageBinding {
             identity: PhysicalBinding::of(&capsule)?,
             intent_digest: object_hash("foreign-migration-intent", &intent)?,
@@ -342,6 +460,20 @@ fn open_reserved(
     };
     transaction.check_names()?;
     Ok(transaction)
+}
+
+fn check_unbound(capsule: &DiskRoot) -> Result<()> {
+    for (index, entry) in capsule.entries(capsule.path())?.enumerate() {
+        if index >= MAX_ENTRIES {
+            return Err(Error::new(ErrorCode::ResourceLimit, "unbound capsule entry limit exceeded"));
+        }
+        let entry = entry?;
+        if !platform_io::fs_safety::AtomicFile::is_temporary_name(&entry) {
+            return Err(changed("unbound reserved stage contains unrelated material"));
+        }
+        capsule.open_read_regular(&capsule.path().join(entry.as_path()))?;
+    }
+    Ok(())
 }
 
 pub(super) fn ensure_exact(root: &DiskRoot, path: &Path, bytes: &[u8]) -> Result<()> {

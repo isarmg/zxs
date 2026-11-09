@@ -1015,3 +1015,22 @@ fn chain_selector_input_rejects_uploaded_authority_and_stop_overrides() {
         assert!(error.to_string().contains(field));
     }
 }
+
+#[tokio::test]
+async fn foreign_chain_routes_keep_request_gates_without_accessing_system_or_disks() {
+    let app = http::router(state());
+    let preview = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
+        "source_root":"/not-opened","source_slot_id":"secondary","source_upstream_slot_id":"primary",
+        "source_metadata_member":true,"lower":[],"external_writers_stopped":false});
+    let original = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
+        "request_digest":"a".repeat(64),"external_writers_stopped":false});
+    for (path, input) in [("/api/disks/foreign-chain-preview", preview), ("/api/disks/foreign-chain-original", original)] {
+        let response = app.clone().oneshot(post(path, input)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["code"], "foreign_chain_material");
+        assert!(body["error"]["message"].as_str().unwrap().contains("stop ZXS"));
+    }
+    let response = app.oneshot(post("/api/disks/foreign-chain-prepare", json!({"confirmation":"admit-foreign-now"}))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

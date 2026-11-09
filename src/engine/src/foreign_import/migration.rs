@@ -84,6 +84,11 @@ struct AcceptedPrimary {
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Placement {
     Primary,
+    /// Isolated material, not an admitted role or membership decision.
+    ChainMaterial {
+        chain_digest: String,
+        target_level: u32,
+    },
     Rebuild {
         primary: AcceptedPrimary,
         directory: String,
@@ -176,6 +181,15 @@ pub struct ForeignMigrationTransaction {
     digest: ForeignEvidenceDigest,
     published: bool,
     _lock: AdvisoryLock,
+}
+
+/// Read-only local progress. Reserved includes incomplete staging windows.
+/// None of these states grants active storage membership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForeignMigrationStatus {
+    Unstarted,
+    Reserved,
+    Published,
 }
 
 /// A synced offline capsule, not an active disk-registration receipt.
