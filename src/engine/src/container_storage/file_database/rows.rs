@@ -78,6 +78,7 @@ pub(super) struct Validation<'a> {
     branches: BTreeMap<String, BranchRow>,
     nodes: BTreeMap<String, u64>,
     file_row: bool,
+    selected_branch: Option<String>,
     versions: usize,
     current: Option<DeletionRow>,
     lifecycle: BTreeMap<u64, LifecycleRow>,
@@ -91,6 +92,7 @@ impl<'a> Validation<'a> {
             branches: BTreeMap::new(),
             nodes: BTreeMap::new(),
             file_row: false,
+            selected_branch: None,
             versions: 0,
             current: None,
             lifecycle: BTreeMap::new(),
@@ -137,7 +139,11 @@ impl<'a> Validation<'a> {
         let (owner, own_id) = match kind {
             "file" => {
                 let row: FileRow = decode_local(body.as_bytes())?;
+                if let Some(branch) = &row.selected_branch_id {
+                    storage_contract::validate_id(branch, "br")?;
+                }
                 self.file_row = true;
+                self.selected_branch = row.selected_branch_id;
                 (row.file_id.clone(), row.file_id)
             }
             "version" => {
@@ -223,6 +229,16 @@ impl<'a> Validation<'a> {
         if !self.file_row || self.versions == 0 {
             return Err(super::invalid(
                 "file database is missing its file or retained versions",
+            ));
+        }
+        // A retained selection must name this object's own admitted branch.
+        // Archived/retired branches remain valid history; this check grants no
+        // live branch access and never guesses a replacement selection.
+        if let Some(selected) = &self.selected_branch
+            && !self.branches.contains_key(selected)
+        {
+            return Err(super::invalid(
+                "file database selection references a missing local branch",
             ));
         }
         let heads: BTreeMap<_, _> = self
