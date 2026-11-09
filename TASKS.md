@@ -54,6 +54,8 @@
 
 ### T00 最新 GitHub 验证与格式修复
 
+- [短 CI #955 quality](https://github.com/isarmg/zxs/actions/runs/42660997622/job/129314790605) 在准确 `3d9d8a50a32611ecc9345cc04dfd7f65b18e18ee` 报旧 `backup_layout_goals_tests::Fixture::state` 的 E0308。本片只在完整替换 `file_backup_paths` 时使用既有 `Tracked::from` 转换（`.into()`），保持新容器的全量变更标记，不放宽生产接口。五项既有测试、全部布局／重绑定拒绝断言与测试数据不变；仅该测试源码及 TASKS，未本地运行程序、格式器、编译或测试，尚待准确后继提交的 GitHub 复验。
+
 - [短 CI #954](https://github.com/isarmg/zxs/actions/runs/42658950722) 的 quality job `129307510947` 在准确 `a921f8665c3445d0441ebc75d51ca2cc077b0bd7` 暴露 `directory_layout_execution` 测试目标的三处 E0521：`rescue_integrity::hide_last_index_row` 将两个一般 `&str` 当 SQL 传给 query_scalar/query，`database_admission::rewrite` 将一般字符串切片成员传给 execute。本片核对实际 `SqlSafeStr`／Execute 契约及全部私有 helper 调用后，仅把两个 SQL 参数和 statements 的元素标为 `&'static str`；全部调用原本就是字面量，外层切片、文件路径及参数绑定的 index 名仍保留原借用，不泄漏字符串、不使用 AssertSqlSafe、不扩大生产 SQL 接口。实际索引／页损坏注入、NUL／长度／闭包拒绝与原字节保全的所有 SQL 和断言原样保留。仅两份既有测试源码和 TASKS，未本地运行程序、formatter、编译、Clippy 或测试，未另行触发 workflow；提交后仍待准确 head 的 GitHub 复验，不将类型修正视为损坏恢复已通过。
 
 - [push CI #953](https://github.com/isarmg/zxs/actions/runs/42657090120) 准确运行 `804855e6427f6dd56eacd0f0a491d3222008d65d`，于 2026-11-09 16:47 UTC 完成：static、contracts、security、foundation-platform、smb-protocol、web、build-tools 七项成功，仅 quality 失败，4 项长 job 按策略跳过。#951 的外来盘原 owner 测试编译与两处 server 嵌套条件问题不再出现；quality 继续到 helper 后发现三处 Clippy，不能把后续尚未走完的检查说成已全过。

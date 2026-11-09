@@ -69,7 +69,7 @@ impl Fixture {
             placement.binding_generations.insert("P02".into(), 1);
             placement.target_copies += 1;
         }
-        state.file_backup_paths = self.paths.clone();
+        state.file_backup_paths = self.paths.clone().into();
         state
     }
     fn goals(&self, state: &State) -> LayoutGoals {
