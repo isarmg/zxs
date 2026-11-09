@@ -258,8 +258,11 @@ def choose_documents(root, origin, extra):
         raise DocumentationError(f'Missing original documentation inventory: {origin["origin_directory"]}')
     entries = []
     documents = []
+    # Historical local aliases are explicit; new origins use their authenticated
+    # upstream name/version without requiring a redundant display field.
+    identity = origin.get('identity', origin['upstream']['name'] + '-' + origin['upstream']['version'])
+    prefix = 'docs/upstream/' + identity + '/'
     for path in origin['central_original_documentation']:
-        prefix = 'docs/upstream/' + origin['identity'] + '/'
         if not path.startswith(prefix):
             raise DocumentationError(f'Original document identity/path mismatch: {path}')
         tail = path.removeprefix(prefix)

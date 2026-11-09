@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import one approved SQLite patch on GitHub; create blobs/tree, never commit/ref."""
+"""Import approved SQLite materials on GitHub; create blobs/tree, never commit/ref."""
 import json
 import os
 from pathlib import Path
@@ -12,6 +12,7 @@ import tomllib
 
 from sqlite_import.artifacts import (GitHub, PATCH, EVIDENCE, REPOSITORY, SOURCE_BASE,
                                      SOURCE_RUN, approved_inputs, object_sha, read_json)
+from sqlite_import.bindings import prepare as prepare_bindings
 from sqlite_upgrade.archive import IDENTITY, NAME, SHA256, URL, VERSION, relative, sha256
 from sqlite_upgrade.upgrade import DIRECTORY, OLD_ORIGIN, PROVENANCE, TEST_ROOT
 
@@ -218,26 +219,34 @@ def main():
         api = GitHub(token, evidence)
         api.require_main(head)
         before = local_tree("HEAD")
-        original = source_baseline(api, head, before, evidence)
-        evidence["stage"] = "fixed-artifact-and-original-source-admission"
-        patch, source, release = approved_inputs(api)
-        evidence["patch"] = source["patch"]
         sys.path.insert(0, str(ROOT / "tools/rust-sources"))
         import manage
-        evidence["stage"] = "current-predecessor-verification"
+        evidence["stage"] = "current-source-verification"
         run(["python3", "tools/rust-sources/manage.py", "verify", "--metadata"])
         previous = read_json((ROOT / "compliance/rust-sources.json").read_bytes())
-        paths, owner = require_paths(source, previous, original, before)
-        if manage.files(ROOT / DIRECTORY) != source["old_source_files_sha256"]:
-            raise ValueError("complete predecessor source differs from artifact evidence")
-        patch_path = directory / "candidate.patch"
-        patch_path.write_bytes(patch)
-        evidence["stage"] = "exact-patch-application"
-        run(["git", "apply", "--check", "--index", "--binary", "--whitespace=nowarn", str(patch_path)])
-        run(["git", "apply", "--index", "--binary", "--whitespace=nowarn", str(patch_path)])
-        entries = patch_entries(paths)
-        evidence["stage"] = "successor-source-and-license-verification"
-        verify_successor(manage, source, release, previous, owner)
+        if previous["packages"][DIRECTORY]["version"] == VERSION:
+            paths = prepare_bindings(api, head, ROOT, manage, run, previous, evidence)
+            patch = run(["git", "diff", "--cached", "--binary", "--full-index", "--"])
+            (directory / "candidate.patch").write_bytes(patch)
+            entries = patch_entries(paths)
+        else:
+            evidence["task"] = "import-approved-sqlite-upgrade-artifact"
+            original = source_baseline(api, head, before, evidence)
+            evidence["stage"] = "fixed-artifact-and-original-source-admission"
+            patch, source, release = approved_inputs(api)
+            evidence["patch"] = source["patch"]
+            paths, owner = require_paths(source, previous, original, before)
+            if manage.files(ROOT / DIRECTORY) != source["old_source_files_sha256"]:
+                raise ValueError("complete predecessor source differs from artifact evidence")
+            patch_path = directory / "candidate.patch"
+            patch_path.write_bytes(patch)
+            evidence["stage"] = "exact-patch-application"
+            run(["git", "apply", "--check", "--index", "--binary", "--whitespace=nowarn", str(patch_path)])
+            run(["git", "apply", "--index", "--binary", "--whitespace=nowarn", str(patch_path)])
+            entries = patch_entries(paths)
+            evidence["stage"] = "successor-source-and-license-verification"
+            verify_successor(manage, source, release, previous, owner)
+        evidence["candidate_patch"] = {"sha256": sha256(patch), "bytes": len(patch), "paths": paths}
         if (run(["git", "diff", "--name-only", "-z", "--"])
                 or run(["git", "ls-files", "--others", "--exclude-standard", "-z"])):
             raise ValueError("verification changed source outside the authenticated index")
@@ -249,7 +258,7 @@ def main():
         publish_objects(api, head, before, entries, expected, evidence)
         evidence["status"] = "tree-ready-for-coordinator"
         evidence["stage"] = "complete"
-        print(json.dumps({"parent": head, "tree": expected, "source_run": SOURCE_RUN,
+        print(json.dumps({"parent": head, "tree": expected, "task": evidence["task"], "source_run": SOURCE_RUN,
                           "patch_sha256": sha256(patch), "changed_paths": paths}, sort_keys=True))
         print("Verified source import only; no compilation, tests, audit, commit or ref update.")
     except Exception as error:
