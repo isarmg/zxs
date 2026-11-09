@@ -2,14 +2,15 @@
 name: CI
 
 on:
-  # Manual dispatch only; GitHub automatic triggers remain paused.
+  # Run the short CI on every push, and retain manual dispatch.
+  push:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.sha }}-${{ github.run_id }}
   cancel-in-progress: false
 
 env:
