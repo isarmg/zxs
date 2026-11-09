@@ -18,11 +18,11 @@ const operation = "op_11111111111111111111111111111111";
 storage.set("zxs-helper:foreign-chain-original", JSON.stringify({service_user:"zxs",
   operation_id:operation,request_digest:"a".repeat(64),external_writers_stopped:true}));
 const context = vm.createContext({
-  document:{getElementById:element, body:{append() {}}, createElement:() => ({
+  document:Object.assign(new EventTarget(), {getElementById:element, body:{append() {}}, createElement:() => ({
     click() { downloads.push(this.download); }, remove() {}
-  })},
+  })}),
   window:{addEventListener() {},confirm:() => true}, confirm:() => true,
-  Blob, TextEncoder, URL:{createObjectURL:() => "blob:test",revokeObjectURL() {}},
+  Blob, Event, TextEncoder, URL:{createObjectURL:() => "blob:test",revokeObjectURL() {}},
   setTimeout:() => 0,
   localStorage:{getItem:key => storage.get(key) ?? null,setItem(key, value) {
     if (storageFailure) throw new Error("storage unavailable"); storage.set(key,value);
