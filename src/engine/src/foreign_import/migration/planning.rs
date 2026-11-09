@@ -1,6 +1,10 @@
 use super::*;
 
 impl ForeignMigrationPlan {
+    /// Maximum level in one complete foreign chain, including the source root.
+    /// This bounds material preparation only and grants no membership authority.
+    pub const MAX_CHAIN_LEVEL: u32 = 32;
+
     /// Plan a verified level 1/2/3 source as an offline primary capsule with
     /// unchanged original graphs, without admitting or changing the source role.
     pub fn primary(source: &ForeignImportPreview, operation_id: OperationId) -> Result<Self> {
@@ -75,7 +79,12 @@ impl ForeignMigrationPlan {
         placement: Placement,
         names: Option<&BTreeMap<ForeignPrimaryOrigin, String>>,
     ) -> Result<Self> {
-        if !(1..=3).contains(&source.source_level) {
+        let source_levels = if matches!(&placement, Placement::ChainMaterial { .. }) {
+            2..=Self::MAX_CHAIN_LEVEL
+        } else {
+            1..=3
+        };
+        if !source_levels.contains(&source.source_level) {
             return Err(invalid("unsupported source role"));
         }
         // The existing cheap revalidation does not cover bodies and all graph
@@ -234,7 +243,7 @@ impl PlanRecord {
             Placement::ChainMaterial {
                 chain_digest,
                 target_level,
-            } if (2..=3).contains(&self.source_level)
+            } if (2..=ForeignMigrationPlan::MAX_CHAIN_LEVEL).contains(&self.source_level)
                 && (1..self.source_level).contains(target_level) =>
             {
                 chain_digest

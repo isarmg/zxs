@@ -165,8 +165,10 @@ fn complete_chain(
     upstream: &str,
     lower: &[&LowerDirectory],
 ) -> Result<()> {
-    if !(2..=3).contains(&level) || lower.len() != (level - 1) as usize {
-        return Err("a level 2 source needs its real level 1; a level 3 source needs real levels 1 and 2 in the same batch".into());
+    if !(2..=storage_engine::ForeignMigrationPlan::MAX_CHAIN_LEVEL).contains(&level)
+        || lower.len() != (level - 1) as usize
+    {
+        return Err("a foreign source must include every real lower level in the same bounded chain; missing levels cannot be added later".into());
     }
     storage_engine::validate_slot(source_slot)?;
     let mut slots = BTreeSet::from([source_slot.to_ascii_lowercase()]);

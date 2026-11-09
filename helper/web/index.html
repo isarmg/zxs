@@ -210,7 +210,7 @@
     </section>
     <section class="card">
       <h2>外来高级盘：同批准备全部低级盘材料</h2>
-      <p>实际检查一个外来二级或三级盘，必须同时列出全部低级真实空目录。二级需要一级；三级需要一级和二级。来源、已有池及所有低级目录都须是 <code>/zxs/data/disks</code> 的不同直接子目录，具备服务 UID/GID 与 0700。目标会得到完整独立的原始材料副本，原历史身份和缺失正文记录保持不变。</p>
+      <p>实际检查一个外来二级及以上盘，必须同时列出从一级到来源前一级的全部真实空目录。例如四级盘必须同批设置一级、二级和三级，不允许省略层级或以后补盘。当前一条新链最多 32 级，来源层级以盘上证明为准。来源、已有池及所有低级目录都须是 <code>/zxs/data/disks</code> 的不同直接子目录，具备服务 UID/GID 与 0700。目标会得到完整独立的原始材料副本，原历史身份和缺失正文记录保持不变；材料准备不等于正式加入。</p>
       <p class="warning">这是实际复制和可恢复的材料准备，不是正式加入。不会先接纳高级盘、先初始化低级盘或启动 writer。完整 State／数据库／共同接纳协议尚未闭合，完成后仍不能把这些目录交给普通 Add 或作为活动盘使用。</p>
       <form id="foreign-chain-form">
         <label>现有服务账户 <input id="foreign-chain-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label>
@@ -218,7 +218,7 @@
         <label>拟使用的高级槽位 <input id="foreign-chain-slot" required value="foreign-tertiary" maxlength="64" autocomplete="off" spellcheck="false"></label>
         <label>高级盘的完整低级链接口槽位 <input id="foreign-chain-upstream" required value="new-secondary" maxlength="64" autocomplete="off" spellcheck="false"></label>
         <label class="ack"><input id="foreign-chain-metadata" type="checkbox"> 拟将高级盘作为元数据成员（仅绑定意图，本次不授予投票权）</label>
-        <label>全部低级根目录，按一级、二级顺序 <textarea id="foreign-chain-lower" rows="7" spellcheck="false">[{"root_path":"/zxs/data/disks/new-primary","slot_id":"new-primary","level":1,"upstream_slot_id":null,"metadata_member":true},{"root_path":"/zxs/data/disks/new-secondary","slot_id":"new-secondary","level":2,"upstream_slot_id":"new-primary","metadata_member":true}]</textarea></label>
+        <label>全部低级根目录，按一级至来源前一级连续升序列出 <textarea id="foreign-chain-lower" rows="7" spellcheck="false">[{"root_path":"/zxs/data/disks/new-primary","slot_id":"new-primary","level":1,"upstream_slot_id":null,"metadata_member":true},{"root_path":"/zxs/data/disks/new-secondary","slot_id":"new-secondary","level":2,"upstream_slot_id":"new-primary","metadata_member":true}]</textarea></label>
         <label class="ack"><input id="foreign-chain-writers" type="checkbox" required> 已停止 ZXS、Samba、旧二进制及所有来源/目标写入者。预览以服务账户打开既有 Engine，可能进行原有恢复/同步；主机锁不能排除外部写入者。</label>
         <button type="submit">预览一次完整的低级链</button>
         <label>原操作 ID <input id="foreign-chain-operation" maxlength="35" autocomplete="off" spellcheck="false"></label>
