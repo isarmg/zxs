@@ -458,3 +458,15 @@ fn same_payload_repair_is_explicit_and_accepts_no_destination_or_runtime_package
         "zxs-helper", "install", "repair-preview", "--destination", "/tmp/elsewhere",
     ]).is_err());
 }
+
+#[test]
+fn embedded_material_export_requires_an_explicit_new_output_and_has_no_extraction_mode() {
+    let args = Args::try_parse_from([
+        "zxs-helper", "install", "materials", "--output", "/tmp/explicit-new-archive.tar.gz",
+    ]).unwrap();
+    assert!(matches!(args.command, Some(Command::Install {
+        command: installation::Command::Materials { output }
+    }) if output == PathBuf::from("/tmp/explicit-new-archive.tar.gz")));
+    assert!(Args::try_parse_from(["zxs-helper", "install", "materials"]).is_err());
+    assert!(Args::try_parse_from(["zxs-helper", "install", "materials", "--extract", "/tmp/other"]).is_err());
+}

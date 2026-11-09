@@ -37,6 +37,12 @@ def elf_fixture(module=False):
 
 def add_runtime_fields(fields):
     # Synthetic package identity for receipt plumbing only, not runtime evidence.
+    fields.update({"native-helper-license-materials-embedded": "true",
+                   "native-helper-license-materials-sha256": "e" * 64,
+                   "native-helper-license-manifest-sha256": "f" * 64,
+                   "native-helper-license-file-count": "5",
+                   "native-helper-license-commit": fields["commit"],
+                   "native-helper-license-tree": fields.get("native-web-tree", "b" * 40)})
     runtime = {"schema_version": 1, "distribution": "debian", "release": "13", "architecture": "amd64",
                "binaries": [{"name": name, "sha256": fields[f"native-{name}-sha256"], "needed": ["libc.so.6"],
                              "libraries": [{"soname": "libc.so.6", "path": "/lib/libc.so.6",

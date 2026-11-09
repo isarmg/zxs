@@ -54,6 +54,15 @@ def build_identity(build, version, commit=None):
     if (fields.get("native-helper-embedded-zxs") != "true"
             or fields.get("native-helper-payload-sha256") != fields["native-zxs-sha256"]):
         raise ValueError("helper must embed the exact standalone ZXS build payload")
+    if (fields.get("native-helper-license-materials-embedded") != "true"
+            or fields.get("native-helper-license-commit") != fields["commit"]
+            or fields.get("native-helper-license-tree") != fields.get("native-web-tree")
+            or not re.fullmatch(r"[1-9][0-9]{0,3}", fields.get("native-helper-license-file-count", ""))
+            or int(fields["native-helper-license-file-count"]) > 8192):
+        raise ValueError("helper legal materials must bind the exact source and bounded file inventory")
+    for key in ("native-helper-license-materials-sha256", "native-helper-license-manifest-sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", fields.get(key, "")):
+            raise ValueError("helper legal material byte identities are missing or invalid")
     if fields.get("native-baseline") != "debian13-amd64" or fields.get("native-web-embedded") != "true":
         raise ValueError("native release requires Debian 13 and embedded Web")
     if fields.get("native-web-commit") != fields["commit"] or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", fields.get("native-web-tree", "")):

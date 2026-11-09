@@ -72,6 +72,11 @@ def runtime_dependencies(root):
             "binaries": [inspector["binary_receipt"](name, root / OUTPUT / name) for name in BINARIES]}
 
 
+def legal_materials(root, version, commit, tree, payload_sha256):
+    builder = runpy.run_path(str(root / ".github/scripts/helper-legal-materials.py"))
+    return builder["prepare"](root, root / OUTPUT, version, commit, tree, payload_sha256)
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     os.chdir(root)
@@ -111,14 +116,22 @@ def main():
                    check=True, env=build_environment)
     payload_path = root / OUTPUT / "zxs"
     payload_sha256 = digest(payload_path)
+    materials = legal_materials(root, version, commit, tree, payload_sha256)
     helper_environment = dict(build_environment, ZXS_HELPER_PAYLOAD=str(payload_path),
                               ZXS_HELPER_PAYLOAD_COMMIT=commit, ZXS_HELPER_PAYLOAD_TREE=tree,
                               ZXS_HELPER_PAYLOAD_VERSION=version,
-                              ZXS_HELPER_PAYLOAD_SHA256=payload_sha256)
+                              ZXS_HELPER_PAYLOAD_SHA256=payload_sha256,
+                              ZXS_HELPER_MATERIALS=str(materials["archive"]),
+                              ZXS_HELPER_MATERIALS_SHA256=materials["archive_sha256"],
+                              ZXS_HELPER_MATERIALS_MANIFEST=str(materials["manifest"]),
+                              ZXS_HELPER_MATERIALS_MANIFEST_SHA256=materials["manifest_sha256"])
     subprocess.run([*build_command, "--package", "storage-helper", "--message-format=json"],
                    check=True, env=helper_environment)
     if digest(payload_path) != payload_sha256:
         raise RuntimeError("embedded helper ZXS payload changed during build")
+    if (digest(materials["archive"]) != materials["archive_sha256"]
+            or digest(materials["manifest"]) != materials["manifest_sha256"]):
+        raise RuntimeError("embedded helper license materials changed during build")
     if commit != subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip():
         raise RuntimeError("native release source commit changed during build")
     require_clean_source()
@@ -136,6 +149,12 @@ def main():
         "native-profile": "release", "native-rustc": json.dumps(rustc),
         "native-helper-embedded-zxs": "true",
         "native-helper-payload-sha256": payload_sha256,
+        "native-helper-license-materials-embedded": "true",
+        "native-helper-license-materials-sha256": materials["archive_sha256"],
+        "native-helper-license-manifest-sha256": materials["manifest_sha256"],
+        "native-helper-license-file-count": str(materials["file_count"]),
+        "native-helper-license-commit": commit,
+        "native-helper-license-tree": tree,
         "native-rust-target-default-cpu": default_cpu,
         "native-rust-target-default-cfg": json.dumps(default_cfg),
         "native-isa-attestation": "not-attested; target-default-query-only; excludes-effective-Rust-C-asm-flags",

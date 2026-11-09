@@ -1,5 +1,6 @@
 """Native build receipt tests use fake subprocesses, never a Rust compiler."""
 import importlib.util
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -33,6 +34,15 @@ class NativeRelease(unittest.TestCase):
         self.output.mkdir(parents=True)
         for name in MODULE.BINARIES:
             (self.output / name).write_bytes(name.encode())
+        archive = self.output / "helper-license-materials.tar.gz"
+        manifest = self.output / "helper-license-materials.json"
+        archive.write_bytes(b"fixture archive")
+        manifest.write_bytes(b"fixture manifest")
+        self.materials = {"archive": archive, "manifest": manifest,
+                          "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                          "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                          "file_count": 5}
+        self.enterContext(patch.object(MODULE, "legal_materials", return_value=self.materials))
         self.receipt = self.output / "BUILD.txt"
         self.receipt.write_text("stale successful build")
         self.enterContext(patch.object(MODULE, "__file__", str(self.root / ".github/scripts/release-native.py")))
@@ -76,8 +86,13 @@ class NativeRelease(unittest.TestCase):
         self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_PAYLOAD_SHA256"], MODULE.digest(self.output / "zxs"))
         self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_PAYLOAD_VERSION"], "0.1.0")
         self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_PAYLOAD_COMMIT"], self.commit)
+        self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_MATERIALS"], str(self.materials["archive"]))
+        self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_MATERIALS_SHA256"], self.materials["archive_sha256"])
+        self.assertEqual(helper.kwargs["env"]["ZXS_HELPER_MATERIALS_MANIFEST_SHA256"], self.materials["manifest_sha256"])
         content = self.receipt.read_text()
         self.assertIn("native-helper-embedded-zxs=true\n", content)
+        self.assertIn("native-helper-license-materials-embedded=true\n", content)
+        self.assertIn("native-helper-license-commit=" + self.commit + "\n", content)
         self.assertIn("native-target=x86_64-unknown-linux-gnu\n", content)
         self.assertIn("native-zxs-sha256=" + MODULE.digest(self.output / "zxs"), content)
         self.assertIn("native-zxs-helper-sha256=" + MODULE.digest(self.output / "zxs-helper"), content)
@@ -99,6 +114,13 @@ class NativeRelease(unittest.TestCase):
     def test_failed_build_removes_old_receipt(self):
         with patch.object(MODULE.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "cargo")):
             with self.assertRaises(subprocess.CalledProcessError):
+                MODULE.main()
+        self.assertFalse(self.receipt.exists())
+
+    def test_material_change_during_helper_build_never_leaves_a_success_receipt(self):
+        with patch.object(MODULE.subprocess, "run", side_effect=lambda *args, **kwargs:
+                          self.materials["archive"].write_bytes(b"changed")):
+            with self.assertRaisesRegex(RuntimeError, "license materials changed"):
                 MODULE.main()
         self.assertFalse(self.receipt.exists())
 

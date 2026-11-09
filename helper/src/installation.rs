@@ -3,6 +3,7 @@
 mod payload;
 mod baseline;
 pub(crate) mod repair;
+pub(crate) mod materials;
 pub(crate) use payload::Metadata as PayloadMetadata;
 pub(crate) fn verified_payload_metadata() -> Result<PayloadMetadata> {
     Ok(payload::required()?.metadata())
@@ -63,6 +64,13 @@ pub(crate) enum Command {
         #[arg(long)]
         external_administration_stopped: bool,
     },
+    /// Export the exact embedded public license/notice archive without extraction or replacement.
+    Materials {
+        #[arg(long)]
+        output: std::path::PathBuf,
+    },
+    /// Print the exact source and file inventory for the embedded public materials.
+    MaterialsManifest,
     /// Show the exact matching embedded executable, or explicit absence in a development build.
     Payload,
     /// Read-only preview of fixed /usr/local/bin/zxs; never configures or starts a service.
@@ -166,7 +174,7 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
     )
 }
 pub(crate) fn availability() -> json_codec::Value {
-    json!({"embedded":payload::metadata(),"destination":DESTINATION,"program_only":true,"repair_available":payload::metadata().is_some(),"repair_requires_exact_installation_baseline":true,"network_download":false})
+    json!({"embedded":payload::metadata(),"legal_materials":materials::metadata(),"destination":DESTINATION,"program_only":true,"repair_available":payload::metadata().is_some(),"repair_requires_exact_installation_baseline":true,"network_download":false})
 }
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
@@ -181,6 +189,8 @@ pub(crate) fn run(command: Command) -> Result<()> {
                 external_administration_stopped,
             })?)
         }
+        Command::Materials { output } => print(materials::export(&output)?),
+        Command::MaterialsManifest => materials::print_manifest(),
         Command::Payload => print(availability()),
         Command::Preview => print(preview()?),
         Command::Commit {

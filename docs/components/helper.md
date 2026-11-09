@@ -14,6 +14,10 @@
 
 `install repair-preview/repair-recover-preview/repair-commit` 与独立 Web 已接[同载荷程序修复](../design/helper-same-payload-program-repair.md)。首装保存不可变安装基线；修复只恢复它绑定的内置程序，先独立备份原字节并保留交换原 inode，支持准确原请求续作。不打开数据/配置，不启动服务，不升级或降级；缺基线及未知状态保留拒绝。源码未审查、编译、测试或 CI。
 
+## 内置许可与版权材料
+
+正式 helper 的程序载荷另配[准确中央许可快照](../design/helper-embedded-legal-materials.md)。`install materials --output …` 可核验后新建归档文件，`install materials-manifest` 输出准确清单；独立 Web 直接下载内置字节，不在服务器解包/落盘。它保留未关闭事项，不是法律完整性证明或完整源码/依赖包；未构建或测试，材料归档尚未实际生成。
+
 ## 首装运行目录准备
 
 `initialization runtime-preview/runtime-prepare` 与独立 Web 现有[固定运行目录入口](../design/helper-runtime-directory-preparation.md)：准确本机服务账户的六个 0700 空目录和 root 所有的独立空 SMB export，原意图及完成 inode 回执、部分发布保留与原请求续作。它不清理已使用目录、不改 live owner/mode、不创建账户或启动服务，且不表示完整安装就绪。此切片未审查、编译、测试或 CI。

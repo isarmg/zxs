@@ -28,6 +28,10 @@
       <h2>安装内置 ZXS 程序</h2>
       <p>只将匹配版本可执行文件放到 <code>/usr/local/bin/zxs</code>，已有不同内容、链接或不安全权限一律拒绝，不覆盖数据、配置或凭据。相同文件可重新核验并同步持久化。本片不会安装依赖、设置 systemd/SMB、初始化系统或启动 ZXS。</p>
       <p id="payload-status">读取内置载荷信息…</p>
+      <p id="legal-materials-status">读取内置许可与版权材料信息…</p>
+      <button id="legal-materials-download" type="button">核验并下载内置许可材料</button>
+      <button id="legal-materials-manifest" type="button" class="secondary">下载准确来源与文件清单</button>
+      <p class="muted">仅导出 helper 内已有的公共材料，不在服务器写文件或解包。归档保留当前许可资料未关闭事项，不等于法律完整性认证，也不是完整源码、VFS 或系统依赖安装包。</p>
       <button id="install-preview" type="button">预览程序首装</button>
       <pre id="install-plan" hidden></pre>
       <button id="install-commit" type="button" hidden>确认仅安装此程序</button>

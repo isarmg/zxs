@@ -2,6 +2,9 @@
 use sha2::{Digest, Sha256};
 use std::{env, fs, io::Read, path::PathBuf};
 
+#[path = "build/materials.rs"]
+mod materials;
+
 const MAX_PAYLOAD: u64 = 256 * 1024 * 1024;
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 fn required(name: &str) -> String {
@@ -29,8 +32,13 @@ fn main() {
         println!("cargo:rerun-if-env-changed={name}");
     }
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build/materials.rs");
+    for name in materials::VARIABLES {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
     let out = PathBuf::from(required("OUT_DIR"));
     let Some(path) = env::var_os("ZXS_HELPER_PAYLOAD") else {
+        materials::absent(&out);
         for name in [
             "ZXS_HELPER_PAYLOAD_COMMIT",
             "ZXS_HELPER_PAYLOAD_TREE",
@@ -98,4 +106,7 @@ fn main() {
         "pub(super) const EMBEDDED: Option<Payload> = Some(Payload {{ bytes: include_bytes!(concat!(env!(\"OUT_DIR\"), \"/payload-zxs\")), version: {version:?}, commit: {commit:?}, tree: {tree:?}, target: {TARGET:?}, sha256: {digest:?} }});\n"
     );
     fs::write(out.join("install_payload.rs"), generated).expect("write embedded payload identity");
+    materials::prepare(&out, materials::Binding {
+        version: &version, commit: &commit, tree: &tree, target: TARGET, payload_sha256: &digest,
+    });
 }

@@ -115,6 +115,23 @@ class ReleaseAssets(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.verify()
 
+    def test_helper_materials_require_exact_source_digest_and_bounded_inventory(self):
+        path = self.assets / "BUILD.txt"
+        fields = dict(line.split("=", 1) for line in path.read_text().splitlines())
+        for key, value in (("native-helper-license-materials-embedded", "false"),
+                           ("native-helper-license-commit", "c" * 40),
+                           ("native-helper-license-tree", "c" * 40),
+                           ("native-helper-license-materials-sha256", "missing"),
+                           ("native-helper-license-manifest-sha256", "missing"),
+                           ("native-helper-license-file-count", "0"),
+                           ("native-helper-license-file-count", "8193")):
+            with self.subTest(key=key, value=value):
+                changed = dict(fields, **{key: value})
+                path.write_text("".join(f"{name}={text}\n" for name, text in changed.items()))
+                self.checksums()
+                with self.assertRaises(ValueError):
+                    self.verify()
+
     def test_elf_type_and_abi_are_required_even_with_consistent_hashes(self):
         binary = self.assets / "zxs-0.1.0-debian13-amd64"
         build = self.assets / "BUILD.txt"

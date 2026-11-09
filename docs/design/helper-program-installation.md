@@ -6,6 +6,8 @@
 
 ## 不递归的可验证载荷
 
+后继有独立[内置许可/版权材料切片](helper-embedded-legal-materials.md)：从准确 source tree 准备中央文本及逐文件清单，与同一 ZXS 载荷绑定，作为 helper 内部资源提供 CLI/Web 导出。不替代源码/VFS/OS 依赖安装包或独立许可复核；不新增顶层 Release 资产。
+
 `release-native.py` 先构建 ZXS，再将这份准确输出交给 helper 的构建脚本；helper 不被放入自身载荷，不嵌入包含 helper 的完整归档。构建脚本只读取、不执行载荷，要求：
 
 - 与 helper 相同的 Cargo 版本，明确当前 Git commit/tree；
