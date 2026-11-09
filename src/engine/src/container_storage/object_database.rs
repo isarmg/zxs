@@ -219,6 +219,21 @@ impl ObjectDatabaseReconstruction {
     pub fn database_bytes(&self) -> &[u8] {
         &self.bytes
     }
+    pub fn maximum_database_bytes(&self) -> usize {
+        MAX_DATABASE_BYTES
+    }
+
+    /// Verify an independently read image against this exact rescue material.
+    /// SQLite page identity is not required, but every typed record and header is.
+    /// No file, system root or installation capability is opened or returned.
+    pub fn verify_database_bytes(&self, bytes: &[u8]) -> Result<()> {
+        if self.material.scope.read(bytes)? != self.material {
+            return Err(invalid(
+                "object rescue image differs from the complete selected material",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn invalid(message: &str) -> Error {

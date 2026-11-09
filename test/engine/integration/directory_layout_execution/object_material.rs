@@ -1,5 +1,6 @@
 //! Object-local rescue artifacts, not active installation or system authority.
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 use storage_engine::{
     ObjectDatabaseScope, inspect_object_database_material, reconstruct_object_database_material,
 };
@@ -21,7 +22,10 @@ fn directory_archive_reconstructs_after_source_system_and_sqlite_are_unavailable
         repository_id: fixture.repository.repository_id.clone(),
         directory_id: initialized.directory_id,
     };
-    let survivor = tempfile::tempdir().unwrap();
+    let survivor = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
     let bytes = fs::read(fixture.root().join("box/.zxs-directory.sqlite")).unwrap();
     fs::write(survivor.path().join(".zxs-directory.sqlite"), bytes).unwrap();
     drop(fixture);
@@ -93,4 +97,40 @@ fn directory_archive_rejects_rehashed_exterior_tree_path_and_missing_local_head(
             .is_err()
         );
     }
+}
+
+#[test]
+fn directory_rescue_readback_cannot_substitute_a_newer_valid_local_branch_set() {
+    let mut fixture = Fixture::new();
+    fixture.save("box/file.txt", b"local");
+    fixture.initialize("");
+    let initialized = fixture.initialize("box");
+    fixture.checkpoint("box");
+    fixture
+        .engine
+        .reconcile_directory_layout(&fixture.repository.repository_id)
+        .unwrap();
+    let scope = ObjectDatabaseScope::Directory {
+        repository_id: fixture.repository.repository_id.clone(),
+        directory_id: initialized.directory_id,
+    };
+    let parent = fixture.root().join("box");
+    let material =
+        inspect_object_database_material(fs::File::open(&parent).unwrap(), parent.clone(), &scope)
+            .unwrap();
+    let rebuilt =
+        reconstruct_object_database_material(&material.archive_bytes().unwrap(), &scope).unwrap();
+    rebuilt
+        .verify_database_bytes(&fs::read(parent.join(".zxs-directory.sqlite")).unwrap())
+        .unwrap();
+    fixture.create_branch("box", "later");
+    fixture
+        .engine
+        .reconcile_directory_layout(&fixture.repository.repository_id)
+        .unwrap();
+    let later = fs::read(parent.join(".zxs-directory.sqlite")).unwrap();
+    assert!(
+        inspect_object_database_material(fs::File::open(&parent).unwrap(), parent, &scope).is_ok()
+    );
+    assert!(rebuilt.verify_database_bytes(&later).is_err());
 }

@@ -56,3 +56,38 @@ fn export_holds_service_exclusion_but_archive_rebuild_needs_no_host_state() {
         .is_err()
     );
 }
+
+#[test]
+fn disk_rescue_verify_is_read_only_and_has_no_implicit_source_selection() {
+    let args = crate::Args::try_parse_from([
+        "zxs-helper",
+        "disk-database-rescue",
+        "verify",
+        "disk.disk-db.json",
+        "identity.json",
+        "--source",
+        "history",
+        "copy.recovered.sqlite",
+    ])
+    .unwrap();
+    assert!(!crate::requires_service_exclusion(
+        args.command.as_ref().unwrap()
+    ));
+    assert!(matches!(
+        args.command,
+        Some(crate::Command::DiskDatabaseRescue {
+            command: Command::Verify { .. }
+        })
+    ));
+    assert!(
+        crate::Args::try_parse_from([
+            "zxs-helper",
+            "disk-database-rescue",
+            "verify",
+            "disk.disk-db.json",
+            "identity.json",
+            "copy.recovered.sqlite",
+        ])
+        .is_err()
+    );
+}

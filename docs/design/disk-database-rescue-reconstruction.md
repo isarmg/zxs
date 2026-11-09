@@ -66,3 +66,7 @@ export 持有现有 ZXS 生命周期租约并复用安全冻结读取。操作�
 本片不修改源业务写者，不添加普通后台全历史扫描。下一步仍包括无预先归档且本库缺失时的完整独立来源重建、全部主目录/alias/标签范围、代际材料、三范围共同准入/活动安装和正文可用性。
 
 2026-11-08：基于 GitHub main `92fc12ec` 写入生产代码、CLI、规范及九项测试源码，未修改先前对象库救援候选。按用户要求**未审查、编译、格式化、静态检查、测试或 CI**，没有真实磁盘操作。九项源码覆盖原 SYSTEM/原盘消失后重建、显式来源/缺失、错身份和矛盾 current、缺失前置历史、非规范/额外字段、所选 sidecar 保全、空目录路径历史、helper 安全输出名及租约/CLI。它们不是运行通过证据。
+
+## 已发表镜像的准确读回
+
+后继 [救援数据库读回](rescue-database-readback.md) 保留所选完整语义 snapshot，并核验实际发表后的准确 inode/文件及全部记录。新增 `disk-database-rescue verify ARCHIVE IDENTITY --source SOURCE IMAGE.recovered.sqlite` 可冷态只读核验，不依赖原盘或 SYSTEM、不修改输出。相同记录但不同 sequence、不同 current/history 族及读验期间变化均不能冒充正确副本；报告区分归档摘要、实际文件摘要和语义 records hash。发表后错误明确保留文件，不能自动重建。后继组合的生产 check 和所选 helper/平台/目录回归已验证；盘根 Engine libtest 尚未执行，具体范围见读回协议交付事实，未复跑 CI。

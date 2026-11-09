@@ -179,3 +179,25 @@ fn bundle_inspection_rejects_unsafe_or_linked_files_without_mutation() {
         assert!(folder.is_dir());
     }
 }
+
+#[test]
+fn publication_receipt_keeps_original_inode_alive_during_caller_readback() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = OpenAt2Root::open(temporary.path(), MountPolicy::AllowNestedMounts).unwrap();
+    let path = temporary.path().join("rescue.sqlite");
+    let receipt = write_atomic_at_mode_receipt(
+        &root,
+        &EntryName::new("rescue.sqlite").unwrap(),
+        b"original",
+        false,
+        0o600,
+    )
+    .unwrap();
+    let original = fs::metadata(&path).unwrap();
+    assert_eq!(receipt.identity().inode, original.ino());
+    fs::remove_file(&path).unwrap();
+    fs::write(&path, b"replacement").unwrap();
+    assert_eq!(receipt._file.metadata().unwrap().nlink(), 0);
+    assert_eq!(receipt._file.metadata().unwrap().ino(), original.ino());
+    assert_ne!(fs::metadata(&path).unwrap().ino(), original.ino());
+}

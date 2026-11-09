@@ -304,4 +304,8 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 
 ### 盘根救援归档和独立数据库重建
 
-`disk-database-rescue export SELECTION OUTPUT.disk-db.json [--scope both|current|history]` 保存完整冻结材料；`disk-database-rescue rebuild ARCHIVE IDENTITY --source stored-current|history|current-from-history OUTPUT.recovered.sqlite` 在原 SYSTEM/原盘均不存在时也可重建一个独立 SQLite，并完整读回比较。来源必须明确，归档中的矛盾记录不能被输出选项隐藏；不凭 current 伪造缺失 history、不安装活动库。只生成新安全文件、拒绝覆盖和活动库名；export 需要停写及现有服务租约，纯归档 rebuild 不触原主机状态。未新增 Web 写入口。详见[范围、示例与未认证边界](../design/disk-database-rescue-reconstruction.md)。九项测试仅源码，未审查/编译/格式化/测试/CI，无实际盘操作。
+`disk-database-rescue export SELECTION OUTPUT.disk-db.json [--scope both|current|history]` 保存完整冻结材料；`disk-database-rescue rebuild ARCHIVE IDENTITY --source stored-current|history|current-from-history OUTPUT.recovered.sqlite` 在原 SYSTEM/原盘均不存在时也可重建一个独立 SQLite，并完整读回比较。来源必须明确，归档中的矛盾记录不能被输出选项隐藏；不凭 current 伪造缺失 history、不安装活动库。只生成新安全文件、拒绝覆盖和活动库名；export 需要停写及现有服务租约，纯归档 rebuild 不触原主机状态。未新增 Web 写入口。详见[范围、示例与未认证边界](../design/disk-database-rescue-reconstruction.md)。原九项中的 helper CLI 已定向验证，盘根 Engine libtest 尚未执行，组合验证范围见后节；未复跑 CI，无实际盘操作。
+
+### 救援数据库发表后/冷态只读核验
+
+对象和盘根 `rebuild` 现在在无覆盖发表后持有准确原 inode，对实际 SQLite 完整解码、对比原归档全部记录，并重核实际文件字节、属性、具名父目录及未知侧车。只有成功才报告 `file_readback_verified:true`，分别带归档/实际文件摘要和准确文件身份。已发表但核验失败会明确保留文件，不回滚或覆盖。新 `object-database verify` 与 `disk-database-rescue verify` 可在进程重启后只读完成同类核验，盘根仍必须明确 `--source`；缺失或错误镜像不会被补造。详见[读回协议与保全边界](../design/rescue-database-readback.md)。它们均无活动安装或来源接纳能力；本次生产 helper check、22 项所选 Rust 回归通过；三项新增 Engine libtest 用例尚未执行，不能据此宣称盘根全套验证通过。未复跑 CI，无真实盘操作。

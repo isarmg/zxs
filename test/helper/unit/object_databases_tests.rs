@@ -30,3 +30,26 @@ fn only_live_entity_reads_require_the_service_lifetime_lease() {
         output: "file.recovered.sqlite".into(),
     }));
 }
+
+#[test]
+fn object_rescue_verify_is_read_only_and_requires_explicit_scope_and_image() {
+    use command_line::Parser;
+    let args = crate::Args::try_parse_from([
+        "zxs-helper",
+        "object-database",
+        "verify",
+        "file.object-db.json",
+        "scope.json",
+        "copy.recovered.sqlite",
+    ])
+    .unwrap();
+    assert!(!crate::requires_service_exclusion(
+        args.command.as_ref().unwrap()
+    ));
+    assert!(matches!(
+        args.command,
+        Some(crate::Command::ObjectDatabase {
+            command: Command::Verify { .. }
+        })
+    ));
+}

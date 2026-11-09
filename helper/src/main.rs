@@ -127,12 +127,12 @@ enum Command {
     },
     /// Inspect current/history SQLite with explicit disk identity; never restores authority.
     DiskDatabases(disk_databases::Options),
-    /// Inspect, export or reconstruct isolated file/directory SQLite material.
+    /// Inspect, export, reconstruct or verify isolated file/directory SQLite material.
     ObjectDatabase {
         #[command(subcommand)]
         command: object_databases::Command,
     },
-    /// Export/rebuild standalone disk SQLite rescue material, never install active databases.
+    /// Export, rebuild or verify standalone disk SQLite rescue material; no active installation.
     DiskDatabaseRescue {
         #[command(subcommand)]
         command: disk_database_rescue::Command,

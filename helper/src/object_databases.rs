@@ -25,6 +25,12 @@ pub(crate) enum Command {
         scope: PathBuf,
         output: PathBuf,
     },
+    /// Read back an existing rescue image against the exact archive; never repair it.
+    Verify {
+        archive: PathBuf,
+        scope: PathBuf,
+        image: PathBuf,
+    },
 }
 
 #[derive(Deserialize)]
@@ -82,6 +88,20 @@ pub(crate) fn requires_service_exclusion(command: &Command) -> bool {
     matches!(command, Command::Inspect { .. } | Command::Export { .. })
 }
 
+fn reconstruct(
+    archive: &Path,
+    scope: &Path,
+) -> Result<(storage_engine::ObjectDatabaseReconstruction, String)> {
+    let expected: ObjectDatabaseScope =
+        storage_engine::decode_strict(&private_io::read_owned(scope, 64 * 1024)?)?;
+    let archive = private_io::read_owned(archive, MAX_OBJECT_DATABASE_ARCHIVE_BYTES)?;
+    let digest = private_io::rescue_digest(&archive);
+    Ok((
+        storage_engine::reconstruct_object_database_material(&archive, &expected)?,
+        digest,
+    ))
+}
+
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
         Command::Inspect { selection } => print(summary(&read(&selection)?)),
@@ -100,16 +120,34 @@ pub(crate) fn run(command: Command) -> Result<()> {
             output,
         } => {
             artifact_path(&output, ".recovered.sqlite")?;
-            let expected: ObjectDatabaseScope =
-                storage_engine::decode_strict(&private_io::read_owned(&scope, 64 * 1024)?)?;
-            let archive = private_io::read_owned(&archive, MAX_OBJECT_DATABASE_ARCHIVE_BYTES)?;
-            let rebuilt =
-                storage_engine::reconstruct_object_database_material(&archive, &expected)?;
-            private_io::write_new(&output, rebuilt.database_bytes())?;
+            let (rebuilt, archive_sha256) = reconstruct(&archive, &scope)?;
+            let readback = private_io::publish_rescue_sqlite(
+                &output,
+                rebuilt.database_bytes(),
+                rebuilt.maximum_database_bytes(),
+                |bytes| Ok(rebuilt.verify_database_bytes(bytes)?),
+            )?;
             print(
                 json!({"reconstructed": output, "database_bytes": rebuilt.database_bytes().len(),
+                "archive_sha256":archive_sha256, "file_readback_verified":true, "readback":readback,
                 "material": summary(rebuilt.material())}),
             )
+        }
+        Command::Verify {
+            archive,
+            scope,
+            image,
+        } => {
+            artifact_path(&image, ".recovered.sqlite")?;
+            let (rebuilt, archive_sha256) = reconstruct(&archive, &scope)?;
+            let readback = private_io::verify_rescue_sqlite(
+                &image,
+                rebuilt.maximum_database_bytes(),
+                |bytes| Ok(rebuilt.verify_database_bytes(bytes)?),
+            )?;
+            print(json!({"verified":image, "archive_sha256":archive_sha256,
+                "file_readback_verified":true, "readback":readback, "files_modified":false,
+                "material":summary(rebuilt.material())}))
         }
     }
 }

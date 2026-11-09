@@ -67,3 +67,7 @@ Inspect/Export 必须先停止全部相关写者，并持有当前 daemon 共用
 - 仍缺无归档情况下从各原生 publication 独立重建完整对象库、恢复后的跨范围联合准入、代际档案和正式活动库重新安装。仅有这份归档不能恢复全系统或宣称任意幸存盘已恢复全部数据。
 
 2026-11-08：生产源码与七条回归源码已写入候选；按当前要求未审查、编译、格式化、静态检查、测试或 CI，未操作真实磁盘。源码中的删除只存在于未运行临时目录测试，不表示已经执行过失盘实验。
+
+## 已发表镜像的准确读回
+
+后继 [救援数据库读回](rescue-database-readback.md) 给重建结果增加完整语义 `verify_database_bytes`，helper 重建发表后绑定原 inode 冻结再读，只有实际文件与原归档完整记录一致才返回 `file_readback_verified:true`。新增 `object-database verify ARCHIVE SCOPE IMAGE.recovered.sqlite` 可在原进程/原 SYSTEM/原盘均不存在时只读复核；不修复缺失或错误输出。发表后失败保留新文件并明确未核验，不提升来源认证或活动安装权限。后继组合的生产 check、helper/平台/目录定向验证与未执行的 Engine libtest 范围见读回协议交付事实。

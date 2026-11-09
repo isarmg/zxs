@@ -223,3 +223,65 @@ fn selected_sqlite_sidecars_are_preserved_and_unselected_sidecars_are_not_inspec
     assert_eq!(fs::read(sidecar).unwrap(), b"unknown pending bytes");
     assert_eq!(fs::read(root.join(DISK_DATABASE_NAME)).unwrap(), original);
 }
+
+#[test]
+fn disk_rescue_readback_binds_source_sequence_even_when_every_row_is_identical() {
+    let (_temp, _root, identity, material) = captured(DiskDatabaseReadScope::Current);
+    let archive = material.archive_bytes().unwrap();
+    let expected = reconstruct_disk_database_material(
+        &archive,
+        &identity,
+        DiskDatabaseRebuildSource::StoredCurrent,
+    )
+    .unwrap();
+    expected
+        .verify_database_bytes(expected.database_bytes())
+        .unwrap();
+    let mut changed: json_codec::Value = decode_strict(&archive).unwrap();
+    changed["material"]["current"]["source_sequence"] =
+        json_codec::json!((expected.source_sequence() + 1).to_string());
+    let later = reconstruct_disk_database_material(
+        &rehash(changed),
+        &identity,
+        DiskDatabaseRebuildSource::StoredCurrent,
+    )
+    .unwrap();
+    assert!(
+        expected
+            .verify_database_bytes(later.database_bytes())
+            .is_err()
+    );
+}
+
+#[test]
+fn disk_rescue_readback_does_not_mix_current_and_history_families() {
+    let (_temp, _root, identity, material) = captured(DiskDatabaseReadScope::Both);
+    let archive = material.archive_bytes().unwrap();
+    let current = reconstruct_disk_database_material(
+        &archive,
+        &identity,
+        DiskDatabaseRebuildSource::StoredCurrent,
+    )
+    .unwrap();
+    let history =
+        reconstruct_disk_database_material(&archive, &identity, DiskDatabaseRebuildSource::History)
+            .unwrap();
+    history
+        .verify_database_bytes(history.database_bytes())
+        .unwrap();
+    assert!(
+        current
+            .verify_database_bytes(history.database_bytes())
+            .is_err()
+    );
+    assert!(
+        history
+            .verify_database_bytes(current.database_bytes())
+            .is_err()
+    );
+    assert!(
+        current
+            .verify_database_bytes(b"not a SQLite database")
+            .is_err()
+    );
+}

@@ -20,6 +20,18 @@ fn random_name() -> Result<String> {
     system_entropy::fill(&mut bytes).map_err(std::io::Error::other)?;
     Ok(crate::lower_hex(&bytes))
 }
+/// Keeps the published inode alive until the caller finishes its readback.
+/// This is a filesystem receipt, not content validation or product authority.
+pub struct PublicationReceipt {
+    identity: FileIdentity,
+    _file: File,
+}
+impl PublicationReceipt {
+    pub fn identity(&self) -> FileIdentity {
+        self.identity
+    }
+}
+
 /// Names are relative to the held directory identity, not a reopened path.
 #[derive(Debug)]
 pub struct PublicationFailure {
@@ -101,6 +113,18 @@ pub fn write_atomic_at_mode(
     replace: bool,
     mode: u32,
 ) -> Result<()> {
+    write_atomic_at_mode_receipt(root, target, bytes, replace, mode).map(|_| ())
+}
+
+/// Retain the exact published inode after the existing durable publication.
+/// Failure semantics and preservation of uncertain names match `write_atomic_at_mode`.
+pub fn write_atomic_at_mode_receipt(
+    root: &OpenAt2Root,
+    target: &EntryName,
+    bytes: &[u8],
+    replace: bool,
+    mode: u32,
+) -> Result<PublicationReceipt> {
     use crate::fs_safety::Error;
     let directory = root.directory();
     if replace {
@@ -125,7 +149,7 @@ pub fn write_atomic_at_mode(
         name,
         armed: true,
     };
-    let result: Result<()> = (|| {
+    let result: Result<FileIdentity> = (|| {
         file.write_all(bytes)?;
         file.set_permissions(std::fs::Permissions::from_mode(mode))?;
         file.sync_all()?;
@@ -170,10 +194,13 @@ pub fn write_atomic_at_mode(
                 Error::PublishedDurabilityUnknown(error),
             ))
         })?;
-        Ok(())
+        Ok(identity)
     })();
     match result {
-        Ok(value) => Ok(value),
+        Ok(identity) => Ok(PublicationReceipt {
+            identity,
+            _file: file,
+        }),
         Err(operation) => match cleanup.cleanup() {
             Ok(()) => Err(operation),
             Err(cleanup) => Err(Box::new(CleanupFailure { operation, cleanup })),

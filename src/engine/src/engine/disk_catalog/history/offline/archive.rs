@@ -45,33 +45,71 @@ pub enum DiskDatabaseRebuildSource {
     CurrentFromHistory,
 }
 
+/// Keep the selected semantic snapshot, not just a digest that could hide a
+/// changed header or an image from a different reconstruction source.
+enum ReconstructedSnapshot {
+    Current(DiskCatalogSnapshot),
+    History(DiskHistorySnapshot),
+}
+
 /// A standalone image and its declared coverage, not a disk binding capability.
 pub struct DiskDatabaseReconstruction {
-    identity: DiskRegistrationIdentity,
     source: DiskDatabaseRebuildSource,
-    source_sequence: u64,
-    records: usize,
+    snapshot: ReconstructedSnapshot,
     records_hash: String,
     bytes: Vec<u8>,
 }
 impl DiskDatabaseReconstruction {
     pub fn identity(&self) -> &DiskRegistrationIdentity {
-        &self.identity
+        match &self.snapshot {
+            ReconstructedSnapshot::Current(row) => &row.identity,
+            ReconstructedSnapshot::History(row) => &row.header.identity,
+        }
     }
     pub fn source(&self) -> DiskDatabaseRebuildSource {
         self.source
     }
     pub fn source_sequence(&self) -> u64 {
-        self.source_sequence
+        match &self.snapshot {
+            ReconstructedSnapshot::Current(row) => row.source_sequence,
+            ReconstructedSnapshot::History(row) => row.header.through_sequence,
+        }
     }
     pub fn records(&self) -> usize {
-        self.records
+        match &self.snapshot {
+            ReconstructedSnapshot::Current(row) => {
+                row.versions.len() + row.backup_directories.len()
+            }
+            ReconstructedSnapshot::History(row) => row.changes.len(),
+        }
     }
     pub fn records_hash(&self) -> &str {
         &self.records_hash
     }
     pub fn database_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+    pub fn maximum_database_bytes(&self) -> usize {
+        MAX_DATABASE_BYTES
+    }
+
+    /// Decode a separately read image, checking the entire exact scope, source
+    /// coverage and records. This is a rescue-copy check, not authority admission.
+    pub fn verify_database_bytes(&self, bytes: &[u8]) -> Result<()> {
+        let matches = match &self.snapshot {
+            ReconstructedSnapshot::Current(expected) => {
+                super::super::super::database::read(bytes, &expected.identity)? == *expected
+            }
+            ReconstructedSnapshot::History(expected) => {
+                database::read(bytes, &expected.header.identity)? == *expected
+            }
+        };
+        if !matches {
+            return Err(invalid(
+                "disk rescue image differs from the complete selected snapshot",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -117,7 +155,7 @@ pub fn reconstruct_disk_database_material(
             "disk database rescue archive is not exact canonical material",
         ));
     }
-    let material = input.material;
+    let mut material = input.material;
     validate_scope(&material, expected)?;
     let current = material.current.as_ref().map(current_image).transpose()?;
     let history = material.history.as_ref().map(history_image).transpose()?;
@@ -126,51 +164,34 @@ pub fn reconstruct_disk_database_material(
         .as_ref()
         .map(|history| fold(history, material.current.as_ref()))
         .transpose()?;
-    let (bytes, records_hash, source_sequence, records) = match source {
+    let (bytes, records_hash, snapshot) = match source {
         DiskDatabaseRebuildSource::StoredCurrent => {
             let snapshot = material
                 .current
-                .as_ref()
+                .take()
                 .ok_or_else(|| invalid("archive has no stored current database"))?;
             let (bytes, hash) = current.expect("invariant: present current was encoded above");
-            (
-                bytes,
-                hash,
-                snapshot.source_sequence,
-                snapshot.versions.len() + snapshot.backup_directories.len(),
-            )
+            (bytes, hash, ReconstructedSnapshot::Current(snapshot))
         }
         DiskDatabaseRebuildSource::History => {
             let snapshot = material
                 .history
-                .as_ref()
+                .take()
                 .ok_or_else(|| invalid("archive has no retained history database"))?;
             let (bytes, hash) = history.expect("invariant: present history was encoded above");
-            (
-                bytes,
-                hash,
-                snapshot.header.through_sequence,
-                snapshot.changes.len(),
-            )
+            (bytes, hash, ReconstructedSnapshot::History(snapshot))
         }
         DiskDatabaseRebuildSource::CurrentFromHistory => {
             let snapshot = inventory.ok_or_else(|| {
                 invalid("current-from-history requires complete retained history material")
             })?;
             let (bytes, hash) = current_image(&snapshot)?;
-            (
-                bytes,
-                hash,
-                snapshot.source_sequence,
-                snapshot.versions.len() + snapshot.backup_directories.len(),
-            )
+            (bytes, hash, ReconstructedSnapshot::Current(snapshot))
         }
     };
     Ok(DiskDatabaseReconstruction {
-        identity: material.identity,
         source,
-        source_sequence,
-        records,
+        snapshot,
         records_hash,
         bytes,
     })

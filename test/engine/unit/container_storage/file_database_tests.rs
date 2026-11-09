@@ -677,3 +677,26 @@ fn recomputed_file_archive_digest_cannot_add_an_external_path_record() {
         .is_err()
     );
 }
+
+#[test]
+fn file_rescue_readback_requires_all_records_from_the_exact_selected_capture() {
+    let mut fixture = Fixture::new();
+    let original = fixture.bytes();
+    let material = read_material(&original).unwrap();
+    let rebuilt =
+        reconstruct_object_database_material(&material.archive_bytes().unwrap(), material.scope())
+            .unwrap();
+    rebuilt.verify_database_bytes(&original).unwrap();
+    rebuilt
+        .verify_database_bytes(rebuilt.database_bytes())
+        .unwrap();
+    fixture.delete();
+    let later = fixture.bytes();
+    assert!(read_material(&later).is_ok());
+    assert!(rebuilt.verify_database_bytes(&later).is_err());
+    assert!(
+        rebuilt
+            .verify_database_bytes(&original[..original.len() / 2])
+            .is_err()
+    );
+}
