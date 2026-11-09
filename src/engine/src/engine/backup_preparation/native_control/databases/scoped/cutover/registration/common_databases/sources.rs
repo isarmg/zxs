@@ -190,9 +190,21 @@ impl Sources {
         if system.available()? < REQUIRED {
             return Err(no_space());
         }
+        let original_control = REQUIRED
+            .checked_add(original_control::PRE_CHOICE_BYTES)
+            .and_then(|bytes| bytes.checked_add(self.metadata_reserve_bytes))
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ResourceLimit,
+                    "original Backup control capacity overflow",
+                )
+            })?;
         for source in &self.disks {
-            if source.root.available()? < REQUIRED {
-                return Err(no_space());
+            if source.root.available()? < original_control {
+                return Err(Error::new(
+                    ErrorCode::NoSpace,
+                    "new Backup choice requires complete original-root control/archive capacity beside common databases and metadata reserve",
+                ));
             }
         }
         Ok(())

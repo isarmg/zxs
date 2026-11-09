@@ -2,9 +2,8 @@
 
 [任务清单](../../TASKS.md) · [原生 disk.json](backup-target-seals.md) · [目标 DiskWriter I/O](backup-target-writer-io.md) · [Engine](../components/engine.md)
 
-本片基于已发布 `ef0f35cb` 之上的本地 I/O `35ba95af` 和 seal `e2c6a07d`，三个后继均尚未发布。它继续实现目标自身的普通原生恢复文件，不把前置文件围栏批的发布批准扩大为这三个后继的批准。
+本目标 locator 切片原基于 `ef0f35cb` 上的 I/O `35ba95af` 和 seal `e2c6a07d`，本地候选为 `e13c9c78`；三片整链对齐准确 `79b276c7` 后，已由唯一协调者发布为 `90450cf0`。发布不等于完整备份激活，也不等于测试通过。
 
-本批与其余备份后继整链对齐准确主线 `79b276c7`，只解决集成冲突并准备树，交唯一协调者提交；保留主线每小时 GitHub 短 CI 安排，不自行触发 CI，也不本地编译或测试。
 原任务在实际 target writer、普通 I/O gate、原生 `disk.json` 之后，在每个准确目标安装普通 Config 锚、generation locator、authority、副本独立的完整 control archive 及所有历史 Candidate 的 inclusion proof。不是只记一份路径清单或完成标记：安装代码逐文件不覆盖写入并读回，随后从该目标普通地址重放真实归档，再用已有普通本地成员读者核对首笔 Candidate 和有效 Config。
 
 **这里只选择目标自己的恢复地址，不选择全池活动代际。** 不改原盘 seal／selector／journal、不切换 Engine Config／Current，不生成第二笔 Publication，不解除 SYSTEM 静默或来源围栏，不开放 H03。未执行上述安装流程，未操作真实盘。
@@ -59,3 +58,5 @@ SYSTEM 的 `backup-preparation/target-generation-locators.json` 绑定源 fence�
 清单和内容检查规模受固定上限约束；目录枚举上限为四倍文件上限，证明构造使用原 map 的有界路径，保留取消检查。原归档、全部正文和数据库仍需重复完整观察，不承诺增量成本、瞬时取消、峰值内存上限或吞吐改善。没有减少 fsync、数据证明或来源围栏。
 
 仍须闭合原盘共同活动 selector／journal、活动 Config／Current 与全部数据库及 serving locator 的共同切换、正常后续 Publication、SYSTEM 解静默及安全源解围栏，再将原任务持有的资源交给普通 Engine。普通设置自动触发和完整进度也未完成，不能仅凭目标普通名字齐全就提前返回备份成功。
+
+后继[原盘独立原生控制](backup-original-generation-control.md)在不改变旧 selector／seal 的情况下，继续补每原盘完整归档并绑定已存在的真实首笔 journal；该后继仍仅本地，不计作活动全池。

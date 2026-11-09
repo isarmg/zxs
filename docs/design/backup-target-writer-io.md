@@ -2,9 +2,8 @@
 
 [任务清单](../../TASKS.md) · [目标 writer 文件围栏](backup-target-writer-fencing.md) · [普通原生对象](backup-ordinary-native-metadata.md) · [Engine](../components/engine.md)
 
-原目标 writer-file 围栏批经用户对准确范围的明确批准，已由唯一协调者发布为 `ef0f35cb`。本 I/O 后继由原 `7ace5287` 独立保全并对齐该真实父，当前本地提交 `35ba95af`；尚未发布，也没有混入已发布的文件围栏批。
+原目标 writer-file 围栏批已发布为 `ef0f35cb`；本 I/O 切片由原 `7ace5287` 独立保全、对齐为 `35ba95af`，随后与 seal／locator 整链对齐 `79b276c7`，由唯一协调者发布为 `90450cf0`。本文件记录该 I/O 切片自身范围，不把实际 I/O 资源视作全池完成。
 
-本批与其余备份后继整链对齐准确主线 `79b276c7`，只解决集成冲突并准备树，交唯一协调者提交；保留主线每小时 GitHub 短 CI 安排，不自行触发 CI，也不本地编译或测试。
 本片把原任务已经持有的真实目标 writer owner 接入生产 `DiskHandle`、`DiskIoBinding` 和 `DiskWriter`。目标普通文件操作开始使用原生 Backup 代际的准确 I/O epoch，并由真实普通租约覆盖写入、读取及同步尾部。不是重新解析 Config 后把目标当成新的 Genesis，也不把文件锁当作 Current 授权。
 
 **范围仍是原任务内的目标资源，不是最终活动池。** 不修改 `Engine.config`、活动 selector、`disk.json`、Engine Current 或原盘 I/O authority，不开放第二笔普通 publication，不解除来源围栏，不开放 SYSTEM 普通查询及 H03。只读来源、目标完整单元、原 voters 和永久回执的规则不变。
@@ -45,4 +44,6 @@ native Generation 保留完整来源 State／历史以支持准确首笔语义�
 
 最终活动 Current／Config 与全池 selector、正常后续 publication、SYSTEM 解静默及安全源解围栏仍未实现。目标 `disk.json` 和普通原生恢复地址由后继本地切片继续开发，不算本片独立完成或已发布。这些要共同闭合后才能将任务内资源交给普通 Engine，不能仅凭本片真实 DiskWriter 已存在就释放旧池或报告迁移成功。
 
-后继本地候选续接[目标原生 seal 的任务内安装](backup-target-seals.md)，只完成准确 `disk.json` 的不覆盖写入、持久文件绑定与原任务恢复。另有[目标原生恢复地址](backup-target-native-locators.md)后继，为目标安装独立完整归档及普通冷读名称。两片仍没有全池活动 selector、普通池切换或源解围栏，也没有发布。
+后继本地候选续接[目标原生 seal 的任务内安装](backup-target-seals.md)，只完成准确 `disk.json` 的不覆盖写入、持久文件绑定与原任务恢复。另有[目标原生恢复地址](backup-target-native-locators.md)后继，为目标安装独立完整归档及普通冷读名称。两片仍没有全池活动 selector、普通池切换或源解围栏，已随 `90450cf0` 发布，仍未完成全池切换。
+
+后继[原盘独立原生控制](backup-original-generation-control.md)在不改变旧 selector／seal 的情况下，继续补每原盘完整归档并绑定已存在的真实首笔 journal；该后继仍仅本地，不计作活动全池。

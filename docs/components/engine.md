@@ -346,14 +346,18 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 ### Backup 原任务内的目标 DiskWriter I/O
 
-独立候选在已持有 writer 文件围栏之后，基于真实首笔 Publication 和完整归档构造[目标专用 native I/O](../design/backup-target-writer-io.md)，保持原 Genesis 上下文及原 voters，唯一允许新目标 root。原目录和 writer owner 接入生产 DiskHandle／gate／DiskWriter，目标普通根别名不再绕过 admission，目录预约由真实 I/O 尾部继续持有。原任务全体再验后经普通租约写回共同记录；冷态按原锁 inode 和全部实际材料重建 gate，检查接口不创建 gate。未改变 Engine 活动 Config／selector／disk.json／Current、普通后续 publication、SYSTEM 查询和源围栏；H03 仍拒绝。本地 I/O 后继已对齐已发布 `ef0f35cb` 并格式化改动 Rust 源码；三项新增测试源码未运行，没有本地编译／测试或新 CI，未操作真实盘；本片未发布。
+独立候选在已持有 writer 文件围栏之后，基于真实首笔 Publication 和完整归档构造[目标专用 native I/O](../design/backup-target-writer-io.md)，保持原 Genesis 上下文及原 voters，唯一允许新目标 root。原目录和 writer owner 接入生产 DiskHandle／gate／DiskWriter，目标普通根别名不再绕过 admission，目录预约由真实 I/O 尾部继续持有。原任务全体再验后经普通租约写回共同记录；冷态按原锁 inode 和全部实际材料重建 gate，检查接口不创建 gate。未改变 Engine 活动 Config／selector／disk.json／Current、普通后续 publication、SYSTEM 查询和源围栏；H03 仍拒绝。该 I/O 切片已随 `90450cf0` 发布；三项新增测试源码未运行，发布前仅格式化，没有本地编译／测试或新 CI，未操作真实盘。
 
 ### Backup 原任务内的普通目标 seal
 
-后继本地候选续接[真实目标 disk.json 安装](../design/backup-target-seals.md)：从已持有 native DiskHandle 取得唯一 seal，原全体计划及本地意图先行，经同一普通 I/O gate 不覆盖写入并绑定文件设备／inode。全体实际证明再观察后共同记录全部 seal hash／inode；一旦本地绑定存在就不重建缺失或替换文件，任一共同完成后只许补相同完成副本。冻结材料读取仅允许与原 native stage、物理根和本地 seal 记录一致的身份文件，仍禁止活动 generation／journal 命名空间，不开放普通启动或来源解围栏。`inspect_backup_target_seals` 只观察已有资源；活动 Config／selector／locator／Current、第二笔 publication 和 SYSTEM 解静默仍缺，H03 不放行。本地 seal 后继已对齐 `ef0f35cb` 上的 I/O 切片并格式化改动 Rust 源码；八项新测试仅源码，无本地编译／测试或新 CI，未操作真实盘，本片未发布。
+后继本地候选续接[真实目标 disk.json 安装](../design/backup-target-seals.md)：从已持有 native DiskHandle 取得唯一 seal，原全体计划及本地意图先行，经同一普通 I/O gate 不覆盖写入并绑定文件设备／inode。全体实际证明再观察后共同记录全部 seal hash／inode；一旦本地绑定存在就不重建缺失或替换文件，任一共同完成后只许补相同完成副本。冻结材料读取仅允许与原 native stage、物理根和本地 seal 记录一致的身份文件，仍禁止活动 generation／journal 命名空间，不开放普通启动或来源解围栏。`inspect_backup_target_seals` 只观察已有资源；活动 Config／selector／locator／Current、第二笔 publication 和 SYSTEM 解静默仍缺，H03 不放行。该 seal 切片已随 `90450cf0` 发布；八项新测试仅源码，发布前仅格式化，无本地编译／测试或新 CI，未操作真实盘。
 
 ### Backup 目标普通原生恢复地址
 
 在准确 writer、I/O gate 和 `disk.json` 后，原任务续接[目标原生恢复地址](../design/backup-target-native-locators.md)：真实首笔 Publication 与全部材料重验后，从同一 sealed writer Config 和完整 control archive 生成目标自身普通 Config 锚／generation／authority、完整归档及逐历史 inclusion proof。SYSTEM 原计划先行，四个固定命名空间必须先有与物理根、原 native stage 相符的本地选择；逐目标真实普通租约覆盖不覆盖安装、归档重放、普通本地成员冷读和同步。任何目标本地完成后不修复缺失材料，任一共同完成后全体本地材料都必须已完整；原显式任务只可补相同共同完成副本。
 
-`GenerationTargetLocatorsInstalled` 和 `inspect_backup_target_locators` 仅报告已有资源的目标恢复地址，不切换原盘 selector／journal、Engine Config／Current，不开放第二笔、SYSTEM 或安全源解围栏，不开放 H03。八项新边界测试仅源码，已格式化改动 Rust 源码；用户最新要求不再本地编译，未编译或运行这些测试、未触发新 CI、未操作真实盘。此后继仍仅本地，未发布。
+`GenerationTargetLocatorsInstalled` 和 `inspect_backup_target_locators` 仅报告已有资源的目标恢复地址，不切换原盘 selector／journal、Engine Config／Current，不开放第二笔、SYSTEM 或安全源解围栏，不开放 H03。八项新边界测试仅源码，已格式化改动 Rust 源码；用户最新要求不再本地编译，未编译或运行这些测试、未触发新 CI、未操作真实盘。该目标 locator 切片已随 `90450cf0` 发布，发布不计作验证通过。
+
+### Backup 原盘独立原生控制
+
+`cb7fb288` 上的本地后继续接[原盘独立控制实物](../design/backup-original-generation-control.md)：全部原盘在原 writer/租约下安装准确同代 authority、完整 archive 和历史 proof，原有首笔 journal 从同一打开文件用生产帧读者重验真实 Publication 并绑定摘要/inode，绝不新建或重放 journal。原 plan/全部本地选择先行，每原盘归档重放、完整原材料再观察后共同完成，完成后缺件和 journal 替换拒绝修补；新决定预检纳入原根最坏控制材料容量。`GenerationOriginalControlInstalled` / `inspect_backup_original_control` 不更改源 selector、seal、Current 或 SYSTEM/来源围栏，不报告成功或开放 H03。八项新库存边界测试仅源码；仅格式化，没有本地编译/测试/新 CI 或真实盘操作，本后继尚未发布。

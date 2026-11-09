@@ -27,7 +27,8 @@ pub use native_control::{
     BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupNativeMetadataReport, BackupOriginalDatabaseReport,
+    BackupNamespaceScope, BackupNativeMetadataReport, BackupOriginalControlMemberReport,
+    BackupOriginalControlReport, BackupOriginalDatabaseReport, BackupOriginalJournalReport,
     BackupPublishedRegistryReport, BackupPublishedScopeTargetReport, BackupPublishedScopesReport,
     BackupRecoveredContent, BackupRegistryRecoveryReport, BackupRootDatabasesReport,
     BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
@@ -171,6 +172,9 @@ pub enum BackupPreparationPhase {
     /// All target-only ordinary native locators/archives have independently
     /// replayed under the retained writers. The active pool remains fenced.
     GenerationTargetLocatorsInstalled,
+    /// Original roots retain independent native control beside exact first journals.
+    /// No active source selector or Engine Current is selected.
+    GenerationOriginalControlInstalled,
     Blocked,
     SourceChanged,
 }

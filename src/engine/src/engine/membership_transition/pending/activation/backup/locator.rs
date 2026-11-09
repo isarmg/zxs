@@ -99,6 +99,86 @@ impl BackupWriterIoConfig {
 }
 
 impl PreparedBackupTargetLocator {
+    /// Original participants get the same complete frozen control material,
+    /// but never a replacement Genesis anchor or a generation selector here.
+    /// Actual original writer permission remains with the caller's held Sources.
+    pub(in crate::engine) fn original_files(&self) -> impl Iterator<Item = (PathBuf, &[u8])> {
+        self.files().filter(|(path, _)| {
+            path != Path::new(GENERATION_FILE)
+                && path != Path::new("metadata/pool-membership/config.json")
+        })
+    }
+
+    pub(in crate::engine) fn original_scopes(&self) -> [PathBuf; 3] {
+        [
+            self.archive_path.clone(),
+            PathBuf::from("metadata/membership-generations").join(self.authority_hash()),
+            PathBuf::from("metadata/membership-history"),
+        ]
+    }
+
+    pub(in crate::engine) fn original_disk(
+        &self,
+        identity: &crate::DiskRegistrationIdentity,
+    ) -> Result<&DiskConfig> {
+        let original = &self
+            .config
+            .generation()
+            .expect("invariant: native Backup locator")
+            .original;
+        original
+            .disks
+            .iter()
+            .find(|disk| {
+                identity.pool_id == original.pool_id
+                    && identity.disk_id == disk.disk_id
+                    && identity.slot_id == disk.slot_id
+                    && identity.binding_generation == disk.binding_generation
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::DiskIdentityMismatch,
+                    "original Backup control is outside its exact original configuration",
+                )
+            })
+    }
+
+    pub(in crate::engine) fn verify_original_archive(
+        &self,
+        root: &DiskRoot,
+        identity: &crate::DiskRegistrationIdentity,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        preparation_checkpoint(stop)?;
+        let disk = self.original_disk(identity)?;
+        let original = &self
+            .config
+            .generation()
+            .expect("invariant: native Backup locator")
+            .original;
+        if root.path() != disk.root {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "original Backup control cannot relocate its held source root",
+            ));
+        }
+        let seal = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        validate_stored_seal(
+            &seal,
+            &identity_at(original, disk, &root.directory(root.path())?)?,
+        )?;
+        let saved: ValidatedConfig = decode_strict(&root.read_bytes(
+            &root.path().join("metadata/pool-membership/config.json"),
+            MAX_METADATA,
+        )?)?;
+        original.verify_saved_metadata_membership(&saved)?;
+        self.control.verify(
+            root.private_child(&root.path().join(&self.archive_path))?,
+            stop,
+        )?;
+        preparation_checkpoint(stop)
+    }
+
     pub(in crate::engine) fn files(&self) -> impl Iterator<Item = (PathBuf, &[u8])> {
         self.files
             .iter()

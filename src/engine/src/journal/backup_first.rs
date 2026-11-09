@@ -18,6 +18,76 @@ pub(crate) struct BackupFirstJournal<'a> {
     state: Option<SlotState>,
 }
 impl<'a> BackupFirstJournal<'a> {
+    /// Read the actual completed ordinary-address journal through one retained
+    /// descriptor. No copied receipt vector may create or repair this file.
+    pub(crate) fn published_binding(
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        candidate: &PreparedBackupFirstCandidate,
+        seal: &PublicationSeal,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<(platform_io::fs_safety::linux::FileIdentity, String)> {
+        use platform_io::fs_safety::linux::FileIdentity;
+        use std::os::unix::fs::MetadataExt;
+        Self::require_member(root, disk, candidate)?;
+        if seal.candidate_hash != candidate.hash() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "observed Backup journal seal names another first candidate",
+            ));
+        }
+        let path =
+            activation::generation_directory(disk, candidate.authority_hash()).join("journal.bin");
+        let mut file = root.open_read_regular(&path)?;
+        let metadata = file.metadata()?;
+        let identity = FileIdentity::from_metadata(&metadata);
+        if metadata.nlink() != 1 || metadata.len() > MAX_SLOT_BYTES as u64 {
+            return Err(Error::new(
+                ErrorCode::LogCorrupt,
+                "Backup first journal is not one bounded original file",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        (&mut file)
+            .take(MAX_SLOT_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > MAX_SLOT_BYTES || bytes.len() as u64 != metadata.len() {
+            return Err(Error::new(
+                ErrorCode::LogCorrupt,
+                "Backup original journal changed its bounded length",
+            ));
+        }
+        let scan = scan_frames_observed(bytes.as_slice(), JournalNamespace::Active, &mut |_| {
+            crate::history_package::preparation_checkpoint(stop)
+        })?;
+        validate_prefix(&scan, candidate)?;
+        if scan.valid_bytes != metadata.len() || scan.torn_tail || scan.records.len() != 3 {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "Backup original control requires the complete unchanged first journal",
+            ));
+        }
+        let (record, frame_hash) = &scan.records[2];
+        let receipt = Receipt {
+            disk_id: disk.disk_id.clone(),
+            slot_id: disk.slot_id.clone(),
+            record: record.clone(),
+            frame_hash: frame_hash.clone(),
+        };
+        if !seal.receipts.iter().any(|expected| expected == &receipt)
+            || record.object_hash != seal.publication_hash
+            || file.metadata()?.len() != metadata.len()
+            || FileIdentity::from_metadata(&root.open_read_regular(&path)?.metadata()?) != identity
+        {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "Backup ordinary journal differs from its real first Publication or original inode",
+            ));
+        }
+        file.check_running()?;
+        Ok((identity, blake3::hash(&bytes).to_hex().to_string()))
+    }
+
     /// No directory creation, repair or fsync. Missing names remain missing.
     pub(crate) fn inspect(
         root: &DiskRoot,

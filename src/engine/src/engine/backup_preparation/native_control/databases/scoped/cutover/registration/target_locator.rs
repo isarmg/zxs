@@ -4,7 +4,7 @@ use super::*;
 use crate::engine::membership_transition::pending::activation::PreparedBackupTargetLocator;
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
 
-mod store;
+pub(super) mod store;
 pub(super) use store::{is_namespace, require_staging};
 
 const INTENT: &str = "backup-preparation/target-generation-locators.json";

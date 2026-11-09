@@ -1067,6 +1067,26 @@ impl Engine {
         self.with_backup_database_aliases(operation, principal, target_locator::observe)
     }
 
+    /// Read all original native control copies beside the actual first journals.
+    /// Missing files, replaced journals and incomplete selections are not repaired.
+    pub fn inspect_backup_original_control(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupOriginalControlReport> {
+        if self
+            .backup_preparation
+            .as_ref()
+            .is_none_or(|worker| worker.targets.is_empty())
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "resume the original Backup task before observing original native control",
+            ));
+        }
+        self.with_backup_database_aliases(operation, principal, original_control::observe)
+    }
+
     fn with_backup_database_aliases<T>(
         &mut self,
         operation: OperationId,

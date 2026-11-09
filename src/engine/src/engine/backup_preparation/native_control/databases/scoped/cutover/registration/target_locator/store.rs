@@ -188,7 +188,7 @@ struct FileReference {
     digest: String,
 }
 
-pub(super) struct Inventory {
+pub(in super::super) struct Inventory {
     files: BTreeMap<PathBuf, FileReference>,
     directories: BTreeSet<PathBuf>,
     parents: BTreeSet<PathBuf>,
@@ -197,13 +197,15 @@ pub(super) struct Inventory {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum Presence {
+pub(in super::super) enum Presence {
     Existing,
     Complete,
 }
 
 impl Inventory {
-    pub(super) fn capture<'a>(files: impl Iterator<Item = (PathBuf, &'a [u8])>) -> Result<Self> {
+    pub(in super::super) fn capture<'a>(
+        files: impl Iterator<Item = (PathBuf, &'a [u8])>,
+    ) -> Result<Self> {
         let mut expected = BTreeMap::new();
         let mut directories = BTreeSet::new();
         let mut parents = BTreeSet::new();
@@ -266,23 +268,35 @@ impl Inventory {
         })
     }
 
-    pub(super) fn count(&self) -> usize {
+    pub(in super::super) fn count(&self) -> usize {
         self.files.len()
     }
 
     pub(super) fn inspect(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
+        let scopes = NAMESPACES.map(|namespace| PathBuf::from("metadata").join(namespace));
+        self.inspect_under(root, &scopes, &[], stop)
+    }
+
+    /// Only the sealed original recipe supplies these scope boundaries. The
+    /// one permitted existing journal is observed separately, never overwritten.
+    pub(in super::super) fn inspect_under(
+        &self,
+        root: &DiskRoot,
+        scopes: &[PathBuf],
+        existing: &[PathBuf],
+        stop: &AtomicBool,
+    ) -> Result<()> {
         let mut pending = Vec::new();
-        for namespace in NAMESPACES {
-            let path = PathBuf::from("metadata").join(namespace);
-            if preparation_path_exists(root, &root.path().join(&path))? {
-                if !self.directories.contains(&path) {
+        for path in scopes {
+            if preparation_path_exists(root, &root.path().join(path))? {
+                if !self.directories.contains(path) {
                     return Err(Error::new(
                         ErrorCode::ObjectCollision,
-                        "unexpected Backup target native namespace retained",
+                        "unexpected Backup native control scope retained",
                     ));
                 }
-                root.private_child(&root.path().join(&path))?;
-                pending.push(path);
+                root.private_child(&root.path().join(path))?;
+                pending.push(path.clone());
             }
         }
         let mut count = 0usize;
@@ -299,6 +313,7 @@ impl Inventory {
                     root.private_child(&root.path().join(&path))?;
                     pending.push(path);
                 } else if self.files.contains_key(&path)
+                    || existing.contains(&path)
                     || (self.parents.contains(&parent)
                         && platform_io::fs_safety::AtomicFile::is_temporary_name(&name))
                 {
@@ -306,7 +321,7 @@ impl Inventory {
                 } else {
                     return Err(Error::new(
                         ErrorCode::ObjectCollision,
-                        "unknown target generation file retained without adoption or deletion",
+                        "unknown Backup native control file retained without adoption or deletion",
                     ));
                 }
             }
@@ -314,7 +329,24 @@ impl Inventory {
         Ok(())
     }
 
-    pub(super) fn require_capacity(&self, root: &DiskRoot, reserve: u64) -> Result<()> {
+    pub(in super::super) fn require_absent_files(
+        &self,
+        root: &DiskRoot,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        for path in self.files.keys() {
+            preparation_checkpoint(stop)?;
+            if preparation_path_exists(root, &root.path().join(path))? {
+                return Err(Error::new(
+                    ErrorCode::ObjectCollision,
+                    "unselected original Backup control file cannot be adopted even when bytes match",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(in super::super) fn require_capacity(&self, root: &DiskRoot, reserve: u64) -> Result<()> {
         let mut missing = 0u64;
         let mut largest = 0u64;
         let mut count = 0u64;
@@ -335,7 +367,7 @@ impl Inventory {
         if root.available()? < required {
             return Err(Error::new(
                 ErrorCode::NoSpace,
-                "each Backup target needs a complete independent native locator copy, atomic staging and original reserve",
+                "each Backup participant needs a complete independent native control copy, atomic staging and original reserve",
             ));
         }
         Ok(())
@@ -348,6 +380,15 @@ impl Inventory {
         stop: &AtomicBool,
     ) -> Result<()> {
         self.inspect(root, stop)?;
+        self.verify_files(root, presence, stop)
+    }
+
+    pub(in super::super) fn verify_files(
+        &self,
+        root: &DiskRoot,
+        presence: Presence,
+        stop: &AtomicBool,
+    ) -> Result<()> {
         for (path, expected) in &self.files {
             preparation_checkpoint(stop)?;
             let path = root.path().join(path);
@@ -360,7 +401,7 @@ impl Inventory {
             {
                 return Err(Error::new(
                     ErrorCode::ObjectCollision,
-                    "Backup ordinary target locator differs from its exact original native recipe",
+                    "Backup native control files differ from their exact original recipe",
                 ));
             }
         }
@@ -378,3 +419,7 @@ fn limit() -> Error {
 #[cfg(test)]
 #[path = "../../../../../../../../../../../test/engine/unit/backup_target_locator_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../../../../../../../../test/engine/unit/backup_original_control_tests.rs"]
+mod original_control_tests;

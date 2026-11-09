@@ -2,9 +2,8 @@
 
 [任务清单](../../TASKS.md) · [目标 DiskWriter I/O](backup-target-writer-io.md) · [writer 文件围栏](backup-target-writer-fencing.md) · [Engine](../components/engine.md)
 
-原目标 writer-file 围栏批已按用户准确批准发布为 `ef0f35cb`。本片保留原 `0abfcb64`，在该真实父之上的本地 I/O 后继 `35ba95af` 继续对齐，当前本地提交 `e2c6a07d`。I/O 与 seal 两片均未发布；没有混入此前准确批准的文件围栏批，也未改写原冻结候选。
+本 seal 切片保留原 `0abfcb64`，曾在已发布 `ef0f35cb` 上对齐为本地 `e2c6a07d`，随后与 I/O／locator 整链对齐 `79b276c7`，由唯一协调者发布为 `90450cf0`。不改写原冻结候选，也不把单目标 seal 安装视作全池活动切换。
 
-本批与其余备份后继整链对齐准确主线 `79b276c7`，只解决集成冲突并准备树，交唯一协调者提交；保留主线每小时 GitHub 短 CI 安排，不自行触发 CI，也不本地编译或测试。
 本片新增实际目标 `disk.json` 的持久化代码，不再只在 `DiskHandle` 内保有 seal。它消费原任务已持有的真实 native DiskWriter，以独占不覆盖方式写入生产 `MembershipGeneration` 格式，并保存准确文件设备／inode 绑定。没有执行该流程或操作真实磁盘。
 
 **目标身份安装仍不等于活动池切换。** 不写 `metadata/pool-membership/generation.json`、普通 Config 锚或代际 journal，不改 Engine Config／Current，不开放第二笔 publication、SYSTEM 查询或安全源解围栏。正常启动的 generation／registry／promotion 门禁没有放宽；不能把孤立 `disk.json` 作为普通池、外来盘或 H03 接纳许可。
@@ -46,3 +45,5 @@ SYSTEM 的 `backup-preparation/target-seals.json` 绑定源 fence、原决定、
 沿用原决定最多八个完整目标、最多三十二个原盘；全体 plan／completion 各上限 64 KiB，每目标本地意图、seal 和绑定各上限 8 KiB。所有参与根预检原 metadata reserve 加 1 MiB，不将预检当作已预留容量。每目标增加三个小文件的原子安装／同步及共同完成记录，保留原全部持久化屏障。
 
 全体观察仍重放原归档并读取所有正文及数据库，不承诺增量成本、瞬时取消或吞吐提升。后继[目标原生恢复地址](backup-target-native-locators.md)仅继续安装目标自身普通 generation／Config 锚与独立归档，不给原池切换。最终全池活动 selector／Config／Current、第二笔普通 publication、SYSTEM 解静默、安全源解围栏、设置自动触发及完整进度仍缺；原永久操作／主体／事件／D／undo、完整单元与低级完整链约束不变。
+
+后继[原盘独立原生控制](backup-original-generation-control.md)在不改变旧 selector／seal 的情况下，继续补每原盘完整归档并绑定已存在的真实首笔 journal；该后继仍仅本地，不计作活动全池。

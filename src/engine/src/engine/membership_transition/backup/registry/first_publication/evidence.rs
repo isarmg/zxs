@@ -215,6 +215,21 @@ impl PreparedBackupFirstPublication {
         Ok(())
     }
 
+    /// The journal layer receives only the already-authenticated native seal,
+    /// not this engine-only publication capability or a caller-supplied digest.
+    pub(in crate::engine) fn original_journal_binding(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        candidate: &PreparedBackupFirstCandidate,
+        stop: &AtomicBool,
+    ) -> Result<(platform_io::fs_safety::linux::FileIdentity, String)> {
+        self.require_namespace_candidate(candidate)?;
+        crate::journal::BackupFirstJournal::published_binding(
+            root, disk, candidate, &self.seal, stop,
+        )
+    }
+
     pub(in crate::engine) fn report(&self) -> &BackupFirstPublicationReport {
         &self.report
     }

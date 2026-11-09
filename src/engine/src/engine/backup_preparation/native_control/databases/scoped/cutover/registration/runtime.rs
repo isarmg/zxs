@@ -501,6 +501,27 @@ fn run(
             locator.bytes_per_target,
             locator.installation_hash,
         );
+    })?;
+    let original = original_control::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationOriginalControlInstalled;
+        status.detail = format!(
+            "decision {hash} installed independent native control on all {} original roots ({} files/{} bytes each), set {}; original first journals retain their exact bytes/inodes; source selectors/seals, Engine Current, SYSTEM admission and source fences remain unchanged",
+            original.originals.len(),
+            original.files_per_original,
+            original.bytes_per_original,
+            original.installation_hash,
+        );
     })
 }
 fn spawn(
