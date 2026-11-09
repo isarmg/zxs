@@ -99,7 +99,7 @@ pub(crate) enum Status {
         account: String,
     },
     CommandCompletedHistoricalReceipt {
-        receipt: Receipt,
+        receipt: Box<Receipt>,
         current_password_or_service_state_verified: bool,
     },
 }
@@ -327,7 +327,7 @@ fn execute(prepared: &Prepared, password: &SecretString) -> Result<Status> {
         );
     }
     Ok(Status::CommandCompletedHistoricalReceipt {
-        receipt,
+        receipt: Box::new(receipt),
         current_password_or_service_state_verified: false,
     })
 }
@@ -378,7 +378,7 @@ pub(crate) fn status(input: Original) -> Result<Status> {
     }
     host.recheck()?;
     Ok(Status::CommandCompletedHistoricalReceipt {
-        receipt,
+        receipt: Box::new(receipt),
         current_password_or_service_state_verified: false,
     })
 }

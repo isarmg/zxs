@@ -152,13 +152,13 @@ fn bind_original(mut prepared: Prepared) -> Result<Prepared> {
     let original = prepared
         .host
         .read_operation(&intent, "plan.json", MAX_RECORD_BYTES)?;
-    if let Some(bytes) = &original {
-        if *bytes != json_codec::to_vec_pretty(&prepared.preview.plan)? {
-            return Err(
-                "runtime directory intent differs from the exact plan; all material was preserved"
-                    .into(),
-            );
-        }
+    if let Some(bytes) = &original
+        && *bytes != json_codec::to_vec_pretty(&prepared.preview.plan)?
+    {
+        return Err(
+            "runtime directory intent differs from the exact plan; all material was preserved"
+                .into(),
+        );
     }
     if prepared
         .preview

@@ -24,12 +24,10 @@ impl TryFrom<Input> for Settings {
         if input.listen.port() == 0 || input.listen.ip().is_multicast() {
             return Err("ZXS listen address must have a nonzero port and not be multicast".into());
         }
-        if let SocketAddr::V6(address) = input.listen {
-            if address.scope_id() != 0 || address.flowinfo() != 0 {
-                return Err(
-                    "scoped IPv6 addresses are not supported by this deployment format".into(),
-                );
-            }
+        if let SocketAddr::V6(address) = input.listen
+            && (address.scope_id() != 0 || address.flowinfo() != 0)
+        {
+            return Err("scoped IPv6 addresses are not supported by this deployment format".into());
         }
         let smb = match input.smb {
             Some(SmbInput { account, peer_uid }) => {
