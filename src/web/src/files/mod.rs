@@ -25,6 +25,9 @@ mod tags;
 mod version_tree;
 mod view;
 pub(crate) use actions::{load_disks, load_entries, load_file_history, pending, poll};
+pub(crate) use deletion::{
+    recovery_view as deletion_recovery, restore_recovery as restore_deletion_recovery,
+};
 pub(crate) use detached_history::view as retained_history_discovery;
 pub(crate) use detail::page as details;
 pub use directory_history::DecodeError as DirectoryHistoryError;

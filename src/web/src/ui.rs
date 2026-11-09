@@ -229,6 +229,7 @@ pub fn app() -> impl IntoView {
                             ..Default::default()
                         };
                     });
+                    files::restore_deletion_recovery(state);
                     management::load(state);
                 }
                 Err(error) => state.update(|s| s.login_failure = Some(feedback(&error))),
@@ -347,6 +348,7 @@ fn workspace(state: RwSignal<State>) -> impl IntoView {
         </div></HeaderActions>
         <Show when=move ||state.with(management_notice_visible)>{management::summary(state)}</Show>
         {files::node_retirement_recovery(state)}
+        {files::deletion_recovery(state)}
         {move ||match page.get() { Page::Admin=>admin::view(state).into_any(),Page::Repositories=>admin::console(state,admin::Section::Repositories).into_any(),Page::Rules=>admin::console(state,admin::Section::Rules).into_any(),Page::Diagnostics=>admin::console(state,admin::Section::Diagnostics).into_any(),Page::Details=>files::details(state).into_any(),Page::Status=>monitor::view(state).into_any(),Page::History=>history::view(state).into_any(),Page::Account=>account(state).into_any(),Page::Files=>files::view(state).into_any() }}
     }
 }
@@ -443,6 +445,7 @@ fn restore_session(state: RwSignal<State>) {
             }),
         }
         state.update(|s| s.session_transition = SessionTransition::Idle);
+        files::restore_deletion_recovery(state);
         management::load(state);
     });
 }

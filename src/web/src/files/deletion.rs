@@ -1,5 +1,6 @@
 //! Deleted files remain discoverable outside the visible SMB namespace. Reads
 //! belong to a session/generation; undo belongs to the global operation ledger.
+mod recovery;
 mod request;
 mod view;
 mod wire;
@@ -7,6 +8,9 @@ use super::actions;
 use crate::{
     api,
     ui::{State, accept_read_response, current_session, fail},
+};
+pub(crate) use recovery::{
+    blocks_writes, finish as finish_recovery, restore as restore_recovery, view as recovery_view,
 };
 pub(crate) use request::{available, in_flight, receipt_matches, settle, start};
 use std::sync::Arc;
@@ -19,6 +23,7 @@ pub(crate) struct Model {
     review_generation: u64,
     review: Option<request::Review>,
     attempt: Option<request::Attempt>,
+    recovery: recovery::Queue,
     open: bool,
     generation: u64,
     loading: bool,

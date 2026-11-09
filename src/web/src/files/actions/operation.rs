@@ -63,6 +63,9 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
             }
         }
     });
+    if recorded && status != SaveStatus::Unknown {
+        crate::files::deletion::finish_recovery(state, &id);
+    }
     if recorded && matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         reload_entries(state);
     }

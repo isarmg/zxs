@@ -7,10 +7,10 @@ use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 use web_interface::i18n::t;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Target {
-    file: HistoryFileId,
-    repository: HistoryRepositoryId,
-    path: name_policy::PortablePath,
+pub(super) struct Target {
+    pub(super) file: HistoryFileId,
+    pub(super) repository: HistoryRepositoryId,
+    pub(super) path: name_policy::PortablePath,
 }
 #[derive(Clone)]
 pub(super) struct Review {
@@ -23,19 +23,19 @@ pub(super) struct Review {
     listing_generation: u64,
     entry_id: String,
 }
-#[derive(Clone)]
-enum Intent {
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Intent {
     Delete(Target),
     Undo(Arc<storage_contract::FileDeletionNode>),
 }
 #[derive(Clone)]
 pub(super) struct Attempt {
-    epoch: u64,
-    principal: String,
-    operation: String,
-    intent: Intent,
-    request_digest: String,
-    in_flight: bool,
+    pub(super) epoch: u64,
+    pub(super) principal: String,
+    pub(super) operation: String,
+    pub(super) intent: Intent,
+    pub(super) request_digest: String,
+    pub(super) in_flight: bool,
 }
 
 fn eligible(entry: &Entry) -> bool {
@@ -183,7 +183,7 @@ pub(super) fn submit_undo(state: RwSignal<State>, node: Arc<storage_contract::Fi
     submit(state, Intent::Undo(node));
 }
 impl Intent {
-    fn request(&self, operation: &str) -> (String, Value) {
+    pub(super) fn request(&self, operation: &str) -> (String, Value) {
         match self {
             Self::Delete(target) => (
                 format!("/api/files/{}/deletion", api::segment(target.file.as_str())),
@@ -195,7 +195,7 @@ impl Intent {
             ),
         }
     }
-    fn digest(&self, principal: &str) -> Result<String, api::Error> {
+    pub(super) fn digest(&self, principal: &str) -> Result<String, api::Error> {
         let (kind, body) = match self {
             Self::Delete(target) => (
                 "file.delete",
@@ -216,7 +216,7 @@ impl Intent {
         )
         .map_err(identity_error)
     }
-    fn receipt_matches(&self, id: &str, principal: &str, receipt: &Value) -> bool {
+    pub(super) fn receipt_matches(&self, id: &str, principal: &str, receipt: &Value) -> bool {
         match self {
             Self::Delete(target) => {
                 if receipt["operation_kind"] != "file.delete" {
@@ -258,6 +258,11 @@ impl Intent {
     }
 }
 fn submit(state: RwSignal<State>, intent: Intent) {
+    // Admission is checked before generating an operation ID or touching storage.
+    // A review alone does not authorize bypassing the restored-request queue.
+    if !state.with_untracked(|s| s.files.deletion.recovery.ready_for_new(s)) {
+        return;
+    }
     let request_digest = match state.with_untracked(|s| intent.digest(&s.principal)) {
         Ok(digest) => digest,
         Err(error) => {
@@ -269,22 +274,54 @@ fn submit(state: RwSignal<State>, intent: Intent) {
         return;
     };
     let epoch = state.with_untracked(|s| s.session_epoch);
-    let (endpoint, body) = intent.request(&id);
+    let attempt = Attempt {
+        epoch,
+        principal: state.with_untracked(|s| s.principal.clone()),
+        operation: id,
+        intent,
+        request_digest,
+        in_flight: false,
+    };
+    // Saving and reading back the exact original is a prerequisite, not a
+    // best-effort side effect after a server mutation has already started.
+    if recovery::save(state, &attempt) {
+        send(state, attempt, Submission::First);
+    }
+}
+pub(super) enum Submission {
+    First,
+    OriginalRetry,
+}
+pub(super) fn send(state: RwSignal<State>, mut attempt: Attempt, submission: Submission) {
+    if !state.with_untracked(|s| {
+        s.session_active()
+            && s.session_epoch == attempt.epoch
+            && s.principal == attempt.principal
+            && !s.files.mutation_pending
+            && !s
+                .files
+                .deletion
+                .attempt
+                .as_ref()
+                .is_some_and(|a| a.in_flight)
+    }) {
+        return;
+    }
+    let id = attempt.operation.clone();
+    let epoch = attempt.epoch;
+    let (endpoint, body) = attempt.intent.request(&id);
+    attempt.in_flight = true;
     state.update(|s| {
         s.files.mutation_pending = true;
-        s.files.deletion.attempt = Some(Attempt {
-            epoch,
-            principal: s.principal.clone(),
-            operation: id.clone(),
-            intent,
-            request_digest,
-            in_flight: true,
-        });
+        s.files.deletion.attempt = Some(attempt);
     });
     // Record the original ID before starting network work, including when the
     // review or deleted-files panel closes while the request is outstanding.
     actions::record_operation(state, FileOperation::unknown(&id));
     spawn_local(async move {
+        if !current_session(state, epoch) {
+            return;
+        }
         let result = api::request("POST", &endpoint, Some(body)).await;
         if !current_session(state, epoch) {
             return;
@@ -304,13 +341,29 @@ fn submit(state: RwSignal<State>, intent: Intent) {
             Ok(value) => {
                 actions::record_receipt(state, &id, value);
             }
-            Err(error) => actions::record_failure(state, epoch, &id, error),
+            Err(error) => failed(state, epoch, &id, error, submission),
         }
         state.update(|s| s.files.mutation_pending = false);
         if state.with_untracked(|s| s.files.deletion.open) {
             load(state, false);
         }
     });
+}
+fn failed(state: RwSignal<State>, epoch: u64, id: &str, error: api::Error, submission: Submission) {
+    match submission {
+        Submission::First => actions::record_failure(state, epoch, id, error),
+        Submission::OriginalRetry => {
+            // A rejected retry says nothing about the original attempt.
+            // Keep its immutable record, ID and unknown-outcome fence.
+            actions::record_operation(state, FileOperation::unknown(id));
+            crate::ui::fail_in(
+                state,
+                epoch,
+                crate::ui::ErrorContext::Operation(id.to_owned()),
+                error,
+            );
+        }
+    }
 }
 pub(crate) fn in_flight(state: &State, id: &str) -> bool {
     state
@@ -321,33 +374,42 @@ pub(crate) fn in_flight(state: &State, id: &str) -> bool {
         .is_some_and(|attempt| attempt.operation == id && attempt.in_flight)
 }
 pub(crate) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool {
-    state
+    let attempt = state
         .files
         .deletion
         .attempt
         .as_ref()
-        .filter(|attempt| attempt.operation == id)
-        .is_none_or(|attempt| {
-            state.session_active()
-                && attempt.epoch == state.session_epoch
-                && attempt.principal == state.principal
-                && receipt["request_digest"].as_str() == Some(attempt.request_digest.as_str())
+        .filter(|attempt| attempt.operation == id);
+    if attempt.is_some_and(|attempt| {
+        !state.session_active()
+            || attempt.epoch != state.session_epoch
+            || attempt.principal != state.principal
+    }) {
+        return false;
+    }
+    recovery::receipt_matches(state, id, receipt).unwrap_or_else(|| {
+        attempt.is_none_or(|attempt| {
+            receipt["request_digest"].as_str() == Some(attempt.request_digest.as_str())
                 && attempt
                     .intent
                     .receipt_matches(id, &attempt.principal, receipt)
         })
+    })
 }
+
 pub(crate) fn settle(model: &mut super::super::model::Model, id: &str, status: SaveStatus) {
-    if status == SaveStatus::Unknown
-        || !model
-            .deletion
-            .attempt
-            .as_ref()
-            .is_some_and(|attempt| attempt.operation == id)
-    {
+    let retained = model.deletion.recovery.settle(id, status);
+    let active = model
+        .deletion
+        .attempt
+        .as_ref()
+        .is_some_and(|attempt| attempt.operation == id);
+    if status == SaveStatus::Unknown || !(retained || active) {
         return;
     }
-    model.deletion.attempt = None;
+    if active {
+        model.deletion.attempt = None;
+    }
     model.deletion.cancel_review();
     if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         model.checked_entries.clear();

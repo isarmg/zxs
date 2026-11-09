@@ -75,11 +75,26 @@ pub(super) fn node(
     let Some(node) = node else {
         return Ok(None);
     };
+    validate_node(&node)?;
     if node.file_id != summary.file_id.as_str()
         || node.repository_id != summary.repository_id.as_str()
         || node.node_id != summary.deletion_node_id
         || node.path != summary.path
+    {
+        return Err(invalid("deletion identity mismatch"));
+    }
+    Ok(Some(node))
+}
+
+/// Shared by HTTP ingress and the untrusted browser recovery boundary. A local
+/// record is not evidence of current deletion or permission to restore it.
+pub(super) fn validate_node(node: &FileDeletionNode) -> Result<(), api::Error> {
+    if HistoryFileId::parse(&node.file_id).is_err()
+        || HistoryRepositoryId::parse(&node.repository_id).is_err()
+        || storage_contract::validate_id(&node.node_id, "fdel").is_err()
         || HistoryTreeId::parse(&node.history_tree_id).is_err()
+        || node.author.is_empty()
+        || node.author.len() > 1024
         || node.branch_heads.is_empty()
         || node.branch_heads.len() > MAX_FILE_DELETION_FRONTIER_ENTRIES
         || node.parent_node_ids.len() > MAX_FILE_DELETION_FRONTIER_ENTRIES
@@ -97,5 +112,5 @@ pub(super) fn node(
             "deletion parent edges do not match all retained branch heads",
         ));
     }
-    Ok(Some(node))
+    Ok(())
 }
