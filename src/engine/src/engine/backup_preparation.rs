@@ -31,8 +31,9 @@ pub use native_control::{
     BackupPublishedRegistryReport, BackupPublishedScopeTargetReport, BackupPublishedScopesReport,
     BackupRecoveredContent, BackupRegistryRecoveryReport, BackupRootDatabasesReport,
     BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
-    BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupTargetWriterReport,
+    BackupTargetWritersReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub use native_control::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -45,6 +46,7 @@ pub(in crate::engine) use native_control::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };
 mod snapshot;
+mod target_resources;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
 pub use inspection::{BackupPreparationReport, offline_check_backup_preparation};
 
@@ -155,6 +157,9 @@ pub enum BackupPreparationPhase {
     /// Exact native objects exist at all ordinary disk addresses and target
     /// Current replays those bytes. No active Config/locator/writer or unfence.
     GenerationOrdinaryNativeMetadataInstalled,
+    /// Every selected target has its actual ordinary writer lock held by this
+    /// Engine task. This is fencing, not active DiskWriter/Current or unfence.
+    GenerationTargetWriterFencesInstalled,
     Blocked,
     SourceChanged,
 }
@@ -228,6 +233,8 @@ pub(super) struct Worker {
     state: Arc<Mutex<BackupPreparationStatus>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    // Retained across task completion, errors, inspection and exact retries.
+    targets: Vec<target_resources::Target>,
 }
 impl Worker {
     fn idle(job: Job, error: Error, phase: BackupPreparationPhase) -> Self {
@@ -241,6 +248,7 @@ impl Worker {
             state: Arc::new(Mutex::new(status)),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
+            targets: Vec::new(),
         }
     }
     fn unavailable_status(&self, detail: &str) -> BackupPreparationStatus {
@@ -724,6 +732,7 @@ fn spawn(
         state,
         stop,
         thread: Some(thread),
+        targets: Vec::new(),
     })
 }
 

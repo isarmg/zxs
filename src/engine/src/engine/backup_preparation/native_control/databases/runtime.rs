@@ -253,5 +253,6 @@ fn spawn(
         state,
         stop,
         thread: Some(thread),
+        targets: Vec::new(),
     })
 }

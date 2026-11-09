@@ -30,6 +30,7 @@ impl OriginalRoot {
 /// surrounding worker's original writer locks remain held through all I/O.
 pub(in super::super) struct Sources {
     configuration_hash: String,
+    metadata_reserve_bytes: u64,
     system: PhysicalBinding,
     system_writer: PhysicalBinding,
     disks: Vec<OriginalRoot>,
@@ -81,6 +82,7 @@ impl Sources {
         }
         Ok(Self {
             configuration_hash: object_hash("backup-preparation-config", &engine.config)?,
+            metadata_reserve_bytes: engine.config.metadata_reserve_bytes,
             system: PhysicalBinding::of(system)?,
             system_writer,
             disks,
@@ -140,6 +142,9 @@ impl Sources {
     }
     pub(in super::super) fn system_binding(&self) -> &PhysicalBinding {
         &self.system
+    }
+    pub(in super::super) fn metadata_reserve_bytes(&self) -> u64 {
+        self.metadata_reserve_bytes
     }
     pub(in super::super) fn system_writer_binding(&self) -> &PhysicalBinding {
         &self.system_writer

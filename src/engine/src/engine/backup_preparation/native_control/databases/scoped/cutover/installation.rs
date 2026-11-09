@@ -91,10 +91,7 @@ impl Task {
         Ok(())
     }
 }
-pub(super) struct Target {
-    pub(super) root: DiskRoot,
-    pub(super) _lock: AdvisoryLock,
-}
+pub(super) use crate::engine::backup_preparation::target_resources::Target;
 
 impl Engine {
     /// Start/continue the exact source-fenced task's target entity installation.
@@ -156,6 +153,26 @@ pub(super) fn acquire(engine: &Engine, task: &Task) -> Result<Vec<Target>> {
     // seals, State and prefix are checked before reopening any target pathname.
     task.require_current(engine)?;
     engine.check_batch_scope(&task.selection().first().request)?;
+    if let Some(worker) = &engine.backup_preparation
+        && !worker.targets.is_empty()
+    {
+        let jobs = task.selection().jobs();
+        if worker.job.request.operation_id != task.selection().first().request.operation_id
+            || worker.targets.len() != jobs.len()
+        {
+            return Err(invalid(
+                "held Backup target writers belong to another original task",
+            ));
+        }
+        for (target, job) in worker.targets.iter().zip(jobs) {
+            named_target(&target.root, job)?;
+            target.recheck_writer()?;
+            if target.root.path() != job.request.target_paths[0].as_path() {
+                return Err(invalid("held Backup target order or original path changed"));
+            }
+        }
+        return worker.targets.iter().map(Target::retain).collect();
+    }
     let roots = task
         .selection()
         .jobs()
@@ -173,7 +190,7 @@ pub(super) fn acquire(engine: &Engine, task: &Task) -> Result<Vec<Target>> {
                 "fenced target directory changed",
             ));
         }
-        targets.push(Target { root, _lock: lock });
+        targets.push(Target::new(root, lock));
     }
     Ok(targets)
 }
@@ -249,6 +266,7 @@ pub(super) fn with_image<T>(
 ) -> Result<T> {
     let job = &task.selection().jobs()[index];
     named_target(&target.root, job)?;
+    target.recheck_writer()?;
     let state = snapshot::read(&target.root, job, stop)?;
     if object_hash("backup-prepared-state", state.state())? != task.evidence.state_hash() {
         return Err(invalid("target image snapshot differs from original fence"));
@@ -271,6 +289,7 @@ pub(super) fn with_image<T>(
     }
     let result = action(&image)?;
     named_target(&target.root, job)?;
+    target.recheck_writer()?;
     Ok(result)
 }
 
@@ -346,10 +365,12 @@ fn run(
     for (target, job) in targets.iter().zip(task.selection().jobs()) {
         preparation_checkpoint(stop)?;
         named_target(&target.root, job)?;
+        target.recheck_writer()?;
         install_preparation_bytes(&target.root, &target.root.path().join(COMPLETE), &complete)?;
     }
     for (target, job) in targets.iter().zip(task.selection().jobs()) {
         named_target(&target.root, job)?;
+        target.recheck_writer()?;
     }
     update(system, progress, |status| {
         status.phase = BackupPreparationPhase::TargetEntitiesPrepared;
@@ -397,6 +418,7 @@ fn spawn(engine: &Engine, task: Task, system: DiskRoot, targets: Vec<Target>) ->
         state,
         stop,
         thread: Some(thread),
+        targets: Vec::new(),
     })
 }
 
@@ -458,6 +480,7 @@ pub(super) fn verify_installed(task: &Task, targets: &[Target], stop: &AtomicBoo
     let complete = completion(task, &hash, &acceptances)?;
     for (target, job) in targets.iter().zip(task.selection().jobs()) {
         named_target(&target.root, job)?;
+        target.recheck_writer()?;
         if target
             .root
             .read_bytes(&target.root.path().join(COMPLETE), MAX_TASK)?

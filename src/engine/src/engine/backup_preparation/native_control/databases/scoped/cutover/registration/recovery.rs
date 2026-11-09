@@ -440,8 +440,9 @@ pub fn open_decided_backup_targets(
             ));
         }
         named_target(&root, job)?;
-        targets.push(Target { root, _lock });
+        targets.push(Target::new(root, _lock));
     }
+    target_writers::resume_existing(&targets)?;
     require_isolated(&targets)?;
     let stop = AtomicBool::new(false);
     let prepared = PreparedBackupRegistry::capture(
@@ -980,6 +981,27 @@ impl Engine {
         principal: &str,
     ) -> Result<BackupNativeMetadataReport> {
         self.with_backup_database_aliases(operation, principal, native_metadata::observe)
+    }
+
+    /// Re-observe all native materials and the actual retained target writer
+    /// locks, including their durable inode bindings. Never repairs a missing
+    /// lock, selects an active generation or releases the source fence.
+    pub fn inspect_backup_target_writers(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupTargetWritersReport> {
+        if self
+            .backup_preparation
+            .as_ref()
+            .is_none_or(|worker| worker.targets.is_empty())
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "resume the original Backup task before observing retained target writer ownership",
+            ));
+        }
+        self.with_backup_database_aliases(operation, principal, target_writers::observe)
     }
 
     fn with_backup_database_aliases<T>(

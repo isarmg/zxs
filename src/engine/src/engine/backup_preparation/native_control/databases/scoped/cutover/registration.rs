@@ -11,6 +11,7 @@ mod database_aliases;
 mod native_metadata;
 mod root_databases;
 mod system_database;
+mod target_writers;
 pub use common_databases::{BackupCommonDatabasesReport, BackupOriginalDatabaseReport};
 pub use current_read::BackupCurrentReadReport;
 pub use database_aliases::{
@@ -20,6 +21,7 @@ pub use database_aliases::{
 pub use native_metadata::BackupNativeMetadataReport;
 pub use root_databases::BackupRootDatabasesReport;
 pub use system_database::BackupSystemDatabaseReport;
+pub use target_writers::{BackupTargetWriterReport, BackupTargetWritersReport};
 mod published_scopes;
 pub use published_scopes::{BackupPublishedScopeTargetReport, BackupPublishedScopesReport};
 mod serving;
@@ -310,6 +312,7 @@ impl PreparedBackupRegistry {
     pub(in crate::engine) fn recheck_names(&self) -> Result<()> {
         for (target, job) in self.targets.iter().zip(self.task.selection().jobs()) {
             named_target(&target.root, job)?;
+            target.recheck_writer()?;
         }
         Ok(())
     }

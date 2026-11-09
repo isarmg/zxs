@@ -35,3 +35,5 @@
 每个对象遵守原 metadata 单对象上限。合并的原生集合最多 12,292 个对象／256 MiB，描述最多 4 MiB，目标选择最多 4 KiB；目标库存扫描最多 49,168 项。对象集合借用已有准备字节，不为每个盘同时复制整份集合。安装逐对象、逐根进行，仍可能持有完整首笔与 registry 编码，并重复多轮全归档／正文／数据库验证；不宣称低峰值、增量成本或硬时限。容量预检包含各根独立缺失字节、最大原子暂存、描述、目录和原 metadata reserve，不能当物理预留。
 
 **仍缺**活动 Config／普通 generation locator／Engine Current、目标 writer 生命周期、下一笔普通 publication、SYSTEM 查询解静默及安全源解围栏。没有新 `disk.json`、generation.json、journal、writer.lock 或 I/O epoch，未改变普通 Backup 拒绝分支。原 pool 继续停写，H03 与完整迁移均未完成。
+
+后继[目标真实 writer 文件围栏](backup-target-writer-fencing.md)在本阶段全体验存后创建并锁住普通 `.writer.lock`，持久绑定目标 inode，并由 Engine 保留 owner 跨后台完成／错误／原任务重试。该后继仅提供实际互斥，不授予活动 DiskWriter，不改变本阶段对 disk.json、活动 selector 和新 I/O epoch 的拒绝，也不解除来源围栏。

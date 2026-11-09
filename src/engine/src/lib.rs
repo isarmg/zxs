@@ -54,7 +54,8 @@ pub use engine::{
     BackupRecoveredContent, BackupRegistryDecisionHash, BackupRegistryRecoveryReport,
     BackupRootDatabasesReport, BackupServingContent, BackupServingImagesReport, BackupServingRead,
     BackupServingTargetReport, BackupSystemDatabaseReport, BackupTargetPublicationReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupTargetWriterReport, BackupTargetWritersReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use engine::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,

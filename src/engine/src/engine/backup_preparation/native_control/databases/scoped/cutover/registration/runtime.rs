@@ -18,6 +18,9 @@ impl Engine {
     /// old main/sidecar set before installing the published ordinary index.
     /// It then installs exact native State/registry/Publication objects at all
     /// ordinary disk addresses and replays target Current from those bytes.
+    /// Finally it acquires and durably binds every ordinary target writer lock;
+    /// the retained task owns the directory and writer descriptors even after
+    /// background completion or failure. These are fences, not DiskWriter I/O.
     /// Query admission and serving activation remain separate: the original
     /// pool stays fenced even after this stage succeeds.
     /// Hosts must authenticate this separate, explicit request. Ordinary settings
@@ -84,6 +87,7 @@ pub(super) fn acquire(engine: &Engine, task: &Task) -> Result<(Vec<Target>, Back
     let request = &task.installation.evidence.task.request;
     let choices = engine.capture_backup_choice_context(request.operation_id, &request.principal)?;
     let targets = installation::acquire(engine, &task.installation)?;
+    target_writers::resume_existing(&targets)?;
     Ok((targets, choices))
 }
 pub(in crate::engine::backup_preparation) fn resume(
@@ -94,6 +98,18 @@ pub(in crate::engine::backup_preparation) fn resume(
         return Ok(false);
     }
     let task = Task::read(system)?;
+    let retained = engine
+        .backup_preparation
+        .as_ref()
+        .map(|worker| {
+            worker
+                .targets
+                .iter()
+                .map(Target::retain)
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     let result = (|| {
         let (targets, choices) = acquire(engine, &task)?;
         spawn(
@@ -106,10 +122,14 @@ pub(in crate::engine::backup_preparation) fn resume(
     })();
     engine.backup_preparation = Some(match result {
         Ok(worker) => worker,
-        Err(error) => task
-            .selection()
-            .clone()
-            .idle(error, BackupPreparationPhase::Blocked),
+        Err(error) => {
+            let mut worker = task
+                .selection()
+                .clone()
+                .idle(error, BackupPreparationPhase::Blocked);
+            worker.targets = retained;
+            worker
+        }
     });
     Ok(true)
 }
@@ -400,6 +420,25 @@ fn run(
             native.original_disks,
             native.selected_targets,
         );
+    })?;
+    let writers = target_writers::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationTargetWriterFencesInstalled;
+        status.detail = format!(
+            "decision {hash} durably bound all {} actual target writer files in set {}; this Engine task retains directory/writer ownership after completion; active selector, disk.json, Current, writer I/O, next publication and source release remain unavailable",
+            writers.targets.len(),
+            writers.fencing_hash,
+        );
     })
 }
 fn spawn(
@@ -421,6 +460,10 @@ fn spawn(
     let progress = Arc::clone(&state);
     let cancel = Arc::clone(&stop);
     let frozen = task.clone();
+    let retained_targets = targets
+        .iter()
+        .map(Target::retain)
+        .collect::<Result<Vec<_>>>()?;
     let thread = std::thread::Builder::new()
         .name("zxs-backup-registry-decision".into())
         .spawn(move || {
@@ -457,5 +500,6 @@ fn spawn(
         state,
         stop,
         thread: Some(thread),
+        targets: retained_targets,
     })
 }

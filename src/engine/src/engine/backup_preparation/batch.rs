@@ -368,6 +368,7 @@ fn idle(batch: Batch, error: Error, phase: BackupPreparationPhase) -> Worker {
         state: Arc::new(Mutex::new(status)),
         stop: Arc::new(AtomicBool::new(false)),
         thread: None,
+        targets: Vec::new(),
     }
 }
 
@@ -577,5 +578,6 @@ fn spawn_batch(
         state,
         stop,
         thread: Some(thread),
+        targets: Vec::new(),
     })
 }

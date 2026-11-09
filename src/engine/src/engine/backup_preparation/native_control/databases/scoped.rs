@@ -14,8 +14,9 @@ pub use cutover::{
     BackupPublishedRegistryReport, BackupPublishedScopeTargetReport, BackupPublishedScopesReport,
     BackupRecoveredContent, BackupRegistryRecoveryReport, BackupRootDatabasesReport,
     BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
-    BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupTargetWriterReport,
+    BackupTargetWritersReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 pub use cutover::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupPreparedTopologyNode,

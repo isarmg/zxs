@@ -16,8 +16,9 @@ pub use databases::{
     BackupPublishedRegistryReport, BackupPublishedScopeTargetReport, BackupPublishedScopesReport,
     BackupRecoveredContent, BackupRegistryRecoveryReport, BackupRootDatabasesReport,
     BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
-    BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupTargetWriterReport,
+    BackupTargetWritersReport, BackupWriterDestination, BackupWriterRoutesReport,
+    open_decided_backup_targets,
 };
 mod runtime;
 pub use archive::BackupNativeControlReport;
@@ -167,6 +168,7 @@ impl Selection {
             state: Arc::new(Mutex::new(status)),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
+            targets: Vec::new(),
         }
     }
 }

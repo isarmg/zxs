@@ -337,3 +337,8 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 ### Backup 普通原生对象与未激活 Current
 
 原 registry/placement 任务在普通 SYSTEM 安装后继续[普通原生对象安装](../design/backup-ordinary-native-metadata.md)：全体原盘／目标用生产不可变写者安装完整首笔、registry 图和实际 Publication/seal，目标从自身普通 metadata 实物消费同一 Current 归档重放。目标未激活选择记录只允许对象／seal 命名空间，仍拒绝 disk.json、活动 locator 和 writer；全体完成后缺失不补造。活动 Engine Current、下一笔发布、SYSTEM 解静默及源解围栏未完成，不开放 H03。本片六项临时目录测试源码未运行，无审查／编译／测试／CI或真实盘操作。
+
+
+### Backup 目标 writer 文件的持久围栏
+
+原 registry 任务在普通原生对象后续接[目标 writer 围栏](../design/backup-target-writer-fencing.md)：全部实际证据成立才无覆盖创建普通 `.writer.lock`、取得真实独占锁并绑定设备／inode；Engine 保留同一目标目录与 writer owner 跨后台完成和错误，同原任务和检查借用已有所有者，冷开不创建缺失已绑定文件。任一共同完成后缺失绑定／lock 拒绝补造。独立 helper 不能与保留这些资源的 Engine 并行抢目标锁。`inspect_backup_target_writers` 重新观察全体材料及实际持锁，不选择活动 generation／disk.json、Current 或新 I/O epoch。最终 writer、第二笔、SYSTEM 解静默和源解围栏仍缺，H03 不放行。本批对齐 `04af3778` 后生产 lib check、全部 engine 测试源码类型检查及变更 Rust 格式检查通过且无警告；八项单测因整体 libtest 编译被 SIGKILL 未执行，不计通过。未触发 GitHub CI或操作真实盘；后继 DiskWriter I/O／seal／locator 未混入。
