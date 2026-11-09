@@ -10,7 +10,7 @@ use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::linux::FileIdentity;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, path::Path};
-use storage_contract::{OperationId, storage_directories::CandidateSelection};
+use storage_engine::{OperationId, storage_directories::CandidateSelection};
 use storage_engine::DiskRegistrationIdentity;
 use storage_server::auth::CredentialRevision;
 const MAX_RECORD_BYTES: usize = 64 * 1024;
@@ -144,10 +144,10 @@ fn complete_chain(level: u32, source_slot: &str, upstream: &str, lower: &[&Lower
     if !(2..=3).contains(&level) || lower.len() != (level - 1) as usize {
         return Err("a level 2 source needs its real level 1; a level 3 source needs real levels 1 and 2 in the same batch".into());
     }
-    name_policy::validate_slot(source_slot)?;
+    storage_engine::validate_slot(source_slot)?;
     let mut slots = BTreeSet::from([source_slot.to_ascii_lowercase()]);
     for (index, item) in lower.iter().enumerate() {
-        name_policy::validate_slot(&item.slot_id)?;
+        storage_engine::validate_slot(&item.slot_id)?;
         let expected_upstream = index.checked_sub(1).map(|previous| lower[previous].slot_id.as_str());
         if item.level != index as u32 + 1
             || item.upstream_slot_id.as_deref() != expected_upstream

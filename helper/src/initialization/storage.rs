@@ -8,7 +8,7 @@ use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use storage_contract::storage_directories::CandidateSelection;
+use storage_engine::storage_directories::CandidateSelection;
 use storage_server::auth::CredentialRevision;
 const MAX_RECORD_BYTES: usize = 64 * 1024;
 #[derive(Deserialize)]

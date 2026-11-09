@@ -124,7 +124,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 Some(target.control.select_terminal_chain_generation(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,
@@ -143,7 +143,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 Some(target.control.inspect_terminal_chain_generation(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,
@@ -161,7 +161,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 Some(target.control.prepare_terminal_chain_generation_log(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,
@@ -179,7 +179,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 Some(target.control.decide_terminal_chain_io_admission(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,
@@ -197,7 +197,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 Some(target.control.prepare_terminal_chain_activation_plan(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,
@@ -215,7 +215,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 published_current = Some(target.control.inspect_terminal_chain_current(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,
@@ -234,7 +234,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 Some(target.control.publish_terminal_chain_first(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,
@@ -252,7 +252,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 Some(target.control.prepare_terminal_chain_first_candidate(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,
@@ -270,7 +270,7 @@ impl crate::service_worker::Request for Request {
                 }
                 let preparation = plan.preparation;
                 Some(target.control.synchronize_terminal_chain_readmission(
-                    storage_contract::storage_readmission::ReadmissionRequest {
+                    storage_engine::storage_readmission::ReadmissionRequest {
                         operation_id: preparation.operation_id,
                         slot_id: preparation.target.slot_id,
                         expected_disk_id: preparation.target.disk_id,

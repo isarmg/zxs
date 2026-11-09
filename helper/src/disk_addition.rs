@@ -9,7 +9,7 @@ use crate::{
 use data_serialization::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use storage_contract::{
+use storage_engine::{
     OperationId,
     storage_addition::{AdditionPreview, AdditionStatus},
 };

@@ -4,7 +4,7 @@ use super::*;
 use crate::managed_pool::ManagedPool;
 use platform_io::fs_safety::{AtomicFile, EntryName, linux::OpenAt2Root};
 use std::path::PathBuf;
-use storage_contract::{Config, storage_directories::InspectRequest};
+use storage_engine::{Config, storage_directories::InspectRequest};
 use storage_engine::{
     ForeignImportLimits, ForeignImportPreview, ForeignMigrationPlan,
     ForeignMigrationStatus, ForeignMigrationTransaction, ForeignVersionAvailability,

@@ -1,7 +1,7 @@
 //! Only the service UID owns native metadata and the confirmed retained root.
 use super::*;
 use platform_io::service_lease::ServiceLease;
-use storage_contract::storage_readmission::ReadmissionCommit;
+use storage_engine::storage_readmission::ReadmissionCommit;
 use storage_server::{
     auth::AuthStore, management::storage_readmission::ExclusiveTerminalReadmission,
     startup_admission::PreparedService,
@@ -83,7 +83,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
                     }
                     Some(status)
                 }
-                Err(error) if error.code == storage_contract::ErrorCode::OperationNotFound => {
+                Err(error) if error.code == storage_engine::ErrorCode::OperationNotFound => {
                     if target.control.preview(plan.readmission.request.clone())? != plan.readmission
                     {
                         return Err(

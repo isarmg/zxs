@@ -104,6 +104,33 @@ class ArchitecturePolicyTests(unittest.TestCase):
             self.package('src/a', 'a', f'[{table}]\nb = {{ path = "../b" }}\n')
             self.reject('forbidden')
 
+    def test_helper_contract_and_naming_remain_engine_owned(self):
+        # Model the actual helper boundary without its unrelated server edge.
+        # Optional, aliased or target-specific declarations are not exemptions.
+        self.members = ['helper', 'src/engine', 'src/contract', 'src/naming']
+        self.policy['owners'] = {
+            'storage-helper': {'path': 'helper', 'runtime': ['storage-engine'], 'build': [], 'dev': []},
+            'storage-engine': {'path': 'src/engine', 'runtime': ['storage-contract', 'name-policy'], 'build': [], 'dev': []},
+            'storage-contract': {'path': 'src/contract', 'runtime': ['name-policy'], 'build': [], 'dev': []},
+            'name-policy': {'path': 'src/naming', 'runtime': [], 'build': [], 'dev': []},
+        }
+        self.package('src/naming', 'name-policy')
+        self.package('src/contract', 'storage-contract', '[dependencies]\nname-policy = { path = "../naming" }\n')
+        self.package('src/engine', 'storage-engine', '[dependencies]\nstorage-contract = { path = "../contract" }\nname-policy = { path = "../naming" }\n')
+        permitted = '[dependencies]\nstorage-engine = { path = "../src/engine" }\n'
+        self.package('helper', 'storage-helper', permitted)
+        self.workspace('[workspace.dependencies]\ncontract = { package = "storage-contract", path = "src/contract" }\n')
+        self.assertEqual(self.check(), (4, 4))
+        for dependency in [
+            'contract = { workspace = true }\n',
+            'direct = { package = "storage-contract", path = "../src/contract", optional = true }\n',
+            'naming = { package = "name-policy", path = "../src/naming" }\n',
+        ]:
+            for table in ['dependencies', 'build-dependencies', 'dev-dependencies']:
+                with self.subTest(dependency=dependency, table=table):
+                    self.package('helper', 'storage-helper', permitted + f"[target.'cfg(unix)'.{table}]\n" + dependency)
+                    self.reject('forbidden .* edge storage-helper -> (storage-contract|name-policy)')
+
     def test_dev_backedge_is_allowed_but_build_cycle_is_not(self):
         self.policy['owners']['a']['runtime'] = ['b']
         self.policy['owners']['b']['dev'] = ['a']

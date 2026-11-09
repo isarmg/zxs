@@ -8,7 +8,7 @@ use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
 use platform_io::service_lease::ServiceLease;
 use std::{collections::BTreeMap, path::PathBuf};
-use storage_contract::storage_directories::{CandidateSelection, InspectRequest};
+use storage_engine::storage_directories::{CandidateSelection, InspectRequest};
 use storage_engine::{Config, Engine, IndexHealth, Mode, OperationId, ValidatedConfig};
 use storage_server::{
     ApiError,

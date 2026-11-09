@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`7583e229`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`e5782e51`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -26,13 +26,13 @@
 | M08 | `c92511c` 的逐盘保留历史库存只读预览；外来盘审核和有限目标执行意图已有分层入口。 | 外来盘正式接纳、完整低级链发布或在线逐盘权威已经切换。 |
 | M09 | 系统管理界面拆分、目录详情控制，以及多级备份盘的 Web 浏览切片。 | 真实浏览器、所有三级盘正文读取和 SMB 隔离均已验收。 |
 
-最新基线的 [短 CI `42473259562`](https://github.com/isarmg/zxs/actions/runs/42473259562) 已于 2026-11-08 11:00 UTC 成功，八项通过、四项按策略跳过。生产 WASM、一期 core、Samba SDK 和真实 Chrome 未由本次运行验证；workspace 长套件没有执行。该结果不覆盖本文件或未合入候选，不以较早 CI 代替后续代码的验证。
+历史基线的 [短 CI `42473259562`](https://github.com/isarmg/zxs/actions/runs/42473259562) 已于 2026-11-08 11:00 UTC 成功，八项通过、四项按策略跳过。生产 WASM、一期 core、Samba SDK 和真实 Chrome 未由本次运行验证；workspace 长套件没有执行。该结果不覆盖本文件或未合入候选，不以较早 CI 代替后续代码的验证。
 
 ## 进行中与未合入候选
 
 | ID | 工作方向与当前事实 | 下一步／合入条件 |
 | --- | --- | --- |
-| T00 | **自动 CI 仍暂停，单次人工检查已执行**：用户于 2026-11-09 明确授权一次人工 CI，`7583e229` 的 [#924](https://github.com/isarmg/zxs/actions/runs/42545476490) 约 18 秒内因 helper 禁止依赖边而 static 失败；矩阵未启动。独立本地续跑 static 又定位 ELF 负向夹具被更早的 helper 内置载荷身份门禁挡住，本片仅修该夹具的准确前置摘要并新增载荷绑定负向用例，原门禁不改。 | 定向 `test_release_assets.py` 17 项通过；准确基线 test/ci 原 814 项中该 failure 和 helper 架构 error 已明确，其余 static 命令通过，helper manifest/消费者治理漂移另片处理。未重跑 GitHub CI、未跑 Rust/长套件，不把本地定向通过当组合全绿；自动触发、长套件暂停及 5+10 分钟上限不变。 |
+| T00 | **自动 CI 仍暂停，单次人工检查与失败修复**：用户于 2026-11-09 明确授权一次人工 CI；`7583e229` 的 [#924](https://github.com/isarmg/zxs/actions/runs/42545476490) 约 18 秒内因 helper 禁止依赖边而 static 失败，Rust 矩阵未启动。`e5782e51` 已修 ELF 负向夹具的准确载荷前置摘要并新增绑定负向用例，原门禁不改。本片另移除 helper 的 contract/name 直接边，经 Engine 既有共同类型与单一槽名校验，不复制规则或放宽策略。 | ELF 定向 17 项通过；原基线 test/ci 814 项除该 failure 与 helper 架构 error 外无其它失败，其余 static 命令已独立通过。本架构定向 30 项中 29 过，唯一仓库库存仍拒绝 helper → storage-server 生产边，待独立解耦；来源 verify --metadata、消费者索引 verify 及其 4 项回归通过。Rust 槽名新用例未运行，未新增编译缓存；未重跑 GitHub CI/Rust 长套件或真实系统操作，不把这些独立结果当组合全绿。自动触发暂停、长套件暂停及 5+10 分钟上限不变，旧外来数据库候选独立保全。 |
 | T01 | **SMB/Web 普通软删除与撤销接线**：Engine 生命周期核心已合入；未合入后继在 cb99 基线通过 20 项所选 Engine／进程内 HTTP 回归及 Engine Clippy。Web 与 Server/Web Clippy 未跑，真实 SMB socket 受环境限制；尚未实际验证与 2189 的组合。 | 完成准确组合的受影响入口验证；D 连接原文件全部分支最新节点、冻结其新节点／分支，撤销当前 D 才恢复 SMB 可见与编辑。保留永久原操作和同路径身份边界；所选回归不是全套或真实 SMB 验收。 |
 | T02 | **跨盘 SMB move**：`5c14a7a` 的完整源历史/scoped 材料在主线；`ccf3f49c` 已合入原 choice/写围栏。本片接[唯一普通 Candidate 与逐成员冷读](docs/design/file-history-move-native-candidate.md)：原 choice 确定 tx/槽/候选，单一 prospective 结果仍同时绑定源 D 和完整目标；真实 snapshot/history/Candidate 安装到全部原元数据根，各根独立普通冷读、全 State/图比较，原 FILE/盘根投影不得漂移。六项新集成仅源码，未审查/编译/格式化/测试/CI，无真实盘操作。 | 普通对象不是决定：无 journal PREPARE/ACCEPT/PUBLISHED、无活动库安装或源/目标可见切换，不返回 SMB 成功，五项义务不解除。孤立无原清单/损坏候选保留拒绝；单成员缺对象不借别盘宣称完整，只原材料显式补齐。完整普通正文/三范围共同安装、N 成员决定及失败收束、双端读取围栏和 choice 解除仍缺，不自动接 SMB。 |
 | T03 | **整体备份迁移**：`160a642f` 已合入原首笔通用冷重放；本片接[普通原生对象安装](docs/design/backup-ordinary-native-metadata.md)，在全部原盘／目标的真实 `metadata/objects` 和 seal 地址无覆盖安装完整 State／history／registry／Publication，目标从自身普通字节重放只读 Current；原任务可辨识未激活的部分 metadata 并按原决定续作。**六项临时目录测试源码未运行；未审查、编译、测试或 CI，未实际操作盘。** | 普通对象不是活动 Current：不写活动 selector／disk.json／writer；第二笔、活动 Config／locator、SYSTEM 解静默及安全源解围栏仍未完成。任一完成标记后全体缺件拒绝补造，旧数据／永久回执和原围栏保留，不开放 H03；仍缺普通设置自动触发和完整进度入口，完整单元／父子同层同盘／一次性完整低级链约束不放宽。 |

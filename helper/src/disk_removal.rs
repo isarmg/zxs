@@ -14,7 +14,7 @@ use crate::{
 use data_serialization::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use storage_contract::{
+use storage_engine::{
     OperationId,
     storage_lifecycle::{ExitAction, ExitAuthority, ExitPreview, ExitStatus},
 };
@@ -87,7 +87,7 @@ struct WorkerRequest {
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
     TerminalPreview {
-        request: storage_contract::storage_lifecycle::ExitRequest,
+        request: storage_engine::storage_lifecycle::ExitRequest,
     },
     TerminalOriginal {
         plan: terminal_action::Plan,
@@ -119,7 +119,7 @@ enum Output {
         plan: terminal_action::Plan,
     },
     TerminalResult {
-        result: Option<storage_contract::OperationResult>,
+        result: Option<storage_engine::OperationResult>,
     },
     Inventory {
         inventory: worker::Inventory,

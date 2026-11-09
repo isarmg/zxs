@@ -1,7 +1,7 @@
 //! Request, authority and uncertainty boundaries; source only, not executed.
 use super::*;
 use json_codec::json;
-use storage_contract::storage_readmission::ReadmissionAuthority;
+use storage_engine::storage_readmission::ReadmissionAuthority;
 fn plan() -> Plan {
     let inode = json!({"device":"1","inode":"2"});
     json_codec::from_value(json!({"format":"zxs-helper-retained-terminal-readmission",

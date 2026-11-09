@@ -9,7 +9,7 @@ use crate::{
 use data_serialization::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use storage_contract::{
+use storage_engine::{
     OperationId,
     storage_readmission::{ReadmissionPreview, ReadmissionStatus},
 };
@@ -75,7 +75,7 @@ struct WorkerRequest {
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
     Preview {
-        request: storage_contract::storage_readmission::ReadmissionRequest,
+        request: storage_engine::storage_readmission::ReadmissionRequest,
     },
     Original {
         plan: Plan,
@@ -201,7 +201,7 @@ pub(crate) fn preview(input: Input) -> Result<Preview> {
     let Output::Preview { plan } = crate::service_worker::run(WorkerRequest {
         context,
         action: Action::Preview {
-            request: storage_contract::storage_readmission::ReadmissionRequest {
+            request: storage_engine::storage_readmission::ReadmissionRequest {
                 operation_id: input.operation_id,
                 slot_id: input.slot_id,
                 expected_disk_id: input.expected_disk_id,

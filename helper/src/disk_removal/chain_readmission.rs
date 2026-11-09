@@ -5,7 +5,7 @@ use super::*;
 #[serialization(deny_unknown_fields)]
 struct Request {
     context: layout::Context,
-    readmission: storage_contract::storage_readmission::ReadmissionRequest,
+    readmission: storage_engine::storage_readmission::ReadmissionRequest,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -66,7 +66,7 @@ pub(crate) fn export(input: Input) -> Result<Export> {
     drop(root);
     let result = crate::service_worker::run(Request {
         context: context.clone(),
-        readmission: storage_contract::storage_readmission::ReadmissionRequest {
+        readmission: storage_engine::storage_readmission::ReadmissionRequest {
             operation_id: input.operation_id,
             slot_id: input.slot_id,
             expected_disk_id: input.expected_disk_id,

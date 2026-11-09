@@ -2,7 +2,7 @@
 //! completion never re-open a retired disk merely to see whether it exists.
 use super::*;
 use platform_io::service_lease::ServiceLease;
-use storage_contract::{
+use storage_engine::{
     storage_lifecycle::{ExitCommit, ExitRequest},
     storage_readmission::{RegistrationEntry, RegistrationSnapshot},
 };
@@ -205,7 +205,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
                     }
                     Some(status)
                 }
-                Err(error) if error.code == storage_contract::ErrorCode::OperationNotFound => {
+                Err(error) if error.code == storage_engine::ErrorCode::OperationNotFound => {
                     if target.control.preview(plan.exit.request.clone())? != plan.exit {
                         return Err("unstarted deregistration no longer has its exact original published source boundary".into());
                     }

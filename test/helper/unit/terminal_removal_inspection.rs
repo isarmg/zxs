@@ -1,11 +1,11 @@
 use super::*;
-use storage_contract::storage_readmission::RegistrationMode;
+use storage_engine::storage_readmission::RegistrationMode;
 fn fixture() -> (
     TerminalBoundary,
-    storage_contract::Config,
+    storage_engine::Config,
     Vec<RegistrationEntry>,
 ) {
-    let config = storage_contract::Config::development([
+    let config = storage_engine::Config::development([
         Path::new("/zxs/data/disks/first").to_owned(),
         Path::new("/zxs/data/disks/second").to_owned(),
     ])

@@ -79502,7 +79502,7 @@
   },
   "manifests_sha256": {
     "Cargo.toml": "5654bb35c6dced1e90ce89f5c28fe2d03d05c253188c1ea34c25f3b9c11c736d",
-    "helper/Cargo.toml": "c662b9fbbc776c014909fb4d367c14533ac6f74abc0be7bf66abb270331b9941",
+    "helper/Cargo.toml": "79d7d9e275d3cab2ca41eadee66d8d60591b68cae3e0853aaa36769688a7ceba",
     "src/auth/Cargo.toml": "f315d7648a6399f68f04ec5e49d9df3f69d9254b68c6f5e8369e87fb1e8282f9",
     "src/client/Cargo.toml": "e52f0f1e11816d9fb28c4b0bfbe607ff3342b30493a92fbb7a75847a1f96b7b6",
     "src/contract/Cargo.toml": "c78a39f40d067f1267d056f0f51c17ada5b2c365556fac2a8c54f9b488f3649f",

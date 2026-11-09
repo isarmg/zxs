@@ -1,7 +1,7 @@
 //! Root-retained exact plan for sequential management-only retirement successors.
 //! Native completion owns Stop/D3; helper files are never completion authority.
 use super::*;
-use storage_contract::{
+use storage_engine::{
     OperationResult,
     storage_lifecycle::{ExitRequest, TerminalRetirementPreview},
 };

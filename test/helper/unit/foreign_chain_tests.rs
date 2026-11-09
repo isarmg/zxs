@@ -33,6 +33,15 @@ fn chain_links_and_slots_cannot_skip_collide_or_use_placeholders() {
     assert!(layout::names(&[first.root_path.clone(), first.root_path.clone()]).is_err());
 }
 #[test]
+fn engine_slot_policy_rejects_invalid_source_and_lower_names() {
+    let first = lower(1, "primary", None);
+    for invalid in ["", "../source", "has space", "source/child", "源"] {
+        assert!(complete_chain(2, invalid, "primary", &[&first]).is_err());
+        let invalid_first = lower(1, invalid, None);
+        assert!(complete_chain(2, "secondary", invalid, &[&invalid_first]).is_err());
+    }
+}
+#[test]
 fn foreign_input_requires_explicit_complete_fields_and_rejects_authority_overrides() {
     let mut input = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
         "source_root":"/zxs/data/disks/foreign","source_slot_id":"secondary",

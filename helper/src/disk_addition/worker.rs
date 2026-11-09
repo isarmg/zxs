@@ -2,7 +2,7 @@
 use super::*;
 use crate::managed_pool::ManagedPool;
 use std::path::PathBuf;
-use storage_contract::{
+use storage_engine::{
     storage_addition::{AdditionCommit, AdditionRequest, DirectoryAddition},
     storage_directories::InspectRequest,
 };
@@ -96,7 +96,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
                     }
                     Some(status)
                 }
-                Err(error) if error.code == storage_contract::ErrorCode::OperationNotFound => {
+                Err(error) if error.code == storage_engine::ErrorCode::OperationNotFound => {
                     // Root intent may precede the child/native intent. Only an
                     // exactly unchanged fresh preview may be explicitly retried.
                     if control.preview(plan.addition.request.clone())? != plan.addition {
@@ -121,7 +121,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
     }
 }
 
-fn root_paths(config: &storage_contract::Config) -> Result<Vec<String>> {
+fn root_paths(config: &storage_engine::Config) -> Result<Vec<String>> {
     config
         .disks
         .iter()

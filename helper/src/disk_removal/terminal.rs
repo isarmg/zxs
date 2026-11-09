@@ -1,7 +1,7 @@
 //! Terminal remaining-member diagnostics. A source commitment and a valid
 //! registration are not a successor publication: this module never deregisters.
 use super::*;
-use storage_contract::storage_readmission::{RegistrationEntry, RegistrationSnapshot};
+use storage_engine::storage_readmission::{RegistrationEntry, RegistrationSnapshot};
 use storage_server::management::storage_lifecycle::{ExclusiveExit, TerminalBoundary};
 
 #[derive(Deserialize)]
@@ -19,13 +19,13 @@ struct Source {
     terminal_operation_id: OperationId,
     terminal_authority_hash: String,
     registry_root_hash: String,
-    #[serialization(with = "storage_contract::u64_string")]
+    #[serialization(with = "storage_engine::u64_string")]
     registry_generation: u64,
-    #[serialization(with = "storage_contract::u64_string")]
+    #[serialization(with = "storage_engine::u64_string")]
     sequence: u64,
-    #[serialization(with = "storage_contract::u64_string")]
+    #[serialization(with = "storage_engine::u64_string")]
     topology_generation: u64,
-    pending_retirement: Option<storage_contract::storage_lifecycle::TerminalRetirementPending>,
+    pending_retirement: Option<storage_engine::storage_lifecycle::TerminalRetirementPending>,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(rename_all = "snake_case")]
@@ -79,7 +79,7 @@ pub(super) fn capture(control: &ExclusiveExit, slot: &str, disk: &str) -> Result
 }
 fn inspect(
     boundary: TerminalBoundary,
-    config: storage_contract::Config,
+    config: storage_engine::Config,
     registrations: Vec<RegistrationEntry>,
     slot: &str,
     disk: &str,

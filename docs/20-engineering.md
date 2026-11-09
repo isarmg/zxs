@@ -152,6 +152,8 @@ platform-io → 文件系统 / SQLite / 凭据算法依赖
 
 此表解释职责，机器策略登记准确边集合；增加包或依赖时同时评审二者，不能通过随手放宽策略使检查自动认可设计。当前第一方构建依赖没有第一方包边；过程宏实际使用编译目标的性质与 manifest 依赖表类别分别判断。根清单保持虚拟工作区，不添加根 `[package]`；成员使用显式路径，不使用 glob，以便审阅库存变化。非 Foundation 的仓库内路径包也必须显式登记为工作区成员与策略所有者，防止 Cargo 自动成员绕过清单。
 
+辅助工具的磁盘请求、状态、操作 ID 与整数编码使用 `storage-engine` 已公开的共同契约，不另建到 `storage-contract` 的直接依赖。磁盘槽名通过引擎明确公开的 `validate_slot` 调用同一 `name-policy` 实现，不复制规则、跳过校验或添加 helper 到命名包的直接边。这些 API 只提供原类型与语法约束，不授予磁盘接纳或发布权限；辅助工具仍须走原有授权、持久化和恢复流程。
+
 [架构检查器](../.github/scripts/check-architecture.py)以 TOML 和真实路径解析包身份、依赖别名、workspace 继承、可选与目标条件依赖，区分 runtime/build/dev，检查运行与构建依赖无环；显式允许的开发期反向边不视作生产环。它不按当前主机 cfg 隐藏依赖，也不把 Foundation 内部一并当作第一方分层。Foundation 的布局、来源完整性和特性边由[来源治理工具](../tools/rust-sources/manage.py)校验；[消费者索引生成器](../tools/rust-sources/architecture.py)只生成并核对声明依赖与保守特性闭包的文档，不是 Foundation 分层规则检查器。这些检查都不证明模块内业务调用、授权与锁语义正确。
 
 `storage-contract` 不依赖操作系统或 UI；`name-policy` 将 Unicode 规范化算法与项目映射放在同一编译组件，使用固定 Unicode 数据，不跟随编译器 Unicode 版本漂移。SQLite 为可删除后重建的索引，全部配置成员日志和不可变对象承担恢复依据。复制必须显式读写完整字节，不使用硬链接、reflink 或去重冒充独立副本。
