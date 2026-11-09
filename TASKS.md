@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`a921f866`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`0a152e5e`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -53,6 +53,8 @@
 
 
 ### T00 最新 GitHub 验证与格式修复
+
+- [短 CI #955](https://github.com/isarmg/zxs/actions/runs/42660997622) 的 quality job `129314790605` 在准确 `3d9d8a50a32611ecc9345cc04dfd7f65b18e18ee` 继续到 Engine lib test，暴露 `index/preparation_readback_tests.rs` 私有 `change` helper 的 E0521。按实际 Execute／SqlSafeStr 契约，helper 改接 `'static` 的 typed Execute；原字面量 SQL 保留原执行方式，唯一按实际 kind 拼接的 DELETE 改为静态 SQL 与 `.bind(kind)`，继续遍历全部实际 system_changes family，不枚举硬编码子集、不使用 AssertSqlSafe 或泄漏字符串。全部八项既有测试及损坏注入／精确 State、原 principal、未知 schema、完整 u64、取消断言保留，不改生产接口或拒绝门。仅这份既有测试源码和 TASKS，未本地运行程序、formatter、编译、Clippy 或测试，未另行触发 workflow；提交后仍待准确 head 的 GitHub 复验，不将源码修正视为 SYSTEM 回验已通过。
 
 - [短 CI #955 quality](https://github.com/isarmg/zxs/actions/runs/42660997622/job/129314790605) 在准确 `3d9d8a50a32611ecc9345cc04dfd7f65b18e18ee` 报旧 `backup_layout_goals_tests::Fixture::state` 的 E0308。本片只在完整替换 `file_backup_paths` 时使用既有 `Tracked::from` 转换（`.into()`），保持新容器的全量变更标记，不放宽生产接口。五项既有测试、全部布局／重绑定拒绝断言与测试数据不变；仅该测试源码及 TASKS，未本地运行程序、格式器、编译或测试，尚待准确后继提交的 GitHub 复验。
 

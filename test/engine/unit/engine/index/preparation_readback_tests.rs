@@ -1,6 +1,6 @@
 //! Source-only preparation-image regressions; no live index recovery authority.
 use super::*;
-use sqlite_access::sqlite::SqliteOwnedBuf;
+use sqlite_access::{Execute, Sqlite, sqlite::SqliteOwnedBuf};
 use std::cell::Cell;
 
 fn fixture() -> (tempfile::TempDir, Engine, Vec<u8>) {
@@ -53,7 +53,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Vec<u8>) {
     (temp, engine, bytes)
 }
 
-fn change(bytes: &[u8], sql: &str) -> Vec<u8> {
+fn change(bytes: &[u8], query: impl Execute<'static, Sqlite> + 'static) -> Vec<u8> {
     platform_io::sqlite::block_on_sqlite_connection(async {
         let mut connection = sqlite_access::SqliteConnection::connect_with(
             &SqliteConnectOptions::new().in_memory(true),
@@ -64,7 +64,7 @@ fn change(bytes: &[u8], sql: &str) -> Vec<u8> {
             .deserialize(None, SqliteOwnedBuf::try_from(bytes).unwrap(), false)
             .await
             .unwrap();
-        connection.execute(sql).await.unwrap();
+        connection.execute(query).await.unwrap();
         let result = connection.serialize(None).await.unwrap().to_vec();
         connection.close().await.unwrap();
         result
@@ -153,7 +153,7 @@ fn every_present_global_family_and_exact_original_principal_must_survive() {
         reject(
             &change(
                 &bytes,
-                &format!("DELETE FROM system_changes WHERE kind={kind}"),
+                sqlite_access::query("DELETE FROM system_changes WHERE kind=?").bind(kind),
             ),
             engine.state(),
         );
