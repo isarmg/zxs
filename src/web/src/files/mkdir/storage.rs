@@ -55,7 +55,8 @@ impl Record {
         let path = match &self.stored.namespace {
             Namespace::FileRelocation { relocation } => format!(
                 "{} → {} (repository {})",
-                self.stored.path.as_str(), relocation.destination.as_str(),
+                self.stored.path.as_str(),
+                relocation.destination.as_str(),
                 relocation.repository_id.as_str(),
             ),
             Namespace::UninitializedRoot | Namespace::Repository { .. } => {
@@ -73,7 +74,10 @@ impl Record {
     pub(super) fn request(&self) -> (String, Value) {
         if let Namespace::FileRelocation { relocation } = &self.stored.namespace {
             return (
-                format!("/api/file-manager/disks/{}/file-relocation", api::segment(&self.stored.slot)),
+                format!(
+                    "/api/file-manager/disks/{}/file-relocation",
+                    api::segment(&self.stored.slot)
+                ),
                 json!({"operation_id":self.operation(),"relocation":relocation}),
             );
         }
@@ -93,9 +97,13 @@ impl Record {
             let Some(kind) = receipt["operation_kind"].as_str() else {
                 return false;
             };
-            if !matches!(kind, "file.namespace" | "file.namespace.recursive"
-                | "file.namespace.recursive-directories" | "file.namespace.recursive-routes")
-            {
+            if !matches!(
+                kind,
+                "file.namespace"
+                    | "file.namespace.recursive"
+                    | "file.namespace.recursive-directories"
+                    | "file.namespace.recursive-routes"
+            ) {
                 return false;
             }
             return self.relocation_digests.get(kind).map(String::as_str)
@@ -170,18 +178,27 @@ impl Record {
         operation: OperationId,
         relocation: storage_contract::file_relocation::FileRelocation,
     ) -> Result<Self, api::Error> {
-        let entry = state.files.entries.iter().find(|entry| {
-            entry.entry_id() == relocation.entry_id.as_str()
-                && entry.file_id() == relocation.file_id.as_str()
-                && entry.repository_path() == Some(relocation.source.as_str())
-                && entry.repository_id() == Some(relocation.repository_id.as_str())
-                && !entry.read_only() && !entry.backup() && !entry.retained_history()
-        }).ok_or_else(|| failure("The captured file is no longer in the current listing."))?;
+        let entry = state
+            .files
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.entry_id() == relocation.entry_id.as_str()
+                    && entry.file_id() == relocation.file_id.as_str()
+                    && entry.repository_path() == Some(relocation.source.as_str())
+                    && entry.repository_id() == Some(relocation.repository_id.as_str())
+                    && !entry.read_only()
+                    && !entry.backup()
+                    && !entry.retained_history()
+            })
+            .ok_or_else(|| failure("The captured file is no longer in the current listing."))?;
         if state.files.repository_id != relocation.repository_id.as_str()
             || state.files.namespace_head != relocation.expected_head.as_str()
             || state.files.directory_branches_supported
         {
-            return Err(failure("The original ordinary namespace changed; review it again."));
+            return Err(failure(
+                "The original ordinary namespace changed; review it again.",
+            ));
         }
         let stored = Stored {
             format: Format::FileRelocation,
@@ -195,7 +212,9 @@ impl Record {
         let bytes = storage_contract::canonical_json(&stored).map_err(decode_error)?;
         let bytes = String::from_utf8(bytes).expect("invariant: canonical JSON is UTF-8");
         if bytes.len() > MAX_RECORD_BYTES {
-            return Err(limit("The original file move exceeds 32 KiB; no request was sent."));
+            return Err(limit(
+                "The original file move exceeds 32 KiB; no request was sent.",
+            ));
         }
         Self::bind(stored, Arc::from(bytes))
     }
@@ -238,7 +257,9 @@ impl Record {
                 if source != stored.path.as_str()
                     && stored.path.as_str().split_once('/').map(|(_, tail)| tail) != Some(source)
                 {
-                    return Err(failure("The original file paths do not share one namespace."));
+                    return Err(failure(
+                        "The original file paths do not share one namespace.",
+                    ));
                 }
                 None
             }
@@ -273,12 +294,19 @@ impl Record {
         };
         let mut relocation_digests = std::collections::BTreeMap::new();
         if let Namespace::FileRelocation { relocation } = &stored.namespace {
-            for kind in ["file.namespace", "file.namespace.recursive",
-                "file.namespace.recursive-directories", "file.namespace.recursive-routes"]
-            {
-                let digest = storage_contract::object_hash("request", &json!({
-                    "kind":kind, "principal":stored.principal, "body":relocation.request(),
-                })).map_err(decode_error)?;
+            for kind in [
+                "file.namespace",
+                "file.namespace.recursive",
+                "file.namespace.recursive-directories",
+                "file.namespace.recursive-routes",
+            ] {
+                let digest = storage_contract::object_hash(
+                    "request",
+                    &json!({
+                        "kind":kind, "principal":stored.principal, "body":relocation.request(),
+                    }),
+                )
+                .map_err(decode_error)?;
                 relocation_digests.insert(kind, digest);
             }
         }

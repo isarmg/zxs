@@ -20,8 +20,8 @@ pub(crate) async fn submit(
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
     name_policy::validate_slot(&slot_id).map_err(ApiError::invalid_source)?;
-    let body: Body =
-        json_codec::from_value(crate::json_body(request).await?).map_err(ApiError::invalid_source)?;
+    let body: Body = json_codec::from_value(crate::json_body(request).await?)
+        .map_err(ApiError::invalid_source)?;
     let permit = state
         .backend_slots
         .clone()

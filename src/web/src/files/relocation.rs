@@ -26,7 +26,8 @@ struct Review {
     request: FileRelocation,
 }
 fn selected(state: &State) -> Option<&Entry> {
-    if !actions::write_allowed(state) || !state.files.loaded
+    if !actions::write_allowed(state)
+        || !state.files.loaded
         || state.files.directory_branches_supported
     {
         return None;
@@ -34,16 +35,23 @@ fn selected(state: &State) -> Option<&Entry> {
     let entries = &state.files.entries;
     let entry = if state.files.checked_entries.is_empty() {
         let selected = state.files.selected.as_ref()?;
-        entries.iter().find(|entry| entry_key(entry) == entry_key(selected))?
+        entries
+            .iter()
+            .find(|entry| entry_key(entry) == entry_key(selected))?
     } else if state.files.checked_entries.len() == 1 {
-        entries.iter().find(|entry| state.files.checked_entries.contains(&entry_key(entry)))?
+        entries
+            .iter()
+            .find(|entry| state.files.checked_entries.contains(&entry_key(entry)))?
     } else {
         return None;
     };
-    (!entry.file_id().is_empty() && !entry.read_only() && !entry.backup()
-        && !entry.retained_history() && !entry.inherited()
+    (!entry.file_id().is_empty()
+        && !entry.read_only()
+        && !entry.backup()
+        && !entry.retained_history()
+        && !entry.inherited()
         && entry.repository_id() == Some(state.files.repository_id.as_str()))
-        .then_some(entry)
+    .then_some(entry)
 }
 fn basis(state: &State) -> Option<Basis> {
     let entry = selected(state)?;

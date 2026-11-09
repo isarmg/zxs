@@ -33,10 +33,14 @@ pub(crate) fn require(
             "source and destination are identical",
         ));
     }
-    if state.directory_git_repositories.contains_key(request.repository_id.as_str())
+    if state
+        .directory_git_repositories
+        .contains_key(request.repository_id.as_str())
         || entries.iter().any(|entry| {
             entry.kind == NamespaceEntryKind::Directory
-                && state.directory_git_repositories.contains_key(&entry.entry_id)
+                && state
+                    .directory_git_repositories
+                    .contains_key(&entry.entry_id)
                 && [request.source.key(), request.destination.key()]
                     .iter()
                     .any(|path| super::namespace::is_descendant(path, entry.lookup_key()))

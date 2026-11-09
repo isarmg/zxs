@@ -123,13 +123,14 @@ pub(super) fn start_relocation(
     let operation = crate::ui::file_operation_id(state)?
         .parse()
         .expect("invariant: UI generated a canonical operation ID");
-    let record = match state.with_untracked(|s| Record::capture_relocation(s, operation, relocation)) {
-        Ok(record) => Arc::new(record),
-        Err(error) => {
-            fail(state, error);
-            return None;
-        }
-    };
+    let record =
+        match state.with_untracked(|s| Record::capture_relocation(s, operation, relocation)) {
+            Ok(record) => Arc::new(record),
+            Err(error) => {
+                fail(state, error);
+                return None;
+            }
+        };
     retain(state, record)
 }
 

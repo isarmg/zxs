@@ -1521,7 +1521,8 @@ impl Backend for AuthorizedBackend {
         identity: &crate::auth::Identity,
         request: crate::MoveDiskFile,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        self.backend.move_disk_file(&self.current(identity)?, request)
+        self.backend
+            .move_disk_file(&self.current(identity)?, request)
     }
     fn create_disk_write_session(
         &self,
