@@ -32,6 +32,7 @@ pub(crate) enum Navigation {
 #[derive(Clone, Default)]
 pub(crate) struct Model {
     pub deletion: super::deletion::Model,
+    pub mkdir: super::mkdir::Model,
     pub disks: Vec<Disk>,
     pub disks_loaded: bool,
     pub loading_disks: bool,

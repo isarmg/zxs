@@ -71,6 +71,7 @@ pub(crate) fn default_write_allowed(state: &State) -> bool {
 pub(crate) fn pending(state: &State) -> bool {
     state.files.mutation_pending
         || super::deletion::blocks_writes(state)
+        || super::mkdir::blocks_writes(state)
         || state
             .files
             .operations

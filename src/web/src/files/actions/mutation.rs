@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     api,
-    files::model::{FileOperation, NamespaceAction, join_path},
+    files::model::{FileOperation, NamespaceAction},
     ui::{ErrorContext, State, current_session, fail_in, set_notice},
 };
 use json_codec::{Value, json};
@@ -18,43 +18,9 @@ pub(crate) fn namespace(
     action: NamespaceAction,
     name: String,
 ) -> Option<String> {
-    let (mut body, endpoint) = state.with_untracked(|snapshot| {
-        if !write_allowed(snapshot) {
-            return None;
-        }
-        let body = match action {
-            NamespaceAction::CreateDirectory => {
-                json!({"kind":"mkdir","path":join_path(&snapshot.files.directory,&name)})
-            }
-        };
-        Some((
-            body,
-            format!("{}/namespace", disk_path(&snapshot.files.slot)),
-        ))
-    })?;
-    let id = crate::ui::file_operation_id(state)?;
-    body["operation_id"] = id.clone().into();
-    state.update(|s| {
-        s.files.mutation_pending = true;
-    });
-    let epoch = state.with_untracked(|s| s.session_epoch);
-    let submitted = id.clone();
-    spawn_local(async move {
-        let result = api::request("POST", &endpoint, Some(body)).await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        match result {
-            Ok(value) => {
-                record_receipt(state, &id, value);
-            }
-            Err(error) => {
-                record_failure(state, epoch, &id, error);
-            }
-        }
-        state.update(|s| s.files.mutation_pending = false);
-    });
-    Some(submitted)
+    match action {
+        NamespaceAction::CreateDirectory => crate::files::mkdir::start(state, &name),
+    }
 }
 pub(crate) fn directory_branch(
     state: RwSignal<State>,

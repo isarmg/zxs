@@ -16,6 +16,7 @@ pub(crate) fn record_receipt(state: RwSignal<State>, id: &str, value: Value) -> 
         crate::files::review::receipt_kind_matches(s, id, &value)
             && crate::files::node_retirement::receipt_matches(s, id, &value)
             && crate::files::deletion::receipt_matches(s, id, &value)
+            && crate::files::mkdir::receipt_matches(s, id, &value)
     }) {
         FileOperation::from_receipt(id, &value)
     } else {
@@ -52,6 +53,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         reload_scope = crate::files::batch::settle_operation(&mut s.files, &id, status);
         crate::files::review::settle(&mut s.files, &id, status);
         crate::files::deletion::settle(&mut s.files, &id, status);
+        crate::files::mkdir::settle(&mut s.files.mkdir, &id, status);
         s.notices.record_operation(s.session_epoch, &id, status);
         if s.files.default_operation.as_deref() == Some(&id) {
             if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
@@ -65,6 +67,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
     });
     if recorded && status != SaveStatus::Unknown {
         crate::files::deletion::finish_recovery(state, &id);
+        crate::files::mkdir::finish(state, &id);
     }
     if recorded && matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         reload_entries(state);
@@ -87,6 +90,7 @@ fn poll_work(state: &State) -> Option<(u64, Vec<String>)> {
             !crate::files::review::tag_attempt_in_flight(state, operation.id())
                 && !crate::files::node_retirement::in_flight(state, operation.id())
                 && !crate::files::deletion::in_flight(state, operation.id())
+                && crate::files::mkdir::poll_allowed(state, operation.id())
         })
         .filter_map(|operation| {
             let id = operation.id();

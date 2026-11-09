@@ -57,6 +57,8 @@ pub enum ErrorSource {
     BackupTransaction(#[source] json_codec::Error),
     #[error("invalid original backup input: {0}")]
     BackupInput(#[source] storage_contract::Error),
+    #[error("invalid folder creation recovery record: {0}")]
+    FolderCreationRecovery(#[source] storage_contract::Error),
     #[error("invalid file deletion recovery record: {0}")]
     FileDeletionRecovery(#[source] storage_contract::Error),
     #[error("invalid file deletion response: {0}")]
