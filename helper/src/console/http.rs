@@ -64,6 +64,14 @@ pub(super) fn router(state: State) -> Router {
         .route("/vfs-install.js", get(vfs_install_script))
         .route("/api/status", get(status))
         .route(
+            "/api/initialization/storage-directories-preview",
+            post(first_storage_directories_preview),
+        )
+        .route(
+            "/api/initialization/storage-directories-prepare",
+            post(first_storage_directories_prepare),
+        )
+        .route(
             "/api/initialization/storage-preview",
             post(first_storage_preview),
         )
@@ -914,6 +922,28 @@ async fn first_administrator_create(
     .await
 }
 
+async fn first_storage_directories_preview(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::FirstStorageDirectoriesPreview,
+    )
+    .await
+}
+async fn first_storage_directories_prepare(
+    ExtractState(state): ExtractState<State>,
+    request: Request,
+) -> Result<Response, Failure> {
+    maintenance_operation(
+        state,
+        request,
+        storage_engine::offline_maintenance::Operation::FirstStorageDirectoriesPrepare,
+    )
+    .await
+}
 async fn first_storage_preview(
     ExtractState(state): ExtractState<State>,
     request: Request,

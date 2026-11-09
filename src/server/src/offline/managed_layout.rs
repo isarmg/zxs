@@ -136,6 +136,14 @@ impl Layout {
         private(&self.management, MANAGEMENT)
     }
 
+    /// Directory creation is limited to management-only first installation.
+    /// It cannot add roots to an active or partially initialized storage pool.
+    pub(crate) fn first_storage_directory_parent(&self) -> Result<(&OpenAt2Root, (u32, u32))> {
+        self.recheck()?;
+        self.fresh()?;
+        Ok((&self.disks, self.account.owner()))
+    }
+
     /// Open only one explicitly selected immediate child through the retained
     /// discovery descriptor. Does not create, adopt, chmod or follow links.
     pub fn disk_root(&self, path: &str) -> Result<OpenAt2Root> {

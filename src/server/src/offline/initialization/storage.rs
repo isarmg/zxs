@@ -1,6 +1,7 @@
 //! Root-coordinated first storage batch. Domain genesis and recovery stay in
 //! SetupRecovery/Engine; all helper IPC, plans and Web orchestration live here.
 use crate::offline::managed_layout as layout;
+pub(crate) mod directories;
 pub(crate) mod process;
 mod worker;
 use crate::offline::{Result, private_io::BundleDestination};

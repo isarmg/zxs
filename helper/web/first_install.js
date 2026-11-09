@@ -19,6 +19,9 @@
   let epoch = 0;
   let blocked = false;
   let liveReady = false;
+  let directoryOriginal = null;
+  let directoryInspected = false;
+  const directoryKey = key + ":directories";
   const element = name => byId("first-install-" + name);
   const show = value => { element("report").textContent = JSON.stringify(value, null, 2); };
   const clearPasswords = () => {
@@ -154,6 +157,9 @@
     element("commit").disabled = locked || record === null || !inspected;
     element("ack").disabled = locked;
     element("samba-settings").disabled = locked || record === null;
+    element("directories-preview").disabled = locked || record === null;
+    element("directories-prepare").disabled = locked || !directoryInspected;
+    element("directories-save").disabled = locked || directoryOriginal === null;
     if (record === null) {
       element("progress").textContent = blocked ? "原请求不可读；未清除记录或发送操作。" : "填一次输入，再逐步核对和确认原生操作。";
       element("commit").hidden = true;
@@ -171,6 +177,7 @@
     element("smb").checked = deployment.smb !== null;
     element("autostart").checked = input.enable_on_boot;
     element("directory-note").hidden = step !== 6;
+    element("directories-actions").hidden = step !== 6 || original !== undefined;
     element("progress").textContent = "第 " + (step + 1) + "/" + names.length + " 步：" + names[step]
       + (original?.issued && !original.completed ? "。已发送或发送结果未知，只续同一请求。" : "")
       + (original?.completed ? "。历史完成记录已保留，请查询当前服务状态。" : "");
@@ -300,6 +307,81 @@
       clearPasswords(); setBusy(false); render();
     }
   });
+  function directoryInput() {
+    if (!record || index() !== 6 || record.steps[6] !== undefined) {
+      throw new Error("只在首存储计划尚未选择前准备原批次空目录。");
+    }
+    return {service_user:record.input.deployment.service_user, roots:record.input.roots};
+  }
+  function checkedDirectoryOriginal(value, input) {
+    shape(value, ["input", "request_digest"]);
+    if (!same(value.input, input) || !/^[0-9a-f]{64}$/.test(value.request_digest)) {
+      throw new Error("空目录原请求与首装完整输入不符；未覆盖它。");
+    }
+    return value;
+  }
+  element("directories-preview").addEventListener("click", async () => {
+    if (busy || stopping || !csrf || blocked || !record) return;
+    const token = ++epoch;
+    directoryInspected = false;
+    error(""); setBusy(true); render();
+    try {
+      const input = directoryInput();
+      const stored = sessionStorage.getItem(directoryKey);
+      if (stored !== null) {
+        if (new TextEncoder().encode(stored).length > 64 * 1024) throw new Error("空目录原请求超过保存上限。");
+        directoryOriginal = checkedDirectoryOriginal(JSON.parse(stored), input);
+      }
+      const value = await (await post("/api/initialization/storage-directories-preview", input)).json();
+      if (token !== epoch) return;
+      const original = checkedDirectoryOriginal({input:value.input, request_digest:value.request_digest}, input);
+      if (directoryOriginal && !same(original, directoryOriginal)) {
+        throw new Error("原空目录计划或宿主身份改变；未选择替代计划。");
+      }
+      const text = JSON.stringify(original);
+      if (new TextEncoder().encode(text).length > 64 * 1024) throw new Error("空目录原请求超过保存上限。");
+      if (sessionStorage.getItem(directoryKey) !== stored) throw new Error("空目录原请求在核对期间改变。");
+      sessionStorage.setItem(directoryKey, text);
+      if (sessionStorage.getItem(directoryKey) !== text) throw new Error("空目录原请求未能准确保存。");
+      directoryOriginal = original;
+      directoryInspected = true;
+      show(value);
+    } catch (failure) { error(failure.message); }
+    finally { setBusy(false); render(); }
+  });
+  element("directories-prepare").addEventListener("click", async () => {
+    if (busy || stopping || !csrf || blocked || !directoryOriginal || !directoryInspected) return;
+    if (!element("ack").checked) { error("先确认已停止外部写者与其他主机管理操作。"); return; }
+    const original = directoryOriginal;
+    if (!window.confirm("仅准备这批原空目录？\n" + original.input.roots.join("\n")
+      + "\n只创建缺少的直接子目录并交给原服务 UID/主 GID；不改已有权限、不删数据、不初始化池、不挂载/格式化。"
+      + "\n原摘要：" + original.request_digest + "\n中断后只查询和续作同一批次。")) return;
+    const token = ++epoch;
+    error(""); setBusy(true); directoryInspected = false; render();
+    try {
+      checkedDirectoryOriginal(original, directoryInput());
+      if (sessionStorage.getItem(directoryKey) !== JSON.stringify(original)) {
+        throw new Error("原目录请求未保留，尚未发送写入。");
+      }
+      const value = await (await post("/api/initialization/storage-directories-prepare", {
+        ...original, confirmation:"prepare-first-storage-directories-only", external_writers_stopped:true,
+      })).json();
+      if (token !== epoch) return;
+      show(value);
+      if (value.request_digest !== original.request_digest
+        || value.state !== "original_empty_storage_directories_durably_prepared") {
+        throw new Error("未收到原目录批次的完成回执；结果仍未知。");
+      }
+      element("ack").checked = false;
+      error("原空目录已准备；现在点“只读核对当前原步骤”，由原生首存储接口检查实际目录、挂载和生产池约束。目录回执不是池已初始化。");
+    } catch (failure) {
+      error(failure.message + " 保留原请求、pending 和全部目录；先查询，不清空、不换批次。");
+    } finally { setBusy(false); render(); }
+  });
+  element("directories-save").addEventListener("click", () => {
+    if (busy || stopping || !directoryOriginal) return;
+    save(new Blob([JSON.stringify(directoryOriginal)], {type:"application/json"}), "zxs-first-storage-directories-original.json");
+  });
   element("samba-settings").addEventListener("click", () => {
     if (busy || stopping || !record?.input.deployment.smb) return;
     const deployment = record.input.deployment;
@@ -336,7 +418,7 @@
     } catch (failure) { error(failure.message); }
   });
   window.addEventListener("pagehide", () => {
-    ++epoch; inspected = false; liveReady = false;
+    ++epoch; inspected = false; directoryInspected = false; liveReady = false;
     element("open").hidden = true; clearPasswords();
   });
   window.addEventListener("pageshow", render);

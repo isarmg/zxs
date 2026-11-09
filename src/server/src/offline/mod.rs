@@ -121,6 +121,20 @@ fn dispatch(operation: Operation, body: &[u8]) -> std::result::Result<Vec<u8>, F
             body,
             initialization::administrator::create,
         ),
+        Operation::FirstStorageDirectoriesPreview => {
+            call::<initialization::storage::directories::Input, _>(
+                operation,
+                body,
+                initialization::storage::directories::preview,
+            )
+        }
+        Operation::FirstStorageDirectoriesPrepare => {
+            call::<initialization::storage::directories::Prepare, _>(
+                operation,
+                body,
+                initialization::storage::directories::prepare,
+            )
+        }
         Operation::FirstStoragePreview => call::<initialization::storage::Input, _>(
             operation,
             body,

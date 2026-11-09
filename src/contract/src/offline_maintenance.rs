@@ -12,6 +12,8 @@ pub enum Operation {
     FirstAdministratorPreview,
     FirstAdministratorRecoverPreview,
     FirstAdministratorCreate,
+    FirstStorageDirectoriesPreview,
+    FirstStorageDirectoriesPrepare,
     FirstStoragePreview,
     FirstStorageRecover,
     FirstStorageCreate,
@@ -59,6 +61,9 @@ impl Operation {
             Self::FirstAdministratorPreview => "first_management_administrator",
             Self::FirstAdministratorRecoverPreview => "first_management_administrator",
             Self::FirstAdministratorCreate => "first_management_administrator",
+            Self::FirstStorageDirectoriesPreview | Self::FirstStorageDirectoriesPrepare => {
+                "first_storage_directories"
+            }
             Self::FirstStoragePreview => "first_storage_initialization",
             Self::FirstStorageRecover => "first_storage_initialization",
             Self::FirstStorageCreate => "first_storage_initialization",
