@@ -31,7 +31,8 @@ const context = vm.createContext({
     if (path === "/api/status") return {ok:true,json:async () => ({csrf:"token",stopping:false,
       name:"helper",version:"test",busy:false,program_installation:{legal_materials:null,embedded:null}})};
     calls.push({path,body:JSON.parse(options.body)});
-    return {ok:true,json:async () => await answer(path)};
+    const respond = answer;
+    return {ok:true,json:async () => await respond(path)};
   }
 });
 vm.runInContext(readFileSync("helper/web/console.js","utf8"),context);
@@ -62,15 +63,23 @@ answer = async () => databases(true);
 await emit("foreign-chain-databases-preview");
 assert.equal(element("foreign-chain-databases-form").hidden,true);
 assert.equal(element("foreign-chain-identity-preview").hidden,false);
-let release;
-answer = () => new Promise(resolve => { release = resolve; });
+// Wait for this response consumer, not an assumed number of microtasks. Each
+// deferred reply owns its resolver so a late preview cannot resolve an old write.
+function deferAnswer() {
+  let release, began;
+  const response = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { began = resolve; });
+  answer = () => { began(); return response; };
+  return {started, release};
+}
+const identityReply = deferAnswer();
 const before = calls.length;
 const running = emit("foreign-chain-identity-preview");
-await Promise.resolve();
+await identityReply.started;
 assert.equal(element("foreign-chain-identity-preview").disabled,true);
 await emit("foreign-chain-identity-preview");
 assert.equal(calls.length,before + 1);
-release({identity_digest:"c".repeat(64),target_identity_proposal_only:true,foreign_admitted:false});
+identityReply.release({identity_digest:"c".repeat(64),target_identity_proposal_only:true,foreign_admitted:false});
 await running;
 await emit("foreign-chain-identity-save");
 assert.deepEqual(downloads,[`zxs-foreign-identity-${operation}.json`]);
@@ -124,13 +133,13 @@ const noObjectWrite = calls.length;
 await emit("foreign-chain-objects-form","submit");
 assert.equal(calls.length,noObjectWrite);
 storageFailure = false;
-answer = () => new Promise(resolve => {release = resolve;});
+const objectReply = deferAnswer();
 const objectWrite = emit("foreign-chain-objects-form","submit");
-await Promise.resolve();
+await objectReply.started;
 const pendingObjectCalls = calls.length;
 await emit("foreign-chain-objects-form","submit");
 assert.equal(calls.length,pendingObjectCalls);
-release(objects(true));
+objectReply.release(objects(true));
 await objectWrite;
 assert.equal(element("foreign-chain-objects-form").hidden,true);
 assert.equal(element("foreign-chain-objects-confirm").checked,false);
@@ -143,11 +152,11 @@ answer = async () => {throw new Error("object connection lost");};
 await emit("foreign-chain-objects-form","submit");
 assert.match(element("error").textContent,/不表示未写入/);
 assert.equal(element("foreign-chain-objects-save").hidden,true);
-answer = () => new Promise(resolve => {release = resolve;});
+const staleReply = deferAnswer();
 const oldObjectPreview = emit("foreign-chain-objects-preview");
-await Promise.resolve();
+await staleReply.started;
 await emit("foreign-chain-user","input");
-release(objects(false));
+staleReply.release(objects(false));
 await oldObjectPreview;
 assert.equal(element("foreign-chain-objects-form").hidden,true);
 assert.equal(element("foreign-chain-objects-save").hidden,true);
