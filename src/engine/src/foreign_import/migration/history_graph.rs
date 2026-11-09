@@ -11,7 +11,9 @@ use transaction::ensure_exact;
 pub enum ForeignHistoryGraphStatus {
     NotStarted,
     Preparing,
-    Verified { report: ForeignHistoryGraphReport },
+    Verified {
+        report: Box<ForeignHistoryGraphReport>,
+    },
 }
 #[derive(Serialize)]
 struct Binding<'a> {
@@ -54,7 +56,7 @@ impl ForeignMigrationTransaction {
         self.parent.sync_dir(self.parent.path())?;
         if material.status(self)?
             != (ForeignHistoryGraphStatus::Verified {
-                report: material.prepared.report.clone(),
+                report: Box::new(material.prepared.report.clone()),
             })
         {
             return Err(changed(
@@ -72,7 +74,7 @@ impl Material {
         let (identities, identity_status) = transaction.preview_identity_closure(target)?;
         if identity_status
             != (ForeignIdentityClosureStatus::Verified {
-                report: identities.clone(),
+                report: Box::new(identities.clone()),
             })
         {
             return Err(invalid(
@@ -125,7 +127,7 @@ impl Material {
                 ));
             }
             return Ok(ForeignHistoryGraphStatus::Verified {
-                report: self.prepared.report.clone(),
+                report: Box::new(self.prepared.report.clone()),
             });
         }
         if !intent {

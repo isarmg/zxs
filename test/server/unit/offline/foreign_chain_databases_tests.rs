@@ -23,12 +23,16 @@ fn all_lower_database_scopes_require_exact_verified_reports_not_progress_flags()
     let mut observation = Observation {
         targets: vec![a.clone(), b.clone()],
         statuses: vec![
-            ForeignDatabaseStatus::Verified { report: a },
+            ForeignDatabaseStatus::Verified {
+                report: Box::new(a),
+            },
             ForeignDatabaseStatus::Preparing,
         ],
     };
     assert!(!observation.completed());
-    observation.statuses[1] = ForeignDatabaseStatus::Verified { report: b };
+    observation.statuses[1] = ForeignDatabaseStatus::Verified {
+        report: Box::new(b),
+    };
     assert!(observation.completed());
     observation.targets[1].original.state_hash = "0".repeat(64);
     assert!(!observation.completed());
@@ -67,7 +71,9 @@ fn original_database_completion_never_claims_new_identity_or_membership() {
     };
     let observation = Observation {
         targets: vec![target.clone()],
-        statuses: vec![ForeignDatabaseStatus::Verified { report: target }],
+        statuses: vec![ForeignDatabaseStatus::Verified {
+            report: Box::new(target),
+        }],
     };
     let value = response(&input(), expected, observation, true).unwrap();
     assert_eq!(value["original_database_scopes_prepared"], true);

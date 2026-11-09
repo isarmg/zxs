@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`c4cbd47d`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`0e140c03`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -53,6 +53,8 @@
 
 
 ### T00 最新 GitHub 验证与格式修复
+
+- [短 CI #946 quality](https://github.com/isarmg/zxs/actions/runs/42651998795/job/129283198978) 准确运行 `619b4d32767e801d1bf6da9ddddcabc138842991`：rustfmt 已过，Engine Clippy 因 26 项诊断失败。Foreign 独立修复原候选基于 `2cd47c57bdf97dc7390c6853adad0d6fe3d7deaa`，本片对齐准确主线 `0e140c03fdcf2a3401cf63d711822565bf7abe69` 并保留此前独立修复，仅处理其中 4 项：三个 `Verified` 变体的大报告改为拥有的 Box，生产完成比较与既有夹具构造同步调整；原链摘要直接比较，不再仅为比较分配 String。JSON 的 state/report 字段、完整报告与完成证据检查不变，不加 allow、不降低 lint、不扩大正式接纳范围。仅 5 份生产源码、3 份既有夹具类型适配及本 TASKS；未新增测试／文档、未本地运行程序／formatter／编译／测试／CI，仅准备 GitHub tree 交协调者串行提交，不创建 commit/ref 或更新 main，仍待准确提交的 GitHub 复验。其他 22 项诊断由独立修复处理，不能将本片称作 quality 或整体 CI 通过；Foreign 正式接纳 WIP 保全且未混入。
 
 - [短 CI #946](https://github.com/isarmg/zxs/actions/runs/42651998795) 的 quality job `129283198978` 在准确 `619b4d32767e801d1bf6da9ddddcabc138842991` 通过格式检查后，因 26 项 Engine Clippy 错误失败。原候选基于已合入 SQLite 查询修复的 `2cd47c57bdf97dc7390c6853adad0d6fe3d7deaa`，本片对齐 `c4cbd47d364a43effb548bdffe1262e56ffecfcd` 并保留已合入 move/topology lint 修复，仅处理其中 DB/history 三项：目录库已借用 hash 直接 bind；私有历史维护的 Tracked coverage 放入 Box；历史 Changed 只将 before 行放入 Box，并同步准确前态比较与离线 fold 的借用。字段、序列化形状、规范 JSON/摘要、历史顺序及完整前态检查不变，不修改 lint 级别、不加 allow 或删校验；其余 Clippy 由独立切片处理。每个存储 coverage／Changed 的 before 增加一层独立分配，其他变体不用承担同等内联大小，不将理论布局改动当作性能验证。仅五份业务源码与 TASKS，未本地运行程序、formatter、编译、Clippy 或测试，未触发 workflow，仅准备 GitHub tree 交协调者串行提交；三项源码修复及组合仍待准确新提交的 GitHub 复验。
 

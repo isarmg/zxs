@@ -101,7 +101,9 @@ fn fixture() -> (Config, Plan, databases::Observation) {
     let statuses = reports
         .iter()
         .cloned()
-        .map(|report| ForeignDatabaseStatus::Verified { report })
+        .map(|report| ForeignDatabaseStatus::Verified {
+            report: Box::new(report),
+        })
         .collect();
     (
         configuration,
@@ -161,7 +163,7 @@ fn incomplete_or_changed_local_database_proof_cannot_produce_target_identity_pro
     observation.statuses[1] = ForeignDatabaseStatus::Preparing;
     assert!(Proposal::capture(&configuration, &plan, &observation).is_err());
     observation.statuses[1] = ForeignDatabaseStatus::Verified {
-        report: observation.targets[1].clone(),
+        report: Box::new(observation.targets[1].clone()),
     };
     observation.targets[1].original.state_hash = "0".repeat(64);
     assert!(Proposal::capture(&configuration, &plan, &observation).is_err());

@@ -165,7 +165,7 @@ fn every_lower_has_equal_original_scopes_but_keeps_its_own_chain_target_binding(
         assert_eq!(
             owner.original_database_status().unwrap(),
             ForeignDatabaseStatus::Verified {
-                report: report.clone()
+                report: Box::new(report.clone())
             }
         );
         assert_eq!(owner.prepare_original_databases().unwrap(), report);
@@ -307,7 +307,7 @@ fn object_identity_mapping_is_independent_equal_and_keeps_foreign_receipts_out_o
         assert_eq!(
             owner.preview_identity_closure(&target).unwrap().1,
             ForeignIdentityClosureStatus::Verified {
-                report: report.clone()
+                report: Box::new(report.clone())
             }
         );
         let map: json_codec::Value = json_codec::from_slice(
@@ -442,7 +442,7 @@ fn every_lower_derives_equal_mapped_graphs_without_turning_missing_bodies_into_r
         assert_eq!(
             owner.preview_history_graph(&target).unwrap().1,
             ForeignHistoryGraphStatus::Verified {
-                report: report.clone()
+                report: Box::new(report.clone())
             }
         );
         let graph: json_codec::Value = json_codec::from_slice(

@@ -29,7 +29,7 @@ pub enum ForeignDatabaseStatus {
     NotStarted,
     Preparing,
     Verified {
-        report: ForeignOriginalDatabasesReport,
+        report: Box<ForeignOriginalDatabasesReport>,
     },
 }
 #[derive(Serialize)]
@@ -273,7 +273,7 @@ impl Prepared {
             self.verify(&root)?;
             transaction.check_names()?;
             return Ok(ForeignDatabaseStatus::Verified {
-                report: self.report.clone(),
+                report: Box::new(self.report.clone()),
             });
         }
         if root

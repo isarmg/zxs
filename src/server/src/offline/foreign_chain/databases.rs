@@ -18,7 +18,7 @@ impl Observation {
     pub fn completed(&self) -> bool {
         !self.targets.is_empty() && self.targets.len() == self.statuses.len()
             && self.targets.iter().zip(&self.statuses).all(|(expected, status)| {
-                matches!(status, ForeignDatabaseStatus::Verified { report } if report == expected)
+                matches!(status, ForeignDatabaseStatus::Verified { report } if report.as_ref() == expected)
             })
     }
     pub(super) fn expected(&self, plan: &Plan) -> Result<Expected> {

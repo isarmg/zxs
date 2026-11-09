@@ -624,7 +624,7 @@ fn observe_object_identities(
             ForeignIdentityClosureStatus::NotStarted => objects::Progress::NotStarted,
             ForeignIdentityClosureStatus::Preparing => objects::Progress::Preparing,
             ForeignIdentityClosureStatus::Verified { report: verified } => {
-                if verified != report {
+                if *verified != report {
                     return Err(
                         "local identity completion differs from derived native State".into(),
                     );

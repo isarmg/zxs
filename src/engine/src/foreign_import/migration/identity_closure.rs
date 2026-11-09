@@ -12,7 +12,7 @@ pub enum ForeignIdentityClosureStatus {
     NotStarted,
     Preparing,
     Verified {
-        report: ForeignIdentityClosureReport,
+        report: Box<ForeignIdentityClosureReport>,
     },
 }
 #[derive(Serialize)]
@@ -54,7 +54,7 @@ impl ForeignMigrationTransaction {
         self.parent.sync_dir(self.parent.path())?;
         if material.status(self)?
             != (ForeignIdentityClosureStatus::Verified {
-                report: material.prepared.report.clone(),
+                report: Box::new(material.prepared.report.clone()),
             })
         {
             return Err(changed("foreign object identity material did not complete"));
@@ -79,7 +79,7 @@ impl Material {
         };
         if !transaction.published
             || transaction.intent.plan.operation_id != target.baseline.operation_id
-            || chain_digest.to_string() != target.baseline.chain_digest
+            || *chain_digest != target.baseline.chain_digest
         {
             return Err(changed(
                 "object identity closure differs from the original whole-chain operation",
@@ -142,7 +142,7 @@ impl Material {
                 ));
             }
             return Ok(ForeignIdentityClosureStatus::Verified {
-                report: self.prepared.report.clone(),
+                report: Box::new(self.prepared.report.clone()),
             });
         }
         if !intent {
