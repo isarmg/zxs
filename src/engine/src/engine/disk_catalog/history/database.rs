@@ -200,8 +200,7 @@ async fn read_changes(
         }
         validate_record(&value, through)?;
         if changes.last().is_some_and(|previous| {
-            (previous.sequence, previous.change.key())
-                >= (value.sequence, value.change.key())
+            (previous.sequence, previous.change.key()) >= (value.sequence, value.change.key())
         }) {
             return Err(invalid(
                 "disk history changes are not in publication/entity order",
@@ -235,7 +234,9 @@ fn validate_record(record: &DiskHistoryRecord, through: u64) -> Result<()> {
             before.validate()?;
             after.validate()?;
             if before.key() != after.key() || before == after {
-                return Err(invalid("disk directory change has no exact same-identity/path transition"));
+                return Err(invalid(
+                    "disk directory change has no exact same-identity/path transition",
+                ));
             }
         }
         DiskHistoryChange::Entered { after } => row(after)?,

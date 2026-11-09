@@ -10,9 +10,9 @@ use sqlite_access::{
 
 pub(super) mod changes;
 pub(super) mod install;
+mod material;
 mod projection;
 mod rows;
-mod material;
 pub(super) use material::{read_material, reconstruct_material};
 
 pub(crate) const NAME: &str = ".zxs-file.sqlite";
@@ -207,7 +207,9 @@ impl PreparedMoveFile {
             || actual.sequence != self.sequence
             || actual.records_hash != self.records_hash
         {
-            return Err(invalid("staged move file database differs from the exact joint projection"));
+            return Err(invalid(
+                "staged move file database differs from the exact joint projection",
+            ));
         }
         Ok(())
     }
@@ -221,10 +223,19 @@ pub(crate) fn prepare_move(
     let view = transition.previous();
     validate_owner(view, &audit.file_id, &audit.history_tree_id)?;
     let records = projection::move_records(view, &audit.file_id, &audit.events)?;
-    validate_records(&records, &audit.file_id, &audit.history_tree_id, state.sequence)?;
+    validate_records(
+        &records,
+        &audit.file_id,
+        &audit.history_tree_id,
+        state.sequence,
+    )?;
     let records_hash = storage_contract::object_hash("file-local-records", &records)?;
     let prepared = encode_records(
-        records, &audit.file_id, &audit.history_tree_id, state.sequence, &records_hash,
+        records,
+        &audit.file_id,
+        &audit.history_tree_id,
+        state.sequence,
+        &records_hash,
     )?;
     Ok(PreparedMoveFile {
         bytes: prepared.bytes,
@@ -250,7 +261,9 @@ pub(crate) fn prepare_move_source(
         || node.sequence != next.sequence
         || node.sequence <= previous.sequence
     {
-        return Err(invalid("move source database has no fresh unpublished deletion"));
+        return Err(invalid(
+            "move source database has no fresh unpublished deletion",
+        ));
     }
     let mut events = capture_copy(previous, &node.file_id, &node.history_tree_id)?.events;
     events.push(LifecycleRow {
@@ -264,10 +277,19 @@ pub(crate) fn prepare_move_source(
     let view = transition.previous();
     validate_owner(view, &node.file_id, &node.history_tree_id)?;
     let records = projection::move_source_records(view, node, &events)?;
-    validate_records(&records, &node.file_id, &node.history_tree_id, next.sequence)?;
+    validate_records(
+        &records,
+        &node.file_id,
+        &node.history_tree_id,
+        next.sequence,
+    )?;
     let records_hash = storage_contract::object_hash("file-local-records", &records)?;
     let prepared = encode_records(
-        records, &node.file_id, &node.history_tree_id, next.sequence, &records_hash,
+        records,
+        &node.file_id,
+        &node.history_tree_id,
+        next.sequence,
+        &records_hash,
     )?;
     Ok(PreparedMoveFile {
         bytes: prepared.bytes,
@@ -450,13 +472,18 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<Verified
         storage_contract::parse_u64_decimal(&owner.try_get::<String, _>("source_sequence")?)?;
     let records = read_records(connection, &file, &history, sequence).await?;
     let records_hash = storage_contract::object_hash("file-local-records", &records)?;
-    if records_hash != owner.try_get::<String, _>("records_hash")?
-    {
+    if records_hash != owner.try_get::<String, _>("records_hash")? {
         return Err(invalid(
             "file database records differ from their recorded digest",
         ));
     }
-    Ok(VerifiedSnapshot { file, history, sequence, records_hash, records })
+    Ok(VerifiedSnapshot {
+        file,
+        history,
+        sequence,
+        records_hash,
+        records,
+    })
 }
 
 #[cfg(test)]

@@ -83,7 +83,11 @@ fn object_set<'a>(
             .native_objects()
             .chain(resolved.registry.objects())
             .chain([
-                ("publication", publication.report().publication_hash.as_str(), publication.publication_bytes()),
+                (
+                    "publication",
+                    publication.report().publication_hash.as_str(),
+                    publication.publication_bytes(),
+                ),
                 ("finalize", finalize.hash.as_str(), finalize.bytes()),
             ]),
         resolved.candidate.hash(),
@@ -103,11 +107,14 @@ impl Plan {
         // record. Ordinary SQLite remains closed for the source Engine.
         let system = system_database::observe(context, prepared, decision, expected, stop)?;
         let resolved = configuration::resolve(prepared, decision, expected, stop)?;
-        let publication = context
-            .choices
-            .read_first_publication(prepared, &resolved.candidate, stop)?;
+        let publication =
+            context
+                .choices
+                .read_first_publication(prepared, &resolved.candidate, stop)?;
         if publication.report().publication_hash != expected.as_str() {
-            return Err(invalid("ordinary metadata lost the original actual Publication"));
+            return Err(invalid(
+                "ordinary metadata lost the original actual Publication",
+            ));
         }
         let native: Publication = crate::journal::decode_proof(publication.publication_bytes())?;
         let finalize = PreparedMetadataObject::new("finalize", &native.finalize, MAX_METADATA)?;
@@ -142,7 +149,13 @@ impl Plan {
             system,
         };
         drop(objects);
-        Ok(Self { resolved, publication, finalize, manifest, report })
+        Ok(Self {
+            resolved,
+            publication,
+            finalize,
+            manifest,
+            report,
+        })
     }
 
     fn objects(&self) -> Result<ObjectSet<'_>> {
@@ -150,12 +163,17 @@ impl Plan {
     }
 
     fn original_disk(&self, identity: &DiskRegistrationIdentity) -> Result<&DiskConfig> {
-        self.resolved.config.disks.iter().find(|disk| {
-            disk.disk_id == identity.disk_id
-                && disk.slot_id == identity.slot_id
-                && disk.binding_generation == identity.binding_generation
-                && self.resolved.config.pool_id == identity.pool_id
-        }).ok_or_else(|| invalid("ordinary metadata root is outside the exact published Config"))
+        self.resolved
+            .config
+            .disks
+            .iter()
+            .find(|disk| {
+                disk.disk_id == identity.disk_id
+                    && disk.slot_id == identity.slot_id
+                    && disk.binding_generation == identity.binding_generation
+                    && self.resolved.config.pool_id == identity.pool_id
+            })
+            .ok_or_else(|| invalid("ordinary metadata root is outside the exact published Config"))
     }
 
     fn target_disk(&self, prepared: &PreparedBackupRegistry, index: usize) -> Result<&DiskConfig> {
@@ -164,7 +182,9 @@ impl Plan {
 
     fn require_record(&self, root: &DiskRoot, name: &str) -> Result<()> {
         if root.read_bytes(&root.path().join(name), MAX_DESCRIPTOR)? != self.manifest {
-            return Err(invalid("ordinary metadata record differs from the original complete decision"));
+            return Err(invalid(
+                "ordinary metadata record differs from the original complete decision",
+            ));
         }
         Ok(())
     }
@@ -178,9 +198,10 @@ impl Plan {
     ) -> Result<NativeReadback> {
         let objects = self.objects()?;
         objects.verify(root, disk, stop)?;
-        let published = self.resolved.candidate.read_state_at(
-            &root.private_child(&root.path().join("metadata"))?, stop,
-        )?;
+        let published = self
+            .resolved
+            .candidate
+            .read_state_at(&root.private_child(&root.path().join("metadata"))?, stop)?;
         let mut count = 0usize;
         let mut bytes = 0usize;
         let registry = self.resolved.registry.verify_backup_with(|kind, hash| {
@@ -193,17 +214,23 @@ impl Plan {
             }
             let actual = crate::journal::load_authenticated_object_at(root, disk, kind, hash)?;
             if actual.bytes() != expected {
-                return Err(invalid("ordinary native registry page changed during readback"));
+                return Err(invalid(
+                    "ordinary native registry page changed during readback",
+                ));
             }
             Ok(actual.bytes().to_vec())
         })?;
         registry.require_config(&self.resolved.config)?;
         registry.require_backup_namespace(&self.resolved.candidate, &published)?;
         let publication = crate::journal::load_authenticated_object_at(
-            root, disk, "publication", &self.publication.report().publication_hash,
+            root,
+            disk,
+            "publication",
+            &self.publication.report().publication_hash,
         )?;
         let seal = root.read_bytes(
-            &crate::journal::publication_seal_path(disk, self.resolved.candidate.hash()), MAX_METADATA,
+            &crate::journal::publication_seal_path(disk, self.resolved.candidate.hash()),
+            MAX_METADATA,
         )?;
         let actual = PreparedBackupFirstPublication::from_trusted_bytes(
             prepared,
@@ -212,7 +239,11 @@ impl Plan {
             publication.bytes(),
             &seal,
         )?;
-        Ok(NativeReadback { published, registry, publication: actual })
+        Ok(NativeReadback {
+            published,
+            registry,
+            publication: actual,
+        })
     }
 
     fn verify_all(
@@ -222,16 +253,23 @@ impl Plan {
         stop: &AtomicBool,
     ) -> Result<()> {
         self.require_record(context.system, INTENT)?;
-        context.sources.for_each_disk(stop, |root, identity| {
-            self.verify_root(prepared, root, self.original_disk(identity)?, stop)?;
-            Ok(())
-        }, &self.resolved.config.pool_id)?;
+        context.sources.for_each_disk(
+            stop,
+            |root, identity| {
+                self.verify_root(prepared, root, self.original_disk(identity)?, stop)?;
+                Ok(())
+            },
+            &self.resolved.config.pool_id,
+        )?;
         for (index, target) in prepared.targets.iter().enumerate() {
             preparation_checkpoint(stop)?;
             require_target_selection(&target.root, &self.report.installation_hash)?;
             self.objects()?.inventory_target(&target.root, stop)?;
             let native = self.verify_root(
-                prepared, &target.root, self.target_disk(prepared, index)?, stop,
+                prepared,
+                &target.root,
+                self.target_disk(prepared, index)?,
+                stop,
             )?;
             // Unlike the earlier isolated reader, the State, registry and
             // Publication below came from this target's ordinary native store.
@@ -261,7 +299,11 @@ impl Plan {
         stop: &AtomicBool,
     ) -> Result<()> {
         self.require_record(context.system, COMPLETE)?;
-        context.sources.for_each_disk(stop, |root, _| self.require_record(root, COMPLETE), &self.resolved.config.pool_id)?;
+        context.sources.for_each_disk(
+            stop,
+            |root, _| self.require_record(root, COMPLETE),
+            &self.resolved.config.pool_id,
+        )?;
         for target in &prepared.targets {
             self.require_record(&target.root, COMPLETE)?;
         }
@@ -284,7 +326,9 @@ fn has_completion(
         Ok(())
     };
     inspect(context.system)?;
-    context.sources.for_each_disk(stop, |root, _| inspect(root), &plan.resolved.config.pool_id)?;
+    context
+        .sources
+        .for_each_disk(stop, |root, _| inspect(root), &plan.resolved.config.pool_id)?;
     for target in &prepared.targets {
         inspect(&target.root)?;
     }
@@ -310,31 +354,53 @@ pub(super) fn install(
             .and_then(|n| n.checked_add(1024 * 1024))
             .ok_or_else(budget)?;
         if context.system.available()? < system_required {
-            return Err(Error::new(ErrorCode::NoSpace,
-                "SYSTEM cannot retain the complete native metadata decision and completion records"));
+            return Err(Error::new(
+                ErrorCode::NoSpace,
+                "SYSTEM cannot retain the complete native metadata decision and completion records",
+            ));
         }
         if preparation_path_exists(context.system, &context.system.path().join(INTENT))? {
             plan.require_record(context.system, INTENT)?;
         }
         let objects = plan.objects()?;
-        context.sources.for_each_disk(stop, |root, identity| {
-            objects.preflight(root, plan.original_disk(identity)?, plan.resolved.config.metadata_reserve_bytes, stop)
-        }, &plan.resolved.config.pool_id)?;
+        context.sources.for_each_disk(
+            stop,
+            |root, identity| {
+                objects.preflight(
+                    root,
+                    plan.original_disk(identity)?,
+                    plan.resolved.config.metadata_reserve_bytes,
+                    stop,
+                )
+            },
+            &plan.resolved.config.pool_id,
+        )?;
         for (index, target) in prepared.targets.iter().enumerate() {
             store::preflight_target(&target.root, &plan.report.installation_hash)?;
             objects.inventory_target(&target.root, stop)?;
-            objects.preflight(&target.root, plan.target_disk(prepared, index)?, plan.resolved.config.metadata_reserve_bytes, stop)?;
+            objects.preflight(
+                &target.root,
+                plan.target_disk(prepared, index)?,
+                plan.resolved.config.metadata_reserve_bytes,
+                stop,
+            )?;
         }
-        install_preparation_bytes(context.system, &context.system.path().join(INTENT), &plan.manifest)?;
+        install_preparation_bytes(
+            context.system,
+            &context.system.path().join(INTENT),
+            &plan.manifest,
+        )?;
         // Every target carries its exact no-activation boundary BEFORE the
         // first ordinary metadata directory can appear. It never chooses State.
         for target in &prepared.targets {
             select_target(&target.root, &plan.report.installation_hash)?;
         }
         context.sources.recheck(context.system)?;
-        context.sources.for_each_disk(stop, |root, identity| {
-            objects.install(root, plan.original_disk(identity)?, stop)
-        }, &plan.resolved.config.pool_id)?;
+        context.sources.for_each_disk(
+            stop,
+            |root, identity| objects.install(root, plan.original_disk(identity)?, stop),
+            &plan.resolved.config.pool_id,
+        )?;
         for (index, target) in prepared.targets.iter().enumerate() {
             preparation_checkpoint(stop)?;
             prepared.recheck_names()?;
@@ -352,14 +418,24 @@ pub(super) fn install(
         return Err(invalid("ordinary metadata proof changed before completion"));
     }
     after.verify_all(context, prepared, stop)?;
-    context.sources.for_each_disk(stop, |root, _| {
-        install_preparation_bytes(root, &root.path().join(COMPLETE), &after.manifest)
-    }, &after.resolved.config.pool_id)?;
+    context.sources.for_each_disk(
+        stop,
+        |root, _| install_preparation_bytes(root, &root.path().join(COMPLETE), &after.manifest),
+        &after.resolved.config.pool_id,
+    )?;
     for target in &prepared.targets {
         preparation_checkpoint(stop)?;
-        install_preparation_bytes(&target.root, &target.root.path().join(COMPLETE), &after.manifest)?;
+        install_preparation_bytes(
+            &target.root,
+            &target.root.path().join(COMPLETE),
+            &after.manifest,
+        )?;
     }
-    install_preparation_bytes(context.system, &context.system.path().join(COMPLETE), &after.manifest)?;
+    install_preparation_bytes(
+        context.system,
+        &context.system.path().join(COMPLETE),
+        &after.manifest,
+    )?;
     after.require_completions(context, prepared, stop)?;
     Ok(after.report)
 }
@@ -374,7 +450,9 @@ pub(super) fn observe(
     let plan = Plan::capture(context, prepared, decision, expected, stop)?;
     plan.verify_all(context, prepared, stop)?;
     plan.require_completions(context, prepared, stop)?;
-    context.choices.observe_first_publication(prepared, &plan.resolved.candidate, stop)?;
+    context
+        .choices
+        .observe_first_publication(prepared, &plan.resolved.candidate, stop)?;
     Ok(plan.report)
 }
 

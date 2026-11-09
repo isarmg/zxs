@@ -238,7 +238,8 @@ fn content_state_preserves_exact_stored_tokens_and_hashes() {
         .into_iter()
         .map(|(_, key)| (key.to_owned(), key.to_owned()))
         .collect::<BTreeMap<_, _>>();
-    let expected = br#"{"AVAILABLE":"AVAILABLE","MIGRATED":"MIGRATED","PURGED":"PURGED","RETIRED":"RETIRED"}"#;
+    let expected =
+        br#"{"AVAILABLE":"AVAILABLE","MIGRATED":"MIGRATED","PURGED":"PURGED","RETIRED":"RETIRED"}"#;
     assert_eq!(canonical_json(&typed).unwrap(), expected);
     assert_eq!(
         canonical_json(&typed).unwrap(),

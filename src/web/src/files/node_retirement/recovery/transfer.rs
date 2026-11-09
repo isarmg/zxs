@@ -17,43 +17,75 @@ struct Transfer {
     record: Record,
 }
 fn site_origin() -> Result<String, api::Error> {
-    let origin = web_sys::window().ok_or_else(|| failure("Browser origin is unavailable."))?.origin();
-    if origin.len() > MAX_ORIGIN_BYTES || !(origin.starts_with("https://") || origin.starts_with("http://")) {
-        return Err(failure("Retirement request transfer requires a concrete HTTP(S) site origin."));
+    let origin = web_sys::window()
+        .ok_or_else(|| failure("Browser origin is unavailable."))?
+        .origin();
+    if origin.len() > MAX_ORIGIN_BYTES
+        || !(origin.starts_with("https://") || origin.starts_with("http://"))
+    {
+        return Err(failure(
+            "Retirement request transfer requires a concrete HTTP(S) site origin.",
+        ));
     }
     Ok(origin)
 }
 impl Transfer {
     fn encode(origin: String, record: Record) -> Result<String, api::Error> {
         record.encode()?;
-        let transfer = Self { format: TransferFormat::OriginalRequest, origin, record };
+        let transfer = Self {
+            format: TransferFormat::OriginalRequest,
+            origin,
+            record,
+        };
         let bytes = json_codec::to_string(&transfer).map_err(wire_error)?;
         if bytes.len() > MAX_TRANSFER_BYTES {
-            return Err(api::error(ErrorCode::ResourceLimit, "Retirement transfer exceeds its byte budget."));
+            return Err(api::error(
+                ErrorCode::ResourceLimit,
+                "Retirement transfer exceeds its byte budget.",
+            ));
         }
         Ok(bytes)
     }
     fn decode(bytes: &str, origin: &str, principal: &str) -> Result<Self, api::Error> {
         if bytes.len() > MAX_TRANSFER_BYTES {
-            return Err(api::error(ErrorCode::ResourceLimit, "Retirement transfer exceeds its byte budget; nothing was imported."));
+            return Err(api::error(
+                ErrorCode::ResourceLimit,
+                "Retirement transfer exceeds its byte budget; nothing was imported.",
+            ));
         }
         let value = storage_contract::strict_json(bytes.as_bytes()).map_err(DecodeError::Name)?;
         if !value.is_object() || !value.get("record").is_some_and(Value::is_object) {
-            return Err(failure("Retirement transfer and record must be named objects."));
+            return Err(failure(
+                "Retirement transfer and record must be named objects.",
+            ));
         }
         let transfer: Self = json_codec::from_value(value).map_err(wire_error)?;
-        if transfer.origin.len() > MAX_ORIGIN_BYTES || transfer.origin != origin || transfer.record.principal != principal {
-            return Err(failure(t("恢复文本不属于当前准确站点和账号，未导入。不可修改来源或身份字段来绕过此限制。", "This recovery text does not belong to this exact site and account. It was not imported. Do not edit its origin or identity fields to bypass this restriction.")));
+        if transfer.origin.len() > MAX_ORIGIN_BYTES
+            || transfer.origin != origin
+            || transfer.record.principal != principal
+        {
+            return Err(failure(t(
+                "恢复文本不属于当前准确站点和账号，未导入。不可修改来源或身份字段来绕过此限制。",
+                "This recovery text does not belong to this exact site and account. It was not imported. Do not edit its origin or identity fields to bypass this restriction.",
+            )));
         }
         transfer.record.encode()?;
         Ok(transfer)
     }
 }
-fn export(state: RwSignal<State>, epoch: u64, record: &Record) -> Result<Option<String>, api::Error> {
-    if !state.with_untracked(|s| owner(s) == Some((epoch, record.principal.clone()))) { return Ok(None); }
+fn export(
+    state: RwSignal<State>,
+    epoch: u64,
+    record: &Record,
+) -> Result<Option<String>, api::Error> {
+    if !state.with_untracked(|s| owner(s) == Some((epoch, record.principal.clone()))) {
+        return Ok(None);
+    }
     let records = load(&record.principal)?;
     if !records.iter().any(|saved| saved == record) {
-        return Err(failure("The saved recovery record changed or disappeared; reload it before exporting."));
+        return Err(failure(
+            "The saved recovery record changed or disappeared; reload it before exporting.",
+        ));
     }
     Transfer::encode(site_origin()?, record.clone()).map(Some)
 }
@@ -88,15 +120,31 @@ struct Import {
 impl Import {
     fn edit(&mut self, input: String) {
         self.generation += 1;
-        self.input = input; self.candidate = None; self.error = None; self.saved = None;
+        self.input = input;
+        self.candidate = None;
+        self.error = None;
+        self.saved = None;
     }
 }
 fn preview(state: RwSignal<State>, model: RwSignal<Import>) {
-    let Some(current) = state.with_untracked(owner) else { return; };
-    let result = site_origin().and_then(|origin| model.with_untracked(|model| Transfer::decode(&model.input, &origin, &current.1)));
+    let Some(current) = state.with_untracked(owner) else {
+        return;
+    };
+    let result = site_origin().and_then(|origin| {
+        model.with_untracked(|model| Transfer::decode(&model.input, &origin, &current.1))
+    });
     model.update(|model| {
-        model.owner = Some(current); model.candidate = None; model.saved = None; model.generation += 1;
-        match result { Ok(candidate) => { model.candidate = Some(candidate); model.error = None; }, Err(error) => model.error = Some(error) }
+        model.owner = Some(current);
+        model.candidate = None;
+        model.saved = None;
+        model.generation += 1;
+        match result {
+            Ok(candidate) => {
+                model.candidate = Some(candidate);
+                model.error = None;
+            }
+            Err(error) => model.error = Some(error),
+        }
     });
 }
 fn can_import(state: &State, owner: &(u64, String), record: &Record) -> bool {
@@ -107,11 +155,17 @@ fn can_import(state: &State, owner: &(u64, String), record: &Record) -> bool {
         && state.files.operations.iter().all(|operation| operation.id() != record.operation.to_string() || operation.status() == SaveStatus::Unknown)
 }
 fn accept(state: RwSignal<State>, model: RwSignal<Import>, generation: u64) {
-    let captured = model.with_untracked(|model| (model.generation == generation).then(|| {
-        Some((model.owner.clone()?, model.candidate.clone()?))
-    }).flatten());
-    let Some((current, candidate)) = captured else { return; };
-    if !state.with_untracked(|s| can_import(s, &current, &candidate.record)) { return; }
+    let captured = model.with_untracked(|model| {
+        (model.generation == generation)
+            .then(|| Some((model.owner.clone()?, model.candidate.clone()?)))
+            .flatten()
+    });
+    let Some((current, candidate)) = captured else {
+        return;
+    };
+    if !state.with_untracked(|s| can_import(s, &current, &candidate.record)) {
+        return;
+    }
     let result = site_origin().and_then(|origin| {
         if origin != candidate.origin { return Err(failure("Site origin changed; the original request was not imported.")); }
         let saved = retain_original(&candidate.record)?;
@@ -122,21 +176,31 @@ fn accept(state: RwSignal<State>, model: RwSignal<Import>, generation: u64) {
     });
     let record = match result {
         Ok(record) => record,
-        Err(error) => { model.update(|model| model.error = Some(error)); return; }
+        Err(error) => {
+            model.update(|model| model.error = Some(error));
+            return;
+        }
     };
     restore(state); // Existing scheduling queries receipts only, never POSTs.
-    if let Some(error) = state.with_untracked(|s|s.files.node_retirement.recovery.error.clone()) {
-        model.update(|model|model.error=Some(error)); return;
+    if let Some(error) = state.with_untracked(|s| s.files.node_retirement.recovery.error.clone()) {
+        model.update(|model| model.error = Some(error));
+        return;
     }
     open(state, record.operation, current.0);
-    model.update(|model| { model.edit(String::new()); model.saved = Some(record.operation); });
+    model.update(|model| {
+        model.edit(String::new());
+        model.saved = Some(record.operation);
+    });
 }
 pub(super) fn import_view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Import::default());
     Effect::new(move |_| {
         let current = state.with(owner);
-        if model.with_untracked(|model|model.owner != current) {
-            model.update(|model| { model.edit(String::new()); model.owner = current; });
+        if model.with_untracked(|model| model.owner != current) {
+            model.update(|model| {
+                model.edit(String::new());
+                model.owner = current;
+            });
         }
     });
     view! {

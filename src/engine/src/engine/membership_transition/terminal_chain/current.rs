@@ -148,11 +148,7 @@ impl TerminalChainPublishedCurrent<'_> {
         let mut files = 0_u64;
         for (id, branch) in &state.branches {
             files = files
-                .checked_add(
-                    namespaces
-                        .branch_entries(id, &branch.head_commit_id)?
-                        .len() as u64,
-                )
+                .checked_add(namespaces.branch_entries(id, &branch.head_commit_id)?.len() as u64)
                 .ok_or_else(|| {
                     Error::new(
                         ErrorCode::ResourceLimit,
@@ -327,7 +323,10 @@ impl TerminalChainPublishedCurrent<'_> {
             .get(branch_id)
             .map(|branch| branch.head_commit_id.as_str())
             .ok_or_else(|| {
-                Error::new(ErrorCode::NotFound, "selected generation file branch not found")
+                Error::new(
+                    ErrorCode::NotFound,
+                    "selected generation file branch not found",
+                )
             })
     }
     pub(super) fn directory_branch_head(&self, branch_id: &str) -> Result<&str> {

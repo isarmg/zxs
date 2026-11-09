@@ -18,54 +18,114 @@ pub(super) struct TerminalFiles {
     pub(super) files: Vec<TerminalFile>,
 }
 
-fn retained_versions<'a>(state: &'a State, files: &BTreeSet<&str>) -> Result<BTreeMap<&'a str, Vec<&'a str>>> {
+fn retained_versions<'a>(
+    state: &'a State,
+    files: &BTreeSet<&str>,
+) -> Result<BTreeMap<&'a str, Vec<&'a str>>> {
     let mut result = BTreeMap::<&str, Vec<&str>>::new();
     let mut count = 0;
     for version in state.versions.values() {
-        if !files.contains(version.file_id.as_str()) { continue; }
+        if !files.contains(version.file_id.as_str()) {
+            continue;
+        }
         if count == MAX_TERMINAL_VERSIONS {
-            return Err(Error::new(ErrorCode::ResourceLimit, "terminal file history exceeds its complete identity budget"));
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "terminal file history exceeds its complete identity budget",
+            ));
         }
         count += 1;
-        result.entry(&version.file_id).or_default().push(&version.version_id);
+        result
+            .entry(&version.file_id)
+            .or_default()
+            .push(&version.version_id);
     }
-    for ids in result.values_mut() { ids.sort(); }
+    for ids in result.values_mut() {
+        ids.sort();
+    }
     Ok(result)
 }
 
 impl TerminalFiles {
     pub(super) fn capture(state: &State, request: &Request) -> Result<Self> {
-        let selected = request.version_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        let files = request.version_ids.iter().map(|id| state.versions[id].file_id.as_str()).collect::<BTreeSet<_>>();
+        let selected = request
+            .version_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let files = request
+            .version_ids
+            .iter()
+            .map(|id| state.versions[id].file_id.as_str())
+            .collect::<BTreeSet<_>>();
         let mut ended = Vec::new();
         for (file, versions) in retained_versions(state, &files)? {
-            if versions.iter().any(|id| !selected.contains(id) && !is_retired(state, id)) { continue; }
-            let retained_frontier = frontier::RetainedFrontier::capture(state, file, &request.history_tree_id)?;
-            if versions.iter().any(|id| state.versions[*id].history_tree_id != request.history_tree_id) { return Err(invalid()); }
-            ended.push(TerminalFile { file_id: file.into(), version_ids: versions.into_iter().map(str::to_owned).collect(), retained_frontier });
+            if versions
+                .iter()
+                .any(|id| !selected.contains(id) && !is_retired(state, id))
+            {
+                continue;
+            }
+            let retained_frontier =
+                frontier::RetainedFrontier::capture(state, file, &request.history_tree_id)?;
+            if versions
+                .iter()
+                .any(|id| state.versions[*id].history_tree_id != request.history_tree_id)
+            {
+                return Err(invalid());
+            }
+            ended.push(TerminalFile {
+                file_id: file.into(),
+                version_ids: versions.into_iter().map(str::to_owned).collect(),
+                retained_frontier,
+            });
         }
         Ok(Self { files: ended })
     }
 
     pub(super) fn validate(&self, state: &State, request: &Request) -> Result<()> {
         if self.files.len() > storage_contract::shared_history::MAX_SHARED_HISTORY_FILES
-            || self.files.windows(2).any(|pair| pair[0].file_id >= pair[1].file_id) { return Err(invalid()); }
-        let files = self.files.iter().map(|file| file.file_id.as_str()).collect::<BTreeSet<_>>();
+            || self
+                .files
+                .windows(2)
+                .any(|pair| pair[0].file_id >= pair[1].file_id)
+        {
+            return Err(invalid());
+        }
+        let files = self
+            .files
+            .iter()
+            .map(|file| file.file_id.as_str())
+            .collect::<BTreeSet<_>>();
         let versions = retained_versions(state, &files)?;
         let mut total = 0;
         for file in &self.files {
             HistoryFileId::parse(&file.file_id)?;
-            file.retained_frontier.validate(state, &file.file_id, &request.history_tree_id)?;
+            file.retained_frontier
+                .validate(state, &file.file_id, &request.history_tree_id)?;
             total += file.version_ids.len();
-            if file.version_ids.is_empty() || total > MAX_TERMINAL_VERSIONS
+            if file.version_ids.is_empty()
+                || total > MAX_TERMINAL_VERSIONS
                 || file.version_ids.windows(2).any(|pair| pair[0] >= pair[1])
-                || !request.version_ids.iter().any(|id| state.versions[id].file_id == file.file_id)
-                || versions.get(file.file_id.as_str()).is_none_or(|ids| !ids.iter().copied().eq(file.version_ids.iter().map(String::as_str))) {
+                || !request
+                    .version_ids
+                    .iter()
+                    .any(|id| state.versions[id].file_id == file.file_id)
+                || versions.get(file.file_id.as_str()).is_none_or(|ids| {
+                    !ids.iter()
+                        .copied()
+                        .eq(file.version_ids.iter().map(String::as_str))
+                })
+            {
                 return Err(invalid());
             }
             for id in &file.version_ids {
                 HistoryVersionId::parse(id)?;
-                if !is_retired(state, id) || state.versions[id].history_tree_id != request.history_tree_id { return Err(invalid()); }
+                if !is_retired(state, id)
+                    || state.versions[id].history_tree_id != request.history_tree_id
+                {
+                    return Err(invalid());
+                }
             }
         }
         Ok(())
@@ -80,8 +140,16 @@ pub(super) fn require_complete(state: &State, terminals: &BTreeSet<String>) -> R
     let mut live = BTreeSet::new();
     for version in state.versions.values() {
         all.insert(version.file_id.as_str());
-        if !is_retired(state, &version.version_id) { live.insert(version.file_id.as_str()); }
+        if !is_retired(state, &version.version_id) {
+            live.insert(version.file_id.as_str());
+        }
     }
-    if all.difference(&live).copied().ne(terminals.iter().map(String::as_str)) { return Err(invalid()); }
+    if all
+        .difference(&live)
+        .copied()
+        .ne(terminals.iter().map(String::as_str))
+    {
+        return Err(invalid());
+    }
     Ok(())
 }

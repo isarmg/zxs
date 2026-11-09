@@ -15,27 +15,45 @@ pub(super) struct Separation {
     file_components: Vec<Vec<String>>,
 }
 
-fn cohort<'a>(state: &'a State, request: &Request, ids: &[String]) -> Result<Vec<&'a crate::FileVersion>> {
-    if ids.is_empty() || ids.len() > MAX_SELECTED
-        || ids.windows(2).any(|pair| pair[0] >= pair[1]) {
+fn cohort<'a>(
+    state: &'a State,
+    request: &Request,
+    ids: &[String],
+) -> Result<Vec<&'a crate::FileVersion>> {
+    if ids.is_empty() || ids.len() > MAX_SELECTED || ids.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(invalid());
     }
-    ids.iter().map(|id| {
-        HistoryVersionId::parse(id)?;
-        state.versions.get(id)
-            .filter(|version| version.history_tree_id == request.history_tree_id)
-            .ok_or_else(invalid)
-    }).collect()
+    ids.iter()
+        .map(|id| {
+            HistoryVersionId::parse(id)?;
+            state
+                .versions
+                .get(id)
+                .filter(|version| version.history_tree_id == request.history_tree_id)
+                .ok_or_else(invalid)
+        })
+        .collect()
 }
 
 fn digest(versions: &[&crate::FileVersion]) -> Result<String> {
     // Only fixed-size identity/content commitments determine connectivity. Do
     // not copy names, full source lists, commits, body bytes or mutable notes.
-    let commitments = versions.iter().map(|version| (
-        &version.version_id, &version.file_id, &version.history_tree_id,
-        version.logical_size, version.content_hash,
-    )).collect::<Vec<_>>();
-    Ok(crate::object_hash("retired-component-cohort", &commitments)?)
+    let commitments = versions
+        .iter()
+        .map(|version| {
+            (
+                &version.version_id,
+                &version.file_id,
+                &version.history_tree_id,
+                version.logical_size,
+                version.content_hash,
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(crate::object_hash(
+        "retired-component-cohort",
+        &commitments,
+    )?)
 }
 
 impl Separation {
@@ -44,14 +62,29 @@ impl Separation {
         let mut scan = Scan::new(&cancellation);
         let index = VersionIndex::new(state, &request.history_tree_id, &mut scan)?;
         let files = index.component(&request.origin_file_id, &mut scan)?;
-        let mut versions = files.iter()
+        let mut versions = files
+            .iter()
             .flat_map(|file| index.files[file].iter().copied())
             .collect::<Vec<_>>();
         versions.sort_by(|a, b| a.version_id.cmp(&b.version_id));
-        let selected = request.version_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        let cohort_ids = versions.iter().map(|v| v.version_id.as_str()).collect::<BTreeSet<_>>();
-        if !selected.is_subset(&cohort_ids) { return Err(invalid()); }
-        let file_components = partition(&files, versions.iter().copied().map(Member::from), &selected, || scan.record())?;
+        let selected = request
+            .version_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let cohort_ids = versions
+            .iter()
+            .map(|v| v.version_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if !selected.is_subset(&cohort_ids) {
+            return Err(invalid());
+        }
+        let file_components = partition(
+            &files,
+            versions.iter().copied().map(Member::from),
+            &selected,
+            || scan.record(),
+        )?;
         Ok(Self {
             files: files.iter().map(|id| (*id).to_owned()).collect(),
             cohort_version_ids: versions.iter().map(|v| v.version_id.clone()).collect(),
@@ -61,26 +94,56 @@ impl Separation {
     }
 
     pub(super) fn validate(&self, state: &State, request: &Request) -> Result<()> {
-        if self.files.is_empty() || self.files.len() > MAX_SHARED_HISTORY_FILES
+        if self.files.is_empty()
+            || self.files.len() > MAX_SHARED_HISTORY_FILES
             || self.files.windows(2).any(|pair| pair[0] >= pair[1])
-            || self.files.binary_search(&request.origin_file_id).is_err() {
+            || self.files.binary_search(&request.origin_file_id).is_err()
+        {
             return Err(invalid());
         }
-        for file in &self.files { HistoryFileId::parse(file)?; }
+        for file in &self.files {
+            HistoryFileId::parse(file)?;
+        }
         let versions = cohort(state, request, &self.cohort_version_ids)?;
-        let files = versions.iter().map(|v| v.file_id.as_str()).collect::<BTreeSet<_>>();
-        let selected = request.version_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        if files.iter().copied().ne(self.files.iter().map(String::as_str))
-            || selected.iter().any(|id| self.cohort_version_ids.binary_search_by(|v| v.as_str().cmp(id)).is_err())
-            || digest(&versions)? != self.cohort_digest {
+        let files = versions
+            .iter()
+            .map(|v| v.file_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let selected = request
+            .version_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if files
+            .iter()
+            .copied()
+            .ne(self.files.iter().map(String::as_str))
+            || selected.iter().any(|id| {
+                self.cohort_version_ids
+                    .binary_search_by(|v| v.as_str().cmp(id))
+                    .is_err()
+            })
+            || digest(&versions)? != self.cohort_digest
+        {
             return Err(invalid());
         }
         // Do not filter today's Retired tokens here. The original cohort is
         // frozen evidence, including versions retired by a later valid decision.
         let cancellation = HistoryWindowCancellation::new();
         let mut scan = Scan::new(&cancellation);
-        if partition(&files, versions.iter().copied().map(Member::from), &BTreeSet::new(), || scan.record())? != vec![self.files.clone()]
-            || partition(&files, versions.iter().copied().map(Member::from), &selected, || scan.record())? != self.file_components {
+        if partition(
+            &files,
+            versions.iter().copied().map(Member::from),
+            &BTreeSet::new(),
+            || scan.record(),
+        )? != vec![self.files.clone()]
+            || partition(
+                &files,
+                versions.iter().copied().map(Member::from),
+                &selected,
+                || scan.record(),
+            )? != self.file_components
+        {
             return Err(invalid());
         }
         Ok(())
@@ -97,10 +160,18 @@ pub struct PermanentNodeSeparation {
     file_components: Vec<Vec<HistoryFileId>>,
 }
 impl PermanentNodeSeparation {
-    pub fn source_history_root(&self) -> HistoryRoot { self.source_history_root }
-    pub fn original_files(&self) -> &[HistoryFileId] { &self.original_files }
-    pub fn terminated_files(&self) -> &[HistoryFileId] { &self.terminated_files }
-    pub fn file_components(&self) -> &[Vec<HistoryFileId>] { &self.file_components }
+    pub fn source_history_root(&self) -> HistoryRoot {
+        self.source_history_root
+    }
+    pub fn original_files(&self) -> &[HistoryFileId] {
+        &self.original_files
+    }
+    pub fn terminated_files(&self) -> &[HistoryFileId] {
+        &self.terminated_files
+    }
+    pub fn file_components(&self) -> &[Vec<HistoryFileId>] {
+        &self.file_components
+    }
 }
 
 impl Decision {
@@ -109,13 +180,28 @@ impl Decision {
         self.file_terminations.validate(state, &self.request)?;
         Ok(PermanentNodeSeparation {
             source_history_root: HistoryRoot::parse(&self.request.history_root)?,
-            original_files: self.separation.files.iter().map(|id| HistoryFileId::parse(id))
+            original_files: self
+                .separation
+                .files
+                .iter()
+                .map(|id| HistoryFileId::parse(id))
                 .collect::<storage_contract::Result<_>>()?,
-            terminated_files: self.file_terminations.files.iter().map(|file| HistoryFileId::parse(&file.file_id))
+            terminated_files: self
+                .file_terminations
+                .files
+                .iter()
+                .map(|file| HistoryFileId::parse(&file.file_id))
                 .collect::<storage_contract::Result<_>>()?,
-            file_components: self.separation.file_components.iter()
-                .map(|component| component.iter().map(|id| HistoryFileId::parse(id))
-                    .collect::<storage_contract::Result<_>>())
+            file_components: self
+                .separation
+                .file_components
+                .iter()
+                .map(|component| {
+                    component
+                        .iter()
+                        .map(|id| HistoryFileId::parse(id))
+                        .collect::<storage_contract::Result<_>>()
+                })
                 .collect::<storage_contract::Result<_>>()?,
         })
     }

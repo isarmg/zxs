@@ -15,7 +15,9 @@ struct Request<'a> {
 
 #[derive(Serialize)]
 #[serialization(rename_all = "SCREAMING_SNAKE_CASE")]
-enum SlotState { CompleteVerified }
+enum SlotState {
+    CompleteVerified,
+}
 
 #[derive(Serialize)]
 #[serialization(deny_unknown_fields)]
@@ -91,16 +93,32 @@ pub(crate) struct NativeMoveDraft {
     digest: String,
 }
 impl NativeMoveDraft {
-    pub(crate) fn operation_id(&self) -> OperationId { self.operation }
-    pub(crate) fn envelope(&self) -> &[u8] { &self.envelope }
-    pub(crate) fn state(&self) -> &[u8] { &self.state }
+    pub(crate) fn operation_id(&self) -> OperationId {
+        self.operation
+    }
+    pub(crate) fn envelope(&self) -> &[u8] {
+        &self.envelope
+    }
+    pub(crate) fn state(&self) -> &[u8] {
+        &self.state
+    }
     /// This remains an unaccepted draft. It cannot construct AdmittedState or
     /// authorize publication, including when used by a disposable SQL encoder.
-    pub(crate) fn proposed_state(&self) -> &State { &self.proposed_state }
-    pub(crate) fn source_records_hash(&self) -> &str { &self.source_records_hash }
-    pub(crate) fn target_records_hash(&self) -> &str { &self.target_records_hash }
-    pub(crate) fn request_digest(&self) -> &str { &self.request_digest }
-    pub(crate) fn digest(&self) -> &str { &self.digest }
+    pub(crate) fn proposed_state(&self) -> &State {
+        &self.proposed_state
+    }
+    pub(crate) fn source_records_hash(&self) -> &str {
+        &self.source_records_hash
+    }
+    pub(crate) fn target_records_hash(&self) -> &str {
+        &self.target_records_hash
+    }
+    pub(crate) fn request_digest(&self) -> &str {
+        &self.request_digest
+    }
+    pub(crate) fn digest(&self) -> &str {
+        &self.digest
+    }
 }
 
 /// Prospective successful snapshot for one frozen candidate. This is not an
@@ -110,7 +128,9 @@ pub(crate) struct NativeMoveCandidate {
     operation: OperationId,
 }
 impl NativeMoveCandidate {
-    pub(crate) fn state(&self) -> &State { &self.state }
+    pub(crate) fn state(&self) -> &State {
+        &self.state
+    }
     pub(crate) fn result(&self) -> &OperationResult {
         &self.state.operations[&self.operation]
     }
@@ -118,7 +138,9 @@ impl NativeMoveCandidate {
 impl NativeMoveDraft {
     pub(crate) fn candidate_draft(&self) -> Result<NativeMoveCandidate> {
         let mut state = self.proposed_state.clone();
-        let result = state.operations.get_mut(&self.operation)
+        let result = state
+            .operations
+            .get_mut(&self.operation)
             .expect("invariant: native move draft contains its one operation");
         // Ordinary publication also freezes its prospective result before the
         // first vote. The result remains private until a real joint publication.
@@ -126,29 +148,46 @@ impl NativeMoveDraft {
         result.protection_at_publish = ProtectionAtPublish::TargetMet;
         result.current_health = CurrentHealth::Healthy;
         history_copy::retained::bounded(&state)?;
-        Ok(NativeMoveCandidate { state, operation: self.operation })
+        Ok(NativeMoveCandidate {
+            state,
+            operation: self.operation,
+        })
     }
 }
 
 fn versions(engine: &Engine, projection: &FileHistoryMoveProjection) -> Result<Vec<Version>> {
-    projection.version_mapping().values().map(|id| {
-        let placement = &projection.writes.next.placements[id];
-        let slots = placement.route_slot_ids.iter().map(|slot| {
-            let disk = engine.disk(slot)?;
-            if placement.binding_generations.get(slot) != Some(&disk.binding_generation) {
-                return Err(changed());
-            }
-            Ok(Slot {
-                slot_id: slot.clone(), copy_level: disk.level, disk_id: disk.disk_id.clone(),
-                binding_generation: disk.binding_generation, state: SlotState::CompleteVerified,
+    projection
+        .version_mapping()
+        .values()
+        .map(|id| {
+            let placement = &projection.writes.next.placements[id];
+            let slots = placement
+                .route_slot_ids
+                .iter()
+                .map(|slot| {
+                    let disk = engine.disk(slot)?;
+                    if placement.binding_generations.get(slot) != Some(&disk.binding_generation) {
+                        return Err(changed());
+                    }
+                    Ok(Slot {
+                        slot_id: slot.clone(),
+                        copy_level: disk.level,
+                        disk_id: disk.disk_id.clone(),
+                        binding_generation: disk.binding_generation,
+                        state: SlotState::CompleteVerified,
+                    })
+                })
+                .collect::<Result<_>>()?;
+            Ok(Version {
+                version_id: id.clone(),
+                primary_slot_id: placement.primary_slot_id.clone(),
+                target_copies: placement.target_copies,
+                required_slots: placement.route_slot_ids.clone(),
+                topology_generation: placement.topology_generation,
+                slots,
             })
-        }).collect::<Result<_>>()?;
-        Ok(Version {
-            version_id: id.clone(), primary_slot_id: placement.primary_slot_id.clone(),
-            target_copies: placement.target_copies, required_slots: placement.route_slot_ids.clone(),
-            topology_generation: placement.topology_generation, slots,
         })
-    }).collect()
+        .collect()
 }
 
 impl FileHistoryMoveProjection {
@@ -163,25 +202,37 @@ impl FileHistoryMoveProjection {
         let request = &self.capture.namespace;
         let target = &self.writes.next.repositories[&request.target_repository_id];
         let branch = &self.writes.next.branches[&target.main_branch_id];
-        let input = Request { namespace: request, source_file_id: self.capture.source_file_id.as_str() };
+        let input = Request {
+            namespace: request,
+            source_file_id: self.capture.source_file_id.as_str(),
+        };
         let request_digest = Engine::native_request_digest(KIND, &self.principal, &json!(input))?;
         let result = ResultBody {
-            move_request: input, move_route: &self.route,
-            source_file_id: self.capture.source_file_id.as_str(), file_id: self.target_file_id().as_str(),
+            move_request: input,
+            move_route: &self.route,
+            source_file_id: self.capture.source_file_id.as_str(),
+            file_id: self.target_file_id().as_str(),
             source_sequence: self.capture.source_sequence,
             source_records_hash: self.capture.source_records_digest.to_string(),
-            deletion_node: self.proposed_source_deletion(), retained_lifecycle: &self.writes.lifecycle,
+            deletion_node: self.proposed_source_deletion(),
+            retained_lifecycle: &self.writes.lifecycle,
             version_ids: self.writes.version_mapping.values().cloned().collect(),
-            version_mapping: &self.writes.version_mapping, branch_mapping: &self.writes.branch_mapping,
-            branch_id: &target.main_branch_id, history_tree_id: &target.history_tree_id,
-            commit_id: &branch.head_commit_id, branch_generation: branch.generation,
-            timestamp: self.route.created_at, membership_epoch: engine.config.membership_epoch(),
-            recovery_digest: recovery.to_string(), decision_inputs_digest: inputs.to_string(),
+            version_mapping: &self.writes.version_mapping,
+            branch_mapping: &self.writes.branch_mapping,
+            branch_id: &target.main_branch_id,
+            history_tree_id: &target.history_tree_id,
+            commit_id: &branch.head_commit_id,
+            branch_generation: branch.generation,
+            timestamp: self.route.created_at,
+            membership_epoch: engine.config.membership_epoch(),
+            recovery_digest: recovery.to_string(),
+            decision_inputs_digest: inputs.to_string(),
             version_protection: versions(engine, self)?,
         };
         history_copy::retained::bounded(&result)?;
         let receipt = OperationResult {
-            operation_id: self.operation, kind: KIND.into(),
+            operation_id: self.operation,
+            kind: KIND.into(),
             commit_id: Some(branch.head_commit_id.clone()),
             history_tree_id: Some(target.history_tree_id.clone()),
             branch_id: Some(target.main_branch_id.clone()),
@@ -190,43 +241,57 @@ impl FileHistoryMoveProjection {
             commit_state: CommitState::Staging,
             protection_at_publish: ProtectionAtPublish::NotApplicable,
             current_health: CurrentHealth::Unknown,
-            request_digest: request_digest.clone(), sequence: self.proposed_sequence(),
+            request_digest: request_digest.clone(),
+            sequence: self.proposed_sequence(),
             result: json_codec::to_value(result)?,
         };
         let mut next = self.writes.next.clone();
         next.operations.insert(self.operation, receipt.clone());
-        next.operation_principals.insert(self.operation, self.principal.clone());
+        next.operation_principals
+            .insert(self.operation, self.principal.clone());
         next.events.push(Event {
-            sequence: self.proposed_sequence(), operation_id: self.operation,
-            kind: KIND.into(), object_id: branch.head_commit_id.clone(),
+            sequence: self.proposed_sequence(),
+            operation_id: self.operation,
+            kind: KIND.into(),
+            object_id: branch.head_commit_id.clone(),
         });
         // Use the ordinary receipt-owner projection for BOTH files. The draft's
         // one operation must own the source D and target imported audit without
         // the special pre-receipt FILE encoder or separate copy/delete receipts.
         let source = crate::container_storage::file_database::capture_copy(
-            &next, self.capture.source_file_id.as_str(),
+            &next,
+            self.capture.source_file_id.as_str(),
             &self.proposed_source_deletion().history_tree_id,
         )?;
         let target_database = crate::container_storage::file_database::capture_copy(
-            &next, self.target_file_id().as_str(), &target.history_tree_id,
+            &next,
+            self.target_file_id().as_str(),
+            &target.history_tree_id,
         )?;
         history_copy::retained::bounded(&next)?;
         let state = crate::disk::encode_metadata(&next, 12 * 1024 * 1024)?;
-        let envelope = crate::disk::encode_metadata(&Envelope {
-            format: "file-history-move-unaccepted-native-operation",
-            proposed_operation: &receipt,
-            source_file_database_records_hash: &source.records_hash,
-            target_file_database_records_hash: &target_database.records_hash,
-        }, 12 * 1024 * 1024)?;
+        let envelope = crate::disk::encode_metadata(
+            &Envelope {
+                format: "file-history-move-unaccepted-native-operation",
+                proposed_operation: &receipt,
+                source_file_database_records_hash: &source.records_hash,
+                target_file_database_records_hash: &target_database.records_hash,
+            },
+            12 * 1024 * 1024,
+        )?;
         let mut digest = blake3::Hasher::new();
         digest.update(b"file-history-move-native-draft\0");
         digest.update(blake3::hash(&envelope).as_bytes());
         digest.update(blake3::hash(&state).as_bytes());
         Ok(NativeMoveDraft {
-            operation: self.operation, envelope, state, proposed_state: next,
+            operation: self.operation,
+            envelope,
+            state,
+            proposed_state: next,
             source_records_hash: source.records_hash,
             target_records_hash: target_database.records_hash,
-            request_digest, digest: digest.finalize().to_hex().to_string(),
+            request_digest,
+            digest: digest.finalize().to_hex().to_string(),
         })
     }
 }
@@ -239,13 +304,24 @@ pub(crate) fn reject_unclosed_publication(
     next: &State,
     result: &OperationResult,
 ) -> Result<()> {
-    let reject = || Error::new(ErrorCode::UnsupportedOperation,
-        "native move has no complete three-scope database and atomic recovery closure; unaccepted inputs cannot enter publication");
-    if result.kind == KIND { return Err(reject()); }
+    let reject = || {
+        Error::new(
+            ErrorCode::UnsupportedOperation,
+            "native move has no complete three-scope database and atomic recovery closure; unaccepted inputs cannot enter publication",
+        )
+    };
+    if result.kind == KIND {
+        return Err(reject());
+    }
     let inspect = |id: &OperationId| -> Result<()> {
         let before = previous.operations.get(id);
         let after = next.operations.get(id);
-        if before != after && before.into_iter().chain(after).any(|receipt| receipt.kind == KIND) {
+        if before != after
+            && before
+                .into_iter()
+                .chain(after)
+                .any(|receipt| receipt.kind == KIND)
+        {
             return Err(reject());
         }
         Ok(())
@@ -253,7 +329,9 @@ pub(crate) fn reject_unclosed_publication(
     match next.operations.changes_since(&previous.operations) {
         storage_contract::MapChanges::Keys(keys) => keys.iter().try_for_each(inspect),
         storage_contract::MapChanges::All => {
-            for id in previous.operations.keys().chain(next.operations.keys()) { inspect(id)?; }
+            for id in previous.operations.keys().chain(next.operations.keys()) {
+                inspect(id)?;
+            }
             Ok(())
         }
     }

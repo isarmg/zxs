@@ -231,11 +231,14 @@ impl PlanRecord {
         }
         match &self.placement {
             Placement::Primary if (1..=3).contains(&self.source_level) => (),
-            Placement::ChainMaterial { chain_digest, target_level }
-                if (2..=3).contains(&self.source_level)
-                    && (1..self.source_level).contains(target_level) =>
+            Placement::ChainMaterial {
+                chain_digest,
+                target_level,
+            } if (2..=3).contains(&self.source_level)
+                && (1..self.source_level).contains(target_level) =>
             {
-                chain_digest.parse::<ForeignEvidenceDigest>()
+                chain_digest
+                    .parse::<ForeignEvidenceDigest>()
                     .map_err(|error| Error::from(std::io::Error::other(error)))?;
             }
             Placement::Rebuild { directory, .. } if self.source_level == 2 => {

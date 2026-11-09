@@ -14,18 +14,34 @@ pub struct FileHistoryMoveNativePreparation {
     target_records_hash: String,
 }
 impl FileHistoryMoveNativePreparation {
-    pub fn operation_id(&self) -> OperationId { self.operation_id }
-    pub fn native_digest(&self) -> &str { &self.native_digest }
-    pub fn request_digest(&self) -> &str { &self.request_digest }
-    pub fn decision_inputs_digest(&self) -> &FileHistoryMoveDecisionDigest { &self.decision_inputs_digest }
-    pub fn source_database_records_hash(&self) -> &str { &self.source_records_hash }
-    pub fn target_database_records_hash(&self) -> &str { &self.target_records_hash }
-    pub fn outstanding(&self) -> &[FileHistoryMoveDecisionObligation] { &OUTSTANDING }
+    pub fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+    pub fn native_digest(&self) -> &str {
+        &self.native_digest
+    }
+    pub fn request_digest(&self) -> &str {
+        &self.request_digest
+    }
+    pub fn decision_inputs_digest(&self) -> &FileHistoryMoveDecisionDigest {
+        &self.decision_inputs_digest
+    }
+    pub fn source_database_records_hash(&self) -> &str {
+        &self.source_records_hash
+    }
+    pub fn target_database_records_hash(&self) -> &str {
+        &self.target_records_hash
+    }
+    pub fn outstanding(&self) -> &[FileHistoryMoveDecisionObligation] {
+        &OUTSTANDING
+    }
 }
 fn report(materials: &Materials, native: &NativeMoveDraft) -> FileHistoryMoveNativePreparation {
     FileHistoryMoveNativePreparation {
-        operation_id: native.operation_id(), native_digest: native.digest().into(),
-        request_digest: native.request_digest().into(), decision_inputs_digest: materials.digest,
+        operation_id: native.operation_id(),
+        native_digest: native.digest().into(),
+        request_digest: native.request_digest().into(),
+        decision_inputs_digest: materials.digest,
         source_records_hash: native.source_records_hash().into(),
         target_records_hash: native.target_records_hash().into(),
     }
@@ -89,8 +105,10 @@ impl Engine {
         if native.source_records_hash() != materials.source.records_hash()
             || native.target_records_hash() != materials.target.records_hash()
         {
-            return Err(Error::new(ErrorCode::PublicationInvalid,
-                "native move receipt does not reproduce the exact two-file material closure"));
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "native move receipt does not reproduce the exact two-file material closure",
+            ));
         }
         self.recheck_file_history_move_projection(projection, cancellation)?;
         Ok((materials, native))
@@ -105,7 +123,8 @@ impl Engine {
         cancellation: &HistoryWindowCancellation,
     ) -> Result<()> {
         checkpoint(cancellation)?;
-        store::Store::system(self, materials, store::Mode::Read)?.verify_native(native, cancellation)?;
+        store::Store::system(self, materials, store::Mode::Read)?
+            .verify_native(native, cancellation)?;
         for participant in &materials.record.disks {
             checkpoint(cancellation)?;
             store::Store::disk(self, materials, participant, store::Mode::Read)?

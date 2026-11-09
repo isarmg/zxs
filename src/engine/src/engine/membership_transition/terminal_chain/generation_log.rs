@@ -376,16 +376,16 @@ pub(super) fn completed_source(
     decision: &TerminalChainIoDecisionReport,
 ) -> Result<Manifest> {
     let root = management.system_root();
-    let selected: Manifest = load(root, &operation(management).join(SELECTED))?
-        .ok_or_else(|| {
+    let selected: Manifest =
+        load(root, &operation(management).join(SELECTED))?.ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,
                 "generation selector requires its original log selection",
             )
         })?;
     selected.verify_source(management, prepared, decision)?;
-    let complete: Manifest = load(root, &operation(management).join(COMPLETE))?
-        .ok_or_else(|| {
+    let complete: Manifest =
+        load(root, &operation(management).join(COMPLETE))?.ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,
                 "generation selector requires completed original log evidence",

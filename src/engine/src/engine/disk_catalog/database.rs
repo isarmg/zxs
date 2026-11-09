@@ -123,7 +123,12 @@ async fn read_connection(
         return Err(invalid("disk catalog has unexpected schema objects"));
     }
     for (row, (name, kind, table, sql)) in schema.into_iter().zip([
-        ("backup_directories", "table", "backup_directories", Some(DIRECTORIES)),
+        (
+            "backup_directories",
+            "table",
+            "backup_directories",
+            Some(DIRECTORIES),
+        ),
         ("identity", "table", "identity", Some(IDENTITY)),
         ("sqlite_autoindex_versions_1", "index", "versions", None),
         ("versions", "table", "versions", Some(VERSIONS)),

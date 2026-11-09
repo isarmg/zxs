@@ -26,7 +26,10 @@ pub(in crate::engine) fn encode_move_draft(
 ) -> Result<Vec<u8>> {
     encode_state(draft.proposed_state(), &|| {
         if cancellation.is_cancelled() {
-            return Err(Error::new(ErrorCode::OperationAborted, "move SYSTEM preparation cancelled"));
+            return Err(Error::new(
+                ErrorCode::OperationAborted,
+                "move SYSTEM preparation cancelled",
+            ));
         }
         Ok(())
     })

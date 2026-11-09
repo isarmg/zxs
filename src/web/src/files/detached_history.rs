@@ -1,6 +1,9 @@
 //! Discovery selects a stable retained file, never invents a live directory row.
 use super::{actions, history::DecodeError, model::Navigation, page::Entry};
-use crate::{api, ui::{State, accept_read_response}};
+use crate::{
+    api,
+    ui::{State, accept_read_response},
+};
 use storage_contract::detached_history::{File, Page, Request};
 use web_interface::{i18n::t, prelude::*, tasks::spawn_local};
 
@@ -15,55 +18,98 @@ struct Model {
 }
 impl Model {
     fn cancel(&mut self) {
-        if let Some(cancellation) = self.cancellation.take() { cancellation.abort(); }
+        if let Some(cancellation) = self.cancellation.take() {
+            cancellation.abort();
+        }
         self.generation += 1;
         self.loading = false;
     }
 }
 fn endpoint(request: &Request) -> String {
     match (&request.snapshot, &request.after_file) {
-        (Some(snapshot), Some(after)) => format!("/api/file-manager/detached-history?snapshot={}&after_file={}", api::segment(&snapshot.to_string()), api::segment(after.as_str())),
+        (Some(snapshot), Some(after)) => format!(
+            "/api/file-manager/detached-history?snapshot={}&after_file={}",
+            api::segment(&snapshot.to_string()),
+            api::segment(after.as_str())
+        ),
         (None, None) => "/api/file-manager/detached-history".into(),
         _ => unreachable!("invariant: discovery controls construct complete continuation pairs"),
     }
 }
 fn load(state: RwSignal<State>, model: RwSignal<Model>, next: bool) {
-    let Some(epoch) = state.with_untracked(|s| s.session_active().then_some(s.session_epoch)) else { return; };
+    let Some(epoch) = state.with_untracked(|s| s.session_active().then_some(s.session_epoch))
+    else {
+        return;
+    };
     let request = model.with_untracked(|model| {
-        if model.loading { return None; }
+        if model.loading {
+            return None;
+        }
         if next {
             let page = model.page.as_ref()?;
-            Some(Request { snapshot: Some(page.snapshot), after_file: Some(page.next_after.clone()?) })
-        } else { Some(Request::default()) }
+            Some(Request {
+                snapshot: Some(page.snapshot),
+                after_file: Some(page.next_after.clone()?),
+            })
+        } else {
+            Some(Request::default())
+        }
     });
-    let Some(request) = request else { return; };
+    let Some(request) = request else {
+        return;
+    };
     let cancellation = match api::ReadCancellation::new() {
         Ok(cancellation) => cancellation,
-        Err(error) => { model.update(|model| model.error = Some(error)); return; }
+        Err(error) => {
+            model.update(|model| model.error = Some(error));
+            return;
+        }
     };
-    let generation = model.try_update(|model| {
-        model.cancel(); model.epoch = Some(epoch); model.loading = true; model.error = None;
-        model.cancellation = Some(cancellation.clone()); model.generation
-    }).expect("invariant: mounted discovery panel owns its state");
+    let generation = model
+        .try_update(|model| {
+            model.cancel();
+            model.epoch = Some(epoch);
+            model.loading = true;
+            model.error = None;
+            model.cancellation = Some(cancellation.clone());
+            model.generation
+        })
+        .expect("invariant: mounted discovery panel owns its state");
     spawn_local(async move {
-        let result = api::cancellable_get(&endpoint(&request), cancellation).await.and_then(|value| {
-            let page: Page = json_codec::from_value(value).map_err(DecodeError::Wire)?;
-            page.validate(&request).map_err(DecodeError::Name)?;
-            Ok(page)
-        });
+        let result = api::cancellable_get(&endpoint(&request), cancellation)
+            .await
+            .and_then(|value| {
+                let page: Page = json_codec::from_value(value).map_err(DecodeError::Wire)?;
+                page.validate(&request).map_err(DecodeError::Name)?;
+                Ok(page)
+            });
         if !accept_read_response(state, epoch, &result)
-            || model.try_with_untracked(|model| model.generation == generation) != Some(true) { return; }
+            || model.try_with_untracked(|model| model.generation == generation) != Some(true)
+        {
+            return;
+        }
         model.update(|model| {
-            model.loading = false; model.cancellation = None;
+            model.loading = false;
+            model.cancellation = None;
             match result {
-                Ok(page) => { model.page = Some(page); model.error = None; }
-                Err(error) => { model.page = None; model.error = Some(error); }
+                Ok(page) => {
+                    model.page = Some(page);
+                    model.error = None;
+                }
+                Err(error) => {
+                    model.page = None;
+                    model.error = Some(error);
+                }
             }
         });
     });
 }
 fn open(state: RwSignal<State>, epoch: u64, file: &File) {
-    if !state.with_untracked(|s| s.session_active() && s.session_epoch == epoch && !actions::pending(s)) { return; }
+    if !state
+        .with_untracked(|s| s.session_active() && s.session_epoch == epoch && !actions::pending(s))
+    {
+        return;
+    }
     state.update(|s| {
         s.files.navigate(Navigation::Root);
         s.files.selected = Some(Entry::retained(file));
@@ -75,11 +121,18 @@ fn open(state: RwSignal<State>, epoch: u64, file: &File) {
 }
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Model::default());
-    on_cleanup(move || { let _ = model.try_update(Model::cancel); });
+    on_cleanup(move || {
+        let _ = model.try_update(Model::cancel);
+    });
     Effect::new(move |_| {
-        let epoch = state.with(|s|s.session_active().then_some(s.session_epoch));
-        if model.with_untracked(|model|model.epoch != epoch) {
-            model.update(|model| { model.cancel(); model.epoch = epoch; model.page = None; model.error = None; });
+        let epoch = state.with(|s| s.session_active().then_some(s.session_epoch));
+        if model.with_untracked(|model| model.epoch != epoch) {
+            model.update(|model| {
+                model.cancel();
+                model.epoch = epoch;
+                model.page = None;
+                model.error = None;
+            });
         }
     });
     view! {

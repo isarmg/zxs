@@ -158,8 +158,11 @@ pub(super) fn verify_generation_entry(
     generation: &DiskRoot,
     manifest: &generation_log::Manifest,
 ) -> Result<()> {
-    let request: Descriptor = load(management.system_root(), &operation(management).join(REQUEST))?
-        .ok_or_else(|| missing("generation descriptor has no original SYSTEM selector request"))?;
+    let request: Descriptor = load(
+        management.system_root(),
+        &operation(management).join(REQUEST),
+    )?
+    .ok_or_else(|| missing("generation descriptor has no original SYSTEM selector request"))?;
     request.verify_manifest(manifest)?;
     if !request.read_at(generation, &generation.path().join(AUTHORITY_FILE))? {
         return Err(missing("generation selector disappeared during inventory"));
@@ -185,18 +188,21 @@ pub(super) fn observe(
     status: &mut TerminalChainReadmissionStatus,
 ) -> Result<()> {
     let root = management.system_root();
-    let Some(request): Option<Descriptor> = load(root, &operation(management).join(REQUEST))? else {
+    let Some(request): Option<Descriptor> = load(root, &operation(management).join(REQUEST))?
+    else {
         if started(management)? {
             return Err(missing("generation selector lost its original request"));
         }
         return Ok(());
     };
-    let publication = status.publication.as_ref().ok_or_else(|| {
-        missing("generation selector requires completed source Publication")
-    })?;
-    let decision = status.io_decision.as_ref().ok_or_else(|| {
-        missing("generation selector requires completed source epoch decision")
-    })?;
+    let publication = status
+        .publication
+        .as_ref()
+        .ok_or_else(|| missing("generation selector requires completed source Publication"))?;
+    let decision = status
+        .io_decision
+        .as_ref()
+        .ok_or_else(|| missing("generation selector requires completed source epoch decision"))?;
     let expected = Descriptor::expected(management, selection, prepared, publication, decision)?;
     request.exact(&expected)?;
     status.phase = TerminalChainReadmissionPhase::GenerationSelectionPending;

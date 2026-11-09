@@ -19,25 +19,44 @@ struct Candidate {
     receipt: Arc<Value>,
 }
 impl Candidate {
-    fn read(owner: (u64, String), operation: OperationId, receipt: Value) -> Result<Self, api::Error> {
+    fn read(
+        owner: (u64, String),
+        operation: OperationId,
+        receipt: Value,
+    ) -> Result<Self, api::Error> {
         if receipt["operation_kind"] != "file.nodes.retire"
-            || !published(FileOperation::from_receipt(&operation.to_string(), &receipt).status()) {
-            return Err(failure(t("没有取得这个原 ID 的已发布节点退役收据。未保存记录、未猜测选择，也未发送删除。", "No published node-retirement receipt was found for this original ID. Nothing was saved, no selection was guessed, and no deletion was sent.")));
+            || !published(FileOperation::from_receipt(&operation.to_string(), &receipt).status())
+        {
+            return Err(failure(t(
+                "没有取得这个原 ID 的已发布节点退役收据。未保存记录、未猜测选择，也未发送删除。",
+                "No published node-retirement receipt was found for this original ID. Nothing was saved, no selection was guessed, and no deletion was sent.",
+            )));
         }
         let request = &receipt["result"]["retirement"]["request"];
         if !request.is_object() {
-            return Err(failure("The published retirement request is not a named object; nothing was saved."));
+            return Err(failure(
+                "The published retirement request is not a named object; nothing was saved.",
+            ));
         }
         let request: PublishedRequest = json_codec::from_value(request.clone())
             .map_err(|source| api::Error::from(DecodeError::Wire(source)))?;
         let record = Record {
-            format: Format::ResumeOnly, principal: owner.1.clone(), operation,
-            label: request.origin_file_id.to_string(), file_id: request.origin_file_id,
-            history_root: request.history_root, version_ids: request.version_ids,
+            format: Format::ResumeOnly,
+            principal: owner.1.clone(),
+            operation,
+            label: request.origin_file_id.to_string(),
+            file_id: request.origin_file_id,
+            history_root: request.history_root,
+            version_ids: request.version_ids,
         };
         // Bound the complete saved hint now, not after the user accepts it.
         record.encode()?;
-        Ok(Self { owner, history: request.history_tree_id, record, receipt: Arc::new(receipt) })
+        Ok(Self {
+            owner,
+            history: request.history_tree_id,
+            record,
+            receipt: Arc::new(receipt),
+        })
     }
 }
 
@@ -54,7 +73,9 @@ struct Lookup {
 }
 impl Lookup {
     fn cancel(&mut self) {
-        if let Some(cancellation) = self.cancellation.take() { cancellation.abort(); }
+        if let Some(cancellation) = self.cancellation.take() {
+            cancellation.abort();
+        }
         self.generation += 1;
         self.loading = false;
     }
@@ -70,32 +91,58 @@ impl Lookup {
     }
 }
 fn lookup(state: RwSignal<State>, model: RwSignal<Lookup>) {
-    let Some(current) = state.with_untracked(owner) else { return; };
-    let input = model.with_untracked(|model| (!model.loading).then(|| model.input.trim().to_owned()));
-    let Some(input) = input else { return; };
+    let Some(current) = state.with_untracked(owner) else {
+        return;
+    };
+    let input =
+        model.with_untracked(|model| (!model.loading).then(|| model.input.trim().to_owned()));
+    let Some(input) = input else {
+        return;
+    };
     let operation: OperationId = match input.parse() {
         Ok(operation) => operation,
-        Err(source) => { model.update(|model| model.error = Some(DecodeError::Name(source).into())); return; }
+        Err(source) => {
+            model.update(|model| model.error = Some(DecodeError::Name(source).into()));
+            return;
+        }
     };
     let cancellation = match api::ReadCancellation::new() {
         Ok(cancellation) => cancellation,
-        Err(error) => { model.update(|model| model.error = Some(error)); return; }
+        Err(error) => {
+            model.update(|model| model.error = Some(error));
+            return;
+        }
     };
-    let generation = model.try_update(|model| {
-        model.cancel(); model.owner = Some(current.clone()); model.loading = true;
-        model.candidate = None; model.saved = None; model.error = None;
-        model.cancellation = Some(cancellation.clone()); model.generation
-    }).expect("invariant: mounted receipt lookup owns its state");
+    let generation = model
+        .try_update(|model| {
+            model.cancel();
+            model.owner = Some(current.clone());
+            model.loading = true;
+            model.candidate = None;
+            model.saved = None;
+            model.error = None;
+            model.cancellation = Some(cancellation.clone());
+            model.generation
+        })
+        .expect("invariant: mounted receipt lookup owns its state");
     spawn_local(async move {
         // The existing outcome endpoint enforces exact current operation ownership.
         // It returns publication evidence, not a new cleanup/absence observation.
-        let result = api::cancellable_get(&format!("/api/operations/{operation}/outcome"), cancellation).await
-            .and_then(|receipt| Candidate::read(current.clone(), operation, receipt));
+        let result = api::cancellable_get(
+            &format!("/api/operations/{operation}/outcome"),
+            cancellation,
+        )
+        .await
+        .and_then(|receipt| Candidate::read(current.clone(), operation, receipt));
         if !crate::ui::accept_read_response(state, current.0, &result)
             || state.with_untracked(owner).as_ref() != Some(&current)
-            || model.try_with_untracked(|model| model.current(&current, generation)) != Some(true) { return; }
+            || model.try_with_untracked(|model| model.current(&current, generation)) != Some(true)
+        {
+            return;
+        }
         model.update(|model| {
-            model.loading = false; model.cancellation = None;
+            model.loading = false;
+            model.cancellation = None;
             match result {
                 Ok(candidate) => model.candidate = Some(candidate),
                 Err(error) => model.error = Some(error),
@@ -104,45 +151,69 @@ fn lookup(state: RwSignal<State>, model: RwSignal<Lookup>) {
     });
 }
 fn can_accept(state: &State, candidate: &Candidate) -> bool {
-    owner(state).as_ref() == Some(&candidate.owner) && !state.files.mutation_pending
-        && !state.files.node_retirement.attempt.as_ref().is_some_and(|attempt| attempt.in_flight)
+    owner(state).as_ref() == Some(&candidate.owner)
+        && !state.files.mutation_pending
+        && !state
+            .files
+            .node_retirement
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.in_flight)
         && state.files.operations.iter().all(|operation| {
-            operation.id() != candidate.record.operation.to_string() || operation.status() != SaveStatus::Rejected
+            operation.id() != candidate.record.operation.to_string()
+                || operation.status() != SaveStatus::Rejected
         })
 }
 fn accept(state: RwSignal<State>, model: RwSignal<Lookup>, generation: u64) {
     let candidate = model.with_untracked(|model| {
-        (model.generation == generation && !model.loading).then(|| model.candidate.clone()).flatten()
+        (model.generation == generation && !model.loading)
+            .then(|| model.candidate.clone())
+            .flatten()
     });
-    let Some(candidate) = candidate else { return; };
-    if !state.with_untracked(|s| can_accept(s, &candidate)) { return; }
+    let Some(candidate) = candidate else {
+        return;
+    };
+    if !state.with_untracked(|s| can_accept(s, &candidate)) {
+        return;
+    }
     if let Err(error) = retain_original(&candidate.record) {
-        model.update(|model| model.error = Some(error)); return;
+        model.update(|model| model.error = Some(error));
+        return;
     }
     // Re-admit the complete bounded queue, retaining every independent operation.
     restore(state);
     let queue_error = state.with_untracked(|s| s.files.node_retirement.recovery.error.clone());
     if let Some(error) = queue_error {
-        model.update(|model| model.error = Some(error)); return;
+        model.update(|model| model.error = Some(error));
+        return;
     }
     let operation = candidate.record.operation;
-    let status = actions::record_receipt(state, &operation.to_string(), (*candidate.receipt).clone());
+    let status =
+        actions::record_receipt(state, &operation.to_string(), (*candidate.receipt).clone());
     if !published(status) {
         model.update(|model| model.error = Some(failure("The exact receipt could not settle this recovery record; the original record is preserved.")));
         return;
     }
     open(state, operation, candidate.owner.0);
     model.update(|model| {
-        model.cancel(); model.candidate = None; model.saved = Some(operation); model.error = None;
+        model.cancel();
+        model.candidate = None;
+        model.saved = Some(operation);
+        model.error = None;
     });
 }
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Lookup::default());
-    on_cleanup(move || { let _ = model.try_update(Lookup::cancel); });
+    on_cleanup(move || {
+        let _ = model.try_update(Lookup::cancel);
+    });
     Effect::new(move |_| {
         let current = state.with(owner);
         if model.with_untracked(|model| model.owner != current) {
-            model.update(|model| { model.edit(String::new()); model.owner = current; });
+            model.update(|model| {
+                model.edit(String::new());
+                model.owner = current;
+            });
         }
     });
     view! {

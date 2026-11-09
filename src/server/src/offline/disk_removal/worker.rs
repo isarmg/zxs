@@ -2,11 +2,11 @@
 //! completion never re-open a retired disk merely to see whether it exists.
 use super::*;
 use platform_io::service_lease::ServiceLease;
+use storage_engine::Mode;
 use storage_engine::{
     storage_lifecycle::{ExitCommit, ExitRequest},
     storage_readmission::{RegistrationEntry, RegistrationSnapshot},
 };
-use storage_engine::Mode;
 use storage_server::management::storage_lifecycle::ExclusiveExit;
 use storage_server::{auth::AuthStore, startup_admission::PreparedService};
 

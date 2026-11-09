@@ -30,7 +30,11 @@ fn current(row: DiskCatalogDirectory, sequence: u64) -> DiskCatalogSnapshot {
     }
 }
 
-fn record(sequence: u64, operation_id: OperationId, change: DiskHistoryChange) -> DiskHistoryRecord {
+fn record(
+    sequence: u64,
+    operation_id: OperationId,
+    change: DiskHistoryChange,
+) -> DiskHistoryRecord {
     DiskHistoryRecord {
         sequence,
         operation_id,
@@ -72,11 +76,32 @@ fn offline_fold_keeps_old_empty_directory_path_after_a_rename() {
     after.owner_path = name_policy::PortablePath::parse("backup/renamed").unwrap();
     after.operation_id = OperationId::generate().unwrap();
     let rename = after.operation_id;
-    let material = history(vec![
-        record(1, before.operation_id, DiskHistoryChange::BackupDirectoryEntered { after: before.clone() }),
-        record(2, rename, DiskHistoryChange::BackupDirectoryDeparted { before: before.clone() }),
-        record(2, rename, DiskHistoryChange::BackupDirectoryEntered { after: after.clone() }),
-    ], 2);
+    let material = history(
+        vec![
+            record(
+                1,
+                before.operation_id,
+                DiskHistoryChange::BackupDirectoryEntered {
+                    after: before.clone(),
+                },
+            ),
+            record(
+                2,
+                rename,
+                DiskHistoryChange::BackupDirectoryDeparted {
+                    before: before.clone(),
+                },
+            ),
+            record(
+                2,
+                rename,
+                DiskHistoryChange::BackupDirectoryEntered {
+                    after: after.clone(),
+                },
+            ),
+        ],
+        2,
+    );
     let recovered = history::fold_prepared(&material, Some(&current(before.clone(), 1))).unwrap();
     assert_eq!(recovered, current(after, 2));
     assert!(recovered.versions.is_empty());
@@ -89,11 +114,26 @@ fn offline_directory_fold_rejects_forged_predecessor_and_current_rows() {
     let before = directory("backup/empty");
     let mut after = before.clone();
     after.operation_id = OperationId::generate().unwrap();
-    let missing = history(vec![record(1, after.operation_id,
-        DiskHistoryChange::BackupDirectoryChanged { before: before.clone(), after: after.clone() })], 1);
+    let missing = history(
+        vec![record(
+            1,
+            after.operation_id,
+            DiskHistoryChange::BackupDirectoryChanged {
+                before: before.clone(),
+                after: after.clone(),
+            },
+        )],
+        1,
+    );
     assert!(history::fold_prepared(&missing, None).is_err());
-    let material = history(vec![record(1, before.operation_id,
-        DiskHistoryChange::BackupDirectoryEntered { after: before })], 1);
+    let material = history(
+        vec![record(
+            1,
+            before.operation_id,
+            DiskHistoryChange::BackupDirectoryEntered { after: before },
+        )],
+        1,
+    );
     assert!(history::fold_prepared(&material, Some(&current(after, 1))).is_err());
 }
 
@@ -134,7 +174,9 @@ fn directory_projection_uses_exact_original_binding_and_each_states_policy() {
     };
     let mut state = State::default();
     state.sequence = 1;
-    state.protection_policies.insert(policy.policy_id.clone(), policy.clone());
+    state
+        .protection_policies
+        .insert(policy.policy_id.clone(), policy.clone());
     state.operations.insert(row.operation_id, receipt);
     assert_eq!(snapshot(&state, identity()).unwrap(), current(row, 1));
     let mut reused = identity();
@@ -142,10 +184,19 @@ fn directory_projection_uses_exact_original_binding_and_each_states_policy() {
     assert!(snapshot(&state, reused).unwrap().is_empty());
     let mut next = state.clone();
     next.begin_tracking();
-    next.protection_policies.get_mut(&policy.policy_id).unwrap().generation += 1;
+    next.protection_policies
+        .get_mut(&policy.policy_id)
+        .unwrap()
+        .generation += 1;
     assert!(crate::protection::directory_catalog_changed(&state, &next));
     assert!(snapshot(&next, identity()).unwrap().is_empty());
-    assert_eq!(snapshot(&state, identity()).unwrap().backup_directories.len(), 1);
+    assert_eq!(
+        snapshot(&state, identity())
+            .unwrap()
+            .backup_directories
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -154,11 +205,30 @@ fn history_only_rescue_rebuilds_empty_directory_paths_without_original_sqlite() 
     let after = directory("backup/renamed");
     let second = OperationId::generate().unwrap();
     // Sort same-sequence records by the original entity/path key, not action kind.
-    let snapshot = history(vec![
-        record(1, before.operation_id, DiskHistoryChange::BackupDirectoryEntered { after: before.clone() }),
-        record(2, second, DiskHistoryChange::BackupDirectoryDeparted { before }),
-        record(2, second, DiskHistoryChange::BackupDirectoryEntered { after: after.clone() }),
-    ], 2);
+    let snapshot = history(
+        vec![
+            record(
+                1,
+                before.operation_id,
+                DiskHistoryChange::BackupDirectoryEntered {
+                    after: before.clone(),
+                },
+            ),
+            record(
+                2,
+                second,
+                DiskHistoryChange::BackupDirectoryDeparted { before },
+            ),
+            record(
+                2,
+                second,
+                DiskHistoryChange::BackupDirectoryEntered {
+                    after: after.clone(),
+                },
+            ),
+        ],
+        2,
+    );
     let material = json_codec::json!({
         "scope":"history", "identity":identity(), "current":null, "history":snapshot,
     });
@@ -167,7 +237,12 @@ fn history_only_rescue_rebuilds_empty_directory_paths_without_original_sqlite() 
         "records_hash":storage_contract::object_hash("disk-database-rescue-material", &material).unwrap(),
         "material":material,
     })).unwrap();
-    let image = reconstruct_disk_database_material(&bytes, &identity(), DiskDatabaseRebuildSource::CurrentFromHistory).unwrap();
+    let image = reconstruct_disk_database_material(
+        &bytes,
+        &identity(),
+        DiskDatabaseRebuildSource::CurrentFromHistory,
+    )
+    .unwrap();
     let recovered = database::read(image.database_bytes(), &identity()).unwrap();
     assert_eq!(recovered, current(after, 2));
     assert!(recovered.versions.is_empty());

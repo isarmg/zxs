@@ -18,12 +18,12 @@ pub use registration::{
     BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
-    BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
-    BackupRegistryRecoveryReport, BackupRootDatabasesReport, BackupServingContent,
-    BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupNativeMetadataReport, BackupSystemDatabaseReport, BackupTargetPublicationReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupNamespaceScope, BackupNativeMetadataReport, BackupOriginalDatabaseReport,
+    BackupPublishedRegistryReport, BackupPublishedScopeTargetReport, BackupPublishedScopesReport,
+    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupRootDatabasesReport,
+    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
+    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub(in crate::engine) use registration::{
     BackupRegistryProjection, MAX_DECISION_BYTES, PreparedBackupRegistry,

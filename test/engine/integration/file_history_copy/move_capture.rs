@@ -80,10 +80,16 @@ fn move_capture_retains_all_branch_frontiers_without_copy_or_source_deletion() {
             .engine
             .recheck_file_history_move(&capture, &HistoryWindowCancellation::new())
             .unwrap();
-        assert_eq!(current.capture().source_file_id().as_str(), original.file_id);
+        assert_eq!(
+            current.capture().source_file_id().as_str(),
+            original.file_id
+        );
         assert_eq!(fixture.engine.state().sequence, sequence);
         assert_eq!(fixture.engine.state().operations.len(), operations);
-        assert_eq!(entry(&fixture.engine, &fixture.source, "source.txt"), original);
+        assert_eq!(
+            entry(&fixture.engine, &fixture.source, "source.txt"),
+            original
+        );
         assert!(fixture.engine.file_deletion(&original.file_id).is_none());
         assert!(
             fixture
@@ -164,7 +170,10 @@ fn move_capture_rejects_target_change_and_preserves_source() {
         recheck_error(&fixture.engine, &before),
         ErrorCode::WorkspaceChanged
     );
-    assert_eq!(entry(&fixture.engine, &fixture.source, "source.txt"), original);
+    assert_eq!(
+        entry(&fixture.engine, &fixture.source, "source.txt"),
+        original
+    );
     assert!(fixture.engine.file_deletion(&original.file_id).is_none());
 }
 
@@ -207,8 +216,14 @@ fn move_capture_includes_tag_only_branch_changes() {
         ErrorCode::WorkspaceChanged
     );
     let after = capture(&fixture);
-    assert_ne!(before.source_records_digest(), after.source_records_digest());
-    assert_ne!(before.branch_heads()[&branch], after.branch_heads()[&branch]);
+    assert_ne!(
+        before.source_records_digest(),
+        after.source_records_digest()
+    );
+    assert_ne!(
+        before.branch_heads()[&branch],
+        after.branch_heads()[&branch]
+    );
 }
 
 #[test]
@@ -220,8 +235,7 @@ fn move_capture_includes_new_undone_deletion_audit_with_unchanged_heads() {
         .engine
         .soft_delete_file(DeleteFileRequest {
             target: FileDeletionTarget {
-                repository_id: &HistoryRepositoryId::parse(&fixture.source.repository_id)
-                    .unwrap(),
+                repository_id: &HistoryRepositoryId::parse(&fixture.source.repository_id).unwrap(),
                 file_id: &HistoryFileId::parse(&original.file_id).unwrap(),
                 path: &name_policy::LookupPath::parse(original.path()).unwrap(),
             },
@@ -254,7 +268,10 @@ fn move_capture_includes_new_undone_deletion_audit_with_unchanged_heads() {
     );
     let after = capture(&fixture);
     assert_eq!(before.branch_heads(), after.branch_heads());
-    assert_ne!(before.source_records_digest(), after.source_records_digest());
+    assert_ne!(
+        before.source_records_digest(),
+        after.source_records_digest()
+    );
 }
 
 #[test]
@@ -336,7 +353,10 @@ fn move_capture_cannot_be_reused_after_cold_reopen() {
     let original = entry(&engine, &source, "source.txt");
     drop(engine);
     let engine = Engine::open(&temp.path().join("system")).unwrap();
-    assert_eq!(recheck_error(&engine, &captured), ErrorCode::WorkspaceChanged);
+    assert_eq!(
+        recheck_error(&engine, &captured),
+        ErrorCode::WorkspaceChanged
+    );
     assert_eq!(entry(&engine, &source, "source.txt"), original);
     assert!(engine.file_deletion(&original.file_id).is_none());
     assert!(

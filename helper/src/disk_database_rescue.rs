@@ -49,15 +49,26 @@ pub(crate) fn requires_service_exclusion(command: &Command) -> bool {
 }
 
 fn require_suffix(path: &Path, suffix: &str) -> Result<()> {
-    if !path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.ends_with(suffix)) {
-        return Err(format!("rescue output must end with {suffix}; active database names are forbidden").into());
+    if !path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(suffix))
+    {
+        return Err(format!(
+            "rescue output must end with {suffix}; active database names are forbidden"
+        )
+        .into());
     }
     Ok(())
 }
 
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
-        Command::Export { selection, scope, output } => {
+        Command::Export {
+            selection,
+            scope,
+            output,
+        } => {
             require_suffix(&output, ".disk-db.json")?;
             let material = disk_databases::inspect(&selection, scope)?;
             let bytes = material.archive_bytes()?;
@@ -78,10 +89,15 @@ pub(crate) fn run(command: Command) -> Result<()> {
                 "active_database_installed":false,
             }))
         }
-        Command::Rebuild { archive, identity, source, output } => {
+        Command::Rebuild {
+            archive,
+            identity,
+            source,
+            output,
+        } => {
             require_suffix(&output, ".recovered.sqlite")?;
-            let expected: DiskRegistrationIdentity = storage_engine::decode_strict(
-                &private_io::read_owned(&identity, 64 * 1024)?)?;
+            let expected: DiskRegistrationIdentity =
+                storage_engine::decode_strict(&private_io::read_owned(&identity, 64 * 1024)?)?;
             let bytes = private_io::read_owned(&archive, MAX_DISK_DATABASE_ARCHIVE_BYTES)?;
             let image = reconstruct_disk_database_material(&bytes, &expected, source.engine())?;
             private_io::write_new(&output, image.database_bytes())?;

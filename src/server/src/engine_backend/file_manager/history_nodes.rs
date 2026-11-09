@@ -121,8 +121,12 @@ pub(super) fn unified_history(
     let path_nodes = state
         .file_path_nodes
         .values()
-        .filter(|node| node.file_id == file && node.history_tree_id == history
-            && state.content_states.get(&node.version_id) != Some(&storage_contract::ContentState::Retired))
+        .filter(|node| {
+            node.file_id == file
+                && node.history_tree_id == history
+                && state.content_states.get(&node.version_id)
+                    != Some(&storage_contract::ContentState::Retired)
+        })
         .collect::<Vec<_>>();
     let visible = versions
         .iter()
@@ -132,8 +136,12 @@ pub(super) fn unified_history(
             state
                 .file_metadata_nodes
                 .values()
-                .filter(|node| node.file_id == file && node.history_tree_id == history
-            && state.content_states.get(&node.version_id) != Some(&storage_contract::ContentState::Retired))
+                .filter(|node| {
+                    node.file_id == file
+                        && node.history_tree_id == history
+                        && state.content_states.get(&node.version_id)
+                            != Some(&storage_contract::ContentState::Retired)
+                })
                 .map(|node| node.node_id.as_str()),
         )
         .fold(BTreeMap::<_, usize>::new(), |mut nodes, id| {
@@ -241,12 +249,12 @@ pub(super) fn unified_history(
             })),
         ));
     }
-    for revision in state
-        .file_metadata_nodes
-        .values()
-        .filter(|node| node.file_id == file && node.history_tree_id == history
-            && state.content_states.get(&node.version_id) != Some(&storage_contract::ContentState::Retired))
-    {
+    for revision in state.file_metadata_nodes.values().filter(|node| {
+        node.file_id == file
+            && node.history_tree_id == history
+            && state.content_states.get(&node.version_id)
+                != Some(&storage_contract::ContentState::Retired)
+    }) {
         let body = &state.versions[&revision.version_id];
         let metadata = version_metadata.get(revision.version_id.as_str()).copied();
         let path = paths.get(&revision.node_id);

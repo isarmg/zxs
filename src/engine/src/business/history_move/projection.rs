@@ -5,7 +5,9 @@ use history_copy::{CopyRoute, retained::CopiedLifecycle};
 use json_codec::json;
 
 mod native;
-pub(crate) use native::{KIND as NATIVE_KIND, NativeMoveDraft, NativeMoveCandidate, reject_unclosed_publication};
+pub(crate) use native::{
+    KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, reject_unclosed_publication,
+};
 
 struct ProjectionInput<'a> {
     capture: &'a FileHistoryMoveCapture,
@@ -110,8 +112,7 @@ impl FileHistoryMoveProjection {
     }
 
     pub(crate) fn target_metadata(&self) -> Result<FileHistoryMoveTargetMetadata<'_>> {
-        let history = &self.writes.next.repositories
-            [&self.capture.namespace.target_repository_id]
+        let history = &self.writes.next.repositories[&self.capture.namespace.target_repository_id]
             .history_tree_id;
         let closure = FileHistoryMoveTargetMetadata {
             target: crate::history_package::capture_history_copy(&self.writes.next, history)?,

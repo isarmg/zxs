@@ -447,8 +447,15 @@ async fn chain_publication_rejects_unselected_recipe_and_unsupported_activation_
 
 #[test]
 fn credential_pipe_diagnostics_do_not_echo_malformed_secret_values() {
-    for operation in [Operation::AdministratorReset, Operation::FirstAdministratorCreate] {
-        let error = dispatch(operation, br#"{"password":"do-not-echo-secret","new_password":"do-not-echo-secret"}"#).unwrap_err();
+    for operation in [
+        Operation::AdministratorReset,
+        Operation::FirstAdministratorCreate,
+    ] {
+        let error = dispatch(
+            operation,
+            br#"{"password":"do-not-echo-secret","new_password":"do-not-echo-secret"}"#,
+        )
+        .unwrap_err();
         assert_eq!(error.kind, FailureKind::InvalidRequest);
         assert!(!error.message.contains("do-not-echo-secret"));
     }

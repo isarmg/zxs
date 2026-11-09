@@ -1592,7 +1592,9 @@ impl Backend for EngineBackend {
         node_retirement::resume(self, identity, file, operation)
     }
     fn detached_history(
-        &self, identity: &Identity, request: storage_contract::detached_history::Request,
+        &self,
+        identity: &Identity,
+        request: storage_contract::detached_history::Request,
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::detached_history::Page, ApiError> {
         node_retirement::detached_history(self, identity, request, cancellation)

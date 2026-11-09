@@ -1249,29 +1249,53 @@ fn published_control_requires_durable_retry_before_account_or_storage_admission(
 
 #[test]
 fn exact_offline_activation_rejects_another_original_selection_or_mode() {
-    let f=fixture();
+    let f = fixture();
     initialize(&f.service);
-    let original=request(&f.service,&["one"]);
-    let selected=original.clone();
-    f.service.activate(&admin(),original,|_|Ok(()),|_|Ok(())).unwrap();
+    let original = request(&f.service, &["one"]);
+    let selected = original.clone();
+    f.service
+        .activate(&admin(), original, |_| Ok(()), |_| Ok(()))
+        .unwrap();
     assert!(f.service.initial_activation_matches(&selected).unwrap());
-    let mut other=selected.clone();
-    other.mode=Mode::Production;
+    let mut other = selected.clone();
+    other.mode = Mode::Production;
     assert!(f.service.initial_activation_matches(&other).is_err());
-    assert!(f.service.complete_activation_exact(&admin(),&other,|_|Ok(()),|_|panic!("must not install a mismatched operation")).is_err());
-    let mut other=selected;
-    other.selections[0].root_identity.inode+=1;
+    assert!(
+        f.service
+            .complete_activation_exact(
+                &admin(),
+                &other,
+                |_| Ok(()),
+                |_| panic!("must not install a mismatched operation")
+            )
+            .is_err()
+    );
+    let mut other = selected;
+    other.selections[0].root_identity.inode += 1;
     assert!(f.service.initial_activation_matches(&other).is_err());
 }
 
 #[test]
 fn exact_completed_activation_still_runs_the_offline_materialization_callback() {
-    let f=fixture();
+    let f = fixture();
     initialize(&f.service);
-    let original=request(&f.service,&["one"]);
-    f.service.activate(&admin(),original.clone(),|_|Ok(()),|_|Ok(())).unwrap();
-    let mut called=false;
-    f.service.complete_activation_exact(&admin(),&original,|_|Ok(()),|engine|{called=true;assert_eq!(engine.config().disks.len(),1);Ok(())}).unwrap();
+    let original = request(&f.service, &["one"]);
+    f.service
+        .activate(&admin(), original.clone(), |_| Ok(()), |_| Ok(()))
+        .unwrap();
+    let mut called = false;
+    f.service
+        .complete_activation_exact(
+            &admin(),
+            &original,
+            |_| Ok(()),
+            |engine| {
+                called = true;
+                assert_eq!(engine.config().disks.len(), 1);
+                Ok(())
+            },
+        )
+        .unwrap();
     assert!(called);
     assert!(f.service.activation_admitted().is_ok());
 }

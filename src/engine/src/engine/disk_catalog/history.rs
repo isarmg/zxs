@@ -10,15 +10,14 @@ mod offline;
 pub(super) use offline::fold as fold_prepared;
 pub(in crate::engine::disk_catalog) mod preparation;
 mod replay;
-pub(in crate::engine) use replay::visit_published_prefix;
 pub(super) use maintenance::Maintenance;
 pub use maintenance::{DiskHistoryFailure, DiskHistoryMaintenanceState, DiskHistoryStatus};
 pub use offline::{
-    DiskDatabaseRebuildSource, DiskDatabaseReconstruction, MAX_DISK_DATABASE_ARCHIVE_BYTES,
-    reconstruct_disk_database_material,
-    DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRelation,
-    inspect_disk_database_material,
+    DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRebuildSource,
+    DiskDatabaseReconstruction, DiskDatabaseRelation, MAX_DISK_DATABASE_ARCHIVE_BYTES,
+    inspect_disk_database_material, reconstruct_disk_database_material,
 };
+pub(in crate::engine) use replay::visit_published_prefix;
 
 const MAX_PUBLICATIONS: usize = 2048;
 const MAX_CHANGES: usize = 65_536;
@@ -61,17 +60,21 @@ impl DiskHistoryChange {
     /// manufacture a zero-byte version or borrow a descendant's identity.
     pub fn version_id(&self) -> Option<&str> {
         match self {
-            Self::Entered { after } | Self::Changed { after, .. } => Some(&after.version.version_id),
+            Self::Entered { after } | Self::Changed { after, .. } => {
+                Some(&after.version.version_id)
+            }
             Self::Departed { before } => Some(&before.version.version_id),
-            Self::BackupDirectoryEntered { .. } | Self::BackupDirectoryChanged { .. }
+            Self::BackupDirectoryEntered { .. }
+            | Self::BackupDirectoryChanged { .. }
             | Self::BackupDirectoryDeparted { .. } => None,
         }
     }
 
     fn key(&self) -> (u8, &str, &str, &str, &str) {
         match self {
-            Self::Entered { after } | Self::Changed { after, .. } =>
-                (1, &after.version.version_id, "", "", ""),
+            Self::Entered { after } | Self::Changed { after, .. } => {
+                (1, &after.version.version_id, "", "", "")
+            }
             Self::Departed { before } => (1, &before.version.version_id, "", "", ""),
             Self::BackupDirectoryEntered { after } | Self::BackupDirectoryChanged { after, .. } => {
                 let (repository, history, directory, path) = after.key();

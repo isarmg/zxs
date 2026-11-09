@@ -714,7 +714,11 @@ impl IntegrityScrubPlan {
                             }
                         }
                     }
-                    Some(state @ (ContentState::Purged | ContentState::Migrated | ContentState::Retired)) => {
+                    Some(
+                        state @ (ContentState::Purged
+                        | ContentState::Migrated
+                        | ContentState::Retired),
+                    ) => {
                         match verify_retained_tombstone_observed(
                             &handle.root,
                             &directory,

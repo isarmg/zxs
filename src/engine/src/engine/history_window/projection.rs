@@ -29,7 +29,8 @@ impl<'a> Query<'a> {
 
     pub(super) fn allowed_version(&self, id: &str) -> bool {
         self.state.versions.get(id).is_some_and(|version| {
-            version.file_id == self.scope().file && version.history_tree_id == self.scope().history
+            version.file_id == self.scope().file
+                && version.history_tree_id == self.scope().history
                 && !crate::node_retirement_engine::is_retired(self.state, id)
         })
     }

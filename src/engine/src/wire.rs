@@ -148,7 +148,10 @@ impl Engine {
             )
         })?;
         if crate::node_retirement_engine::is_retired(&self.state, version) {
-            return Err(Error::new(storage_contract::ErrorCode::VersionNotFound, "version is permanently retired"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::VersionNotFound,
+                "version is permanently retired",
+            ));
         }
         if let Some(state) = self.state.content_states.get(version)
             && matches!(state, ContentState::Purged | ContentState::Migrated)

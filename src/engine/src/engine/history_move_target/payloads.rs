@@ -22,18 +22,25 @@ struct Identity<'a> {
 fn identity(file: &ReadFile, version: &FileVersion) -> Result<Vec<u8>> {
     let metadata = file.metadata()?;
     if metadata.nlink() != 1 || metadata.len() != version.logical_size {
-        return Err(Error::new(ErrorCode::ObjectCollision, "move target must be one independent complete original copy"));
+        return Err(Error::new(
+            ErrorCode::ObjectCollision,
+            "move target must be one independent complete original copy",
+        ));
     }
-    encode_metadata(&Identity {
-        format: "file-history-move-original-full-copy",
-        version_id: &version.version_id,
-        device: metadata.dev().to_string(), inode: metadata.ino().to_string(),
-        bytes: metadata.len().to_string(),
-        modified_seconds: metadata.mtime().to_string(),
-        modified_nanoseconds: metadata.mtime_nsec().to_string(),
-        changed_seconds: metadata.ctime().to_string(),
-        changed_nanoseconds: metadata.ctime_nsec().to_string(),
-    }, IDENTITY_BYTES)
+    encode_metadata(
+        &Identity {
+            format: "file-history-move-original-full-copy",
+            version_id: &version.version_id,
+            device: metadata.dev().to_string(),
+            inode: metadata.ino().to_string(),
+            bytes: metadata.len().to_string(),
+            modified_seconds: metadata.mtime().to_string(),
+            modified_nanoseconds: metadata.mtime_nsec().to_string(),
+            changed_seconds: metadata.ctime().to_string(),
+            changed_nanoseconds: metadata.ctime_nsec().to_string(),
+        },
+        IDENTITY_BYTES,
+    )
 }
 
 struct Source<'a> {
@@ -48,7 +55,10 @@ impl FileExt for Source<'_> {
         self.file.read_at(&mut bytes[..count], offset)
     }
     fn write_at(&self, _: &[u8], _: u64) -> std::io::Result<usize> {
-        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "move source is read-only"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "move source is read-only",
+        ))
     }
 }
 
@@ -69,7 +79,10 @@ pub(super) fn prepare(
     let marker_exists = crate::history_package::preparation_path_exists(root, &marker)?;
     if body_exists || marker_exists {
         if !body_exists || !marker_exists {
-            return Err(Error::new(ErrorCode::RecoveryRequired, "partial move copy lacks its original body/identity pair; retained without adoption"));
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "partial move copy lacks its original body/identity pair; retained without adoption",
+            ));
         }
         verify(target, version, cancellation)?;
         root.open_regular(&body)?.sync_all()?;
@@ -80,17 +93,27 @@ pub(super) fn prepare(
     let _source_lease = engine.prepare_content(original)?;
     let source = engine.valid_backup_replica(original)?.open()?;
     root.private_dir(&directory.join("content"))?;
-    crate::history_package::install_preparation_bytes(root, &directory.join("version.json"), &canonical_json(version)?)?;
+    crate::history_package::install_preparation_bytes(
+        root,
+        &directory.join("version.json"),
+        &canonical_json(version)?,
+    )?;
     let copied = verified_full_copy_at(
         root,
-        Source { file: &source, cancellation },
+        Source {
+            file: &source,
+            cancellation,
+        },
         &body,
         version,
         engine.config.max_file_bytes,
-    ).map_err(CopyFailure::into_error)?;
+    )
+    .map_err(CopyFailure::into_error)?;
     copied.check_at(root, &body)?;
     crate::history_package::install_preparation_bytes(
-        root, &directory.join("checksums.bin"), &copied.checksums().encode()?,
+        root,
+        &directory.join("checksums.bin"),
+        &copied.checksums().encode()?,
     )?;
     let (_, held) = copied.into_parts();
     // Keep the actual copy FD through its identity publication. A matching
@@ -100,7 +123,10 @@ pub(super) fn prepare(
     if identity(&held, version)? != original_identity
         || identity(&root.open_read_regular(&body)?, version)? != original_identity
     {
-        return Err(Error::new(ErrorCode::PreparationStale, "new move copy changed before identity synchronization"));
+        return Err(Error::new(
+            ErrorCode::PreparationStale,
+            "new move copy changed before identity synchronization",
+        ));
     }
     root.sync_dir(&directory)?;
     verify(target, version, cancellation)?;
@@ -119,13 +145,21 @@ pub(super) fn verify(
     let held = root.open_read_regular(&body)?;
     let stamp = identity(&held, version)?;
     if root.read_bytes(&directory.join(IDENTITY), IDENTITY_BYTES)? != stamp {
-        return Err(Error::new(ErrorCode::PreparationStale, "move target body is no longer the original independently copied inode"));
+        return Err(Error::new(
+            ErrorCode::PreparationStale,
+            "move target body is no longer the original independently copied inode",
+        ));
     }
-    crate::history_package::verify_package_payload_at(root, &directory, version, &mut |_| checkpoint(cancellation))?;
+    crate::history_package::verify_package_payload_at(root, &directory, version, &mut |_| {
+        checkpoint(cancellation)
+    })?;
     if identity(&held, version)? != stamp
         || identity(&root.open_read_regular(&body)?, version)? != stamp
     {
-        return Err(Error::new(ErrorCode::PreparationStale, "move target body changed during complete verification"));
+        return Err(Error::new(
+            ErrorCode::PreparationStale,
+            "move target body changed during complete verification",
+        ));
     }
     target.check_names()?;
     Ok(blake3::hash(&stamp).to_hex().to_string())

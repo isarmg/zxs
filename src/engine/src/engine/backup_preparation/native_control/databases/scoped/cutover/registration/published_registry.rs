@@ -299,7 +299,8 @@ pub(super) struct NamespaceInputs<'a> {
     pub(super) candidate: &'a crate::engine::membership_transition::PreparedBackupFirstCandidate,
     pub(super) registry: &'a crate::VerifiedDiskRegistry,
     pub(super) published: &'a crate::history_package::AdmittedState,
-    pub(super) publication: &'a crate::engine::membership_transition::PreparedBackupFirstPublication,
+    pub(super) publication:
+        &'a crate::engine::membership_transition::PreparedBackupFirstPublication,
 }
 
 pub(super) fn with_archive_namespaces<T>(
@@ -317,22 +318,21 @@ pub(super) fn with_archive_namespaces<T>(
     let mut replay = crate::engine::disk_registry::current::backup::BackupNamespaceReplay::new(
         inputs.candidate,
     )?;
-    let (control, _) =
-        crate::engine::backup_preparation::native_control::archive::read_observed(
-            &target.root,
-            job,
-            &prepared
-                .task
-                .installation
-                .evidence
-                .task
-                .scoped
-                .objects
-                .native
-                .archive_hash,
-            stop,
-            &mut |_, candidate, _, state| replay.observe(candidate, state),
-        )?;
+    let (control, _) = crate::engine::backup_preparation::native_control::archive::read_observed(
+        &target.root,
+        job,
+        &prepared
+            .task
+            .installation
+            .evidence
+            .task
+            .scoped
+            .objects
+            .native
+            .archive_hash,
+        stop,
+        &mut |_, candidate, _, state| replay.observe(candidate, state),
+    )?;
     if control.state_hash != prepared.source_evidence().state_hash()
         || inputs.candidate.candidate().previous_snapshot.as_deref()
             != Some(control.snapshot_hash.as_str())

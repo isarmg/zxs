@@ -215,14 +215,23 @@ impl Entry {
     }
     pub(super) fn retained(file: &storage_contract::detached_history::File) -> Self {
         Self {
-            preview: false, entry_id: EntryIdentity::Retained(file.file_id.clone()),
-            path: DisplayPath { text: file.recorded_name.clone(), key: name_policy::path_key(&file.recorded_name) },
-            body: Body::File {
-                file_id: file.file_id.to_string(), size: file.representative_size,
-                version_id: Some(file.representative_version_id.to_string()),
-                node_id: file.representative_version_id.to_string(), ownership: Ownership::Materialized,
+            preview: false,
+            entry_id: EntryIdentity::Retained(file.file_id.clone()),
+            path: DisplayPath {
+                text: file.recorded_name.clone(),
+                key: name_policy::path_key(&file.recorded_name),
             },
-            location: None, note: None, backup: false, read_only: true,
+            body: Body::File {
+                file_id: file.file_id.to_string(),
+                size: file.representative_size,
+                version_id: Some(file.representative_version_id.to_string()),
+                node_id: file.representative_version_id.to_string(),
+                ownership: Ownership::Materialized,
+            },
+            location: None,
+            note: None,
+            backup: false,
+            read_only: true,
         }
     }
     pub(crate) fn name(&self) -> &str {

@@ -374,10 +374,20 @@ impl Engine {
     /// Only the exact branch set frozen by a complete terminal decision may be
     /// read as immutable evidence instead of a live HEAD. Every other purge
     /// admission, including leases, directories, Git and workspaces, is unchanged.
-    pub(crate) fn check_retirement_purge(&self, history: &str, versions: &[String], decision: &crate::node_retirement_engine::Decision) -> Result<()> {
+    pub(crate) fn check_retirement_purge(
+        &self,
+        history: &str,
+        versions: &[String],
+        decision: &crate::node_retirement_engine::Decision,
+    ) -> Result<()> {
         self.check_purge_with_archived(history, versions, &decision.archived_branch_ids())
     }
-    fn check_purge_with_archived(&self, history: &str, versions: &[String], archived: &BTreeSet<String>) -> Result<()> {
+    fn check_purge_with_archived(
+        &self,
+        history: &str,
+        versions: &[String],
+        archived: &BTreeSet<String>,
+    ) -> Result<()> {
         let selected = versions.iter().collect::<BTreeSet<_>>();
         let reads = self
             .reads
@@ -391,7 +401,9 @@ impl Engine {
             self.state
                 .branches
                 .values()
-                .filter(|branch| branch.state == BranchState::Active && !archived.contains(&branch.branch_id))
+                .filter(|branch| {
+                    branch.state == BranchState::Active && !archived.contains(&branch.branch_id)
+                })
                 .filter_map(|branch| self.state.commits.get(&branch.head_commit_id))
                 .flat_map(|commit| &commit.entries)
                 .filter(|entry| selected.contains(&entry.version_id))
@@ -476,12 +488,12 @@ impl Engine {
     pub(crate) fn cleanup_purged(&mut self) -> Result<()> {
         self.require_unfenced_membership()?;
         self.require_no_commit_preparation()?;
-        if !self
-            .state
-            .content_states
-            .values()
-            .any(|s| matches!(s, ContentState::Purged | ContentState::Migrated | ContentState::Retired))
-        {
+        if !self.state.content_states.values().any(|s| {
+            matches!(
+                s,
+                ContentState::Purged | ContentState::Migrated | ContentState::Retired
+            )
+        }) {
             return Ok(());
         }
         // Embed the hashed state page and its publication closure in each local
@@ -561,7 +573,8 @@ impl Engine {
         // indefinitely. Re-admit each actual cleanup target at first use, not
         // for every version, retaining the existing unavailable-target skip.
         let mut cleanup_slots = BTreeMap::new();
-        let original_bindings = crate::node_retirement_engine::original_cleanup_bindings(&self.state)?;
+        let original_bindings =
+            crate::node_retirement_engine::original_cleanup_bindings(&self.state)?;
         for (id, state) in &self.state.content_states {
             if *state == ContentState::Available {
                 continue;
@@ -605,21 +618,35 @@ impl Engine {
                 snapshot: snapshot.clone(),
                 content_state_proof,
             };
-            let mut targets = p.route_slot_ids.iter().map(|slot| {
-                (slot.clone(), p.binding_generations[slot])
-            }).collect::<BTreeSet<_>>();
+            let mut targets = p
+                .route_slot_ids
+                .iter()
+                .map(|slot| (slot.clone(), p.binding_generations[slot]))
+                .collect::<BTreeSet<_>>();
             if *state == ContentState::Retired {
-                let bindings = original_bindings.get(id).ok_or_else(|| Error::new(
-                    ErrorCode::PublicationInvalid, "retired body has no permanent original cleanup bindings",
-                ))?;
-                targets.extend(bindings.iter().map(|binding| (binding.slot_id.clone(), binding.binding_generation)));
+                let bindings = original_bindings.get(id).ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::PublicationInvalid,
+                        "retired body has no permanent original cleanup bindings",
+                    )
+                })?;
+                targets.extend(
+                    bindings
+                        .iter()
+                        .map(|binding| (binding.slot_id.clone(), binding.binding_generation)),
+                );
             }
             for (slot, generation) in targets {
                 // Never reopen a withdrawn root or substitute today's disk for
                 // the original binding. The receipt keeps this obligation pending.
-                let Some(d) = self.config.disks.iter().find(|disk| {
-                    disk.slot_id == slot && disk.binding_generation == generation
-                }) else { continue; };
+                let Some(d) = self
+                    .config
+                    .disks
+                    .iter()
+                    .find(|disk| disk.slot_id == slot && disk.binding_generation == generation)
+                else {
+                    continue;
+                };
                 let admitted = cleanup_slots.entry((slot, generation)).or_insert_with(|| {
                     crate::engine::provenance::validate_owned_seal(
                         &self.disk_resources,
@@ -648,13 +675,19 @@ impl Engine {
                     Err(error) => return Err(error),
                 }
                 if *state == ContentState::Retired {
-                    let stored: FileVersion = root.read_json_observed(&dir.join("version.json"), &mut |_| Ok(()))?;
+                    let stored: FileVersion =
+                        root.read_json_observed(&dir.join("version.json"), &mut |_| Ok(()))?;
                     if stored != *v {
-                        return Err(Error::new(ErrorCode::ObjectCorrupt, "retirement cleanup descriptor differs from its retained identity"));
+                        return Err(Error::new(
+                            ErrorCode::ObjectCorrupt,
+                            "retirement cleanup descriptor differs from its retained identity",
+                        ));
                     }
                     let metadata = crate::engine::provenance::MetadataReadContext::for_disk(
-                        &self.config, &handle.seal,
-                        d.metadata_member.then_some(self.metadata_integrity.as_ref()),
+                        &self.config,
+                        &handle.seal,
+                        d.metadata_member
+                            .then_some(self.metadata_integrity.as_ref()),
                     );
                     verify_retained_version_publication_at(root, &dir, v, Some(&metadata))?;
                 }
@@ -663,7 +696,9 @@ impl Engine {
                 // unlink includes its parent-directory sync. Do not certify a
                 // single chosen path as complete cleanup of both locations.
                 for _ in 0..2 {
-                    match crate::container_storage::content_location_at(root, &dir, v, &mut |_| Ok(()))? {
+                    match crate::container_storage::content_location_at(root, &dir, v, &mut |_| {
+                        Ok(())
+                    })? {
                         crate::container_storage::ContentLocation::Present(content) => {
                             root.remove_file_if_present_synced(&content)?;
                         }

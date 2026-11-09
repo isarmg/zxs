@@ -180,14 +180,14 @@ pub use engine::{
     verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
+/// Canonical disk-slot syntax for trusted local maintenance request boundaries.
+/// This validates only a name, never a disk identity or permission to admit it.
+pub use name_policy::validate_slot;
 pub use protection::{
     BackupConfigurationRequest, PlacementConfigurationRequest, PlacementRuleUpdate,
     ProtectionPolicyUpdate, PublishedBackupDirectory, RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };
-/// Canonical disk-slot syntax for trusted local maintenance request boundaries.
-/// This validates only a name, never a disk identity or permission to admit it.
-pub use name_policy::validate_slot;
 pub use storage_contract::*;
 pub use wire::{commit_request_digest, manifest_hash as workspace_manifest_hash};
 #[cfg(test)]

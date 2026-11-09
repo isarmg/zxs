@@ -379,9 +379,15 @@ impl Engine {
                 "branch is not writable",
             ));
         }
-        if branch.file_id.as_deref().is_some_and(|file| crate::node_retirement_engine::is_terminal_file(&self.state, file)) {
-            return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound,
-                "file identity is permanently terminated; retained branch HEADs are authentication evidence only"));
+        if branch
+            .file_id
+            .as_deref()
+            .is_some_and(|file| crate::node_retirement_engine::is_terminal_file(&self.state, file))
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::FileNodeNotFound,
+                "file identity is permanently terminated; retained branch HEADs are authentication evidence only",
+            ));
         }
         let head_entries = self.list_tree_ref(branch_id)?;
         let w = Workspace {

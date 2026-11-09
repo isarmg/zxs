@@ -73,8 +73,10 @@ pub(crate) fn read(receipt: &OperationResult, file: &str) -> Result<CopiedLifecy
     }
     bounded(raw)?;
     let value: CopiedLifecycle = json_codec::from_value(raw.clone())?;
-    if !matches!(receipt.kind.as_str(), RETAINED_KIND | crate::business::FILE_HISTORY_MOVE_KIND)
-        || value.events.len() > 65_536
+    if !matches!(
+        receipt.kind.as_str(),
+        RETAINED_KIND | crate::business::FILE_HISTORY_MOVE_KIND
+    ) || value.events.len() > 65_536
         || value.file_id != file
         || receipt.result["file_id"].as_str() != Some(file)
         || receipt.result["source_file_id"].as_str() != Some(value.source_file_id.as_str())

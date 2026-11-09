@@ -35,9 +35,13 @@ pub use permanent_removal::{
     RemovalParentProjection,
 };
 pub use permanent_removal_cleanup::{
-    PermanentRemovalCleanupObservation, RemovalCleanupScope, RemovalReplicaCleanup, RemovalReplicaCleanupState,
+    PermanentRemovalCleanupObservation, RemovalCleanupScope, RemovalReplicaCleanup,
+    RemovalReplicaCleanupState,
 };
-pub use read::{ContentMatchRead, FileHistorySourceRead, HistoryWindowRead, PermanentNodeRetirementOutcome, SharedHistoryRead};
+pub use read::{
+    ContentMatchRead, FileHistorySourceRead, HistoryWindowRead, PermanentNodeRetirementOutcome,
+    SharedHistoryRead,
+};
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/history_window_oracle_tests.rs"]

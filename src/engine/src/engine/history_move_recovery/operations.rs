@@ -7,7 +7,12 @@ pub(super) fn metadata_members(engine: &Engine) -> Result<Vec<DiskRegistrationId
         .map(|disk| (disk.slot_id, disk))
         .collect();
     let mut members = Vec::new();
-    for disk in engine.config.disks.iter().filter(|disk| disk.metadata_member) {
+    for disk in engine
+        .config
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member)
+    {
         let current = registered.get(disk.slot_id.as_str()).ok_or_else(|| {
             stale("move recovery requires every original metadata member to remain registered")
         })?;
@@ -23,14 +28,19 @@ pub(super) fn metadata_members(engine: &Engine) -> Result<Vec<DiskRegistrationId
     }
     members.sort_by(|left, right| left.disk_id.cmp(&right.disk_id));
     if members.is_empty() || members.len() > MAX_ITEMS {
-        return Err(stale("move recovery requires a bounded nonempty metadata membership"));
+        return Err(stale(
+            "move recovery requires a bounded nonempty metadata membership",
+        ));
     }
     Ok(members)
 }
 
 fn checkpoint(cancellation: &HistoryWindowCancellation) -> Result<()> {
     if cancellation.is_cancelled() {
-        return Err(Error::new(ErrorCode::OperationAborted, "move recovery preparation cancelled"));
+        return Err(Error::new(
+            ErrorCode::OperationAborted,
+            "move recovery preparation cancelled",
+        ));
     }
     Ok(())
 }
@@ -91,14 +101,18 @@ impl Engine {
         self.recheck_file_history_move_projection(projection, cancellation)?;
         let expected = RecoveryRecord::capture(self, projection)?;
         if &expected.digest()? != reviewed {
-            return Err(stale("target preparation differs from the reviewed joint envelope"));
+            return Err(stale(
+                "target preparation differs from the reviewed joint envelope",
+            ));
         }
         let system = persist::Store::system(self)?;
-        let original = system.read()?.ok_or_else(|| {
-            stale("target preparation has no original system recovery envelope")
-        })?;
+        let original = system
+            .read()?
+            .ok_or_else(|| stale("target preparation has no original system recovery envelope"))?;
         if original.record != expected {
-            return Err(stale("target preparation differs from the original system envelope"));
+            return Err(stale(
+                "target preparation differs from the original system envelope",
+            ));
         }
         for member in &expected.metadata_members {
             checkpoint(cancellation)?;
@@ -136,7 +150,9 @@ impl Engine {
                 stale("move recovery system envelope disappeared before the final barrier")
             })?;
             if retained.record != record {
-                return Err(corrupt("move recovery system envelope changed during replication"));
+                return Err(corrupt(
+                    "move recovery system envelope changed during replication",
+                ));
             }
             retained.check_names(&system)?;
             self.recheck_file_history_move_projection(projection, cancellation)?;
@@ -147,7 +163,9 @@ impl Engine {
 
     /// Inspect the bounded system envelope only. The expected member count is
     /// not a health report, quorum, target proof or operation-success receipt.
-    pub fn inspect_file_history_move_recovery(&self) -> Result<Option<FileHistoryMoveRecoveryInfo>> {
+    pub fn inspect_file_history_move_recovery(
+        &self,
+    ) -> Result<Option<FileHistoryMoveRecoveryInfo>> {
         persist::Store::system(self)?
             .read()?
             .map(|observed| observed.record.info())
@@ -172,14 +190,19 @@ impl Engine {
         self.require_unfenced_membership()?;
         let system = persist::Store::system(self)?;
         let observed = system.read()?.ok_or_else(|| {
-            Error::new(ErrorCode::PlanNotFound, "no original joint move envelope is retained")
+            Error::new(
+                ErrorCode::PlanNotFound,
+                "no original joint move envelope is retained",
+            )
         })?;
         let record = &observed.record;
         if record.operation_id != operation
             || record.principal != principal
             || &record.digest()? != reviewed
         {
-            return Err(stale("move recovery requires the original operation, actor and reviewed envelope"));
+            return Err(stale(
+                "move recovery requires the original operation, actor and reviewed envelope",
+            ));
         }
         record.require_current(self)?;
         let capture = self.capture_retained_file_history_move(
@@ -200,7 +223,9 @@ impl Engine {
             cancellation,
         )?;
         if RecoveryRecord::capture(self, &projection)? != *record {
-            return Err(stale("the independently rebuilt complete move write set differs from its original envelope"));
+            return Err(stale(
+                "the independently rebuilt complete move write set differs from its original envelope",
+            ));
         }
         observed.check_names(&system)?;
         // Synchronize the same system bytes too: a prior failure may have

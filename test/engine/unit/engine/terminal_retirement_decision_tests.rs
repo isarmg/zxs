@@ -2893,12 +2893,15 @@ fn installed_chain_selector_fixture() -> (
 ) {
     let (mut fixture, operation, proposal, _) = decided_chain_generation_fixture();
     let directory = retained_chain_directory(&fixture);
-    let status = fixture.terminal.prepare_chain_generation_log(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).unwrap();
+    let status = fixture
+        .terminal
+        .prepare_chain_generation_log(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
     (fixture, operation, proposal, status)
 }
 #[test]
@@ -2911,13 +2914,19 @@ fn selected_chain_generation_reads_actual_current_without_active_marker_or_stop(
     let generation = chain_generation_path(&fixture, &before);
     let log = fs::read(generation.join("journal.bin")).unwrap();
     let directory = retained_chain_directory(&fixture);
-    let status = fixture.terminal.select_chain_generation(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).unwrap();
-    assert_eq!(status.phase, crate::TerminalChainReadmissionPhase::GenerationSelected);
+    let status = fixture
+        .terminal
+        .select_chain_generation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::GenerationSelected
+    );
     let report = status.generation_selection.unwrap();
     assert!(report.target_reverified_this_call && report.installed_current_reverified_this_call);
     assert!(!report.stop_consumed && !report.locator_installed && !report.active_writer_admitted);
@@ -2927,16 +2936,34 @@ fn selected_chain_generation_reads_actual_current_without_active_marker_or_stop(
     assert_eq!(current.publication_hash, report.publication_hash);
     assert_eq!(current.seal_hash, report.seal_hash);
     assert!(current.frozen_namespace_admitted && current.target_reverified_this_call);
-    assert!(!current.active_engine_admitted && !current.target_writer_admitted && !current.stop_consumed);
+    assert!(
+        !current.active_engine_admitted
+            && !current.target_writer_admitted
+            && !current.stop_consumed
+    );
     let descriptor = fs::read(generation.join("chain-authority.json")).unwrap();
-    assert_eq!(descriptor, fs::read(fixture.terminal.store.operation().path().join("chain-generation-selector.json")).unwrap());
+    assert_eq!(
+        descriptor,
+        fs::read(
+            fixture
+                .terminal
+                .store
+                .operation()
+                .path()
+                .join("chain-generation-selector.json")
+        )
+        .unwrap()
+    );
     let directory = retained_chain_directory(&fixture);
-    let reader = fixture.terminal.open_chain_selected_generation(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).unwrap();
+    let reader = fixture
+        .terminal
+        .open_chain_selected_generation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
     assert_eq!(reader.report().unwrap().selector_hash, report.selector_hash);
     let state = fixture.terminal.published_state();
     for id in state.branches.keys() {
@@ -2948,7 +2975,10 @@ fn selected_chain_generation_reads_actual_current_without_active_marker_or_stop(
     drop(reader);
     assert_eq!(fs::read(generation.join("journal.bin")).unwrap(), log);
     assert_eq!(fs::read(root.join("disk.json")).unwrap(), seal);
-    assert_eq!(optional_chain_marker(&root.join("metadata/pool-membership/generation.json")), marker);
+    assert_eq!(
+        optional_chain_marker(&root.join("metadata/pool-membership/generation.json")),
+        marker
+    );
     assert_eq!(locator_bytes(&fixture.system()), locator);
     assert!(fixture.terminal.writer_locks().is_err());
 }
@@ -2957,32 +2987,71 @@ fn chain_selector_cold_status_does_not_probe_and_reader_does_not_repair_completi
     let (mut fixture, operation, proposal, before) = installed_chain_selector_fixture();
     let generation = chain_generation_path(&fixture, &before);
     let directory = retained_chain_directory(&fixture);
-    fixture.terminal.select_chain_generation("admin", operation, &proposal.preparation().proposal_digest, directory).unwrap();
+    fixture
+        .terminal
+        .select_chain_generation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
     let root = fixture.config.disks[0].root.clone();
     let disk_id = fixture.config.disks[0].disk_id.clone();
     let system = fixture.system();
-    let receipt = fixture.terminal.store.operation().path().join("chain-generation-selector.json");
+    let receipt = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join("chain-generation-selector.json");
     let saved = fs::read(&receipt).unwrap();
     drop(fixture.terminal);
     fs::rename(&root, root.with_extension("selector-held")).unwrap();
     fs::write(&root, b"status must not probe").unwrap();
     let mut cold = TerminalManagement::open(&system).unwrap();
     let status = cold.chain_readmission_status().unwrap().unwrap();
-    assert_eq!(status.phase, crate::TerminalChainReadmissionPhase::GenerationSelected);
+    assert_eq!(
+        status.phase,
+        crate::TerminalChainReadmissionPhase::GenerationSelected
+    );
     let report = status.generation_selection.unwrap();
     assert!(!report.target_reverified_this_call);
     assert!(report.installed_current.is_none());
     fs::remove_file(&root).unwrap();
     fs::rename(root.with_extension("selector-held"), &root).unwrap();
     fs::remove_file(&receipt).unwrap();
-    assert_eq!(cold.chain_readmission_status().unwrap().unwrap().phase, crate::TerminalChainReadmissionPhase::GenerationSelectionPending);
-    let directory = || crate::PendingMemberDirectory { disk_id: disk_id.clone(), directory: fs::File::open(&root).unwrap() };
-    assert!(cold.open_chain_selected_generation("admin", operation, &proposal.preparation().proposal_digest, directory()).is_err());
+    assert_eq!(
+        cold.chain_readmission_status().unwrap().unwrap().phase,
+        crate::TerminalChainReadmissionPhase::GenerationSelectionPending
+    );
+    let directory = || crate::PendingMemberDirectory {
+        disk_id: disk_id.clone(),
+        directory: fs::File::open(&root).unwrap(),
+    };
+    assert!(
+        cold.open_chain_selected_generation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory()
+        )
+        .is_err()
+    );
     assert!(!receipt.exists());
     let authority = fs::read(generation.join("chain-authority.json")).unwrap();
-    cold.select_chain_generation("admin", operation, &proposal.preparation().proposal_digest, directory()).unwrap();
+    cold.select_chain_generation(
+        "admin",
+        operation,
+        &proposal.preparation().proposal_digest,
+        directory(),
+    )
+    .unwrap();
     assert_eq!(fs::read(&receipt).unwrap(), saved);
-    assert_eq!(fs::read(generation.join("chain-authority.json")).unwrap(), authority);
+    assert_eq!(
+        fs::read(generation.join("chain-authority.json")).unwrap(),
+        authority
+    );
     drop(cold);
     assert!(Engine::open(&system).is_err());
 }
@@ -2991,13 +3060,22 @@ fn chain_selector_completed_missing_target_or_changed_epoch_is_not_overwritten()
     for corruption in ["missing", "epoch"] {
         let (mut fixture, operation, proposal, before) = installed_chain_selector_fixture();
         let directory = retained_chain_directory(&fixture);
-        fixture.terminal.select_chain_generation("admin", operation, &proposal.preparation().proposal_digest, directory).unwrap();
+        fixture
+            .terminal
+            .select_chain_generation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .unwrap();
         let path = chain_generation_path(&fixture, &before).join("chain-authority.json");
         let changed = if corruption == "missing" {
             fs::remove_file(&path).unwrap();
             None
         } else {
-            let mut value: json_codec::Value = crate::decode_strict(&fs::read(&path).unwrap()).unwrap();
+            let mut value: json_codec::Value =
+                crate::decode_strict(&fs::read(&path).unwrap()).unwrap();
             value["plan"]["planned_epoch"] = "0".repeat(64).into();
             let bytes = crate::canonical_json(&value).unwrap();
             fs::write(&path, &bytes).unwrap();
@@ -3005,7 +3083,17 @@ fn chain_selector_completed_missing_target_or_changed_epoch_is_not_overwritten()
         };
         let locator = locator_bytes(&fixture.system());
         let directory = retained_chain_directory(&fixture);
-        assert!(fixture.terminal.select_chain_generation("admin", operation, &proposal.preparation().proposal_digest, directory).is_err());
+        assert!(
+            fixture
+                .terminal
+                .select_chain_generation(
+                    "admin",
+                    operation,
+                    &proposal.preparation().proposal_digest,
+                    directory
+                )
+                .is_err()
+        );
         assert_eq!(optional_chain_marker(&path), changed);
         assert_eq!(locator_bytes(&fixture.system()), locator);
     }
@@ -3014,55 +3102,125 @@ fn chain_selector_completed_missing_target_or_changed_epoch_is_not_overwritten()
 fn chain_selector_requires_completed_generation_and_rejects_unowned_target_descriptor() {
     let (mut fixture, operation, proposal, before) = decided_chain_generation_fixture();
     let directory = retained_chain_directory(&fixture);
-    assert!(fixture.terminal.select_chain_generation("admin", operation, &proposal.preparation().proposal_digest, directory).is_err());
-    let request = fixture.terminal.store.operation().path().join("chain-generation-selector-request.json");
+    assert!(
+        fixture
+            .terminal
+            .select_chain_generation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory
+            )
+            .is_err()
+    );
+    let request = fixture
+        .terminal
+        .store
+        .operation()
+        .path()
+        .join("chain-generation-selector-request.json");
     assert!(!request.exists());
     let directory = retained_chain_directory(&fixture);
-    fixture.terminal.prepare_chain_generation_log("admin", operation, &proposal.preparation().proposal_digest, directory).unwrap();
+    fixture
+        .terminal
+        .prepare_chain_generation_log(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
     let directory = retained_chain_directory(&fixture);
-    fixture.terminal.select_chain_generation("admin", operation, &proposal.preparation().proposal_digest, directory).unwrap();
+    fixture
+        .terminal
+        .select_chain_generation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
     let generation = chain_generation_path(&fixture, &before);
     let descriptor = fs::read(generation.join("chain-authority.json")).unwrap();
     fs::remove_file(&request).unwrap();
-    fs::remove_file(fixture.terminal.store.operation().path().join("chain-generation-selector.json")).unwrap();
+    fs::remove_file(
+        fixture
+            .terminal
+            .store
+            .operation()
+            .path()
+            .join("chain-generation-selector.json"),
+    )
+    .unwrap();
     let directory = retained_chain_directory(&fixture);
-    assert!(fixture.terminal.select_chain_generation("admin", operation, &proposal.preparation().proposal_digest, directory).is_err());
+    assert!(
+        fixture
+            .terminal
+            .select_chain_generation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory
+            )
+            .is_err()
+    );
     assert!(!request.exists());
-    assert_eq!(fs::read(generation.join("chain-authority.json")).unwrap(), descriptor);
+    assert_eq!(
+        fs::read(generation.join("chain-authority.json")).unwrap(),
+        descriptor
+    );
     let directory = retained_chain_directory(&fixture);
-    assert!(fixture.terminal.prepare_chain_generation_log(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).is_err());
+    assert!(
+        fixture
+            .terminal
+            .prepare_chain_generation_log(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
     assert!(!request.exists());
-    assert_eq!(fs::read(generation.join("chain-authority.json")).unwrap(), descriptor);
+    assert_eq!(
+        fs::read(generation.join("chain-authority.json")).unwrap(),
+        descriptor
+    );
 }
 
 #[test]
 fn chain_selected_reader_never_falls_back_after_installed_object_is_removed() {
     let (mut fixture, operation, proposal, before) = installed_chain_selector_fixture();
     let directory = retained_chain_directory(&fixture);
-    fixture.terminal.select_chain_generation(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).unwrap();
+    fixture
+        .terminal
+        .select_chain_generation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
     let directory = retained_chain_directory(&fixture);
-    let reader = fixture.terminal.open_chain_selected_generation(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).unwrap();
+    let reader = fixture
+        .terminal
+        .open_chain_selected_generation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
     let report = reader.report().unwrap();
     let installed = crate::journal::object_path(
-        &fixture.config.disks[0], "candidate", &before.activation.as_ref().unwrap().candidate_hash,
+        &fixture.config.disks[0],
+        "candidate",
+        &before.activation.as_ref().unwrap().candidate_hash,
     );
     let isolated = chain_first_object(
-        &chain_first_target(&fixture, &before), "candidate", &before.activation.as_ref().unwrap().candidate_hash,
+        &chain_first_target(&fixture, &before),
+        "candidate",
+        &before.activation.as_ref().unwrap().candidate_hash,
     );
     let bytes = fs::read(&installed).unwrap();
     assert_eq!(fs::read(&isolated).unwrap(), bytes);
@@ -3075,14 +3233,23 @@ fn chain_selected_reader_never_falls_back_after_installed_object_is_removed() {
     assert_eq!(fs::read(&isolated).unwrap(), bytes);
     drop(reader);
     let directory = retained_chain_directory(&fixture);
-    assert!(fixture.terminal.select_chain_generation(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).is_err());
+    assert!(
+        fixture
+            .terminal
+            .select_chain_generation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
     assert!(!installed.exists());
-    let historical = fixture.terminal.chain_readmission_status().unwrap().unwrap();
+    let historical = fixture
+        .terminal
+        .chain_readmission_status()
+        .unwrap()
+        .unwrap();
     let historical = historical.generation_selection.unwrap();
     assert_eq!(historical.selector_hash, report.selector_hash);
     assert!(historical.installed_current.is_none());
@@ -3092,12 +3259,15 @@ fn chain_selected_reader_never_falls_back_after_installed_object_is_removed() {
 fn chain_selector_rejects_a_missing_source_request_without_mutating_target() {
     let (mut fixture, operation, proposal, before) = installed_chain_selector_fixture();
     let directory = retained_chain_directory(&fixture);
-    fixture.terminal.select_chain_generation(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).unwrap();
+    fixture
+        .terminal
+        .select_chain_generation(
+            "admin",
+            operation,
+            &proposal.preparation().proposal_digest,
+            directory,
+        )
+        .unwrap();
     let generation = chain_generation_path(&fixture, &before);
     let authority = fs::read(generation.join("chain-authority.json")).unwrap();
     let source = fixture.terminal.store.operation().path().to_path_buf();
@@ -3106,20 +3276,36 @@ fn chain_selector_rejects_a_missing_source_request_without_mutating_target() {
     fs::remove_file(&request).unwrap();
     assert!(fixture.terminal.chain_readmission_status().is_err());
     let directory = retained_chain_directory(&fixture);
-    assert!(fixture.terminal.open_chain_selected_generation(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).is_err());
+    assert!(
+        fixture
+            .terminal
+            .open_chain_selected_generation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
     let directory = retained_chain_directory(&fixture);
-    assert!(fixture.terminal.select_chain_generation(
-        "admin",
-        operation,
-        &proposal.preparation().proposal_digest,
-        directory,
-    ).is_err());
+    assert!(
+        fixture
+            .terminal
+            .select_chain_generation(
+                "admin",
+                operation,
+                &proposal.preparation().proposal_digest,
+                directory,
+            )
+            .is_err()
+    );
     assert!(!request.exists());
-    assert_eq!(fs::read(generation.join("chain-authority.json")).unwrap(), authority);
-    assert_eq!(fs::read(source.join("chain-generation-selector.json")).unwrap(), complete);
+    assert_eq!(
+        fs::read(generation.join("chain-authority.json")).unwrap(),
+        authority
+    );
+    assert_eq!(
+        fs::read(source.join("chain-generation-selector.json")).unwrap(),
+        complete
+    );
 }

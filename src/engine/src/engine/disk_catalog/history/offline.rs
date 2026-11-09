@@ -183,11 +183,21 @@ pub fn inspect_disk_database_material(
 }
 
 fn no_sidecars(root: &DiskRoot, scope: DiskDatabaseReadScope) -> Result<()> {
-    for (selected, leaf) in [(scope.current(), DISK_DATABASE_NAME), (scope.history(), DISK_HISTORY_DATABASE_NAME)] {
-        if !selected { continue; }
+    for (selected, leaf) in [
+        (scope.current(), DISK_DATABASE_NAME),
+        (scope.history(), DISK_HISTORY_DATABASE_NAME),
+    ] {
+        if !selected {
+            continue;
+        }
         for suffix in ["-wal", "-shm", "-journal"] {
-            if root.optional_metadata(&root.path().join(format!("{leaf}{suffix}")))?.is_some() {
-                return Err(invalid("selected disk database has a live or unknown SQLite sidecar; preserve all files"));
+            if root
+                .optional_metadata(&root.path().join(format!("{leaf}{suffix}")))?
+                .is_some()
+            {
+                return Err(invalid(
+                    "selected disk database has a live or unknown SQLite sidecar; preserve all files",
+                ));
             }
         }
     }
@@ -285,18 +295,24 @@ pub(in crate::engine::disk_catalog) fn fold(
         match &record.change {
             DiskHistoryChange::BackupDirectoryEntered { after } => {
                 if directories.insert(after.key(), after).is_some() {
-                    return Err(invalid("disk history enters an already-present backup directory"));
+                    return Err(invalid(
+                        "disk history enters an already-present backup directory",
+                    ));
                 }
             }
             DiskHistoryChange::BackupDirectoryChanged { before, after } => {
                 if directories.get(&before.key()).copied() != Some(before) {
-                    return Err(invalid("disk directory change has no exact retained predecessor"));
+                    return Err(invalid(
+                        "disk directory change has no exact retained predecessor",
+                    ));
                 }
                 directories.insert(after.key(), after);
             }
             DiskHistoryChange::BackupDirectoryDeparted { before } => {
                 if directories.remove(&before.key()) != Some(before) {
-                    return Err(invalid("disk directory departure has no exact retained predecessor"));
+                    return Err(invalid(
+                        "disk directory departure has no exact retained predecessor",
+                    ));
                 }
             }
             DiskHistoryChange::Entered { after } => {
@@ -374,7 +390,10 @@ fn compare_current(
     current: &DiskCatalogSnapshot,
 ) -> Result<()> {
     if !current.versions.iter().eq(active.values().copied())
-        || !current.backup_directories.iter().eq(directories.values().copied())
+        || !current
+            .backup_directories
+            .iter()
+            .eq(directories.values().copied())
     {
         return Err(invalid(
             "current disk catalog differs from its complete local historical fold",

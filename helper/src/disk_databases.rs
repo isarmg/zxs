@@ -7,7 +7,10 @@ use platform_io::fs_safety::{
     PrivateDirectory,
     linux::{MountPolicy, OpenAt2Root},
 };
-use std::{io::Write, path::{Path, PathBuf}};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 use storage_engine::{
     DiskCatalogMaintenanceState, DiskDatabaseReadScope, DiskHistoryMaintenanceState,
     DiskRegistrationIdentity, Engine, IndexHealth,
@@ -61,7 +64,10 @@ pub(crate) fn inspect(path: &Path, scope: Scope) -> Result<storage_engine::DiskD
         Scope::History => DiskDatabaseReadScope::History,
     };
     Ok(storage_engine::inspect_disk_database_material(
-        directory.into_directory(), path, &selection.expected_identity, scope,
+        directory.into_directory(),
+        path,
+        &selection.expected_identity,
+        scope,
     )?)
 }
 
@@ -113,7 +119,11 @@ pub(crate) fn run(options: Options) -> Result<()> {
     }
     if let Some(current) = material.current() {
         for row in &current.backup_directories {
-            writeln!(output, "{}", json_codec::to_string(&Record::CurrentBackupDirectory(row))?)?;
+            writeln!(
+                output,
+                "{}",
+                json_codec::to_string(&Record::CurrentBackupDirectory(row))?
+            )?;
         }
     }
     if let Some(history) = material.history() {
@@ -136,7 +146,11 @@ pub(crate) fn run(options: Options) -> Result<()> {
     }
     if let Some(inventory) = material.history_inventory() {
         for row in &inventory.backup_directories {
-            writeln!(output, "{}", json_codec::to_string(&Record::HistoryInventoryBackupDirectory(row))?)?;
+            writeln!(
+                output,
+                "{}",
+                json_codec::to_string(&Record::HistoryInventoryBackupDirectory(row))?
+            )?;
         }
     }
     writeln!(

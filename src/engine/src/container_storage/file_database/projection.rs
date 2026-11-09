@@ -44,7 +44,9 @@ pub(super) fn move_records(
             !rows.history_copies.is_empty() || !rows.deletion_operations.is_empty()
         })
     {
-        return Err(invalid("move target database requires a fresh undeleted identity"));
+        return Err(invalid(
+            "move target database requires a fresh undeleted identity",
+        ));
     }
     with_events(view, file, events)
 }
@@ -57,7 +59,9 @@ pub(super) fn move_source_records(
     events: &[LifecycleRow],
 ) -> Result<Vec<Record>> {
     if view.state().file_deletions.get(&node.file_id) != Some(node) {
-        return Err(invalid("move source database requires its exact proposed deletion"));
+        return Err(invalid(
+            "move source database requires its exact proposed deletion",
+        ));
     }
     with_events(view, &node.file_id, events)
 }

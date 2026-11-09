@@ -10,15 +10,22 @@ fn read_at(root: &DiskRoot, config: &ValidatedConfig) -> Result<Option<Choice>> 
         let stage_identity = root.directory_identity(&path)?;
         let stage = root.private_child_matching(&path, stage_identity)?;
         let held = HeldRegular::capture(&stage, NAME, MAX_BYTES)?;
-        let choice = held.as_ref().map(|held| Choice::decode(config, held.bytes())).transpose()?;
+        let choice = held
+            .as_ref()
+            .map(|held| Choice::decode(config, held.bytes()))
+            .transpose()?;
         // Hold the original inode through a fresh name/content observation.
         let named = HeldRegular::capture(&stage, NAME, MAX_BYTES)?;
         if held.as_ref().map(HeldRegular::stamp) != named.as_ref().map(HeldRegular::stamp)
             || root.directory_identity(&path)? != stage_identity
         {
-            return Err(invalid("retained move choice or its stage changed during discovery"));
+            return Err(invalid(
+                "retained move choice or its stage changed during discovery",
+            ));
         }
-        if let Some(held) = held { held.check_running()?; }
+        if let Some(held) = held {
+            held.check_running()?;
+        }
         choice
     } else {
         None
@@ -34,8 +41,10 @@ fn retain(selected: &mut Option<Choice>, observed: Option<Choice>) -> Result<()>
     if let Some(observed) = observed {
         match selected {
             Some(original) if *original != observed => {
-                return Err(Error::new(ErrorCode::RecoveryRequired,
-                    "retained move choices disagree; preserve every original replica"));
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "retained move choices disagree; preserve every original replica",
+                ));
             }
             Some(_) => {}
             None => *selected = Some(observed),
@@ -54,7 +63,9 @@ impl Engine {
         let check_writer = || -> Result<()> {
             let named = root.open_regular(&root.path().join("writer.lock"))?;
             if FileIdentity::from_fd(&named)? != writer {
-                return Err(invalid("system writer identity changed during move choice discovery"));
+                return Err(invalid(
+                    "system writer identity changed during move choice discovery",
+                ));
             }
             Ok(())
         };
@@ -62,20 +73,30 @@ impl Engine {
         let mut selected = read_at(&root, &self.config)?;
         check_writer()?;
         for handle in self.disk_resources.handles() {
-            let disk = self.config.io_disks().find(|disk| disk.disk_id == handle.seal.disk_id)
+            let disk = self
+                .config
+                .io_disks()
+                .find(|disk| disk.disk_id == handle.seal.disk_id)
                 .expect("invariant: admitted handle has an I/O configuration binding");
             let lease = handle.root.admit_io()?;
             let check_seal = || -> Result<()> {
-                let seal = validate_seal_observed(&self.config, disk, &mut |_| lease.check_running())?;
+                let seal =
+                    validate_seal_observed(&self.config, disk, &mut |_| lease.check_running())?;
                 validate_stored_seal(&handle.seal, &seal)?;
                 lease.check_running()
             };
             check_seal()?;
             let observed = read_at(&handle.root, &self.config)?;
             if observed.as_ref().is_some_and(|choice| {
-                !choice.record.participants.iter().any(|identity| identity.disk_id == disk.disk_id)
+                !choice
+                    .record
+                    .participants
+                    .iter()
+                    .any(|identity| identity.disk_id == disk.disk_id)
             }) {
-                return Err(invalid("move choice is stored outside its original participant set"));
+                return Err(invalid(
+                    "move choice is stored outside its original participant set",
+                ));
             }
             check_seal()?;
             retain(&mut selected, observed)?;

@@ -130,13 +130,17 @@ impl PermanentNodeRemovalAnalysis {
     }
     /// Conditional terminal frontiers only. Execution still checks current
     /// ownership, root, read leases, workspaces and the complete write set.
-    pub fn archived_branch_heads(&self) -> &[HistoryBranchId] { &self.archived_branch_heads }
+    pub fn archived_branch_heads(&self) -> &[HistoryBranchId] {
+        &self.archived_branch_heads
+    }
     pub fn frozen_files(&self) -> &[HistoryFileId] {
         &self.frozen_files
     }
     /// Conditional stable identities with no live body after this selection.
     /// Existing HEAD/D/context references can still prevent their termination.
-    pub fn last_live_files(&self) -> &[HistoryFileId] { &self.last_live_files }
+    pub fn last_live_files(&self) -> &[HistoryFileId] {
+        &self.last_live_files
+    }
 }
 
 struct Work<'a> {
@@ -240,17 +244,25 @@ pub(super) fn analyze(
     let mut last_live_files = selected_files.clone();
     for version in &graph.versions {
         work.step()?;
-        if !selected.contains(&version.version_id) { last_live_files.remove(&version.file_id); }
+        if !selected.contains(&version.version_id) {
+            last_live_files.remove(&version.file_id);
+        }
     }
     let mut archived_branch_heads = BTreeSet::new();
     for file in &last_live_files {
         work.step()?;
-        match crate::node_retirement_engine::prospective_archived_branches(query.state, file.as_str(), graph.history_tree_id.as_str()) {
+        match crate::node_retirement_engine::prospective_archived_branches(
+            query.state,
+            file.as_str(),
+            graph.history_tree_id.as_str(),
+        ) {
             Ok(branches) => {
                 for branch in branches {
                     work.step()?;
                     let branch = HistoryBranchId::parse(&branch)?;
-                    if affected_branch_heads.contains(&branch) { archived_branch_heads.insert(branch); }
+                    if affected_branch_heads.contains(&branch) {
+                        archived_branch_heads.insert(branch);
+                    }
                 }
             }
             // A known retained namespace/D/path reference leaves its HEAD in
@@ -284,16 +296,29 @@ fn components(
     selected: &BTreeSet<&HistoryVersionId>,
     work: &mut Work<'_>,
 ) -> Result<Vec<Vec<HistoryFileId>>> {
-    let files = graph.files.iter().map(|file| file.file_id.as_str()).collect();
+    let files = graph
+        .files
+        .iter()
+        .map(|file| file.file_id.as_str())
+        .collect();
     let selected = selected.iter().map(|id| id.as_str()).collect();
-    let versions = graph.versions.iter().map(|version| crate::shared_file_topology::Member {
-        file: version.file_id.as_str(),
-        version: version.version_id.as_str(),
-        content: (version.content_hash, version.logical_size),
-    });
+    let versions = graph
+        .versions
+        .iter()
+        .map(|version| crate::shared_file_topology::Member {
+            file: version.file_id.as_str(),
+            version: version.version_id.as_str(),
+            content: (version.content_hash, version.logical_size),
+        });
     crate::shared_file_topology::partition(&files, versions, &selected, || work.step())?
         .into_iter()
-        .map(|component| component.iter().map(|id| HistoryFileId::parse(id)).collect::<storage_contract::Result<_>>().map_err(Into::into))
+        .map(|component| {
+            component
+                .iter()
+                .map(|id| HistoryFileId::parse(id))
+                .collect::<storage_contract::Result<_>>()
+                .map_err(Into::into)
+        })
         .collect()
 }
 

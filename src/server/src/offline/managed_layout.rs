@@ -166,9 +166,7 @@ impl Layout {
             if !missing.remove(text) {
                 return Err("unselected or duplicate discovery material was preserved; the entire explicitly selected root set is required".into());
             }
-            let file = self
-                .disks
-                .open_directory(&name.as_relative())?;
+            let file = self.disks.open_directory(&name.as_relative())?;
             owner(&file, self.account.owner())?;
         }
         if !missing.is_empty() {

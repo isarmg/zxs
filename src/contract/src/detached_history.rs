@@ -1,6 +1,8 @@
 //! Discovery is a bounded read, not authority to detach or retire a file.
+use crate::history_window::{
+    HistoryFileId, HistoryRepositoryId, HistoryRoot, HistoryTreeId, HistoryVersionId,
+};
 use crate::{Error, ErrorCode, Result};
-use crate::history_window::{HistoryFileId, HistoryRepositoryId, HistoryRoot, HistoryTreeId, HistoryVersionId};
 use data_serialization::{Deserialize, Serialize};
 
 pub const PAGE_SIZE: usize = 100;
@@ -14,7 +16,9 @@ pub struct Request {
 }
 impl Request {
     pub fn validate(&self) -> Result<()> {
-        if self.snapshot.is_some() != self.after_file.is_some() { return Err(invalid()); }
+        if self.snapshot.is_some() != self.after_file.is_some() {
+            return Err(invalid());
+        }
         Ok(())
     }
 }
@@ -36,9 +40,13 @@ pub struct File {
 }
 impl File {
     pub fn validate(&self) -> Result<()> {
-        if self.recorded_name.is_empty() || self.recorded_name.len() > MAX_NAME_BYTES
+        if self.recorded_name.is_empty()
+            || self.recorded_name.len() > MAX_NAME_BYTES
             || self.recorded_name.chars().any(char::is_control)
-            || self.retained_versions == 0 { return Err(invalid()); }
+            || self.retained_versions == 0
+        {
+            return Err(invalid());
+        }
         Ok(())
     }
 }
@@ -53,19 +61,38 @@ pub struct Page {
 impl Page {
     pub fn validate(&self, request: &Request) -> Result<()> {
         request.validate()?;
-        if request.snapshot.is_some_and(|snapshot| snapshot != self.snapshot)
+        if request
+            .snapshot
+            .is_some_and(|snapshot| snapshot != self.snapshot)
             || self.files.len() > PAGE_SIZE
-            || self.files.windows(2).any(|pair| pair[0].file_id >= pair[1].file_id)
-            || self.files.iter().any(|file| request.after_file.as_ref().is_some_and(|after| file.file_id <= *after))
+            || self
+                .files
+                .windows(2)
+                .any(|pair| pair[0].file_id >= pair[1].file_id)
+            || self.files.iter().any(|file| {
+                request
+                    .after_file
+                    .as_ref()
+                    .is_some_and(|after| file.file_id <= *after)
+            })
             || self.next_after.as_ref().is_some_and(|next| {
-                self.files.len() != PAGE_SIZE || self.files.last().is_none_or(|file| file.file_id != *next)
-            }) { return Err(invalid()); }
-        for file in &self.files { file.validate()?; }
+                self.files.len() != PAGE_SIZE
+                    || self.files.last().is_none_or(|file| file.file_id != *next)
+            })
+        {
+            return Err(invalid());
+        }
+        for file in &self.files {
+            file.validate()?;
+        }
         Ok(())
     }
 }
 fn invalid() -> Error {
-    Error::new(ErrorCode::InvalidRequest, "invalid detached-history discovery page or cursor")
+    Error::new(
+        ErrorCode::InvalidRequest,
+        "invalid detached-history discovery page or cursor",
+    )
 }
 
 #[cfg(test)]

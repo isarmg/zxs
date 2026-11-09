@@ -8,13 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 mod candidate;
 pub use candidate::FileHistoryMoveCandidatePreparation;
 mod choice;
-pub use choice::FileHistoryMoveJointChoice;
 pub(super) use choice::Choice;
+pub use choice::FileHistoryMoveJointChoice;
 mod materials;
 mod native;
 mod scopes;
-pub use scopes::FileHistoryMoveScopedPreparation;
 pub use native::FileHistoryMoveNativePreparation;
+pub use scopes::FileHistoryMoveScopedPreparation;
 mod store;
 use materials::Materials;
 
@@ -69,14 +69,30 @@ pub struct FileHistoryMoveDecisionInputs {
     proposed_state_hash: String,
 }
 impl FileHistoryMoveDecisionInputs {
-    pub fn operation_id(&self) -> OperationId { self.operation }
-    pub fn digest(&self) -> &FileHistoryMoveDecisionDigest { &self.digest }
-    pub fn metadata_members(&self) -> usize { self.metadata_members }
-    pub fn participant_disks(&self) -> usize { self.participant_disks }
-    pub fn source_database_records_hash(&self) -> &str { &self.source_database_hash }
-    pub fn target_database_records_hash(&self) -> &str { &self.target_database_hash }
-    pub fn proposed_state_hash(&self) -> &str { &self.proposed_state_hash }
-    pub fn outstanding(&self) -> &[FileHistoryMoveDecisionObligation] { &OUTSTANDING }
+    pub fn operation_id(&self) -> OperationId {
+        self.operation
+    }
+    pub fn digest(&self) -> &FileHistoryMoveDecisionDigest {
+        &self.digest
+    }
+    pub fn metadata_members(&self) -> usize {
+        self.metadata_members
+    }
+    pub fn participant_disks(&self) -> usize {
+        self.participant_disks
+    }
+    pub fn source_database_records_hash(&self) -> &str {
+        &self.source_database_hash
+    }
+    pub fn target_database_records_hash(&self) -> &str {
+        &self.target_database_hash
+    }
+    pub fn proposed_state_hash(&self) -> &str {
+        &self.proposed_state_hash
+    }
+    pub fn outstanding(&self) -> &[FileHistoryMoveDecisionObligation] {
+        &OUTSTANDING
+    }
 }
 
 fn invalid(message: &str) -> Error {
@@ -87,7 +103,10 @@ fn limit() -> Error {
 }
 fn checkpoint(cancellation: &HistoryWindowCancellation) -> Result<()> {
     if cancellation.is_cancelled() {
-        return Err(Error::new(ErrorCode::OperationAborted, "joint move input preparation cancelled"));
+        return Err(Error::new(
+            ErrorCode::OperationAborted,
+            "joint move input preparation cancelled",
+        ));
     }
     Ok(())
 }
@@ -144,7 +163,9 @@ impl Engine {
         let targets = self.verify_file_history_move_target(projection, recovery, cancellation)?;
         let materials = Materials::capture(self, projection, recovery, &targets)?;
         if materials.digest != *reviewed {
-            return Err(invalid("move decision inputs differ from the reviewed original"));
+            return Err(invalid(
+                "move decision inputs differ from the reviewed original",
+            ));
         }
         self.verify_move_decision_inputs(projection, recovery, &materials, cancellation)?;
         Ok(materials.report())
@@ -186,7 +207,9 @@ impl Engine {
         // recovery replica and the original State/config/namespace observation.
         let targets = self.verify_file_history_move_target(projection, recovery, cancellation)?;
         if targets.copy_identities() != &materials.record.target_copy_identities {
-            return Err(invalid("original move FULL copy identities changed during input preparation"));
+            return Err(invalid(
+                "original move FULL copy identities changed during input preparation",
+            ));
         }
         Ok(())
     }

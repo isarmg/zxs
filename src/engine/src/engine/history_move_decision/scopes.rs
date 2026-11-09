@@ -27,20 +27,40 @@ pub struct FileHistoryMoveScopedPreparation {
     database_bytes: u64,
 }
 impl FileHistoryMoveScopedPreparation {
-    pub fn operation_id(&self) -> OperationId { self.operation_id }
-    pub fn native_digest(&self) -> &str { &self.native_digest }
-    pub fn scoped_digest(&self) -> &str { &self.scoped_digest }
-    pub fn source_sequence(&self) -> u64 { self.source_sequence }
-    pub fn system_publications(&self) -> usize { self.system_publications }
-    pub fn participant_disks(&self) -> usize { self.participant_disks }
-    pub fn databases(&self) -> usize { self.databases }
-    pub fn database_bytes(&self) -> u64 { self.database_bytes }
-    pub fn outstanding(&self) -> &[FileHistoryMoveDecisionObligation] { &OUTSTANDING }
+    pub fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+    pub fn native_digest(&self) -> &str {
+        &self.native_digest
+    }
+    pub fn scoped_digest(&self) -> &str {
+        &self.scoped_digest
+    }
+    pub fn source_sequence(&self) -> u64 {
+        self.source_sequence
+    }
+    pub fn system_publications(&self) -> usize {
+        self.system_publications
+    }
+    pub fn participant_disks(&self) -> usize {
+        self.participant_disks
+    }
+    pub fn databases(&self) -> usize {
+        self.databases
+    }
+    pub fn database_bytes(&self) -> u64 {
+        self.database_bytes
+    }
+    pub fn outstanding(&self) -> &[FileHistoryMoveDecisionObligation] {
+        &OUTSTANDING
+    }
 }
 
 fn budget() -> Error {
-    Error::new(ErrorCode::ResourceLimit,
-        "move scoped preparation exceeds 2048 source publications / 32 disks / 128 MiB")
+    Error::new(
+        ErrorCode::ResourceLimit,
+        "move scoped preparation exceeds 2048 source publications / 32 disks / 128 MiB",
+    )
 }
 
 impl Engine {
@@ -54,7 +74,8 @@ impl Engine {
         recovery: &FileHistoryMoveRecoveryDigest,
         cancellation: &HistoryWindowCancellation,
     ) -> Result<FileHistoryMoveScopedPreparation> {
-        let (materials, native, scopes) = self.move_scoped_inputs(projection, recovery, cancellation)?;
+        let (materials, native, scopes) =
+            self.move_scoped_inputs(projection, recovery, cancellation)?;
         // Reject configured capacity before writing the first scoped file. The
         // physical reserve and identities are checked again by each held store.
         for participant in &materials.record.disks {
@@ -69,7 +90,14 @@ impl Engine {
                 store::Store::disk(self, &materials, participant, store::Mode::Read)?
                     .install_scopes(&scopes, cancellation)?;
             }
-            self.verify_move_scopes(projection, recovery, &materials, &native, &scopes, cancellation)
+            self.verify_move_scopes(
+                projection,
+                recovery,
+                &materials,
+                &native,
+                &scopes,
+                cancellation,
+            )
         };
         prepare().map_err(|error| error.context(ErrorCode::RecoveryRequired,
             "move scoped databases may be partially retained; resume only the original operation, no move decision or success exists"))?;
@@ -84,8 +112,16 @@ impl Engine {
         recovery: &FileHistoryMoveRecoveryDigest,
         cancellation: &HistoryWindowCancellation,
     ) -> Result<FileHistoryMoveScopedPreparation> {
-        let (materials, native, scopes) = self.move_scoped_inputs(projection, recovery, cancellation)?;
-        self.verify_move_scopes(projection, recovery, &materials, &native, &scopes, cancellation)?;
+        let (materials, native, scopes) =
+            self.move_scoped_inputs(projection, recovery, cancellation)?;
+        self.verify_move_scopes(
+            projection,
+            recovery,
+            &materials,
+            &native,
+            &scopes,
+            cancellation,
+        )?;
         Ok(scopes.report())
     }
 

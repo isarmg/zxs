@@ -428,45 +428,97 @@ fn configuration_installation_has_explicit_files_only_boundary_no_service_start(
 #[test]
 fn runtime_first_install_has_separate_preview_confirmation_and_external_ack() {
     let args = Args::try_parse_from([
-        "zxs-helper", "initialization", "runtime-prepare", "--service-user", "zxs",
-        "--request-digest", "exact", "--confirm-empty-runtime-only",
+        "zxs-helper",
+        "initialization",
+        "runtime-prepare",
+        "--service-user",
+        "zxs",
+        "--request-digest",
+        "exact",
+        "--confirm-empty-runtime-only",
         "--external-administration-stopped",
-    ]).unwrap();
-    assert!(matches!(args.command, Some(Command::Initialization {
-        command: initialization::Command::RuntimePrepare {
-            confirm_empty_runtime_only: true, external_administration_stopped: true, ..
-        }
-    })));
-    assert!(Args::try_parse_from([
-        "zxs-helper", "initialization", "runtime-preview", "--service-user", "zxs",
-        "--path", "/tmp/other",
-    ]).is_err());
+    ])
+    .unwrap();
+    assert!(matches!(
+        args.command,
+        Some(Command::Initialization {
+            command: initialization::Command::RuntimePrepare {
+                confirm_empty_runtime_only: true,
+                external_administration_stopped: true,
+                ..
+            }
+        })
+    ));
+    assert!(
+        Args::try_parse_from([
+            "zxs-helper",
+            "initialization",
+            "runtime-preview",
+            "--service-user",
+            "zxs",
+            "--path",
+            "/tmp/other",
+        ])
+        .is_err()
+    );
 }
 
 #[test]
 fn same_payload_repair_is_explicit_and_accepts_no_destination_or_runtime_package() {
     let args = Args::try_parse_from([
-        "zxs-helper", "install", "repair-commit", "--request-digest", "original",
-        "--confirm-same-payload-program-only", "--external-administration-stopped",
-    ]).unwrap();
-    assert!(matches!(args.command, Some(Command::Install {
-        command: installation::Command::RepairCommit {
-            confirm_same_payload_program_only: true, external_administration_stopped: true, ..
-        }
-    })));
-    assert!(Args::try_parse_from([
-        "zxs-helper", "install", "repair-preview", "--destination", "/tmp/elsewhere",
-    ]).is_err());
+        "zxs-helper",
+        "install",
+        "repair-commit",
+        "--request-digest",
+        "original",
+        "--confirm-same-payload-program-only",
+        "--external-administration-stopped",
+    ])
+    .unwrap();
+    assert!(matches!(
+        args.command,
+        Some(Command::Install {
+            command: installation::Command::RepairCommit {
+                confirm_same_payload_program_only: true,
+                external_administration_stopped: true,
+                ..
+            }
+        })
+    ));
+    assert!(
+        Args::try_parse_from([
+            "zxs-helper",
+            "install",
+            "repair-preview",
+            "--destination",
+            "/tmp/elsewhere",
+        ])
+        .is_err()
+    );
 }
 
 #[test]
 fn embedded_material_export_requires_an_explicit_new_output_and_has_no_extraction_mode() {
     let args = Args::try_parse_from([
-        "zxs-helper", "install", "materials", "--output", "/tmp/explicit-new-archive.tar.gz",
-    ]).unwrap();
+        "zxs-helper",
+        "install",
+        "materials",
+        "--output",
+        "/tmp/explicit-new-archive.tar.gz",
+    ])
+    .unwrap();
     assert!(matches!(args.command, Some(Command::Install {
         command: installation::Command::Materials { output }
     }) if output == PathBuf::from("/tmp/explicit-new-archive.tar.gz")));
     assert!(Args::try_parse_from(["zxs-helper", "install", "materials"]).is_err());
-    assert!(Args::try_parse_from(["zxs-helper", "install", "materials", "--extract", "/tmp/other"]).is_err());
+    assert!(
+        Args::try_parse_from([
+            "zxs-helper",
+            "install",
+            "materials",
+            "--extract",
+            "/tmp/other"
+        ])
+        .is_err()
+    );
 }

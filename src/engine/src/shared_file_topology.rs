@@ -22,11 +22,17 @@ pub(crate) struct Scan<'a> {
 }
 impl<'a> Scan<'a> {
     pub(crate) fn new(cancellation: &'a HistoryWindowCancellation) -> Self {
-        Self { remaining: MAX_SCAN_RECORDS, cancellation }
+        Self {
+            remaining: MAX_SCAN_RECORDS,
+            cancellation,
+        }
     }
     pub(crate) fn record(&mut self) -> Result<()> {
         if self.cancellation.is_cancelled() {
-            return Err(Error::new(storage_contract::ErrorCode::OperationAborted, "shared topology query cancelled"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::OperationAborted,
+                "shared topology query cancelled",
+            ));
         }
         if self.remaining == 0 {
             return Err(exhausted());
@@ -49,7 +55,9 @@ impl<'a> VersionIndex<'a> {
         let mut count = 0;
         for version in state.versions.values() {
             scan.record()?;
-            if version.history_tree_id != history || crate::node_retirement_engine::is_retired(state, &version.version_id) {
+            if version.history_tree_id != history
+                || crate::node_retirement_engine::is_retired(state, &version.version_id)
+            {
                 continue;
             }
             if count == MAX_INDEX_VERSIONS {
@@ -76,7 +84,12 @@ impl<'a> VersionIndex<'a> {
         let origin = self
             .files
             .get_key_value(origin)
-            .ok_or_else(|| Error::new(storage_contract::ErrorCode::InvalidRequest, "shared component origin has no live version"))?
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::InvalidRequest,
+                    "shared component origin has no live version",
+                )
+            })?
             .0;
         let mut files = BTreeSet::from([*origin]);
         let mut queue = VecDeque::from([*origin]);
@@ -112,7 +125,6 @@ pub(crate) fn content_key(version: &FileVersion) -> ContentKey {
     (version.content_hash, version.logical_size)
 }
 
-
 pub(crate) struct Member<'a> {
     pub(crate) file: &'a str,
     pub(crate) version: &'a str,
@@ -120,7 +132,11 @@ pub(crate) struct Member<'a> {
 }
 impl<'a> From<&'a FileVersion> for Member<'a> {
     fn from(version: &'a FileVersion) -> Self {
-        Self { file: &version.file_id, version: &version.version_id, content: content_key(version) }
+        Self {
+            file: &version.file_id,
+            version: &version.version_id,
+            content: content_key(version),
+        }
     }
 }
 
@@ -145,7 +161,10 @@ pub(crate) fn partition<'a>(
         }
         count += 1;
         if version.content.1 != 0 && !excluded.contains(version.version) {
-            groups.entry(version.content).or_default().insert(version.file);
+            groups
+                .entry(version.content)
+                .or_default()
+                .insert(version.file);
         }
     }
     let mut memberships = BTreeMap::<&str, Vec<ContentKey>>::new();

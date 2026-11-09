@@ -59,7 +59,9 @@ impl Store {
             || identity.binding_generation != disk.binding_generation
             || !disk.metadata_member
         {
-            return Err(stale("move recovery member differs from its frozen binding"));
+            return Err(stale(
+                "move recovery member differs from its frozen binding",
+            ));
         }
         let handle = Arc::clone(engine.disk_resources.get(disk)?);
         let store = Self {
@@ -91,7 +93,9 @@ impl Store {
             ));
         }
         match &self.owner {
-            Owner::System { writer_identity, .. } => {
+            Owner::System {
+                writer_identity, ..
+            } => {
                 let writer = named.open_regular(&named.path().join("writer.lock"))?;
                 if FileIdentity::from_fd(&writer)? != *writer_identity {
                     return Err(Error::new(
@@ -100,7 +104,11 @@ impl Store {
                     ));
                 }
             }
-            Owner::Member { config, disk, handle } => {
+            Owner::Member {
+                config,
+                disk,
+                handle,
+            } => {
                 let lease = handle.root.admit_io()?;
                 let seal = validate_seal_observed(config, disk, &mut |_| lease.check_running())?;
                 validate_stored_seal(&handle.seal, &seal)?;
@@ -131,7 +139,9 @@ impl Store {
         let envelope: Envelope = decode_strict(&bytes)?;
         envelope.record.validate()?;
         if envelope.record.digest()?.to_string() != envelope.digest {
-            return Err(corrupt("move recovery envelope differs from its frozen record digest"));
+            return Err(corrupt(
+                "move recovery envelope differs from its frozen record digest",
+            ));
         }
         let observed = Observed {
             record: envelope.record,
@@ -198,7 +208,9 @@ impl Store {
                 )
             })?;
             if observed.record != *record {
-                return Err(corrupt("new move recovery envelope differs from the captured source plan"));
+                return Err(corrupt(
+                    "new move recovery envelope differs from the captured source plan",
+                ));
             }
             observed.synchronize(self)?;
             if self.root().available()? < reserve {
@@ -227,7 +239,9 @@ impl Observed {
             || FileIdentity::from_metadata(&named.metadata()?)
                 != FileIdentity::from_metadata(&self.file.metadata()?)
         {
-            return Err(stale("move recovery envelope file or directory name changed"));
+            return Err(stale(
+                "move recovery envelope file or directory name changed",
+            ));
         }
         verify_bytes(&named, &self.bytes)?;
         store.check_owner()
@@ -257,7 +271,9 @@ fn verify_bytes(file: &ReadFile, bytes: &[u8]) -> Result<()> {
         offset += chunk.len() as u64;
     }
     if file.metadata()?.len() != offset {
-        return Err(corrupt("retained move recovery envelope changed during verification"));
+        return Err(corrupt(
+            "retained move recovery envelope changed during verification",
+        ));
     }
     file.check_running()
 }

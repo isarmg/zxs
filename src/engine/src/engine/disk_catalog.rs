@@ -13,19 +13,18 @@ mod database;
 mod directories;
 pub use directories::DiskCatalogDirectory;
 mod move_draft;
-pub(in crate::engine) use move_draft::{prepare_move_current, require_same_move_current};
 pub(in crate::engine) use history::visit_published_prefix;
+pub(in crate::engine) use move_draft::{prepare_move_current, require_same_move_current};
 mod history;
 mod maintenance;
 pub(in crate::engine) mod root_install;
 pub(in crate::engine) use history::preparation::PreparedDiskScopes;
 pub use history::{
-    DiskDatabaseRebuildSource, DiskDatabaseReconstruction, MAX_DISK_DATABASE_ARCHIVE_BYTES,
-    reconstruct_disk_database_material,
-    DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange,
-    DiskHistoryFailure, DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation,
-    DiskHistoryReceipt, DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus,
-    inspect_disk_database_material,
+    DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRebuildSource,
+    DiskDatabaseReconstruction, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
+    DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation, DiskHistoryReceipt,
+    DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus, MAX_DISK_DATABASE_ARCHIVE_BYTES,
+    inspect_disk_database_material, reconstruct_disk_database_material,
 };
 pub(super) use maintenance::Maintenance;
 pub use maintenance::{DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogStatus};

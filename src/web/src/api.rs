@@ -10,8 +10,8 @@ use web_sys::{RequestCredentials, RequestInit, RequestMode, RequestRedirect, Res
 mod browser;
 mod read_queue;
 mod response;
-pub(crate) use browser::{ReadCancellation, js_error};
 use browser::AbortOnDrop;
+pub(crate) use browser::{ReadCancellation, js_error};
 
 // Token and CSRF belong to one credential generation. A response from a
 // previous login may not clear or replace the current login's credentials.

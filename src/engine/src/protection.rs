@@ -6,9 +6,9 @@ mod placement_configuration;
 pub(crate) use backup_paths::directory_namespaces::{
     BATCH_FOLLOW_KIND, BATCH_ROUTE_KIND, DirectoryFollowChange, DirectoryFollowPlan,
     DirectoryNamespace, FILE_FOLLOW_KIND, FILE_ROUTE_KIND, captured_directory_namespace,
-    follows_directories, follows_routes, published_directories_at, directory_catalog_changed,
-    materialize as materialize_backup_directories,
-    preflight as preflight_backup_directories, repair_current as repair_current_backup_directories,
+    directory_catalog_changed, follows_directories, follows_routes,
+    materialize as materialize_backup_directories, preflight as preflight_backup_directories,
+    published_directories_at, repair_current as repair_current_backup_directories,
 };
 pub use backup_paths::{
     BackupConfigurationRequest, PublishedBackupDirectory, RecursiveBackupCapture,

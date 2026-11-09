@@ -265,9 +265,11 @@ impl PreparedBackupFirstCandidate {
             self.authority.hash.as_str(),
             self.authority.bytes(),
         ))
-        .chain(self.files.values().map(|value| {
-            (value.kind, value.hash.as_str(), value.bytes.as_slice())
-        }))
+        .chain(
+            self.files
+                .values()
+                .map(|value| (value.kind, value.hash.as_str(), value.bytes.as_slice())),
+        )
     }
     pub(in crate::engine) fn bytes(&self) -> usize {
         self.bytes

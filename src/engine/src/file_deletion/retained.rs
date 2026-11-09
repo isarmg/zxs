@@ -61,7 +61,9 @@ fn invalid() -> Error {
 fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
     let receipt = &state.operations[&id];
     let (action, key) = match receipt.kind.as_str() {
-        "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND => (DeletionAction::Delete, "deletion_node"),
+        "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND => {
+            (DeletionAction::Delete, "deletion_node")
+        }
         "file.delete.undo" => (DeletionAction::Undo, "removed_deletion_node"),
         _ => return Err(invalid()),
     };

@@ -15,12 +15,16 @@ fn record() -> Record {
 }
 fn authenticated(record: &Record, epoch: u64) -> State {
     let mut state = State {
-        authenticated: true, principal: record.principal.clone(), session_epoch: epoch,
+        authenticated: true,
+        principal: record.principal.clone(),
+        session_epoch: epoch,
         ..Default::default()
     };
     state.management.storage = crate::management::Storage::Ready;
     state.files.node_retirement.recovery = Queue {
-        owner: Some((epoch, record.principal.clone())), records: vec![record.clone()], error: None,
+        owner: Some((epoch, record.principal.clone())),
+        records: vec![record.clone()],
+        error: None,
     };
     state
 }
@@ -53,7 +57,10 @@ fn saved_request_round_trip_keeps_exact_identity_but_never_restores_success() {
     assert!(attempt.uncertain && attempt.restored);
     assert!(!attempt.in_flight && !attempt.retry_confirmed);
     assert!(attempt.cleanup.is_none() && attempt.separation.is_none());
-    assert_eq!(status(&authenticated(&original, 8), &attempt), SaveStatus::Unknown);
+    assert_eq!(
+        status(&authenticated(&original, 8), &attempt),
+        SaveStatus::Unknown
+    );
     assert!(!bytes.contains("token") && !bytes.contains("cleanup") && !bytes.contains("password"));
 }
 
@@ -68,15 +75,32 @@ fn storage_boundary_rejects_other_accounts_keys_extra_fields_and_unsupported_for
         ("cleanup", json!({"state":"observed"})),
         ("operation", json!("not-an-operation")),
         ("version_ids", json!([])),
-        ("version_ids", json!([original.version_ids[0], original.version_ids[0]])),
+        (
+            "version_ids",
+            json!([original.version_ids[0], original.version_ids[0]]),
+        ),
         ("label", json!("x".repeat(MAX_LABEL_BYTES + 1))),
     ] {
         // Each invalid value is independent of the immutable source record.
         let mut changed = json_codec::to_value(&original).unwrap();
         changed[field] = value;
-        assert!(Record::decode(&original.key(), "admin", &json_codec::to_string(&changed).unwrap()).is_err());
+        assert!(
+            Record::decode(
+                &original.key(),
+                "admin",
+                &json_codec::to_string(&changed).unwrap()
+            )
+            .is_err()
+        );
     }
-    assert!(Record::decode(&original.key(), "admin", &" ".repeat(wire::MAX_REQUEST_BYTES + 1)).is_err());
+    assert!(
+        Record::decode(
+            &original.key(),
+            "admin",
+            &" ".repeat(wire::MAX_REQUEST_BYTES + 1)
+        )
+        .is_err()
+    );
     let duplicate = bytes.replacen("{", "{\"principal\":\"admin\",", 1);
     assert!(Record::decode(&original.key(), "admin", &duplicate).is_err());
     assert_eq!(json_codec::to_string(&original).unwrap(), bytes);
@@ -107,17 +131,34 @@ fn every_retained_request_is_matched_even_when_a_different_recovery_row_is_open(
     let mut other = saved.clone();
     other.operation = format!("op_{}", "f".repeat(32)).parse().unwrap();
     let mut state = authenticated(&saved, 8);
-    state.files.node_retirement.recovery.records.push(other.clone());
+    state
+        .files
+        .node_retirement
+        .recovery
+        .records
+        .push(other.clone());
     state.files.node_retirement.attempt = Some(other.restored_attempt(8).unwrap());
     let exact = receipt(&saved);
-    assert!(super::super::receipt_matches(&state, &saved.operation.to_string(), &exact));
+    assert!(super::super::receipt_matches(
+        &state,
+        &saved.operation.to_string(),
+        &exact
+    ));
     for field in ["origin_file_id", "history_root", "version_ids"] {
         let mut changed = exact.clone();
         changed["result"]["retirement"]["request"][field] = Value::Null;
-        assert!(!super::super::receipt_matches(&state, &saved.operation.to_string(), &changed));
+        assert!(!super::super::receipt_matches(
+            &state,
+            &saved.operation.to_string(),
+            &changed
+        ));
     }
     state.principal = "another-admin".into();
-    assert!(!super::super::receipt_matches(&state, &saved.operation.to_string(), &exact));
+    assert!(!super::super::receipt_matches(
+        &state,
+        &saved.operation.to_string(),
+        &exact
+    ));
 }
 
 #[test]
@@ -125,7 +166,10 @@ fn verified_publication_allows_only_original_resume_without_restoring_old_cleanu
     let saved = record();
     let mut state = authenticated(&saved, 8);
     let operation = saved.operation.to_string();
-    state.files.operations.push(FileOperation::from_receipt(&operation, &receipt(&saved)));
+    state
+        .files
+        .operations
+        .push(FileOperation::from_receipt(&operation, &receipt(&saved)));
     let attempt = saved.restored_attempt(8).unwrap();
     assert!(published(status(&state, &attempt)));
     assert!(!attempt.retry_confirmed && attempt.retry_allowed(&state));

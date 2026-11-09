@@ -3,8 +3,12 @@ use std::{fs, os::unix::fs::PermissionsExt};
 
 fn payload() -> payload::Payload {
     payload::Payload {
-        bytes: b"exact build fixture", version: "fixture", commit: "a", tree: "b",
-        target: "x86_64-unknown-linux-gnu", sha256: "fixture-digest",
+        bytes: b"exact build fixture",
+        version: "fixture",
+        commit: "a",
+        tree: "b",
+        target: "x86_64-unknown-linux-gnu",
+        sha256: "fixture-digest",
     }
 }
 
@@ -22,7 +26,10 @@ fn baseline_requires_exact_payload_and_parent_and_never_adopts_another_version()
     let mut other = payload();
     other.commit = "another build";
     assert!(existing(&host, &expected(&host, &program, other).unwrap()).is_err());
-    assert_eq!(fs::read(host_root.path().join(NAME).join("receipt.json")).unwrap(), original);
+    assert_eq!(
+        fs::read(host_root.path().join(NAME).join("receipt.json")).unwrap(),
+        original
+    );
 }
 
 #[test]

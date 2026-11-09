@@ -10,8 +10,8 @@ use sqlite_access::{
 };
 use std::path::Path;
 
-mod projection;
 mod material;
+mod projection;
 pub(super) use material::{read_material, reconstruct_material};
 
 pub(crate) const NAME: &str = ".zxs-directory.sqlite";
@@ -59,7 +59,13 @@ pub(super) fn prepare(state: &State, directory: &str) -> Result<Prepared> {
     let records = projection::records(state, directory)?;
     let hash = storage_contract::object_hash("directory-local-records", &records)?;
     let git = &state.directory_git_repositories[directory];
-    encode_records(records, &git.repository_id, directory, state.sequence, &hash)
+    encode_records(
+        records,
+        &git.repository_id,
+        directory,
+        state.sequence,
+        &hash,
+    )
 }
 
 fn encode_records(
@@ -311,11 +317,11 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<StoredId
         },
     )?;
     let directory = super::layout_locator::DirectoryId::parse(&directory)?;
-    let sequence = storage_contract::parse_u64_decimal(&owner.try_get::<String, _>("source_sequence")?)?;
+    let sequence =
+        storage_contract::parse_u64_decimal(&owner.try_get::<String, _>("source_sequence")?)?;
     let records = read_records(connection).await?;
     let records_hash = storage_contract::object_hash("directory-local-records", &records)?;
-    if records_hash != owner.try_get::<String, _>("records_hash")?
-    {
+    if records_hash != owner.try_get::<String, _>("records_hash")? {
         return Err(invalid(
             "directory database records do not match their recorded digest",
         ));

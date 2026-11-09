@@ -314,11 +314,12 @@ fn validate_deletion(row: &DeletionRow) -> crate::Result<()> {
     Ok(())
 }
 
-
 fn decode_local<T: for<'de> Deserialize<'de> + Serialize>(bytes: &[u8]) -> crate::Result<T> {
     let row: T = storage_contract::decode_strict(bytes)?;
     if crate::disk::encode_metadata(&row, super::projection::MAX_RECORD_BYTES)? != bytes {
-        return Err(super::invalid("file database row is not canonical typed metadata"));
+        return Err(super::invalid(
+            "file database row is not canonical typed metadata",
+        ));
     }
     Ok(row)
 }

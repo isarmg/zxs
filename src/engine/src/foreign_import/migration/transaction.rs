@@ -110,10 +110,13 @@ impl ForeignMigrationTransaction {
         let final_path = parent.path().join(&name);
         let stage_exists = parent.optional_metadata(&stage)?.is_some();
         let published = parent.optional_metadata(&final_path)?.is_some();
-        let Some(file) = parent.open_optional_read_regular(&reservation_path(&parent, operation))?
+        let Some(file) =
+            parent.open_optional_read_regular(&reservation_path(&parent, operation))?
         else {
             if stage_exists || published {
-                return Err(changed("capsule material lacks its original parent reservation"));
+                return Err(changed(
+                    "capsule material lacks its original parent reservation",
+                ));
             }
             return Ok(ForeignMigrationStatus::Unstarted);
         };
@@ -125,7 +128,9 @@ impl ForeignMigrationTransaction {
             || digest(&intent.plan)? != *expected
             || intent.parent != PhysicalBinding::of(&parent)?
         {
-            return Err(changed("capsule status does not match the original plan and parent"));
+            return Err(changed(
+                "capsule status does not match the original plan and parent",
+            ));
         }
         if stage_exists && published {
             return Err(changed("both migration staging and destination exist"));
@@ -135,7 +140,10 @@ impl ForeignMigrationTransaction {
         }
         let path = if published { &final_path } else { &stage };
         let capsule = parent.private_child(path)?;
-        if capsule.optional_metadata(&path.join("binding.json"))?.is_none() {
+        if capsule
+            .optional_metadata(&path.join("binding.json"))?
+            .is_none()
+        {
             if published {
                 return Err(invalid("final capsule lacks its original physical binding"));
             }
@@ -157,9 +165,11 @@ impl ForeignMigrationTransaction {
         let replica = transaction.verify_replica()?;
         projection::Projection::from_replica(&transaction.intent.plan, &replica)?
             .verify(&transaction.capsule, &transaction.intent.plan.budget)?;
-        if transaction.capsule.read_bytes(
-            &transaction.capsule.path().join("intent.json"), MAX_INTENT,
-        )? != canonical_json(&transaction.intent)? {
+        if transaction
+            .capsule
+            .read_bytes(&transaction.capsule.path().join("intent.json"), MAX_INTENT)?
+            != canonical_json(&transaction.intent)?
+        {
             return Err(changed("published capsule portable intent differs"));
         }
         transaction.check_names()?;
@@ -170,13 +180,16 @@ impl ForeignMigrationTransaction {
     /// marker is an error, never treated as an unstarted copy.
     pub fn is_sealed(&self) -> Result<bool> {
         self.check_names()?;
-        let Some(file) = self.capsule.open_optional_read_regular(
-            &self.capsule.path().join("sealed.json"),
-        )? else {
+        let Some(file) = self
+            .capsule
+            .open_optional_read_regular(&self.capsule.path().join("sealed.json"))?
+        else {
             return Ok(false);
         };
         if read_file_bytes(file, MAX_METADATA)? != self.marker()? {
-            return Err(changed("capsule sealed marker differs from the original binding"));
+            return Err(changed(
+                "capsule sealed marker differs from the original binding",
+            ));
         }
         Ok(true)
     }
@@ -465,11 +478,16 @@ fn open_reserved(
 fn check_unbound(capsule: &DiskRoot) -> Result<()> {
     for (index, entry) in capsule.entries(capsule.path())?.enumerate() {
         if index >= MAX_ENTRIES {
-            return Err(Error::new(ErrorCode::ResourceLimit, "unbound capsule entry limit exceeded"));
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "unbound capsule entry limit exceeded",
+            ));
         }
         let entry = entry?;
         if !platform_io::fs_safety::AtomicFile::is_temporary_name(&entry) {
-            return Err(changed("unbound reserved stage contains unrelated material"));
+            return Err(changed(
+                "unbound reserved stage contains unrelated material",
+            ));
         }
         capsule.open_read_regular(&capsule.path().join(entry.as_path()))?;
     }

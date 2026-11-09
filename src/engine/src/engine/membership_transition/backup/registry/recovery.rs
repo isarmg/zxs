@@ -155,9 +155,7 @@ impl AdmittedBackupDecision {
     pub(in crate::engine::membership_transition) fn transition(&self) -> &TransitionIntent {
         &self.stored.core.transition
     }
-    pub(super) fn original_members(
-        &self,
-    ) -> &BTreeMap<String, OriginalMember> {
+    pub(super) fn original_members(&self) -> &BTreeMap<String, OriginalMember> {
         &self.stored.core.original_members
     }
     pub(in crate::engine::membership_transition) fn projection(&self) -> &BackupRegistryProjection {

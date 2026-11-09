@@ -32,9 +32,14 @@ struct Edges<'a> {
 }
 impl<'a> Edges<'a> {
     fn add(&mut self, kind: Kind, owner: &'a str, position: usize, target: &'a str) -> Result<()> {
-        if !self.nodes.contains(target) { return Ok(()); }
+        if !self.nodes.contains(target) {
+            return Ok(());
+        }
         if self.values.len() == MAX_REFERENCE_EDGES {
-            return Err(Error::new(ErrorCode::ResourceLimit, "retired-node inbound reference closure is too large"));
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "retired-node inbound reference closure is too large",
+            ));
         }
         self.values.insert((kind, owner, position, target));
         Ok(())
@@ -48,24 +53,48 @@ impl<'a> Edges<'a> {
 }
 
 pub(super) fn capture(state: &State, request: &Request) -> Result<ReferenceClosure> {
-    let selected = request.version_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
-    let mut edges = Edges { nodes: BTreeSet::new(), values: BTreeSet::new() };
+    let selected = request
+        .version_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut edges = Edges {
+        nodes: BTreeSet::new(),
+        values: BTreeSet::new(),
+    };
     for version in state.versions.values() {
-        if selected.contains(version.version_id.as_str()) { edges.nodes.insert(&version.version_id); }
+        if selected.contains(version.version_id.as_str()) {
+            edges.nodes.insert(&version.version_id);
+        }
     }
     for node in state.file_path_nodes.values() {
-        if selected.contains(node.version_id.as_str()) { edges.nodes.insert(&node.node_id); }
+        if selected.contains(node.version_id.as_str()) {
+            edges.nodes.insert(&node.node_id);
+        }
     }
     for node in state.file_metadata_nodes.values() {
-        if selected.contains(node.version_id.as_str()) { edges.nodes.insert(&node.node_id); }
+        if selected.contains(node.version_id.as_str()) {
+            edges.nodes.insert(&node.node_id);
+        }
     }
-    if edges.nodes.len() > MAX_SELECTED { return Err(invalid()); }
+    if edges.nodes.len() > MAX_SELECTED {
+        return Err(invalid());
+    }
     for version in state.versions.values() {
-        edges.list(Kind::VersionSource, &version.version_id, &version.source_version_ids)?;
+        edges.list(
+            Kind::VersionSource,
+            &version.version_id,
+            &version.source_version_ids,
+        )?;
     }
     for commit in state.commits.values() {
         for (position, entry) in commit.entries.iter().enumerate() {
-            edges.add(Kind::CommitEntry, &commit.commit_id, position, &entry.version_id)?;
+            edges.add(
+                Kind::CommitEntry,
+                &commit.commit_id,
+                position,
+                &entry.version_id,
+            )?;
         }
         for (position, version) in commit.pending_file_versions.values().enumerate() {
             edges.add(Kind::CommitPending, &commit.commit_id, position, version)?;
@@ -84,7 +113,12 @@ pub(super) fn capture(state: &State, request: &Request) -> Result<ReferenceClosu
     }
     for tree in state.directory_trees.values() {
         for (position, entry) in tree.entries.iter().enumerate() {
-            edges.add(Kind::DirectoryEntry, &tree.tree_id, position, &entry.version_id)?;
+            edges.add(
+                Kind::DirectoryEntry,
+                &tree.tree_id,
+                position,
+                &entry.version_id,
+            )?;
         }
         for (position, context) in tree.file_contexts.values().enumerate() {
             if let Some(node) = &context.node_id {

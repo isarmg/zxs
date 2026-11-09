@@ -593,7 +593,10 @@ pub(crate) fn published_directories_at(
 /// Only changes that can alter the directory projection invalidate its disk
 /// catalogs. Unknown map lineage is not an empty write set.
 pub(crate) fn directory_catalog_changed(before: &State, after: &State) -> bool {
-    match after.protection_policies.changes_since(&before.protection_policies) {
+    match after
+        .protection_policies
+        .changes_since(&before.protection_policies)
+    {
         storage_contract::MapChanges::Keys(keys) if keys.is_empty() => (),
         _ => return true,
     }

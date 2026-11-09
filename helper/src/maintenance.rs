@@ -181,7 +181,7 @@ fn read_reply(operation: Operation, output: &mut impl BufRead) -> Result<Vec<u8>
                 return Err(transport("response body", "invalid declared response size"));
             }
             *body_bytes
-        },
+        }
         ReplyHeader::Failed { .. } => 0,
     };
     let mut body = Vec::new();

@@ -861,8 +861,13 @@ fn chain_parent(f: &Fixture, name: &str) -> PathBuf {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
     path
 }
-fn chain_plan(source: &ForeignImportPreview, operation: OperationId, level: u32) -> ForeignMigrationPlan {
-    ForeignMigrationPlan::chain_material(source, operation, &"a".repeat(64).parse().unwrap(), level).unwrap()
+fn chain_plan(
+    source: &ForeignImportPreview,
+    operation: OperationId,
+    level: u32,
+) -> ForeignMigrationPlan {
+    ForeignMigrationPlan::chain_material(source, operation, &"a".repeat(64).parse().unwrap(), level)
+        .unwrap()
 }
 #[test]
 fn lower_material_digest_binds_whole_chain_and_target_level_without_admitting_role() {
@@ -872,13 +877,35 @@ fn lower_material_digest_binds_whole_chain_and_target_level_without_admitting_ro
     let first = chain_plan(&source, operation, 1);
     let second = chain_plan(&source, operation, 2);
     assert_ne!(first.digest(), second.digest());
-    let changed = ForeignMigrationPlan::chain_material(&source, operation, &"b".repeat(64).parse().unwrap(), 1).unwrap();
+    let changed = ForeignMigrationPlan::chain_material(
+        &source,
+        operation,
+        &"b".repeat(64).parse().unwrap(),
+        1,
+    )
+    .unwrap();
     assert_ne!(first.digest(), changed.digest());
     for level in [0, 3, 4] {
-        assert!(ForeignMigrationPlan::chain_material(&source, operation, &"a".repeat(64).parse().unwrap(), level).is_err());
+        assert!(
+            ForeignMigrationPlan::chain_material(
+                &source,
+                operation,
+                &"a".repeat(64).parse().unwrap(),
+                level
+            )
+            .is_err()
+        );
     }
     let primary = inspect(&f.engine.config().disks[0].root);
-    assert!(ForeignMigrationPlan::chain_material(&primary, operation, &"a".repeat(64).parse().unwrap(), 1).is_err());
+    assert!(
+        ForeignMigrationPlan::chain_material(
+            &primary,
+            operation,
+            &"a".repeat(64).parse().unwrap(),
+            1
+        )
+        .is_err()
+    );
 }
 #[test]
 fn exact_material_status_is_read_only_across_unstarted_and_missing_stage_windows() {
@@ -889,17 +916,36 @@ fn exact_material_status_is_read_only_across_unstarted_and_missing_stage_windows
     let operation = OperationId::generate().unwrap();
     let plan = chain_plan(&source, operation, 1);
     let digest = *plan.digest();
-    let status = || ForeignMigrationTransaction::status_in(File::open(&parent).unwrap(), &destination, &operation, &digest).unwrap();
+    let status = || {
+        ForeignMigrationTransaction::status_in(
+            File::open(&parent).unwrap(),
+            &destination,
+            &operation,
+            &digest,
+        )
+        .unwrap()
+    };
     assert_eq!(status(), ForeignMigrationStatus::Unstarted);
     assert_eq!(fs::read_dir(&parent).unwrap().count(), 0);
-    drop(plan.begin_in(File::open(&parent).unwrap(), &destination).unwrap());
+    drop(
+        plan.begin_in(File::open(&parent).unwrap(), &destination)
+            .unwrap(),
+    );
     let stage = parent.join(format!(".zxs-foreign-{operation}"));
     fs::remove_dir_all(&stage).unwrap();
     let before = fs::read_dir(&parent).unwrap().count();
     assert_eq!(status(), ForeignMigrationStatus::Reserved);
     assert!(!stage.exists());
     assert_eq!(fs::read_dir(&parent).unwrap().count(), before);
-    drop(ForeignMigrationTransaction::resume_in(File::open(&parent).unwrap(), &destination, &operation, &digest).unwrap());
+    drop(
+        ForeignMigrationTransaction::resume_in(
+            File::open(&parent).unwrap(),
+            &destination,
+            &operation,
+            &digest,
+        )
+        .unwrap(),
+    );
     assert!(stage.is_dir());
 }
 #[test]
@@ -912,8 +958,11 @@ fn held_material_parent_rejects_named_replacement_before_reserving() {
     fs::rename(&parent, &old).unwrap();
     fs::create_dir(&parent).unwrap();
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(chain_plan(&source, OperationId::generate().unwrap(), 1)
-        .begin_in(held, &parent.join("material")).is_err());
+    assert!(
+        chain_plan(&source, OperationId::generate().unwrap(), 1)
+            .begin_in(held, &parent.join("material"))
+            .is_err()
+    );
     assert_eq!(fs::read_dir(&parent).unwrap().count(), 0);
     assert_eq!(fs::read_dir(&old).unwrap().count(), 0);
 }
@@ -928,19 +977,50 @@ fn complete_lower_material_capsules_keep_source_and_resume_exact_published_targe
         let destination = parent.join("material");
         let plan = chain_plan(&source, operation, level);
         let digest = *plan.digest();
-        let mut transaction = plan.begin_in(File::open(&parent).unwrap(), &destination).unwrap();
+        let mut transaction = plan
+            .begin_in(File::open(&parent).unwrap(), &destination)
+            .unwrap();
         assert!(!transaction.is_sealed().unwrap());
         transaction.copy_source(&source).unwrap();
         transaction.seal().unwrap();
         assert!(transaction.is_sealed().unwrap());
         drop(transaction);
-        let transaction = ForeignMigrationTransaction::resume_in(File::open(&parent).unwrap(), &destination, &operation, &digest).unwrap();
+        let transaction = ForeignMigrationTransaction::resume_in(
+            File::open(&parent).unwrap(),
+            &destination,
+            &operation,
+            &digest,
+        )
+        .unwrap();
         transaction.publish(None).unwrap();
-        assert_eq!(ForeignMigrationTransaction::status_in(File::open(&parent).unwrap(), &destination, &operation, &digest).unwrap(), ForeignMigrationStatus::Published);
-        let transaction = ForeignMigrationTransaction::resume_in(File::open(&parent).unwrap(), &destination, &operation, &digest).unwrap();
+        assert_eq!(
+            ForeignMigrationTransaction::status_in(
+                File::open(&parent).unwrap(),
+                &destination,
+                &operation,
+                &digest
+            )
+            .unwrap(),
+            ForeignMigrationStatus::Published
+        );
+        let transaction = ForeignMigrationTransaction::resume_in(
+            File::open(&parent).unwrap(),
+            &destination,
+            &operation,
+            &digest,
+        )
+        .unwrap();
         assert!(transaction.is_sealed().unwrap());
         transaction.publish(None).unwrap();
-        assert!(ForeignMigrationTransaction::status_in(File::open(&parent).unwrap(), &destination, &operation, &"b".repeat(64).parse().unwrap()).is_err());
+        assert!(
+            ForeignMigrationTransaction::status_in(
+                File::open(&parent).unwrap(),
+                &destination,
+                &operation,
+                &"b".repeat(64).parse().unwrap()
+            )
+            .is_err()
+        );
     }
     let unchanged = inspect(&f.engine.config().disks[3].root);
     assert_eq!(unchanged.original_seal(), seal);
@@ -955,12 +1035,22 @@ fn material_status_rejects_corrupt_final_evidence_without_repairing_it() {
     let operation = OperationId::generate().unwrap();
     let plan = chain_plan(&source, operation, 1);
     let digest = *plan.digest();
-    let mut transaction = plan.begin_in(File::open(&parent).unwrap(), &destination).unwrap();
+    let mut transaction = plan
+        .begin_in(File::open(&parent).unwrap(), &destination)
+        .unwrap();
     transaction.copy_source(&source).unwrap();
     transaction.seal().unwrap();
     transaction.publish(None).unwrap();
     let marker = destination.join("ready.json");
     fs::write(&marker, b"not-original-evidence").unwrap();
-    assert!(ForeignMigrationTransaction::status_in(File::open(&parent).unwrap(), &destination, &operation, &digest).is_err());
+    assert!(
+        ForeignMigrationTransaction::status_in(
+            File::open(&parent).unwrap(),
+            &destination,
+            &operation,
+            &digest
+        )
+        .is_err()
+    );
     assert_eq!(fs::read(marker).unwrap(), b"not-original-evidence");
 }

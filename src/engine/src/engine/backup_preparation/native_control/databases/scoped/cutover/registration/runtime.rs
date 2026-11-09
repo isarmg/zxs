@@ -380,7 +380,11 @@ fn run(
         );
     })?;
     let native = native_metadata::install(
-        &common_databases::Context { system, sources: &sources, choices: &choices },
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
         &prepared,
         &decision,
         &expected,

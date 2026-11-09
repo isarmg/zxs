@@ -14,12 +14,12 @@ pub use backup_preparation::{
     BackupDatabaseRead, BackupDatabaseScope, BackupDecidedTargets, BackupDirectoryWriterRoute,
     BackupFileWriterRoute, BackupFirstCandidateReport, BackupGenerationAuthorityReport,
     BackupGenerationControlReport, BackupGenerationPreparationReport, BackupNamespacePage,
-    BackupNamespaceScope, BackupOriginalDatabaseReport, BackupPublishedRegistryReport,
-    BackupPublishedScopeTargetReport, BackupPublishedScopesReport, BackupRecoveredContent,
-    BackupRegistryRecoveryReport, BackupRootDatabasesReport, BackupServingContent,
-    BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
-    BackupNativeMetadataReport, BackupSystemDatabaseReport, BackupTargetPublicationReport,
-    BackupWriterDestination, BackupWriterRoutesReport, open_decided_backup_targets,
+    BackupNamespaceScope, BackupNativeMetadataReport, BackupOriginalDatabaseReport,
+    BackupPublishedRegistryReport, BackupPublishedScopeTargetReport, BackupPublishedScopesReport,
+    BackupRecoveredContent, BackupRegistryRecoveryReport, BackupRootDatabasesReport,
+    BackupServingContent, BackupServingImagesReport, BackupServingRead, BackupServingTargetReport,
+    BackupSystemDatabaseReport, BackupTargetPublicationReport, BackupWriterDestination,
+    BackupWriterRoutesReport, open_decided_backup_targets,
 };
 pub use backup_preparation::{
     BackupCutoverPreparationReport, BackupCutoverPreparationRequest, BackupNativeControlReport,
@@ -69,23 +69,22 @@ mod planning;
 pub(crate) use planning::PlanningContext;
 mod disk_catalog;
 pub use disk_catalog::{
-    DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogObservation, DiskCatalogReceipt,
-    DiskCatalogRefreshOutcome, DiskCatalogRefreshReport, DiskCatalogRefreshResult, DiskCatalogRole,
-    DiskCatalogSnapshot, DiskCatalogStatus, DiskCatalogVersion, DiskCatalogDirectory,
-    DiskDatabaseRebuildSource, DiskDatabaseReconstruction, MAX_DISK_DATABASE_ARCHIVE_BYTES,
-    reconstruct_disk_database_material,
-    DiskDatabaseMaterial,
-    DiskDatabaseReadScope, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
+    DiskCatalogDirectory, DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogObservation,
+    DiskCatalogReceipt, DiskCatalogRefreshOutcome, DiskCatalogRefreshReport,
+    DiskCatalogRefreshResult, DiskCatalogRole, DiskCatalogSnapshot, DiskCatalogStatus,
+    DiskCatalogVersion, DiskDatabaseMaterial, DiskDatabaseReadScope, DiskDatabaseRebuildSource,
+    DiskDatabaseReconstruction, DiskDatabaseRelation, DiskHistoryChange, DiskHistoryFailure,
     DiskHistoryHeader, DiskHistoryMaintenanceState, DiskHistoryObservation, DiskHistoryReceipt,
-    DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus, inspect_disk_database_material,
+    DiskHistoryRecord, DiskHistorySnapshot, DiskHistoryStatus, MAX_DISK_DATABASE_ARCHIVE_BYTES,
+    inspect_disk_database_material, reconstruct_disk_database_material,
 };
 mod history_move_recovery;
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 mod history_move_decision;
 pub use history_move_decision::{
-    FileHistoryMoveDecisionDigest, FileHistoryMoveDecisionInputs,
-    FileHistoryMoveDecisionObligation, FileHistoryMoveNativePreparation,
-    FileHistoryMoveScopedPreparation, FileHistoryMoveJointChoice, FileHistoryMoveCandidatePreparation,
+    FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
+    FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation, FileHistoryMoveJointChoice,
+    FileHistoryMoveNativePreparation, FileHistoryMoveScopedPreparation,
 };
 mod history_move_target;
 pub use history_move_target::FileHistoryMoveTargetReport;
@@ -145,8 +144,7 @@ pub use membership_transition::{
     TerminalChainIoDecisionReport, TerminalChainPublishedCurrent,
     TerminalChainPublishedCurrentReport, TerminalChainReadmissionActivation,
     TerminalChainReadmissionPhase, TerminalChainReadmissionStatus, TerminalChainSelectedGeneration,
-    TerminalMetadataResume,
-    TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
+    TerminalMetadataResume, TerminalMetadataResumeAdmission, TerminalMetadataResumeCancelOutcome,
     TerminalMetadataResumeCancellationPhase, TerminalMetadataResumePhase,
     TerminalMetadataResumeRecovery, TerminalMetadataResumeStatus, TerminalReadmissionPreview,
 };

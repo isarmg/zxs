@@ -14,7 +14,12 @@ pub struct DiskCatalogDirectory {
 }
 impl DiskCatalogDirectory {
     pub(super) fn key(&self) -> (&str, &str, &str, &str) {
-        (&self.repository_id, &self.history_tree_id, &self.directory_id, self.owner_path.key())
+        (
+            &self.repository_id,
+            &self.history_tree_id,
+            &self.directory_id,
+            self.owner_path.key(),
+        )
     }
 
     pub(super) fn validate(&self) -> Result<()> {

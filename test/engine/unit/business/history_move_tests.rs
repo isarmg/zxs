@@ -10,8 +10,12 @@ fn a_shared_file_cannot_be_captured_as_a_single_path_move() {
     config.disks[1].upstream_slot_id = None;
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let operation = || OperationId::generate().unwrap();
-    let source = engine.create_disk_root("P01", "admin", operation()).unwrap();
-    let target = engine.create_disk_root("B01", "admin", operation()).unwrap();
+    let source = engine
+        .create_disk_root("P01", "admin", operation())
+        .unwrap();
+    let target = engine
+        .create_disk_root("B01", "admin", operation())
+        .unwrap();
     let workspace = engine
         .create_workspace(&source.main_branch_id, "admin")
         .unwrap();

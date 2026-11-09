@@ -1,6 +1,9 @@
 //! One immutable same-payload installation baseline, never an upgrade license.
 use super::payload;
-use crate::{Result, private_io::{BundleDestination, ProgramDestination}};
+use crate::{
+    Result,
+    private_io::{BundleDestination, ProgramDestination},
+};
 use data_serialization::{Deserialize, Serialize};
 
 pub(super) const NAME: &str = ".zxs-helper-program-baseline";
@@ -19,9 +22,12 @@ pub(super) struct PayloadIdentity {
 impl PayloadIdentity {
     pub(super) fn from_payload(payload: payload::Payload) -> Self {
         Self {
-            version: payload.version.into(), commit: payload.commit.into(),
-            tree: payload.tree.into(), target: payload.target.into(),
-            sha256: payload.sha256.into(), bytes: payload.bytes.len() as u64,
+            version: payload.version.into(),
+            commit: payload.commit.into(),
+            tree: payload.tree.into(),
+            target: payload.target.into(),
+            sha256: payload.sha256.into(),
+            bytes: payload.bytes.len() as u64,
         }
     }
 }
@@ -40,16 +46,24 @@ struct Baseline {
     service_started: bool,
 }
 
-pub(super) fn expected(host: &BundleDestination, program: &ProgramDestination, payload: payload::Payload) -> Result<Vec<u8>> {
+pub(super) fn expected(
+    host: &BundleDestination,
+    program: &ProgramDestination,
+    payload: payload::Payload,
+) -> Result<Vec<u8>> {
     let host_id = host.identity();
     let parent = program.parent_identity();
     Ok(json_codec::to_vec_pretty(&Baseline {
-        format: "zxs-helper-installed-program-baseline", revision: 1,
+        format: "zxs-helper-installed-program-baseline",
+        revision: 1,
         destination: super::DESTINATION,
-        host_device: host_id.device.to_string(), host_inode: host_id.inode.to_string(),
-        parent_device: parent.device.to_string(), parent_inode: parent.inode.to_string(),
+        host_device: host_id.device.to_string(),
+        host_inode: host_id.inode.to_string(),
+        parent_device: parent.device.to_string(),
+        parent_inode: parent.inode.to_string(),
         payload: PayloadIdentity::from_payload(payload),
-        data_or_configuration_modified: false, service_started: false,
+        data_or_configuration_modified: false,
+        service_started: false,
     })?)
 }
 

@@ -2,7 +2,10 @@
 //! installation capability. A reconstruction stays in memory until an explicit
 //! rescue-file consumer publishes it outside the managed database names.
 use super::{directory_database, file_database};
-use crate::{Error, ErrorCode, Result, disk::{DiskRoot, HeldRegular}};
+use crate::{
+    Error, ErrorCode, Result,
+    disk::{DiskRoot, HeldRegular},
+};
 use data_serialization::{Deserialize, Serialize};
 use std::{fs::File, path::PathBuf};
 
@@ -15,17 +18,29 @@ const ARCHIVE_FORMAT: &str = "object-local-database-material";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ObjectDatabaseScope {
-    File { file_id: String, history_tree_id: String },
-    Directory { repository_id: String, directory_id: String },
+    File {
+        file_id: String,
+        history_tree_id: String,
+    },
+    Directory {
+        repository_id: String,
+        directory_id: String,
+    },
 }
 impl ObjectDatabaseScope {
     fn validate(&self) -> Result<()> {
         match self {
-            Self::File { file_id, history_tree_id } => {
+            Self::File {
+                file_id,
+                history_tree_id,
+            } => {
                 storage_contract::validate_id(file_id, "file")?;
                 storage_contract::validate_id(history_tree_id, "history")?;
             }
-            Self::Directory { repository_id, directory_id } => {
+            Self::Directory {
+                repository_id,
+                directory_id,
+            } => {
                 storage_contract::validate_id(repository_id, "repo")?;
                 if directory_id != repository_id {
                     storage_contract::validate_id(directory_id, "entry")?;
@@ -46,7 +61,9 @@ impl ObjectDatabaseScope {
             Self::Directory { .. } => directory_database::read_material(bytes)?,
         };
         if material.scope != *self {
-            return Err(invalid("object database differs from the explicitly selected scope"));
+            return Err(invalid(
+                "object database differs from the explicitly selected scope",
+            ));
         }
         Ok(material)
     }
@@ -61,11 +78,21 @@ pub struct ObjectDatabaseRecord {
     body: String,
 }
 impl ObjectDatabaseRecord {
-    pub fn kind(&self) -> &str { &self.kind }
-    pub fn id(&self) -> &str { &self.id }
-    pub fn body_json(&self) -> &str { &self.body }
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn body_json(&self) -> &str {
+        &self.body
+    }
     pub(super) fn new(kind: &str, id: String, body: String) -> Self {
-        Self { kind: kind.into(), id, body }
+        Self {
+            kind: kind.into(),
+            id,
+            body,
+        }
     }
 }
 
@@ -79,10 +106,18 @@ pub struct ObjectDatabaseMaterial {
     records: Vec<ObjectDatabaseRecord>,
 }
 impl ObjectDatabaseMaterial {
-    pub fn scope(&self) -> &ObjectDatabaseScope { &self.scope }
-    pub fn source_sequence(&self) -> u64 { self.source_sequence }
-    pub fn records_hash(&self) -> &str { &self.records_hash }
-    pub fn records(&self) -> &[ObjectDatabaseRecord] { &self.records }
+    pub fn scope(&self) -> &ObjectDatabaseScope {
+        &self.scope
+    }
+    pub fn source_sequence(&self) -> u64 {
+        self.source_sequence
+    }
+    pub fn records_hash(&self) -> &str {
+        &self.records_hash
+    }
+    pub fn records(&self) -> &[ObjectDatabaseRecord] {
+        &self.records
+    }
 
     pub(super) fn new(
         scope: ObjectDatabaseScope,
@@ -90,7 +125,12 @@ impl ObjectDatabaseMaterial {
         records_hash: String,
         records: Vec<ObjectDatabaseRecord>,
     ) -> Self {
-        Self { scope, source_sequence, records_hash, records }
+        Self {
+            scope,
+            source_sequence,
+            records_hash,
+            records,
+        }
     }
 
     /// This durable rescue representation contains no selected host path,
@@ -98,20 +138,30 @@ impl ObjectDatabaseMaterial {
     pub fn archive_bytes(&self) -> Result<Vec<u8>> {
         self.validate_envelope()?;
         crate::disk::encode_metadata(
-            &ArchiveOutput { format: ARCHIVE_FORMAT, material: self },
+            &ArchiveOutput {
+                format: ARCHIVE_FORMAT,
+                material: self,
+            },
             MAX_OBJECT_DATABASE_ARCHIVE_BYTES,
         )
     }
 
     fn validate_envelope(&self) -> Result<()> {
         self.scope.validate()?;
-        if self.source_sequence == 0 || self.records.is_empty() || self.records.len() > MAX_RECORDS {
-            return Err(invalid("object material has no bounded nonempty captured scope"));
+        if self.source_sequence == 0 || self.records.is_empty() || self.records.len() > MAX_RECORDS
+        {
+            return Err(invalid(
+                "object material has no bounded nonempty captured scope",
+            ));
         }
         let mut bytes = 0usize;
         let mut previous = None;
         for record in &self.records {
-            let length = record.id.len().checked_add(record.body.len()).ok_or_else(budget)?;
+            let length = record
+                .id
+                .len()
+                .checked_add(record.body.len())
+                .ok_or_else(budget)?;
             if record.kind.len() > 16 || length > MAX_RECORD_BYTES - bytes {
                 return Err(budget());
             }
@@ -127,7 +177,9 @@ impl ObjectDatabaseMaterial {
             ObjectDatabaseScope::Directory { .. } => "directory-local-records",
         };
         if storage_contract::object_hash(domain, &self.records)? != self.records_hash {
-            return Err(invalid("object material records differ from their retained digest"));
+            return Err(invalid(
+                "object material records differ from their retained digest",
+            ));
         }
         Ok(())
     }
@@ -161,21 +213,33 @@ pub struct ObjectDatabaseReconstruction {
     bytes: Vec<u8>,
 }
 impl ObjectDatabaseReconstruction {
-    pub fn material(&self) -> &ObjectDatabaseMaterial { &self.material }
-    pub fn database_bytes(&self) -> &[u8] { &self.bytes }
+    pub fn material(&self) -> &ObjectDatabaseMaterial {
+        &self.material
+    }
+    pub fn database_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 fn invalid(message: &str) -> Error {
     Error::new(ErrorCode::ContainerLayoutInvalid, message)
 }
 fn budget() -> Error {
-    Error::new(ErrorCode::ResourceLimit, "object database material exceeds its bounded budget")
+    Error::new(
+        ErrorCode::ResourceLimit,
+        "object database material exceeds its bounded budget",
+    )
 }
 
 fn no_sidecars(root: &DiskRoot, leaf: &str) -> Result<()> {
     for suffix in ["-wal", "-shm", "-journal"] {
-        if root.optional_metadata(&root.path().join(format!("{leaf}{suffix}")))?.is_some() {
-            return Err(invalid("object database has a live or unknown SQLite sidecar; preserve all files"));
+        if root
+            .optional_metadata(&root.path().join(format!("{leaf}{suffix}")))?
+            .is_some()
+        {
+            return Err(invalid(
+                "object database has a live or unknown SQLite sidecar; preserve all files",
+            ));
         }
     }
     Ok(())
@@ -193,15 +257,18 @@ pub fn inspect_object_database_material(
     let root = DiskRoot::from_directory(path, directory)?;
     let leaf = expected.leaf();
     no_sidecars(&root, leaf)?;
-    let mut original = HeldRegular::capture(&root, leaf, MAX_DATABASE_BYTES)?
-        .ok_or_else(|| invalid("selected object database is absent; no metadata was reconstructed"))?;
+    let mut original = HeldRegular::capture(&root, leaf, MAX_DATABASE_BYTES)?.ok_or_else(|| {
+        invalid("selected object database is absent; no metadata was reconstructed")
+    })?;
     let material = expected.read(original.bytes())?;
     material.validate_envelope()?;
     original.release_bytes();
     let after = HeldRegular::capture(&root, leaf, MAX_DATABASE_BYTES)?
         .ok_or_else(|| invalid("selected object database disappeared during inspection"))?;
     if after.stamp() != original.stamp() {
-        return Err(invalid("selected object database changed during inspection"));
+        return Err(invalid(
+            "selected object database changed during inspection",
+        ));
     }
     no_sidecars(&root, leaf)?;
     // Revalidate all named ancestors against the still-held original directory.
@@ -218,7 +285,9 @@ pub fn reconstruct_object_database_material(
     archive: &[u8],
     expected: &ObjectDatabaseScope,
 ) -> Result<ObjectDatabaseReconstruction> {
-    if archive.len() > MAX_OBJECT_DATABASE_ARCHIVE_BYTES { return Err(budget()); }
+    if archive.len() > MAX_OBJECT_DATABASE_ARCHIVE_BYTES {
+        return Err(budget());
+    }
     expected.validate()?;
     let decoded: Archive = storage_contract::decode_strict(archive)?;
     if decoded.format != ARCHIVE_FORMAT || &decoded.material.scope != expected {
@@ -226,19 +295,26 @@ pub fn reconstruct_object_database_material(
     }
     let input = decoded.material;
     let material = ObjectDatabaseMaterial::new(
-        input.scope, input.source_sequence, input.records_hash, input.records,
+        input.scope,
+        input.source_sequence,
+        input.records_hash,
+        input.records,
     );
     material.validate_envelope()?;
     let bytes = match expected {
-        ObjectDatabaseScope::File { file_id, history_tree_id } => file_database::reconstruct_material(
-            &material, file_id, history_tree_id,
-        )?,
-        ObjectDatabaseScope::Directory { repository_id, directory_id } => directory_database::reconstruct_material(
-            &material, repository_id, directory_id,
-        )?,
+        ObjectDatabaseScope::File {
+            file_id,
+            history_tree_id,
+        } => file_database::reconstruct_material(&material, file_id, history_tree_id)?,
+        ObjectDatabaseScope::Directory {
+            repository_id,
+            directory_id,
+        } => directory_database::reconstruct_material(&material, repository_id, directory_id)?,
     };
     if expected.read(&bytes)? != material {
-        return Err(invalid("reconstructed object database does not reproduce its complete material"));
+        return Err(invalid(
+            "reconstructed object database does not reproduce its complete material",
+        ));
     }
     Ok(ObjectDatabaseReconstruction { material, bytes })
 }

@@ -17,13 +17,7 @@ pub(crate) use platform_io::publication::{BundleDestination, BundlePublication};
 use platform_io::publication::{PublicationFailure, write_atomic_at, write_atomic_at_mode};
 pub(crate) use program_repair::ProgramSnapshot;
 use rustix::fs::{AtFlags, RenameFlags, renameat_with, statat};
-use std::{
-    ffi::OsStr,
-    fs::File,
-    io::Read,
-    os::unix::fs::MetadataExt,
-    path::Path,
-};
+use std::{ffi::OsStr, fs::File, io::Read, os::unix::fs::MetadataExt, path::Path};
 
 struct AnchoredPath {
     directory: OpenAt2Root,

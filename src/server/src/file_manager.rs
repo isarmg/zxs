@@ -3,7 +3,10 @@ use crate::*;
 pub(crate) fn routes() -> Router<AppState> {
     let routes = Router::new()
         .route("/api/file-manager/disks", get(disks))
-        .route("/api/file-manager/detached-history", get(http_detached_history::read))
+        .route(
+            "/api/file-manager/detached-history",
+            get(http_detached_history::read),
+        )
         .route(
             "/api/file-manager/disks/{slot}/entries",
             get(http_listing::read),

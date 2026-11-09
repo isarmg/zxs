@@ -2,8 +2,8 @@
 //! receives published bytes from the Backup owner, never chooses a State from
 //! SQLite. SYSTEM/current namespace and writer activation remain separate.
 use super::*;
-use crate::disk::DiskRoot;
 use crate::database_install::DISK_HISTORY_DATABASE_NAME;
+use crate::disk::DiskRoot;
 use crate::history_package::preparation_checkpoint;
 use std::sync::atomic::AtomicBool;
 

@@ -292,11 +292,19 @@ impl Engine {
             // This slice has no native move Candidate/ACCEPT. A later ordinary
             // slot or a torn tail is not permission to bypass retained selection.
             if prepared.torn_tail
-                || prepared.records.keys().any(|slot| *slot > choice.source_sequence())
-                || prepared.candidates.keys().any(|slot| *slot > choice.source_sequence())
+                || prepared
+                    .records
+                    .keys()
+                    .any(|slot| *slot > choice.source_sequence())
+                || prepared
+                    .candidates
+                    .keys()
+                    .any(|slot| *slot > choice.source_sequence())
             {
-                return Err(Error::new(ErrorCode::RecoveryRequired,
-                    "journal extends beyond or cannot prove the selected move source; preserve the original choice and journal"));
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "journal extends beyond or cannot prove the selected move source; preserve the original choice and journal",
+                ));
             }
         }
         let PreparedRecovery {

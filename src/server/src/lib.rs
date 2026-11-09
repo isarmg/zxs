@@ -50,14 +50,14 @@ mod history_window_encode;
 mod history_window_http;
 mod history_window_query;
 mod http_content_matches;
+mod http_detached_history;
 mod http_directory_git;
 mod http_directory_history;
 mod http_directory_layout;
 mod http_directory_staging;
 mod http_file_history_source;
-mod http_shared_history;
-mod http_detached_history;
 mod http_node_retirement;
+mod http_shared_history;
 pub use backend_file_history::{
     ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
     HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
@@ -780,21 +780,37 @@ pub trait Backend: Send + Sync {
         repository_id: &str,
     ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
     fn preview_node_retirement(
-        &self, _identity: &Identity, _request: storage_contract::node_retirement::Selection,
+        &self,
+        _identity: &Identity,
+        _request: storage_contract::node_retirement::Selection,
         _cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::node_retirement::Preview, ApiError> { Err(ApiError::unsupported()) }
+    ) -> Result<storage_contract::node_retirement::Preview, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn retire_file_nodes(
-        &self, _identity: &Identity, _request: storage_contract::node_retirement::Selection,
+        &self,
+        _identity: &Identity,
+        _request: storage_contract::node_retirement::Selection,
         _operation: storage_contract::OperationId,
-    ) -> Result<storage_contract::node_retirement::Outcome, ApiError> { Err(ApiError::unsupported()) }
+    ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn resume_node_retirement(
-        &self, _identity: &Identity, _file: storage_contract::history_window::HistoryFileId,
+        &self,
+        _identity: &Identity,
+        _file: storage_contract::history_window::HistoryFileId,
         _operation: storage_contract::OperationId,
-    ) -> Result<storage_contract::node_retirement::Outcome, ApiError> { Err(ApiError::unsupported()) }
+    ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn detached_history(
-        &self, _identity: &Identity, _request: storage_contract::detached_history::Request,
+        &self,
+        _identity: &Identity,
+        _request: storage_contract::detached_history::Request,
         _cancellation: storage_contract::history_window::HistoryWindowCancellation,
-    ) -> Result<storage_contract::detached_history::Page, ApiError> { Err(ApiError::unsupported()) }
+    ) -> Result<storage_contract::detached_history::Page, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn shared_history(
         &self,
         _identity: &Identity,
@@ -1567,28 +1583,40 @@ impl Backend for AuthorizedBackend {
             .default_directory_branch(&self.current(identity)?, repository_id)
     }
     fn preview_node_retirement(
-        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        &self,
+        identity: &Identity,
+        request: storage_contract::node_retirement::Selection,
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::node_retirement::Preview, ApiError> {
-        self.backend.preview_node_retirement(&self.current(identity)?, request, cancellation)
+        self.backend
+            .preview_node_retirement(&self.current(identity)?, request, cancellation)
     }
     fn retire_file_nodes(
-        &self, identity: &Identity, request: storage_contract::node_retirement::Selection,
+        &self,
+        identity: &Identity,
+        request: storage_contract::node_retirement::Selection,
         operation: storage_contract::OperationId,
     ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
-        self.backend.retire_file_nodes(&self.current(identity)?, request, operation)
+        self.backend
+            .retire_file_nodes(&self.current(identity)?, request, operation)
     }
     fn resume_node_retirement(
-        &self, identity: &Identity, file: storage_contract::history_window::HistoryFileId,
+        &self,
+        identity: &Identity,
+        file: storage_contract::history_window::HistoryFileId,
         operation: storage_contract::OperationId,
     ) -> Result<storage_contract::node_retirement::Outcome, ApiError> {
-        self.backend.resume_node_retirement(&self.current(identity)?, file, operation)
+        self.backend
+            .resume_node_retirement(&self.current(identity)?, file, operation)
     }
     fn detached_history(
-        &self, identity: &Identity, request: storage_contract::detached_history::Request,
+        &self,
+        identity: &Identity,
+        request: storage_contract::detached_history::Request,
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::detached_history::Page, ApiError> {
-        self.backend.detached_history(&self.current(identity)?, request, cancellation)
+        self.backend
+            .detached_history(&self.current(identity)?, request, cancellation)
     }
     fn shared_history(
         &self,

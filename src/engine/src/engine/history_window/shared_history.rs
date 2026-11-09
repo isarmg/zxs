@@ -7,10 +7,9 @@ use storage_contract::history_window::{
     HistoryBranchId, HistoryFileId, HistoryTreeId, HistoryVersionId,
 };
 use storage_contract::shared_history::{
-    MAX_SHARED_HISTORY_BRANCHES, MAX_SHARED_HISTORY_EDGES,
-    MAX_SHARED_HISTORY_NODES, SharedContent, SharedHistoryBranch, SharedHistoryFile,
-    SharedHistoryGraph, SharedHistoryNode, SharedHistoryNodeId, SharedHistoryNodeKind,
-    SharedHistoryRequest, SharedHistoryVersion,
+    MAX_SHARED_HISTORY_BRANCHES, MAX_SHARED_HISTORY_EDGES, MAX_SHARED_HISTORY_NODES, SharedContent,
+    SharedHistoryBranch, SharedHistoryFile, SharedHistoryGraph, SharedHistoryNode,
+    SharedHistoryNodeId, SharedHistoryNodeKind, SharedHistoryRequest, SharedHistoryVersion,
 };
 
 use crate::shared_file_topology::{Scan, VersionIndex, exhausted};
@@ -172,8 +171,10 @@ fn metadata_events(
 ) -> Result<()> {
     for node in state.file_path_nodes.values() {
         scan.record()?;
-        if node.history_tree_id == history && files.contains(node.file_id.as_str())
-            && !crate::node_retirement_engine::is_retired(state, &node.version_id) {
+        if node.history_tree_id == history
+            && files.contains(node.file_id.as_str())
+            && !crate::node_retirement_engine::is_retired(state, &node.version_id)
+        {
             events.insert(
                 &node.node_id,
                 &node.file_id,
@@ -185,8 +186,10 @@ fn metadata_events(
     }
     for node in state.file_metadata_nodes.values() {
         scan.record()?;
-        if node.history_tree_id == history && files.contains(node.file_id.as_str())
-            && !crate::node_retirement_engine::is_retired(state, &node.version_id) {
+        if node.history_tree_id == history
+            && files.contains(node.file_id.as_str())
+            && !crate::node_retirement_engine::is_retired(state, &node.version_id)
+        {
             let kind = match node.kind {
                 crate::FileMetadataKind::Tags => SharedHistoryNodeKind::Tags,
                 crate::FileMetadataKind::Merge => SharedHistoryNodeKind::Merge,
@@ -225,7 +228,8 @@ fn ancestry(state: &State, history: &str, events: &mut Events, scan: &mut Scan<'
         } else {
             nodes::base_parents(state, id)
         };
-        let parents = crate::node_retirement_engine::live_parents(state, parents, || scan.record())?;
+        let parents =
+            crate::node_retirement_engine::live_parents(state, parents, || scan.record())?;
         for parent in parents {
             events.parent(id, parent, scan)?;
         }

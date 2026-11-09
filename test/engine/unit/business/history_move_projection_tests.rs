@@ -37,13 +37,16 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
-            Config::development([temp.path().join("source"), temp.path().join("target")])
-                .unwrap();
+            Config::development([temp.path().join("source"), temp.path().join("target")]).unwrap();
         config.disks[1].level = 1;
         config.disks[1].upstream_slot_id = None;
         let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
-        let source = engine.create_disk_root("P01", "admin", operation()).unwrap();
-        let target = engine.create_disk_root("B01", "admin", operation()).unwrap();
+        let source = engine
+            .create_disk_root("P01", "admin", operation())
+            .unwrap();
+        let target = engine
+            .create_disk_root("B01", "admin", operation())
+            .unwrap();
         save(&mut engine, &source, b"old body");
         save(&mut engine, &source, b"current body");
         let file = engine
@@ -121,13 +124,19 @@ fn move_projects_one_complete_joint_graph_without_publishing_either_side() {
         .unwrap()
         .branch_id
         .unwrap();
-    fixture.engine.archive_branch(&branch, "admin", operation()).unwrap();
+    fixture
+        .engine
+        .archive_branch(&branch, "admin", operation())
+        .unwrap();
     let before = fixture.engine.state().clone();
     let projection = fixture.project();
     let deletion = projection.proposed_source_deletion();
     assert_eq!(deletion.branch_heads, projection.capture().branch_heads);
     assert!(deletion.branch_heads.contains_key(&branch));
-    assert_eq!(deletion.parent_node_ids, projection.capture().parent_node_ids);
+    assert_eq!(
+        deletion.parent_node_ids,
+        projection.capture().parent_node_ids
+    );
     assert_eq!(deletion.operation_id, projection.operation_id());
     assert_eq!(deletion.author, projection.principal());
     assert_eq!(deletion.sequence, projection.proposed_sequence());
@@ -145,8 +154,14 @@ fn move_projects_one_complete_joint_graph_without_publishing_either_side() {
     for (old, new) in projection.version_mapping() {
         assert_eq!(next.versions[old], before.versions[old]);
         assert_eq!(next.versions[new].file_id, target_file);
-        assert_eq!(next.versions[new].content_hash, before.versions[old].content_hash);
-        assert_eq!(next.versions[new].logical_size, before.versions[old].logical_size);
+        assert_eq!(
+            next.versions[new].content_hash,
+            before.versions[old].content_hash
+        );
+        assert_eq!(
+            next.versions[new].logical_size,
+            before.versions[old].logical_size
+        );
         assert_eq!(next.placements[new].route_slot_ids, ["B01"]);
     }
     for old in projection.branch_mapping().keys() {
@@ -163,8 +178,20 @@ fn move_projects_one_complete_joint_graph_without_publishing_either_side() {
         .recheck_file_history_move_projection(&projection, &HistoryWindowCancellation::new())
         .unwrap();
     assert_eq!(fixture.engine.state(), &before);
-    assert!(fixture.engine.file_deletion(&fixture.file.file_id).is_none());
-    assert!(fixture.engine.namespace_tree(&fixture.target.main_branch_id).unwrap().entries().is_empty());
+    assert!(
+        fixture
+            .engine
+            .file_deletion(&fixture.file.file_id)
+            .is_none()
+    );
+    assert!(
+        fixture
+            .engine
+            .namespace_tree(&fixture.target.main_branch_id)
+            .unwrap()
+            .entries()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -195,52 +222,69 @@ fn move_reconstruction_keeps_the_exact_frozen_clock_slot_route_and_identities() 
 #[test]
 fn move_projection_preserves_tags_notes_and_undone_lifecycle_without_importing_new_d() {
     let mut fixture = Fixture::new();
-    let context = fixture.engine.file_context(&fixture.source.repository_id, "source.txt").unwrap();
+    let context = fixture
+        .engine
+        .file_context(&fixture.source.repository_id, "source.txt")
+        .unwrap();
     let head = fixture.engine.file_branch_head(&context.branch_id).unwrap();
-    fixture.engine.update_file_node_tags(FileNodeTagsUpdateRequest {
-        file_id: &fixture.file.file_id,
-        targets: &[FileTagTarget {
-            branch_id: context.branch_id,
-            source_node_id: head.clone(),
-            expected_node_id: head,
-        }],
-        add: &["kept-tag".into()],
-        remove: &[],
-        location: None,
-        principal: "admin",
-        operation_id: operation(),
-    }).unwrap();
-    fixture.engine.set_file_note(
-        &fixture.file.file_id,
-        None,
-        &Note::parse("retained note".into()).unwrap(),
-        "admin",
-        operation(),
-    ).unwrap();
+    fixture
+        .engine
+        .update_file_node_tags(FileNodeTagsUpdateRequest {
+            file_id: &fixture.file.file_id,
+            targets: &[FileTagTarget {
+                branch_id: context.branch_id,
+                source_node_id: head.clone(),
+                expected_node_id: head,
+            }],
+            add: &["kept-tag".into()],
+            remove: &[],
+            location: None,
+            principal: "admin",
+            operation_id: operation(),
+        })
+        .unwrap();
+    fixture
+        .engine
+        .set_file_note(
+            &fixture.file.file_id,
+            None,
+            &Note::parse("retained note".into()).unwrap(),
+            "admin",
+            operation(),
+        )
+        .unwrap();
     let file = HistoryFileId::parse(&fixture.file.file_id).unwrap();
-    fixture.engine.soft_delete_file(DeleteFileRequest {
-        target: FileDeletionTarget {
-            repository_id: &HistoryRepositoryId::parse(&fixture.source.repository_id).unwrap(),
-            file_id: &file,
-            path: &name_policy::LookupPath::parse("source.txt").unwrap(),
-        },
-        principal: "admin",
-        operation_id: operation(),
-    }).unwrap();
+    fixture
+        .engine
+        .soft_delete_file(DeleteFileRequest {
+            target: FileDeletionTarget {
+                repository_id: &HistoryRepositoryId::parse(&fixture.source.repository_id).unwrap(),
+                file_id: &file,
+                path: &name_policy::LookupPath::parse("source.txt").unwrap(),
+            },
+            principal: "admin",
+            operation_id: operation(),
+        })
+        .unwrap();
     let deleted = fixture.engine.file_deletion(file.as_str()).unwrap().clone();
-    fixture.engine.undo_file_deletion(UndoFileDeletionRequest {
-        file_id: &file,
-        deletion_node_id: &deleted.node_id,
-        principal: "admin",
-        operation_id: operation(),
-    }).unwrap();
+    fixture
+        .engine
+        .undo_file_deletion(UndoFileDeletionRequest {
+            file_id: &file,
+            deletion_node_id: &deleted.node_id,
+            principal: "admin",
+            operation_id: operation(),
+        })
+        .unwrap();
     let projection = fixture.project();
     let target = projection.target_file_id().as_str();
     let next = &projection.writes.next;
     assert_eq!(next.file_notes[target], "retained note");
-    assert!(next.file_metadata_nodes.values().any(|node| {
-        node.file_id == target && node.tags.contains("kept-tag")
-    }));
+    assert!(
+        next.file_metadata_nodes
+            .values()
+            .any(|node| { node.file_id == target && node.tags.contains("kept-tag") })
+    );
     assert_eq!(projection.retained_lifecycle_events(), 2);
     let events = &projection.writes.lifecycle.events;
     assert!(events.iter().all(|event| {
@@ -260,19 +304,31 @@ fn move_projection_preserves_tags_notes_and_undone_lifecycle_without_importing_n
 fn changed_state_or_unpublished_workspace_invalidates_the_joint_projection() {
     let mut fixture = Fixture::new();
     let projection = fixture.project();
-    fixture.engine.set_file_note(
-        &fixture.file.file_id,
-        None,
-        &Note::parse("new source note".into()).unwrap(),
-        "admin",
-        operation(),
-    ).unwrap();
-    assert_eq!(recheck_error(&fixture.engine, &projection), ErrorCode::WorkspaceChanged);
+    fixture
+        .engine
+        .set_file_note(
+            &fixture.file.file_id,
+            None,
+            &Note::parse("new source note".into()).unwrap(),
+            "admin",
+            operation(),
+        )
+        .unwrap();
+    assert_eq!(
+        recheck_error(&fixture.engine, &projection),
+        ErrorCode::WorkspaceChanged
+    );
     let projection = fixture.project();
     let sequence = fixture.engine.state().sequence;
-    let _workspace = fixture.engine.create_workspace(&fixture.target.main_branch_id, "admin").unwrap();
+    let _workspace = fixture
+        .engine
+        .create_workspace(&fixture.target.main_branch_id, "admin")
+        .unwrap();
     assert_eq!(fixture.engine.state().sequence, sequence);
-    assert_eq!(recheck_error(&fixture.engine, &projection), ErrorCode::WorkspaceBusy);
+    assert_eq!(
+        recheck_error(&fixture.engine, &projection),
+        ErrorCode::WorkspaceBusy
+    );
 }
 
 #[test]
@@ -282,8 +338,16 @@ fn same_state_but_changed_decision_slot_cannot_reuse_a_joint_projection() {
     // Admission-only fixture: a resolved aborted slot can advance without
     // turning the proposed write set into published State.
     fixture.engine.next_slot += 1;
-    assert_eq!(recheck_error(&fixture.engine, &projection), ErrorCode::WorkspaceChanged);
-    assert!(fixture.engine.file_deletion(&fixture.file.file_id).is_none());
+    assert_eq!(
+        recheck_error(&fixture.engine, &projection),
+        ErrorCode::WorkspaceChanged
+    );
+    assert!(
+        fixture
+            .engine
+            .file_deletion(&fixture.file.file_id)
+            .is_none()
+    );
 }
 
 #[test]
@@ -297,9 +361,23 @@ fn joint_projection_has_no_side_effects_to_recover_after_cold_open() {
     drop(engine);
     let reopened = Engine::open(&root).unwrap();
     assert_eq!(reopened.state(), &before);
-    assert_eq!(recheck_error(&reopened, &projection), ErrorCode::WorkspaceChanged);
-    assert!(!reopened.state().operations.contains_key(&projection.operation_id()));
-    assert!(reopened.namespace_tree(&target.main_branch_id).unwrap().entries().is_empty());
+    assert_eq!(
+        recheck_error(&reopened, &projection),
+        ErrorCode::WorkspaceChanged
+    );
+    assert!(
+        !reopened
+            .state()
+            .operations
+            .contains_key(&projection.operation_id())
+    );
+    assert!(
+        reopened
+            .namespace_tree(&target.main_branch_id)
+            .unwrap()
+            .entries()
+            .is_empty()
+    );
     drop(reopened);
     drop(temp);
 }
@@ -309,17 +387,35 @@ fn projection_rejects_used_operation_empty_actor_and_cancellation() {
     let fixture = Fixture::new();
     let used = *fixture.engine.state().operations.keys().next().unwrap();
     let cancellation = HistoryWindowCancellation::new();
-    assert_eq!(fixture.engine.project_file_history_move(
-        fixture.capture(), "admin", used, &cancellation,
-    ).map(|_| ()).unwrap_err().code(), ErrorCode::IdempotencyKeyReused);
-    assert_eq!(fixture.engine.project_file_history_move(
-        fixture.capture(), "", operation(), &cancellation,
-    ).map(|_| ()).unwrap_err().code(), ErrorCode::Unauthenticated);
+    assert_eq!(
+        fixture
+            .engine
+            .project_file_history_move(fixture.capture(), "admin", used, &cancellation,)
+            .map(|_| ())
+            .unwrap_err()
+            .code(),
+        ErrorCode::IdempotencyKeyReused
+    );
+    assert_eq!(
+        fixture
+            .engine
+            .project_file_history_move(fixture.capture(), "", operation(), &cancellation,)
+            .map(|_| ())
+            .unwrap_err()
+            .code(),
+        ErrorCode::Unauthenticated
+    );
     let capture = fixture.capture();
     cancellation.cancel();
-    assert_eq!(fixture.engine.project_file_history_move(
-        capture, "admin", operation(), &cancellation,
-    ).map(|_| ()).unwrap_err().code(), ErrorCode::OperationAborted);
+    assert_eq!(
+        fixture
+            .engine
+            .project_file_history_move(capture, "admin", operation(), &cancellation,)
+            .map(|_| ())
+            .unwrap_err()
+            .code(),
+        ErrorCode::OperationAborted
+    );
 }
 
 #[test]
@@ -338,7 +434,11 @@ fn joint_projection_is_not_admitted_as_an_existing_copy_or_delete_publication() 
     );
     let mut changed_source = projection.writes.next.clone();
     let source_branch = projection.capture().branch_heads().keys().next().unwrap();
-    changed_source.branches.get_mut(source_branch).unwrap().generation += 1;
+    changed_source
+        .branches
+        .get_mut(source_branch)
+        .unwrap()
+        .generation += 1;
     assert_eq!(
         crate::file_deletion::freeze::verify(&projection.writes.next, &changed_source)
             .unwrap_err()
@@ -347,6 +447,10 @@ fn joint_projection_is_not_admitted_as_an_existing_copy_or_delete_publication() 
     );
     let mut changed_target = projection.writes.next.clone();
     let target_branch = projection.branch_mapping().values().next().unwrap();
-    changed_target.branches.get_mut(target_branch).unwrap().generation += 1;
+    changed_target
+        .branches
+        .get_mut(target_branch)
+        .unwrap()
+        .generation += 1;
     crate::file_deletion::freeze::verify(&projection.writes.next, &changed_target).unwrap();
 }

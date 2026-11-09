@@ -138,12 +138,19 @@ fn prepare_history_manifests_inner(
         if let Some((maximum_bytes, maximum_objects)) = limits {
             for object in &incoming {
                 bytes = bytes.checked_add(object.bytes().len()).ok_or_else(|| {
-                    Error::new(ErrorCode::ResourceLimit, "history preparation size overflow")
+                    Error::new(
+                        ErrorCode::ResourceLimit,
+                        "history preparation size overflow",
+                    )
                 })?;
             }
-            if bytes > maximum_bytes || objects.len().saturating_add(incoming.len()) > maximum_objects {
-                return Err(Error::new(ErrorCode::ResourceLimit,
-                    "history preparation exceeds its aggregate object budget"));
+            if bytes > maximum_bytes
+                || objects.len().saturating_add(incoming.len()) > maximum_objects
+            {
+                return Err(Error::new(
+                    ErrorCode::ResourceLimit,
+                    "history preparation exceeds its aggregate object budget",
+                ));
             }
         }
         objects.extend(incoming);
@@ -725,8 +732,15 @@ fn load_package_at(
         )
     })?;
     manifest.validate()?;
-    if manifest.content_states.values().any(|state| *state == ContentState::Retired) {
-        return Err(Error::new(ErrorCode::HistoryPackageInvalid, "portable history lacks permanent retirement receipts"));
+    if manifest
+        .content_states
+        .values()
+        .any(|state| *state == ContentState::Retired)
+    {
+        return Err(Error::new(
+            ErrorCode::HistoryPackageInvalid,
+            "portable history lacks permanent retirement receipts",
+        ));
     }
     verify_publication_seal(
         &proof.candidate,

@@ -15,7 +15,9 @@ pub(super) async fn read(
             sqlite_access::query("SELECT ordinal,length(CAST(body AS BLOB)) FROM backup_directories WHERE ordinal>? ORDER BY ordinal LIMIT 1")
                 .bind(directories.len() as i64 - 1).fetch_optional(&mut *connection).await?
         };
-        let Some(row) = row else { break; };
+        let Some(row) = row else {
+            break;
+        };
         if versions + directories.len() == MAX_ROWS {
             return Err(budget());
         }
@@ -39,8 +41,13 @@ pub(super) async fn read(
             return Err(invalid("disk directory encoding is not canonical"));
         }
         value.validate()?;
-        if directories.last().is_some_and(|previous| previous.key() >= value.key()) {
-            return Err(invalid("disk directories are not unique and in identity/path order"));
+        if directories
+            .last()
+            .is_some_and(|previous| previous.key() >= value.key())
+        {
+            return Err(invalid(
+                "disk directories are not unique and in identity/path order",
+            ));
         }
         *total += length;
         directories.push(value);

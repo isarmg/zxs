@@ -40,8 +40,12 @@ pub(super) fn select_target(root: &DiskRoot, hash: &str) -> Result<()> {
     require_target_selection(root, hash)
 }
 pub(super) fn require_target_selection(root: &DiskRoot, hash: &str) -> Result<()> {
-    if root.read_bytes(&root.path().join(TARGET_SELECTION), MAX_SELECTION)? != selection(root, hash)? {
-        return Err(invalid("native metadata target selection changed its original plan or physical root"));
+    if root.read_bytes(&root.path().join(TARGET_SELECTION), MAX_SELECTION)?
+        != selection(root, hash)?
+    {
+        return Err(invalid(
+            "native metadata target selection changed its original plan or physical root",
+        ));
     }
     require_unselected_target(root)
 }
@@ -63,18 +67,26 @@ pub(in super::super) fn require_unselected_target(root: &DiskRoot) -> Result<()>
     let bytes = root.read_bytes(&root.path().join(TARGET_SELECTION), MAX_SELECTION)?;
     let selected: Selection = crate::journal::decode_proof(&bytes)?;
     if selected.installation_hash.len() != 64
-        || !selected.installation_hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || !selected
+            .installation_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         || selected.physical != PhysicalBinding::of(root)?
         || canonical_json(&selected)? != bytes
     {
-        return Err(invalid("unselected Backup metadata has no exact bounded local staging record"));
+        return Err(invalid(
+            "unselected Backup metadata has no exact bounded local staging record",
+        ));
     }
     let held = root.private_child(&metadata)?;
     for entry in held.entries(held.path())? {
         let name = entry.map_err(fs_error)?;
         // In particular pool-membership/generation.json, journal namespaces,
         // I/O decisions and writer names cannot hide behind a staging record.
-        if !matches!(name.as_path().to_str(), Some("objects" | "publication-seals")) {
+        if !matches!(
+            name.as_path().to_str(),
+            Some("objects" | "publication-seals")
+        ) {
             return Err(Error::new(
                 ErrorCode::UnsupportedOperation,
                 "frozen Backup metadata contains an active or unknown namespace; retained without adoption",
@@ -115,18 +127,33 @@ impl<'a> ObjectSet<'a> {
         if seal.len() > MAX_METADATA || bytes > MAX_BYTES {
             return Err(budget());
         }
-        Ok(Self { objects, candidate, seal, bytes })
+        Ok(Self {
+            objects,
+            candidate,
+            seal,
+            bytes,
+        })
     }
     pub(super) fn references(&self) -> Vec<ObjectReference<'_>> {
-        self.objects.iter().map(|((kind, hash), bytes)| ObjectReference {
-            kind, hash, bytes: bytes.len(),
-        }).collect()
+        self.objects
+            .iter()
+            .map(|((kind, hash), bytes)| ObjectReference {
+                kind,
+                hash,
+                bytes: bytes.len(),
+            })
+            .collect()
     }
-    pub(super) fn len(&self) -> usize { self.objects.len() }
-    pub(super) fn bytes(&self) -> usize { self.bytes }
+    pub(super) fn len(&self) -> usize {
+        self.objects.len()
+    }
+    pub(super) fn bytes(&self) -> usize {
+        self.bytes
+    }
     pub(super) fn get(&self, kind: &'static str, hash: &str) -> Result<&[u8]> {
-        self.objects.get(&(kind, hash)).copied()
-            .ok_or_else(|| invalid("native registry requested an object outside its exact closed graph"))
+        self.objects.get(&(kind, hash)).copied().ok_or_else(|| {
+            invalid("native registry requested an object outside its exact closed graph")
+        })
     }
     fn seal_path(&self, disk: &DiskConfig) -> PathBuf {
         crate::journal::publication_seal_path(disk, self.candidate)
@@ -145,42 +172,63 @@ impl<'a> ObjectSet<'a> {
             let paths = crate::journal::existing_object_paths_at(root, disk, kind, hash)?;
             if let Some(path) = paths.first() {
                 if root.read_bytes(path, expected.len())? != *expected {
-                    return Err(Error::new(ErrorCode::ObjectCollision,
-                        "ordinary native metadata conflicts; no existing object replaced"));
+                    return Err(Error::new(
+                        ErrorCode::ObjectCollision,
+                        "ordinary native metadata conflicts; no existing object replaced",
+                    ));
                 }
             } else {
-                missing = missing.checked_add(expected.len() as u64).ok_or_else(budget)?;
+                missing = missing
+                    .checked_add(expected.len() as u64)
+                    .ok_or_else(budget)?;
                 largest = largest.max(expected.len() as u64);
             }
         }
         let path = self.seal_path(disk);
         if preparation_path_exists(root, &path)? {
             if root.read_bytes(&path, MAX_METADATA)? != self.seal {
-                return Err(invalid("ordinary Publication seal conflicts with the real original barrier"));
+                return Err(invalid(
+                    "ordinary Publication seal conflicts with the real original barrier",
+                ));
             }
         } else {
-            missing = missing.checked_add(self.seal.len() as u64).ok_or_else(budget)?;
+            missing = missing
+                .checked_add(self.seal.len() as u64)
+                .ok_or_else(budget)?;
             largest = largest.max(self.seal.len() as u64);
         }
-        let required = missing.checked_add(largest)
+        let required = missing
+            .checked_add(largest)
             .and_then(|n| n.checked_add(reserve))
             .and_then(|n| n.checked_add(2 * MAX_DESCRIPTOR as u64 + 1024 * 1024))
             .and_then(|n| n.checked_add(self.objects.len() as u64 * 8192))
             .ok_or_else(budget)?;
         if root.available()? < required {
-            return Err(Error::new(ErrorCode::NoSpace,
-                "each ordinary native store needs independent bytes, atomic staging and retained reserve"));
+            return Err(Error::new(
+                ErrorCode::NoSpace,
+                "each ordinary native store needs independent bytes, atomic staging and retained reserve",
+            ));
         }
         Ok(())
     }
-    pub(super) fn install(&self, root: &DiskRoot, disk: &DiskConfig, stop: &AtomicBool) -> Result<()> {
+    pub(super) fn install(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        stop: &AtomicBool,
+    ) -> Result<()> {
         for ((kind, hash), bytes) in &self.objects {
             preparation_checkpoint(stop)?;
             let object = AuthenticatedMetadataObject::authenticate(
-                kind, hash, storage_contract::strict_json(bytes)?,
-            )?.into_prepared(MAX_METADATA)?;
+                kind,
+                hash,
+                storage_contract::strict_json(bytes)?,
+            )?
+            .into_prepared(MAX_METADATA)?;
             if object.bytes() != *bytes {
-                return Err(invalid("ordinary metadata recipe is not the original canonical native bytes"));
+                return Err(invalid(
+                    "ordinary metadata recipe is not the original canonical native bytes",
+                ));
             }
             // Production native storage rejects flat aliases, never replaces a
             // conflicting hash name, and repeats file/directory durability.
@@ -188,35 +236,57 @@ impl<'a> ObjectSet<'a> {
         }
         install_preparation_bytes(root, &self.seal_path(disk), self.seal)
     }
-    pub(super) fn verify(&self, root: &DiskRoot, disk: &DiskConfig, stop: &AtomicBool) -> Result<()> {
+    pub(super) fn verify(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        stop: &AtomicBool,
+    ) -> Result<()> {
         for ((kind, hash), bytes) in &self.objects {
             preparation_checkpoint(stop)?;
             let object = crate::journal::load_authenticated_object_at(root, disk, kind, hash)?;
             if object.bytes() != *bytes {
-                return Err(invalid("ordinary native object no longer has its exact published bytes"));
+                return Err(invalid(
+                    "ordinary native object no longer has its exact published bytes",
+                ));
             }
         }
         if root.read_bytes(&self.seal_path(disk), MAX_METADATA)? != self.seal {
-            return Err(invalid("ordinary native seal lost its exact all-original member proof"));
+            return Err(invalid(
+                "ordinary native seal lost its exact all-original member proof",
+            ));
         }
         Ok(())
     }
     pub(super) fn inventory_target(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         let metadata = root.path().join("metadata");
-        if !preparation_path_exists(root, &metadata)? { return Ok(()); }
+        if !preparation_path_exists(root, &metadata)? {
+            return Ok(());
+        }
         require_unselected_target(root)?;
         let mut files = BTreeSet::new();
         for (kind, hash) in self.objects.keys() {
-            files.insert(PathBuf::from("objects").join(kind).join(&hash[..2]).join(format!("{hash}.json")));
+            files.insert(
+                PathBuf::from("objects")
+                    .join(kind)
+                    .join(&hash[..2])
+                    .join(format!("{hash}.json")),
+            );
         }
         files.insert(PathBuf::from("publication-seals").join(format!("{}.json", self.candidate)));
         let mut directories = BTreeSet::new();
         let mut file_parents = BTreeSet::new();
         for path in &files {
-            file_parents.insert(path.parent().expect("invariant: native object has parent").to_owned());
+            file_parents.insert(
+                path.parent()
+                    .expect("invariant: native object has parent")
+                    .to_owned(),
+            );
             let mut parent = path.parent();
             while let Some(value) = parent {
-                if value == Path::new("") { break; }
+                if value == Path::new("") {
+                    break;
+                }
                 directories.insert(value.to_owned());
                 parent = value.parent();
             }
@@ -228,7 +298,9 @@ impl<'a> ObjectSet<'a> {
             for entry in held.entries(&held.path().join(&parent))? {
                 preparation_checkpoint(stop)?;
                 count += 1;
-                if count > 4 * MAX_OBJECTS { return Err(budget()); }
+                if count > 4 * MAX_OBJECTS {
+                    return Err(budget());
+                }
                 let name = entry.map_err(fs_error)?;
                 let relative = parent.join(name.as_path());
                 let path = held.path().join(&relative);
@@ -241,8 +313,10 @@ impl<'a> ObjectSet<'a> {
                 {
                     held.open_read_regular(&path)?;
                 } else {
-                    return Err(Error::new(ErrorCode::ObjectCollision,
-                        "unknown target native metadata retained, not adopted or removed"));
+                    return Err(Error::new(
+                        ErrorCode::ObjectCollision,
+                        "unknown target native metadata retained, not adopted or removed",
+                    ));
                 }
             }
         }

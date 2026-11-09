@@ -5,8 +5,8 @@ use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::history_window::HistoryFileId;
 
-mod persist;
 mod operations;
+mod persist;
 use operations::metadata_members;
 
 const FORMAT: &str = "file-history-move-joint-recovery";
@@ -208,7 +208,9 @@ impl RecoveryRecord {
         {
             parse_hash(hash)?;
             if *membership_epoch == 0 {
-                return Err(corrupt("move recovery envelope has an invalid configuration generation"));
+                return Err(corrupt(
+                    "move recovery envelope has an invalid configuration generation",
+                ));
             }
         }
         if self.source_sequence == 0
@@ -220,14 +222,20 @@ impl RecoveryRecord {
             || self.target_slots.is_empty()
             || self.target_slots.len() > MAX_ITEMS
         {
-            return Err(corrupt("move recovery envelope has an invalid retained source cardinality"));
+            return Err(corrupt(
+                "move recovery envelope has an invalid retained source cardinality",
+            ));
         }
         for (branch, head) in &self.branch_heads {
             storage_contract::validate_id(branch, "br")?;
             match head.split_once('_').map(|(prefix, _)| prefix) {
                 Some("ver") => storage_contract::validate_id(head, "ver")?,
                 Some("fnode") => storage_contract::validate_id(head, "fnode")?,
-                _ => return Err(corrupt("move recovery envelope frontier is not a retained file node")),
+                _ => {
+                    return Err(corrupt(
+                        "move recovery envelope frontier is not a retained file node",
+                    ));
+                }
             }
         }
         let parents: Vec<_> = self
@@ -241,7 +249,9 @@ impl RecoveryRecord {
             || self.version_ids.iter().collect::<BTreeSet<_>>().len() != self.version_ids.len()
             || self.target_slots.iter().collect::<BTreeSet<_>>().len() != self.target_slots.len()
         {
-            return Err(corrupt("move recovery envelope frontier, versions or target route is not exact"));
+            return Err(corrupt(
+                "move recovery envelope frontier, versions or target route is not exact",
+            ));
         }
         for version in &self.version_ids {
             storage_contract::validate_id(version, "ver")?;
@@ -252,11 +262,18 @@ impl RecoveryRecord {
         if self.decision_slot <= self.source_sequence
             || self.route.slots != self.target_slots
             || self.route.bindings.len() != self.target_slots.len()
-            || self.target_slots.iter().any(|slot| self.route.bindings.get(slot).is_none_or(|generation| *generation == 0))
+            || self.target_slots.iter().any(|slot| {
+                self.route
+                    .bindings
+                    .get(slot)
+                    .is_none_or(|generation| *generation == 0)
+            })
             || self.metadata_members.is_empty()
             || self.metadata_members.len() > MAX_ITEMS
         {
-            return Err(corrupt("move recovery envelope has an invalid joint slot, route or member set"));
+            return Err(corrupt(
+                "move recovery envelope has an invalid joint slot, route or member set",
+            ));
         }
         let mut disk_ids = BTreeSet::new();
         let mut slots = BTreeSet::new();
@@ -270,7 +287,9 @@ impl RecoveryRecord {
                 || !slots.insert(&member.slot_id)
                 || previous.is_some_and(|id| id >= member.disk_id.as_str())
             {
-                return Err(corrupt("move recovery member identities are not exact and ordered"));
+                return Err(corrupt(
+                    "move recovery member identities are not exact and ordered",
+                ));
             }
             previous = Some(&member.disk_id);
         }
@@ -293,4 +312,3 @@ impl RecoveryRecord {
         Ok(())
     }
 }
-

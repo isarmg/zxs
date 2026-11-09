@@ -1,54 +1,127 @@
 use super::*;
 
 fn choices(state: &State) -> Vec<(Target, String, String, bool)> {
-    let Some(target) = Target::capture(state) else { return Vec::new(); };
-    let current = state.files.selected.as_ref().filter(|entry| !entry.retained_history()).and_then(|entry| entry.version_id());
+    let Some(target) = Target::capture(state) else {
+        return Vec::new();
+    };
+    let current = state
+        .files
+        .selected
+        .as_ref()
+        .filter(|entry| !entry.retained_history())
+        .and_then(|entry| entry.version_id());
     let mut rows = BTreeMap::new();
     for node in state.files.file_history.nodes() {
-        let Some(version) = node.version_id() else { continue; };
-        if matches!(node.content_state(), Some(storage_contract::ContentState::Migrated | storage_contract::ContentState::Retired)) { continue; }
-        let label = format!("{} · {} · {}", node.path().unwrap_or(&target.path), node.note(), version);
-        rows.entry(version.to_owned()).or_insert((target.clone(), version.to_owned(), label, current == Some(version)));
+        let Some(version) = node.version_id() else {
+            continue;
+        };
+        if matches!(
+            node.content_state(),
+            Some(
+                storage_contract::ContentState::Migrated | storage_contract::ContentState::Retired
+            )
+        ) {
+            continue;
+        }
+        let label = format!(
+            "{} · {} · {}",
+            node.path().unwrap_or(&target.path),
+            node.note(),
+            version
+        );
+        rows.entry(version.to_owned()).or_insert((
+            target.clone(),
+            version.to_owned(),
+            label,
+            current == Some(version),
+        ));
     }
     rows.into_values().collect()
 }
 fn can_edit(state: &State) -> bool {
-    admission_ready(state) && !state.files.node_retirement.loading && state.files.node_retirement.attempt.is_none()
+    admission_ready(state)
+        && !state.files.node_retirement.loading
+        && state.files.node_retirement.attempt.is_none()
         && state.files.node_retirement.recovery.ready_for_new(state)
 }
 fn can_submit(state: &State) -> bool {
     let model = &state.files.node_retirement;
-    can_edit(state) && model.confirmed && model.preview.as_ref().is_some_and(|preview| {
-        preview.affected_branch_heads.iter().all(|branch| preview.archived_branch_heads.contains(branch)) && preview.frozen_files.is_empty()
-            && model.selection().is_some_and(|selection| preview.validate(&selection).is_ok())
-    })
+    can_edit(state)
+        && model.confirmed
+        && model.preview.as_ref().is_some_and(|preview| {
+            preview
+                .affected_branch_heads
+                .iter()
+                .all(|branch| preview.archived_branch_heads.contains(branch))
+                && preview.frozen_files.is_empty()
+                && model
+                    .selection()
+                    .is_some_and(|selection| preview.validate(&selection).is_ok())
+        })
 }
 fn summary(state: &State) -> Option<String> {
     let attempt = state.files.node_retirement.attempt.as_ref()?;
     let text = match status(state, attempt) {
-        SaveStatus::Unknown if attempt.resume_only => t("此恢复入口只允许继续已经发布的原操作。当前会话尚未核到准确发布收据，只可查询，不能重发原删除请求。", "This recovery entry can only resume an already published operation. This session has not confirmed its exact publication receipt; only receipt lookup is allowed, never resubmission of the original deletion."),
-        SaveStatus::Unknown => t("发布结果未确认。只可查询或重试原操作，不得换新 ID 重提。", "Publication is unconfirmed. Query or retry only this original operation; do not submit a new ID."),
-        SaveStatus::Rejected => t("本次请求被拒绝，没有确认任何退役发布。", "This request was rejected; no retirement publication was confirmed."),
+        SaveStatus::Unknown if attempt.resume_only => t(
+            "此恢复入口只允许继续已经发布的原操作。当前会话尚未核到准确发布收据，只可查询，不能重发原删除请求。",
+            "This recovery entry can only resume an already published operation. This session has not confirmed its exact publication receipt; only receipt lookup is allowed, never resubmission of the original deletion.",
+        ),
+        SaveStatus::Unknown => t(
+            "发布结果未确认。只可查询或重试原操作，不得换新 ID 重提。",
+            "Publication is unconfirmed. Query or retry only this original operation; do not submit a new ID.",
+        ),
+        SaveStatus::Rejected => t(
+            "本次请求被拒绝，没有确认任何退役发布。",
+            "This request was rejected; no retirement publication was confirmed.",
+        ),
         SaveStatus::Published | SaveStatus::Degraded => {
-            if attempt.cleanup.as_ref().is_some_and(Cleanup::all_required_bindings_absent) {
-                t("节点已永久退役；本次观察确认原决定记录的副本义务及当前路由正文均缺失。不是离线旧盘、外部备份或旧认证元数据的擦除证明。", "Nodes are permanently retired; this observation found no body on the original recorded bindings or current routes. It does not prove erasure of offline disks, external backups or old authentication metadata.")
+            if attempt
+                .cleanup
+                .as_ref()
+                .is_some_and(Cleanup::all_required_bindings_absent)
+            {
+                t(
+                    "节点已永久退役；本次观察确认原决定记录的副本义务及当前路由正文均缺失。不是离线旧盘、外部备份或旧认证元数据的擦除证明。",
+                    "Nodes are permanently retired; this observation found no body on the original recorded bindings or current routes. It does not prove erasure of offline disks, external backups or old authentication metadata.",
+                )
             } else {
-                t("节点退役已经发布，不可撤销；正文清理仍待完成或核验。请使用原操作继续清理。", "Retirement was published and cannot be undone. Body cleanup is still pending or unverified. Continue cleanup using the original operation.")
+                t(
+                    "节点退役已经发布，不可撤销；正文清理仍待完成或核验。请使用原操作继续清理。",
+                    "Retirement was published and cannot be undone. Body cleanup is still pending or unverified. Continue cleanup using the original operation.",
+                )
             }
         }
     };
-    Some(format!("{}\n{} · {}\n{}", text, attempt.target.path, attempt.target.file, attempt.operation))
+    Some(format!(
+        "{}\n{} · {}\n{}",
+        text, attempt.target.path, attempt.target.file, attempt.operation
+    ))
 }
 fn replica_label(replica: &wire::Replica) -> String {
     let label = match &replica.status {
         wire::ReplicaState::NotRequested => t("未获清理授权", "Cleanup not requested"),
-        wire::ReplicaState::MissingTombstone => t("缺少认证墓碑，未确认清理", "Authenticated tombstone missing; cleanup unverified"),
+        wire::ReplicaState::MissingTombstone => t(
+            "缺少认证墓碑，未确认清理",
+            "Authenticated tombstone missing; cleanup unverified",
+        ),
         wire::ReplicaState::PayloadPresent => t("正文仍存在", "Body is still present"),
         wire::ReplicaState::VerifiedAbsent => t("已观察到正文缺失", "Body observed absent"),
-        wire::ReplicaState::Unverified { error_code } => format!("{}: {}", t("未核验", "Unverified"), error_code),
+        wire::ReplicaState::Unverified { error_code } => {
+            format!("{}: {}", t("未核验", "Unverified"), error_code)
+        }
     };
-    format!("{} · {} @ {} · {} · {}", replica.version_id, replica.slot_id, replica.binding_generation,
-        if replica.original_requirement { t("原决定义务", "Original obligation") } else { t("新增当前路由", "Additional current route") }, label)
+    format!(
+        "{} · {} @ {} · {} · {}",
+        replica.version_id,
+        replica.slot_id,
+        replica.binding_generation,
+        if replica.original_requirement {
+            t("原决定义务", "Original obligation")
+        } else {
+            t("新增当前路由", "Additional current route")
+        },
+        label
+    )
 }
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     Effect::new(move |_| {

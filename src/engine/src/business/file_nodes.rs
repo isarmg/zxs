@@ -43,7 +43,10 @@ pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<Stri
             )
         })?;
     if crate::node_retirement_engine::is_retired(state, &version) {
-        return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound, "node is permanently retired"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::FileNodeNotFound,
+            "node is permanently retired",
+        ));
     }
     let body = state
         .versions
@@ -92,11 +95,15 @@ fn display_parents(state: &State, parents: &[String]) -> Result<Vec<String>> {
     let mut remaining = 1_048_576usize;
     crate::node_retirement_engine::live_parents(state, parents, || {
         if remaining == 0 {
-            return Err(Error::new(storage_contract::ErrorCode::ResourceLimit, "retired ancestry traversal exceeds its complete-result budget"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "retired ancestry traversal exceeds its complete-result budget",
+            ));
         }
         remaining -= 1;
         Ok(())
-    }).map(|parents| parents.into_iter().map(str::to_owned).collect())
+    })
+    .map(|parents| parents.into_iter().map(str::to_owned).collect())
 }
 
 pub(crate) fn belongs_to_branch(state: &State, branch: &str, head: &str, source: &str) -> bool {
