@@ -119,6 +119,77 @@ pub(super) struct NamespaceAdmission {
     reservation: OperationReservation,
 }
 impl NamespaceAdmission {
+    pub(super) fn operation_id(&self) -> OperationId {
+        self.reservation.operation_id
+    }
+
+    pub(super) fn record_intent(&self, value: &Value) -> Result<(), ApiError> {
+        write_namespace_record(&self.record, value)
+    }
+
+    pub(super) fn finish_published(&self) {
+        cleanup_namespace_record(&self.record);
+    }
+
+    /// Only the native move adapter consumes this retained record. Generic
+    /// namespace/workspace operations remain non-replayable.
+    pub(super) fn retain_move(
+        shared: &Arc<Shared>,
+        identity: &Identity,
+        operation_id: OperationId,
+    ) -> Result<Option<Self>, ApiError> {
+        let reservation = OperationReservation::acquire(shared, operation_id)?;
+        let record = shared.spool.join(format!("{operation_id}.namespace.json"));
+        match fs::symlink_metadata(&record) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(ApiError::io(error)),
+            Ok(metadata) if metadata.is_file() && metadata.nlink() == 1 => {}
+            Ok(_) => {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::RecoveryRequired,
+                    "retained native move record is not one regular file",
+                ));
+            }
+        }
+        let budget = shared.budget.retain_namespace(
+            &identity.principal,
+            &shared.spool.join(operation_id.to_string()),
+        )?;
+        Ok(Some(Self {
+            record,
+            _budget: budget,
+            reservation,
+        }))
+    }
+
+    pub(super) fn retained_move_bytes(&self) -> Result<Vec<u8>, ApiError> {
+        use platform_io::fs_safety::{EntryName, PrivateDirectory};
+        let parent = self
+            .record
+            .parent()
+            .expect("invariant: namespace record is in the spool");
+        let directory = PrivateDirectory::open_trusted(parent).map_err(|source| {
+            ApiError::conflict(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "retained move spool is unsafe",
+            )
+            .with_source(source)
+        })?;
+        let name = EntryName::new(
+            self.record
+                .file_name()
+                .expect("invariant: namespace has a filename"),
+        )
+        .map_err(ApiError::invalid_source)?;
+        directory.read_bounded(&name, 64 * 1024).map_err(|source| {
+            ApiError::conflict(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "retained move record is unavailable",
+            )
+            .with_source(source)
+        })
+    }
+
     pub(super) fn acquire(
         shared: &Arc<Shared>,
         identity: &Identity,

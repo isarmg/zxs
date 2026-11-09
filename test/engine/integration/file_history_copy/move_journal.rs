@@ -247,18 +247,28 @@ fn missing_prepared_body_or_original_envelope_blocks_cold_open_without_recreatio
 }
 
 #[test]
-fn torn_original_tail_is_preserved_instead_of_automatic_truncation() {
+fn torn_prepare_tail_is_repaired_only_after_the_complete_original_preparation() {
     let mut fixture = Fixture::new(false);
     let (projection, recovery) = input(&mut fixture);
     prepare(&mut fixture.engine, &projection, &recovery);
     prepare_journal(&mut fixture.engine, &projection, &recovery);
-    let mut saved = unchanged(&fixture.engine);
-    let path = journals(&fixture.engine).into_keys().next().unwrap();
+    let saved = journals(&fixture.engine);
+    let path = saved.keys().next().unwrap().clone();
+    let mut torn = saved[&path].clone();
+    torn.push(0x5a);
     let Fixture { temp, engine, .. } = fixture;
     drop(engine);
-    saved.get_mut(&path).unwrap().push(0x5a);
-    fs::write(&path, &saved[&path]).unwrap();
-    assert!(Engine::open(&temp.path().join("system")).is_err());
+    fs::write(&path, &torn).unwrap();
+    let engine = Engine::open_for_recovery(&temp.path().join("system")).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), torn);
+    drop(engine);
+    let engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert!(
+        !engine
+            .state()
+            .operations
+            .contains_key(&recovery.operation_id())
+    );
     assert_saved(&saved);
 }
 

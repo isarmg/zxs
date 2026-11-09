@@ -77,7 +77,8 @@ pub use engine::{
     FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
     FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation, FileHistoryMoveJointChoice,
     FileHistoryMoveJournalPreparation, FileHistoryMoveNativePreparation,
-    FileHistoryMoveOrdinaryPreparation, FileHistoryMoveScopedPreparation,
+    FileHistoryMoveOrdinaryPreparation, FileHistoryMovePathRequest,
+    FileHistoryMoveScopedPreparation,
 };
 pub use engine::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub use engine::{

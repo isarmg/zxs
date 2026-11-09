@@ -7,6 +7,10 @@ use std::sync::atomic::AtomicBool;
 
 mod readback;
 
+pub(super) fn verify_installed(bytes: &[u8], state: &State) -> Result<()> {
+    readback::verify(bytes, state, &|| Ok(()))
+}
+
 pub(in crate::engine) const MAX_BYTES: usize = 64 * 1024 * 1024;
 
 pub(in crate::engine) fn encode(admitted: &AdmittedState, stop: &AtomicBool) -> Result<Vec<u8>> {

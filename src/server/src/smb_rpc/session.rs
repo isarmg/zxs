@@ -77,22 +77,16 @@ impl Session {
             .iter()
             .map(|path| name_policy::path_key(path))
             .collect::<BTreeSet<_>>();
-        let overlaps = |left: &str, right: &str| {
-            left == right
-                || left
-                    .strip_prefix(right)
-                    .is_some_and(|tail| tail.starts_with('/'))
-                || right
-                    .strip_prefix(left)
-                    .is_some_and(|tail| tail.starts_with('/'))
-        };
         let mut writers = self
             .shared
             .file_writers
             .lock()
             .expect("service state lock poisoned");
         if writers.iter().any(|(branch, existing)| {
-            branch == &self.branch && keys.iter().any(|key| overlaps(existing, key))
+            branch == &self.branch
+                && keys
+                    .iter()
+                    .any(|key| super::path_reservation::overlaps(existing, key))
         }) {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::FileWriteBusy,

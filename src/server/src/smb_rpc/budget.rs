@@ -300,6 +300,67 @@ impl Budget {
         }))
     }
 
+    /// Reuse the retained zero-body charge for an explicitly retried native
+    /// namespace operation. The caller holds its OperationReservation; this
+    /// never admits an upload or creates a second budget owner.
+    pub(super) fn retain_namespace(
+        self: &Arc<Self>,
+        principal: &str,
+        source: &Path,
+    ) -> Result<Lease, ApiError> {
+        if source.parent() != Some(self.root.as_path()) {
+            return Err(invalid(
+                "retained namespace budget belongs to another spool",
+            ));
+        }
+        let directory = PrivateDirectory::open_trusted(&self.root)
+            .map_err(|source| invalid("SMB spool directory is unsafe").with_source(source))?;
+        let record = record_path(source);
+        let name = EntryName::new(
+            record
+                .file_name()
+                .ok_or_else(|| invalid("missing budget name"))?,
+        )
+        .map_err(|source| invalid("invalid retained namespace budget name").with_source(source))?;
+        let bytes = directory
+            .read_bounded(&name, RECORD_LIMIT as usize)
+            .map_err(|source| {
+                invalid("retained namespace budget is unavailable").with_source(source)
+            })?;
+        let owner: Owner = storage_contract::decode_strict(&bytes).map_err(|source| {
+            invalid("retained namespace budget is invalid").with_source(source)
+        })?;
+        if owner.principal != principal
+            || owner.admitted_end != 0
+            || source.file_name().and_then(|name| name.to_str()) != Some(owner.source.as_str())
+        {
+            return Err(invalid("retained namespace budget identity differs"));
+        }
+        for path in [source.to_owned(), source.with_extension("work.json")] {
+            match fs::symlink_metadata(path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(ApiError::io(error)),
+                Ok(_) => return Err(invalid("retained namespace has unrelated upload evidence")),
+            }
+        }
+        let ledger = self.lock_ledger();
+        if ledger.uncertain
+            || !ledger
+                .files
+                .get(source)
+                .is_some_and(|charge| charge.principal.as_deref() == Some(principal))
+        {
+            return Err(invalid("retained namespace has no admitted budget owner"));
+        }
+        Ok(Lease {
+            budget: self.clone(),
+            source: source.to_owned(),
+            max_length: 0,
+            principal: principal.into(),
+            granted: 0,
+        })
+    }
+
     pub(super) fn reserve(
         self: &Arc<Self>,
         principal: &str,

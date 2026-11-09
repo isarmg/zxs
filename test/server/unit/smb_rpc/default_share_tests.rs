@@ -261,7 +261,7 @@ fn default_share_rejects_wrong_account_before_creating_any_namespace() {
 }
 
 #[test]
-fn default_share_keeps_primary_paths_separate_and_rejects_cross_namespace_rename() {
+fn default_share_keeps_primary_paths_separate_and_refuses_nonempty_move_target() {
     let (_temp, shared, _backend) = empty_fixture(true);
     let (mut stream, worker, reply) = wire(shared.clone(), "alice");
     assert!(matches!(reply, Response::Ok { .. }), "{reply:?}");
@@ -574,7 +574,7 @@ fn default_namespace_changes_use_the_real_root_and_do_not_create_cross_disk_targ
         matches!(
             reply,
             Response::Error {
-                code: storage_contract::ErrorCode::UnsupportedOperation,
+                code: storage_contract::ErrorCode::DirectoryNotFound,
                 ..
             }
         ),

@@ -117,6 +117,7 @@ impl Databases {
         ),
         frozen: &FrozenCandidate,
         targets: &[store::Target],
+        additional_history_budget: u64,
     ) -> Result<()> {
         let (materials, native, scopes) = inputs;
         let files = self
@@ -170,6 +171,7 @@ impl Databases {
                         bytes.checked_add((pending.install.byte_len() as u64 + 8192).max(reserved))
                     })
                     .and_then(|bytes| bytes.checked_add(engine.used_bytes(slot)))
+                    .and_then(|bytes| bytes.checked_add(additional_history_budget))
                     .ok_or_else(limit)?;
             if pending
                 .disk

@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 
 pub(in crate::engine) const BACKUP_SELECTION: &str = "backup-root-databases-selected.json";
 
-pub(super) fn require_unselected(root: &DiskRoot) -> Result<()> {
+pub(in crate::engine) fn require_unselected(root: &DiskRoot) -> Result<()> {
     // Presence is deliberately only a refusal. Corrupt/foreign selector bytes
     // cannot grant a writer, choose a new State, or cause a cache rebuild.
     if root
@@ -129,6 +129,24 @@ impl PreparedRootDatabases {
                 "Backup root database pair must retain its metadata recovery reserve",
             ));
         }
+        Ok(())
+    }
+
+    pub(in crate::engine) fn storage_bytes(&self) -> u64 {
+        (self.current.byte_len() + self.history.byte_len()) as u64 + 16_384
+    }
+
+    /// Freeze this exact pair before the move's first ACCEPT. No live alias is
+    /// exchanged; a recovery path never calls this unpublished-only observer.
+    pub(in crate::engine) fn stage_move(
+        &mut self,
+        root: &DiskRoot,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        self.current
+            .stage_unpublished(root, &mut |_| preparation_checkpoint(stop))?;
+        self.history
+            .stage_unpublished(root, &mut |_| preparation_checkpoint(stop))?;
         Ok(())
     }
 

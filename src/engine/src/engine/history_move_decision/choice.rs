@@ -165,7 +165,7 @@ impl Choice {
         Ok(())
     }
 
-    pub(super) fn decision_slot(&self) -> u64 {
+    pub(in crate::engine) fn decision_slot(&self) -> u64 {
         self.record.decision_slot
     }
 
@@ -202,7 +202,31 @@ impl Choice {
         Ok(())
     }
 
-    fn report(&self) -> FileHistoryMoveJointChoice {
+    pub(super) fn require_native(&self, native: &crate::business::NativeMoveDraft) -> Result<()> {
+        if native.operation_id() != self.record.operation_id
+            || native.digest() != self.record.native_digest
+        {
+            return Err(invalid(
+                "move recovery does not reproduce the original selected native write set",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn require_archive_choice(&self, directory: &DiskRoot) -> Result<()> {
+        let held = HeldRegular::capture(directory, NAME, MAX_BYTES)?
+            .ok_or_else(|| invalid("move completion directory lost its original choice"))?;
+        if held.bytes() != self.bytes {
+            return Err(invalid("move completion choice changed"));
+        }
+        held.check_running()
+    }
+
+    pub(super) fn participants(&self) -> &[DiskRegistrationIdentity] {
+        &self.record.participants
+    }
+
+    pub(super) fn report(&self) -> FileHistoryMoveJointChoice {
         FileHistoryMoveJointChoice {
             operation_id: self.record.operation_id,
             digest: hash(b"file-history-move-joint-choice", &self.bytes)
@@ -250,7 +274,7 @@ impl Record {
             }
         }
         if self.source_sequence == 0
-            || self.source_sequence.checked_add(1) != Some(self.decision_slot)
+            || self.decision_slot <= self.source_sequence
             || self.participants.is_empty()
             || self.participants.len() > MAX_PARTICIPANTS
             || self
@@ -259,7 +283,7 @@ impl Record {
                 .any(|p| p[0].disk_id >= p[1].disk_id)
         {
             return Err(invalid(
-                "move choice needs one next slot and bounded sorted exact participants",
+                "move choice needs a later original decision slot and bounded sorted exact participants",
             ));
         }
         for participant in &self.participants {
@@ -313,6 +337,12 @@ impl Engine {
     }
 
     pub(crate) fn require_selected_move_operation(&self, operation: OperationId) -> Result<()> {
+        if self
+            .history_move_intent
+            .is_some_and(|original| original != operation)
+        {
+            return Err(invalid("only the original retained move intent may resume"));
+        }
         if let Some(choice) = &self.history_move_choice {
             choice.require_baseline(self)?;
             if choice.record.operation_id != operation {

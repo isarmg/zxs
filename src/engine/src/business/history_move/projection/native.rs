@@ -7,7 +7,7 @@ use storage_contract::{CommitState, CurrentHealth, Event, OperationResult, Prote
 pub(crate) const KIND: &str = "file.history.move";
 
 mod admission;
-pub(crate) use admission::admit_source_deletion;
+pub(crate) use admission::{admit_source_deletion, original_move_namespace, replay_selected_move};
 
 #[derive(Serialize)]
 #[serialization(deny_unknown_fields)]
@@ -131,6 +131,9 @@ pub(crate) struct NativeMoveCandidate {
     operation: OperationId,
 }
 impl NativeMoveCandidate {
+    pub(crate) fn into_state(self) -> State {
+        self.state
+    }
     pub(crate) fn state(&self) -> &State {
         &self.state
     }
@@ -310,7 +313,7 @@ pub(crate) fn reject_unclosed_publication(
     let reject = || {
         Error::new(
             ErrorCode::UnsupportedOperation,
-            "native move has no complete three-scope database and atomic recovery closure; unaccepted inputs cannot enter publication",
+            "native move requires its dedicated joint execution and recovery path; unaccepted inputs cannot use generic publication",
         )
     };
     if result.kind == KIND {

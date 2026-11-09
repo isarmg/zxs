@@ -235,6 +235,10 @@ impl FrozenCandidate {
         Ok(())
     }
 
+    pub(super) fn into_decision(self) -> (Candidate, NativeMoveCandidate) {
+        (self.candidate, self.outcome)
+    }
+
     pub(super) fn hash(&self) -> &str {
         &self.candidate_object.hash
     }

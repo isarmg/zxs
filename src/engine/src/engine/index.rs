@@ -319,6 +319,33 @@ impl IndexConnection {
         Ok(())
     }
 
+    fn move_readback(&mut self) -> Result<Vec<u8>> {
+        let connection = self
+            .connection
+            .as_mut()
+            .expect("invariant: installed index worker is open");
+        platform_io::sqlite::block_on_sqlite_connection(async {
+            let pages: i64 = sqlite_access::query_scalar("PRAGMA page_count")
+                .fetch_one(&mut *connection)
+                .await?;
+            let size: i64 = sqlite_access::query_scalar("PRAGMA page_size")
+                .fetch_one(&mut *connection)
+                .await?;
+            if pages <= 0
+                || size <= 0
+                || pages
+                    .checked_mul(size)
+                    .is_none_or(|bytes| bytes > preparation::MAX_BYTES as i64)
+            {
+                return Err(Error::new(
+                    ErrorCode::ResourceLimit,
+                    "move SYSTEM readback exceeds 64 MiB",
+                ));
+            }
+            Ok(connection.serialize(None).await?.to_vec())
+        })
+    }
+
     fn close(&mut self) -> std::result::Result<(), ProjectionFailure> {
         if let Some(connection) = self.connection.take() {
             // A close error must never authorize quarantine.
@@ -586,11 +613,28 @@ impl Engine {
     }
 
     pub(crate) fn rebuild_index(&self) -> Result<()> {
+        self.rebuild_index_state(&self.state, false)
+    }
+
+    pub(in crate::engine) fn install_move_system_index(
+        &self,
+        published: &super::PublishedMove,
+    ) -> Result<()> {
+        self.rebuild_index_state(published.state(), true)
+    }
+
+    fn rebuild_index_state(&self, state: &State, strict: bool) -> Result<()> {
         let mut proof = self
             .history_query_proof
             .lock()
             .expect("invariant: history query proof lock poisoned");
-        if backup_install::preserve_selected(&self.root, &mut proof, self.state.sequence)? {
+        if backup_install::preserve_selected(&self.root, &mut proof, state.sequence)? {
+            if strict {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "another selected SYSTEM installation blocks move activation",
+                ));
+            }
             return Ok(());
         }
         match std::mem::take(&mut proof.availability) {
@@ -598,15 +642,15 @@ impl Engine {
             unavailable @ IndexAvailability::Unavailable(_) => proof.availability = unavailable,
             IndexAvailability::Unbuilt => (),
         }
-        let delta = HistoryDelta::between(None, &self.state.versions);
+        let delta = HistoryDelta::between(None, &state.versions);
         checked_index_files(&self.root)?;
         let path = self.root.join("index.sqlite");
         let rebuild = || {
             let mut writer = IndexConnection::open(&path, true)?;
-            writer.project(None, &self.state, &delta)?;
+            writer.project(None, state, &delta)?;
             Ok::<_, ProjectionFailure>(writer)
         };
-        let writer = match rebuild() {
+        let mut writer = match rebuild() {
             Ok(writer) => writer,
             Err(error) => {
                 if !error.corrupt {
@@ -617,20 +661,22 @@ impl Engine {
                 rebuild().map_err(Error::from)?
             }
         };
+        if strict {
+            writer.check_identity(&path)?;
+            let bytes = writer.move_readback()?;
+            preparation::verify_installed(&bytes, state)?;
+            writer.check_identity(&path)?;
+        }
         proof.read_generation = Arc::new(());
         proof.system_order = system_changes::Order::default();
-        proof.system_order.update(None, &self.state);
+        proof.system_order.update(None, state);
         proof.scope_counts.clear();
-        scope::Delta::between(None, &self.state).apply_counts(
-            &mut proof.scope_counts,
-            None,
-            &self.state,
-        );
+        scope::Delta::between(None, state).apply_counts(&mut proof.scope_counts, None, state);
         proof.counts.clear();
-        for v in self.state.versions.values() {
+        for v in state.versions.values() {
             *proof.counts.entry(v.file_id.clone()).or_default() += 1;
         }
-        proof.sequence = self.state.sequence;
+        proof.sequence = state.sequence;
         proof.availability = IndexAvailability::Ready(writer);
         Ok(())
     }

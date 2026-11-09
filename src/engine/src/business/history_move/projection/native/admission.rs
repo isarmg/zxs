@@ -234,7 +234,7 @@ pub(crate) fn admit_source_deletion(
         || node.created_at != body.timestamp
         || body.move_route.created_at != body.timestamp
         || body.source_sequence == 0
-        || body.source_sequence.checked_add(1) != Some(receipt.sequence)
+        || body.source_sequence >= receipt.sequence
         || body.branch_generation == 0
         || body.membership_epoch != 1
         || receipt.request_digest
@@ -253,4 +253,62 @@ pub(crate) fn admit_source_deletion(
     body.require_versions(receipt.operation_id)?;
     body.require_arrival(state, receipt, principal)?;
     Ok(body.deletion_node)
+}
+
+/// Read only original operation intent. A later rename, D undo or HEAD change
+/// must not turn an exact retry into a new capture of today's source path.
+pub(crate) fn original_move_namespace(receipt: &OperationResult) -> Result<FileHistoryCopyRequest> {
+    if receipt.kind != KIND {
+        return Err(invalid());
+    }
+    history_copy::retained::bounded(&receipt.result)?;
+    let body: ReadBody = json_codec::from_value(receipt.result.clone())?;
+    Ok(body.move_request.namespace)
+}
+
+/// Recompute the complete selected transition from the old published State,
+/// using the one native receipt's original request, route, clock and operation.
+/// Neither a stored draft nor an arbitrary snapshot may substitute its writes.
+pub(crate) fn replay_selected_move(
+    engine: &Engine,
+    next: &State,
+    operation: OperationId,
+) -> Result<(FileHistoryMoveProjection, NativeMoveDraft)> {
+    let receipt = next.operations.get(&operation).ok_or_else(invalid)?;
+    admit_source_deletion(next, receipt)?;
+    let body: ReadBody = json_codec::from_value(receipt.result.clone())?;
+    let principal = next
+        .operation_principals
+        .get(&operation)
+        .ok_or_else(invalid)?;
+    let stop = HistoryWindowCancellation::default();
+    let capture = engine.capture_retained_file_history_move(
+        FileHistoryMoveRequest {
+            namespace: &body.move_request.namespace,
+            source_file_id: &HistoryFileId::parse(&body.move_request.source_file_id)?,
+        },
+        &stop,
+    )?;
+    let projection = engine.replay_file_history_move_projection(
+        capture,
+        FileHistoryMoveReplay {
+            principal: principal.clone(),
+            operation,
+            sequence: receipt.sequence,
+            route: body.move_route,
+        },
+        &stop,
+    )?;
+    let native = projection.native_draft(
+        engine,
+        &FileHistoryMoveRecoveryDigest::from_native_receipt(&body.recovery_digest)?,
+        &FileHistoryMoveDecisionDigest::from_native_receipt(&body.decision_inputs_digest)?,
+    )?;
+    let rebuilt = native.candidate_draft()?;
+    if crate::disk::encode_metadata(rebuilt.state(), 12 * 1024 * 1024)?
+        != crate::disk::encode_metadata(next, 12 * 1024 * 1024)?
+    {
+        return Err(invalid());
+    }
+    Ok((projection, native))
 }

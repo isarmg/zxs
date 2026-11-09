@@ -401,7 +401,7 @@ fn native_preparation_requires_original_inputs_and_honors_initial_cancellation()
 }
 
 #[test]
-fn native_templates_do_not_bypass_a_changed_source_or_a_damaged_target_full() {
+fn native_templates_keep_source_fenced_and_reject_a_damaged_target_full() {
     for changed_source in [false, true] {
         let mut fixture = Fixture::new(false);
         let (projection, recovery, _) = input(&mut fixture);
@@ -417,7 +417,7 @@ fn native_templates_do_not_bypass_a_changed_source_or_a_damaged_target_full() {
                     "admin",
                     op(),
                 )
-                .unwrap();
+                .unwrap_err();
         } else {
             let (source, target) = projection.version_mapping().iter().next().unwrap();
             let root = &fixture
@@ -435,7 +435,7 @@ fn native_templates_do_not_bypass_a_changed_source_or_a_damaged_target_full() {
                 .join(&fixture.engine.state().versions[source].creation_name);
             fs::write(body, b"damaged full copy").unwrap();
         }
-        assert!(
+        assert_eq!(
             fixture
                 .engine
                 .read_file_history_move_native_operation(
@@ -443,7 +443,8 @@ fn native_templates_do_not_bypass_a_changed_source_or_a_damaged_target_full() {
                     recovery.digest(),
                     &HistoryWindowCancellation::new()
                 )
-                .is_err()
+                .is_ok(),
+            changed_source
         );
         assert_eq!(
             fs::read(stage(&fixture).join("native-operation.json")).unwrap(),

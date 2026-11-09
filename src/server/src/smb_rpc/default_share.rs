@@ -7,6 +7,7 @@ use crate::{
 };
 use smb_protocol::protocol::{FileMtime, NamespaceOperation, StatResult};
 mod directory;
+mod history_move;
 use directory::VirtualDirectory;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -424,6 +425,18 @@ impl DefaultShare {
                 name_policy::PortablePath::parse(path.as_str())
                     .map_err(ApiError::invalid_source)?;
             }
+            if kind == NamespaceOperation::Rename
+                && !replace
+                && let Some(reply) = self.resume_move(
+                    &path,
+                    destination
+                        .as_deref()
+                        .expect("invariant: rename destination was validated"),
+                    operation_id,
+                )?
+            {
+                return Ok((Reply::Json(reply), None));
+            }
             let admission = super::namespace::NamespaceAdmission::acquire(
                 &self.shared,
                 &self.identity,
@@ -439,23 +452,30 @@ impl DefaultShare {
             if source.relative_path.is_empty() {
                 return Err(ApiError::unsupported());
             }
-            let destination = destination
-                .map(|path| {
-                    let Location::Path { slot, .. } = self.locate(&path)? else {
-                        return Err(ApiError::unsupported());
-                    };
-                    if slot.slot_id != source.repository.primary_slot_id {
+            let destination = if let Some(path) = destination {
+                let Location::Path { slot, .. } = self.locate(&path)? else {
+                    return Err(ApiError::unsupported());
+                };
+                if slot.slot_id != source.repository.primary_slot_id {
+                    if replace {
                         return Err(ApiError::unsupported());
                     }
+                    // Lookup must not initialize an empty destination disk
+                    // or manufacture a repository before native admission.
                     let target = self.resolve(&path, SmbPathIntent::Lookup)?;
-                    if target.repository.repository_id != source.repository.repository_id
-                        || target.relative_path.is_empty()
-                    {
-                        return Err(ApiError::unsupported());
-                    }
-                    Ok(target.relative_path)
-                })
-                .transpose()?;
+                    let reply = self.move_file(source, target, admission)?;
+                    return Ok((Reply::Json(reply), None));
+                }
+                let target = self.resolve(&path, SmbPathIntent::Lookup)?;
+                if target.repository.repository_id != source.repository.repository_id
+                    || target.relative_path.is_empty()
+                {
+                    return Err(ApiError::unsupported());
+                }
+                Some(target.relative_path)
+            } else {
+                None
+            };
             let key = self.session_key(source.repository)?;
             let input = super::namespace::NamespaceInput::parse(
                 kind,

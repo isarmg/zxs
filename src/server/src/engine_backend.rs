@@ -20,6 +20,7 @@ mod directory_selection;
 mod disk_monitor;
 mod error_registry;
 mod file_deletion;
+mod file_history_move;
 mod file_manager;
 mod foreign_identity;
 mod foreign_intent;
@@ -1389,6 +1390,13 @@ impl Backend for EngineBackend {
         command: crate::DeleteFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.soft_delete_file_admitted(identity, command)
+    }
+    fn move_current_file(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.move_current_file_admitted(identity, command)
     }
     fn delete_current_file(
         &self,

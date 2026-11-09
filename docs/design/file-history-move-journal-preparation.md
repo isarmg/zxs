@@ -2,6 +2,8 @@
 
 [任务清单](../../TASKS.md) · [普通正文与原安装对](file-history-move-ordinary-preparation.md) · [唯一选择](file-history-move-joint-choice.md) · [单一收据生命周期](file-history-move-receipt-lifecycle.md)
 
+> 以下记录 PREPARE-only 切片的历史边界。后继已将专用执行/冷恢复源码接到普通决定，见[最小执行路径](file-history-move-execution.md)；准备 API 本身仍不授予成功。后继未编译/测试，不能沿用这里的“拒绝所有 ACCEPT/torn tail”作为新执行协议。
+
 原候选 `f1d77559` 基于 `24f0c31b`；本片对齐准确主线 `4a8be030`，保留新目录库恢复准入与原 `2a01b0e8`、`23621d9b` 及已发布的普通准备、冷 D 生命周期源码。新增的是**原生普通日志中的 PREPARE**，不再只记录准备侧车；仍不写 ACCEPT、FINALIZE 或 PUBLICATION。PREPARE 不是多数决定，不安装活动数据库，不发布源 D，不显露目标 namespace，不解除 choice，更不能返回 SMB rename 成功。
 
 ## 只有同一原候选可以进入日志

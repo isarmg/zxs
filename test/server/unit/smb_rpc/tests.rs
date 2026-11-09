@@ -34,6 +34,8 @@ mod close_tests;
 mod default_share_tests;
 #[path = "directory_tests.rs"]
 mod directory_tests;
+#[path = "history_move_tests.rs"]
+mod history_move_tests;
 #[path = "mtime_tests.rs"]
 mod mtime_tests;
 #[path = "namespace_tests.rs"]
@@ -66,6 +68,8 @@ pub(super) struct LostCommitReply {
     revoked: AtomicBool,
     change_before_workspace: AtomicBool,
     obstruct_work_record: Mutex<Option<PathBuf>>,
+    move_requests: Mutex<Vec<Value>>,
+    move_result: Mutex<Option<Result<storage_contract::OperationResult, ApiError>>>,
 }
 impl LostCommitReply {
     fn take_version_authorizations(&self) -> Vec<String> {
@@ -519,6 +523,29 @@ impl Backend for LostCommitReply {
     ) -> Result<(), crate::ApiError> {
         self.inner.authorize_listing_snapshot(identity, snapshot)
     }
+    fn move_current_file(
+        &self,
+        identity: &Identity,
+        request: crate::MoveCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.move_requests.lock().unwrap().push(json!({
+            "source_repository_id":request.source_binding.repository_id,
+            "source_branch_id":request.source_binding.branch_id,
+            "source_generation":request.source_binding.generation.to_string(),
+            "source_path":request.source_path.as_str(),
+            "target_repository_id":request.target_binding.repository_id,
+            "target_branch_id":request.target_binding.branch_id,
+            "target_generation":request.target_binding.generation.to_string(),
+            "target_name":request.target_name.as_str(),
+            "source_entry_id":request.expected_source_entry_id,
+            "source_file_id":request.expected_source_file_id.as_str(),
+            "operation_id":request.operation_id
+        }));
+        match self.move_result.lock().unwrap().take() {
+            Some(result) => result,
+            None => self.inner.move_current_file(identity, request),
+        }
+    }
     fn delete_current_file(
         &self,
         identity: &crate::auth::Identity,
@@ -881,6 +908,8 @@ fn fixture_backend(
         revoked: AtomicBool::new(false),
         change_before_workspace: AtomicBool::new(false),
         obstruct_work_record: Mutex::new(None),
+        move_requests: Mutex::new(Vec::new()),
+        move_result: Mutex::new(None),
     });
     backend
         .inner

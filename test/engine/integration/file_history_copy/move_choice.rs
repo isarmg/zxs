@@ -398,7 +398,7 @@ fn a_conflicting_or_malformed_choice_refuses_startup_without_overwrite() {
 }
 
 #[test]
-fn an_older_choice_returning_after_a_later_publication_cannot_rewind_or_repair_the_pool() {
+fn missing_choice_cannot_release_the_original_envelope_write_fence() {
     let mut fixture = Fixture::new(false);
     let (projection, recovery) = input(&mut fixture);
     select(&mut fixture, &projection, &recovery);
@@ -420,14 +420,16 @@ fn an_older_choice_returning_after_a_later_publication_cannot_rewind_or_repair_t
             "admin",
             op(),
         )
-        .unwrap();
-    let later_sequence = engine.state().sequence;
-    assert!(later_sequence > projection.capture().source_sequence());
+        .unwrap_err();
+    assert_eq!(
+        engine.state().sequence,
+        projection.capture().source_sequence()
+    );
     for path in &copies {
         fs::write(path, &original).unwrap();
     }
     drop(engine);
-    assert!(Engine::open(&temp.path().join("system")).is_err());
+    assert!(Engine::open(&temp.path().join("system")).is_ok());
     assert!(
         copies
             .iter()

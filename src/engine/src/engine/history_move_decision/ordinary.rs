@@ -150,6 +150,7 @@ impl Engine {
                 (&materials, &native, &scopes),
                 &frozen,
                 &targets,
+                0,
             )?;
             (report.file_database_intents, report.disk_database_intents) =
                 databases.stage(self, cancellation)?;
@@ -209,6 +210,39 @@ impl Engine {
         report.disk_database_intents = bindings.disks.len();
         Ok(report)
     }
+}
+
+/// Execution additionally reserves the bounded final disk-history image on
+/// top of the complete retained preparation, ordinary FULLs and FILE/current
+/// intents. Preparation-only callers do not pay this execution admission.
+pub(super) fn require_execution_capacity(
+    engine: &Engine,
+    projection: &FileHistoryMoveProjection,
+    inputs: (
+        &Materials,
+        &crate::business::NativeMoveDraft,
+        &scopes::Scopes,
+    ),
+    frozen: &FrozenCandidate,
+    cancellation: &HistoryWindowCancellation,
+) -> Result<()> {
+    let (materials, _, _) = inputs;
+    let targets = projection
+        .capture()
+        .target_slots()
+        .iter()
+        .map(|slot| store::Target::capture(engine, projection, materials, frozen, slot))
+        .collect::<Result<Vec<_>>>()?;
+    let pending =
+        databases::Databases::capture(engine, projection, frozen, materials, cancellation)?;
+    pending.preflight(
+        engine,
+        projection,
+        inputs,
+        frozen,
+        &targets,
+        32 * 1024 * 1024 + 8192,
+    )
 }
 
 fn verify_targets(

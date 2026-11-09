@@ -292,11 +292,11 @@ impl Engine {
             if prepared
                 .candidates
                 .keys()
-                .any(|slot| *slot > choice.source_sequence())
+                .any(|slot| *slot > choice.decision_slot())
             {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
-                    "selected move has an unclosed accepted candidate; preserve its original journal",
+                    "journal extends beyond the unresolved original move decision",
                 ));
             }
             self.admit_selected_move_prepares(&prepared.records, prepared.torn_tail)?;
@@ -498,6 +498,24 @@ impl Engine {
                 self.blocked = true;
                 break;
             }
+            if self
+                .history_move_choice
+                .as_ref()
+                .is_some_and(|choice| choice.decision_slot() == candidate.sequence)
+            {
+                if !members_ready {
+                    self.blocked = true;
+                    break;
+                }
+                self.recover_selected_move(candidate, hash, next, publication)?;
+                for disk in &online {
+                    let history = scanned_journals
+                        .get_mut(&disk.disk_id)
+                        .expect("scanned online member");
+                    retain_replayed_records(history, self.journals[&disk.disk_id].records());
+                }
+                continue;
+            }
             if publication.is_none() && mode == RecoveryMode::CompletePending && can_repair {
                 let result = next
                     .operations
@@ -653,9 +671,16 @@ impl Engine {
         if !members_ready {
             self.blocked = true;
         }
-        if move_selected {
-            // Recovered only existing complete PUBLICATION barriers above. No
-            // tail repair, namespace/layout install, purge or checkpoint write.
+        if self.history_move_choice.is_some() {
+            if torn_tail && mode == RecoveryMode::CompletePending && members_ready && !self.blocked
+            {
+                self.repair_selected_move_prepare_tail()?;
+            } else if torn_tail {
+                self.blocked = true;
+            }
+            // A selected PREPARE/preserved ACCEPT keeps the original old State.
+            // Apart from the proven original torn tail above, no ordinary layout,
+            // purge or checkpoint writes may release the selection.
             self.require_move_choice_baseline()?;
             self.restore_namespace_workspace_baselines()?;
             return Ok(());

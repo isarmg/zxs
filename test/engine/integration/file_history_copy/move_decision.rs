@@ -556,20 +556,16 @@ fn missing_target_fulls_cancellation_and_stale_sources_never_create_a_move_decis
             "admin",
             op(),
         )
+        .unwrap_err();
+    fixture
+        .engine
+        .prepare_file_history_move_decision_inputs(
+            &projection,
+            recovery.digest(),
+            &HistoryWindowCancellation::new(),
+        )
         .unwrap();
-    assert_eq!(
-        fixture
-            .engine
-            .prepare_file_history_move_decision_inputs(
-                &projection,
-                recovery.digest(),
-                &HistoryWindowCancellation::new()
-            )
-            .unwrap_err()
-            .code(),
-        ErrorCode::WorkspaceChanged
-    );
-    assert!(!system(&fixture).exists());
+    assert!(system(&fixture).exists());
     assert!(
         !fixture
             .engine

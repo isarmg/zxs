@@ -17,6 +17,24 @@ const MAX_ITEMS: usize = 65_536;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileHistoryMoveRecoveryDigest(blake3::Hash);
 
+impl FileHistoryMoveRecoveryDigest {
+    pub(crate) fn from_native_receipt(value: &str) -> Result<Self> {
+        let hash = blake3::Hash::from_hex(value).map_err(|_| {
+            Error::new(
+                ErrorCode::PublicationInvalid,
+                "native move receipt has an invalid material digest",
+            )
+        })?;
+        if hash.to_hex().as_str() != value {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "native move digest is not canonical",
+            ));
+        }
+        Ok(Self(hash))
+    }
+}
+
 impl std::fmt::Display for FileHistoryMoveRecoveryDigest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.0.to_hex().as_str())

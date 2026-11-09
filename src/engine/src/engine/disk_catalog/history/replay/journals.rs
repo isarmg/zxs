@@ -20,6 +20,12 @@ pub(super) fn sources(
                 "disk history has no admitted journal writer",
             )
         })?;
+        writer.verify_retained_name()?;
+        let selected_torn = writer.has_scanned_torn_tail()
+            && engine
+                .history_move_choice
+                .as_ref()
+                .is_some_and(|choice| choice.source_sequence() == through);
         let expected_tail = writer.records().last().map(|(_, hash)| hash.as_str());
         let handle = engine.disk_resources.get(disk)?;
         let root = &handle.root;
@@ -95,10 +101,22 @@ pub(super) fn sources(
                 return Err(budget());
             }
         }
-        if reader.torn_tail
-            || last.as_deref() != expected_tail
-            || reader.probe_extra_observed(&mut meter)?
-        {
+        if reader.torn_tail || last.as_deref() != expected_tail {
+            return Err(Error::new(
+                ErrorCode::LogCorrupt,
+                "disk history journal lost its admitted writer endpoint",
+            ));
+        }
+        let exact_end = if selected_torn {
+            // Only this selected operation may inspect a prefix before its known
+            // torn tail is repaired. Parse the suffix again: a newly complete
+            // frame or a now-missing suffix is not the original torn boundary.
+            // This is read-only; complete move evidence still precedes repair.
+            reader.next_record_observed(&mut meter)?.is_none() && reader.torn_tail
+        } else {
+            !reader.probe_extra_observed(&mut meter)?
+        };
+        if !exact_end {
             return Err(Error::new(
                 ErrorCode::LogCorrupt,
                 "disk history journal differs from its admitted writer endpoint",
@@ -116,6 +134,7 @@ pub(super) fn sources(
             ));
         }
         file.check_running()?;
+        writer.verify_retained_name()?;
         let seal = validate_seal_observed(&engine.config, disk, &mut |_| observe())?;
         validate_stored_seal(&handle.seal, &seal)?;
         observe()?;

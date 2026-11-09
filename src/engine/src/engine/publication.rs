@@ -112,6 +112,10 @@ pub(crate) struct DetachedPublication {
 }
 
 enum Completion<'a> {
+    Move {
+        names: crate::container_storage::PreparedNames,
+        recovered: bool,
+    },
     Prepared {
         payloads: &'a VerifiedPayloadSet,
         names: crate::container_storage::PreparedNames,
@@ -154,6 +158,7 @@ impl Engine {
     ) -> Result<OperationResult> {
         if self.blocked
             || self.history_move_choice.is_some()
+            || self.history_move_intent.is_some()
             || !detached.prepared_epoch.matches(&self.metadata_integrity)
             || detached.reused_dependencies.as_ref().is_some_and(|reuse| {
                 !reuse.matches(&self.planning_context(), &detached.config_hash)
@@ -333,6 +338,24 @@ impl Engine {
         self.planning_context().prepare_payload(p)
     }
 
+    pub(super) fn complete_move_candidate(
+        &mut self,
+        candidate: &Candidate,
+        hash: &str,
+        next: &State,
+        existing: Option<Publication>,
+        names: crate::container_storage::PreparedNames,
+        recovered: bool,
+    ) -> Result<()> {
+        self.complete_candidate_verified(
+            candidate,
+            hash,
+            next,
+            existing,
+            Completion::Move { names, recovered },
+        )
+    }
+
     pub(crate) fn complete_candidate(
         &mut self,
         c: &Candidate,
@@ -484,6 +507,16 @@ impl Engine {
         completion: Completion<'_>,
     ) -> Result<()> {
         let (verified, names, append) = match completion {
+            Completion::Move { names, recovered } => (
+                None,
+                Some(names),
+                if recovered {
+                    Engine::append_recovered_journal
+                } else {
+                    Engine::append_journal
+                }
+                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
+            ),
             Completion::Prepared { payloads, names } => (
                 Some(payloads),
                 Some(names),

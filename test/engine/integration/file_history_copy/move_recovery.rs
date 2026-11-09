@@ -201,7 +201,7 @@ fn self_consistent_forged_projection_digest_cannot_replace_independent_reconstru
 }
 
 #[test]
-fn source_changes_reject_old_recovery_without_replanning_or_overwriting_the_slot() {
+fn original_envelope_fences_source_writes_before_the_later_joint_choice() {
     let mut fixture = Fixture::new(false);
     let operation = op();
     let proposed = projection(&fixture, operation);
@@ -211,48 +211,32 @@ fn source_changes_reject_old_recovery_without_replanning_or_overwriting_the_slot
         .unwrap();
     let path = system_path(&fixture);
     let original = fs::read(&path).unwrap();
-    let file = entry(&fixture.engine, &fixture.source, "source.txt");
-    fixture
+    assert_eq!(
+        fixture
+            .engine
+            .set_file_note(
+                proposed.capture().source_file_id().as_str(),
+                None,
+                &Note::parse("must remain original".into()).unwrap(),
+                "admin",
+                op()
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
+    let resumed = fixture
         .engine
-        .set_file_note(
-            &file.file_id,
-            None,
-            &Note::parse("changed after preparation".into()).unwrap(),
+        .resume_file_history_move_recovery(
+            operation,
+            info.digest(),
             "admin",
-            op(),
+            &HistoryWindowCancellation::new(),
         )
         .unwrap();
     assert_eq!(
-        fixture
-            .engine
-            .resume_file_history_move_recovery(
-                operation,
-                info.digest(),
-                "admin",
-                &HistoryWindowCancellation::new(),
-            )
-            .map(|_| ())
-            .unwrap_err()
-            .code(),
-        ErrorCode::PreparationStale
-    );
-    let changed = projection(&fixture, operation);
-    assert_eq!(
-        fixture
-            .engine
-            .save_file_history_move_recovery(&changed, &HistoryWindowCancellation::new(),)
-            .unwrap_err()
-            .code(),
-        ErrorCode::IdempotencyKeyReused
-    );
-    let another = projection(&fixture, op());
-    assert_eq!(
-        fixture
-            .engine
-            .save_file_history_move_recovery(&another, &HistoryWindowCancellation::new(),)
-            .unwrap_err()
-            .code(),
-        ErrorCode::WorkspaceBusy
+        resumed.proposed_source_deletion(),
+        proposed.proposed_source_deletion()
     );
     assert_eq!(fs::read(path).unwrap(), original);
 }

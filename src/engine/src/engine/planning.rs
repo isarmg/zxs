@@ -43,7 +43,9 @@ impl Engine {
             workspace_namespace_baselines: &self.workspace_namespace_baselines,
             snapshot: &self.snapshot,
             next_slot: self.next_slot,
-            blocked: self.blocked || self.history_move_choice.is_some(),
+            blocked: self.blocked
+                || self.history_move_choice.is_some()
+                || self.history_move_intent.is_some(),
             metadata_integrity: &self.metadata_integrity,
             admission: Admission::Live(&self.commit_preparation),
             published_state_base: self.published_state_base.as_ref(),

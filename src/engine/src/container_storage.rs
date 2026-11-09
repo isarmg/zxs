@@ -1652,3 +1652,47 @@ fn version_time(time: std::time::SystemTime) -> Result<OffsetDateTime> {
     OffsetDateTime::from_unix_timestamp_nanos(i128::from(seconds) * 1_000_000_000)
         .map_err(Error::ClockRange)
 }
+
+/// Strict first-activation observation. Historical repair may skip an unavailable
+/// old body, but a move cannot return its first success with a missing FILE.
+pub(crate) fn verify_move_files(
+    config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
+    published: &crate::engine::PublishedMove,
+) -> Result<()> {
+    let transition = ProjectionTransition::new(published.state(), published.state(), None)?;
+    for (slot, history_id, file) in published.files() {
+        let disk = config
+            .disks
+            .iter()
+            .find(|disk| disk.slot_id == *slot)
+            .ok_or_else(|| invalid("published move FILE binding is absent"))?;
+        let root = &resources.get(disk)?.root;
+        let history = disk.root.join("histories").join(history_id);
+        let container = container_at(root, &history, Some(history_id), file, &mut |_| Ok(()))?
+            .ok_or_else(|| invalid("published move FILE container is absent"))?;
+        let expected = file_database::prepare(transition.next(), file, history_id)?;
+        let held = root.private_child(&container)?;
+        for suffix in ["-wal", "-shm", "-journal"] {
+            if held
+                .optional_metadata(&container.join(format!("{}{suffix}", file_database::NAME)))?
+                .is_some()
+            {
+                return Err(invalid("move FILE has an unknown SQLite sidecar"));
+            }
+        }
+        let actual = crate::disk::HeldRegular::capture(
+            &held,
+            file_database::NAME,
+            file_database::MAX_BYTES,
+        )?
+        .ok_or_else(|| invalid("published move FILE database is missing"))?;
+        if actual.bytes() != expected.bytes {
+            return Err(invalid(
+                "published move FILE differs from the complete retained graph",
+            ));
+        }
+        actual.check_running()?;
+    }
+    Ok(())
+}

@@ -102,6 +102,6 @@ impl Engine {
             retain(&mut selected, observed)?;
         }
         self.history_move_choice = selected;
-        Ok(())
+        self.discover_move_intent()
     }
 }

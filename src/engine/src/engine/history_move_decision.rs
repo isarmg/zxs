@@ -1,10 +1,13 @@
-//! Retained inputs, ordinary Candidate and PREPARE-only execution for one move.
-//! No ACCEPT or decision; unresolved system/disk authority stays explicit.
+//! Retained inputs and dedicated single-candidate move execution. Preparation
+//! reports alone never grant decision, visibility or source deletion authority.
 use super::Engine;
 use crate::{disk::*, *};
 use data_serialization::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod execution;
+pub use execution::FileHistoryMovePathRequest;
+pub(crate) use execution::PublishedMove;
 mod journal_prepare;
 pub use journal_prepare::FileHistoryMoveJournalPreparation;
 pub(super) use journal_prepare::PrepareBinding;
@@ -55,6 +58,24 @@ const OUTSTANDING: [FileHistoryMoveDecisionObligation; 5] = [
 /// self digest authorizes publication or proves those bytes still exist.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileHistoryMoveDecisionDigest(blake3::Hash);
+impl FileHistoryMoveDecisionDigest {
+    pub(crate) fn from_native_receipt(value: &str) -> Result<Self> {
+        let hash = blake3::Hash::from_hex(value).map_err(|_| {
+            Error::new(
+                ErrorCode::PublicationInvalid,
+                "native move receipt has an invalid material digest",
+            )
+        })?;
+        if hash.to_hex().as_str() != value {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "native move digest is not canonical",
+            ));
+        }
+        Ok(Self(hash))
+    }
+}
+
 impl std::fmt::Display for FileHistoryMoveDecisionDigest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.0.to_hex().as_str())

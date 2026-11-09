@@ -11,9 +11,16 @@ pub(in crate::engine) struct PrepareBinding {
     sequence: u64,
     candidate_hash: String,
     snapshot_hash: String,
+    decided: bool,
 }
 
 impl PrepareBinding {
+    pub(in crate::engine) fn mark_decided(&mut self) {
+        self.decided = true;
+    }
+    pub(in crate::engine) fn is_decided(&self) -> bool {
+        self.decided
+    }
     pub(in crate::engine) fn matches(&self, operation: OperationId, slot: u64) -> bool {
         self.operation == operation && self.sequence == slot
     }
@@ -86,6 +93,7 @@ impl Engine {
             sequence: candidate.sequence(),
             candidate_hash: candidate.candidate_hash().into(),
             snapshot_hash: candidate.snapshot_hash().into(),
+            decided: false,
         };
         if self
             .history_move_prepare

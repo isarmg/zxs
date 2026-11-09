@@ -7,7 +7,7 @@ use json_codec::json;
 mod native;
 pub(crate) use native::{
     KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, admit_source_deletion,
-    reject_unclosed_publication,
+    original_move_namespace, reject_unclosed_publication, replay_selected_move,
 };
 
 struct ProjectionInput<'a> {
@@ -286,8 +286,8 @@ impl Engine {
     /// hide the source, or change the real target namespace.
     ///
     /// This consumes a current capture. The trusted caller authenticates the
-    /// actor before invoking this API. No public execute method exists until
-    /// three-scope proofs and the common durable/recovery protocol are closed.
+    /// actor before invoking this API. Only the dedicated move_current_file
+    /// executor can consume the complete three-scope and journal closure.
     pub fn project_file_history_move(
         &self,
         capture: FileHistoryMoveCapture,

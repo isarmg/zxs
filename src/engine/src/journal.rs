@@ -469,6 +469,11 @@ impl JournalWriter {
     pub(crate) fn needs_recovery(&self) -> bool {
         self.state != WriterState::Ready
     }
+    /// A fact from the original read-only scan, not permission to truncate.
+    /// An indeterminate live write still requires reopening, never this allowance.
+    pub(crate) fn has_scanned_torn_tail(&self) -> bool {
+        matches!(self.state, WriterState::TornTail(_))
+    }
     fn check_slot(&self, sequence: u64, candidate: &str) -> Result<()> {
         if self
             .records

@@ -87,11 +87,13 @@ pub use disk_catalog::{
 mod history_move_recovery;
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 mod history_move_decision;
+pub(crate) use history_move_decision::PublishedMove;
 pub use history_move_decision::{
     FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
     FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation, FileHistoryMoveJointChoice,
     FileHistoryMoveJournalPreparation, FileHistoryMoveNativePreparation,
-    FileHistoryMoveOrdinaryPreparation, FileHistoryMoveScopedPreparation,
+    FileHistoryMoveOrdinaryPreparation, FileHistoryMovePathRequest,
+    FileHistoryMoveScopedPreparation,
 };
 mod history_move_target;
 pub use history_move_target::FileHistoryMoveTargetReport;
@@ -243,6 +245,7 @@ pub struct Engine {
     pub(crate) workspace_namespace_baselines: BTreeMap<String, WorkspaceNamespaceBaseline>,
     workspace_budget: workspace_budget::WorkspaceBudget,
     pub(crate) blocked: bool,
+    history_move_intent: Option<OperationId>,
     history_move_choice: Option<history_move_decision::Choice>,
     history_move_prepare: Option<history_move_decision::PrepareBinding>,
     backup_preparation: Option<backup_preparation::Worker>,
@@ -646,6 +649,7 @@ impl Engine {
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
+            history_move_intent: None,
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
@@ -770,7 +774,10 @@ impl Engine {
         engine.load_workspaces()?;
         engine.verify_selected_move_prepare()?;
         engine.rebuild_index()?;
-        if mode == RecoveryMode::CompletePending && engine.history_move_choice.is_none() {
+        if mode == RecoveryMode::CompletePending
+            && engine.history_move_choice.is_none()
+            && engine.history_move_intent.is_none()
+        {
             engine.refresh_published_disk_catalogs(None);
             engine.restore_published_disk_histories();
             engine.resume_backup_preparation()?;
@@ -838,6 +845,7 @@ impl Engine {
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
+            history_move_intent: None,
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
@@ -1392,7 +1400,7 @@ impl Engine {
     }
     pub(crate) fn require_write(&self) -> Result<()> {
         self.require_move_source_read()?;
-        if self.history_move_choice.is_some() {
+        if self.history_move_choice.is_some() || self.history_move_intent.is_some() {
             return Err(Error::new(ErrorCode::RecoveryRequired,
                 "the original joint move choice fences ordinary writes; resume only its retained inputs")
                 .retryable());

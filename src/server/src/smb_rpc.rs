@@ -32,6 +32,7 @@ mod directory;
 mod handles;
 mod metadata;
 mod namespace;
+mod path_reservation;
 mod publication;
 mod recovery_record;
 mod session;

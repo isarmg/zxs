@@ -88,6 +88,83 @@ fn replicate(
 }
 
 impl Engine {
+    pub(in crate::engine) fn discover_move_intent(&mut self) -> Result<()> {
+        let system = persist::Store::system(self)?;
+        let mut original = match system.read()? {
+            Some(observed) => {
+                observed.check_names(&system)?;
+                Some(observed.record)
+            }
+            None => None,
+        };
+        for disk in self.config.disks.iter().filter(|disk| disk.metadata_member) {
+            if self.disk_resources.available(disk).is_none() {
+                continue;
+            }
+            let identity = DiskRegistrationIdentity {
+                pool_id: self.config.pool_id.clone(),
+                disk_id: disk.disk_id.clone(),
+                slot_id: disk.slot_id.clone(),
+                binding_generation: disk.binding_generation,
+            };
+            let store = persist::Store::member(self, &identity)?;
+            if let Some(observed) = store.read()? {
+                observed.check_names(&store)?;
+                if original
+                    .as_ref()
+                    .is_some_and(|record| record != &observed.record)
+                {
+                    return Err(corrupt("original move intent replicas disagree"));
+                }
+                original = Some(observed.record);
+            }
+        }
+        if let Some(record) = original {
+            if record.pool_id != self.config.pool_id
+                || record.configuration_hash
+                    != object_hash("file-history-move-config", &self.config)?
+            {
+                return Err(stale(
+                    "retained move intent belongs to another original configuration",
+                ));
+            }
+            if self
+                .inspect_file_history_move_joint_choice()
+                .is_some_and(|choice| choice.operation_id() != record.operation_id)
+            {
+                return Err(stale(
+                    "retained move intent differs from the selected operation",
+                ));
+            }
+            self.history_move_intent = Some(record.operation_id);
+        }
+        Ok(())
+    }
+
+    pub(in crate::engine) fn original_move_path_intent(
+        &self,
+        request: &FileHistoryMovePathRequest,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<Option<FileHistoryMoveRecoveryInfo>> {
+        let store = persist::Store::system(self)?;
+        let Some(observed) = store.read()? else {
+            return Ok(None);
+        };
+        let record = &observed.record;
+        if record.operation_id != operation
+            || record.principal != principal
+            || !request.matches(&record.namespace)
+        {
+            return Err(Error::new(
+                ErrorCode::IdempotencyKeyReused,
+                "retained move belongs to another original actor, operation or path request",
+            ));
+        }
+        observed.check_names(&store)?;
+        Ok(Some(record.info()?))
+    }
+
     /// Read-only original-envelope barrier for target staging. Rechecking the
     /// proposed State alone cannot substitute for every retained member copy.
     pub(crate) fn verify_file_history_move_recovery(
@@ -130,8 +207,8 @@ impl Engine {
     }
 
     /// Retain the exact joint metadata preparation on the system root and all
-    /// configured metadata members. This is not PREPARE/ACCEPT in the journal,
-    /// does not reserve the operation/slot and cannot publish either namespace.
+    /// configured metadata members. This reserves the original operation's
+    /// write fence, not an ACCEPT or visibility on either namespace.
     pub fn save_file_history_move_recovery(
         &mut self,
         projection: &FileHistoryMoveProjection,
@@ -143,6 +220,10 @@ impl Engine {
         let record = RecoveryRecord::capture(self, projection)?;
         record.validate()?;
         let system = persist::Store::system(self)?;
+        // The first original envelope is already a durable deny fence. An I/O
+        // failure before the later candidate choice must not permit a fresh
+        // ordinary write to change the source and strand this operation.
+        self.history_move_intent = Some(record.operation_id);
         system.save(&record, self.config.metadata_reserve_bytes)?;
         let finish = || -> Result<FileHistoryMoveRecoveryInfo> {
             replicate(self, &record, cancellation)?;

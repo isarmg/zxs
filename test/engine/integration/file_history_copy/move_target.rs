@@ -497,7 +497,7 @@ fn target_preparation_requires_all_original_recovery_replicas_and_honors_initial
 }
 
 #[test]
-fn a_changed_source_cannot_complete_or_publish_already_staged_target_materials() {
+fn staged_target_keeps_the_earlier_original_source_write_fence() {
     let mut fixture = Fixture::new(false);
     let (projection, info) = plan(&mut fixture);
     fixture
@@ -519,19 +519,15 @@ fn a_changed_source_cannot_complete_or_publish_already_staged_target_materials()
             "admin",
             op(),
         )
+        .unwrap_err();
+    fixture
+        .engine
+        .verify_file_history_move_target(
+            &projection,
+            info.digest(),
+            &HistoryWindowCancellation::new(),
+        )
         .unwrap();
-    assert_eq!(
-        fixture
-            .engine
-            .verify_file_history_move_target(
-                &projection,
-                info.digest(),
-                &HistoryWindowCancellation::new()
-            )
-            .unwrap_err()
-            .code(),
-        ErrorCode::WorkspaceChanged
-    );
     assert_eq!(fs::read(path).unwrap(), retained);
     assert!(
         fixture
