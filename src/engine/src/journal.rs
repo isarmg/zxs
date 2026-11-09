@@ -458,6 +458,11 @@ impl JournalWriter {
     pub(crate) fn records(&self) -> &[(Record, String)] {
         &self.records
     }
+    /// Read-only name/held-file identity check; cached receipts alone cannot
+    /// certify the currently named original journal. No descriptor is replaced.
+    pub(crate) fn verify_retained_name(&self) -> Result<()> {
+        self.io.verify_retained_name()
+    }
     pub(crate) fn requires_reopen(&self) -> bool {
         self.state == WriterState::RecoveryRequired
     }

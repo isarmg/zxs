@@ -313,7 +313,7 @@ impl Engine {
             FileHistoryMoveReplay {
                 principal: principal.into(),
                 operation,
-                sequence: self.next_slot,
+                sequence: self.move_source_slot(),
                 route,
             },
             cancellation,
@@ -335,7 +335,7 @@ impl Engine {
             .iter()
             .map(|slot| Ok((slot.clone(), self.disk(slot)?.binding_generation)))
             .collect::<Result<BTreeMap<_, _>>>()?;
-        if replay.sequence != self.next_slot
+        if replay.sequence != self.move_source_slot()
             || replay.route.slots != capture.target_slots
             || replay.route.bindings != bindings
         {
@@ -381,7 +381,7 @@ impl Engine {
     ) -> Result<CurrentFileHistoryMoveProjection<'a>> {
         self.recheck_file_history_move(&projection.capture, cancellation)?;
         require_unused(self, projection.operation)?;
-        if self.next_slot != projection.proposed_sequence() {
+        if self.move_source_slot() != projection.proposed_sequence() {
             return Err(changed());
         }
         Ok(CurrentFileHistoryMoveProjection {

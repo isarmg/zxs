@@ -62,6 +62,20 @@ impl JournalIo {
         }
     }
 
+    /// Observe the held original file through the admitted resource without
+    /// opening a replacement writer, synchronizing, truncating or appending.
+    pub(crate) fn verify_retained_name(&self) -> Result<()> {
+        match &self.source {
+            JournalSource::Bound(files) => {
+                let mut guard = files.access_checked()?;
+                files.check_journal_authority()?;
+                guard.value().resource.verify_named()?;
+                files.check_running()
+            }
+            JournalSource::Unbound(files) => files.verify_named(),
+        }
+    }
+
     pub(crate) fn check_writer(&self) -> Result<()> {
         match &self.source {
             JournalSource::Bound(files) => {

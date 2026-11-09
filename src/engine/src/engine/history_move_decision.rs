@@ -1,10 +1,13 @@
-//! Durable inputs for one joint move, never a journal Candidate or decision.
-//! File scopes are materialized; unresolved system/disk authority stays explicit.
+//! Retained inputs, ordinary Candidate and PREPARE-only execution for one move.
+//! No ACCEPT or decision; unresolved system/disk authority stays explicit.
 use super::Engine;
 use crate::{disk::*, *};
 use data_serialization::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod journal_prepare;
+pub use journal_prepare::FileHistoryMoveJournalPreparation;
+pub(super) use journal_prepare::PrepareBinding;
 mod ordinary;
 pub use ordinary::FileHistoryMoveOrdinaryPreparation;
 mod candidate;

@@ -88,8 +88,8 @@ mod history_move_decision;
 pub use history_move_decision::{
     FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
     FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation, FileHistoryMoveJointChoice,
-    FileHistoryMoveNativePreparation, FileHistoryMoveOrdinaryPreparation,
-    FileHistoryMoveScopedPreparation,
+    FileHistoryMoveJournalPreparation, FileHistoryMoveNativePreparation,
+    FileHistoryMoveOrdinaryPreparation, FileHistoryMoveScopedPreparation,
 };
 mod history_move_target;
 pub use history_move_target::FileHistoryMoveTargetReport;
@@ -242,6 +242,7 @@ pub struct Engine {
     workspace_budget: workspace_budget::WorkspaceBudget,
     pub(crate) blocked: bool,
     history_move_choice: Option<history_move_decision::Choice>,
+    history_move_prepare: Option<history_move_decision::PrepareBinding>,
     backup_preparation: Option<backup_preparation::Worker>,
     membership_fence: Option<membership_transition::AdmittedFence>,
     pending_membership: Option<membership_transition::pending::PendingMembership>,
@@ -643,6 +644,7 @@ impl Engine {
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
             history_move_choice: None,
+            history_move_prepare: None,
             backup_preparation: None,
             membership_fence: None,
             pending_membership: None,
@@ -719,6 +721,7 @@ impl Engine {
         engine.restore_current_disk_exit()?;
         engine.retire_published_readmission_plan()?;
         engine.load_workspaces()?;
+        engine.verify_selected_move_prepare()?;
         engine.rebuild_index()?;
         Ok(engine)
     }
@@ -761,6 +764,7 @@ impl Engine {
         engine.restore_current_disk_exit()?;
         engine.retire_published_readmission_plan()?;
         engine.load_workspaces()?;
+        engine.verify_selected_move_prepare()?;
         engine.rebuild_index()?;
         if mode == RecoveryMode::CompletePending && engine.history_move_choice.is_none() {
             engine.refresh_published_disk_catalogs(None);
@@ -831,6 +835,7 @@ impl Engine {
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
             history_move_choice: None,
+            history_move_prepare: None,
             backup_preparation: None,
             membership_fence: None,
             pending_membership: None,
@@ -1137,6 +1142,7 @@ impl Engine {
         engine.restore_current_disk_exit()?;
         engine.retire_published_readmission_plan()?;
         engine.load_workspaces()?;
+        engine.verify_selected_move_prepare()?;
         engine.rebuild_index()?;
         // Restoring SYSTEM has admitted the original authority. Reconstruct its
         // disposable disk projections only now, never elect authority from them.

@@ -139,9 +139,19 @@ impl Choice {
     }
 
     fn require_baseline(&self, engine: &Engine) -> Result<()> {
+        let next_slot = if let Some(prepared) = &engine.history_move_prepare {
+            if !prepared.matches(self.record.operation_id, self.record.decision_slot) {
+                return Err(invalid(
+                    "move PREPARE does not belong to the original choice",
+                ));
+            }
+            self.record.decision_slot.checked_add(1).ok_or_else(limit)?
+        } else {
+            self.record.decision_slot
+        };
         if engine.state.sequence != self.record.source_sequence
             || engine.snapshot.as_ref() != Some(&self.record.source_snapshot)
-            || engine.next_slot != self.record.decision_slot
+            || engine.next_slot != next_slot
             || engine
                 .state
                 .operations
@@ -150,6 +160,43 @@ impl Choice {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "retained move choice differs from the exact published source/next slot; keep all material",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn decision_slot(&self) -> u64 {
+        self.record.decision_slot
+    }
+
+    pub(super) fn principal(&self) -> &str {
+        &self.record.principal
+    }
+
+    pub(super) fn matches_recovery(&self, info: &FileHistoryMoveRecoveryInfo) -> bool {
+        info.operation_id() == self.record.operation_id
+            && info.digest().to_string() == self.record.recovery_digest
+            && info.source_sequence() == self.record.source_sequence
+            && info.decision_slot() == self.record.decision_slot
+    }
+
+    pub(super) fn require_prepare_candidate(
+        &self,
+        candidate: &crate::journal::Candidate,
+    ) -> Result<()> {
+        let transaction = object_hash(
+            "file-history-move-candidate-transaction",
+            &self.report().digest(),
+        )?;
+        if candidate.pool_id != self.record.pool_id
+            || candidate.sequence != self.record.decision_slot
+            || candidate.operation_id != self.record.operation_id
+            || candidate.previous_snapshot.as_deref() != Some(self.record.source_snapshot.as_str())
+            || candidate.transaction_id != format!("tx_{}", &transaction[..32])
+            || candidate.registry().is_some()
+        {
+            return Err(invalid(
+                "journal PREPARE is not the original selected native move candidate",
             ));
         }
         Ok(())
@@ -257,6 +304,14 @@ impl Record {
 }
 
 impl Engine {
+    /// Original move replay keeps its chosen slot after PREPARE consumes the
+    /// ordinary next-slot counter. This does not reopen ordinary write access.
+    pub(crate) fn move_source_slot(&self) -> u64 {
+        self.history_move_choice
+            .as_ref()
+            .map_or(self.next_slot, Choice::decision_slot)
+    }
+
     pub(crate) fn require_selected_move_operation(&self, operation: OperationId) -> Result<()> {
         if let Some(choice) = &self.history_move_choice {
             choice.require_baseline(self)?;

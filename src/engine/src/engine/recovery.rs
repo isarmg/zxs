@@ -289,23 +289,17 @@ impl Engine {
     ) -> Result<()> {
         let move_selected = self.history_move_choice.is_some();
         if let Some(choice) = &self.history_move_choice {
-            // This slice has no native move Candidate/ACCEPT. A later ordinary
-            // slot or a torn tail is not permission to bypass retained selection.
-            if prepared.torn_tail
-                || prepared
-                    .records
-                    .keys()
-                    .any(|slot| *slot > choice.source_sequence())
-                || prepared
-                    .candidates
-                    .keys()
-                    .any(|slot| *slot > choice.source_sequence())
+            if prepared
+                .candidates
+                .keys()
+                .any(|slot| *slot > choice.source_sequence())
             {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
-                    "journal extends beyond or cannot prove the selected move source; preserve the original choice and journal",
+                    "selected move has an unclosed accepted candidate; preserve its original journal",
                 ));
             }
+            self.admit_selected_move_prepares(&prepared.records, prepared.torn_tail)?;
         }
         let PreparedRecovery {
             members,

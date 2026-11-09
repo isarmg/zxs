@@ -45,3 +45,5 @@ Engine 持有原 writer 锁后，先读取系统根和实际已准入 I/O 根的
 新增未运行源码覆盖：完整选择后源可读与目标未发布、普通写拒绝、缺 scoped 与早取消不建立选择、冷重建保留 D／clock／inode、系统副本缺失仍围栏且只显式补齐、部分写失败、损坏／冲突保留拒绝、更晚 journal 不回绕，以及已脱锁普通提交拒绝和持久记录严格解析。这些不是运行结果，更不代表真实 SMB／磁盘故障验收。
 
 独立后继：[唯一普通 Candidate 与逐成员冷读](file-history-move-native-candidate.md)。仅安装原普通不可变依赖，选择围栏及无 ACCEPT 的边界保持。
+
+后继：[原 PREPARE 与冷续作](file-history-move-journal-preparation.md) 允许准确原选择的 PREPARE-only 尾部并保留原 slot，choice 仍只是禁止其它写入的不可变围栏，不转成 ACCEPT 或成功收据。

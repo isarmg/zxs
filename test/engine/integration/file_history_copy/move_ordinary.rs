@@ -11,6 +11,8 @@ use std::{
 const STAGE: &str = "file-history-move-ordinary";
 #[path = "move_installations.rs"]
 mod installations;
+#[path = "move_journal.rs"]
+mod journal;
 fn input(fixture: &mut Fixture) -> (FileHistoryMoveProjection, FileHistoryMoveRecoveryInfo) {
     let (projection, recovery) = plan(fixture);
     let cancel = HistoryWindowCancellation::new();

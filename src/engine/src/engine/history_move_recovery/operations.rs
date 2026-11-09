@@ -1,4 +1,4 @@
-//! Explicit preparation/resume only. No path reaches the publication journal.
+//! Original-envelope read, explicit preparation and resume. No publication.
 use super::*;
 
 pub(super) fn metadata_members(engine: &Engine) -> Result<Vec<DiskRegistrationIdentity>> {
@@ -172,17 +172,13 @@ impl Engine {
             .transpose()
     }
 
-    /// Recreate the SAME joint projection after restart, using its original
-    /// clock, slot, route and identities. Complete only missing member envelopes
-    /// for that exact original request. Never replan, replace partial material,
-    /// create a body/D or promote preparation into a successful move.
-    pub fn resume_file_history_move_recovery(
-        &mut self,
+    fn original_move_projection(
+        &self,
         operation: OperationId,
         reviewed: &FileHistoryMoveRecoveryDigest,
         principal: &str,
         cancellation: &HistoryWindowCancellation,
-    ) -> Result<FileHistoryMoveProjection> {
+    ) -> Result<(FileHistoryMoveProjection, persist::Store, persist::Observed)> {
         checkpoint(cancellation)?;
         Self::require_actor(principal)?;
         self.require_move_source_read()?;
@@ -228,6 +224,39 @@ impl Engine {
             ));
         }
         observed.check_names(&system)?;
+        Ok((projection, system, observed))
+    }
+
+    /// Reconstruct and recheck every original envelope without synchronizing or
+    /// filling replicas. Cold PREPARE admission must never invoke explicit resume.
+    pub(crate) fn read_original_move_projection(
+        &self,
+        operation: OperationId,
+        reviewed: &FileHistoryMoveRecoveryDigest,
+        principal: &str,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<FileHistoryMoveProjection> {
+        let (projection, system, observed) =
+            self.original_move_projection(operation, reviewed, principal, cancellation)?;
+        self.verify_file_history_move_recovery(&projection, reviewed, cancellation)?;
+        observed.check_names(&system)?;
+        Ok(projection)
+    }
+
+    /// Recreate the SAME joint projection after restart, using its original
+    /// clock, slot, route and identities. Complete only missing member envelopes
+    /// for that exact original request. Never replan, replace partial material,
+    /// create a body/D or promote preparation into a successful move.
+    pub fn resume_file_history_move_recovery(
+        &mut self,
+        operation: OperationId,
+        reviewed: &FileHistoryMoveRecoveryDigest,
+        principal: &str,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<FileHistoryMoveProjection> {
+        let (projection, system, observed) =
+            self.original_move_projection(operation, reviewed, principal, cancellation)?;
+        let record = &observed.record;
         // Synchronize the same system bytes too: a prior failure may have
         // installed the name without completing all parent-directory barriers.
         let finish = || -> Result<()> {

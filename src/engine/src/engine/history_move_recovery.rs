@@ -302,7 +302,7 @@ impl RecoveryRecord {
             || engine.snapshot.as_deref() != Some(self.snapshot.as_str())
             || self.configuration_hash != object_hash("file-history-move-config", &engine.config)?
             || self.generation != ConfigurationGeneration::current(engine)
-            || self.decision_slot != engine.next_slot
+            || self.decision_slot != engine.move_source_slot()
             || self.metadata_members != metadata_members(engine)?
         {
             return Err(stale(

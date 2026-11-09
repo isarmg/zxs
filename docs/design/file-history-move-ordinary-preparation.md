@@ -80,3 +80,5 @@
 
 
 冷逻辑后继：[单一 move 收据与冷 D 生命周期](file-history-move-receipt-lifecycle.md) 接原源 D 的准确收据/撤销准入，不改变本片原安装对、普通 publication 硬门禁或五项未完成义务。
+
+后继：[原候选 PREPARE 与冷续作](file-history-move-journal-preparation.md) 在独立入口追加同一普通 Candidate 的 PREPARE-only 日志，并冷态只读复核原安装闭包。本文件的 ordinary 准备入口自身仍不写 journal；没有新增 ACCEPT、活动交换、源 D 或 SMB 成功。
