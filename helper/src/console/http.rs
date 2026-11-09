@@ -1,10 +1,11 @@
 use super::{MAX_REQUEST_BYTES, State, boundary, work};
 mod configuration_recovery;
 mod materials;
+mod response_body;
 use data_serialization::{Deserialize, de::DeserializeOwned};
 use http_routing::{
     Json, Router,
-    body::{Body, to_bytes},
+    body::to_bytes,
     extract::{Request, State as ExtractState},
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
@@ -349,13 +350,19 @@ async fn check(
     let permit = admit_job(&state, &request)?;
     let input: work::Check = input(request).await?;
     work::admit(&input.selection, input.writers_stopped)?;
-    let report = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::authority::check::collect(&input.selection).map_err(work::disk_error)
+    let response = tokio::task::spawn_blocking(move || {
+        let report = crate::authority::check::collect(&input.selection).map_err(work::disk_error)?;
+        let bytes = json_codec::to_vec(&report).map_err(|error| {
+            Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "report_json", error)
+        })?;
+        Ok::<_, Failure>((
+            [(header::CONTENT_TYPE, "application/json")],
+            response_body::owned(bytes.into(), permit),
+        ).into_response())
     })
     .await
     .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "read_worker", error))??;
-    Ok(Json(report).into_response())
+    Ok(response)
 }
 async fn export(
     ExtractState(state): ExtractState<State>,
@@ -364,13 +371,13 @@ async fn export(
     let permit = admit_job(&state, &request)?;
     let input: work::Export = input(request).await?;
     work::admit(&input.selection, input.writers_stopped)?;
-    let exported = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        work::export(input)
+    let (exported, permit) = tokio::task::spawn_blocking(move || {
+        let exported = work::export(input)?;
+        Ok::<_, Failure>((exported, permit))
     })
     .await
     .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "read_worker", error))??;
-    let mut response = Response::new(Body::from(exported.bytes));
+    let mut response = Response::new(response_body::owned(exported.bytes.into(), permit));
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
@@ -1386,9 +1393,9 @@ async fn maintenance_operation(
     if let Ok(mut unique) = bytes.try_into_mut() {
         unique.fill(0);
     }
-    let result = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::maintenance::run(operation, body)
+    let (result, permit) = tokio::task::spawn_blocking(move || {
+        let result = crate::maintenance::run(operation, body)?;
+        Ok::<_, crate::maintenance::Error>((result, permit))
     })
     .await
     .map_err(|error| {
@@ -1399,5 +1406,8 @@ async fn maintenance_operation(
         )
     })?
     .map_err(|error| Failure::message(error.status(), error.code(operation), &error.to_string()))?;
-    Ok(([(header::CONTENT_TYPE, "application/json")], result).into_response())
+    Ok((
+        [(header::CONTENT_TYPE, "application/json")],
+        response_body::owned(result.into(), permit),
+    ).into_response())
 }

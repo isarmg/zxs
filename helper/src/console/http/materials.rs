@@ -21,9 +21,9 @@ pub(super) async fn manifest(
 async fn download(state: State, request: Request, kind: Kind) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
     let _: InstallPreviewRequest = input(request).await?;
-    let verified = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::installation::materials::verified().map_err(install_failure)
+    let (verified, permit) = tokio::task::spawn_blocking(move || {
+        let verified = crate::installation::materials::verified().map_err(install_failure)?;
+        Ok::<_, Failure>((verified, permit))
     })
     .await
     .map_err(|error| {
@@ -47,7 +47,9 @@ async fn download(state: State, request: Request, kind: Kind) -> Result<Response
             "attachment; filename=\"zxs-license-materials.json\"",
         ),
     };
-    let mut response = Response::new(Body::from(bytes));
+    let mut response = Response::new(response_body::owned(
+        http_routing::body::Bytes::from_static(bytes), permit,
+    ));
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
