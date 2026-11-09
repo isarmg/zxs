@@ -3,6 +3,7 @@
 use super::directory_staging::Ids;
 use super::*;
 mod branches;
+pub(crate) mod export;
 mod rename;
 mod retention;
 mod status;

@@ -1193,6 +1193,20 @@ pub(crate) fn record_directory_edits(
     changed_paths: &[String],
     exclude: Option<&str>,
 ) -> Result<Vec<String>> {
+    record_directory_edits_with_ids(
+        state, repository, changed_paths, exclude, &mut |prefix| Ok(new_id(prefix)?),
+    )
+}
+
+/// Native history exports must reconstruct these same working checkpoints from
+/// their operation, not accept caller-supplied trees as publication authority.
+pub(super) fn record_directory_edits_with_ids(
+    state: &mut State,
+    repository: &str,
+    changed_paths: &[String],
+    exclude: Option<&str>,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<Vec<String>> {
     let repo = required(
         state.repositories.get(repository),
         "directory repository missing",
@@ -1237,7 +1251,11 @@ pub(crate) fn record_directory_edits(
         match scope(state, repository, &path) {
             Err(e) if e.code() == storage_contract::ErrorCode::DirectoryNotFound => continue,
             Err(e) => return Err(e),
-            Ok(_) => result.push(snapshot(state, repository, &path)?),
+            Ok(_) => {
+                let source =
+                    DirectorySnapshotSource::capture(state, scope_view(state, repository, &path)?);
+                result.push(snapshot_source_with_ids(state, repository, source, ids)?);
+            }
         }
     }
     Ok(result)

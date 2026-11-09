@@ -124,6 +124,7 @@ pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<Lifecy
             return Err(invalid());
         }
         if receipt.kind == crate::business::history_copy::RETAINED_KIND
+            || receipt.kind == crate::business::history_copy::DIRECTORY_EXPORT_KIND
             || receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND
         {
             let copied = crate::business::history_copy::retained::read(receipt, file)?;

@@ -1,6 +1,8 @@
 //! Namespace type checks, workspace staging and recoverable commit submission.
 use super::*;
 use smb_protocol::protocol::NamespaceOperation;
+mod directory_export;
+pub(super) use directory_export::RetainedExport;
 
 // Only namespace admission uses this registry. It spans the operation lookup,
 // record lifetime and workspace submission without holding a mutex across I/O.
@@ -131,8 +133,8 @@ impl NamespaceAdmission {
         cleanup_namespace_record(&self.record);
     }
 
-    /// Only the native move adapter consumes this retained record. Generic
-    /// namespace/workspace operations remain non-replayable.
+    /// Native move and retaining directory-export adapters consume these
+    /// records. Generic namespace/workspace operations remain non-replayable.
     pub(super) fn retain_move(
         shared: &Arc<Shared>,
         identity: &Identity,
@@ -245,6 +247,12 @@ impl Session {
         operation_id: OperationId,
     ) -> Result<Value, ApiError> {
         let input = NamespaceInput::parse(kind, path, destination, replace)?;
+        if input.kind == NamespaceOperation::Rename
+            && let Some(retained) =
+                RetainedExport::read(&self.shared, &self.identity, operation_id)?
+        {
+            return self.retry_directory_export(&input, retained);
+        }
         let admission = NamespaceAdmission::acquire(&self.shared, &self.identity, operation_id)?;
         self.namespace_admitted(input, admission)
     }
@@ -339,6 +347,17 @@ impl Session {
             false
         };
         let reserved = self.reserve_paths(&affected)?;
+        if kind == NamespaceOperation::Rename {
+            let target = destination_path.as_ref()
+                .expect("invariant: rename input has a typed destination");
+            match self.try_directory_file_export(&source_path, target, replace, &admission) {
+                Ok(None) => {}
+                result => {
+                    self.release_paths(&reserved);
+                    return result.map(|reply| reply.expect("invariant: None was handled"));
+                }
+            }
+        }
         if soft_delete {
             let result = self.soft_delete_unlink(&source_path, operation_id, record);
             self.release_paths(&reserved);

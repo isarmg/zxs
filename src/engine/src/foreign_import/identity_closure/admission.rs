@@ -210,6 +210,7 @@ impl ForeignAdmissionRecipe {
                     | "file.delete.undo"
                     | crate::business::FILE_HISTORY_MOVE_KIND
                     | crate::business::history_copy::RETAINED_KIND
+                    | crate::business::history_copy::DIRECTORY_EXPORT_KIND
                     | crate::node_retirement_engine::KIND
             )
         }) || !self.source.0.file_deletions.is_empty()

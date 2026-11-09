@@ -7,9 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const KIND: &str = "file.history.copy";
 pub(crate) const RETAINED_KIND: &str = "file.history.copy.retained";
+pub(crate) const DIRECTORY_EXPORT_KIND: &str = "file.directory.export";
 pub(crate) mod retained;
 pub(crate) fn is_kind(kind: &str) -> bool {
-    matches!(kind, KIND | RETAINED_KIND)
+    matches!(kind, KIND | RETAINED_KIND | DIRECTORY_EXPORT_KIND)
 }
 
 pub(crate) type CopyTransform = fn(
@@ -26,12 +27,14 @@ pub(crate) type CopyTransform = fn(
 pub(crate) enum CopyKind {
     Graph,
     Retained,
+    DirectoryExport,
 }
 impl CopyKind {
     pub(crate) fn parse(kind: &str) -> Result<Self> {
         match kind {
             KIND => Ok(Self::Graph),
             RETAINED_KIND => Ok(Self::Retained),
+            DIRECTORY_EXPORT_KIND => Ok(Self::DirectoryExport),
             _ => Err(invalid()),
         }
     }
@@ -39,18 +42,35 @@ impl CopyKind {
         match self {
             Self::Graph => KIND,
             Self::Retained => RETAINED_KIND,
+            Self::DirectoryExport => DIRECTORY_EXPORT_KIND,
         }
     }
+    pub(crate) fn sources(
+        self,
+        previous: &State,
+        view: Option<&crate::engine::CurrentNamespaces>,
+        request: &FileHistoryCopyRequest,
+    ) -> Result<CopySources> {
+        match self {
+            Self::Graph | Self::Retained => sources(previous, view, request),
+            Self::DirectoryExport => {
+                sources_for(previous, view, Destination::DirectoryExport(request))
+            }
+        }
+    }
+
     pub(crate) fn transform(self) -> CopyTransform {
         match self {
             Self::Graph => apply,
             Self::Retained => retained::apply,
+            Self::DirectoryExport => directory_git::export::apply,
         }
     }
 }
 
-/// First online slice: one saved file into an empty, uninitialized repository
-/// on another primary. Both exact namespace heads are part of the request.
+/// Exact namespace baselines for a native history fork. Ordinary copy still
+/// requires an empty repository on another primary; directory export separately
+/// admits a full destination path inside the same outer namespace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct FileHistoryCopyRequest {
@@ -81,7 +101,7 @@ pub(crate) fn invalid() -> Error {
 fn unsupported() -> Error {
     Error::new(
         ErrorCode::UnsupportedOperation,
-        "history copy/move requires an available uniformly placed file history, unchanged placement/backup policies, and its supported destination scope on another primary",
+        "history copy/move requires an available uniformly placed file history, unchanged placement/backup policies, and its operation's supported destination scope",
     )
 }
 
@@ -106,12 +126,15 @@ pub(crate) struct CopySources {
 pub(in crate::business) enum Destination<'a> {
     EmptyRepository(&'a FileHistoryCopyRequest),
     MoveIntoDiskRoot(&'a FileHistoryCopyRequest),
+    DirectoryExport(&'a FileHistoryCopyRequest),
 }
 
 impl<'a> Destination<'a> {
     fn request(self) -> &'a FileHistoryCopyRequest {
         match self {
-            Self::EmptyRepository(request) | Self::MoveIntoDiskRoot(request) => request,
+            Self::EmptyRepository(request)
+            | Self::MoveIntoDiskRoot(request)
+            | Self::DirectoryExport(request) => request,
         }
     }
 }
@@ -139,7 +162,10 @@ fn sources_for(
 ) -> Result<CopySources> {
     let request = destination.request();
     let source_path = name_policy::LookupPath::parse(&request.source_path)?;
-    if matches!(destination, Destination::MoveIntoDiskRoot(_)) {
+    if matches!(
+        destination,
+        Destination::MoveIntoDiskRoot(_) | Destination::DirectoryExport(_)
+    ) {
         name_policy::PortablePath::parse(&request.target_name)?;
     } else {
         name_policy::validate_name(&request.target_name)?;
@@ -172,17 +198,15 @@ fn sources_for(
             "history copy namespace head changed",
         ));
     }
-    if source.primary_slot_id == target.primary_slot_id
-        || source.history_tree_id == target.history_tree_id
+    let directory_export = matches!(destination, Destination::DirectoryExport(_));
+    if (!directory_export
+        && (source.primary_slot_id == target.primary_slot_id
+            || source.history_tree_id == target.history_tree_id
+            || previous.directory_branches.values()
+                .any(|branch| branch.repository_id == target.repository_id)
+            || previous.directory_git_repositories.contains_key(&target.repository_id)))
         || source_branch.state != BranchState::Active
         || target_branch.state != BranchState::Active
-        || previous
-            .directory_branches
-            .values()
-            .any(|branch| branch.repository_id == target.repository_id)
-        || previous
-            .directory_git_repositories
-            .contains_key(&target.repository_id)
         || previous.protection_policies.values().any(|policy| {
             policy.repository_id == source.repository_id
                 || policy.repository_id == target.repository_id
@@ -228,6 +252,11 @@ fn sources_for(
                     ));
                 }
             }
+            Destination::DirectoryExport(_) => {
+                if current_target != target_entries.as_slice() {
+                    return Err(unsupported());
+                }
+            }
             Destination::EmptyRepository(_) => {}
         }
         view.branch_entries(&source.main_branch_id, &source_branch.head_commit_id)?
@@ -271,6 +300,9 @@ fn sources_for(
                     "history move cannot replace a retained target entry",
                 ));
             }
+        }
+        Destination::DirectoryExport(_) => {
+            directory_git::export::require_scope(previous, view, request, source_entries)?;
         }
     }
     let entry = namespace::find_unordered_key(source_entries, source_path.key())
@@ -815,7 +847,7 @@ impl Engine {
         self.copy_file_history_kind(request, principal, operation, CopyKind::Retained)
     }
 
-    fn copy_file_history_kind(
+    pub(in crate::business) fn copy_file_history_kind(
         &mut self,
         request: &FileHistoryCopyRequest,
         principal: &str,
@@ -828,7 +860,7 @@ impl Engine {
             operation,
             json!(request),
             |engine, next, prepared| {
-                let source = sources(
+                let source = kind.sources(
                     engine.state(),
                     engine.current_namespaces.as_deref(),
                     request,

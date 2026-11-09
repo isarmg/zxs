@@ -92,7 +92,7 @@ pub(in crate::business) fn validate(
 ) -> Result<()> {
     if !matches!(
         receipt.kind.as_str(),
-        RETAINED_KIND | crate::business::FILE_HISTORY_MOVE_KIND
+        RETAINED_KIND | DIRECTORY_EXPORT_KIND | crate::business::FILE_HISTORY_MOVE_KIND
     ) || value.events.len() > 65_536
         || value.file_id != file
         || receipt.result["file_id"].as_str() != Some(file)

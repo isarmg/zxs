@@ -46,6 +46,10 @@ mod uploads;
 mod verified_chunk;
 mod web_assets;
 
+mod backend_directory_export;
+pub use backend_directory_export::{
+    DirectoryFileExport, ExportDirectoryFile, PrepareDirectoryFileExport,
+};
 mod backend_file_history_move;
 pub use backend_file_history_move::{MoveCurrentFile, MoveCurrentFileToEmptyDisk, MoveTargetName};
 mod backend_file_deletion;
@@ -788,6 +792,20 @@ pub trait Backend: Send + Sync {
         &self,
         _identity: &Identity,
         _command: crate::DeleteFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn prepare_directory_file_export(
+        &self,
+        _identity: &Identity,
+        _command: crate::PrepareDirectoryFileExport,
+    ) -> Result<Option<crate::DirectoryFileExport>, ApiError> {
+        Ok(None)
+    }
+    fn export_directory_file(
+        &self,
+        _identity: &Identity,
+        _command: crate::ExportDirectoryFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -1624,6 +1642,20 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.backend
             .soft_delete_file(&self.current(identity)?, command)
+    }
+    fn prepare_directory_file_export(
+        &self,
+        identity: &Identity,
+        command: crate::PrepareDirectoryFileExport,
+    ) -> Result<Option<crate::DirectoryFileExport>, ApiError> {
+        self.backend.prepare_directory_file_export(&self.current(identity)?, command)
+    }
+    fn export_directory_file(
+        &self,
+        identity: &Identity,
+        command: crate::ExportDirectoryFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend.export_directory_file(&self.current(identity)?, command)
     }
     fn move_current_file(
         &self,

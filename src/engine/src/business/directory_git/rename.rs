@@ -39,27 +39,17 @@ impl<'a> RenameOwnership<'a> {
         if self.departures.is_empty() {
             return Ok(());
         }
-        // Query every explicit historical node, not just the current HEAD or
-        // selected branch. No history scan is needed for an in-owner rename.
-        for tree in state.directory_trees.values() {
-            let branch = &state.directory_branches[&tree.directory_branch_id];
-            let Some(files) = self.departures.get(branch.directory_id.as_str()) else {
-                continue;
-            };
-            if storage_contract::directory_staging::directory_tree_is_committed(state, tree)
-                && contains_owned_file(tree, files)
-            {
-                return Err(Error::new(
-                    ErrorCode::UnsupportedOperation,
-                    "renaming a historically committed file out of its directory repository requires a full-history copy; source and destination are unchanged",
-                ));
-            }
+        if has_committed_departure(state, &self.departures)? {
+            return Err(Error::new(
+                ErrorCode::UnsupportedOperation,
+                "renaming a historically committed file out of its directory repository requires a full-history copy; source and destination are unchanged",
+            ));
         }
         Ok(())
     }
 }
 
-fn owners<'a>(
+pub(super) fn owners<'a>(
     state: &State,
     repository: &'a str,
     entries: &'a [Entry],
@@ -80,7 +70,7 @@ fn owners<'a>(
     result
 }
 
-fn owner_at<'a>(owners: &BTreeMap<&str, &'a str>, mut key: &str) -> Option<&'a str> {
+pub(super) fn owner_at<'a>(owners: &BTreeMap<&str, &'a str>, mut key: &str) -> Option<&'a str> {
     while let Some((parent, _)) = key.rsplit_once('/') {
         if let Some(owner) = owners.get(parent) {
             return Some(owner);
@@ -90,7 +80,7 @@ fn owner_at<'a>(owners: &BTreeMap<&str, &'a str>, mut key: &str) -> Option<&'a s
     owners.get("").copied()
 }
 
-fn contains_owned_file(tree: &DirectoryTree, files: &BTreeSet<&str>) -> bool {
+pub(super) fn contains_owned_file(tree: &DirectoryTree, files: &BTreeSet<&str>) -> bool {
     let children = tree
         .entries
         .iter()
@@ -113,4 +103,28 @@ fn contains_owned_file(tree: &DirectoryTree, files: &BTreeSet<&str>) -> bool {
         }
         true
     })
+}
+
+pub(super) fn has_committed_departure(
+    state: &State,
+    departures: &BTreeMap<&str, BTreeSet<&str>>,
+) -> Result<bool> {
+    if departures.is_empty() {
+        return Ok(false);
+    }
+    let mut remaining = 1_000_000usize;
+    for tree in state.directory_trees.values() {
+        let branch = &state.directory_branches[&tree.directory_branch_id];
+        let count = 1 + tree.entries.len();
+        remaining = remaining.checked_sub(count).ok_or_else(|| {
+            Error::new(ErrorCode::ResourceLimit, "directory ownership history scan budget exceeded")
+        })?;
+        if let Some(files) = departures.get(branch.directory_id.as_str())
+            && storage_contract::directory_staging::directory_tree_is_committed(state, tree)
+            && contains_owned_file(tree, files)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
