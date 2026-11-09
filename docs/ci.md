@@ -23,7 +23,7 @@
 | `web-production` | 本地维护的绑定工具、wasm32 release 构建、资源清单和压缩产物 |
 | `browser-smoke` | 实际 Web/WASM 对真实服务端的 Chrome 交互；响应式尺寸预览不冒充原生 App 验收 |
 
-`browser-smoke` 成功完成单个 ELF 的内嵌 Web 运行验收及模板浏览器检查后，运行无发布副作用的 `release-assemble.sh`，生成并校验完整安装材料。随该 job 上传的 `installation-candidate-linux-web` artifact 保留 7 天，包含 `zxs-VERSION-debian13-amd64` 主程序、`zxs-vfs-VERSION-debian13-amd64.so` 独立 VFS、`zxs-materials-VERSION.tar.gz` 资料归档、`VFS-BUILD.json`、`INSTALL.md`、`BUILD.txt` 和 `SHA256SUMS` 七文件集合（`VERSION` 为构建版本），供检查或部署演练；下载后仍须完整校验摘要。
+`browser-smoke` 成功完成单个 ELF 的内嵌 Web 运行验收及模板浏览器检查后，运行无发布副作用的 `release-assemble.sh`，生成并校验完整安装材料。随该 job 上传的 `installation-candidate-linux-web` artifact 保留 7 天，包含 `zxs-VERSION-debian13-amd64` 主程序、`zxs-helper-VERSION-debian13-amd64` 独立辅助工具、`zxs-source-VERSION.tar.gz` 完整源码与收据归档，以及 `SHA256SUMS` 四文件集合（`VERSION` 为构建版本），供检查或部署演练；下载后仍须完整校验摘要。
 
 CI 的 `browser-smoke` 步骤显式设置 `ZXS_SMOKE_FOREIGN_REVIEW=1`：原完整场景成功后，使用同一私有复制的最终 ELF 追加独立 `--foreign-review-only` 外来历史审核场景，不减少原场景或改变并发。第二次调用不带文件页截图参数，任何一次失败都阻止安装候选组装。开关仅接受 `0` 或 `1`，缺省为 `0`；Release 工作流未启用，仍保持原验收范围。审核场景的实际网络、可访问性与截图证据由 `foreign-review-browser-${{ github.sha }}` artifact 保留 7 天；未生成证据不表示通过。此接线尚未经过真实 Chrome 执行，脚本模型、原生夹具与静态检查不能替代浏览器结果；场景只审核计划，不执行迁入。详见 [浏览器验收工具](tools/browser-smoke.md)。
 
@@ -73,3 +73,4 @@ TMPDIR="$PWD/target/test-tmp" bash .github/scripts/check.sh workspace
 SMB SDK 编译不等于 Samba 模块已加载或跨客户端往返通过；Chrome 检查不等于所有浏览器和移动设备通过；模拟文件故障不等于物理盘掉电验收。依赖源码本地化也不等于漏洞或许可证审查完成，见 [第三方来源清单](THIRD_PARTY_RUST_SOURCES.md)。
 
 工作流仅授予所需权限，checkout 不保留凭据，官方 Actions 固定完整提交 SHA。所有调用 Rust 的 job 在 checkout 后通过 [环境初始化脚本](../.github/scripts/initialize-cargo-home.sh) 从运行时 `RUNNER_TEMP` 创建全新空 Cargo home，再写入 `GITHUB_ENV` 供后续步骤使用；不在顶层或 job env 引用尚不可用的 `runner.temp`。不缓存 registry/git 源码或测试成功结果。新增组件必须加入根工作区、复用根锁文件、登记中央来源清单并增加对应检查；不得增加子工作区或活动子锁文件。
+

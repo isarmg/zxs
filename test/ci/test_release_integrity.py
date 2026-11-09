@@ -1,5 +1,6 @@
 """Reject stale, incomplete, escaped or modified release inputs before archiving."""
 import copy
+import io
 import importlib.util
 import json
 import os
@@ -33,16 +34,27 @@ class ReleaseIntegrity(unittest.TestCase):
                               env=os.environ | {"RELEASE_VERSION": version},
                               capture_output=True, text=True)
 
-    def test_complete_distribution_can_be_verified_and_repeatedly_packaged(self):
+    def test_complete_distribution_preserves_source_and_refuses_replacement(self):
         self.assertEqual(validator.verify(self.root), (len(self.receipt["files"]), len(self.receipt["inputs"])))
-        for _ in range(2):
-            result = self.package()
-            self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(list((self.root / "release-assets").glob("*.tar.gz"))), 1)
-        for path in (self.root / "release-assets").glob("*.tar.gz"):
-            with tarfile.open(path) as archive:
+        result = self.package()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assets = self.root / "release-assets"
+        self.assertEqual({path.name for path in assets.iterdir()},
+                         {"zxs-0.1.0-debian13-amd64", "zxs-helper-0.1.0-debian13-amd64",
+                          "zxs-source-0.1.0.tar.gz"})
+        source = assets / "zxs-source-0.1.0.tar.gz"
+        original = source.read_bytes()
+        with tarfile.open(source) as bundle:
+            self.assertEqual(set(bundle.getnames()),
+                             {"BUILD.txt", "VFS-BUILD.json", "INSTALL.md", "repository.tar.gz"})
+            with tarfile.open(fileobj=io.BytesIO(bundle.extractfile("repository.tar.gz").read())) as archive:
                 for template in ("deploy/systemd/zxs.service", "deploy/samba/smb.conf.example"):
-                    self.assertEqual(archive.extractfile(template).read(), (self.root / template).read_bytes())
+                    self.assertEqual(archive.extractfile("source/" + template).read(),
+                                     (self.root / template).read_bytes())
+        retry = self.package()
+        self.assertNotEqual(retry.returncode, 0)
+        self.assertIn("release-assets must be absent", retry.stderr)
+        self.assertEqual(source.read_bytes(), original)
 
     def test_missing_samba_template_rejects_incomplete_installation_material(self):
         (self.root / "deploy/samba/smb.conf.example").unlink()
@@ -78,7 +90,7 @@ class ReleaseIntegrity(unittest.TestCase):
         (native / "zxs").write_bytes(b"different executable")
         result = self.package()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("native build output checksum mismatch", result.stderr)
+        self.assertIn("ELF64", result.stderr)
         self.assertFalse((self.root / "release-assets").exists())
 
     def test_wrong_native_target_receipt_is_rejected(self):
@@ -240,3 +252,4 @@ class ReleaseIntegrity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

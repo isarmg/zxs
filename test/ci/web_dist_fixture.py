@@ -1,6 +1,13 @@
 """Small complete release fixture; no compiler or executable product required."""
 import hashlib
 import json
+import gzip
+import io
+import os
+import runpy
+import subprocess
+import tarfile
+import tempfile
 from pathlib import Path
 import shutil
 import sys
@@ -77,22 +84,32 @@ def prepare(root):
     for name in ("zxs", "zxs-helper"):
         (root / "target/native/x86_64-unknown-linux-gnu/release" / name).chmod(0o755)
     native = root / "target/native/x86_64-unknown-linux-gnu/release"
-    (native / "zxs").write_bytes(elf_fixture())
-    fields = {"version": "0.1.0", "commit": "0123456789012345678901234567890123456789",
+    for name in ("zxs", "zxs-helper"):
+        (native / name).write_bytes(elf_fixture())
+    fields = {"version": "0.1.0",
               "native-target": "x86_64-unknown-linux-gnu", "native-profile": "release",
               "native-rustc": "fixture compiler", "native-environment-sha256": "a" * 64,
               "native-inputs-sha256": "b" * 64}
     for name in ("zxs", "zxs-helper"):
         fields[f"native-{name}-sha256"] = hashlib.sha256((native / name).read_bytes()).hexdigest()
     fields.update({"native-helper-embedded-zxs": "true", "native-helper-payload-sha256": fields["native-zxs-sha256"]})
-    add_runtime_fields(fields)
-    (native / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
     for relative in (SPEC, ".github/scripts/release-package.sh", ".github/scripts/verify-web-dist.py",
-                     ".github/scripts/verify-release-assets.py"):
+                     ".github/scripts/verify-release-assets.py", ".github/scripts/release-source.py",
+                     ".github/scripts/release-source-bundle.py", "docs/templates/release-install.md"):
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, root / relative)
+    (root / ".gitignore").write_text("/target/\n/build/\n/release-assets/\n")
+    git_environment = dict(os.environ, GIT_AUTHOR_NAME="fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
+                           GIT_COMMITTER_NAME="fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid",
+                           GIT_AUTHOR_DATE="2000-01-01T00:00:00+00:00",
+                           GIT_COMMITTER_DATE="2000-01-01T00:00:00+00:00")
+    for arguments in (["init", "-q"], ["add", "--all"], ["commit", "-qm", "release source fixture"]):
+        subprocess.run(["git", "-C", str(root), *arguments], env=git_environment, check=True)
+    fields["commit"] = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    tree = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True).strip()
     manifest = record(root)
     fields.update({"native-baseline": "debian13-amd64", "native-web-embedded": "true",
-                   "native-web-commit": fields["commit"], "native-web-tree": "b" * 40,
+                   "native-web-commit": fields["commit"], "native-web-tree": tree,
                    "native-web-manifest-sha256": hashlib.sha256((root / "build/web/build-manifest.json").read_bytes()).hexdigest()})
     fields.update({"native-helper-embedded-zxs": "true", "native-helper-payload-sha256": fields["native-zxs-sha256"]})
     add_runtime_fields(fields)
@@ -112,29 +129,71 @@ def vfs_receipt(commit, tree, module):
             "commit": commit, "tree": tree, "module_sha256": hashlib.sha256(module).hexdigest()}
 
 
-def write_release_assets(directory, commit, version="0.1.0"):
+def write_release_assets(directory, version="0.1.0"):
+    """Real Git identities and canonical archives around explicitly synthetic ELFs."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    data = b"release asset bytes"
-    for name in ("INSTALL.md", f"zxs-{version}-debian13-amd64", f"zxs-vfs-{version}-debian13-amd64.so", f"zxs-materials-{version}.tar.gz"):
-        (directory / name).write_bytes(data)
-    (directory / f"zxs-{version}-debian13-amd64").write_bytes(elf_fixture())
-    (directory / f"zxs-vfs-{version}-debian13-amd64.so").write_bytes(elf_fixture(module=True))
-    fields = {"version": version, "commit": commit, "native-target": "x86_64-unknown-linux-gnu",
-              "native-profile": "release", "native-rustc": "fixture compiler",
-              "native-environment-sha256": "a" * 64, "native-inputs-sha256": "b" * 64,
-              "native-zxs-sha256": hashlib.sha256(elf_fixture()).hexdigest(), "native-zxs-helper-sha256": "d" * 64,
-              "materials-archive-sha256": hashlib.sha256(data).hexdigest(),
-              "native-baseline": "debian13-amd64", "native-web-embedded": "true",
-              "native-web-commit": commit, "native-web-tree": "b" * 40,
-              "native-web-manifest-sha256": "c" * 64}
-    fields.update({"native-helper-embedded-zxs": "true", "native-helper-payload-sha256": fields["native-zxs-sha256"]})
-    add_runtime_fields(fields)
-    (directory / "VFS-BUILD.json").write_text(json.dumps(vfs_receipt(commit, "b" * 40, elf_fixture(module=True))))
-    add_vfs_fields(fields, (directory / "VFS-BUILD.json").read_bytes(), elf_fixture(module=True))
-    (directory / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
+    with tempfile.TemporaryDirectory(prefix="release-source-fixture-") as temporary:
+        root = Path(temporary)
+        prepare(root)
+        native = root / "target/native/x86_64-unknown-linux-gnu/release"
+        fields = dict(line.split("=", 1) for line in (native / "BUILD.txt").read_text().splitlines())
+        fields["version"] = version
+        build = "".join(f"{key}={value}\n" for key, value in fields.items()).encode()
+        bundle = runpy.run_path(str(ROOT / ".github/scripts/release-source-bundle.py"))
+        bundle["prepare"](root, directory / f"zxs-source-{version}.tar.gz", version, build,
+                          (root / "target/smb-debian13/product/VFS-BUILD.json").read_bytes())
+        for name in ("zxs", "zxs-helper"):
+            shutil.copy2(native / name, directory / f"{name}-{version}-debian13-amd64")
     return fields
+
+
+class BundleMember:
+    """Mutate one nested metadata member without using production validation."""
+    def __init__(self, directory, name, version="0.1.0"):
+        self.archive = Path(directory) / f"zxs-source-{version}.tar.gz"
+        self.name = name
+
+    def entries(self):
+        with tarfile.open(self.archive, "r:gz") as archive:
+            return [(entry, archive.extractfile(entry).read()) for entry in archive]
+
+    def read_bytes(self):
+        return next(data for entry, data in self.entries() if entry.name == self.name)
+
+    def read_text(self):
+        return self.read_bytes().decode()
+
+    def replace(self, data):
+        entries = self.entries()
+        with self.archive.open("wb") as output:
+            with gzip.GzipFile(fileobj=output, mode="wb", filename="", mtime=0) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+                    for entry, original in entries:
+                        if entry.name == self.name:
+                            if data is None:
+                                continue
+                            original = data
+                            entry.size = len(data)
+                        archive.addfile(entry, io.BytesIO(original))
+
+    def write_bytes(self, data):
+        self.replace(data)
+
+    def write_text(self, text):
+        self.replace(text.encode())
+
+    def unlink(self):
+        self.replace(None)
+
+    def exists(self):
+        return any(entry.name == self.name for entry, _ in self.entries())
+
+
+def bundle_member(directory, name, version="0.1.0"):
+    return BundleMember(directory, name, version)
 
 
 if __name__ == "__main__":
     prepare(Path(sys.argv[1]))
+

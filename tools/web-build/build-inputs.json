@@ -34,6 +34,8 @@
     "tools/rust-sources/source_moves.py",
     ".github/scripts/rust-build-tool.sh",
     ".github/scripts/release-package.sh",
+    ".github/scripts/release-source.py",
+    ".github/scripts/release-source-bundle.py",
     ".github/scripts/verify-web-dist.py",
     "src/web/Cargo.toml",
     "Cargo.lock",
@@ -49,3 +51,4 @@
     "tools/rust-sources/proof_maintenance.py"
   ]
 }
+

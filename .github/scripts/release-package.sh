@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
-# Package the verified Web snapshot and native bytes bound by release-native.py.
-# This is build-step identity, not a reproducible-build attestation.
+# Package the same-source Web/native products into the four-file release contract.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 : "${RELEASE_VERSION:?}"
-# release-tools performs canonical SemVer validation in CI. Independently bound
-# the filename here so direct invocations cannot redirect archive output paths.
 [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?$ ]] || {
   echo 'RELEASE_VERSION must be a safe version filename' >&2
+  exit 1
+}
+# Refuse to mix this generation with old or partial assets.
+[[ ! -e release-assets && ! -L release-assets ]] || {
+  echo 'release-assets must be absent; retain existing output and choose a fresh checkout' >&2
   exit 1
 }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 python3 .github/scripts/verify-web-dist.py --root "$PWD" --stage "$work/snapshot"
-python3 - "$work/snapshot/native" "$RELEASE_VERSION" <<'PYNATIVE'
+python3 - "$work/snapshot/native" "$work/assets" "$RELEASE_VERSION" <<'PYNATIVE'
 import hashlib
-import shutil
 import os
 from pathlib import Path
 import runpy
+import shutil
+import subprocess
 import sys
 
 validator = runpy.run_path('.github/scripts/verify-release-assets.py')
@@ -28,42 +31,44 @@ try:
     receipt = validator['read_metadata'](directory, 'BUILD.txt')
 finally:
     os.close(directory)
-fields = validator['build_identity'](receipt, sys.argv[2])
-snapshot = Path(sys.argv[1])
+commit = subprocess.check_output(['git', '--no-replace-objects', 'rev-parse', 'HEAD'], text=True).strip()
+fields = validator['build_identity'](receipt, sys.argv[3], commit)
+snapshot, assets = Path(sys.argv[1]), Path(sys.argv[2])
+assets.mkdir()
 for name in ('zxs', 'zxs-helper'):
     with (snapshot / name).open('rb') as source:
-        actual = hashlib.file_digest(source, 'sha256').hexdigest()
-    if actual != fields[f'native-{name}-sha256']:
-        raise ValueError(f'native build output checksum mismatch: {name}')
-with (snapshot / 'zxs').open('rb') as source:
-    validator['elf_identity'](source.read(64))
-if 'materials-archive-sha256' in fields:
-    raise ValueError('native build receipt already contains archive identity')
+        validator['elf_identity'](source.read(64))
+        source.seek(0)
+        if hashlib.file_digest(source, 'sha256').hexdigest() != fields[f'native-{name}-sha256']:
+            raise ValueError(f'native build output checksum mismatch: {name}')
 if hashlib.sha256((snapshot.parent / 'web/build-manifest.json').read_bytes()).hexdigest() != fields['native-web-manifest-sha256']:
     raise ValueError('embedded Web manifest differs from verified current Web')
 vfs_dir = os.open('target/smb-debian13/product', os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
 try:
     vfs_bytes = validator['read_metadata'](vfs_dir, 'VFS-BUILD.json')
     vfs = validator['embedded_vfs_identity'](vfs_bytes, fields)
-    with validator['open_regular'](vfs_dir, 'zxs.so') as source, (snapshot / 'zxs.so').open('xb') as output:
-        shutil.copyfileobj(source, output)
+    with validator['open_regular'](vfs_dir, 'zxs.so') as source:
+        if os.fstat(source.fileno()).st_size > 64 * 1024 * 1024:
+            raise ValueError('VFS output exceeds embedded module budget')
+        validator['elf_identity'](source.read(64), module=True)
+        source.seek(0)
+        if hashlib.file_digest(source, 'sha256').hexdigest() != vfs['module_sha256']:
+            raise ValueError('VFS output checksum mismatch')
 finally:
     os.close(vfs_dir)
-if hashlib.sha256((snapshot / 'zxs.so').read_bytes()).hexdigest() != vfs['module_sha256']:
-    raise ValueError('VFS output checksum mismatch')
-with (snapshot / 'zxs.so').open('rb') as source:
-    validator['elf_identity'](source.read(64), module=True)
-(snapshot / 'VFS-BUILD.json').write_bytes(vfs_bytes)
-(snapshot / 'BUILD.txt').write_bytes(receipt)
+bundle = runpy.run_path('.github/scripts/release-source-bundle.py')
+bundle['prepare'](Path.cwd(), assets / f'zxs-source-{sys.argv[3]}.tar.gz',
+                  sys.argv[3], receipt, vfs_bytes)
+for name in ('zxs', 'zxs-helper'):
+    (snapshot / name).rename(assets / f'{name}-{sys.argv[3]}-debian13-amd64')
+# Publish only after all three files have been prepared. Existing destinations
+# are never overwritten; an interrupted copy remains explicit partial output.
+destination = Path('release-assets')
+destination.mkdir()
+for source in assets.iterdir():
+    with source.open('rb') as incoming, (destination / source.name).open('xb') as outgoing:
+        shutil.copyfileobj(incoming, outgoing, length=1024 * 1024)
+    if not source.name.endswith('.tar.gz'):
+        (destination / source.name).chmod(0o755)
 PYNATIVE
-material=(compliance README.md docs deploy)
-tar --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' -czf "$work/materials.tar.gz" \
-  -C "$work/snapshot/native" zxs-helper -C "$work/snapshot/material" "${material[@]}"
-printf 'materials-archive-sha256=%s\n' "$(sha256sum "$work/materials.tar.gz" | cut -d' ' -f1)" >> "$work/snapshot/native/BUILD.txt"
-[[ ! -L release-assets ]]
-mkdir -p release-assets
-mv -T -- "$work/snapshot/native/zxs" "release-assets/zxs-${RELEASE_VERSION}-debian13-amd64"
-mv -T -- "$work/snapshot/native/zxs.so" "release-assets/zxs-vfs-${RELEASE_VERSION}-debian13-amd64.so"
-mv -T -- "$work/materials.tar.gz" "release-assets/zxs-materials-${RELEASE_VERSION}.tar.gz"
-mv -T -- "$work/snapshot/native/VFS-BUILD.json" release-assets/VFS-BUILD.json
-mv -T -- "$work/snapshot/native/BUILD.txt" release-assets/BUILD.txt
+

@@ -5,16 +5,22 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/.github/scripts" "$root/release-assets" "$root/bin" "$root/remote"
-cp .github/scripts/{release-publish.sh,verify-release-assets.py} "$root/.github/scripts/"
-git -C "$root" init -q
-git -C "$root" -c user.name=test -c user.email=test@example.invalid commit -qm fixture --allow-empty
-export MOCK_SHA="$(git -C "$root" rev-parse HEAD)" MOCK_ROOT="$root"
-python3 - "$root/release-assets" "$MOCK_SHA" <<'PYASSETS'
+cp .github/scripts/{release-publish.sh,verify-release-assets.py,release-source.py,release-source-bundle.py} "$root/.github/scripts/"
+export MOCK_ROOT="$root"
+MOCK_SHA="$(python3 - "$root/release-assets" <<'PYASSETS'
 import sys
 sys.path.insert(0, 'test/ci')
 from web_dist_fixture import write_release_assets
-write_release_assets(sys.argv[1], sys.argv[2])
+print(write_release_assets(sys.argv[1])['commit'])
 PYASSETS
+)"
+export MOCK_SHA
+cat > "$root/bin/git" <<'MOCKGIT'
+#!/bin/sh
+test "$*" = 'rev-parse HEAD' || exit 2
+printf '%s\n' "$MOCK_SHA"
+MOCKGIT
+chmod +x "$root/bin/git"
 (cd "$root/release-assets" && sha256sum -- * > SHA256SUMS)
 cat > "$root/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
@@ -28,7 +34,7 @@ case "$1 $2" in
     esac
     exit 1 ;;
   'api repos/'*)
-    if [[ "$MODE" == local-change ]]; then echo changed > "$MOCK_ROOT/release-assets/INSTALL.md"; fi
+    if [[ "$MODE" == local-change ]]; then echo changed > "$MOCK_ROOT/release-assets/zxs-source-0.1.0.tar.gz"; fi
     echo "$MOCK_SHA" ;;
   'release view')
     if [[ -f "$MOCK_ROOT/published" ]]; then
@@ -51,7 +57,7 @@ case "$1 $2" in
     if [[ "$MODE" == remote-extra ]]; then echo extra > "$MOCK_ROOT/remote/.unlisted"; fi ;;
   'release download')
     cp -a "$MOCK_ROOT"/remote/. "$5/"
-    if [[ "$MODE" == corrupt ]]; then echo bad >> "$5/INSTALL.md"; fi ;;
+    if [[ "$MODE" == corrupt ]]; then echo bad >> "$5/zxs-helper-0.1.0-debian13-amd64"; fi ;;
   'release edit') touch "$MOCK_ROOT/published" ;;
   *) echo "Unexpected mock call: $*" >&2; exit 3 ;;
 esac
@@ -75,3 +81,4 @@ for MODE in new resume network forbidden public foreign malformed corrupt remote
   esac
   echo "PASS mock release publication: $MODE"
 done
+

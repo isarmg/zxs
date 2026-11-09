@@ -52,10 +52,10 @@ class ReleaseAcceptance(unittest.TestCase):
         candidate = next(paragraph for paragraph in documentation.split('\n\n')
                          if 'installation-candidate-linux-web' in paragraph)
         validator = runpy.run_path(str(ROOT / '.github/scripts/verify-release-assets.py'))
-        expected = validator['asset_names']('VERSION') | {'SHA256SUMS'}
+        expected = {name.replace('0.1.0', 'VERSION') for name in validator['asset_names']('0.1.0')} | {'SHA256SUMS'}
         documented = set(re.findall(r'`([^`]+)`', candidate))
         self.assertEqual(expected & documented, expected)
-        self.assertIn('七文件集合', candidate)
+        self.assertIn('四文件集合', candidate)
         self.assertIn('单个 ELF 的内嵌 Web 运行验收', candidate)
         self.assertNotIn('两个归档', candidate)
         self.assertNotIn('归档解压验收', candidate)
@@ -107,7 +107,7 @@ class ReleaseAcceptance(unittest.TestCase):
     def test_release_checklist_matches_debian_single_elf_assets(self):
         checklist = (ROOT / 'docs/validation/release-checklist.md').read_text()
         for required in ('Debian 13 amd64', '单个 `zxs` ELF 内嵌 Web',
-                         '七文件集合', 'VFS-BUILD.json', '系统 apt 安装的 Samba',
+                         '四文件集合', 'VFS-BUILD.json', '系统 apt 安装的 Samba',
                          'MODULESDIR/vfs/', 'vfs objects = zxs',
                          '不传 `--web-dir`', '不是启动依赖',
                          '准备发行不等于创建标签或公开 Release'):
@@ -122,10 +122,11 @@ class ReleaseAcceptance(unittest.TestCase):
         install = (ROOT / 'docs/templates/release-install.md').read_text()
         self.assertIn('(templates/release-install.md)', release)
         self.assertNotIn('sha256sum ', release)
-        self.assertIn('set -eu\nVERSION="$(python3', install)
+        self.assertIn("set -eu\nexport VERSION='已核实版本'", install)
         self.assertLess(install.index('if names != expected:'), install.index('sha256sum --check SHA256SUMS'))
-        self.assertLess(install.index('sha256sum --check SHA256SUMS'), install.index('mkdir "server-$VERSION"'))
-        self.assertIn('不是独立的发布者签名', install)
+        self.assertNotIn('mkdir "server-$VERSION"', install)
+        self.assertIn('源码外层包固定只含', install)
+        self.assertIn('不是独立发布者签名', install)
         self.assertIn('`public/`', install)
         self.assertTrue((ROOT / 'test/ci/release-publish.sh').is_file())
         self.assertNotIn('.github/scripts/tests/', release)
@@ -133,3 +134,4 @@ class ReleaseAcceptance(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

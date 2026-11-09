@@ -21,10 +21,10 @@ ZXS $RELEASE_TAG
 提交 $sha 已通过可移植测试、源码与安全检查、契约检查、正式 WASM 构建及浏览器冒烟。
 
 - Debian 13 amd64：单个 zxs ELF 内嵌正式 Web，无需旁置静态目录。
-- 系统 apt Samba 配套独立 VFS 模块，精确包版本、ABI 与源码身份见 VFS-BUILD.json。
-- 独立资料归档包含许可证、来源、文档与可选辅助工具，不是运行主程序所需的归档。
+- 独立 zxs-helper 内嵌同次 ZXS、匹配 VFS 与许可材料；系统 Samba 仍由 Debian 提供。
+- 完整源码归档保留真实来源、许可证、部署文档，以及 BUILD.txt、VFS-BUILD.json 和 INSTALL.md。
 
-安装前请阅读 INSTALL.md 和 BUILD.txt，并完整校验 SHA256SUMS。上述检查不能替代物理盘与真实 Samba 验收，也不承诺位级可复现。
+四个公开文件是 ZXS、helper、完整源码归档和 SHA256SUMS。安装前请完整校验 SHA256SUMS，再阅读源码归档内的 INSTALL.md 和 BUILD.txt。上述检查不能替代物理盘与真实 Samba 验收，也不承诺位级可复现；完整离线系统依赖与工具链输入仍须另行准备。
 EOF
 if gh release view "$RELEASE_TAG" --json isDraft,body > "$existing"; then
   # Retry only our own draft for this exact source; never mutate a published release.
@@ -65,3 +65,4 @@ flags=()
 if [[ "$RELEASE_PRERELEASE" == true ]]; then flags+=(--prerelease --latest=false); else flags+=(--prerelease=false); fi
 gh release edit "$RELEASE_TAG" --draft=false "${flags[@]}"
 test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = false
+

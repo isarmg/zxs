@@ -6,6 +6,9 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
+import tempfile
+import tarfile
 import stat
 import struct
 
@@ -108,8 +111,10 @@ def elf_identity(header, module=False):
 
 
 def asset_names(version):
-    return {f"zxs-{version}-debian13-amd64", f"zxs-vfs-{version}-debian13-amd64.so",
-            f"zxs-materials-{version}.tar.gz", "VFS-BUILD.json", "INSTALL.md", "BUILD.txt"}
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?", version):
+        raise ValueError("invalid release version")
+    return {f"zxs-{version}-debian13-amd64", f"zxs-helper-{version}-debian13-amd64",
+            f"zxs-source-{version}.tar.gz"}
 
 
 def vfs_identity(data, fields):
@@ -127,7 +132,7 @@ def embedded_vfs_identity(data, fields):
     receipt = vfs_identity(data, fields)
     if (fields["native-helper-vfs-payload-sha256"] != receipt["module_sha256"]
             or fields["native-helper-vfs-build-sha256"] != hashlib.sha256(data).hexdigest()):
-        raise ValueError("embedded helper VFS differs from the separate same-source release product")
+        raise ValueError("embedded helper VFS differs from its same-source build receipt")
     return receipt
 
 
@@ -156,52 +161,43 @@ def verify_opened(directory_fd, version, commit, stage):
         hashes[match[2]] = match[1]
     if set(hashes) != names:
         raise ValueError("release checksum inventory differs from the expected asset set")
-    build = read_metadata(directory_fd, "BUILD.txt")
-    fields = build_identity(build, version, commit)
-    if fields["native-zxs-sha256"] != hashes[f"zxs-{version}-debian13-amd64"]:
-        raise ValueError("native executable differs from build identity")
-    if fields.get("materials-archive-sha256") != hashes[f"zxs-materials-{version}.tar.gz"]:
-        raise ValueError("materials archive differs from build identity")
-    vfs_bytes = read_metadata(directory_fd, "VFS-BUILD.json")
-    vfs = embedded_vfs_identity(vfs_bytes, fields)
-    if vfs["module_sha256"] != hashes[f"zxs-vfs-{version}-debian13-amd64.so"]:
-        raise ValueError("VFS module differs from build identity")
-    if stage is not None:
-        stage = Path(stage)
-        for path in (stage, *stage.absolute().parents):
-            if path.is_symlink():
-                raise ValueError(f"release snapshot symlink: {path}")
-        stage.mkdir()
-    # Hash the exact stream copied into a private upload snapshot. Subsequent
-    # edits to release-assets cannot replace bytes after the validation gate.
-    for name, expected in hashes.items():
-        with open_regular(directory_fd, name) as source:
-            output = (stage / name).open("xb") if stage is not None else None
-            try:
+    bundle = runpy.run_path(str(Path(__file__).with_name("release-source-bundle.py")))
+    limits = {name: bundle["MAX_BUNDLE_BYTES"] if name.endswith(".tar.gz") else 512 * 1024 * 1024
+              for name in names}
+    # Validate and copy the same held input streams. A private complete snapshot
+    # is required even for verify-only, because nested archive checks must never
+    # reopen mutable release paths after their checksums have been verified.
+    with tempfile.TemporaryDirectory(prefix="zxs-release-verify-") as temporary:
+        snapshot = Path(temporary)
+        for name, expected in hashes.items():
+            size, digest = 0, hashlib.sha256()
+            with open_regular(directory_fd, name) as source, (snapshot / name).open("xb") as output:
                 first = source.read(1024 * 1024)
-                if name == f"zxs-{version}-debian13-amd64":
+                if not name.endswith(".tar.gz"):
                     elf_identity(first[:64])
-                elif name == f"zxs-vfs-{version}-debian13-amd64.so":
-                    elf_identity(first[:64], module=True)
-                digest = hashlib.sha256()
                 chunk = first
                 while chunk:
+                    size += len(chunk)
+                    if size > limits[name]:
+                        raise ValueError(f"release asset exceeds its byte budget: {name}")
                     digest.update(chunk)
-                    if output is not None:
-                        output.write(chunk)
+                    output.write(chunk)
                     chunk = source.read(1024 * 1024)
-                actual = digest.hexdigest()
-            finally:
-                if output is not None:
-                    output.close()
-            if actual != expected:
+            if digest.hexdigest() != expected:
                 raise ValueError(f"release checksum mismatch: {name}")
-    if hashlib.sha256(vfs_bytes).hexdigest() != hashes["VFS-BUILD.json"]:
-        raise ValueError("VFS build identity changed during verification")
-    if hashlib.sha256(build).hexdigest() != hashes["BUILD.txt"]:
-        raise ValueError("release build identity changed during verification")
-    if stage is not None:
-        (stage / "SHA256SUMS").write_bytes(receipt)
+        bundle["verify"](snapshot / f"zxs-source-{version}.tar.gz", version, commit,
+                         {name: hashes[f"{name}-{version}-debian13-amd64"] for name in ("zxs", "zxs-helper")})
+        if stage is not None:
+            stage = Path(stage)
+            for path in (stage, *stage.absolute().parents):
+                if path.is_symlink():
+                    raise ValueError(f"release snapshot symlink: {path}")
+            stage.mkdir()
+            for name in names:
+                with (snapshot / name).open("rb") as source, (stage / name).open("xb") as output:
+                    while chunk := source.read(1024 * 1024):
+                        output.write(chunk)
+            (stage / "SHA256SUMS").write_bytes(receipt)
     return len(names) + 1
 
 
@@ -214,10 +210,11 @@ def main():
     args = parser.parse_args()
     try:
         count = verify(args.directory, args.version, args.commit, args.stage)
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, tarfile.TarError, EOFError) as error:
         parser.exit(1, f"Release asset verification failed: {error}\n")
     print(f"Verified {count} release assets and their source identity.")
 
 
 if __name__ == "__main__":
     main()
+
