@@ -281,6 +281,15 @@ impl Engine {
                 "Backup cold resume differs from its original native operation or principal",
             ));
         }
+        if pending.is_completed() {
+            // Bootstrap completion precedes the final Engine/service handoff.
+            // Keep the exact owners and replay the actual latest journal; first
+            // image inode/body checks cannot be reapplied after ordinary writes.
+            return pending
+                .into_completed()?
+                .into_engine()?
+                .finish_backup_transaction_resume();
+        }
         let system = DiskRoot::open(&root)?;
         let (selection, bytes) = selected(&system, admitted)?;
         require_initial_targets(&system, admitted, &selection, &AtomicBool::new(false))?;
@@ -321,17 +330,23 @@ impl Engine {
         completion(&system, admitted, &bytes)?;
         let barrier = barrier(admitted, &selection)?;
         pending.require_owners()?;
-        let mut engine = pending.publish(&barrier)?.into_engine()?;
-        let warnings = engine.prepare_generation_resources()?;
-        let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
-        engine.preflight_workspace_receipts(&mut prepared)?;
-        engine.recover_prepared(crate::engine::RecoveryMode::CompletePending, prepared)?;
-        engine.complete_backup_serving_open()?;
-        engine.load_workspaces()?;
-        engine.verify_selected_move_prepare()?;
-        if !engine.is_read_only() && engine.history_move_choice.is_none() {
-            engine.restore_published_disk_histories();
+        pending
+            .publish(&barrier)?
+            .into_engine()?
+            .finish_backup_transaction_resume()
+    }
+
+    fn finish_backup_transaction_resume(mut self) -> Result<Self> {
+        let warnings = self.prepare_generation_resources()?;
+        let mut prepared = self.prepare_recovery_with_warnings(warnings)?;
+        self.preflight_workspace_receipts(&mut prepared)?;
+        self.recover_prepared(crate::engine::RecoveryMode::CompletePending, prepared)?;
+        self.complete_backup_serving_open()?;
+        self.load_workspaces()?;
+        self.verify_selected_move_prepare()?;
+        if !self.is_read_only() && self.history_move_choice.is_none() {
+            self.restore_published_disk_histories();
         }
-        Ok(engine)
+        Ok(self)
     }
 }

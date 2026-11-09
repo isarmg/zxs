@@ -21,6 +21,29 @@ impl PreparedBackupResume {
     pub(in crate::engine) fn held_roots(&self) -> &[(DiskConfig, DiskRoot)] {
         self.admission.held_roots()
     }
+    pub(in crate::engine) fn is_completed(&self) -> bool {
+        self.admission.completed
+    }
+    /// Completed native admission keeps the same held writers through ordinary
+    /// journal replay. It never reapplies the first image or republishes roots.
+    pub(in crate::engine) fn into_completed(self) -> Result<ResumeResources> {
+        self.admission.require_config(self.admission.config())?;
+        if !self.saved.completed()? {
+            return Err(invalid("Backup completed resume lost its exact completion"));
+        }
+        self.bootstrap
+            .require_published_root_extension(&self.admission.plan.extension)
+            .map_err(management_error)?;
+        self.require_owners()?;
+        Ok(ResumeResources {
+            root: self.root,
+            bootstrap: self.bootstrap,
+            admission: self.admission,
+            system: self.system,
+            selection: self.selection,
+            writers: self.writers,
+        })
+    }
     pub(in crate::engine) fn require_owners(&self) -> Result<()> {
         self.saved.verify()?;
         verify_owners(
@@ -37,6 +60,11 @@ impl PreparedBackupResume {
         mut self,
         barrier: &ServingBarrier,
     ) -> Result<ResumeResources> {
+        if self.is_completed() {
+            return Err(invalid(
+                "completed Backup roots must replay normally, not republish activation",
+            ));
+        }
         self.require_owners()?;
         barrier.require_native(
             self.admission.first(),
@@ -124,8 +152,9 @@ impl ResumeResources {
 }
 
 /// No new operation is selected here. The SYSTEM record restricts the names;
-/// actual complete archives, all original journal prefixes and all selected
-/// target ordinary payloads prove the SAME already-published Backup operation.
+/// actual complete archives and journal prefixes prove the SAME published
+/// Backup operation. Unfinished activation still requires its initial target
+/// payloads; completed native roots use the ordinary full successor replay.
 pub(in crate::engine) fn prepare_resume(
     root: &Path,
     projected: &ValidatedConfig,
@@ -141,8 +170,12 @@ pub(in crate::engine) fn prepare_resume(
             "Backup recovery cannot replay a different selected operation",
         ));
     }
-    if saved.completed()? {
-        return Ok(None);
+    let completed = saved.completed()?;
+    if completed {
+        // A saved completion alone cannot admit or repair a missing head.
+        bootstrap
+            .require_published_root_extension(&plan.extension)
+            .map_err(management_error)?;
     }
     let locator = bootstrap
         .root_extension_locator(&plan.extension)
@@ -164,7 +197,7 @@ pub(in crate::engine) fn prepare_resume(
         );
     }
     verify_owners(root, &system, &writers, &roots)?;
-    let admission = authenticate(plan, roots, projected, false, &AtomicBool::new(false))?;
+    let admission = authenticate(plan, roots, projected, completed, &AtomicBool::new(false))?;
     saved.verify()?;
     Ok(Some(PreparedBackupResume {
         root: root.to_owned(),

@@ -283,6 +283,10 @@ impl Engine {
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "no original Backup transaction"))?;
         saved.require_actor(operation, principal)?;
         if self.backup_serving.is_some() {
+            // Resume may finish only the activation already selected by this
+            // original task. Re-enter the native coordinator so a late failed
+            // Current/SYSTEM/config handoff is not mistaken for read-only status.
+            self.complete_backup_registry_placement_decision(operation, principal)?;
             return self.transaction_status(operation);
         }
         if self
