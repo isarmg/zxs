@@ -165,6 +165,29 @@ impl Engine {
         Ok(Some(record.info()?))
     }
 
+    /// The journal scan cannot recover slots consumed before their first frame.
+    /// A still-current original envelope reserves only its recorded slot; it
+    /// cannot rewind an observed journal or authorize a vote/layout repair.
+    pub(in crate::engine) fn restore_original_move_intent_slot(&mut self) -> Result<()> {
+        let operation = self
+            .history_move_intent
+            .expect("invariant: original move intent remains fenced");
+        let store = persist::Store::system(self)?;
+        let observed = store
+            .read()?
+            .ok_or_else(|| stale("original move intent lost its system envelope"))?;
+        let record = &observed.record;
+        record.require_source(self)?;
+        if record.operation_id != operation || self.next_slot > record.decision_slot {
+            return Err(stale(
+                "journal advanced beyond the original unselected move intent",
+            ));
+        }
+        observed.check_names(&store)?;
+        self.next_slot = record.decision_slot;
+        Ok(())
+    }
+
     /// Read-only original-envelope barrier for target staging. Rechecking the
     /// proposed State alone cannot substitute for every retained member copy.
     pub(crate) fn verify_file_history_move_recovery(

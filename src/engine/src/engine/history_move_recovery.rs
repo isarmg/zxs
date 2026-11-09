@@ -314,18 +314,25 @@ impl RecoveryRecord {
         Ok(())
     }
 
-    fn require_current(&self, engine: &Engine) -> Result<()> {
+    fn require_source(&self, engine: &Engine) -> Result<()> {
         if self.pool_id != engine.config.pool_id
             || self.source_sequence != engine.state.sequence
             || engine.snapshot.as_deref() != Some(self.snapshot.as_str())
             || self.configuration_hash != object_hash("file-history-move-config", &engine.config)?
             || self.generation != ConfigurationGeneration::current(engine)
-            || self.decision_slot != engine.move_source_slot()
             || self.metadata_members != metadata_members(engine)?
         {
             return Err(stale(
                 "the original move source snapshot or configuration changed; no replan was saved",
             ));
+        }
+        Ok(())
+    }
+
+    fn require_current(&self, engine: &Engine) -> Result<()> {
+        self.require_source(engine)?;
+        if self.decision_slot != engine.move_source_slot() {
+            return Err(stale("the original move decision slot changed"));
         }
         Ok(())
     }

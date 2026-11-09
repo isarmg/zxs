@@ -138,7 +138,23 @@ impl Choice {
         self.record.source_sequence
     }
 
+    fn require_source(&self, engine: &Engine) -> Result<()> {
+        if engine.state.sequence != self.record.source_sequence
+            || engine.snapshot.as_ref() != Some(&self.record.source_snapshot)
+            || engine
+                .state
+                .operations
+                .contains_key(&self.record.operation_id)
+        {
+            return Err(invalid(
+                "retained move choice lost its original published source",
+            ));
+        }
+        Ok(())
+    }
+
     fn require_baseline(&self, engine: &Engine) -> Result<()> {
+        self.require_source(engine)?;
         let next_slot = if let Some(prepared) = &engine.history_move_prepare {
             if !prepared.matches(self.record.operation_id, self.record.decision_slot) {
                 return Err(invalid(
@@ -149,14 +165,7 @@ impl Choice {
         } else {
             self.record.decision_slot
         };
-        if engine.state.sequence != self.record.source_sequence
-            || engine.snapshot.as_ref() != Some(&self.record.source_snapshot)
-            || engine.next_slot != next_slot
-            || engine
-                .state
-                .operations
-                .contains_key(&self.record.operation_id)
-        {
+        if engine.next_slot != next_slot {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "retained move choice differs from the exact published source/next slot; keep all material",
@@ -359,6 +368,27 @@ impl Engine {
             choice.require_baseline(self)?;
         }
         Ok(())
+    }
+
+    /// Called after the exact source prefix is recovered. A choice can retain
+    /// an unused slot beyond the last physical frame; restore that same slot,
+    /// never a fresh decision or an observed-counter rewind.
+    pub(in crate::engine) fn restore_selected_move_slot(&mut self) -> Result<()> {
+        let choice = self
+            .history_move_choice
+            .as_ref()
+            .expect("invariant: selected move retains its original choice")
+            .clone();
+        if self.history_move_prepare.is_none() {
+            choice.require_source(self)?;
+            if self.next_slot > choice.decision_slot() {
+                return Err(invalid(
+                    "journal advanced beyond the unused original move slot",
+                ));
+            }
+            self.next_slot = choice.decision_slot();
+        }
+        choice.require_baseline(self)
     }
 
     /// Inspect the in-process deny fence discovered at startup or installed

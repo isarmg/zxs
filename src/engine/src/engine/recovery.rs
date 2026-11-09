@@ -287,7 +287,8 @@ impl Engine {
         mode: RecoveryMode,
         prepared: PreparedRecovery,
     ) -> Result<()> {
-        let move_selected = self.history_move_choice.is_some();
+        let move_retained =
+            self.history_move_choice.is_some() || self.history_move_intent.is_some();
         if let Some(choice) = &self.history_move_choice {
             if prepared
                 .candidates
@@ -312,7 +313,7 @@ impl Engine {
         } = prepared;
         let fenced = self.membership_fence.is_some();
         let members_ready = online.len() == members.len() && !fenced;
-        let can_repair = members_ready && !move_selected;
+        let can_repair = members_ready && !move_retained;
         let mut scanned_journals = BTreeMap::new();
         for disk in &online {
             let opened = opened_journals
@@ -672,6 +673,7 @@ impl Engine {
             self.blocked = true;
         }
         if self.history_move_choice.is_some() {
+            self.restore_selected_move_slot()?;
             if torn_tail && mode == RecoveryMode::CompletePending && members_ready && !self.blocked
             {
                 self.repair_selected_move_prepare_tail()?;
@@ -682,6 +684,16 @@ impl Engine {
             // Apart from the proven original torn tail above, no ordinary layout,
             // purge or checkpoint writes may release the selection.
             self.require_move_choice_baseline()?;
+            self.restore_namespace_workspace_baselines()?;
+            return Ok(());
+        }
+        if self.history_move_intent.is_some() {
+            self.restore_original_move_intent_slot()?;
+            if torn_tail {
+                self.blocked = true;
+            }
+            // An envelope is a deny fence, not repair authority. Preserve all
+            // original material until an authorized retry resumes that intent.
             self.restore_namespace_workspace_baselines()?;
             return Ok(());
         }
