@@ -5,6 +5,8 @@ use crate::history_package::{AdmittedState, preparation_checkpoint};
 use sqlite_access::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use std::sync::atomic::AtomicBool;
 
+mod readback;
+
 pub(in crate::engine) const MAX_BYTES: usize = 64 * 1024 * 1024;
 
 pub(in crate::engine) fn encode(admitted: &AdmittedState, stop: &AtomicBool) -> Result<Vec<u8>> {
@@ -49,7 +51,7 @@ fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<V
     // Bound the entire input before SQL rows duplicate parts of it. This is a
     // preparation budget, not a limit silently truncating the serving index.
     crate::disk::encode_metadata(state, MAX_BYTES)?;
-    platform_io::sqlite::block_on_sqlite_connection(async {
+    let bytes = platform_io::sqlite::block_on_sqlite_connection(async {
         let options = SqliteConnectOptions::new()
             .in_memory(true)
             .journal_mode(SqliteJournalMode::Memory);
@@ -103,5 +105,13 @@ fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<V
                 cleanup: std::io::Error::other(close),
             }),
         }
-    })
+    })?;
+    // Close the encoding connection before decoding the actual serialized
+    // image. No stored self-digest can replace the original source State.
+    readback::verify(&bytes, state, checkpoint)?;
+    Ok(bytes)
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/index/preparation_readback_tests.rs"]
+mod tests;

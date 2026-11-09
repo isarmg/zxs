@@ -4,6 +4,9 @@ use crate::engine::history_window::HistoryCancellationCheckpoint;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
+mod prepared;
+pub(super) use prepared::verify_prepared;
+
 #[cfg(test)]
 thread_local! {
     static READ_METRICS: Cell<([usize; 6], usize)> = const { Cell::new(([0;6],0)) };

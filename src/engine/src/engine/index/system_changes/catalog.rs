@@ -38,6 +38,8 @@ macro_rules! catalog_families {
         enum ValueRef<'a> { $( $variant($(#[$codec])* &'a $value) ),+ }
 
         impl SystemCatalogKind {
+            pub(super) const ALL: &'static [Self] = &[$(Self::$variant),+];
+
             pub(super) fn sql(self) -> i64 {
                 match self { $( Self::$variant => $number ),+ }
             }
