@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-09。当前源码父基线：`5ee67fa2`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-09。当前源码父基线：`30c23f4b`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -53,6 +53,8 @@
 
 
 ### T00 最新 GitHub 验证与格式修复
+
+- [短 CI #951 quality](https://github.com/isarmg/zxs/actions/runs/42655061664/job/129293878894) 在准确 `5ee67fa26c1488a994188342492cc42fecaa4bd6` 报 `foreign_original_databases.rs:281` 的 E0382：既有身份材料夹具在 `publish(self, ...)` 消耗 owner 后继续借用它。本片对齐准确主线 `30c23f4bf03b5ada2887d7f17e062af629c2409c` 并保留已合入的首装／启动 Clippy 修复，仅先保存原 plan digest，实际发布完成后调用既有 `published_owner`／`open_published_in`，按相同原操作、摘要和真实父根重新取得持锁 owner，再准备原三范围数据库；不修改生产消耗式 publish，不将准备移到发布前，不跳过原 reservation／实物身份及完整 native 读回。原测试与所有断言保留，未新增测试或文档；仅一份既有集成夹具与本 TASKS。两个 server Clippy 问题由独立切片修复，本片不代表 quality 通过。未本地运行程序、formatter、编译、测试或 CI，仅准备 GitHub tree 交协调者，不创建 commit/ref 或更新 main，仍待准确提交的 GitHub 复验；暂停的 Foreign 正式接纳 WIP 未混入。
 
 - [push CI #951](https://github.com/isarmg/zxs/actions/runs/42655061664) 在准确 `5ee67fa26c1488a994188342492cc42fecaa4bd6` 于 2026-11-09 16:35 UTC 完成：static、contracts、security、foundation-platform、smb-protocol、web、build-tools 七项成功，仅 quality 失败；4 项长 job 按策略跳过。此前 26 项 Engine Clippy 和格式差异不再出现，build-tools 的 browser-smoke 继续 57／57 通过；不代表后续所有 Clippy、生产 WASM 或实际系统验收完成。
 - #951 quality 新暴露三个准确位置：`foreign_original_databases.rs:281` 的原测试在 `publish(self)` 消耗 owner 后再次使用，另 `setup_recovery/activation.rs:400`、`startup_admission.rs:89` 为两处 `collapsible_if`，后者在 lib/libtest 重复报告。外来盘原测试由独立片沿真实生命周期修复，不改变生产 owner 消耗边界。

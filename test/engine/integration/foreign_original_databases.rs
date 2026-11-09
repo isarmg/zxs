@@ -271,13 +271,15 @@ fn identity_capsules(
     for level in [1, 2] {
         let root = chain_parent(f, &format!("identities-{level}"));
         let plan = chain_plan(&source, operation, level);
-        digests.push(*plan.digest());
+        let digest = *plan.digest();
+        digests.push(digest);
         let mut owner = plan
             .begin_in(File::open(&root).unwrap(), &root.join("material"))
             .unwrap();
         owner.copy_source(&source).unwrap();
         owner.seal().unwrap();
         owner.publish(None).unwrap();
+        let owner = published_owner(&root, operation, &digest);
         owner.prepare_original_databases().unwrap();
         roots.push(root);
     }
