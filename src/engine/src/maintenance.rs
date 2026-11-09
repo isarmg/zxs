@@ -374,7 +374,7 @@ impl Engine {
     /// Only the exact branch set frozen by a complete terminal decision may be
     /// read as immutable evidence instead of a live HEAD. Every other purge
     /// admission, including leases, directories, Git and workspaces, is unchanged.
-    pub(crate) fn check_retirement_purge(&self, history: &str, versions: &[String], decision: &crate::node_retirement::Decision) -> Result<()> {
+    pub(crate) fn check_retirement_purge(&self, history: &str, versions: &[String], decision: &crate::node_retirement_engine::Decision) -> Result<()> {
         self.check_purge_with_archived(history, versions, &decision.archived_branch_ids())
     }
     fn check_purge_with_archived(&self, history: &str, versions: &[String], archived: &BTreeSet<String>) -> Result<()> {
@@ -561,7 +561,7 @@ impl Engine {
         // indefinitely. Re-admit each actual cleanup target at first use, not
         // for every version, retaining the existing unavailable-target skip.
         let mut cleanup_slots = BTreeMap::new();
-        let original_bindings = crate::node_retirement::original_cleanup_bindings(&self.state)?;
+        let original_bindings = crate::node_retirement_engine::original_cleanup_bindings(&self.state)?;
         for (id, state) in &self.state.content_states {
             if *state == ContentState::Available {
                 continue;
@@ -683,7 +683,7 @@ impl Engine {
         plan: &Plan,
     ) -> Result<OperationResult> {
         self.check_directory_split(history)?;
-        crate::node_retirement::require_portable_history(&self.state, history)?;
+        crate::node_retirement_engine::require_portable_history(&self.state, history)?;
         self.mutate(
             "history.split", principal, operation,
             json!({"plan_id":plan.plan_id,"digest":plan.digest}),

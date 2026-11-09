@@ -512,7 +512,7 @@ impl CurrentNamespaces {
     /// Derived only before a real publication. Ordinary publication installs the
     /// result atomically with its State; failure leaves the previous view intact.
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
-        crate::node_retirement::verify(previous, next)?;
+        crate::node_retirement_engine::verify(previous, next)?;
         if let Some(view) = self.advance_history_copy(previous, next)? {
             return Ok(view);
         }

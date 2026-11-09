@@ -831,7 +831,7 @@ impl Engine {
             proof,
             graph_objects,
         } = self.history_package_metadata(history)?;
-        crate::node_retirement::require_portable_history(&self.state, history)?;
+        crate::node_retirement_engine::require_portable_history(&self.state, history)?;
         let parent = destination
             .parent()
             .filter(|p| !p.as_os_str().is_empty())

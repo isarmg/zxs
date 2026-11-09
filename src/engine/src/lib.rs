@@ -124,8 +124,11 @@ pub use journal::JournalFault;
 mod maintenance;
 mod metadata_budget;
 mod metadata_map;
-mod node_retirement;
-pub use node_retirement::PermanentNodeSeparation;
+// Keep the private authority implementation distinct from the public wire
+// module re-exported by storage_contract below.
+#[path = "node_retirement.rs"]
+mod node_retirement_engine;
+pub use node_retirement_engine::PermanentNodeSeparation;
 mod protection;
 mod publication_evidence;
 mod repair;

@@ -245,7 +245,7 @@ pub(super) fn analyze(
     let mut archived_branch_heads = BTreeSet::new();
     for file in &last_live_files {
         work.step()?;
-        match crate::node_retirement::prospective_archived_branches(query.state, file.as_str(), graph.history_tree_id.as_str()) {
+        match crate::node_retirement_engine::prospective_archived_branches(query.state, file.as_str(), graph.history_tree_id.as_str()) {
             Ok(branches) => {
                 for branch in branches {
                     work.step()?;

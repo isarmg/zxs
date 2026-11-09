@@ -6,12 +6,18 @@ use json_codec::json;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::history_window::{HistoryFileId, HistoryRoot, HistoryTreeId, HistoryVersionId};
 
+#[path = "node_retirement/publication.rs"]
 mod publication;
+#[path = "node_retirement/frontier.rs"]
 mod frontier;
+#[path = "node_retirement/references.rs"]
 mod references;
+#[path = "node_retirement/replicas.rs"]
 mod replicas;
 pub(crate) use replicas::{CleanupRoutes, original_cleanup_bindings};
+#[path = "node_retirement/separation.rs"]
 mod separation;
+#[path = "node_retirement/terminal.rs"]
 mod terminal;
 pub use separation::PermanentNodeSeparation;
 pub(crate) use publication::{admit_current, verify};

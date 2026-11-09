@@ -11,7 +11,7 @@ pub(super) fn project(
     let source = query.node(request.node_id.as_str())?.version(query.state);
     let matching = |version: &crate::FileVersion| {
         source.logical_size != 0
-            && !crate::node_retirement::is_retired(query.state, &version.version_id)
+            && !crate::node_retirement_engine::is_retired(query.state, &version.version_id)
             && version.history_tree_id == source.history_tree_id
             && version.file_id != source.file_id
             && version.logical_size == source.logical_size

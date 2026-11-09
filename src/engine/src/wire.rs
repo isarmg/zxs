@@ -147,7 +147,7 @@ impl Engine {
                 "version not found",
             )
         })?;
-        if crate::node_retirement::is_retired(&self.state, version) {
+        if crate::node_retirement_engine::is_retired(&self.state, version) {
             return Err(Error::new(storage_contract::ErrorCode::VersionNotFound, "version is permanently retired"));
         }
         if let Some(state) = self.state.content_states.get(version)

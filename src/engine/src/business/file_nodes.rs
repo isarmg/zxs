@@ -42,7 +42,7 @@ pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<Stri
                 "node does not belong to this file",
             )
         })?;
-    if crate::node_retirement::is_retired(state, &version) {
+    if crate::node_retirement_engine::is_retired(state, &version) {
         return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound, "node is permanently retired"));
     }
     let body = state
@@ -90,7 +90,7 @@ pub(crate) fn node_parents(state: &State, node: &str) -> Vec<String> {
 
 fn display_parents(state: &State, parents: &[String]) -> Result<Vec<String>> {
     let mut remaining = 1_048_576usize;
-    crate::node_retirement::live_parents(state, parents, || {
+    crate::node_retirement_engine::live_parents(state, parents, || {
         if remaining == 0 {
             return Err(Error::new(storage_contract::ErrorCode::ResourceLimit, "retired ancestry traversal exceeds its complete-result budget"));
         }

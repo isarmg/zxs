@@ -111,13 +111,13 @@ impl Engine {
         if self.history_index_is_selective(file_id)
             && let Some(versions) = self.indexed_file_history(file_id)
         {
-            return Ok(versions.into_iter().filter(|v| !crate::node_retirement::is_retired(&self.state, &v.version_id)).collect());
+            return Ok(versions.into_iter().filter(|v| !crate::node_retirement_engine::is_retired(&self.state, &v.version_id)).collect());
         }
         let mut versions = self
             .state
             .versions
             .values()
-            .filter(|v| v.file_id == file_id && !crate::node_retirement::is_retired(&self.state, &v.version_id))
+            .filter(|v| v.file_id == file_id && !crate::node_retirement_engine::is_retired(&self.state, &v.version_id))
             .cloned()
             .collect::<Vec<_>>();
         versions.sort_by_key(|v| v.version_sequence);

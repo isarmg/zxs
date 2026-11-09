@@ -142,7 +142,7 @@ pub(super) fn inspect_required(
     engine: &Engine,
     history_root: HistoryRoot,
     versions: &[HistoryVersionId],
-    required: &crate::node_retirement::CleanupRoutes,
+    required: &crate::node_retirement_engine::CleanupRoutes,
     cancellation: &HistoryWindowCancellation,
 ) -> Result<PermanentRemovalCleanupObservation> {
     inspect_bindings(engine, history_root, versions, Some(required), cancellation)
@@ -152,7 +152,7 @@ fn inspect_bindings(
     engine: &Engine,
     history_root: HistoryRoot,
     versions: &[HistoryVersionId],
-    required: Option<&crate::node_retirement::CleanupRoutes>,
+    required: Option<&crate::node_retirement_engine::CleanupRoutes>,
     cancellation: &HistoryWindowCancellation,
 ) -> Result<PermanentRemovalCleanupObservation> {
     let mut budget = Budget { cancellation, bytes: MAX_READ_BYTES, checkpoints: MAX_CHECKPOINTS, io_exhausted: false };

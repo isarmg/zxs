@@ -599,7 +599,7 @@ impl<'a> PlanningContext<'a> {
                 .or_else(|| op.history_tree_id.clone())
                 .unwrap_or_else(|| operation_id.to_string()),
         });
-        crate::node_retirement::verify(self.state, &next)?;
+        crate::node_retirement_engine::verify(self.state, &next)?;
         crate::file_deletion::publication::verify(
             self.state,
             &next,

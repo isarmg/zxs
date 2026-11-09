@@ -197,5 +197,5 @@ fn validate(state: &State) -> Result<()> {
         covered.include(&manifest)?;
     }
     covered.finish(state)?;
-    crate::node_retirement::admit_current(state)
+    crate::node_retirement_engine::admit_current(state)
 }

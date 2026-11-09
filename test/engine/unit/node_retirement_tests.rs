@@ -30,28 +30,28 @@ fn fixture() -> (tempfile::TempDir, Engine, State, OperationId, String) {
 fn retirement_snapshot_requires_receipt_actor_exact_event_and_current_retired_state() {
     let (_temp, engine, before, operation, version) = fixture();
     let state = engine.state();
-    crate::node_retirement::admit_current(state).unwrap();
-    crate::node_retirement::verify(&before, state).unwrap();
+    crate::node_retirement_engine::admit_current(state).unwrap();
+    crate::node_retirement_engine::verify(&before, state).unwrap();
     let mut missing = state.clone();
     missing.operations.remove(&operation);
-    assert!(crate::node_retirement::admit_current(&missing).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&missing).is_err());
     let mut missing = state.clone();
     missing.operation_principals.remove(&operation);
-    assert!(crate::node_retirement::admit_current(&missing).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&missing).is_err());
     let mut revived = state.clone();
     revived.content_states.insert(version.clone(), ContentState::Available);
-    assert!(crate::node_retirement::admit_current(&revived).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&revived).is_err());
     let mut tampered = state.clone();
     tampered.version_notes.insert(version, "changed archived evidence".into());
-    assert!(crate::node_retirement::admit_current(&tampered).is_err());
-    assert!(crate::node_retirement::verify(state, &before).is_err(), "an old full state cannot replace a retained retirement");
+    assert!(crate::node_retirement_engine::admit_current(&tampered).is_err());
+    assert!(crate::node_retirement_engine::verify(state, &before).is_err(), "an old full state cannot replace a retained retirement");
 }
 
 #[test]
 fn retirement_never_accepts_bare_state_token_as_authority() {
     let (_temp, _engine, mut before, _operation, version) = fixture();
     before.content_states.insert(version, ContentState::Retired);
-    assert!(crate::node_retirement::admit_current(&before).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&before).is_err());
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn cold_retirement_closure_rejects_new_inbound_sources_without_using_version_seq
     // that a newly attached inbound reference predates the retirement.
     version.version_sequence = 1;
     changed.versions.insert(entry.version_id, version);
-    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&changed).is_err());
 }
 
 #[test]
@@ -85,30 +85,30 @@ fn cold_retirement_requires_the_frozen_partition_and_inbound_closure_fields() {
     let mut receipt = changed.operations[&operation].clone();
     receipt.result["retirement"]["separation"]["file_components"] = json_codec::json!([]);
     changed.operations.insert(operation, receipt);
-    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&changed).is_err());
     let mut missing = state.clone();
     let mut receipt = missing.operations[&operation].clone();
     receipt.result["retirement"].as_object_mut().unwrap().remove("inbound_references");
     missing.operations.insert(operation, receipt);
-    assert!(crate::node_retirement::admit_current(&missing).is_err(), "missing current-format proof is not silently defaulted");
+    assert!(crate::node_retirement_engine::admit_current(&missing).is_err(), "missing current-format proof is not silently defaulted");
 }
 
 #[test]
 fn cleanup_obligation_remains_the_original_binding_after_placement_change() {
     let (_temp, engine, _before, operation, version) = fixture();
-    let before = crate::node_retirement::original_cleanup_bindings(engine.state()).unwrap();
+    let before = crate::node_retirement_engine::original_cleanup_bindings(engine.state()).unwrap();
     let original = before[&version].clone();
     let mut changed = engine.state().clone();
     let mut placement = changed.placements[&version].clone();
     for generation in placement.binding_generations.values_mut() { *generation += 1; }
     changed.placements.insert(version.clone(), placement);
-    crate::node_retirement::admit_current(&changed).unwrap();
-    assert_eq!(crate::node_retirement::original_cleanup_bindings(&changed).unwrap()[&version], original);
+    crate::node_retirement_engine::admit_current(&changed).unwrap();
+    assert_eq!(crate::node_retirement_engine::original_cleanup_bindings(&changed).unwrap()[&version], original);
     let mut missing = changed;
     let mut receipt = missing.operations[&operation].clone();
     receipt.result["retirement"].as_object_mut().unwrap().remove("cleanup_routes");
     missing.operations.insert(operation, receipt);
-    assert!(crate::node_retirement::admit_current(&missing).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&missing).is_err());
 }
 
 fn terminal_fixture() -> (tempfile::TempDir, Engine, State, OperationId, String) {
@@ -135,7 +135,7 @@ fn terminal_fixture() -> (tempfile::TempDir, Engine, State, OperationId, String)
 #[test]
 fn terminal_identity_rejects_a_new_version_even_without_retired_source_edges() {
     let (_temp, engine, before, _operation, version) = terminal_fixture();
-    crate::node_retirement::verify(&before, engine.state()).unwrap();
+    crate::node_retirement_engine::verify(&before, engine.state()).unwrap();
     let mut revived = engine.state().clone();
     let mut fresh = revived.versions[&version].clone();
     let new_id = crate::new_id("ver").unwrap();
@@ -145,7 +145,7 @@ fn terminal_identity_rejects_a_new_version_even_without_retired_source_edges() {
     // The terminal cohort, not only the old node/source guard, must reject it.
     revived.versions.insert(new_id.clone(), fresh);
     revived.content_states.insert(new_id, ContentState::Available);
-    assert!(crate::node_retirement::admit_current(&revived).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&revived).is_err());
 }
 
 #[test]
@@ -155,12 +155,12 @@ fn completely_retired_file_requires_its_exact_terminal_receipt() {
     let mut receipt = missing.operations[&operation].clone();
     receipt.result["retirement"].as_object_mut().unwrap().remove("file_terminations");
     missing.operations.insert(operation, receipt);
-    assert!(crate::node_retirement::admit_current(&missing).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&missing).is_err());
     let mut erased = engine.state().clone();
     let mut receipt = erased.operations[&operation].clone();
     receipt.result["retirement"]["file_terminations"]["files"] = json_codec::json!([]);
     erased.operations.insert(operation, receipt);
-    assert!(crate::node_retirement::admit_current(&erased).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&erased).is_err());
 }
 
 
@@ -173,17 +173,17 @@ fn terminal_frontier_rejects_branch_changes_new_aliases_and_selection_changes_on
     let mut modified = branch.clone();
     modified.generation += 1;
     changed.branches.insert(branch.branch_id.clone(), modified);
-    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&changed).is_err());
     let mut changed = engine.state().clone();
     changed.file_branch_aliases.insert(branch.branch_id.clone(), branch.branch_id.clone());
-    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&changed).is_err());
     let mut changed = engine.state().clone();
     if changed.file_selections.contains_key(&file) { changed.file_selections.remove(&file); }
     else { changed.file_selections.insert(file.clone(), branch.branch_id.clone()); }
-    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&changed).is_err());
     let mut changed = engine.state().clone();
     let mut receipt = changed.operations[&operation].clone();
     receipt.result["retirement"]["file_terminations"]["files"][0].as_object_mut().unwrap().remove("retained_frontier");
     changed.operations.insert(operation, receipt);
-    assert!(crate::node_retirement::admit_current(&changed).is_err());
+    assert!(crate::node_retirement_engine::admit_current(&changed).is_err());
 }

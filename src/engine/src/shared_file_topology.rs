@@ -49,7 +49,7 @@ impl<'a> VersionIndex<'a> {
         let mut count = 0;
         for version in state.versions.values() {
             scan.record()?;
-            if version.history_tree_id != history || crate::node_retirement::is_retired(state, &version.version_id) {
+            if version.history_tree_id != history || crate::node_retirement_engine::is_retired(state, &version.version_id) {
                 continue;
             }
             if count == MAX_INDEX_VERSIONS {

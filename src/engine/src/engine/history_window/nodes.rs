@@ -96,7 +96,7 @@ pub(super) fn node<'a>(state: &'a State, scope: Scope<'_>, id: &str) -> Option<N
                 .filter(|node| node.file_id == scope.file && node.history_tree_id == scope.history)
                 .map(Node::Metadata)
         })
-        .filter(|node| !crate::node_retirement::is_retired(state, &node.version(state).version_id))
+        .filter(|node| !crate::node_retirement_engine::is_retired(state, &node.version(state).version_id))
 }
 
 pub(super) fn all_nodes<'a>(
@@ -120,7 +120,7 @@ pub(super) fn all_nodes<'a>(
                 Node::Metadata(node) => (&node.file_id, &node.history_tree_id),
             };
             (file == scope.file && history == scope.history
-                && !crate::node_retirement::is_retired(state, &candidate.version(state).version_id))
+                && !crate::node_retirement_engine::is_retired(state, &candidate.version(state).version_id))
                 .then_some(Ok(candidate))
         })
 }
@@ -398,7 +398,7 @@ pub(super) fn visit_parents_from<'a>(
     mut visit: impl FnMut(&'a str) -> Result<()>,
 ) -> Result<()> {
     let mut remaining = 1_048_576usize;
-    let parents = crate::node_retirement::live_parents(state, base_parents(state, id), || {
+    let parents = crate::node_retirement_engine::live_parents(state, base_parents(state, id), || {
         cancel.checkpoint()?;
         if remaining == 0 {
             return Err(Error::new(storage_contract::ErrorCode::ResourceLimit, "retired ancestry traversal exceeds its complete-result budget"));
