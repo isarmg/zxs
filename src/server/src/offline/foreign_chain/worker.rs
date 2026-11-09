@@ -130,6 +130,57 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             let (_, report) = status(&target, &plan)?;
             Ok(Output::Report { report })
         }
+        Action::Identity { plan, expected } => {
+            original(&target, &configuration, &plan)?;
+            let (_, material) = status(&target, &plan)?;
+            if !material.all_published() {
+                return Err("target identity mapping requires every original lower capsule".into());
+            }
+            let observation = original_databases(&target, &plan)?;
+            databases::match_expected(&plan, &observation, &expected)?;
+            exact_source(&target, &plan)?;
+            let proposal = identity::Proposal::capture(&configuration, &plan, &observation)?;
+            original(&target, &configuration, &plan)?;
+            Ok(Output::Identity { proposal })
+        }
+        Action::Databases {
+            plan,
+            prepare,
+            completed,
+        } => {
+            original(&target, &configuration, &plan)?;
+            exact_source(&target, &plan)?;
+            let (_, material) = status(&target, &plan)?;
+            if !material.all_published() {
+                return Err("the entire original lower chain must retain every published capsule before any database work".into());
+            }
+            let observation = original_databases(&target, &plan)?;
+            if completed && !observation.completed() {
+                return Err("completed original database batch is incomplete; no missing target or image was recreated".into());
+            }
+            if let Some(expected) = prepare {
+                databases::match_expected(&plan, &observation, &expected)?;
+                for (item, digest) in plan.binding.lower.iter().zip(&plan.capsule_digests) {
+                    let root = exact_lower(&target, item)?;
+                    let owner = ForeignMigrationTransaction::open_published_in(
+                        root.into_directory(),
+                        &Path::new(&item.directory.root_path).join(CAPSULE),
+                        &plan.binding.operation_id,
+                        &digest.parse()?,
+                    )?;
+                    owner.prepare_original_databases()?;
+                }
+                original(&target, &configuration, &plan)?;
+                let report = original_databases(&target, &plan)?;
+                databases::match_expected(&plan, &report, &expected)?;
+                Ok(Output::Databases { report })
+            } else {
+                original(&target, &configuration, &plan)?;
+                Ok(Output::Databases {
+                    report: observation,
+                })
+            }
+        }
     };
     let output = output?;
     target.recheck()?;
@@ -168,6 +219,16 @@ fn inspect(target: &ManagedPool, path: &str) -> Result<ForeignImportPreview> {
         path.into(),
         ForeignImportLimits::default(),
     )?)
+}
+fn exact_source(target: &ManagedPool, plan: &Plan) -> Result<ForeignImportPreview> {
+    let source = inspect(target, &plan.binding.source.root_path)?;
+    if source_record(&plan.binding.source.root_path, &source) != plan.binding.source {
+        return Err(
+            "foreign source evidence changed; only the original unchanged batch can continue"
+                .into(),
+        );
+    }
+    Ok(source)
 }
 fn source_record(path: &str, source: &ForeignImportPreview) -> Source {
     Source {
@@ -257,6 +318,8 @@ fn exact_lower(target: &ManagedPool, item: &SelectedLower) -> Result<OpenAt2Root
 fn contents(root: &OpenAt2Root, operation: OperationId) -> Result<()> {
     let stage = format!(".zxs-foreign-{operation}");
     let reservation = format!("{stage}.json");
+    let database_reservation = format!(".zxs-foreign-databases-{operation}.json");
+    let database_completion = format!(".zxs-foreign-databases-{operation}-complete.json");
     for (index, name) in root.entries()?.enumerate() {
         if index >= 64 {
             return Err("lower-root retained material exceeds its entry budget".into());
@@ -266,9 +329,16 @@ fn contents(root: &OpenAt2Root, operation: OperationId) -> Result<()> {
             .as_os_str()
             .to_str()
             .ok_or("non-UTF-8 lower-root material was preserved")?;
-        if text == CAPSULE || text == stage || text == reservation {
+        if text == CAPSULE
+            || text == stage
+            || text == reservation
+            || text == "foreign-chain-databases"
+            || text == database_reservation
+            || text == database_completion
+        {
             continue;
         }
+
         if AtomicFile::is_temporary_name(&name) {
             root.open_file(&name.as_relative(), false)?;
         } else {
@@ -279,6 +349,43 @@ fn contents(root: &OpenAt2Root, operation: OperationId) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn original_databases(target: &ManagedPool, plan: &Plan) -> Result<databases::Observation> {
+    let mut targets = Vec::with_capacity(plan.binding.lower.len());
+    let mut statuses = Vec::with_capacity(plan.binding.lower.len());
+    for (item, digest) in plan.binding.lower.iter().zip(&plan.capsule_digests) {
+        let root = exact_lower(target, item)?;
+        contents(&root, plan.binding.operation_id)?;
+        let owner = ForeignMigrationTransaction::open_published_in(
+            root.into_directory(),
+            &Path::new(&item.directory.root_path).join(CAPSULE),
+            &plan.binding.operation_id,
+            &digest.parse()?,
+        )?;
+        let (report, status) = owner.preview_original_databases()?;
+        if report.target_level != item.directory.level
+            || report.capsule_digest != *digest
+            || report.chain_digest != super::digest(&plan.binding)?
+        {
+            return Err("original databases do not bind this exact complete-chain target".into());
+        }
+        targets.push(report);
+        statuses.push(status);
+    }
+    let first = targets.first().ok_or("the complete lower chain is empty")?;
+    if targets.iter().any(|report| {
+        report.original != first.original
+            || report.manifest_hash != first.manifest_hash
+            || report.databases != first.databases
+            || report.database_bytes != first.database_bytes
+            || report.original_disks != first.original_disks
+            || report.file_databases != first.file_databases
+            || report.directory_databases != first.directory_databases
+    }) {
+        return Err("required lower targets disagree on the complete original State or database scopes; no peer fills another target".into());
+    }
+    Ok(databases::Observation { targets, statuses })
 }
 fn status(target: &ManagedPool, plan: &Plan) -> Result<(Vec<OpenAt2Root>, Report)> {
     let mut roots = Vec::with_capacity(plan.binding.lower.len());
@@ -319,13 +426,7 @@ fn prepare(
 ) -> Result<()> {
     // Freeze and check every target before the first lower root can be written.
     // Even a partially prepared original may not omit another required level.
-    let source = inspect(target, &plan.binding.source.root_path)?;
-    if source_record(&plan.binding.source.root_path, &source) != plan.binding.source {
-        return Err(
-            "foreign source evidence changed; only this original unchanged batch can continue"
-                .into(),
-        );
-    }
+    let source = exact_source(target, plan)?;
     foreign_identity(
         configuration,
         &source,

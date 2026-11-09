@@ -6,10 +6,12 @@ use name_policy::PortablePath;
 use platform_io::fs_safety::{EntryName, RelativePath, linux::AdvisoryLock};
 use std::{collections::BTreeSet, io::Read, path::Path};
 
+mod databases;
 mod inventory;
 mod planning;
 mod projection;
 mod transaction;
+pub use databases::{ForeignDatabaseStatus, ForeignOriginalDatabasesReport};
 
 const FORMAT: &str = "zxs-foreign-migration-capsule";
 const MAX_INTENT: usize = 64 * 1024 * 1024;

@@ -55,6 +55,10 @@
 
 为保持原已有完整校验路径，本片没有减少哈希、复制或 fsync。每个目标都独立全量复制/读验，预览、重新计划、最终状态也进行完整证据读取，成本随来源字节量和目标数增长；不是常数时间预览，也不证明实际剩余空间或物理故障域独立。Web 与子进程受现有单任务 owner 和关闭排空约束，HTTP 断开不能遗弃后台写者。
 
+## 原完整 State 与数据库后继
+
+[原完整 State 与三范围数据库](helper-foreign-original-databases.md)在本片所有低级 capsule 完成后提供独立 Web 入口，从每个原目标自己的完整固定 genesis 前缀生成原身份镜像，严格保留永久记录并独立读验。它不修改既有 capsule 格式、不安装新链身份数据库、不改变下面的正式接纳边界。
+
 ## 仍缺的正式接纳闭包
 
 完整来源 State、永久 operations/principals/events 的来源认证与目标身份映射；SYSTEM/盘根/FILE 三范围数据库在共同决定上的安装；所有低级链、来源与目标共同的 authority/epoch/Publication；全目标原操作冷恢复；活动 Config/locator/Stop/fence/serving 切换，均不能用 capsule 或本整批回执替代。本片只把之前没有可操作入口的完整低级**实物材料准备**接起来，不把 H03 标为完成。

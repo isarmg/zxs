@@ -2,6 +2,8 @@
 
 > 后继切片：[外来高级盘完整低级链实物准备](helper-foreign-complete-chain-material.md)已写出独立 Web、全部真实低级根同批冻结/复制和原请求续作；只产生隔离材料，不完成正式接纳，按该片记录全部未验范围。
 
+> 后继补充：[原完整 State 与三范围数据库准备](helper-foreign-original-databases.md)将每个原低级目标自己的 native 前缀接到实际原身份镜像和整批续作；不解除正式新链身份/共同发布条件。
+
 # 辅助工具的磁盘管理职责与迁移边界
 
 [辅助工具](../components/helper.md) · [架构决策](../adr/0017-helper-disk-management.md) · [现有协调器](online-disk-management.md)

@@ -1,5 +1,26 @@
 use super::*;
 
+/// Original local published State evidence, not a new target identity or an
+/// active admission capability. Counts retain permanent receipts and actors.
+#[derive(
+    Clone, Debug, PartialEq, Eq, data_serialization::Serialize, data_serialization::Deserialize,
+)]
+#[serialization(deny_unknown_fields)]
+pub struct ForeignOriginalStateReport {
+    pub pool_id: String,
+    pub configuration_hash: String,
+    pub registrations: Vec<DiskRegistrationIdentity>,
+    #[serialization(with = "storage_contract::u64_string")]
+    pub sequence: u64,
+    pub snapshot_hash: String,
+    pub state_hash: String,
+    pub prefix_hash: String,
+    pub publications: usize,
+    pub operations: usize,
+    pub principals: usize,
+    pub events: usize,
+}
+
 /// A foreign-source evidence/review digest, distinct from a file body's hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ForeignEvidenceDigest([u8; 32]);

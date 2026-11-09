@@ -13,13 +13,14 @@ mod mapping;
 mod migration;
 mod model;
 pub use migration::{
-    ForeignMigrationPlan, ForeignMigrationReceipt, ForeignMigrationStatus,
-    ForeignMigrationTransaction,
+    ForeignDatabaseStatus, ForeignMigrationPlan, ForeignMigrationReceipt, ForeignMigrationStatus,
+    ForeignMigrationTransaction, ForeignOriginalDatabasesReport,
 };
 pub use model::{
     ForeignCheckpoint, ForeignEvidenceDigest, ForeignHistory, ForeignImportLimits,
     ForeignImportMapping, ForeignImportPreview, ForeignLocalBinding, ForeignMappedHistory,
-    ForeignPrimaryOrigin, ForeignSourceIdentity, ForeignVersionAvailability,
+    ForeignOriginalStateReport, ForeignPrimaryOrigin, ForeignSourceIdentity,
+    ForeignVersionAvailability,
 };
 
 fn invalid(message: &str) -> Error {

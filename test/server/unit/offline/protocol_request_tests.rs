@@ -27,6 +27,9 @@ impl Dispatcher {
             "/api/disks/foreign-chain-preview" => Operation::ForeignChainPreview,
             "/api/disks/foreign-chain-original" => Operation::ForeignChainOriginal,
             "/api/disks/foreign-chain-prepare" => Operation::ForeignChainPrepare,
+            "/api/disks/foreign-chain-identity-preview" => Operation::ForeignChainIdentityPreview,
+            "/api/disks/foreign-chain-databases-preview" => Operation::ForeignChainDatabasesPreview,
+            "/api/disks/foreign-chain-databases-prepare" => Operation::ForeignChainDatabasesPrepare,
             "/api/disks/add-preview" => Operation::DiskAdditionPreview,
             "/api/disks/add-original" => Operation::DiskAdditionOriginal,
             "/api/disks/add-commit" => Operation::DiskAdditionCommit,
@@ -459,4 +462,63 @@ fn credential_pipe_diagnostics_do_not_echo_malformed_secret_values() {
         assert_eq!(error.kind, FailureKind::InvalidRequest);
         assert!(!error.message.contains("do-not-echo-secret"));
     }
+}
+
+#[tokio::test]
+async fn foreign_original_database_routes_do_not_open_roots_without_explicit_stop_and_confirmation()
+{
+    let app = Dispatcher;
+    let original = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
+        "request_digest":"a".repeat(64),"external_writers_stopped":false});
+    let response = app
+        .clone()
+        .oneshot(post(
+            "/api/disks/foreign-chain-databases-preview",
+            original.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        json_body(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stop ZXS")
+    );
+    let response = app
+        .oneshot(post(
+            "/api/disks/foreign-chain-databases-prepare",
+            json!({"input":original,
+        "expected":{"request_digest":"a".repeat(64),"targets":[]},"database_digest":"b".repeat(64),
+        "confirmation":"admit-foreign-now"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        json_body(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("before system access")
+    );
+}
+
+#[tokio::test]
+async fn foreign_identity_preview_requires_explicit_stop_before_any_system_access() {
+    let response = Dispatcher
+        .oneshot(post(
+            "/api/disks/foreign-chain-identity-preview",
+            json!({
+        "service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
+        "request_digest":"a".repeat(64),"external_writers_stopped":false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        json_body(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stop ZXS")
+    );
 }

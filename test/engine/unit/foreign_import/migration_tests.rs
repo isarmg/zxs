@@ -1054,3 +1054,14 @@ fn material_status_rejects_corrupt_final_evidence_without_repairing_it() {
     );
     assert_eq!(fs::read(marker).unwrap(), b"not-original-evidence");
 }
+
+#[test]
+fn incomplete_source_frontier_cannot_supply_foreign_original_state_scopes() {
+    let f = fixture();
+    let mut source = inspect(&f.engine.config().disks[3].root);
+    source.checkpoint.unpublished_tail = true;
+    assert!(source.visit_original_states(|_, _, _, _| Ok(())).is_err());
+    source.checkpoint.unpublished_tail = false;
+    source.checkpoint.authority_hash = Some("a".repeat(64));
+    assert!(source.visit_original_states(|_, _, _, _| Ok(())).is_err());
+}

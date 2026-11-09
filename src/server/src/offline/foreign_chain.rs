@@ -1,5 +1,7 @@
 //! One exact complete lower-chain material batch. It does not invoke Add,
 //! rewrite the source, install an active Config or grant membership authority.
+pub(crate) mod databases;
+pub(crate) mod identity;
 mod worker;
 use crate::offline::{
     Result,
@@ -249,12 +251,23 @@ enum Action {
         plan: Plan,
         completed: bool,
     },
+    Databases {
+        plan: Plan,
+        prepare: Option<databases::Expected>,
+        completed: bool,
+    },
+    Identity {
+        plan: Plan,
+        expected: databases::Expected,
+    },
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Output {
     Preview { plan: Plan },
     Report { report: Report },
+    Databases { report: databases::Observation },
+    Identity { proposal: identity::Proposal },
 }
 impl crate::offline::service_worker::Request for WorkerRequest {
     type Output = Output;

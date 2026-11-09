@@ -145,6 +145,17 @@ fn dispatch(operation: Operation, body: &[u8]) -> std::result::Result<Vec<u8>, F
         Operation::ForeignChainPrepare => {
             call::<foreign_chain::Prepare, _>(operation, body, foreign_chain::prepare)
         }
+        Operation::ForeignChainDatabasesPreview => {
+            call::<foreign_chain::Original, _>(operation, body, foreign_chain::databases::preview)
+        }
+        Operation::ForeignChainDatabasesPrepare => call::<foreign_chain::databases::Prepare, _>(
+            operation,
+            body,
+            foreign_chain::databases::prepare,
+        ),
+        Operation::ForeignChainIdentityPreview => {
+            call::<foreign_chain::Original, _>(operation, body, foreign_chain::identity::preview)
+        }
         Operation::DiskAdditionPreview => {
             call::<disk_addition::Input, _>(operation, body, disk_addition::preview)
         }

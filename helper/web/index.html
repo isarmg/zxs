@@ -164,6 +164,20 @@
         <button type="submit">确认准备全部低级材料 / 原批续作</button>
       </form>
       <pre id="foreign-chain-result" hidden></pre>
+      <h3>正式接纳前：核对原完整 State 与三范围数据库</h3>
+      <p>先核对已完成的整批原材料，再从每个低级目标自身的原生发布链重建原 SYSTEM、原盘 current/history、FILE/目录库。必须保留完整 operations/principals/events，所有目标独立一致，不能拿健康同伴补缺。此阶段仍保留来源旧身份，不安装新链身份数据库，不授予外来成员资格。</p>
+      <button id="foreign-chain-databases-preview" class="secondary" type="button" hidden>预览 / 查询原批完整 State 与三范围库</button>
+      <pre id="foreign-chain-databases-plan" hidden></pre>
+      <button id="foreign-chain-databases-save" class="secondary" type="button" hidden>保存原数据库计划与摘要</button>
+      <form id="foreign-chain-databases-form" hidden>
+        <label class="ack"><input id="foreign-chain-databases-confirm" type="checkbox" required> 核对全部原目标的完整 State、永久记录、原盘及文件/目录库；仅准备独立旧身份镜像，不正式纳入。</label>
+        <button type="submit">确认整批原三范围库准备 / 原请求续作</button>
+      </form>
+      <pre id="foreign-chain-databases-result" hidden></pre>
+      <button id="foreign-chain-identity-preview" class="secondary" type="button" hidden>核对全链新登记身份提案（不纳入）</button>
+      <pre id="foreign-chain-identity-plan" hidden></pre>
+      <button id="foreign-chain-identity-save" class="secondary" type="button" hidden>保存新身份提案与摘要</button>
+      <p class="muted">新身份提案必须建立在全部原三范围库独立验证完成之上，只绑定现池、来源身份、所有真实根及新 ID；尚不映射联合 State、不安装目标身份数据库、不建立共同发布或启动服务。</p>
       <p class="muted">原计划在写入前持久保存，真实胶囊只读查询不补造材料。各目标可能分步准备，但只在全部原目标完成且同步后记录整批材料完成；任何中断都不授予成员身份。缺件、损坏、未知内容或身份改变保留拒绝。每个原始一级来源单独保留历史映射，不以名称合并历史。当前仅支持所有既有成员仍启用的 production 池，来源须来自其他池且保持原地不变。</p>
     </section>
     <section class="card">

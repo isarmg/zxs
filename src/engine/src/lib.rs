@@ -94,12 +94,13 @@ pub use file_deletion::{
 mod file_stamp;
 mod foreign_import;
 pub use foreign_import::{
-    ConfirmedForeignImportIntent, ForeignCheckpoint, ForeignEvidenceDigest, ForeignHistory,
-    ForeignImportIntentInfo, ForeignImportIntentRequest, ForeignImportIntentSource,
+    ConfirmedForeignImportIntent, ForeignCheckpoint, ForeignDatabaseStatus, ForeignEvidenceDigest,
+    ForeignHistory, ForeignImportIntentInfo, ForeignImportIntentRequest, ForeignImportIntentSource,
     ForeignImportIntentTarget, ForeignImportLimits, ForeignImportMapping, ForeignImportPreview,
     ForeignLocalBinding, ForeignMappedHistory, ForeignMigrationPlan, ForeignMigrationReceipt,
-    ForeignMigrationStatus, ForeignMigrationTransaction, ForeignPrimaryOrigin,
-    ForeignSourceIdentity, ForeignVersionAvailability, PreparedForeignImportIntent,
+    ForeignMigrationStatus, ForeignMigrationTransaction, ForeignOriginalDatabasesReport,
+    ForeignOriginalStateReport, ForeignPrimaryOrigin, ForeignSourceIdentity,
+    ForeignVersionAvailability, PreparedForeignImportIntent,
 };
 mod historical_save;
 pub use engine::{

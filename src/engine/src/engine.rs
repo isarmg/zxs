@@ -70,6 +70,7 @@ pub use detached_history::DetachedHistoryRead;
 mod planning;
 pub(crate) use planning::PlanningContext;
 mod disk_catalog;
+pub(crate) mod foreign_databases;
 pub use disk_catalog::{
     DiskCatalogDirectory, DiskCatalogFailure, DiskCatalogMaintenanceState, DiskCatalogObservation,
     DiskCatalogReceipt, DiskCatalogRefreshOutcome, DiskCatalogRefreshReport,

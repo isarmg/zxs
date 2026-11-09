@@ -3,6 +3,8 @@ use crate::engine::membership_transition::pending::activation;
 use data_serialization::{Serialize, de::DeserializeOwned};
 use std::{collections::BTreeSet, os::unix::fs::MetadataExt, path::Path};
 
+mod native;
+
 struct Budget {
     remaining: usize,
 }
@@ -128,6 +130,7 @@ impl ForeignImportPreview {
             source_level,
             journal_path,
             config_anchors,
+            config: _,
         } = open_source(directory, path, &mut budget)?;
         let journal = root.read_bytes(&journal_path, limits.journal_bytes)?;
         let journal_digest = ForeignEvidenceDigest::from_digest(blake3::hash(&journal));
@@ -275,6 +278,7 @@ struct OpenedSource {
     source_level: u32,
     journal_path: PathBuf,
     config_anchors: BTreeMap<PathBuf, ForeignEvidenceDigest>,
+    config: ValidatedConfig,
 }
 
 fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<OpenedSource> {
@@ -342,6 +346,7 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
         source_level,
         journal_path,
         config_anchors,
+        config,
     })
 }
 

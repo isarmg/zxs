@@ -103,3 +103,7 @@ path = "../../test/engine/integration/file_history_copy.rs"
 [[test]]
 name = "independent_inventory"
 path = "../../test/engine/integration/independent_inventory.rs"
+
+[[test]]
+name = "foreign_original_databases"
+path = "../../test/engine/integration/foreign_original_databases.rs"

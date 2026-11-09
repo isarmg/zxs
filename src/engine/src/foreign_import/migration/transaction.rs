@@ -48,6 +48,44 @@ impl ForeignMigrationPlan {
 }
 
 impl ForeignMigrationTransaction {
+    /// Open only an already published exact local capsule without synchronizing
+    /// or creating a reservation, stage or marker. This is an observation owner.
+    pub fn open_published_in(
+        parent: File,
+        destination: &Path,
+        operation: &OperationId,
+        expected: &ForeignEvidenceDigest,
+    ) -> Result<Self> {
+        let (parent, name) = open_parent(destination, Some(parent))?;
+        let lock = AdvisoryLock::directory(&parent.directory(parent.path())?)?;
+        let intent: Intent =
+            decode_strict(&parent.read_bytes(&reservation_path(&parent, operation), MAX_INTENT)?)?;
+        intent.plan.validate()?;
+        if intent.destination != name
+            || intent.parent_path != parent.path()
+            || intent.plan.operation_id != *operation
+            || digest(&intent.plan)? != *expected
+            || intent.parent != PhysicalBinding::of(&parent)?
+            || parent
+                .optional_metadata(&staging_path(&parent, operation))?
+                .is_some()
+        {
+            return Err(changed(
+                "published capsule owner differs from the original reservation",
+            ));
+        }
+        let capsule = parent.private_child(&parent.path().join(name))?;
+        let result = Self {
+            parent,
+            capsule,
+            intent,
+            digest: *expected,
+            published: true,
+            _lock: lock,
+        };
+        result.check_names()?;
+        Ok(result)
+    }
     /// Recover only the caller's exact reviewed operation and digest. A final
     /// capsule is verified before retry success; a conflicting final or partial
     /// capsule is preserved and rejected. No source is needed after sealing.
@@ -327,11 +365,11 @@ impl ForeignMigrationTransaction {
         })?)
     }
 
-    fn verify_replica(&self) -> Result<ForeignImportPreview> {
+    pub(super) fn verify_replica(&self) -> Result<ForeignImportPreview> {
         verify_replica(&self.capsule, &self.intent.plan)
     }
 
-    fn check_names(&self) -> Result<()> {
+    pub(super) fn check_names(&self) -> Result<()> {
         DiskRoot::from_directory(
             self.parent.path().into(),
             self.parent.directory(self.parent.path())?,
