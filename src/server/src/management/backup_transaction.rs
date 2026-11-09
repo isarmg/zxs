@@ -97,8 +97,11 @@ impl ManagementBackend {
             });
         }
         let backend = self.backup_transaction_backend(identity)?;
-        let snapshot = backend.continue_backup_transaction(identity, operation, command)?;
-        if snapshot.completion.is_some() {
+        let response = backend.continue_backup_transaction(identity, operation, command)?;
+        if let wire::CommandResponse::CancellationRejected { snapshot } = &response {
+            self.require_backup_serving(&backend, snapshot)?;
+        }
+        if matches!(&response, wire::CommandResponse::Observed { snapshot } if snapshot.completion.is_some()) {
             // Core activation is necessary but not sufficient for the service.
             // Keep existing auth replication/capabilities/ready admission owned
             // by its normal recovery worker; GET never schedules it.
@@ -113,7 +116,7 @@ impl ManagementBackend {
                 operation_id: operation,
             });
         }
-        Ok(wire::CommandResponse::Observed { snapshot })
+        Ok(response)
     }
 
     fn require_backup_serving(

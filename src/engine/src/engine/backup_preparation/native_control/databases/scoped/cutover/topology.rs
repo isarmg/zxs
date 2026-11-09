@@ -34,7 +34,21 @@ impl Topology {
         selection: &Selection,
         targets: &[BackupTopologyTarget],
     ) -> Result<Self> {
-        if targets.len() != selection.jobs().len() || !(1..=8).contains(&targets.len()) {
+        if !(1..=8).contains(&selection.jobs().len()) {
+            return Err(invalid("topology requires a nonempty bounded original target set"));
+        }
+        let paths = selection.jobs().iter()
+            .map(|job| job.request.target_paths[0].as_path()).collect::<Vec<_>>();
+        Self::derive_request(config, &selection.first().request.source_slot_id, &paths, targets)
+    }
+
+    fn derive_request(
+        config: &crate::ValidatedConfig,
+        source_slot: &str,
+        paths: &[&std::path::Path],
+        targets: &[BackupTopologyTarget],
+    ) -> Result<Self> {
+        if targets.len() != paths.len() || !(1..=8).contains(&targets.len()) {
             return Err(invalid(
                 "topology must name each original selected physical target exactly once",
             ));
@@ -42,7 +56,7 @@ impl Topology {
         let source = config
             .disks
             .iter()
-            .find(|disk| disk.slot_id == selection.first().request.source_slot_id)
+            .find(|disk| disk.slot_id == source_slot)
             .ok_or_else(|| invalid("topology source is not the exact frozen source slot"))?;
         let old = config
             .disks
@@ -114,7 +128,7 @@ impl Topology {
                 let index = *selected.get(parent).ok_or_else(|| invalid(
                     "every new lower-level ancestor must be in the same exact target batch; no placeholder or unrelated source is accepted"))?;
                 let upstream = &targets[index];
-                prefix.push(name(&selection.jobs()[index].request.target_paths[0])?);
+                prefix.push(name(paths[index])?);
                 parent = &upstream.upstream_slot_id;
             }
             let depth =
@@ -134,7 +148,7 @@ impl Topology {
                 },
                 upstream_slot_id: target.upstream_slot_id.clone(),
                 level,
-                name: name(&selection.jobs()[index].request.target_paths[0])?,
+                name: name(paths[index])?,
                 source_prefix: prefix,
             });
         }
@@ -143,5 +157,17 @@ impl Topology {
             replaced: identity(config, old[0]),
             nodes,
         })
+    }
+}
+
+impl Engine {
+    pub(in crate::engine::backup_preparation) fn check_backup_transaction_topology(
+        &self,
+        source_slot: &str,
+        paths: &[std::path::PathBuf],
+        targets: &[BackupTopologyTarget],
+    ) -> Result<()> {
+        let paths = paths.iter().map(|path| path.as_path()).collect::<Vec<_>>();
+        Topology::derive_request(&self.config, source_slot, &paths, targets).map(|_| ())
     }
 }

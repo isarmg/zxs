@@ -86,6 +86,7 @@ impl Selection {
         }
     }
     fn read(system: &DiskRoot) -> Result<Self> {
+        super::transaction::require_not_cancelling(system)?;
         let single =
             crate::history_package::preparation_path_exists(system, &system.path().join(JOB))?;
         let batch = crate::history_package::preparation_path_exists(

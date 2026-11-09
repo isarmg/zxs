@@ -8,7 +8,7 @@ use std::{
 };
 
 mod backup_preparation;
-pub use backup_preparation::BackupTransactionRequest;
+pub use backup_preparation::{BackupTransactionRequest, BackupTransactionCancellation, BackupTransactionCancelOutcome};
 pub use backup_preparation::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,

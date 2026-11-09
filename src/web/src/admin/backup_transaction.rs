@@ -14,6 +14,7 @@ enum Approval {
     Fence,
     Decide,
     Activate,
+    Cancel,
 }
 
 #[derive(Clone, Default)]
@@ -28,6 +29,7 @@ pub(super) struct Model {
     snapshot: Option<wire::Snapshot>,
     busy: bool,
     unknown: bool,
+    cancellation_requested: bool,
     checked_current: bool,
     approval: Option<Approval>,
     error: Option<api::Error>,
@@ -61,6 +63,31 @@ impl Model {
             .as_ref()
             .is_some_and(|snapshot| snapshot.completion.is_some())
     }
+    fn cancelled(&self) -> bool {
+        self.snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.progress.observation == wire::Observation::Cancelled
+                && snapshot.completion.is_none()
+        })
+    }
+    fn cancelling(&self) -> bool {
+        self.cancellation_requested
+            || self.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.progress.observation == wire::Observation::CancellationPending
+            })
+    }
+    fn can_continue(&self) -> bool {
+        !self.completed() && !self.cancelled() && !self.cancelling()
+    }
+    fn can_approve(&self, approval: Approval) -> bool {
+        match approval {
+            Approval::Cancel => !self.completed() && !self.cancelled(),
+            Approval::Prepare | Approval::Resume | Approval::Fence
+            | Approval::Decide | Approval::Activate => self.can_continue(),
+        }
+    }
+    fn can_restart(&self) -> bool {
+        !self.busy && !self.unknown && self.cancelled()
+    }
     fn can_start(&self) -> bool {
         self.editable()
             && self.checked_current
@@ -90,8 +117,17 @@ impl Model {
     }
     fn accept(&mut self, snapshot: wire::Snapshot) -> Result<(), api::Error> {
         validate(&snapshot)?;
-        if !self.accepts_request(&snapshot.request) {
+        if !self.accepts_request(&snapshot.request)
+            || self.cancelled() && snapshot.progress.observation != wire::Observation::Cancelled
+        {
             return Err(invalid());
+        }
+        if matches!(
+            snapshot.progress.observation,
+            wire::Observation::CancellationPending | wire::Observation::Cancelled
+        ) {
+            self.cancellation_requested = true;
+            self.approval = None;
         }
         self.operation_text = snapshot.request.operation_id.to_string();
         self.unknown = false;
@@ -208,7 +244,9 @@ fn validate(snapshot: &wire::Snapshot) -> Result<(), api::Error> {
             None,
             wire::Observation::Preparing
             | wire::Observation::Blocked
-            | wire::Observation::SourceChanged,
+            | wire::Observation::SourceChanged
+            | wire::Observation::CancellationPending
+            | wire::Observation::Cancelled,
         ) => Ok(()),
         _ => Err(invalid()),
     }
@@ -243,6 +281,7 @@ pub(super) fn poll(state: RwSignal<State>) {
             && s.admin_console.backup.operation().is_some()
             && !s.admin_console.backup.unknown
             && !s.admin_console.backup.completed()
+            && !s.admin_console.backup.cancelled()
     }) == Some(true)
     {
         actions::read_original(state);

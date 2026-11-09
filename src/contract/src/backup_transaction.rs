@@ -55,10 +55,20 @@ pub enum ResumeConfirmation {
     RecoverOnlyTheOriginalRetainedTask,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum CancellationConfirmation {
+    PreserveFilesAndCancelBeforeSourceStop,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     ContinuePreparation {},
+    CancelPreparation {
+        confirmation: CancellationConfirmation,
+        original_start: Option<StartRequest>,
+    },
     ResumeOriginalTask {
         confirmation: ResumeConfirmation,
     },
@@ -99,6 +109,8 @@ pub enum Observation {
     Preparing,
     Blocked,
     SourceChanged,
+    CancellationPending,
+    Cancelled,
     ServingActive,
 }
 
@@ -141,6 +153,11 @@ pub struct Current {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CommandResponse {
+    /// The original source is already stopped or selected. No cancellation
+    /// intent was written; only this same transaction may continue.
+    CancellationRejected {
+        snapshot: Snapshot,
+    },
     Observed {
         snapshot: Snapshot,
     },

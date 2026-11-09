@@ -183,6 +183,7 @@ impl Engine {
         self.require_unfenced_membership()?;
         self.check_batch_scope(&request)?;
         let system = DiskRoot::open(&self.root)?;
+        transaction::require_operation_open(&system, request.operation_id)?;
         require_no_single(&system)?;
         let roots = request
             .target_paths

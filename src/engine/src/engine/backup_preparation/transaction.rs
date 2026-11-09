@@ -5,6 +5,9 @@ use super::*;
 
 const REQUEST: &str = "backup-preparation/transaction.json";
 const MAX_REQUEST: usize = 64 * 1024;
+mod cancellation;
+pub use cancellation::{BackupTransactionCancelOutcome, BackupTransactionCancellation};
+pub(super) use cancellation::{cancellation_pending, require_not_cancelling, require_operation_open};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -124,7 +127,11 @@ impl Engine {
         principal: &str,
     ) -> Result<Option<BackupTransactionRequest>> {
         Self::require_actor(principal)?;
-        let Some(saved) = Retained::read(&DiskRoot::open(&self.root)?)? else {
+        let system = DiskRoot::open(&self.root)?;
+        if let Some(request) = cancellation::archived_request(&system, operation, principal)? {
+            return Ok(Some(request));
+        }
+        let Some(saved) = Retained::read(&system)? else {
             return Ok(None);
         };
         saved.require_actor(operation, principal)?;
@@ -142,6 +149,7 @@ impl Engine {
         request.validate()?;
         self.require_no_commit_preparation()?;
         let system = DiskRoot::open(&self.root)?;
+        require_operation_open(&system, request.preparation.operation_id)?;
         if let Some(saved) = Retained::read(&system)? {
             saved.require_actor(
                 request.preparation.operation_id,
@@ -162,6 +170,24 @@ impl Engine {
         }
         self.require_write()?;
         self.require_unfenced_membership()?;
+        self.check_batch_scope(&request.preparation)?;
+        self.check_backup_transaction_topology(
+            &request.preparation.source_slot_id,
+            &request.preparation.target_paths,
+            &request.targets,
+        )?;
+        if self.config.generation().is_some() || self.snapshot.is_none() {
+            return Err(Error::new(ErrorCode::UnsupportedOperation,
+                "Backup preparation requires its original fixed-genesis published source"));
+        }
+        if self.state.operations.contains_key(&request.preparation.operation_id)
+            || self.backup_preparation.is_some()
+            || crate::history_package::preparation_path_exists(&system, &system.path().join(JOB))?
+            || crate::history_package::preparation_path_exists(&system, &system.path().join(batch::BATCH_JOB))?
+        {
+            return Err(Error::new(ErrorCode::IdempotencyKeyReused,
+                "an existing operation or preparation must retain its original task"));
+        }
         if directories.len() != request.targets.len() {
             return Err(Error::new(
                 ErrorCode::ConfigInvalid,
@@ -169,7 +195,7 @@ impl Engine {
             ));
         }
         let mut bindings = Vec::with_capacity(directories.len());
-        let mut admitted = Vec::with_capacity(directories.len());
+        let mut roots = Vec::with_capacity(directories.len());
         for (path, directory) in request.preparation.target_paths.iter().zip(directories) {
             let root = DiskRoot::from_directory(path.clone(), directory)?;
             let physical = PhysicalBinding::of(&root)?;
@@ -180,8 +206,15 @@ impl Engine {
                 ));
             }
             bindings.push(physical);
-            admitted.push(root.directory(root.path())?);
+            if root.entries(root.path())?.next().transpose()?.is_some() {
+                return Err(Error::new(ErrorCode::ObjectCollision,
+                    "a new Backup transaction requires empty targets; existing bytes are preserved"));
+            }
+            roots.push(root);
         }
+        self.check_batch_targets(&roots)?;
+        let admitted = roots.iter().map(|root| root.directory(root.path()))
+            .collect::<Result<Vec<_>>>()?;
         let saved = Retained {
             format: "zxs-backup-user-transaction".into(),
             request,
@@ -229,6 +262,7 @@ impl Engine {
         principal: &str,
     ) -> Result<BackupPreparationStatus> {
         let system = DiskRoot::open(&self.root)?;
+        require_operation_open(&system, operation)?;
         let saved = Retained::read(&system)?
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "no original Backup transaction"))?;
         saved.require_actor(operation, principal)?;
@@ -297,6 +331,7 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupPreparationStatus> {
+        require_operation_open(&DiskRoot::open(&self.root)?, operation)?;
         let request = self
             .backup_transaction_request(operation, principal)?
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "no original Backup transaction"))?;

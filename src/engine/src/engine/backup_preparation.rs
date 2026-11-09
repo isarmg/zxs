@@ -54,7 +54,7 @@ mod target_resources;
 mod transaction;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
 pub use inspection::{BackupPreparationReport, offline_check_backup_preparation};
-pub use transaction::BackupTransactionRequest;
+pub use transaction::{BackupTransactionRequest, BackupTransactionCancellation, BackupTransactionCancelOutcome};
 
 const FORMAT: &str = "zxs-backup-history-preparation";
 const JOB: &str = "backup-preparation/job.json";
@@ -570,6 +570,7 @@ impl Engine {
         self.require_unfenced_membership()?;
         self.check_backup_preparation_scope(&request)?;
         let system = DiskRoot::open(&self.root)?;
+        transaction::require_operation_open(&system, request.operation_id)?;
         batch::require_no_batch(&system)?;
         if crate::history_package::preparation_path_exists(&system, &self.root.join(JOB))? {
             let job: Job = decode_strict(&system.read_bytes(&self.root.join(JOB), MAX_METADATA)?)?;
@@ -722,6 +723,11 @@ impl Engine {
             return Ok(());
         }
         let system = DiskRoot::open(&self.root)?;
+        if transaction::cancellation_pending(&system)? {
+            // A durable explicit cancel cannot be turned back into copy work by
+            // cold open. Only the same-operation cancellation may finish archiving.
+            return Ok(());
+        }
         if native_control::resume_fenced(self, &system)? {
             return Ok(());
         }
