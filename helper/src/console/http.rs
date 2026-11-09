@@ -58,6 +58,7 @@ pub(super) fn router(state: State) -> Router {
         .route("/", get(index))
         .route("/console.css", get(styles))
         .route("/console.js", get(script))
+        .route("/first-install.js", get(first_install_script))
         .route("/api/status", get(status))
         .route(
             "/api/initialization/storage-preview",
@@ -274,6 +275,12 @@ async fn script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
         include_str!("../../web/console.js"),
+    )
+}
+async fn first_install_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../../web/first_install.js"),
     )
 }
 async fn not_found() -> Failure {

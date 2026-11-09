@@ -6,6 +6,7 @@
   <title>ZXS 辅助工具</title>
   <link rel="stylesheet" href="/console.css">
   <script src="/console.js" defer></script>
+  <script src="/first-install.js" defer></script>
 </head>
 <body>
   <main>
@@ -15,6 +16,46 @@
       <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、在新空布局创建 ZXS 管理员、重置其密码及受支持的既有本地 Samba 密码、初始化明确选择的首批空盘目录或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
+    <section class="card" id="first-install">
+      <h2>空目录首装：同一输入逐步完成并启动</h2>
+      <p>只填一次服务身份、完整目录批次和配置。按顺序复用现有原生安装、初始化与启动接口，每步先核对准确计划，再单独确认；不复制核心事务、不自动重试或清空失败材料。</p>
+      <p class="muted">前提：已有独立非 root Unix 服务账户及主组。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空，第 7 步之前再由操作员准备全部服务账户所有的 0700 空直接子目录。本向导不创建 Unix 账户或这些存储目录，不挂载或格式化。选择 SMB 还须有独立 Unix 账户、支持的 Samba/VFS 与单独确认的 SMB 凭据。</p>
+      <form id="first-install-form">
+        <div class="fields">
+          <label>本机服务账户 <input id="first-install-user" required value="zxs" maxlength="32" autocomplete="off"></label>
+          <label>该账户主组 <input id="first-install-group" required value="zxs" maxlength="32" autocomplete="off"></label>
+          <label>服务监听地址 <input id="first-install-listen" required value="0.0.0.0:7400" maxlength="256" autocomplete="off"></label>
+          <label>首次 ZXS 管理员 <input id="first-install-administrator" required value="admin" maxlength="256" autocomplete="off"></label>
+        </div>
+        <label>全部首批空目录，一行一个 <textarea id="first-install-roots" required rows="3" spellcheck="false" placeholder="/zxs/data/disks/primary1"></textarea></label>
+        <label class="ack"><input id="first-install-smb" type="checkbox"> 本次同时配置并启动独立 Samba（缺少依赖或凭据时明确停在启动前，不改成 HTTP-only 新请求）</label>
+        <div class="fields">
+          <label>独立 SMB Unix 账户 <input id="first-install-smb-account" value="zxs-smb" maxlength="32" autocomplete="off"></label>
+          <label>受信 Samba worker UID <input id="first-install-peer-uid" type="number" value="0" min="0" max="4294967295"></label>
+        </div>
+        <label class="ack"><input id="first-install-autostart" type="checkbox"> 仅在最终正常管理准入完成后启用选定服务的开机启动</label>
+        <button type="submit">保留同一输入并开始逐步核对</button>
+      </form>
+      <p class="muted">本标签页会在每次写入前保留无密码原请求，刷新不自动重放。请导出原请求以便关闭标签页、换浏览器或 helper 地址改变后恢复。浏览器记录只用于定位原操作，不是当前磁盘或服务就绪证明；不能跳过服务器的重新准入。此处不提供清除或换输入重做。</p>
+      <label>恢复已导出的原请求 <input id="first-install-import" type="file" accept="application/json,.json"></label>
+      <button id="first-install-save" type="button" class="secondary">导出无密码原请求</button>
+      <p id="first-install-progress" role="status"></p>
+      <button id="first-install-inspect" type="button">只读核对当前原步骤</button>
+      <pre id="first-install-report"></pre>
+      <p id="first-install-directory-note" hidden>首次管理员已完成。现在须在主机上准备原输入中全部 /zxs/data/disks 直接子目录（准确服务 UID/主 GID、0700、空），再核对本步骤。已有别的目录、未知数据或缺少目录会由原生准入明确拒绝；不删除或改选来绕过。</p>
+      <div id="first-install-samba-note" hidden>
+        <p>服务配置已进入首装流程。SMB 账户登记／密码仍须在原有独立卡片明确确认，本向导不会代填、保存或重放 SMB 密码。可先带入同一配置，再回到本流程继续。</p>
+        <button id="first-install-samba-settings" type="button" class="secondary">带入同一配置并打开 SMB 凭据卡片</button>
+      </div>
+      <div id="first-install-passwords" hidden>
+        <label>手动输入首次 ZXS 管理员密码 <input id="first-install-password" type="password" autocomplete="new-password"></label>
+        <label>再次输入 <input id="first-install-repeat-password" type="password" autocomplete="new-password"></label>
+        <p class="muted">密码不进入浏览器原请求、下载文件或 URL。原步骤结果未知时须重新输入同一个密码，不会替换已创建的管理员。</p>
+      </div>
+      <label class="ack"><input id="first-install-ack" type="checkbox"> 已停止外部 ZXS/Samba、数据写者及其他主机配置／服务管理操作；只确认当前原步骤，此声明不是它们参与互斥的证明。</label>
+      <button id="first-install-commit" type="button" hidden>确认执行当前原步骤</button>
+      <p id="first-install-open" hidden>当前服务已通过正常管理就绪检查。<a id="first-install-web" target="_blank" rel="noreferrer noopener">打开 ZXS Web 管理</a>。尚未执行真实文件读写、SMB 密码登录或 VFS 网络验收。</p>
+    </section>
     <section class="card">
       <h2>准备安装根与运行互斥</h2>
       <p>只在缺少时原子创建 root 所有、0755 的 <code>/zxs</code>，已有安全目录只核验并同步，不改已有权限或内容。当前 ZXS 可执行程序启动前独占该目录的 OS 租约，直到所有运行时工作结束。准备此空根不代表账户、磁盘或系统已经初始化。</p>
