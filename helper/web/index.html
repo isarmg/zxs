@@ -177,6 +177,16 @@
       <button id="foreign-chain-identity-preview" class="secondary" type="button" hidden>核对全链新登记身份提案（不纳入）</button>
       <pre id="foreign-chain-identity-plan" hidden></pre>
       <button id="foreign-chain-identity-save" class="secondary" type="button" hidden>保存新身份提案与摘要</button>
+      <h3>正式接纳前：完整对象命名与原 State 绑定</h3>
+      <p>每个低级盘从自身完整原生 State 和已验证三范围库独立推导同一对象 ID 映射，绑定现池完整 State 与所有新登记根。历史操作、作者和计划只进入外来审计命名空间，不变成现池账户、权限或幂等回执。此片只准备映射材料，尚不改写对象记录、不生成联合 State，也不正式纳入。</p>
+      <button id="foreign-chain-objects-preview" class="secondary" type="button" hidden>预览 / 查询原批完整对象映射</button>
+      <pre id="foreign-chain-objects-plan" hidden></pre>
+      <button id="foreign-chain-objects-save" class="secondary" type="button" hidden>保存对象映射摘要与恢复选择器</button>
+      <form id="foreign-chain-objects-form" hidden>
+        <label class="ack"><input id="foreign-chain-objects-confirm" type="checkbox" required> 确认完整原 State、现池基线和全部低级根；仅保存不启用的映射材料。现池 State 改变后不重新绑定旧操作。</label>
+        <button type="submit">确认整批对象映射准备 / 原请求续作</button>
+      </form>
+      <pre id="foreign-chain-objects-result" hidden></pre>
       <p class="muted">新身份提案必须建立在全部原三范围库独立验证完成之上，只绑定现池、来源身份、所有真实根及新 ID；尚不映射联合 State、不安装目标身份数据库、不建立共同发布或启动服务。</p>
       <p class="muted">原计划在写入前持久保存，真实胶囊只读查询不补造材料。各目标可能分步准备，但只在全部原目标完成且同步后记录整批材料完成；任何中断都不授予成员身份。缺件、损坏、未知内容或身份改变保留拒绝。每个原始一级来源单独保留历史映射，不以名称合并历史。当前仅支持所有既有成员仍启用的 production 池，来源须来自其他池且保持原地不变。</p>
     </section>

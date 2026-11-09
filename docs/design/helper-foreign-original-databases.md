@@ -88,3 +88,7 @@ Web 首发前保存并读回原 operation 选择器，可下载完整数据库�
 - 通过：原架构策略、来源 `verify --metadata`、Foundation 消费者索引与依赖文档检查；四个受影响第一方包的格式检查在最后错误转换修改前通过，修改后 `git diff --check` 通过；独立 Web 的实际 JS handler 在 DOM/transport doubles 下覆盖整批门禁、双击单请求、旧提案失效、写前持久选择器失败、中断保留与刷新不自动重放。没有真实浏览器验收。
 - 未通过：生产组合 check 初次发现旧候选 `canonical_json` 的 contract→engine 错误类型转换缺失，已补 `Ok(...?)`。后一次在 helper 报缺新 Operation 枚举；源码的三个新枚举及 Engine 重导出均存在，但共享 target 的已存 contract 元数据都没有新枚举，本次未重建 contract。“共享旧缓存导致”仅为未经复验的原因推测，并非已确认根因或已修复结论。最后一次生产 check 未通过；本次对齐 `b7f6c95a` 的组合未编译、未测试、未运行 CI，既有轻量结果也不覆盖本组合。
 - 停止/未执行：收到用户“本地也不再编译，直接提交”后，没有继续编译、清缓存重试或测试构建。新增五项 native 集成、一项 native unit、八项离线模型、两项请求门禁测试只有源码；Rust 测试、Clippy、真实嵌入进程链、磁盘/主机操作及本候选 GitHub CI 均未执行。没有沿用旧 CI 结论。
+
+## 后续对象命名材料
+
+后继的[完整对象命名准备](helper-foreign-object-identities.md) 在上述全部原库验证后绑定现池完整 State，并将确定命名表单独持久化到每个真实低级根。该命名表仍不改写对象引用、不生成联合 State 或活动目标数据库，不改变本页关于正式接纳未完成的结论。

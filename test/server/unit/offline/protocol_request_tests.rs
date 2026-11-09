@@ -28,6 +28,8 @@ impl Dispatcher {
             "/api/disks/foreign-chain-original" => Operation::ForeignChainOriginal,
             "/api/disks/foreign-chain-prepare" => Operation::ForeignChainPrepare,
             "/api/disks/foreign-chain-identity-preview" => Operation::ForeignChainIdentityPreview,
+            "/api/disks/foreign-chain-objects-preview" => Operation::ForeignChainObjectsPreview,
+            "/api/disks/foreign-chain-objects-prepare" => Operation::ForeignChainObjectsPrepare,
             "/api/disks/foreign-chain-databases-preview" => Operation::ForeignChainDatabasesPreview,
             "/api/disks/foreign-chain-databases-prepare" => Operation::ForeignChainDatabasesPrepare,
             "/api/disks/add-preview" => Operation::DiskAdditionPreview,
@@ -520,5 +522,53 @@ async fn foreign_identity_preview_requires_explicit_stop_before_any_system_acces
             .as_str()
             .unwrap()
             .contains("stop ZXS")
+    );
+}
+
+#[tokio::test]
+async fn foreign_object_identity_preview_requires_explicit_stop_before_system_access() {
+    let response = Dispatcher
+        .oneshot(post(
+            "/api/disks/foreign-chain-objects-preview",
+            json!({
+                "service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
+                "request_digest":"a".repeat(64),"external_writers_stopped":false
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        json_body(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stop ZXS")
+    );
+}
+#[tokio::test]
+async fn foreign_object_identity_prepare_rejects_an_activation_confirmation_before_system_access() {
+    let operation = "op_11111111111111111111111111111111";
+    let hash = "a".repeat(64);
+    let original = json!({"service_user":"zxs","operation_id":operation,
+        "request_digest":hash,"external_writers_stopped":false});
+    let expected = json!({
+        "baseline":{"pool_id":"pool_current","sequence":"1","state_hash":hash,
+            "configuration_hash":hash,"proposed_configuration_hash":hash,"operation_id":operation,
+            "request_digest":hash,"chain_digest":hash,"registration_proposal_digest":hash},
+        "original":{"pool_id":"pool_foreign","configuration_hash":hash,"registrations":[],
+            "sequence":"1","snapshot_hash":hash,"state_hash":hash,"prefix_hash":hash,
+            "publications":1,"operations":1,"principals":1,"events":1},
+        "mapping_digest":hash,"objects_by_domain":{},"objects":0,"archived_operations":1,
+        "archived_principals":1,"archived_plans":0,"archived_events":1,"mapping_bytes":"100"
+    });
+    let response = Dispatcher.oneshot(post("/api/disks/foreign-chain-objects-prepare", json!({
+        "input":original,"expected":expected,"mapping_digest":hash,"confirmation":"admit-foreign-now"
+    }))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        json_body(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("before system access")
     );
 }

@@ -96,7 +96,9 @@ mod file_stamp;
 mod foreign_import;
 pub use foreign_import::{
     ConfirmedForeignImportIntent, ForeignCheckpoint, ForeignDatabaseStatus, ForeignEvidenceDigest,
-    ForeignHistory, ForeignImportIntentInfo, ForeignImportIntentRequest, ForeignImportIntentSource,
+    ForeignHistory, ForeignIdentityBaseline, ForeignIdentityClosureReport,
+    ForeignIdentityClosureStatus, ForeignIdentityTarget, ForeignIdentityTargetRequest,
+    ForeignImportIntentInfo, ForeignImportIntentRequest, ForeignImportIntentSource,
     ForeignImportIntentTarget, ForeignImportLimits, ForeignImportMapping, ForeignImportPreview,
     ForeignLocalBinding, ForeignMappedHistory, ForeignMigrationPlan, ForeignMigrationReceipt,
     ForeignMigrationStatus, ForeignMigrationTransaction, ForeignOriginalDatabasesReport,

@@ -143,6 +143,22 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             original(&target, &configuration, &plan)?;
             Ok(Output::Identity { proposal })
         }
+        Action::Objects {
+            plan,
+            databases,
+            prepare,
+            completed,
+        } => {
+            let report = object_identities(
+                &target,
+                &configuration,
+                &plan,
+                &databases,
+                prepare.as_ref(),
+                completed,
+            )?;
+            Ok(Output::Objects { report })
+        }
         Action::Databases {
             plan,
             prepare,
@@ -320,6 +336,9 @@ fn contents(root: &OpenAt2Root, operation: OperationId) -> Result<()> {
     let reservation = format!("{stage}.json");
     let database_reservation = format!(".zxs-foreign-databases-{operation}.json");
     let database_completion = format!(".zxs-foreign-databases-{operation}-complete.json");
+    let identity_material = format!(".zxs-foreign-identities-{operation}.json");
+    let identity_intent = format!(".zxs-foreign-identities-{operation}-intent.json");
+    let identity_completion = format!(".zxs-foreign-identities-{operation}-complete.json");
     for (index, name) in root.entries()?.enumerate() {
         if index >= 64 {
             return Err("lower-root retained material exceeds its entry budget".into());
@@ -335,6 +354,9 @@ fn contents(root: &OpenAt2Root, operation: OperationId) -> Result<()> {
             || text == "foreign-chain-databases"
             || text == database_reservation
             || text == database_completion
+            || text == identity_material
+            || text == identity_intent
+            || text == identity_completion
         {
             continue;
         }
@@ -499,4 +521,122 @@ fn prepare(
         transaction.publish(None)?;
     }
     Ok(())
+}
+
+fn object_identities(
+    target: &ManagedPool,
+    configuration: &Config,
+    plan: &Plan,
+    expected_databases: &databases::Expected,
+    prepare: Option<&storage_engine::ForeignIdentityClosureReport>,
+    completed: bool,
+) -> Result<objects::Observation> {
+    original(target, configuration, plan)?;
+    exact_source(target, plan)?;
+    let (_, material) = status(target, plan)?;
+    if !material.all_published() {
+        return Err("identity closure requires every original lower capsule".into());
+    }
+    let databases = original_databases(target, plan)?;
+    databases::match_expected(plan, &databases, expected_databases)?;
+    let proposal = identity::Proposal::capture(configuration, plan, &databases)?;
+    let actor = target.auth().sole_identity()?;
+    let naming = target.backend().capture_foreign_identity_target(
+        &actor,
+        storage_engine::ForeignIdentityTargetRequest {
+            proposed_configuration: proposal.configuration(configuration)?,
+            operation_id: plan.binding.operation_id,
+            request_digest: digest(plan)?.parse()?,
+            chain_digest: digest(&plan.binding)?.parse()?,
+            registration_proposal_digest: digest(&proposal)?.parse()?,
+        },
+    )?;
+    let before = observe_object_identities(target, plan, &naming)?;
+    if prepare.is_some_and(|expected| expected != &before.expected) {
+        return Err("reviewed object identity plan changed; no target material was written".into());
+    }
+    if completed && !before.completed(plan) {
+        return Err(
+            "completed object identity batch lost a target; no missing map was recreated".into(),
+        );
+    }
+    original(target, configuration, plan)?;
+    target
+        .backend()
+        .recheck_foreign_identity_target(&actor, &naming)?;
+    if prepare.is_none() {
+        return Ok(before);
+    }
+    for (item, digest) in plan.binding.lower.iter().zip(&plan.capsule_digests) {
+        let owner = object_owner(target, plan, item, digest)?;
+        // The exact administrator and complete current State are checked at
+        // each inert write boundary, not inferred from a saved preparation.
+        target
+            .backend()
+            .recheck_foreign_identity_target(&actor, &naming)?;
+        if owner.prepare_identity_closure(&naming)? != before.expected {
+            return Err("target independently derived a different object identity closure".into());
+        }
+    }
+    let after = observe_object_identities(target, plan, &naming)?;
+    if after.expected != before.expected || !after.completed(plan) {
+        return Err("entire object identity batch did not complete independently".into());
+    }
+    original(target, configuration, plan)?;
+    exact_source(target, plan)?;
+    target
+        .backend()
+        .recheck_foreign_identity_target(&actor, &naming)?;
+    Ok(after)
+}
+fn object_owner(
+    target: &ManagedPool,
+    plan: &Plan,
+    item: &SelectedLower,
+    digest: &str,
+) -> Result<ForeignMigrationTransaction> {
+    let root = exact_lower(target, item)?;
+    contents(&root, plan.binding.operation_id)?;
+    Ok(ForeignMigrationTransaction::open_published_in(
+        root.into_directory(),
+        &Path::new(&item.directory.root_path).join(CAPSULE),
+        &plan.binding.operation_id,
+        &digest.parse()?,
+    )?)
+}
+fn observe_object_identities(
+    target: &ManagedPool,
+    plan: &Plan,
+    naming: &storage_engine::ForeignIdentityTarget,
+) -> Result<objects::Observation> {
+    use storage_engine::ForeignIdentityClosureStatus;
+    let mut expected = None;
+    let mut statuses = Vec::with_capacity(plan.binding.lower.len());
+    for (item, digest) in plan.binding.lower.iter().zip(&plan.capsule_digests) {
+        let (report, status) =
+            object_owner(target, plan, item, digest)?.preview_identity_closure(naming)?;
+        if expected.as_ref().is_some_and(|saved| saved != &report) {
+            return Err(
+                "required lower targets disagree on their complete object identity closure".into(),
+            );
+        }
+        let progress = match status {
+            ForeignIdentityClosureStatus::NotStarted => objects::Progress::NotStarted,
+            ForeignIdentityClosureStatus::Preparing => objects::Progress::Preparing,
+            ForeignIdentityClosureStatus::Verified { report: verified } => {
+                if verified != report {
+                    return Err(
+                        "local identity completion differs from derived native State".into(),
+                    );
+                }
+                objects::Progress::Verified
+            }
+        };
+        expected = Some(report);
+        statuses.push(progress);
+    }
+    Ok(objects::Observation {
+        expected: expected.ok_or("object identity closure has no real lower target")?,
+        statuses,
+    })
 }

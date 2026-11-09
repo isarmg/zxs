@@ -20,6 +20,8 @@ let diskAdditionPreview = null;
 let foreignChainPreview = null;
 let foreignChainDatabasesPreview = null;
 let foreignChainIdentityPreview = null;
+let foreignChainObjectsPreview = null;
+let foreignObjectsEpoch = 0;
 let diskRemovalPreview = null;
 let diskReadmissionPreview = null;
 let chainTargetPlan = null;
@@ -27,7 +29,7 @@ let sambaPasswordPreview = null;
 let sambaPasswordOriginal = null;
 const maxSelectionBytes = 60 * 1024;
 function error(message) { byId("error").textContent = message; byId("error").hidden = !message; }
-function setBusy(value) { busy = value; for (const id of ["foreign-chain-identity-preview","foreign-chain-identity-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("foreign-chain-databases-form").elements) input.disabled = value || stopping || !csrf; for (const id of ["foreign-chain-databases-preview","foreign-chain-databases-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["configuration-recovery-form", "configuration-recovery-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; byId("configuration-original-save").disabled = value || stopping || !csrf; for (const id of ["legal-materials-download", "legal-materials-manifest"]) byId(id).disabled = value || stopping || !csrf || !legalMaterials; for (const form of ["foreign-chain-form","foreign-chain-prepare-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; byId("foreign-chain-save").disabled = value || stopping || !csrf; for (const input of byId("program-repair-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("runtime-form").elements) input.disabled = value || stopping || !csrf; byId("runtime-prepare").disabled = value || stopping || !csrf; byId("runtime-external-stopped").disabled = value || stopping || !csrf; for (const input of byId("chain-generation-select-form").elements) input.disabled = value || stopping || !csrf; byId("chain-generation-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) { byId("chain-generation-select-form").hidden = true; byId("chain-generation-read").hidden = true; } for (const input of byId("chain-generation-log-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-generation-log-form").hidden = true; for (const input of byId("chain-io-decision-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-io-decision-form").hidden = true; for (const input of byId("chain-epoch-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-epoch-form").hidden = true; byId("chain-current-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-current-read").hidden = true; for (const input of byId("chain-publish-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("chain-first-form").elements) input.disabled = value || stopping || !csrf; byId("chain-target-status").disabled = value || stopping || !csrf; for (const input of byId("chain-target-form").elements) input.disabled = value || stopping || !csrf; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
+function setBusy(value) { busy = value; for (const id of ["foreign-chain-objects-preview","foreign-chain-objects-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("foreign-chain-objects-form").elements) input.disabled = value || stopping || !csrf; for (const id of ["foreign-chain-identity-preview","foreign-chain-identity-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("foreign-chain-databases-form").elements) input.disabled = value || stopping || !csrf; for (const id of ["foreign-chain-databases-preview","foreign-chain-databases-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["configuration-recovery-form", "configuration-recovery-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; byId("configuration-original-save").disabled = value || stopping || !csrf; for (const id of ["legal-materials-download", "legal-materials-manifest"]) byId(id).disabled = value || stopping || !csrf || !legalMaterials; for (const form of ["foreign-chain-form","foreign-chain-prepare-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; byId("foreign-chain-save").disabled = value || stopping || !csrf; for (const input of byId("program-repair-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("runtime-form").elements) input.disabled = value || stopping || !csrf; byId("runtime-prepare").disabled = value || stopping || !csrf; byId("runtime-external-stopped").disabled = value || stopping || !csrf; for (const input of byId("chain-generation-select-form").elements) input.disabled = value || stopping || !csrf; byId("chain-generation-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) { byId("chain-generation-select-form").hidden = true; byId("chain-generation-read").hidden = true; } for (const input of byId("chain-generation-log-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-generation-log-form").hidden = true; for (const input of byId("chain-io-decision-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-io-decision-form").hidden = true; for (const input of byId("chain-epoch-form").elements) input.disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-epoch-form").hidden = true; byId("chain-current-read").disabled = value || stopping || !csrf; if (!chainTargetPlan) byId("chain-current-read").hidden = true; for (const input of byId("chain-publish-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("chain-first-form").elements) input.disabled = value || stopping || !csrf; byId("chain-target-status").disabled = value || stopping || !csrf; for (const input of byId("chain-target-form").elements) input.disabled = value || stopping || !csrf; byId("terminal-chain-readmit").disabled = value || stopping || !csrf; byId("terminal-chain-export").disabled = value || stopping || !csrf; for (const input of byId("disk-readmit-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["disk-readmit-preview","disk-readmit-original","disk-readmit-digest","disk-readmit-save"]) byId(id).disabled = value || stopping || !csrf; for (const input of byId("terminal-retire-commit").elements) input.disabled = value || stopping || !csrf; for (const id of ["terminal-retire-preview","terminal-retire-original","terminal-retire-digest","terminal-retire-save"]) byId(id).disabled = value || stopping || !csrf; for (const form of ["disk-remove-form","disk-remove-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["disk-add-form","disk-add-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["samba-reset-form","samba-password-form","samba-reset-status-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const form of ["first-storage-form", "first-storage-commit-form"]) for (const input of byId(form).elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("first-administrator-password-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-reset-form").elements) input.disabled = value || stopping || !csrf; for (const input of byId("administrator-password-form").elements) input.disabled = value || stopping || !csrf; byId("check").disabled = value || stopping || !csrf; byId("selection").disabled = value || stopping; byId("selection-file").disabled = value || stopping; byId("install-preview").disabled = value || stopping || !csrf; byId("install-commit").disabled = value || stopping || !csrf; for (const input of byId("deployment-form").elements) input.disabled = value || stopping || !csrf; byId("deployment-prepare").disabled = value || stopping || !csrf; byId("configuration-install").disabled = value || stopping || !csrf; byId("external-administration-stopped").disabled = value || stopping; byId("host-preview").disabled = value || stopping || !csrf; byId("host-prepare").disabled = value || stopping || !csrf; for (const input of byId("layout-form").elements) input.disabled = value || stopping || !csrf; byId("layout-prepare").disabled = value || stopping || !csrf; }
 function resetResults() { byId("results").hidden = true; byId("copies").replaceChildren(); byId("report").textContent = ""; error(""); }
 async function status() {
   const response = await fetch("/api/status", {cache:"no-store", credentials:"omit"});
@@ -824,11 +826,13 @@ byId("foreign-chain-databases-form").addEventListener("submit", async event => {
   }
 });
 function resetForeignIdentity() {
+  resetForeignObjects();
   foreignChainIdentityPreview = null;
   for (const id of ["foreign-chain-identity-preview","foreign-chain-identity-plan","foreign-chain-identity-save"]) byId(id).hidden = true;
 }
 byId("foreign-chain-identity-preview").addEventListener("click", async () => {
   if (busy || stopping || !foreignChainPreview) return;
+  resetForeignObjects();
   foreignChainIdentityPreview = null;
   for (const id of ["foreign-chain-identity-plan","foreign-chain-identity-save"]) byId(id).hidden = true;
   const input = {...foreignChainPreview.input,external_writers_stopped:byId("foreign-chain-writers").checked};
@@ -839,11 +843,64 @@ byId("foreign-chain-identity-preview").addEventListener("click", async () => {
     byId("foreign-chain-identity-plan").textContent = JSON.stringify(preview,null,2);
     byId("foreign-chain-identity-plan").hidden = false;
     byId("foreign-chain-identity-save").hidden = false;
+    byId("foreign-chain-objects-preview").hidden = false;
   } catch (e) { error(e.message); } finally { setBusy(false); }
 });
 byId("foreign-chain-identity-save").addEventListener("click", () => {
   if (busy || stopping || !foreignChainIdentityPreview || !foreignChainPreview) return;
   save(new Blob([JSON.stringify(foreignChainIdentityPreview,null,2)],{type:"application/json"}),`zxs-foreign-identity-${foreignChainPreview.input.operation_id}.json`);
+});
+function resetForeignObjects() {
+  foreignObjectsEpoch += 1;
+  foreignChainObjectsPreview = null;
+  for (const id of ["foreign-chain-objects-preview","foreign-chain-objects-plan","foreign-chain-objects-save","foreign-chain-objects-form","foreign-chain-objects-result"]) byId(id).hidden = true;
+  byId("foreign-chain-objects-confirm").checked = false;
+}
+byId("foreign-chain-objects-preview").addEventListener("click", async () => {
+  if (busy || stopping || !foreignChainPreview || !foreignChainIdentityPreview) return;
+  const input = {...foreignChainPreview.input,external_writers_stopped:byId("foreign-chain-writers").checked};
+  resetForeignObjects();
+  byId("foreign-chain-objects-preview").hidden = false;
+  const epoch = foreignObjectsEpoch;
+  setBusy(true); error("");
+  try {
+    const report = await (await post("/api/disks/foreign-chain-objects-preview",input)).json();
+    if (epoch !== foreignObjectsEpoch) return;
+    foreignChainObjectsPreview = {input,expected:report.expected,mapping_digest:report.mapping_digest};
+    byId("foreign-chain-objects-plan").textContent = JSON.stringify(report,null,2);
+    byId("foreign-chain-objects-plan").hidden = false;
+    byId("foreign-chain-objects-save").hidden = false;
+    byId("foreign-chain-objects-form").hidden = report.object_identity_material_prepared;
+  } catch (e) { error(e.message); } finally { setBusy(false); }
+});
+byId("foreign-chain-objects-save").addEventListener("click", () => {
+  if (busy || stopping || !foreignChainObjectsPreview) return;
+  save(new Blob([JSON.stringify(foreignChainObjectsPreview,null,2)],{type:"application/json"}),`zxs-foreign-objects-${foreignChainObjectsPreview.input.operation_id}.json`);
+});
+byId("foreign-chain-objects-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  if (busy || stopping || !foreignChainObjectsPreview || !byId("foreign-chain-objects-confirm").checked) return;
+  const retained = foreignChainObjectsPreview;
+  if (!confirm(`只准备 ${retained.input.operation_id} 的完整对象映射？不导入权限、不生成联合 State、不正式纳入。`)) return;
+  const selector = JSON.stringify(retained.input);
+  try {
+    localStorage.setItem(foreignChainSelectorKey,selector);
+    if (localStorage.getItem(foreignChainSelectorKey) !== selector) throw new Error("选择器读回不符");
+  } catch (e) { error(`尚未发送对象映射准备：${e.message}`); return; }
+  setBusy(true); error("");
+  try {
+    const report = await (await post("/api/disks/foreign-chain-objects-prepare",{...retained,confirmation:"prepare-complete-chain-object-identities-without-admission"})).json();
+    byId("foreign-chain-objects-result").textContent = JSON.stringify(report,null,2);
+    byId("foreign-chain-objects-result").hidden = false;
+  } catch (e) {
+    error(`${e.message} 原操作 ${retained.input.operation_id}，对象摘要 ${retained.mapping_digest}。保留全部材料并查询原请求；连接失败不表示未写入，现池改变也不重新绑定。`);
+  } finally {
+    foreignChainObjectsPreview = null;
+    byId("foreign-chain-objects-form").hidden = true;
+    byId("foreign-chain-objects-save").hidden = true;
+    byId("foreign-chain-objects-confirm").checked = false;
+    setBusy(false);
+  }
 });
 // Browser retention is only a selector. The root-owned immutable plan and
 // native parent reservations remain authoritative; no stored plan is executed.

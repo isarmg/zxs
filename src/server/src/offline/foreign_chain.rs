@@ -2,6 +2,7 @@
 //! rewrite the source, install an active Config or grant membership authority.
 pub(crate) mod databases;
 pub(crate) mod identity;
+pub(crate) mod objects;
 mod worker;
 use crate::offline::{
     Result,
@@ -260,6 +261,12 @@ enum Action {
         plan: Plan,
         expected: databases::Expected,
     },
+    Objects {
+        plan: Plan,
+        databases: databases::Expected,
+        prepare: Option<storage_engine::ForeignIdentityClosureReport>,
+        completed: bool,
+    },
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -268,6 +275,7 @@ enum Output {
     Report { report: Report },
     Databases { report: databases::Observation },
     Identity { proposal: identity::Proposal },
+    Objects { report: objects::Observation },
 }
 impl crate::offline::service_worker::Request for WorkerRequest {
     type Output = Output;

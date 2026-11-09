@@ -224,3 +224,186 @@ fn completed_original_database_root_loss_is_not_mistaken_for_a_partial_preparati
             .is_file()
     );
 }
+
+fn identity_targets(
+    f: &Fixture,
+    operation: OperationId,
+    lowers: &[PathBuf],
+) -> (Engine, ForeignIdentityTarget) {
+    let config = Config::development([f.temp.path().join("identity-current")]).unwrap();
+    let current = Engine::initialize(&f.temp.path().join("identity-system"), config).unwrap();
+    let mut proposed = current.config().clone();
+    for (index, root) in lowers
+        .iter()
+        .cloned()
+        .chain(std::iter::once(f.engine.config().disks[3].root.clone()))
+        .enumerate()
+    {
+        proposed.disks.push(DiskConfig {
+            disk_id: format!("disk_{:032x}", 500 + index),
+            slot_id: format!("NEW{}", index + 1),
+            root,
+            level: index as u32 + 1,
+            upstream_slot_id: index.checked_sub(1).map(|i| format!("NEW{}", i + 1)),
+            metadata_member: true,
+            binding_generation: 1,
+            capacity_bytes: None,
+        });
+    }
+    let target = current
+        .capture_foreign_identity_target(ForeignIdentityTargetRequest {
+            proposed_configuration: proposed,
+            operation_id: operation,
+            request_digest: "b".repeat(64).parse().unwrap(),
+            chain_digest: "a".repeat(64).parse().unwrap(),
+            registration_proposal_digest: "c".repeat(64).parse().unwrap(),
+        })
+        .unwrap();
+    (current, target)
+}
+fn identity_capsules(
+    f: &Fixture,
+    operation: OperationId,
+) -> (Vec<PathBuf>, Vec<ForeignEvidenceDigest>) {
+    let source = inspect(&f.engine.config().disks[3].root);
+    let mut roots = Vec::new();
+    let mut digests = Vec::new();
+    for level in [1, 2] {
+        let root = chain_parent(f, &format!("identities-{level}"));
+        let plan = chain_plan(&source, operation, level);
+        digests.push(*plan.digest());
+        let mut owner = plan
+            .begin_in(File::open(&root).unwrap(), &root.join("material"))
+            .unwrap();
+        owner.copy_source(&source).unwrap();
+        owner.seal().unwrap();
+        owner.publish(None).unwrap();
+        owner.prepare_original_databases().unwrap();
+        roots.push(root);
+    }
+    (roots, digests)
+}
+#[test]
+fn object_identity_mapping_is_independent_equal_and_keeps_foreign_receipts_out_of_live_state() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (current, target) = identity_targets(&f, operation, &roots);
+    let before = json_codec::to_vec(current.state()).unwrap();
+    let mut reports = Vec::new();
+    for (root, digest) in roots.iter().zip(&digests) {
+        let owner = published_owner(root, operation, digest);
+        let count = fs::read_dir(root).unwrap().count();
+        let (report, state) = owner.preview_identity_closure(&target).unwrap();
+        assert_eq!(state, ForeignIdentityClosureStatus::NotStarted);
+        assert_eq!(fs::read_dir(root).unwrap().count(), count);
+        assert!(report.objects > 0);
+        assert_eq!(
+            report.archived_operations,
+            f.engine.state().operations.len()
+        );
+        assert_eq!(report.archived_events, f.engine.state().events.len());
+        assert_eq!(owner.prepare_identity_closure(&target).unwrap(), report);
+        assert_eq!(
+            owner.preview_identity_closure(&target).unwrap().1,
+            ForeignIdentityClosureStatus::Verified {
+                report: report.clone()
+            }
+        );
+        let map: json_codec::Value = json_codec::from_slice(
+            &fs::read(root.join(format!(".zxs-foreign-identities-{operation}.json"))).unwrap(),
+        )
+        .unwrap();
+        for mapped in map["archived_operations"].as_object().unwrap().values() {
+            assert!(mapped.as_str().unwrap().starts_with("foreignop_"));
+            assert!(mapped.as_str().unwrap().parse::<OperationId>().is_err());
+        }
+        assert!(map.get("control_auth").is_none());
+        reports.push(report);
+    }
+    assert_eq!(reports[0], reports[1]);
+    assert_eq!(json_codec::to_vec(current.state()).unwrap(), before);
+    current.recheck_foreign_identity_target(&target).unwrap();
+}
+#[test]
+fn finished_identity_mapping_loss_cannot_recreate_from_a_healthy_peer() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    for (root, digest) in roots.iter().zip(&digests) {
+        published_owner(root, operation, digest)
+            .prepare_identity_closure(&target)
+            .unwrap();
+    }
+    let path = roots[0].join(format!(".zxs-foreign-identities-{operation}.json"));
+    fs::remove_file(&path).unwrap();
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    assert!(owner.preview_identity_closure(&target).is_err());
+    assert!(owner.prepare_identity_closure(&target).is_err());
+    assert!(!path.exists());
+    assert!(
+        published_owner(&roots[1], operation, &digests[1])
+            .preview_identity_closure(&target)
+            .is_ok()
+    );
+}
+#[test]
+fn identity_preparation_binds_current_state_not_just_unchanged_configuration() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, _) = identity_capsules(&f, operation);
+    let (mut current, target) = identity_targets(&f, operation, &roots);
+    save(&mut current, "changed-current-state", "P01", 1);
+    assert!(current.recheck_foreign_identity_target(&target).is_err());
+}
+#[test]
+fn identity_closure_refuses_wrong_chain_or_missing_original_database() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    fs::remove_file(roots[0].join("foreign-chain-databases/databases/system/index.sqlite"))
+        .unwrap();
+    assert!(owner.preview_identity_closure(&target).is_err());
+    assert!(
+        !roots[0]
+            .join(format!(".zxs-foreign-identities-{operation}.json"))
+            .exists()
+    );
+}
+
+#[test]
+fn interrupted_identity_final_marker_only_finishes_after_exact_material_readback() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    let report = owner.prepare_identity_closure(&target).unwrap();
+    let mapping = roots[0].join(format!(".zxs-foreign-identities-{operation}.json"));
+    let before = fs::read(&mapping).unwrap();
+    fs::remove_file(roots[0].join(format!(".zxs-foreign-identities-{operation}-complete.json")))
+        .unwrap();
+    assert_eq!(
+        owner.preview_identity_closure(&target).unwrap().1,
+        ForeignIdentityClosureStatus::Preparing
+    );
+    assert_eq!(owner.prepare_identity_closure(&target).unwrap(), report);
+    assert_eq!(fs::read(mapping).unwrap(), before);
+}
+#[test]
+fn changed_finished_identity_bytes_are_preserved_and_never_replaced() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    owner.prepare_identity_closure(&target).unwrap();
+    let mapping = roots[0].join(format!(".zxs-foreign-identities-{operation}.json"));
+    fs::write(&mapping, b"changed original mapping").unwrap();
+    assert!(owner.preview_identity_closure(&target).is_err());
+    assert!(owner.prepare_identity_closure(&target).is_err());
+    assert_eq!(fs::read(&mapping).unwrap(), b"changed original mapping");
+}

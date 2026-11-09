@@ -20,6 +20,7 @@ mod disk_monitor;
 mod error_registry;
 mod file_deletion;
 mod file_manager;
+mod foreign_identity;
 mod foreign_intent;
 pub(crate) mod foreign_plan;
 mod graph;
