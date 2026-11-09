@@ -504,5 +504,7 @@ fn public_smb_bridge_exclusive_conflicts_preserve_content_and_connection() {
     assert_eq!(exported(&engine, root.path(), &before.version_id), b"keep");
 }
 
+#[path = "phase1_smb_rpc/http_soft_deletion.rs"]
+mod http_soft_deletion;
 #[path = "phase1_smb_rpc/soft_deletion.rs"]
 mod soft_deletion;

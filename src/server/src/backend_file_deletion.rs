@@ -1,7 +1,16 @@
 //! Stable file identity and exact deletion identity cross the adapter boundary.
 use crate::ApiError;
 use data_serialization::Serialize;
-use storage_contract::history_window::HistoryFileId;
+use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
+
+/// Ordinary HTTP deletion is bound to one stable file and its current location,
+/// not to a user-selected subset of directory or file branches.
+pub struct DeleteFile {
+    pub repository_id: HistoryRepositoryId,
+    pub file_id: HistoryFileId,
+    pub path: name_policy::LookupPath,
+    pub operation_id: storage_contract::OperationId,
+}
 
 pub struct DeleteCurrentFile {
     pub branch_id: String,

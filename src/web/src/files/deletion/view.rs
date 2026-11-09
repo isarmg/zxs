@@ -5,6 +5,21 @@ const FRONTIER_PAGE: usize = 100;
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <section class="zxs-stack" data-file-deletions="">
+            {move ||state.with(|s|s.files.deletion.review.clone()).map(|review| {
+                let generation = review.generation;
+                view! {
+                    <section class="zxs-surface zxs-stack" data-zxs-file-delete-review="" aria-label=t("确认软删除", "Confirm soft deletion")>
+                        <h2>{t("软删除文件", "Soft-delete file")}</h2>
+                        <p><code>{review.display_path}</code></p>
+                        <p>{t("此操作隐藏同一稳定文件的全部路径和分支，并冻结其编辑；正文与历史保留，不会永久删除节点。可在已删除文件中移除准确的删除节点来恢复。当前仅支持未初始化目录仓库的磁盘工作区文件。", "This hides all paths and branches of the same stable file and freezes editing. Content and history are retained; no nodes are permanently removed. Restore by removing the exact deletion node in Deleted files. Only disk-workspace files outside initialized folder repositories are currently supported.")}</p>
+                        <div class="zxs-row">
+                            <button class="zxs-button" data-zxs-confirm-file-delete="" disabled=move ||!state.with(|s|request::review_allowed(s,generation)) on:click=move |_|request::submit_delete(state,generation)>{t("确认软删除整个文件", "Confirm whole-file soft deletion")}</button>
+                            <button class="zxs-button" on:click=move |_|state.update(|s|s.files.deletion.cancel_review())>{t("关闭", "Close")}</button>
+                        </div>
+                        <p>{t("关闭或切换目录不会取消已发送的操作。结果不明时只查询原操作，不重复提交。", "Closing or navigating does not cancel a submitted operation. An unknown outcome is checked using the original operation, without resubmitting.")}</p>
+                    </section>
+                }
+            })}
             <div class="zxs-row"><button class="zxs-button" disabled=move ||state.with(|s|!s.session_active()||s.files.deletion.loading)
                 on:click=move |_|load(state,false)>{t("已删除文件", "Deleted files")}</button></div>
             <Show when=move ||state.with(|s|s.files.deletion.open)>
@@ -44,6 +59,8 @@ fn frontier(
     node: Arc<storage_contract::FileDeletionNode>,
 ) -> impl IntoView {
     let display = node.clone();
+    let undo_file = node.file_id.clone();
+    let undo_node = node.node_id.clone();
     let pages = node.branch_heads.len().div_ceil(FRONTIER_PAGE);
     view! {
         <section class="zxs-stack" data-deletion-node=node.node_id.clone()>
@@ -62,7 +79,7 @@ fn frontier(
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.deletion.frontier_page==0) on:click=move |_|state.update(|s|{if s.files.deletion.frontier_page>0{s.files.deletion.frontier_page-=1;}})>{t("上一页分支", "Previous branches")}</button>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.deletion.frontier_page+1>=pages) on:click=move |_|state.update(|s|{if s.files.deletion.frontier_page+1<pages{s.files.deletion.frontier_page+=1;}})>{t("下一页分支", "Next branches")}</button>
             </div></Show>
-            <button class="zxs-button" data-undo-file-deletion="" disabled=move ||!state.with(undo_allowed) on:click=move |_|undo(state)>{t("删除此节点，撤销文件删除", "Remove this node and restore the file")}</button>
+            <button class="zxs-button" data-undo-file-deletion="" disabled=move ||!state.with(undo_allowed) on:click=move |_|undo(state,&undo_file,&undo_node)>{t("删除此节点，撤销文件删除", "Remove this node and restore the file")}</button>
         </section>
     }
 }

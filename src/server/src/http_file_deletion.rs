@@ -10,7 +10,7 @@ use http_routing::{
     response::Response,
 };
 use std::collections::BTreeMap;
-use storage_contract::history_window::HistoryFileId;
+use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 pub(crate) async fn read(
     State(state): State<AppState>,
@@ -48,6 +48,50 @@ pub(crate) async fn list(
     .await
 }
 
+const MAX_MUTATION_BYTES: usize = 16 * 1024;
+
+async fn body<T: data_serialization::de::DeserializeOwned>(
+    request: Request,
+) -> Result<T, ApiError> {
+    let bytes = crate::http_boundary::read_body(request, MAX_MUTATION_BYTES).await?;
+    storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)
+}
+
+#[derive(data_serialization::Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct Delete {
+    repository_id: HistoryRepositoryId,
+    path: String,
+    operation_id: storage_contract::OperationId,
+}
+
+pub(crate) async fn submit(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(file): ApiPath<String>,
+    ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
+    request: Request,
+) -> Result<Json<json_codec::Value>, ApiError> {
+    if !query.is_empty() {
+        return Err(ApiError::invalid(
+            "file deletion does not accept query fields",
+        ));
+    }
+    let file_id = HistoryFileId::parse(&file).map_err(ApiError::contract_input)?;
+    let body: Delete = body(request).await?;
+    let path = name_policy::LookupPath::parse(&body.path).map_err(ApiError::invalid_source)?;
+    let command = crate::DeleteFile {
+        repository_id: body.repository_id,
+        file_id,
+        path,
+        operation_id: body.operation_id,
+    };
+    mutate(state, move |backend| {
+        backend.soft_delete_file(&identity, command)
+    })
+    .await
+}
+
 #[derive(data_serialization::Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Undo {
@@ -62,10 +106,28 @@ pub(crate) async fn undo(
     request: Request,
 ) -> Result<Json<json_codec::Value>, ApiError> {
     let file_id = HistoryFileId::parse(&file).map_err(ApiError::contract_input)?;
-    let body: Undo = json_codec::from_value(crate::json_body(request).await?)
-        .map_err(ApiError::invalid_source)?;
+    let body: Undo = body(request).await?;
     storage_contract::validate_id(&body.deletion_node_id, "fdel")
         .map_err(ApiError::contract_input)?;
+    mutate(state, move |backend| {
+        backend.restore_deleted_file(
+            &identity,
+            crate::RestoreDeletedFile {
+                file_id,
+                deletion_node_id: body.deletion_node_id,
+                operation_id: body.operation_id,
+            },
+        )
+    })
+    .await
+}
+
+async fn mutate(
+    state: AppState,
+    work: impl FnOnce(&dyn crate::Backend) -> Result<storage_contract::OperationResult, ApiError>
+    + Send
+    + 'static,
+) -> Result<Json<json_codec::Value>, ApiError> {
     let permit = state
         .backend_slots
         .clone()
@@ -73,17 +135,12 @@ pub(crate) async fn undo(
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
     crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
         .run(move |backend| {
-            backend
-                .restore_deleted_file(
-                    &identity,
-                    crate::RestoreDeletedFile {
-                        file_id,
-                        deletion_node_id: body.deletion_node_id,
-                        operation_id: body.operation_id,
-                    },
-                )
-                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
+            work(backend).and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)
 }
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/http_file_deletion.rs"]
+mod tests;

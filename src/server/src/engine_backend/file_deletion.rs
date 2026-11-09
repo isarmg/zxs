@@ -3,6 +3,58 @@ use super::*;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 impl EngineBackend {
+    pub(super) fn soft_delete_file_admitted(
+        &self,
+        identity: &Identity,
+        command: crate::DeleteFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        if current.smb_binding.is_some() {
+            return Err(ApiError::forbidden());
+        }
+        // Bound a new HTTP publication to the same complete-frontier budget as
+        // discovery. The core still captures the authoritative frontier when it
+        // plans the mutation; both captures occur under this owner lock.
+        if !engine
+            .state()
+            .operations
+            .contains_key(&command.operation_id)
+        {
+            let capture = engine
+                .file_deletion_preflight(
+                    storage_engine::FileDeletionTarget {
+                        repository_id: &command.repository_id,
+                        file_id: &command.file_id,
+                        path: &command.path,
+                    },
+                    &storage_contract::history_window::HistoryWindowCancellation::default(),
+                )
+                .map_err(error)?;
+            if capture.branches().len() > 4096 || capture.parent_node_ids().len() > 4096 {
+                return Err(ApiError::limit(
+                    "complete deletion frontier exceeds response record budget",
+                ));
+            }
+        }
+        // Core checks the original canonical receipt before today's namespace.
+        // A retry after undo must return that receipt, never delete the file again.
+        engine
+            .soft_delete_file(storage_engine::DeleteFileRequest {
+                target: storage_engine::FileDeletionTarget {
+                    repository_id: &command.repository_id,
+                    file_id: &command.file_id,
+                    path: &command.path,
+                },
+                principal: &current.principal,
+                operation_id: command.operation_id,
+            })
+            .map_err(error)
+    }
+
     pub(super) fn delete_current_file_admitted(
         &self,
         identity: &Identity,
@@ -26,6 +78,25 @@ impl EngineBackend {
         }
         let repository_id = HistoryRepositoryId::parse(&repository.repository_id)
             .map_err(|source| error(source.into()))?;
+        let request = storage_engine::DeleteFileRequest {
+            target: storage_engine::FileDeletionTarget {
+                repository_id: &repository_id,
+                file_id: &command.file_id,
+                path: &command.path,
+            },
+            principal: &current.principal,
+            operation_id: command.operation_id,
+        };
+        if engine
+            .state()
+            .operations
+            .contains_key(&command.operation_id)
+        {
+            // The entry ID guards a new path resolution. A retained receipt is
+            // checked by its canonical repository/file/path/actor before current
+            // visibility, including after undo or another later deletion.
+            return engine.soft_delete_file(request).map_err(error);
+        }
         let namespace = engine.namespace_tree(&command.branch_id).map_err(error)?;
         let entry = namespace.get_key(command.path.key()).ok_or_else(|| {
             ApiError::new(
@@ -47,17 +118,7 @@ impl EngineBackend {
                 "delete target identity changed",
             ));
         }
-        engine
-            .soft_delete_file(storage_engine::DeleteFileRequest {
-                target: storage_engine::FileDeletionTarget {
-                    repository_id: &repository_id,
-                    file_id: &command.file_id,
-                    path: &command.path,
-                },
-                principal: &current.principal,
-                operation_id: command.operation_id,
-            })
-            .map_err(error)
+        engine.soft_delete_file(request).map_err(error)
     }
 
     pub(super) fn current_file_deletion_admitted(

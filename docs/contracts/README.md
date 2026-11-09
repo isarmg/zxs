@@ -184,3 +184,5 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 ### 软删除发现与精确撤销
 
 `FileDeletionSummary` / `FileDeletionsPage` 是当前管理员读取投影，分页最多100条，`next_after` 必须显式为文件ID或null；after与snapshot必须成对且业务根变化需重读。`UndoFileDeletionBody` 只接受准确删除节点和原操作ID，拒绝force等未知字段。独立D读取不借用正文历史节点，最多4096分支/父边且1MiB超限拒绝。SMB仅在支持的磁盘工作区范围默认启用，完整边界见[生命周期说明](../design/file-soft-deletion.md)。
+
+`DeleteFileBody` 为普通 Web 单文件软删除请求，只含原仓库、逻辑查找路径和操作 ID，文件 ID 位于 URL。新 POST 与 SMB 使用同一核心 `file.delete` 收据及路径规范化；不能选择分支子集、提交正文或 force。请求/撤销均使用 16 KiB 严格 JSON 准入；新 HTTP 删除完整 frontier 最多 4,096 个分支/父边。原操作重试按规范仓库/文件/路径/作者核对永久收据，先于今日可见性，撤销后重试不会重新删除。SMB 的 entry ID 只约束首次路径准入，不能阻止已发布原请求的只读收据重放。新增四个 schema 向量仅是待验证输入，本片未编译或运行契约工具。

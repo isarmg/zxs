@@ -1368,6 +1368,13 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.rename_file_branch(identity, request)
     }
+    fn soft_delete_file(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::DeleteFile,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.soft_delete_file(identity, command)
+    }
     fn delete_current_file(
         &self,
         identity: &crate::auth::Identity,

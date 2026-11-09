@@ -1,5 +1,6 @@
 //! Deleted files remain discoverable outside the visible SMB namespace. Reads
 //! belong to a session/generation; undo belongs to the global operation ledger.
+mod request;
 mod view;
 mod wire;
 use super::actions;
@@ -7,7 +8,7 @@ use crate::{
     api,
     ui::{State, accept_read_response, current_session, fail},
 };
-use json_codec::json;
+pub(crate) use request::{available, in_flight, receipt_matches, settle, start};
 use std::sync::Arc;
 pub(crate) use view::view;
 use web_interface::{prelude::*, tasks::spawn_local};
@@ -15,6 +16,9 @@ use wire::{Page, Summary};
 
 #[derive(Clone, Default)]
 pub(crate) struct Model {
+    review_generation: u64,
+    review: Option<request::Review>,
+    attempt: Option<request::Attempt>,
     open: bool,
     generation: u64,
     loading: bool,
@@ -24,6 +28,11 @@ pub(crate) struct Model {
     frontier_page: usize,
 }
 impl Model {
+    pub(crate) fn cancel_review(&mut self) {
+        self.review_generation += 1;
+        self.review = None;
+    }
+
     fn accepts(&self, generation: u64) -> bool {
         self.open && self.generation == generation
     }
@@ -131,43 +140,16 @@ fn undo_allowed(state: &State) -> bool {
         && !state.files.deletion.loading
         && state.files.deletion.node.is_some()
 }
-fn undo(state: RwSignal<State>) {
+fn undo(state: RwSignal<State>, file_id: &str, deletion_node_id: &str) {
     let Some(node) = state.with_untracked(|s| {
         undo_allowed(s)
             .then(|| s.files.deletion.node.clone())
             .flatten()
+            .filter(|node| node.file_id == file_id && node.node_id == deletion_node_id)
     }) else {
         return;
     };
-    let Some(id) = crate::ui::file_operation_id(state) else {
-        return;
-    };
-    let epoch = state.with_untracked(|s| s.session_epoch);
-    state.update(|s| s.files.mutation_pending = true);
-    spawn_local(async move {
-        let endpoint = format!("/api/files/{}/deletion/undo", api::segment(&node.file_id));
-        let result = api::request(
-            "POST",
-            &endpoint,
-            Some(json!({"deletion_node_id":node.node_id,"operation_id":id})),
-        )
-        .await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        match result {
-            Ok(value) => {
-                actions::record_receipt(state, &id, value);
-            }
-            Err(error) => actions::record_failure(state, epoch, &id, error),
-        }
-        state.update(|s| s.files.mutation_pending = false);
-        // An unknown outcome stays in the global ledger even if this view closes.
-        // Refresh is read-only; a new undo ID remains blocked until it settles.
-        if state.with_untracked(|s| s.files.deletion.open) {
-            load(state, false);
-        }
-    });
+    request::submit_undo(state, node);
 }
 
 #[cfg(test)]

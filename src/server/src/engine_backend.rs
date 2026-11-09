@@ -1381,6 +1381,13 @@ impl Backend for EngineBackend {
             )
             .map_err(error)
     }
+    fn soft_delete_file(
+        &self,
+        identity: &Identity,
+        command: crate::DeleteFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.soft_delete_file_admitted(identity, command)
+    }
     fn delete_current_file(
         &self,
         identity: &Identity,

@@ -2,6 +2,12 @@
 use super::*;
 use crate::files::model::FileOperation;
 pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
+    if kind == Kind::Delete {
+        // Ordinary Delete owns the whole stable file, not a chosen subset of
+        // directory branches. Unsupported selections never fall back to batch.
+        super::super::deletion::start(state, entry);
+        return;
+    }
     let draft = state.with_untracked(|snapshot| {
         if !file_actions::write_allowed(snapshot) {
             return Ok(None);

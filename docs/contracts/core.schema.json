@@ -10828,6 +10828,31 @@
         "operation_id"
       ],
       "additionalProperties": false
+    },
+    "DeleteFileBody": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "x-maxUtf8Bytes": 768,
+          "x-namePolicy": "LookupPath"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "repository_id",
+        "path",
+        "operation_id"
+      ],
+      "additionalProperties": false,
+      "description": "Whole stable-file soft deletion at the current logical lookup path. File identity is in the URL. The server captures all branch heads, never a caller-supplied subset. Strict JSON body at most 16 KiB; no body/history removal."
     }
   }
 }

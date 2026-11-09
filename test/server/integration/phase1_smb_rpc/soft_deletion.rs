@@ -129,7 +129,7 @@ fn public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file
     );
 }
 
-async fn request(
+pub(super) async fn request(
     app: &http_routing::Router,
     token: Option<&str>,
     method: &str,

@@ -129,6 +129,7 @@ impl Model {
     /// Reset location-owned state without discarding disk reads or operation
     /// recovery. Session admission and starting the next read belong to actions.
     pub(crate) fn navigate(&mut self, destination: Navigation) {
+        self.deletion.cancel_review();
         self.cancel_listing();
         self.reset_page();
         let preserve_preview = match &destination {

@@ -5737,6 +5737,16 @@
         "deletion_node_id": "fdel_11111111111111111111111111111111",
         "operation_id": "op_11111111111111111111111111111111"
       }
+    },
+    {
+      "name": "file-deletion-whole-file-request",
+      "schema": "DeleteFileBody",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_11111111111111111111111111111111",
+        "path": "A.txt",
+        "operation_id": "op_11111111111111111111111111111111"
+      }
     }
   ],
   "negative": [
@@ -20269,6 +20279,37 @@
       "value": {
         "snapshot": "root",
         "entries": []
+      }
+    },
+    {
+      "name": "file-deletion-reject-branch-subset",
+      "schema": "DeleteFileBody",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_11111111111111111111111111111111",
+        "path": "A.txt",
+        "operation_id": "op_11111111111111111111111111111111",
+        "branch_ids": []
+      }
+    },
+    {
+      "name": "file-deletion-reject-force",
+      "schema": "DeleteFileBody",
+      "layer": "schema",
+      "value": {
+        "repository_id": "repo_11111111111111111111111111111111",
+        "path": "A.txt",
+        "operation_id": "op_11111111111111111111111111111111",
+        "force": true
+      }
+    },
+    {
+      "name": "file-deletion-require-repository",
+      "schema": "DeleteFileBody",
+      "layer": "schema",
+      "value": {
+        "path": "A.txt",
+        "operation_id": "op_11111111111111111111111111111111"
       }
     }
   ],

@@ -47,7 +47,7 @@ mod web_assets;
 mod backend_file_deletion;
 mod http_file_deletion;
 pub use backend_file_deletion::{
-    DeleteCurrentFile, FileDeletionSummary, FileDeletionsPage, ReadFileDeletions,
+    DeleteCurrentFile, DeleteFile, FileDeletionSummary, FileDeletionsPage, ReadFileDeletions,
     RestoreDeletedFile,
 };
 mod backend_file_history;
@@ -740,6 +740,13 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: RenameFileBranch,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn soft_delete_file(
+        &self,
+        _identity: &Identity,
+        _command: crate::DeleteFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn delete_current_file(
         &self,
         _identity: &Identity,
@@ -1551,6 +1558,14 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.backend
             .rename_file_branch(&self.current(identity)?, request)
+    }
+    fn soft_delete_file(
+        &self,
+        identity: &Identity,
+        command: crate::DeleteFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .soft_delete_file(&self.current(identity)?, command)
     }
     fn delete_current_file(
         &self,
@@ -2484,7 +2499,10 @@ fn router_shared(
         .route("/api/versions/{version}/placement", get(placement))
         .route("/api/versions/{version}/checksums", get(checksums))
         .route("/api/file-deletions", get(http_file_deletion::list))
-        .route("/api/files/{file}/deletion", get(http_file_deletion::read))
+        .route(
+            "/api/files/{file}/deletion",
+            get(http_file_deletion::read).post(http_file_deletion::submit),
+        )
         .route(
             "/api/files/{file}/deletion/undo",
             post(http_file_deletion::undo),

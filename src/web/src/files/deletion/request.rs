@@ -1,0 +1,365 @@
+//! One explicit whole-file request. Navigation cancels only an unsubmitted
+//! review; the original in-flight/unknown attempt is owned by the session ledger.
+use super::*;
+use crate::files::{FileOperation, SaveStatus, model::entry_key, page::Entry};
+use json_codec::{Value, json};
+use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
+use web_interface::i18n::t;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Target {
+    file: HistoryFileId,
+    repository: HistoryRepositoryId,
+    path: name_policy::PortablePath,
+}
+#[derive(Clone)]
+pub(super) struct Review {
+    pub(super) generation: u64,
+    pub(super) display_path: String,
+    target: Target,
+    epoch: u64,
+    slot: String,
+    directory: String,
+    listing_generation: u64,
+    entry_id: String,
+}
+#[derive(Clone)]
+enum Intent {
+    Delete(Target),
+    Undo(Arc<storage_contract::FileDeletionNode>),
+}
+#[derive(Clone)]
+pub(super) struct Attempt {
+    epoch: u64,
+    principal: String,
+    operation: String,
+    intent: Intent,
+    request_digest: String,
+    in_flight: bool,
+}
+
+fn eligible(entry: &Entry) -> bool {
+    entry.kind() == storage_contract::NamespaceEntryKind::File
+        && !entry.read_only()
+        && !entry.preview()
+        && !entry.backup()
+        && !entry.retained_history()
+        && entry.context().is_some()
+}
+fn chosen<'a>(state: &'a State, explicit: Option<&'a Entry>) -> Option<&'a Entry> {
+    if !actions::write_allowed(state) || !state.files.loaded {
+        return None;
+    }
+    let model = &state.files;
+    let entry = if let Some(entry) = explicit {
+        entry
+    } else if model.checked_entries.is_empty() {
+        model.selected.as_ref()?
+    } else {
+        if model.checked_entries.len() != 1 {
+            return None;
+        }
+        model
+            .entries
+            .iter()
+            .find(|entry| model.checked_entries.contains(&entry_key(entry)))?
+    };
+    // A stale row callback cannot target an entry that left the admitted page.
+    if !eligible(entry)
+        || !model
+            .entries
+            .iter()
+            .chain(model.selected.iter())
+            .any(|current| {
+                eligible(current)
+                    && current.entry_id() == entry.entry_id()
+                    && current.file_id() == entry.file_id()
+                    && current.path() == entry.path()
+                    && current.context() == entry.context()
+            })
+    {
+        return None;
+    }
+    Some(entry)
+}
+pub(crate) fn available(state: &State) -> bool {
+    chosen(state, None).is_some()
+}
+fn identity_error(source: storage_contract::Error) -> api::Error {
+    api::Error {
+        status: 200,
+        code: storage_contract::ErrorCode::InvalidResponse,
+        message: "The selected file does not carry a valid deletion identity.".into(),
+        retryable: false,
+        request_id: None,
+        source: Some(Arc::new(api::ErrorSource::Path(source))),
+    }
+}
+fn capture(state: &State, explicit: Option<&Entry>) -> Result<Option<Review>, api::Error> {
+    let Some(entry) = chosen(state, explicit) else {
+        return Ok(None);
+    };
+    let (repository, path) = entry
+        .context()
+        .expect("invariant: chosen file has a current location");
+    Ok(Some(Review {
+        generation: state.files.deletion.review_generation + 1,
+        display_path: format!("{}/{}", state.files.slot, entry.path()),
+        target: Target {
+            file: HistoryFileId::parse(entry.file_id()).map_err(identity_error)?,
+            repository: HistoryRepositoryId::parse(repository).map_err(identity_error)?,
+            path: name_policy::PortablePath::parse(path)
+                .map_err(|source| identity_error(source.into()))?,
+        },
+        epoch: state.session_epoch,
+        slot: state.files.slot.clone(),
+        directory: state.files.directory.clone(),
+        listing_generation: state.files.generation,
+        entry_id: entry.entry_id().into(),
+    }))
+}
+pub(crate) fn start(state: RwSignal<State>, entry: Option<Entry>) {
+    match state.with_untracked(|s| capture(s, entry.as_ref())) {
+        Ok(Some(review)) => state.update(|s| {
+            s.files.deletion.review_generation = review.generation;
+            s.files.deletion.review = Some(review);
+            s.change_page(crate::ui::Page::Files);
+        }),
+        Ok(None) => crate::ui::set_notice(
+            state,
+            t(
+                "请只选择一个当前可写文件。目录、多个文件和只读历史不能使用此软删除入口；不会回退为目录分支删除。",
+                "Select one current writable file. Folders, multiple files and read-only history are not supported here; this never falls back to folder-branch deletion.",
+            ),
+        ),
+        Err(error) => fail(state, error),
+    }
+}
+
+pub(super) fn review_allowed(state: &State, generation: u64) -> bool {
+    let Some(review) = state.files.deletion.review.as_ref() else {
+        return false;
+    };
+    actions::write_allowed(state)
+        && state.files.loaded
+        && review.generation == generation
+        && review.epoch == state.session_epoch
+        && review.slot == state.files.slot
+        && review.directory == state.files.directory
+        && review.listing_generation == state.files.generation
+        && state
+            .files
+            .entries
+            .iter()
+            .chain(state.files.selected.iter())
+            .any(|entry| {
+                eligible(entry)
+                    && entry.entry_id() == review.entry_id
+                    && entry.file_id() == review.target.file.as_str()
+                    && entry.context()
+                        == Some((
+                            review.target.repository.as_str(),
+                            review.target.path.as_str(),
+                        ))
+            })
+}
+pub(super) fn submit_delete(state: RwSignal<State>, generation: u64) {
+    let target = state.with_untracked(|s| {
+        review_allowed(s, generation).then(|| {
+            s.files
+                .deletion
+                .review
+                .as_ref()
+                .expect("invariant: admitted review exists")
+                .target
+                .clone()
+        })
+    });
+    if let Some(target) = target {
+        submit(state, Intent::Delete(target));
+    }
+}
+pub(super) fn submit_undo(state: RwSignal<State>, node: Arc<storage_contract::FileDeletionNode>) {
+    submit(state, Intent::Undo(node));
+}
+impl Intent {
+    fn request(&self, operation: &str) -> (String, Value) {
+        match self {
+            Self::Delete(target) => (
+                format!("/api/files/{}/deletion", api::segment(target.file.as_str())),
+                json!({"repository_id":target.repository.as_str(),"path":target.path.as_str(),"operation_id":operation}),
+            ),
+            Self::Undo(node) => (
+                format!("/api/files/{}/deletion/undo", api::segment(&node.file_id)),
+                json!({"deletion_node_id":node.node_id,"operation_id":operation}),
+            ),
+        }
+    }
+    fn digest(&self, principal: &str) -> Result<String, api::Error> {
+        let (kind, body) = match self {
+            Self::Delete(target) => (
+                "file.delete",
+                json!({
+                    "repository_id":target.repository.as_str(), "file_id":target.file.as_str(), "path":target.path.key(),
+                }),
+            ),
+            Self::Undo(node) => (
+                "file.delete.undo",
+                json!({
+                    "file_id":node.file_id, "deletion_node_id":node.node_id,
+                }),
+            ),
+        };
+        storage_contract::object_hash(
+            "request",
+            &json!({"kind":kind,"principal":principal,"body":body}),
+        )
+        .map_err(identity_error)
+    }
+    fn receipt_matches(&self, id: &str, principal: &str, receipt: &Value) -> bool {
+        match self {
+            Self::Delete(target) => {
+                if receipt["operation_kind"] != "file.delete" {
+                    return false;
+                }
+                let result = &receipt["result"];
+                let Some(object) = result.as_object().filter(|object| object.len() == 1) else {
+                    return false;
+                };
+                let Some(value) = object.get("deletion_node") else {
+                    return false;
+                };
+                // Complete bodyless frontier validation is shared with the read
+                // boundary. Neither a different file nor a generic receipt can
+                // release this exact request's unknown-outcome fence.
+                let Some(deletion_id) = value["node_id"].as_str() else {
+                    return false;
+                };
+                if storage_contract::validate_id(deletion_id, "fdel").is_err() {
+                    return false;
+                }
+                let summary = wire::Summary {
+                    file_id: target.file.clone(),
+                    repository_id: target.repository.clone(),
+                    deletion_node_id: deletion_id.into(),
+                    path: target.path.clone(),
+                };
+                matches!(wire::node(value.clone(), &summary), Ok(Some(node)) if node.operation_id.to_string() == id && node.author == principal)
+            }
+            Self::Undo(node) => {
+                receipt["operation_kind"] == "file.delete.undo"
+                    && receipt["result"]
+                        .as_object()
+                        .is_some_and(|result| result.len() == 2)
+                    && receipt["result"]["restored_file_id"] == node.file_id
+                    && receipt["result"]["removed_deletion_node"] == json!(node.as_ref())
+            }
+        }
+    }
+}
+fn submit(state: RwSignal<State>, intent: Intent) {
+    let request_digest = match state.with_untracked(|s| intent.digest(&s.principal)) {
+        Ok(digest) => digest,
+        Err(error) => {
+            fail(state, error);
+            return;
+        }
+    };
+    let Some(id) = crate::ui::file_operation_id(state) else {
+        return;
+    };
+    let epoch = state.with_untracked(|s| s.session_epoch);
+    let (endpoint, body) = intent.request(&id);
+    state.update(|s| {
+        s.files.mutation_pending = true;
+        s.files.deletion.attempt = Some(Attempt {
+            epoch,
+            principal: s.principal.clone(),
+            operation: id.clone(),
+            intent,
+            request_digest,
+            in_flight: true,
+        });
+    });
+    // Record the original ID before starting network work, including when the
+    // review or deleted-files panel closes while the request is outstanding.
+    actions::record_operation(state, FileOperation::unknown(&id));
+    spawn_local(async move {
+        let result = api::request("POST", &endpoint, Some(body)).await;
+        if !current_session(state, epoch) {
+            return;
+        }
+        state.update(|s| {
+            if let Some(attempt) = s
+                .files
+                .deletion
+                .attempt
+                .as_mut()
+                .filter(|a| a.operation == id)
+            {
+                attempt.in_flight = false;
+            }
+        });
+        match result {
+            Ok(value) => {
+                actions::record_receipt(state, &id, value);
+            }
+            Err(error) => actions::record_failure(state, epoch, &id, error),
+        }
+        state.update(|s| s.files.mutation_pending = false);
+        if state.with_untracked(|s| s.files.deletion.open) {
+            load(state, false);
+        }
+    });
+}
+pub(crate) fn in_flight(state: &State, id: &str) -> bool {
+    state
+        .files
+        .deletion
+        .attempt
+        .as_ref()
+        .is_some_and(|attempt| attempt.operation == id && attempt.in_flight)
+}
+pub(crate) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool {
+    state
+        .files
+        .deletion
+        .attempt
+        .as_ref()
+        .filter(|attempt| attempt.operation == id)
+        .is_none_or(|attempt| {
+            state.session_active()
+                && attempt.epoch == state.session_epoch
+                && attempt.principal == state.principal
+                && receipt["request_digest"].as_str() == Some(attempt.request_digest.as_str())
+                && attempt
+                    .intent
+                    .receipt_matches(id, &attempt.principal, receipt)
+        })
+}
+pub(crate) fn settle(model: &mut super::super::model::Model, id: &str, status: SaveStatus) {
+    if status == SaveStatus::Unknown
+        || !model
+            .deletion
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.operation == id)
+    {
+        return;
+    }
+    model.deletion.attempt = None;
+    model.deletion.cancel_review();
+    if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
+        model.checked_entries.clear();
+        // Cached D is not restoration authority after another lifecycle event.
+        model.deletion.generation += 1;
+        model.deletion.loading = false;
+        model.deletion.node = None;
+        model.deletion.selected = None;
+        model.deletion.page = None;
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../../test/web/unit/files/deletion/request_tests.rs"]
+mod tests;

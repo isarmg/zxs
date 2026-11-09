@@ -9956,6 +9956,52 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "softDeleteCurrentFile",
+        "description": "管理员按稳定file_id、repository_id和当前逻辑path软删除整个文件。核心捕获全部保留分支frontier，隐藏所有同文件路径并冻结编辑，保留正文/历史/原路径。只支持磁盘根独立文件，命名库和初始化目录范围拒绝，不回退namespace-batch。严格请求体最多16KiB，拒绝重复/未知字段与查询参数；新发布完整frontier最多4096分支/父边。重试原operation_id先匹配规范repository/file/path/actor收据，撤销或后来的删除不能使旧重试再次发布。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteFileBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Current authenticated result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenericOperation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Typed rejection or unconfirmed publication error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/files/{file}/deletion/undo": {
@@ -20847,6 +20893,31 @@
           "operation_id"
         ],
         "additionalProperties": false
+      },
+      "DeleteFileBody": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "x-maxUtf8Bytes": 768,
+            "x-namePolicy": "LookupPath"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "repository_id",
+          "path",
+          "operation_id"
+        ],
+        "additionalProperties": false,
+        "description": "Whole stable-file soft deletion at the current logical lookup path. File identity is in the URL. The server captures all branch heads, never a caller-supplied subset. Strict JSON body at most 16 KiB; no body/history removal."
       }
     }
   }
