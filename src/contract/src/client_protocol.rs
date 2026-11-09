@@ -7,6 +7,12 @@ pub use operation::{OperationStatus, operation_observation_status, operation_sta
 /// Common JSON response cap, enforced while streaming and again when decoding.
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
+/// A newly deleted file must remain readable as one complete recovery frontier.
+/// HTTP and SMB mutation admission and the Web decoder share this limit; it is
+/// not a truncation rule or a new limit on retained on-disk history.
+pub const MAX_FILE_DELETION_FRONTIER_ENTRIES: usize = 4096;
+pub const MAX_FILE_DELETION_RESPONSE_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, error_definition::Error)]
 #[error("{code}: {message}")]
 pub struct ResponseError {

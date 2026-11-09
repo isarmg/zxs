@@ -1,6 +1,32 @@
 //! The same core publication owns SMB deletion and management restoration.
 use super::*;
+use storage_contract::client_protocol::MAX_FILE_DELETION_FRONTIER_ENTRIES;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
+
+fn require_recoverable_frontier(branches: usize, parents: usize) -> Result<(), ApiError> {
+    if branches > MAX_FILE_DELETION_FRONTIER_ENTRIES || parents > MAX_FILE_DELETION_FRONTIER_ENTRIES
+    {
+        return Err(ApiError::limit(
+            "complete deletion frontier exceeds response record budget",
+        ));
+    }
+    Ok(())
+}
+
+/// Called under the same engine owner lock as the ensuing new publication.
+/// Both user entrances must admit the complete frontier that recovery can read.
+fn admit_new_deletion(
+    engine: &Engine,
+    target: storage_engine::FileDeletionTarget<'_>,
+) -> Result<(), ApiError> {
+    let capture = engine
+        .file_deletion_preflight(
+            target,
+            &storage_contract::history_window::HistoryWindowCancellation::default(),
+        )
+        .map_err(error)?;
+    require_recoverable_frontier(capture.branches().len(), capture.parent_node_ids().len())
+}
 
 impl EngineBackend {
     pub(super) fn soft_delete_file_admitted(
@@ -16,29 +42,21 @@ impl EngineBackend {
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
-        // Bound a new HTTP publication to the same complete-frontier budget as
-        // discovery. The core still captures the authoritative frontier when it
-        // plans the mutation; both captures occur under this owner lock.
+        // Existing receipts keep their original semantics and are never
+        // re-admitted against today's location, frontier or response budget.
         if !engine
             .state()
             .operations
             .contains_key(&command.operation_id)
         {
-            let capture = engine
-                .file_deletion_preflight(
-                    storage_engine::FileDeletionTarget {
-                        repository_id: &command.repository_id,
-                        file_id: &command.file_id,
-                        path: &command.path,
-                    },
-                    &storage_contract::history_window::HistoryWindowCancellation::default(),
-                )
-                .map_err(error)?;
-            if capture.branches().len() > 4096 || capture.parent_node_ids().len() > 4096 {
-                return Err(ApiError::limit(
-                    "complete deletion frontier exceeds response record budget",
-                ));
-            }
+            admit_new_deletion(
+                &engine,
+                storage_engine::FileDeletionTarget {
+                    repository_id: &command.repository_id,
+                    file_id: &command.file_id,
+                    path: &command.path,
+                },
+            )?;
         }
         // Core checks the original canonical receipt before today's namespace.
         // A retry after undo must return that receipt, never delete the file again.
@@ -118,6 +136,9 @@ impl EngineBackend {
                 "delete target identity changed",
             ));
         }
+        // SMB must not publish a D that the management recovery entrance cannot
+        // read. Preserve the captured entry guard above and do not trim parents.
+        admit_new_deletion(&engine, request.target)?;
         engine.soft_delete_file(request).map_err(error)
     }
 
@@ -135,12 +156,8 @@ impl EngineBackend {
             return Err(ApiError::forbidden());
         }
         let node = engine.file_deletion(file.as_str());
-        if node
-            .is_some_and(|node| node.branch_heads.len() > 4096 || node.parent_node_ids.len() > 4096)
-        {
-            return Err(ApiError::limit(
-                "complete deletion frontier exceeds response record budget",
-            ));
+        if let Some(node) = node {
+            require_recoverable_frontier(node.branch_heads.len(), node.parent_node_ids.len())?;
         }
         Ok(node.cloned())
     }

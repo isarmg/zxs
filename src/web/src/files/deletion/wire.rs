@@ -4,6 +4,7 @@ use json_codec::Value;
 use std::{collections::BTreeSet, sync::Arc};
 use storage_contract::{
     FileDeletionNode,
+    client_protocol::MAX_FILE_DELETION_FRONTIER_ENTRIES,
     history_window::{
         HistoryBranchId, HistoryFileId, HistoryNodeId, HistoryRepositoryId, HistoryTreeId,
     },
@@ -80,8 +81,8 @@ pub(super) fn node(
         || node.path != summary.path
         || HistoryTreeId::parse(&node.history_tree_id).is_err()
         || node.branch_heads.is_empty()
-        || node.branch_heads.len() > 4096
-        || node.parent_node_ids.len() > 4096
+        || node.branch_heads.len() > MAX_FILE_DELETION_FRONTIER_ENTRIES
+        || node.parent_node_ids.len() > MAX_FILE_DELETION_FRONTIER_ENTRIES
         || node.branch_heads.iter().any(|(branch, head)| {
             HistoryBranchId::parse(branch).is_err() || HistoryNodeId::parse(head).is_err()
         })

@@ -10,6 +10,7 @@ use http_routing::{
     response::Response,
 };
 use std::collections::BTreeMap;
+use storage_contract::client_protocol::MAX_FILE_DELETION_RESPONSE_BYTES;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 pub(crate) async fn read(
@@ -27,7 +28,7 @@ pub(crate) async fn read(
     crate::bounded_history_http::read(state, move |backend, _| {
         crate::history_window_encode::encode_bounded(
             &backend.current_file_deletion(&identity, &file)?,
-            1024 * 1024,
+            MAX_FILE_DELETION_RESPONSE_BYTES,
         )
     })
     .await
@@ -42,7 +43,7 @@ pub(crate) async fn list(
     crate::bounded_history_http::read(state, move |backend, _| {
         crate::history_window_encode::encode_bounded(
             &backend.file_deletions(&identity, request)?,
-            1024 * 1024,
+            MAX_FILE_DELETION_RESPONSE_BYTES,
         )
     })
     .await
