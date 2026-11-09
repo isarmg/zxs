@@ -2,7 +2,7 @@
 
 [任务清单](../../TASKS.md) · [目标恢复地址](backup-target-native-locators.md) · [Engine](../components/engine.md)
 
-本片将原候选 `4bd46a46` 对齐准确主线 `44c9d6e6`；目标 DiskWriter I/O、inode 绑定 seal 和普通目标 locator 三片已在 `90450cf0` 合入。本片继续为实际全池切换补齐原盘自身的控制材料，仅准备树交唯一协调者发布，不宣称全池切换完成。
+原候选 `4bd46a46` 对齐 `44c9d6e6` 后，已由唯一协调者发布为 `55f3d092`；目标 DiskWriter I/O、inode 绑定 seal 和普通目标 locator 三片已在 `90450cf0` 合入。本片继续为实际全池切换补齐原盘自身的控制材料，发布不等于编译、测试通过或全池切换完成。
 
 原首笔 Backup 的真实 ACCEPT／FINALIZE／Publication 已在每个原 metadata 成员的普通 `metadata/membership-generations/<authority>/journal.bin`。不能为了准备活动资源，再写一个空 journal 或从 receipt JSON 重造这些帧。新目标上的完整归档也不能代替每个原盘自己的独立恢复材料。
 
@@ -53,3 +53,5 @@
 全部实际正文、数据库、归档和第一笔证据仍需重复完整观察，不声称增量运行、瞬时取消、低峰值内存或性能提升。没有删除旧数据、减少独立副本或减弱 fsync。
 
 新增八项临时目录测试仅为库存／保留边界的源码夹具，不冒充 native Publication 或端到端切换验收。按用户最新要求没有本地编译或运行测试、没有手动触发新 CI；原候选仅格式化修改的 Rust 源码，本次对齐后的组合没有重新编译或运行测试。实际原 journal 绑定、新阶段的中断续作、全体组合、真实掉盘／断电和最终活动切换尚未验证。
+
+后继[目标普通 serving 实物](backup-ordinary-serving-entities.md)接普通容器／对象库与实际读取闭包；尚不安装活动 Current 或解除围栏。

@@ -9,6 +9,7 @@ mod common_databases;
 mod current_read;
 mod database_aliases;
 mod native_metadata;
+mod ordinary_serving;
 mod original_control;
 mod root_databases;
 mod system_database;
@@ -23,6 +24,7 @@ pub use database_aliases::{
     BackupDatabaseRead, BackupDatabaseScope,
 };
 pub use native_metadata::BackupNativeMetadataReport;
+pub use ordinary_serving::{BackupOrdinaryServingReport, BackupOrdinaryServingTargetReport};
 pub use original_control::{
     BackupOriginalControlMemberReport, BackupOriginalControlReport, BackupOriginalJournalReport,
 };

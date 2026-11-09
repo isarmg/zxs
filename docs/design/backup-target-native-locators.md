@@ -59,4 +59,4 @@ SYSTEM 的 `backup-preparation/target-generation-locators.json` 绑定源 fence�
 
 仍须闭合原盘共同活动 selector／journal、活动 Config／Current 与全部数据库及 serving locator 的共同切换、正常后续 Publication、SYSTEM 解静默及安全源解围栏，再将原任务持有的资源交给普通 Engine。普通设置自动触发和完整进度也未完成，不能仅凭目标普通名字齐全就提前返回备份成功。
 
-后继[原盘独立原生控制](backup-original-generation-control.md)在不改变旧 selector／seal 的情况下，继续补每原盘完整归档并绑定已存在的真实首笔 journal；该后继仍仅本地，不计作活动全池。
+后继[原盘独立原生控制](backup-original-generation-control.md)在不改变旧 selector／seal 的情况下，继续补每原盘完整归档并绑定已存在的真实首笔 journal；该后继已在 `55f3d092` 合入，不计作活动全池。

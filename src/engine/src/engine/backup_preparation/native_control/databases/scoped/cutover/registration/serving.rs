@@ -217,10 +217,14 @@ pub(super) fn require_capacity_before_choice(
     prepared: &PreparedBackupRegistry,
     stop: &AtomicBool,
 ) -> Result<()> {
+    let ordinary = crate::container_storage::backup_ordinary::capacity_before_choice(
+        prepared.task.selection().first().total_bytes,
+    )?;
     let required = crate::container_storage::backup_entities::capacity_before_choice(
         prepared.task.selection().first().total_bytes,
     )?
     .checked_add(published_scopes::PRE_CHOICE_BYTES)
+    .and_then(|bytes| bytes.checked_add(ordinary))
     .ok_or_else(|| {
         Error::new(
             ErrorCode::ResourceLimit,

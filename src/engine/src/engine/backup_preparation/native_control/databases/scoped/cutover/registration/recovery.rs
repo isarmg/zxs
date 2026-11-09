@@ -1087,6 +1087,26 @@ impl Engine {
         self.with_backup_database_aliases(operation, principal, original_control::observe)
     }
 
+    /// Re-read every ordinary target entity through native container/locator
+    /// readers and exact completion inode bindings. Never repairs or activates.
+    pub fn inspect_backup_ordinary_serving(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<BackupOrdinaryServingReport> {
+        if self
+            .backup_preparation
+            .as_ref()
+            .is_none_or(|worker| worker.targets.is_empty())
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "resume the original Backup task before observing ordinary serving entities",
+            ));
+        }
+        self.with_backup_database_aliases(operation, principal, ordinary_serving::observe)
+    }
+
     fn with_backup_database_aliases<T>(
         &mut self,
         operation: OperationId,

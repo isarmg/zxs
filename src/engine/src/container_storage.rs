@@ -2,6 +2,7 @@
 use crate::{disk::*, *};
 pub(crate) mod backup_databases;
 pub(crate) mod backup_entities;
+pub(crate) mod backup_ordinary;
 mod changes;
 mod directory_database;
 mod object_database;

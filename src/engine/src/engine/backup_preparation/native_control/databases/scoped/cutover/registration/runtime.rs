@@ -522,6 +522,25 @@ fn run(
             original.bytes_per_original,
             original.installation_hash,
         );
+    })?;
+    let ordinary = ordinary_serving::install(
+        &common_databases::Context {
+            system,
+            sources: &sources,
+            choices: &choices,
+        },
+        &prepared,
+        &decision,
+        &expected,
+        stop,
+    )?;
+    update(system, progress, |status| {
+        status.phase = BackupPreparationPhase::GenerationOrdinaryServingInstalled;
+        status.detail = format!(
+            "decision {hash} installed complete ordinary container/SQLite/locator entities under actual target writers on all {} targets, set {}; native readers resolve the exact inode-bound copies; active source selectors, Engine Current, next publication, SYSTEM admission and source fence release remain unavailable",
+            ordinary.targets.len(),
+            ordinary.installation_hash,
+        );
     })
 }
 fn spawn(

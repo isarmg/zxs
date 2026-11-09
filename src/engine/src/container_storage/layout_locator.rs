@@ -253,6 +253,9 @@ impl FileIntent {
     pub(super) fn to(&self) -> &FileAddress {
         &self.to
     }
+    pub(super) fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        Ok(crate::canonical_json(&RawFileIntent::from(self))?)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -306,6 +309,9 @@ impl DirectoryIntent {
     }
     pub(super) fn to(&self) -> &HistoryRelative {
         &self.to
+    }
+    pub(super) fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        Ok(crate::canonical_json(&RawDirectoryIntent::from(self))?)
     }
 }
 

@@ -360,4 +360,9 @@ CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从�
 
 ### Backup 原盘独立原生控制
 
-`cb7fb288` 上的本地后继续接[原盘独立控制实物](../design/backup-original-generation-control.md)：全部原盘在原 writer/租约下安装准确同代 authority、完整 archive 和历史 proof，原有首笔 journal 从同一打开文件用生产帧读者重验真实 Publication 并绑定摘要/inode，绝不新建或重放 journal。原 plan/全部本地选择先行，每原盘归档重放、完整原材料再观察后共同完成，完成后缺件和 journal 替换拒绝修补；新决定预检纳入原根最坏控制材料容量。`GenerationOriginalControlInstalled` / `inspect_backup_original_control` 不更改源 selector、seal、Current 或 SYSTEM/来源围栏，不报告成功或开放 H03。八项新库存边界测试仅源码；仅格式化，没有本地编译/测试/新 CI 或真实盘操作，本后继尚未发布。
+`55f3d092` 已合入[原盘独立控制实物](../design/backup-original-generation-control.md)：全部原盘在原 writer/租约下安装准确同代 authority、完整 archive 和历史 proof，原有首笔 journal 从同一打开文件用生产帧读者重验真实 Publication 并绑定摘要/inode，绝不新建或重放 journal。原 plan/全部本地选择先行，每原盘归档重放、完整原材料再观察后共同完成，完成后缺件和 journal 替换拒绝修补；新决定预检纳入原根最坏控制材料容量。`GenerationOriginalControlInstalled` / `inspect_backup_original_control` 不更改源 selector、seal、Current 或 SYSTEM/来源围栏，不报告成功或开放 H03。八项新库存边界测试仅源码；仅格式化，没有本地编译/测试/新 CI 或真实盘操作，发布不代表验证通过。
+
+
+### Backup 目标普通 serving 实物
+
+基于 `24f0c31b` 的本地后继接[目标普通 serving 实物](../design/backup-ordinary-serving-entities.md)：只在原任务真实 target DiskWriter 下独立复制普通历史内完整容器／FILE 与目录库，标准 inode locator 和普通 payload 读者核验实际名字、owner、正文与校验表，不将隔离 image 或 package fallback 冒充普通实体。全部目标选择先行，本地完成绑定全部目录／文件／locator 的真实身份；完整之后缺件、同字节换 inode 均拒绝补造。`GenerationOrdinaryServingInstalled` 与 `inspect_backup_ordinary_serving` 仍不改活动 Engine Current、原盘 selector、SYSTEM 静默或来源围栏。十二项新增边界夹具仅源码，未编译／测试或触发 CI。
