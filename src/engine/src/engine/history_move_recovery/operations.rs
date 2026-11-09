@@ -167,7 +167,8 @@ impl Engine {
     ) -> Result<FileHistoryMoveProjection> {
         checkpoint(cancellation)?;
         Self::require_actor(principal)?;
-        self.require_write()?;
+        self.require_move_source_read()?;
+        self.require_selected_move_operation(operation)?;
         self.require_unfenced_membership()?;
         let system = persist::Store::system(self)?;
         let observed = system.read()?.ok_or_else(|| {
@@ -181,7 +182,7 @@ impl Engine {
             return Err(stale("move recovery requires the original operation, actor and reviewed envelope"));
         }
         record.require_current(self)?;
-        let capture = self.capture_file_history_move(
+        let capture = self.capture_retained_file_history_move(
             FileHistoryMoveRequest {
                 namespace: &record.namespace,
                 source_file_id: &HistoryFileId::parse(&record.source_file_id)?,

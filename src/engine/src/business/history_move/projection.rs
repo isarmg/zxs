@@ -166,6 +166,7 @@ impl CurrentFileHistoryMoveProjection<'_> {
 }
 
 fn require_unused(engine: &Engine, operation: OperationId) -> Result<()> {
+    engine.require_selected_move_operation(operation)?;
     if engine.state().operations.contains_key(&operation) {
         return Err(Error::new(
             ErrorCode::IdempotencyKeyReused,

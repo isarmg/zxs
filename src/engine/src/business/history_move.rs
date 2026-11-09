@@ -146,6 +146,16 @@ impl Engine {
     ) -> Result<FileHistoryMoveCapture> {
         checkpoint(cancellation)?;
         self.require_write()?;
+        self.capture_retained_file_history_move(request, cancellation)
+    }
+
+    pub(crate) fn capture_retained_file_history_move(
+        &self,
+        request: FileHistoryMoveRequest<'_>,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<FileHistoryMoveCapture> {
+        checkpoint(cancellation)?;
+        self.require_move_source_read()?;
         let repository_id = HistoryRepositoryId::parse(&request.namespace.source_repository_id)?;
         let path = name_policy::LookupPath::parse(&request.namespace.source_path)?;
         let deletion = self.file_deletion_preflight(
@@ -225,7 +235,7 @@ impl Engine {
         cancellation: &HistoryWindowCancellation,
     ) -> Result<CurrentFileHistoryMove<'a>> {
         checkpoint(cancellation)?;
-        self.require_write()?;
+        self.require_move_source_read()?;
         if !capture.state.ptr_eq(&Arc::downgrade(&self.state))
             || !self.config.same_admission(&capture.config)
             || !self.namespace_snapshot_matches(&capture.source_namespace)

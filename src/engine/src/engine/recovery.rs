@@ -287,6 +287,18 @@ impl Engine {
         mode: RecoveryMode,
         prepared: PreparedRecovery,
     ) -> Result<()> {
+        let move_selected = self.history_move_choice.is_some();
+        if let Some(choice) = &self.history_move_choice {
+            // This slice has no native move Candidate/ACCEPT. A later ordinary
+            // slot or a torn tail is not permission to bypass retained selection.
+            if prepared.torn_tail
+                || prepared.records.keys().any(|slot| *slot > choice.source_sequence())
+                || prepared.candidates.keys().any(|slot| *slot > choice.source_sequence())
+            {
+                return Err(Error::new(ErrorCode::RecoveryRequired,
+                    "journal extends beyond or cannot prove the selected move source; preserve the original choice and journal"));
+            }
+        }
         let PreparedRecovery {
             members,
             online,
@@ -297,7 +309,8 @@ impl Engine {
             mut candidates,
         } = prepared;
         let fenced = self.membership_fence.is_some();
-        let can_repair = online.len() == members.len() && !fenced;
+        let members_ready = online.len() == members.len() && !fenced;
+        let can_repair = members_ready && !move_selected;
         let mut scanned_journals = BTreeMap::new();
         for disk in &online {
             let opened = opened_journals
@@ -622,7 +635,7 @@ impl Engine {
                 )?;
                 self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash.clone());
-                self.blocked = true;
+                self.blocked |= !members_ready;
             } else {
                 self.blocked = true;
                 break;
@@ -635,8 +648,15 @@ impl Engine {
                 retain_replayed_records(history, self.journals[&disk.disk_id].records());
             }
         }
-        if !can_repair {
+        if !members_ready {
             self.blocked = true;
+        }
+        if move_selected {
+            // Recovered only existing complete PUBLICATION barriers above. No
+            // tail repair, namespace/layout install, purge or checkpoint write.
+            self.require_move_choice_baseline()?;
+            self.restore_namespace_workspace_baselines()?;
+            return Ok(());
         }
         if mode == RecoveryMode::CompletePending && !self.blocked {
             self.repair_journal_tails()?;

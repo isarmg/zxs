@@ -185,7 +185,7 @@ impl Scopes {
         artifacts
     }
 
-    pub(super) fn report(&self) -> FileHistoryMoveScopedPreparation {
+    pub(in crate::engine::history_move_decision) fn report(&self) -> FileHistoryMoveScopedPreparation {
         FileHistoryMoveScopedPreparation {
             operation_id: self.operation, native_digest: self.native_digest.clone(),
             scoped_digest: self.digest.clone(), source_sequence: self.source_sequence,

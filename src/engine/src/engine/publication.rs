@@ -153,6 +153,7 @@ impl Engine {
         detached: DetachedPublication,
     ) -> Result<OperationResult> {
         if self.blocked
+            || self.history_move_choice.is_some()
             || !detached.prepared_epoch.matches(&self.metadata_integrity)
             || detached.reused_dependencies.as_ref().is_some_and(|reuse| {
                 !reuse.matches(&self.planning_context(), &detached.config_hash)

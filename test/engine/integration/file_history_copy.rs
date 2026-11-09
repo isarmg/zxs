@@ -703,3 +703,6 @@ mod move_native;
 
 #[path = "file_history_copy/move_scopes.rs"]
 mod move_scopes;
+
+#[path = "file_history_copy/move_choice.rs"]
+mod move_choice;

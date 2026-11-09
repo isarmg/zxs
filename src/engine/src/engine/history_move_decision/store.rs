@@ -263,14 +263,37 @@ impl Store {
     ) -> Result<()> {
         let disk = engine.disk(&participant.identity.slot_id)?;
         let Some(capacity) = disk.capacity_bytes else { return Ok(()); };
-        let mut required = native_storage_bytes(materials, participant, native)?;
-        let payload_disk = (!participant.carries_state()).then_some(participant.identity.disk_id.as_str());
-        for artifact in scopes.artifacts(payload_disk) {
-            required = required.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
-        }
+        let required = scoped_storage_bytes(materials, participant, native, scopes)?;
         if engine.used_bytes(&participant.identity.slot_id).checked_add(required).ok_or_else(limit)? > capacity {
             return Err(Error::new(ErrorCode::NoSpace,
                 "move scoped databases exceed configured participant capacity"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn install_choice(&self, bytes: &[u8], cancellation: &HistoryWindowCancellation) -> Result<()> {
+        self.install_artifacts(&[Artifact::Exact { name: choice::NAME, bytes }], cancellation)
+    }
+
+    pub(super) fn verify_choice(&self, bytes: &[u8], cancellation: &HistoryWindowCancellation) -> Result<()> {
+        self.verify_artifacts(&[Artifact::Exact { name: choice::NAME, bytes }], cancellation)
+    }
+
+    pub(super) fn require_choice_capacity(
+        engine: &Engine,
+        materials: &Materials,
+        participant: &DiskScope,
+        native: &crate::business::NativeMoveDraft,
+        scopes: &scopes::Scopes,
+        choice_bytes: usize,
+    ) -> Result<()> {
+        let disk = engine.disk(&participant.identity.slot_id)?;
+        let Some(capacity) = disk.capacity_bytes else { return Ok(()); };
+        let required = scoped_storage_bytes(materials, participant, native, scopes)?
+            .checked_add(choice_bytes as u64 + 4096).ok_or_else(limit)?;
+        if engine.used_bytes(&participant.identity.slot_id).checked_add(required).ok_or_else(limit)? > capacity {
+            return Err(Error::new(ErrorCode::NoSpace,
+                "move joint choice and all retained inputs exceed configured participant capacity"));
         }
         Ok(())
     }
@@ -382,5 +405,19 @@ fn native_storage_bytes(
         for artifact in scope.native_artifacts(native) {
             required = required.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
         }
+    Ok(required)
+}
+
+fn scoped_storage_bytes(
+    materials: &Materials,
+    participant: &DiskScope,
+    native: &crate::business::NativeMoveDraft,
+    scopes: &scopes::Scopes,
+) -> Result<u64> {
+    let mut required = native_storage_bytes(materials, participant, native)?;
+    let payload_disk = (!participant.carries_state()).then_some(participant.identity.disk_id.as_str());
+    for artifact in scopes.artifacts(payload_disk) {
+        required = required.checked_add(artifact.bytes().len() as u64 + 4096).ok_or_else(limit)?;
+    }
     Ok(required)
 }

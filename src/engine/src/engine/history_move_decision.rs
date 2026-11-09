@@ -5,6 +5,9 @@ use crate::{disk::*, *};
 use data_serialization::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod choice;
+pub use choice::FileHistoryMoveJointChoice;
+pub(super) use choice::Choice;
 mod materials;
 mod native;
 mod scopes;

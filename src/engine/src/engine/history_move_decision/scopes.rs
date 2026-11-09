@@ -89,7 +89,7 @@ impl Engine {
         Ok(scopes.report())
     }
 
-    fn move_scoped_inputs(
+    pub(super) fn move_scoped_inputs(
         &self,
         projection: &FileHistoryMoveProjection,
         recovery: &FileHistoryMoveRecoveryDigest,
@@ -102,7 +102,7 @@ impl Engine {
         Ok((materials, native, scopes))
     }
 
-    fn verify_move_scopes(
+    pub(super) fn verify_move_scopes(
         &self,
         projection: &FileHistoryMoveProjection,
         recovery: &FileHistoryMoveRecoveryDigest,
