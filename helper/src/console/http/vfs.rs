@@ -48,11 +48,16 @@ pub(super) async fn commit(
     Ok(Json(value).into_response())
 }
 fn join_failure(error: tokio::task::JoinError) -> Failure {
-    Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "vfs_installation_worker", error)
+    Failure::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "vfs_installation_worker",
+        error,
+    )
 }
 fn failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
     Failure::message(
-        StatusCode::CONFLICT, "sealed_vfs_installation",
+        StatusCode::CONFLICT,
+        "sealed_vfs_installation",
         &crate::diagnostic_chain(error.as_ref()),
     )
 }

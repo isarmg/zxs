@@ -57,9 +57,8 @@ struct BuildReceipt {
 }
 impl BuildReceipt {
     fn require_target(&self, payload: Payload) -> Result<()> {
-        let target: Target = json_codec::from_str(include_str!(
-            "../../../.github/samba-debian-target.json"
-        ))?;
+        let target: Target =
+            json_codec::from_str(include_str!("../../../.github/samba-debian-target.json"))?;
         if self.distribution != target.distribution
             || self.release != target.release
             || self.suite != target.suite
@@ -79,7 +78,9 @@ impl BuildReceipt {
         }
         for digest in [&self.sdk_recipe_sha256, &self.sdk_config_sha256] {
             if digest.len() != 64
-                || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             {
                 return Err("embedded VFS SDK evidence has an invalid byte identity".into());
             }
@@ -125,7 +126,9 @@ pub(crate) fn required() -> Result<Verified> {
         || platform_io::lower_hex(&Sha256::digest(payload.bytes)) != payload.sha256
         || platform_io::lower_hex(&Sha256::digest(payload.receipt)) != payload.receipt_sha256
     {
-        return Err("embedded VFS bytes or source binding differ from the exact ZXS payload".into());
+        return Err(
+            "embedded VFS bytes or source binding differ from the exact ZXS payload".into(),
+        );
     }
     let bytes = payload.bytes;
     if bytes[..7] != *b"\x7fELF\x02\x01\x01"

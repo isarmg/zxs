@@ -16,8 +16,11 @@ pub fn absent(out: &Path) {
             "partial embedded VFS configuration: {name}"
         );
     }
-    fs::write(out.join("install_vfs.rs"), "const EMBEDDED: Option<Payload> = None;\n")
-        .expect("write explicit development VFS absence");
+    fs::write(
+        out.join("install_vfs.rs"),
+        "const EMBEDDED: Option<Payload> = None;\n",
+    )
+    .expect("write explicit development VFS absence");
 }
 
 pub fn prepare(out: &Path, binding: &materials::Binding<'_>) {
@@ -26,7 +29,11 @@ pub fn prepare(out: &Path, binding: &materials::Binding<'_>) {
         return;
     }
     let (sha256, bytes) = materials::snapshot(
-        out, VARIABLES[0], VARIABLES[1], "payload-zxs.so", 64 * 1024 * 1024,
+        out,
+        VARIABLES[0],
+        VARIABLES[1],
+        "payload-zxs.so",
+        64 * 1024 * 1024,
     );
     assert!(
         bytes.len() >= 64
@@ -37,10 +44,15 @@ pub fn prepare(out: &Path, binding: &materials::Binding<'_>) {
             && u16::from_le_bytes([bytes[52], bytes[53]]) == 64,
         "embedded VFS must be one ELF64 little-endian x86_64 shared object"
     );
-    let (receipt_sha256, _) = materials::snapshot(
-        out, VARIABLES[2], VARIABLES[3], "vfs-build.json", 64 * 1024,
-    );
-    let materials::Binding { version, commit, tree, target, .. } = binding;
+    let (receipt_sha256, _) =
+        materials::snapshot(out, VARIABLES[2], VARIABLES[3], "vfs-build.json", 64 * 1024);
+    let materials::Binding {
+        version,
+        commit,
+        tree,
+        target,
+        ..
+    } = binding;
     let generated = format!(
         "const EMBEDDED: Option<Payload> = Some(Payload {{ bytes: include_bytes!(concat!(env!(\"OUT_DIR\"), \"/payload-zxs.so\")), receipt: include_bytes!(concat!(env!(\"OUT_DIR\"), \"/vfs-build.json\")), version: {version:?}, commit: {commit:?}, tree: {tree:?}, target: {target:?}, sha256: {sha256:?}, receipt_sha256: {receipt_sha256:?} }});\n"
     );

@@ -65,7 +65,9 @@ struct Prepared {
 impl Prepared {
     fn open() -> Result<Self> {
         if rustix::process::getuid().as_raw() != 0 || rustix::process::geteuid().as_raw() != 0 {
-            return Err("VFS installation requires the manually run real/effective root helper".into());
+            return Err(
+                "VFS installation requires the manually run real/effective root helper".into(),
+            );
         }
         let payload = vfs_payload::required()?;
         let host = BundleDestination::open(Path::new("/zxs"))?;
@@ -129,17 +131,23 @@ impl Prepared {
     fn records(&self) -> Result<(bool, bool)> {
         let plan = json_codec::to_vec_pretty(&self.plan)?;
         let receipt = json_codec::to_vec_pretty(&self.receipt())?;
-        let original = self.host.read_operation(&self.name("intent"), "plan.json", RECORD_LIMIT)?;
+        let original = self
+            .host
+            .read_operation(&self.name("intent"), "plan.json", RECORD_LIMIT)?;
         if original.as_ref().is_some_and(|bytes| bytes != &plan) {
-            return Err("retained VFS intent differs from this exact original request; preserve it".into());
+            return Err(
+                "retained VFS intent differs from this exact original request; preserve it".into(),
+            );
         }
-        let complete = self.host.read_operation(
-            &self.name("installed"), "receipt.json", RECORD_LIMIT,
-        )?;
+        let complete =
+            self.host
+                .read_operation(&self.name("installed"), "receipt.json", RECORD_LIMIT)?;
         if complete.as_ref().is_some_and(|bytes| bytes != &receipt)
             || (complete.is_some() && original.is_none())
         {
-            return Err("retained VFS completion is inconsistent or lacks its original intent".into());
+            return Err(
+                "retained VFS completion is inconsistent or lacks its original intent".into(),
+            );
         }
         Ok((original.is_some(), complete.is_some()))
     }
@@ -177,11 +185,13 @@ pub(crate) fn preview() -> Result<Value> {
     let prepared = Prepared::open()?;
     activation::require_samba_stopped_for_vfs(&prepared.systemctl)?;
     let current = prepared.observation()?;
-    Ok(json!({"request_digest":prepared.digest,"plan":prepared.plan,"current":current,
+    Ok(
+        json!({"request_digest":prepared.digest,"plan":prepared.plan,"current":current,
         "source":"sealed matching helper release; no runtime path, URL or upload",
         "will_replace_existing_bytes":false,"will_install_os_packages":false,
         "will_stop_or_start_services":false,"all_external_writers_excluded":false,
-        "confirmation":"install-sealed-samba-vfs-only"}))
+        "confirmation":"install-sealed-samba-vfs-only"}),
+    )
 }
 pub(crate) fn status(input: Original) -> Result<Observation> {
     let prepared = Prepared::open()?;
@@ -195,7 +205,11 @@ struct Pending {
 }
 impl std::fmt::Display for Pending {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "VFS installation {} may have published exact module bytes; preserve all material, query this original request and explicitly resume only it; no rollback or service activation is claimed", self.digest)
+        write!(
+            f,
+            "VFS installation {} may have published exact module bytes; preserve all material, query this original request and explicitly resume only it; no rollback or service activation is claimed",
+            self.digest
+        )
     }
 }
 impl std::error::Error for Pending {
@@ -222,13 +236,17 @@ pub(crate) fn commit(input: Commit) -> Result<Value> {
 fn publish(prepared: &Prepared) -> Result<Value> {
     prepared.recheck()?;
     let (_, complete) = prepared.records()?;
-    let matches = prepared.destination.matches_or_absent(prepared.payload.bytes)?;
+    let matches = prepared
+        .destination
+        .matches_or_absent(prepared.payload.bytes)?;
     if complete && !matches {
         return Err("a completed VFS module is missing; installation does not recreate it or discard the original completion".into());
     }
     if !complete {
         let plan = json_codec::to_vec_pretty(&prepared.plan)?;
-        prepared.host.publish(&prepared.name("intent"), &[("plan.json", &plan)])?;
+        prepared
+            .host
+            .publish(&prepared.name("intent"), &[("plan.json", &plan)])?;
     }
     prepared.recheck()?;
     activation::require_samba_stopped_for_vfs(&prepared.systemctl)?;
@@ -236,13 +254,17 @@ fn publish(prepared: &Prepared) -> Result<Value> {
     prepared.recheck()?;
     activation::require_samba_stopped_for_vfs(&prepared.systemctl)?;
     let receipt = json_codec::to_vec_pretty(&prepared.receipt())?;
-    prepared.host.publish(
-        &prepared.name("installed"), &[("receipt.json", &receipt)],
-    )?;
+    prepared
+        .host
+        .publish(&prepared.name("installed"), &[("receipt.json", &receipt)])?;
     let current = prepared.observation()?;
     if !current.current_module_matches {
-        return Err("VFS module changed after receipt publication; no current success is claimed".into());
+        return Err(
+            "VFS module changed after receipt publication; no current success is claimed".into(),
+        );
     }
-    Ok(json!({"state":"vfs_module_installed_not_activated","request_digest":prepared.digest,
-        "created_in_this_attempt":created,"current":current,"receipt":prepared.receipt()}))
+    Ok(
+        json!({"state":"vfs_module_installed_not_activated","request_digest":prepared.digest,
+        "created_in_this_attempt":created,"current":current,"receipt":prepared.receipt()}),
+    )
 }

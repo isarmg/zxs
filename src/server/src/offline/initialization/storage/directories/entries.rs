@@ -199,7 +199,8 @@ fn observe_one(
         if pending_directory.is_some() {
             return Err("an existing selected root has unexpected staging material".into());
         }
-        let directory = final_directory.ok_or("original existing first-storage root disappeared")?;
+        let directory =
+            final_directory.ok_or("original existing first-storage root disappeared")?;
         attributes(&directory, owner, false)?;
         if Identity::from(directory.identity()) != *original {
             return Err("original existing first-storage root was replaced".into());
@@ -217,14 +218,19 @@ fn observe_one(
         let (binding, phase) = binding(host, target, digest, &record)?;
         match (final_directory, pending_directory) {
             (Some(_), Some(_)) => {
-                return Err("both final and pending first-storage roots exist; neither was changed".into());
+                return Err(
+                    "both final and pending first-storage roots exist; neither was changed".into(),
+                );
             }
             (Some(directory), None) => {
                 let binding = binding.ok_or("published new root has no original inode binding")?;
                 if phase != BundleState::Published
                     || Identity::from(directory.identity()) != binding.identity
                 {
-                    return Err("published new root does not match its durable original inode binding".into());
+                    return Err(
+                        "published new root does not match its durable original inode binding"
+                            .into(),
+                    );
                 }
                 attributes(&directory, owner, false)?;
                 named(parent, &final_name, directory.identity())?;
@@ -235,7 +241,9 @@ fn observe_one(
                 if let Some(binding) = &binding
                     && Identity::from(directory.identity()) != binding.identity
                 {
-                    return Err("pending first-storage root no longer has its original inode".into());
+                    return Err(
+                        "pending first-storage root no longer has its original inode".into(),
+                    );
                 }
                 if binding.is_none() && !administrative {
                     return Err("handed-off pending root has no original inode record".into());
@@ -248,7 +256,9 @@ fn observe_one(
             }
             (None, None) => {
                 if binding.is_some() || phase != BundleState::Absent {
-                    return Err("an original prepared root disappeared; it was not recreated".into());
+                    return Err(
+                        "an original prepared root disappeared; it was not recreated".into(),
+                    );
                 }
                 Location::Absent
             }
@@ -306,8 +316,8 @@ pub(super) fn publish(
                 pending.as_os_str(),
                 Mode::from_raw_mode(0o700),
             )?;
-            let directory = open(parent, &pending)?
-                .ok_or("new first-storage pending directory disappeared")?;
+            let directory =
+                open(parent, &pending)?.ok_or("new first-storage pending directory disappeared")?;
             parent.directory().sync_all()?;
             directory
         }

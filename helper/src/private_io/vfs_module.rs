@@ -69,7 +69,9 @@ impl VfsDestination {
         let created = self.destination.install(bytes)?;
         self.recheck()?;
         if !self.destination.matches_or_absent(bytes)? {
-            return Err("VFS module disappeared after publication; no completion is claimed".into());
+            return Err(
+                "VFS module disappeared after publication; no completion is claimed".into(),
+            );
         }
         Ok(created)
     }

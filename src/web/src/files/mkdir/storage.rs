@@ -177,9 +177,7 @@ impl Record {
                         "The original folder paths do not share one namespace.",
                     ));
                 }
-                let change = storage_contract::NamespaceOperation::Mkdir {
-                    path: path.clone(),
-                };
+                let change = storage_contract::NamespaceOperation::Mkdir { path: path.clone() };
                 Some(
                     storage_contract::object_hash(
                         "request",
@@ -218,7 +216,9 @@ pub(super) fn load(principal: &str) -> Result<Vec<Arc<Record>>, api::Error> {
     let storage = storage()?;
     let count = storage.length().map_err(api::js_error)?;
     if count > MAX_STORAGE_KEYS {
-        return Err(limit("Folder recovery exceeds the local storage scan budget."));
+        return Err(limit(
+            "Folder recovery exceeds the local storage scan budget.",
+        ));
     }
     let prefix = prefix(principal);
     let mut records = Vec::new();

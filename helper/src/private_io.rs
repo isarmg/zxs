@@ -11,7 +11,6 @@ pub(crate) use configuration_files::{
     ConfigurationFiles, ParentSnapshot, SAMBA_PATH, SYSTEMD_PATH,
 };
 pub(crate) use host_root::HostRoot;
-pub(crate) use vfs_module::VfsDestination;
 use platform_io::fs_safety::{
     AtomicCommitError, EntryName,
     linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},
@@ -24,6 +23,7 @@ pub(crate) use program_repair::ProgramSnapshot;
 pub(crate) use rescue_image::{publish_rescue_sqlite, rescue_digest, verify_rescue_sqlite};
 use rustix::fs::{AtFlags, RenameFlags, renameat_with, statat};
 use std::{ffi::OsStr, fs::File, io::Read, os::unix::fs::MetadataExt, path::Path};
+pub(crate) use vfs_module::VfsDestination;
 
 struct AnchoredPath {
     directory: OpenAt2Root,

@@ -92,9 +92,9 @@ pub(crate) fn blocks_writes(state: &State) -> bool {
     model.owns(state) && (!model.records.is_empty() || model.error.is_some())
 }
 pub(crate) fn start(state: RwSignal<State>, name: &str) -> Option<String> {
-    if !state.with_untracked(|s| {
-        actions::write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s)
-    }) {
+    if !state
+        .with_untracked(|s| actions::write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s))
+    {
         return None;
     }
     let id = crate::ui::file_operation_id(state)?;
@@ -138,7 +138,10 @@ fn retry_record(state: &State, epoch: u64, operation: OperationId) -> Option<Arc
         || !state.management.storage.writable()
         || model.error.is_some()
         || state.files.mutation_pending
-        || state.files.polling_operations.contains(&operation.to_string())
+        || state
+            .files
+            .polling_operations
+            .contains(&operation.to_string())
     {
         return None;
     }
@@ -233,9 +236,7 @@ pub(crate) fn poll_allowed(state: &State, id: &str) -> bool {
         .iter()
         .find(|retained| retained.record.operation().to_string() == id)
         .is_none_or(|retained| {
-            model.owns(state)
-                && retained.phase == Phase::Pending
-                && retained.record.can_lookup()
+            model.owns(state) && retained.phase == Phase::Pending && retained.record.can_lookup()
         })
 }
 pub(crate) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool {
@@ -246,7 +247,9 @@ pub(crate) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool 
         .find(|retained| retained.record.operation().to_string() == id)
         .is_none_or(|retained| {
             model.owns(state)
-                && retained.record.matches_receipt(receipt, ReceiptOrigin::Lookup)
+                && retained
+                    .record
+                    .matches_receipt(receipt, ReceiptOrigin::Lookup)
         })
 }
 pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {

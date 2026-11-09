@@ -15,7 +15,6 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 <For each=move ||state.with(|s|s.files.mkdir.records.iter().map(|retained|(s.session_epoch,Arc::clone(&retained.record))).collect::<Vec<_>>())
                     key=|row|(row.0,row.1.operation()) children=move |(epoch,record)| {
                         let operation = record.operation();
-                        let cleanup_id = operation.to_string();
                         let label = record.label();
                         let requires_post = !record.can_lookup();
                         view! {
@@ -40,7 +39,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                                     <p>{t("原操作已有明确结果；仅本机记录清理未完成，不会再次提交。", "The original outcome is confirmed. Only local record cleanup remains; it never resubmits.")}</p>
                                     <button class="zxs-button" on:click=move |_| {
                                         if current_session(state,epoch) {
-                                            finish(state,&cleanup_id);
+                                            finish(state,&operation.to_string());
                                         }
                                     }>{t("重试本机记录清理", "Retry local record cleanup")}</button>
                                 </Show>

@@ -111,7 +111,9 @@ fn bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 impl Prepared {
     fn open(input: Input) -> Result<Self> {
         if rustix::process::getuid().as_raw() != 0 || rustix::process::geteuid().as_raw() != 0 {
-            return Err("first-storage directory preparation requires the manually run root helper".into());
+            return Err(
+                "first-storage directory preparation requires the manually run root helper".into(),
+            );
         }
         layout::names(&input.roots)?;
         let root = Root::open(input.service_user.clone())?;
@@ -179,7 +181,10 @@ impl Prepared {
                 .zip(&self.plan.targets)
                 .any(|(entry, target)| target.original.is_none() && !entry.is_absent())
         {
-            return Err("new directory material exists before its complete original plan; it was preserved".into());
+            return Err(
+                "new directory material exists before its complete original plan; it was preserved"
+                    .into(),
+            );
         }
         self.recheck()?;
         Ok(observed)
@@ -219,7 +224,10 @@ impl Prepared {
             .host
             .inspect(COMPLETION_DIRECTORY, &[("receipt.json", &encoded)])?;
         if phase != BundleState::Absent && expected.is_none() {
-            return Err("directory completion began but its original directory set is no longer complete".into());
+            return Err(
+                "directory completion began but its original directory set is no longer complete"
+                    .into(),
+            );
         }
         if phase == BundleState::Published {
             Ok(expected)
@@ -253,14 +261,9 @@ impl Prepared {
         for target in &self.plan.targets {
             self.recheck()?;
             let (parent, owner) = self.root.layout.first_storage_directory_parent()?;
-            entries::publish(
-                &self.root.host,
-                parent,
-                owner,
-                target,
-                &self.digest,
-                || self.recheck(),
-            )?;
+            entries::publish(&self.root.host, parent, owner, target, &self.digest, || {
+                self.recheck()
+            })?;
             self.observe()?;
         }
         let final_entries = self.observe()?;
@@ -303,7 +306,10 @@ pub(crate) fn prepare(input: Prepare) -> Result<Outcome> {
     }
     let prepared = Prepared::open(input.input)?;
     if prepared.digest != input.request_digest {
-        return Err("first-storage directory request differs from its exact preview; nothing was created".into());
+        return Err(
+            "first-storage directory request differs from its exact preview; nothing was created"
+                .into(),
+        );
     }
     let request_digest = prepared.digest.clone();
     prepared.publish().map_err(|source| {
