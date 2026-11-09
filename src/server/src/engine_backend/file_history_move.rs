@@ -17,7 +17,7 @@ impl EngineBackend {
 }
 
 fn move_current_file_locked(
-    engine: &mut Engine,
+    engine: &mut AdmissionEngine,
     identity: &Identity,
     command: crate::MoveCurrentFile,
 ) -> Result<storage_contract::OperationResult, ApiError> {
