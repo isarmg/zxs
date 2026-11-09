@@ -19,6 +19,9 @@ pub(crate) fn verify(
     next: &State,
     current: Option<&crate::engine::CurrentNamespaces>,
 ) -> Result<()> {
+    if super::occurrence::verify_publication(previous, next, current)?.is_some() {
+        return Ok(());
+    }
     let mut changed = std::collections::BTreeSet::new();
     let inspect = |key: &str, changed: &mut std::collections::BTreeSet<String>| {
         if previous.file_deletions.get(key) != next.file_deletions.get(key) {
@@ -196,7 +199,11 @@ fn verify_receipt(
 
 /// One envelope rule serves hot publication and cold lifecycle replay. A past
 /// node's frontier may legitimately differ from current heads after its undo.
-fn admit_receipt(state: &State, receipt: &OperationResult, undo: bool) -> Result<FileDeletionNode> {
+pub(in crate::file_deletion) fn admit_receipt(
+    state: &State,
+    receipt: &OperationResult,
+    undo: bool,
+) -> Result<FileDeletionNode> {
     let node: FileDeletionNode = json_codec::from_value(
         receipt
             .result
@@ -232,6 +239,9 @@ fn admit_receipt(state: &State, receipt: &OperationResult, undo: bool) -> Result
                 || receipt.result["restored_file_id"].as_str() != Some(node.file_id.as_str())))
     {
         return Err(invalid());
+    }
+    if undo {
+        super::occurrence::admit_retained_undo(state, receipt, &node)?;
     }
     Ok(node)
 }

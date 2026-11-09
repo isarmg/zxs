@@ -115,6 +115,8 @@ struct RecoveryRecord {
     generation: ConfigurationGeneration,
     namespace: FileHistoryCopyRequest,
     source_file_id: String,
+    #[serialization(skip_serializing_if = "Option::is_none")]
+    replacement: Option<FileHistoryMoveReplacement>,
     #[serialization(with = "storage_contract::u64_string")]
     source_sequence: u64,
     source_records_hash: String,
@@ -165,6 +167,7 @@ impl RecoveryRecord {
             generation: ConfigurationGeneration::current(engine),
             namespace: capture.namespace().clone(),
             source_file_id: capture.source_file_id().as_str().into(),
+            replacement: capture.replacement().cloned(),
             source_sequence: capture.source_sequence(),
             source_records_hash: capture.source_records_digest().to_string(),
             branch_heads: capture.branch_heads().clone(),

@@ -69,6 +69,8 @@ fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
     };
     let source: crate::FileDeletionNode = if receipt.kind == super::batch::KIND {
         super::batch::node_for(receipt, file)?
+    } else if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
+        crate::business::retained_file_history_move_deletion(receipt, file)?
     } else {
         json_codec::from_value(receipt.result.get(key).ok_or_else(invalid)?.clone())?
     };

@@ -54,6 +54,8 @@ pub(super) struct Record {
     pub(super) disks: Vec<DiskScope>,
     source_file: FileScope,
     target_file: FileScope,
+    #[serialization(skip_serializing_if = "Option::is_none")]
+    replacement_file: Option<FileScope>,
     source_placements: BTreeMap<String, Placement>,
     target_route: crate::business::history_copy::CopyRoute,
     pub(super) target_copy_identities: super::super::history_move_target::CopyIdentities,
@@ -70,6 +72,7 @@ pub(super) struct Materials {
     pub(super) state: Vec<u8>,
     pub(super) source: PreparedMoveFile,
     pub(super) target: PreparedMoveFile,
+    pub(super) replacement: Option<PreparedMoveFile>,
     pub(super) target_preparation_bytes: u64,
 }
 
@@ -144,6 +147,7 @@ impl Materials {
     ) -> Result<Self> {
         let source = projection.source_file_database(engine.state())?;
         let target = projection.target_file_database()?;
+        let replacement = projection.replacement_file_database(engine.state())?;
         let metadata = projection.target_metadata()?;
         let logical = encode_metadata(&metadata, STATE_BYTES)?;
         let mut target_preparation_bytes =
@@ -162,8 +166,7 @@ impl Materials {
             .to_string();
         let source_placements = projection
             .capture()
-            .version_ids()
-            .iter()
+            .retained_version_ids()
             .map(|id| (id.clone(), engine.state().placements[id].clone()))
             .collect();
         let disks = participants(engine, projection, &source_placements)?;
@@ -208,6 +211,15 @@ impl Materials {
                 history_tree_id: target_repository.history_tree_id.clone(),
                 records_hash: target.records_hash().into(),
             },
+            replacement_file: projection.proposed_replacement_deletion().map(|node| FileScope {
+                file_id: node.file_id.clone(),
+                history_tree_id: node.history_tree_id.clone(),
+                records_hash: replacement
+                    .as_ref()
+                    .expect("invariant: replacement D has its prepared FILE")
+                    .records_hash()
+                    .into(),
+            }),
             source_placements,
             target_route: projection.recovery_route().clone(),
             target_copy_identities: targets.copy_identities().clone(),
@@ -226,6 +238,7 @@ impl Materials {
             state,
             source,
             target,
+            replacement,
             target_preparation_bytes,
         })
     }

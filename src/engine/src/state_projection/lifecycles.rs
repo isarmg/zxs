@@ -12,6 +12,26 @@ pub(crate) enum DeletionOwner<'a> {
     Malformed,
 }
 pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
+    if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND
+        && let Some(replacement) = receipt.result.get("replacement")
+    {
+        let source = receipt.result.get("deletion_node")
+            .and_then(|node| node.get("file_id"))
+            .and_then(json_codec::Value::as_str);
+        let target = replacement.get("deletion_node")
+            .and_then(|node| node.get("file_id"))
+            .and_then(json_codec::Value::as_str);
+        return match (source, target) {
+            (Some(source), Some(target))
+                if source != target
+                    && storage_contract::validate_id(source, "file").is_ok()
+                    && storage_contract::validate_id(target, "file").is_ok() =>
+            {
+                DeletionOwner::Files(vec![source, target])
+            }
+            _ => DeletionOwner::Malformed,
+        };
+    }
     if receipt.kind == crate::file_deletion::batch::KIND {
         let Some(nodes) = receipt
             .result

@@ -16,7 +16,8 @@ mod business;
 mod route_topology;
 pub use business::{
     CurrentFileHistoryMove, CurrentFileHistoryMoveProjection, FileHistoryCopyRequest,
-    FileHistoryMoveCapture, FileHistoryMoveProjection, FileHistoryMoveRequest,
+    FileHistoryMoveCapture, FileHistoryMoveProjection, FileHistoryMoveReplacement,
+    FileHistoryMoveRequest,
     FileHistoryMoveSourceDigest,
 };
 mod container_storage;

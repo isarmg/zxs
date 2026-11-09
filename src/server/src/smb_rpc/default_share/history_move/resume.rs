@@ -34,6 +34,7 @@ struct Intent {
     operation_id: OperationId,
     publication_outcome: String,
     move_request: Request,
+    replacement: Option<ReplacementIntent>,
     source_binding: Binding,
     target_binding: Binding,
     source_entry_id: String,
@@ -53,6 +54,7 @@ impl DefaultShare {
         &mut self,
         source: &str,
         target: &str,
+        replace: bool,
         operation: OperationId,
     ) -> Result<Option<Value>, ApiError> {
         let Some(admission) =
@@ -66,6 +68,9 @@ impl DefaultShare {
         if format.get("format").and_then(Value::as_str)
             == Some("smb-file-history-move-empty-target")
         {
+            if replace {
+                return Err(changed());
+            }
             return self
                 .resume_empty_disk_move(source, target, admission, &bytes)
                 .map(Some);
@@ -73,7 +78,13 @@ impl DefaultShare {
         let original: Intent =
             storage_contract::decode_strict(&bytes).map_err(ApiError::contract_input)?;
         let request = &original.move_request;
-        if original.format != "smb-file-history-move"
+        let expected_format = if replace {
+            "smb-file-history-move-replace"
+        } else {
+            "smb-file-history-move"
+        };
+        if original.format != expected_format
+            || (!replace && original.replacement.is_some())
             || original.publication_outcome != "unconfirmed"
             || original.operation_id != operation
             || original.principal != self.identity.principal
@@ -145,8 +156,7 @@ impl DefaultShare {
         if admission.retained_move_bytes()? != bytes {
             return Err(changed());
         }
-        let result = self.shared.backend.move_current_file(
-            &self.identity,
+        let result = self.submit_move(
             crate::MoveCurrentFile {
                 source_binding: source_identity
                     .smb_binding
@@ -160,6 +170,7 @@ impl DefaultShare {
                 expected_source_file_id: file,
                 operation_id: operation,
             },
+            original.replacement,
         )?;
         let reply = published_reply(result, operation)?;
         admission.finish_published();

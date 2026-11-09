@@ -8,15 +8,19 @@ pub(crate) const KIND: &str = "file.history.move";
 
 mod admission;
 pub(crate) use admission::{
-    admit_source_deletion, original_move_namespace, replay_selected_move,
-    verify_current_move_transition,
+    admit_deletions, admit_displaced, original_move_intent, replay_selected_move,
+    retained_deletion, verify_current_move_transition,
 };
+#[cfg(test)]
+use admission::admit_source_deletion;
 
 #[derive(Serialize)]
 #[serialization(deny_unknown_fields)]
 struct Request<'a> {
     namespace: &'a FileHistoryCopyRequest,
     source_file_id: &'a str,
+    #[serialization(skip_serializing_if = "Option::is_none")]
+    replacement: Option<&'a FileHistoryMoveReplacement>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
@@ -58,6 +62,8 @@ struct ResultBody<'a> {
     source_sequence: u64,
     source_records_hash: String,
     deletion_node: &'a FileDeletionNode,
+    #[serialization(skip_serializing_if = "Option::is_none")]
+    replacement: Option<&'a replacement::Evidence>,
     retained_lifecycle: &'a CopiedLifecycle,
     version_ids: Vec<String>,
     version_mapping: &'a BTreeMap<String, String>,
@@ -84,6 +90,8 @@ struct Envelope<'a> {
     proposed_operation: &'a OperationResult,
     source_file_database_records_hash: &'a str,
     target_file_database_records_hash: &'a str,
+    #[serialization(skip_serializing_if = "Option::is_none")]
+    replacement_file_database_records_hash: Option<&'a str>,
 }
 
 /// Opaque internal inputs. No caller receives the proposed OperationResult or
@@ -95,6 +103,7 @@ pub(crate) struct NativeMoveDraft {
     proposed_state: State,
     source_records_hash: String,
     target_records_hash: String,
+    replacement_records_hash: Option<String>,
     request_digest: String,
     digest: String,
 }
@@ -118,6 +127,9 @@ impl NativeMoveDraft {
     }
     pub(crate) fn target_records_hash(&self) -> &str {
         &self.target_records_hash
+    }
+    pub(crate) fn replacement_records_hash(&self) -> Option<&str> {
+        self.replacement_records_hash.as_deref()
     }
     pub(crate) fn request_digest(&self) -> &str {
         &self.request_digest
@@ -214,6 +226,7 @@ impl FileHistoryMoveProjection {
         let input = Request {
             namespace: request,
             source_file_id: self.capture.source_file_id.as_str(),
+            replacement: self.capture.replacement(),
         };
         let request_digest = Engine::native_request_digest(KIND, &self.principal, &json!(input))?;
         let result = ResultBody {
@@ -224,6 +237,7 @@ impl FileHistoryMoveProjection {
             source_sequence: self.capture.source_sequence,
             source_records_hash: self.capture.source_records_digest.to_string(),
             deletion_node: self.proposed_source_deletion(),
+            replacement: self.writes.replacement.as_ref(),
             retained_lifecycle: &self.writes.lifecycle,
             version_ids: self.writes.version_mapping.values().cloned().collect(),
             version_mapping: &self.writes.version_mapping,
@@ -277,6 +291,17 @@ impl FileHistoryMoveProjection {
             self.target_file_id().as_str(),
             &target.history_tree_id,
         )?;
+        let replacement_records_hash = self
+            .proposed_replacement_deletion()
+            .map(|node| {
+                crate::container_storage::file_database::capture_copy(
+                    &next,
+                    &node.file_id,
+                    &node.history_tree_id,
+                )
+                .map(|database| database.records_hash)
+            })
+            .transpose()?;
         history_copy::retained::bounded(&next)?;
         let state = crate::disk::encode_metadata(&next, 12 * 1024 * 1024)?;
         let envelope = crate::disk::encode_metadata(
@@ -285,6 +310,7 @@ impl FileHistoryMoveProjection {
                 proposed_operation: &receipt,
                 source_file_database_records_hash: &source.records_hash,
                 target_file_database_records_hash: &target_database.records_hash,
+                replacement_file_database_records_hash: replacement_records_hash.as_deref(),
             },
             12 * 1024 * 1024,
         )?;
@@ -299,6 +325,7 @@ impl FileHistoryMoveProjection {
             proposed_state: next,
             source_records_hash: source.records_hash,
             target_records_hash: target_database.records_hash,
+            replacement_records_hash,
             request_digest,
             digest: digest.finalize().to_hex().to_string(),
         })

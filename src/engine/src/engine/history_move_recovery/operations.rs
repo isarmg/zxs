@@ -145,6 +145,7 @@ impl Engine {
     pub(in crate::engine) fn original_move_path_intent(
         &self,
         request: &FileHistoryMovePathRequest,
+        replacement: Option<&FileHistoryMoveReplacement>,
         principal: &str,
         operation: OperationId,
     ) -> Result<Option<FileHistoryMoveRecoveryInfo>> {
@@ -156,6 +157,7 @@ impl Engine {
         if record.operation_id != operation
             || record.principal != principal
             || !request.matches(&record.namespace)
+            || record.replacement.as_ref() != replacement
         {
             return Err(Error::new(
                 ErrorCode::IdempotencyKeyReused,
@@ -306,11 +308,12 @@ impl Engine {
             ));
         }
         record.require_current(self)?;
-        let capture = self.capture_retained_file_history_move(
+        let capture = self.capture_retained_file_history_move_target(
             FileHistoryMoveRequest {
                 namespace: &record.namespace,
                 source_file_id: &HistoryFileId::parse(&record.source_file_id)?,
             },
+            record.replacement.as_ref(),
             cancellation,
         )?;
         let projection = self.replay_file_history_move_projection(

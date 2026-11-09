@@ -104,10 +104,12 @@ impl Engine {
         // staged databases, including source D and only old D/undo on target.
         if native.source_records_hash() != materials.source.records_hash()
             || native.target_records_hash() != materials.target.records_hash()
+            || native.replacement_records_hash()
+                != materials.replacement.as_ref().map(|database| database.records_hash())
         {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,
-                "native move receipt does not reproduce the exact two-file material closure",
+                "native move receipt does not reproduce every exact file material",
             ));
         }
         self.recheck_file_history_move_projection(projection, cancellation)?;

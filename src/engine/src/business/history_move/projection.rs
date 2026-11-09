@@ -6,9 +6,9 @@ use json_codec::json;
 
 mod native;
 pub(crate) use native::{
-    KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, admit_source_deletion,
-    original_move_namespace, reject_unclosed_publication, replay_selected_move,
-    verify_current_move_transition,
+    KIND as NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft, admit_deletions,
+    admit_displaced, original_move_intent, reject_unclosed_publication, replay_selected_move,
+    retained_deletion, verify_current_move_transition,
 };
 
 struct ProjectionSource<'a> {
@@ -17,6 +17,7 @@ struct ProjectionSource<'a> {
     branch_heads: &'a BTreeMap<String, String>,
     parents: &'a [String],
     versions: &'a [String],
+    replacement: Option<&'a replacement::Capture>,
 }
 impl<'a> From<&'a FileHistoryMoveCapture> for ProjectionSource<'a> {
     fn from(capture: &'a FileHistoryMoveCapture) -> Self {
@@ -26,6 +27,7 @@ impl<'a> From<&'a FileHistoryMoveCapture> for ProjectionSource<'a> {
             branch_heads: &capture.branch_heads,
             parents: &capture.parent_node_ids,
             versions: &capture.version_ids,
+            replacement: capture.replacement.as_ref(),
         }
     }
 }
@@ -44,6 +46,7 @@ struct WriteSet {
     version_mapping: BTreeMap<String, String>,
     branch_mapping: BTreeMap<String, String>,
     lifecycle: CopiedLifecycle,
+    replacement: Option<replacement::Evidence>,
 }
 
 /// Frozen inputs recovered only after checking the original source envelope.
@@ -60,6 +63,8 @@ pub(crate) struct FileHistoryMoveTargetMetadata<'a> {
     pub(crate) target: crate::HistoryManifest,
     pub(crate) imported_lifecycle: &'a CopiedLifecycle,
     pub(crate) source_deletion: &'a FileDeletionNode,
+    #[serialization(skip_serializing_if = "Option::is_none")]
+    replacement: Option<&'a replacement::Evidence>,
 }
 
 /// Proposed target graph and source deletion, held together and never exposed
@@ -139,6 +144,7 @@ impl FileHistoryMoveProjection {
             target: crate::history_package::capture_history_copy(&self.writes.next, history)?,
             imported_lifecycle: &self.writes.lifecycle,
             source_deletion: self.proposed_source_deletion(),
+            replacement: self.writes.replacement.as_ref(),
         };
         // Count before canonical Value/byte allocation. The entire joint
         // logical envelope, not each fragment separately, is limited to 12 MiB.
@@ -164,6 +170,28 @@ impl FileHistoryMoveProjection {
             &self.writes.next,
             self.proposed_source_deletion(),
         )
+    }
+
+    pub(crate) fn proposed_replacement_deletion(&self) -> Option<&FileDeletionNode> {
+        self.writes
+            .replacement
+            .as_ref()
+            .map(|evidence| &evidence.deletion_node)
+    }
+
+    pub(crate) fn replacement_file_database(
+        &self,
+        previous: &State,
+    ) -> Result<Option<crate::container_storage::file_database::PreparedMoveFile>> {
+        self.proposed_replacement_deletion()
+            .map(|node| {
+                crate::container_storage::file_database::prepare_move_source(
+                    previous,
+                    &self.writes.next,
+                    node,
+                )
+            })
+            .transpose()
     }
 
     /// Exact complete proposal, intentionally still without a published move
@@ -272,7 +300,10 @@ fn compose(
         previous,
         &mut next,
         view,
-        history_copy::Destination::MoveIntoDiskRoot(request),
+        replacement::destination(
+            request,
+            input.source.replacement.map(|capture| &capture.identity),
+        ),
         input.route,
         input.principal,
         input.operation,
@@ -280,7 +311,24 @@ fn compose(
     let target_file = HistoryFileId::parse(&copied.lifecycle.file_id)?;
     name_arrival(&mut next, request, target_file.as_str());
     let node = deletion(previous, input)?;
+    if input.source.replacement.is_some() {
+        replacement::require_recoverable(&node)?;
+    }
     next.file_deletions.insert(node.file_id.clone(), node);
+    let replacement = input
+        .source
+        .replacement
+        .map(|capture| {
+            replacement::project(
+                &mut next,
+                request,
+                capture,
+                input.principal,
+                input.operation,
+                input.route.created_at,
+            )
+        })
+        .transpose()?;
     crate::file_deletion::freeze::verify(previous, &next)?;
     crate::container_storage::capture_changed_names(previous, &mut next);
     // These are complete logical graph checks, not SQLite or payload proofs.
@@ -296,6 +344,7 @@ fn compose(
         version_mapping: map_ids(input.operation, input.source.versions.iter())?,
         branch_mapping: map_ids(input.operation, input.source.branch_heads.keys())?,
         lifecycle: copied.lifecycle,
+        replacement,
     })
 }
 

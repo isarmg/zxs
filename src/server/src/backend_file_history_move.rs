@@ -13,6 +13,14 @@ pub struct MoveCurrentFile {
     pub operation_id: OperationId,
 }
 
+/// Both original bindings and both file identities are rechecked by the owner.
+#[derive(Debug)]
+pub struct ReplaceCurrentFile {
+    pub request: MoveCurrentFile,
+    pub expected_target_entry_id: String,
+    pub expected_target_file_id: HistoryFileId,
+}
+
 /// A strict creation path inside the admitted target disk-root namespace.
 #[derive(Debug)]
 pub struct MoveTargetName(name_policy::PortablePath);

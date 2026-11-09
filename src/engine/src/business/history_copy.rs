@@ -126,6 +126,10 @@ pub(crate) struct CopySources {
 pub(in crate::business) enum Destination<'a> {
     EmptyRepository(&'a FileHistoryCopyRequest),
     MoveIntoDiskRoot(&'a FileHistoryCopyRequest),
+    ReplaceIntoDiskRoot(
+        &'a FileHistoryCopyRequest,
+        &'a history_move::FileHistoryMoveReplacement,
+    ),
     DirectoryExport(&'a FileHistoryCopyRequest),
 }
 
@@ -134,7 +138,15 @@ impl<'a> Destination<'a> {
         match self {
             Self::EmptyRepository(request)
             | Self::MoveIntoDiskRoot(request)
+            | Self::ReplaceIntoDiskRoot(request, _)
             | Self::DirectoryExport(request) => request,
+        }
+    }
+
+    fn replacement(self) -> Option<&'a history_move::FileHistoryMoveReplacement> {
+        match self {
+            Self::ReplaceIntoDiskRoot(_, identity) => Some(identity),
+            Self::EmptyRepository(_) | Self::MoveIntoDiskRoot(_) | Self::DirectoryExport(_) => None,
         }
     }
 }
@@ -155,6 +167,42 @@ pub(in crate::business) fn move_sources(
     sources_for(previous, view, Destination::MoveIntoDiskRoot(request))
 }
 
+pub(in crate::business) fn move_destination_sources(
+    previous: &State,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    request: &FileHistoryCopyRequest,
+    replacement: Option<&history_move::FileHistoryMoveReplacement>,
+) -> Result<CopySources> {
+    match replacement {
+        None => move_sources(previous, view, request),
+        Some(identity) => sources_for(
+            previous,
+            view,
+            Destination::ReplaceIntoDiskRoot(request, identity),
+        ),
+    }
+}
+
+fn require_move_arrival(
+    entries: &[Entry],
+    path: &name_policy::LookupPath,
+    replacement: Option<&history_move::FileHistoryMoveReplacement>,
+) -> Result<()> {
+    let actual = namespace::find_unordered_key(entries, path.key());
+    match (replacement, actual) {
+        (None, None) => Ok(()),
+        (Some(expected), Some(actual)) if expected.matches(actual) => Ok(()),
+        (None, Some(_)) => Err(Error::new(
+            ErrorCode::NameCollision,
+            "history move cannot replace a target entry without its exact replacement intent",
+        )),
+        _ => Err(Error::new(
+            ErrorCode::WorkspaceChanged,
+            "history move replacement target identity changed",
+        )),
+    }
+}
+
 fn sources_for(
     previous: &State,
     view: Option<&crate::engine::CurrentNamespaces>,
@@ -164,7 +212,9 @@ fn sources_for(
     let source_path = name_policy::LookupPath::parse(&request.source_path)?;
     if matches!(
         destination,
-        Destination::MoveIntoDiskRoot(_) | Destination::DirectoryExport(_)
+        Destination::MoveIntoDiskRoot(_)
+            | Destination::ReplaceIntoDiskRoot(..)
+            | Destination::DirectoryExport(_)
     ) {
         name_policy::PortablePath::parse(&request.target_name)?;
     } else {
@@ -238,14 +288,9 @@ fn sources_for(
             Destination::EmptyRepository(_) if !current_target.is_empty() => {
                 return Err(unsupported());
             }
-            Destination::MoveIntoDiskRoot(_) => {
+            Destination::MoveIntoDiskRoot(_) | Destination::ReplaceIntoDiskRoot(..) => {
                 let path = name_policy::LookupPath::parse(&request.target_name)?;
-                if namespace::find_unordered_key(current_target, path.key()).is_some() {
-                    return Err(Error::new(
-                        ErrorCode::NameCollision,
-                        "history move cannot replace a current target entry",
-                    ));
-                }
+                require_move_arrival(current_target, &path, destination.replacement())?;
                 // The native projection appends to this retained parent. A
                 // masked or rewritten view needs its own publication adapter,
                 // not a fallback that resurrects hidden historical entries.
@@ -279,7 +324,7 @@ fn sources_for(
                 return Err(unsupported());
             }
         }
-        Destination::MoveIntoDiskRoot(_) => {
+        Destination::MoveIntoDiskRoot(_) | Destination::ReplaceIntoDiskRoot(..) => {
             if !source.file_manager_root
                 || !target.file_manager_root
                 || !target_branch.pending_file_versions.is_empty()
@@ -301,12 +346,7 @@ fn sources_for(
             let target_path = name_policy::PortablePath::parse(&request.target_name)?;
             history_move::target_path::require_parent(previous, target_entries, &target_path)?;
             let path = name_policy::LookupPath::from(&target_path);
-            if namespace::find_unordered_key(target_entries, path.key()).is_some() {
-                return Err(Error::new(
-                    ErrorCode::NameCollision,
-                    "history move cannot replace a retained target entry",
-                ));
-            }
+            require_move_arrival(target_entries, &path, destination.replacement())?;
         }
         Destination::DirectoryExport(_) => {
             directory_git::export::require_scope(previous, view, request, source_entries)?;
@@ -316,7 +356,10 @@ fn sources_for(
         .filter(|entry| entry.kind == NamespaceEntryKind::File)
         .ok_or_else(|| Error::new(ErrorCode::FileNotFound, "history copy source file missing"))?;
     if view.is_some()
-        && matches!(destination, Destination::MoveIntoDiskRoot(_))
+        && matches!(
+            destination,
+            Destination::MoveIntoDiskRoot(_) | Destination::ReplaceIntoDiskRoot(..)
+        )
         && namespace::find_unordered_key(
             &previous.commits[&source_branch.head_commit_id].entries,
             source_path.key(),
@@ -782,11 +825,14 @@ pub(in crate::business) fn apply_scoped(
     let id = generated(operation, "commit", "arrival")?;
     let selected_head = next.branches[&selected].head_commit_id.clone();
     let pending = next.branches[&selected].pending_file_versions.clone();
-    // Preserve every old entry and add exactly one non-overwriting file.
-    // Published namespaces are sorted by lookup key, not insertion order.
+    // Only the separately captured exact replacement may leave this namespace.
+    // Its graph and original occurrence remain in the move's own durable receipt.
     let mut entries = previous.commits[&request.expected_target_head]
         .entries
         .clone();
+    if let Some(displaced) = destination.replacement() {
+        entries.retain(|existing| !displaced.matches(existing));
+    }
     entries.push(entry.clone());
     namespace::validate_entries(&mut entries, usize::MAX)?;
     next.commits.insert(

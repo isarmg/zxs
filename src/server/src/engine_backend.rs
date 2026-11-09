@@ -1413,6 +1413,13 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.move_current_file_admitted(identity, command)
     }
+    fn replace_current_file(
+        &self,
+        identity: &Identity,
+        command: crate::ReplaceCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.replace_current_file_admitted(identity, command)
+    }
     fn move_current_file_to_empty_disk(
         &self,
         identity: &Identity,

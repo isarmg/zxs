@@ -532,7 +532,16 @@ impl<'a> PlanningContext<'a> {
         let timestamp = crate::business::now()?;
         let mut prepared = Vec::new();
         let mut result = change(self, &mut next, &mut prepared)?;
-        crate::file_deletion::freeze::verify(self.state, &next)?;
+        if !crate::file_deletion::occurrence::verify_plan(
+            self.state,
+            &next,
+            self.current_namespaces.map(AsRef::as_ref),
+            kind,
+            crate::file_deletion::occurrence::RestorePublication { operation_id, principal },
+            &result,
+        )? {
+            crate::file_deletion::freeze::verify(self.state, &next)?;
+        }
         crate::container_storage::capture_changed_names(self.state, &mut next);
         if super::CurrentNamespaces::recursive_namespace_kind(kind) {
             let view = self.current_namespaces.ok_or_else(|| {

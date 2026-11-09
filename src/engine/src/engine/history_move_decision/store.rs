@@ -77,6 +77,12 @@ impl Scope {
                 prepared: &materials.target,
             },
         ];
+        if let Some(prepared) = &materials.replacement {
+            artifacts.push(Artifact::Database {
+                name: "replacement-file.sqlite",
+                prepared,
+            });
+        }
         if let Self::Metadata = self {
             artifacts.push(Artifact::Exact {
                 name: STATE,

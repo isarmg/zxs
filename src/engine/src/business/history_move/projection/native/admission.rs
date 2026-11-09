@@ -4,6 +4,8 @@ use super::*;
 use std::collections::BTreeSet;
 
 mod transition;
+mod displaced;
+pub(crate) use displaced::{admit_deletions, admit_displaced, retained_deletion};
 pub(crate) use transition::verify_current_move_transition;
 
 #[derive(Deserialize, Serialize)]
@@ -11,6 +13,8 @@ pub(crate) use transition::verify_current_move_transition;
 struct ReadRequest {
     namespace: FileHistoryCopyRequest,
     source_file_id: String,
+    #[serialization(skip_serializing_if = "Option::is_none")]
+    replacement: Option<FileHistoryMoveReplacement>,
 }
 
 /// Owned disk boundary for the borrowed writer's exact ResultBody schema.
@@ -26,6 +30,7 @@ struct ReadBody {
     source_sequence: u64,
     source_records_hash: String,
     deletion_node: FileDeletionNode,
+    replacement: Option<replacement::Evidence>,
     retained_lifecycle: CopiedLifecycle,
     version_ids: Vec<String>,
     version_mapping: BTreeMap<String, String>,
@@ -174,13 +179,16 @@ impl ReadBody {
         let path = name_policy::LookupPath::from(&target_path);
         let entry =
             namespace::find_unordered_key(&arrival.entries, path.key()).ok_or_else(invalid)?;
-        if arrival.entries.len() != previous.entries.len() + 1
+        let replaced = self.replacement.as_ref().map(|proof| &proof.occurrence.displaced);
+        let previous_entry = namespace::find_unordered_key(&previous.entries, path.key());
+        let expected_len = previous.entries.len() + usize::from(replaced.is_none());
+        if arrival.entries.len() != expected_len
             || arrival
                 .entries
                 .iter()
                 .filter(|entry| entry.lookup_key() != path.key())
-                .ne(previous.entries.iter())
-            || namespace::find_unordered_key(&previous.entries, path.key()).is_some()
+                .ne(previous.entries.iter().filter(|entry| entry.lookup_key() != path.key()))
+            || previous_entry != replaced
             || entry.kind != NamespaceEntryKind::File
             || entry.file_id != self.file_id
             || entry.path() != request.target_name
@@ -277,19 +285,22 @@ fn admit_body(state: &State, receipt: &OperationResult) -> Result<ReadBody> {
     }
     history_copy::retained::validate(receipt, &body.file_id, &body.retained_lifecycle)?;
     body.require_versions(receipt.operation_id)?;
+    body.require_replacement(state, receipt, principal)?;
     body.require_arrival(state, receipt, principal)?;
     Ok(body)
 }
 
 /// Read only original operation intent. A later rename, D undo or HEAD change
 /// must not turn an exact retry into a new capture of today's source path.
-pub(crate) fn original_move_namespace(receipt: &OperationResult) -> Result<FileHistoryCopyRequest> {
+pub(crate) fn original_move_intent(
+    receipt: &OperationResult,
+) -> Result<(FileHistoryCopyRequest, Option<FileHistoryMoveReplacement>)> {
     if receipt.kind != KIND {
         return Err(invalid());
     }
     history_copy::retained::bounded(&receipt.result)?;
     let body: ReadBody = json_codec::from_value(receipt.result.clone())?;
-    Ok(body.move_request.namespace)
+    Ok((body.move_request.namespace, body.move_request.replacement))
 }
 
 /// Recompute the complete selected transition from the old published State,
@@ -307,11 +318,12 @@ pub(crate) fn replay_selected_move(
         .get(&operation)
         .ok_or_else(invalid)?;
     let stop = HistoryWindowCancellation::default();
-    let capture = engine.capture_retained_file_history_move(
+    let capture = engine.capture_retained_file_history_move_target(
         FileHistoryMoveRequest {
             namespace: &body.move_request.namespace,
             source_file_id: &HistoryFileId::parse(&body.move_request.source_file_id)?,
         },
+        body.move_request.replacement.as_ref(),
         &stop,
     )?;
     let projection = engine.replay_file_history_move_projection(

@@ -5,12 +5,20 @@ use crate::smb_rpc::{namespace::NamespaceAdmission, path_reservation::MovePaths}
 mod empty_target;
 mod resume;
 
+#[derive(Clone, data_serialization::Serialize, data_serialization::Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct ReplacementIntent {
+    entry_id: String,
+    file_id: String,
+}
+
 impl DefaultShare {
     pub(super) fn move_file(
         &mut self,
         source: SmbPathLocation,
         target: SmbPathLocation,
         admission: NamespaceAdmission,
+        replace: bool,
     ) -> Result<Value, ApiError> {
         if !source.repository.file_manager_root
             || !target.repository.file_manager_root
@@ -59,17 +67,31 @@ impl DefaultShare {
                 "cross-disk move requires a single file",
             ));
         }
-        if self
+        let replacement = match self
             .shared
             .backend
             .lookup_current(&target_identity, &target.branch, &target_name.lookup())?
-            .is_some()
         {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::NameCollision,
-                "cross-disk move never replaces a target entry",
-            ));
-        }
+            Some(_) if !replace => {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::NameCollision,
+                    "cross-disk move requires explicit replacement intent",
+                ));
+            }
+            Some(target) if target.kind == storage_contract::NamespaceEntryKind::File => {
+                Some(ReplacementIntent {
+                    entry_id: target.entry_id,
+                    file_id: target.file_id,
+                })
+            }
+            Some(_) => {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::IsDirectory,
+                    "cross-disk file replacement cannot replace a directory",
+                ));
+            }
+            None => None,
+        };
         let file_id = storage_contract::history_window::HistoryFileId::parse(&entry.file_id)
             .map_err(ApiError::contract_input)?;
         let operation_id = admission.operation_id();
@@ -77,7 +99,8 @@ impl DefaultShare {
         // record is not a decision, a replay command or a grant to recapture a
         // changed source. Any uncertain result retains this original identity.
         admission.record_intent(&json!({
-            "format":"smb-file-history-move",
+            "format":if replace { "smb-file-history-move-replace" } else { "smb-file-history-move" },
+            "replacement":replacement,
             "principal":self.identity.principal,
             "operation_id":operation_id,
             "publication_outcome":"unconfirmed",
@@ -101,8 +124,7 @@ impl DefaultShare {
             "source_file_id":file_id.as_str(),
             "account_generation":self.account_generation.to_string()
         }))?;
-        let result = self.shared.backend.move_current_file(
-            &self.identity,
+        let result = self.submit_move(
             crate::MoveCurrentFile {
                 source_binding: source_identity
                     .smb_binding
@@ -116,10 +138,32 @@ impl DefaultShare {
                 expected_source_file_id: file_id,
                 operation_id,
             },
+            replacement,
         )?;
         let reply = published_reply(result, operation_id)?;
         admission.finish_published();
         Ok(reply)
+    }
+
+    fn submit_move(
+        &self,
+        request: crate::MoveCurrentFile,
+        replacement: Option<ReplacementIntent>,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        match replacement {
+            Some(target) => self.shared.backend.replace_current_file(
+                &self.identity,
+                crate::ReplaceCurrentFile {
+                    request,
+                    expected_target_entry_id: target.entry_id,
+                    expected_target_file_id: storage_contract::history_window::HistoryFileId::parse(
+                        &target.file_id,
+                    )
+                    .map_err(ApiError::contract_input)?,
+                },
+            ),
+            None => self.shared.backend.move_current_file(&self.identity, request),
+        }
     }
 }
 

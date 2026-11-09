@@ -42,6 +42,7 @@ pub(crate) struct PublishedMove {
     outcome: NativeMoveCandidate,
     hash: String,
     files: BTreeSet<(String, String, String)>,
+    retained_versions: Vec<String>,
 }
 impl PublishedMove {
     pub(crate) fn state(&self) -> &State {
@@ -108,6 +109,28 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
+        self.move_current_file_target(request, None, principal, operation)
+    }
+
+    /// Replace the exact existing ordinary target in the SAME move decision.
+    /// The displaced file retains its graph, FULLs, original occurrence and D.
+    pub fn replace_current_file(
+        &mut self,
+        request: &FileHistoryMovePathRequest,
+        replacement: &FileHistoryMoveReplacement,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
+        self.move_current_file_target(request, Some(replacement), principal, operation)
+    }
+
+    fn move_current_file_target(
+        &mut self,
+        request: &FileHistoryMovePathRequest,
+        replacement: Option<&FileHistoryMoveReplacement>,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
         Self::require_actor(principal)?;
         request.validate()?;
         // Replay before resolving source visibility or today's namespace heads.
@@ -119,8 +142,11 @@ impl Engine {
                     .get(&operation)
                     .map(String::as_str)
                     != Some(principal)
-                || !request.matches(&crate::business::original_move_namespace(original)?)
             {
+                return Err(conflict());
+            }
+            let (namespace, original_target) = crate::business::original_move_intent(original)?;
+            if !request.matches(&namespace) || original_target.as_ref() != replacement {
                 return Err(conflict());
             }
             return Ok(original.clone());
@@ -130,7 +156,7 @@ impl Engine {
         self.require_native_move_authority()?;
         let cancellation = HistoryWindowCancellation::default();
         let projection = if let Some(original) =
-            self.original_move_path_intent(request, principal, operation)?
+            self.original_move_path_intent(request, replacement, principal, operation)?
         {
             self.resume_file_history_move_recovery(
                 operation,
@@ -148,11 +174,12 @@ impl Engine {
                 .filter(|entry| entry.kind == NamespaceEntryKind::File)
                 .ok_or_else(|| Error::new(ErrorCode::FileNotFound, "move source file is absent"))?;
             let file = HistoryFileId::parse(&entry.file_id)?;
-            let capture = self.capture_file_history_move(
+            let capture = self.capture_retained_file_history_move_target(
                 FileHistoryMoveRequest {
                     namespace: &namespace,
                     source_file_id: &file,
                 },
+                replacement,
                 &cancellation,
             )?;
             self.project_file_history_move(capture, principal, operation, &cancellation)?
@@ -329,6 +356,11 @@ impl Engine {
                 hash,
                 outcome,
                 files,
+                retained_versions: projection
+                    .capture()
+                    .retained_version_ids()
+                    .cloned()
+                    .collect(),
             };
             databases.install(self, &published)?;
             crate::container_storage::verify_move_files(

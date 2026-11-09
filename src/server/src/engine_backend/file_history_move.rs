@@ -14,12 +14,43 @@ impl EngineBackend {
             .expect("invariant: service state lock poisoned");
         move_current_file_locked(&mut engine, identity, command)
     }
+
+    pub(super) fn replace_current_file_admitted(
+        &self,
+        identity: &Identity,
+        command: crate::ReplaceCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let replacement = storage_engine::FileHistoryMoveReplacement::parse(
+            &command.expected_target_entry_id,
+            command.expected_target_file_id.as_str(),
+        )
+        .map_err(error)?;
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        move_current_file_target_locked(
+            &mut engine,
+            identity,
+            command.request,
+            Some(&replacement),
+        )
+    }
 }
 
 fn move_current_file_locked(
     engine: &mut AdmissionEngine,
     identity: &Identity,
     command: crate::MoveCurrentFile,
+) -> Result<storage_contract::OperationResult, ApiError> {
+    move_current_file_target_locked(engine, identity, command, None)
+}
+
+fn move_current_file_target_locked(
+    engine: &mut AdmissionEngine,
+    identity: &Identity,
+    command: crate::MoveCurrentFile,
+    replacement: Option<&storage_engine::FileHistoryMoveReplacement>,
 ) -> Result<storage_contract::OperationResult, ApiError> {
     let mut current = current_protected_identity(engine, identity)?;
     // Only the default share routes two separately pinned namespaces. A
@@ -78,16 +109,20 @@ fn move_current_file_locked(
             ));
         }
     }
-    engine
-        .move_current_file(
-            &storage_engine::FileHistoryMovePathRequest {
-                source_repository_id: command.source_binding.repository_id,
-                source_path: command.source_path.as_str().into(),
-                target_repository_id: command.target_binding.repository_id,
-                target_name: command.target_name.as_str().into(),
-            },
+    let request = storage_engine::FileHistoryMovePathRequest {
+        source_repository_id: command.source_binding.repository_id,
+        source_path: command.source_path.as_str().into(),
+        target_repository_id: command.target_binding.repository_id,
+        target_name: command.target_name.as_str().into(),
+    };
+    match replacement {
+        Some(replacement) => engine.replace_current_file(
+            &request,
+            replacement,
             &current.principal,
             command.operation_id,
-        )
-        .map_err(error)
+        ),
+        None => engine.move_current_file(&request, &current.principal, command.operation_id),
+    }
+    .map_err(error)
 }

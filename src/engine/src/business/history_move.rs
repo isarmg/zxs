@@ -8,12 +8,14 @@ use std::{
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 mod projection;
+pub(in crate::business) mod replacement;
+pub use replacement::FileHistoryMoveReplacement;
 pub(in crate::business) mod target_path;
 pub use projection::{CurrentFileHistoryMoveProjection, FileHistoryMoveProjection};
 pub(crate) use projection::{
     FileHistoryMoveReplay, NATIVE_KIND, NativeMoveCandidate, NativeMoveDraft,
-    admit_source_deletion, original_move_namespace, reject_unclosed_publication,
-    replay_selected_move, verify_current_move_transition,
+    admit_deletions, admit_displaced, original_move_intent, reject_unclosed_publication,
+    replay_selected_move, retained_deletion, verify_current_move_transition,
 };
 
 /// Exact source identity in addition to the two namespace heads. The history
@@ -46,6 +48,7 @@ pub struct FileHistoryMoveCapture {
     parent_node_ids: Vec<String>,
     version_ids: Vec<String>,
     target_slots: Vec<String>,
+    replacement: Option<replacement::Capture>,
     state: Weak<State>,
     config: crate::ValidatedConfig,
     source_namespace: NamespaceSnapshotWitness,
@@ -86,6 +89,18 @@ impl FileHistoryMoveCapture {
 
     pub fn target_slots(&self) -> &[String] {
         &self.target_slots
+    }
+
+    pub(crate) fn replacement(&self) -> Option<&FileHistoryMoveReplacement> {
+        self.replacement.as_ref().map(|capture| &capture.identity)
+    }
+
+    pub(crate) fn retained_version_ids(&self) -> impl Iterator<Item = &String> {
+        self.version_ids.iter().chain(
+            self.replacement
+                .iter()
+                .flat_map(|capture| capture.versions.iter()),
+        )
     }
 }
 
@@ -180,6 +195,15 @@ impl Engine {
         request: FileHistoryMoveRequest<'_>,
         cancellation: &HistoryWindowCancellation,
     ) -> Result<FileHistoryMoveCapture> {
+        self.capture_retained_file_history_move_target(request, None, cancellation)
+    }
+
+    pub(crate) fn capture_retained_file_history_move_target(
+        &self,
+        request: FileHistoryMoveRequest<'_>,
+        replacement: Option<&FileHistoryMoveReplacement>,
+        cancellation: &HistoryWindowCancellation,
+    ) -> Result<FileHistoryMoveCapture> {
         checkpoint(cancellation)?;
         self.require_move_source_read()?;
         let repository_id = HistoryRepositoryId::parse(&request.namespace.source_repository_id)?;
@@ -211,10 +235,31 @@ impl Engine {
             source_entries.entries(),
             &path,
         )?;
-        let source = history_copy::move_sources(
+        let replacement = replacement
+            .map(|identity| {
+                replacement::capture(
+                    self.state(),
+                    self.admitted_current_namespaces()?,
+                    request.namespace,
+                    identity,
+                    self.config.max_entries,
+                    cancellation,
+                )
+            })
+            .transpose()?;
+        if replacement.as_ref().is_some_and(|capture| {
+            capture.entry.file_id == request.source_file_id.as_str()
+        }) {
+            return Err(Error::new(
+                ErrorCode::FileBranchScope,
+                "history move source and replacement must have distinct stable file identities",
+            ));
+        }
+        let source = history_copy::move_destination_sources(
             self.state(),
             self.admitted_current_namespaces()?,
             request.namespace,
+            replacement.as_ref().map(|capture| &capture.identity),
         )?;
         // The deletion preflight and copy projection observed the same borrowed
         // State and exact path. Neither may substitute a same-path new file.
@@ -226,7 +271,9 @@ impl Engine {
         require_idle(self, request.namespace)?;
         let target = &self.state().repositories[&request.namespace.target_repository_id];
         let target_head = &self.state().branches[&target.main_branch_id].head_commit_id;
-        if self.state().commits[target_head].entries.len() >= self.config.max_entries {
+        if replacement.is_none()
+            && self.state().commits[target_head].entries.len() >= self.config.max_entries
+        {
             return Err(Error::new(
                 ErrorCode::ResourceLimit,
                 "move destination has reached its namespace entry limit",
@@ -251,6 +298,7 @@ impl Engine {
             parent_node_ids: deletion.parent_node_ids().to_vec(),
             version_ids: source.versions,
             target_slots,
+            replacement,
             state: Arc::downgrade(&self.state),
             config: self.config.clone(),
             source_namespace: source_namespace.witness(),

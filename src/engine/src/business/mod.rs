@@ -16,12 +16,15 @@ pub use history_copy::FileHistoryCopyRequest;
 mod history_move;
 pub use history_move::{
     CurrentFileHistoryMove, CurrentFileHistoryMoveProjection, FileHistoryMoveCapture,
-    FileHistoryMoveProjection, FileHistoryMoveRequest, FileHistoryMoveSourceDigest,
+    FileHistoryMoveProjection, FileHistoryMoveReplacement, FileHistoryMoveRequest,
+    FileHistoryMoveSourceDigest,
 };
 pub(crate) use history_move::{
     FileHistoryMoveReplay, NATIVE_KIND as FILE_HISTORY_MOVE_KIND, NativeMoveCandidate,
-    NativeMoveDraft, admit_source_deletion as admit_file_history_move_deletion,
-    original_move_namespace, reject_unclosed_publication as reject_unclosed_file_history_move,
+    NativeMoveDraft, admit_deletions as admit_file_history_move_deletions,
+    admit_displaced as admit_file_history_move_displaced,
+    retained_deletion as retained_file_history_move_deletion,
+    original_move_intent, reject_unclosed_publication as reject_unclosed_file_history_move,
     replay_selected_move, verify_current_move_transition,
 };
 pub(crate) mod file_ancestry;
@@ -41,6 +44,7 @@ pub(crate) use ancestry::descendant_commits;
 pub(crate) use batch::{relocate as relocate_namespace_entry, separated_file_source};
 pub(crate) use directory::context_key_from_key;
 pub(crate) use directory::namespace_location;
+pub(crate) use directory::record_restored_namespace_with_ids;
 pub use file_nodes::{FileNodeProjectionRequest, FileNodeSummary};
 pub use file_requests::{
     FileBranchMergeRequest, FileDefaultSelection, FileHistoryMergeRequest,

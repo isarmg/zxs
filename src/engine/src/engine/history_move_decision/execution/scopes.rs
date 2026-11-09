@@ -24,7 +24,7 @@ pub(super) fn file_scopes(
     candidate: &Candidate,
 ) -> BTreeSet<(String, String, String)> {
     let mut files = BTreeSet::new();
-    for id in projection.capture().version_ids() {
+    for id in projection.capture().retained_version_ids() {
         let version = &engine.state.versions[id];
         for slot in &engine.state.placements[id].route_slot_ids {
             files.insert((
@@ -94,7 +94,7 @@ pub(super) fn verify_full(
     projection: &FileHistoryMoveProjection,
     candidate: &Candidate,
 ) -> Result<()> {
-    for id in projection.capture().version_ids() {
+    for id in projection.capture().retained_version_ids() {
         full(
             engine,
             &engine.state.versions[id],
@@ -108,6 +108,13 @@ pub(super) fn verify_full(
 }
 pub(super) fn verify_published_full(engine: &Engine, published: &PublishedMove) -> Result<()> {
     require_resources(engine, &published.candidate)?;
+    for id in &published.retained_versions {
+        full(
+            engine,
+            &published.state().versions[id],
+            &published.state().placements[id],
+        )?;
+    }
     for evidence in &published.candidate.versions {
         full(engine, &evidence.version, &evidence.placement)?;
     }

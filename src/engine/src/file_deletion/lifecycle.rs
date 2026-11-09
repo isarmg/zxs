@@ -134,18 +134,30 @@ impl Engine {
                             ErrorCode::FileNodeNotFound,
                             "current deletion node differs or is absent",
                         )
-                    })?;
+                    })?
+                    .clone();
                 let repository = engine.repository_for_history(&deletion.history_tree_id)?;
                 require_writable(engine, repository)?;
-                let namespace = engine.namespace_tree(&repository.main_branch_id)?;
-                preflight::require_scope_writable(
-                    engine.state(),
-                    engine.admitted_current_namespaces()?,
-                    repository,
-                    namespace.entries(),
-                    file_id.as_str(),
-                    &HistoryWindowCancellation::default(),
-                )?;
+                if let Some(evidence) = occurrence::original(engine.state(), &deletion)? {
+                    occurrence::restore(
+                        engine.state(),
+                        state,
+                        engine.admitted_current_namespaces()?,
+                        &deletion,
+                        &evidence,
+                        occurrence::RestorePublication { operation_id, principal },
+                    )?;
+                } else {
+                    let namespace = engine.namespace_tree(&repository.main_branch_id)?;
+                    preflight::require_scope_writable(
+                        engine.state(),
+                        engine.admitted_current_namespaces()?,
+                        repository,
+                        namespace.entries(),
+                        file_id.as_str(),
+                        &HistoryWindowCancellation::default(),
+                    )?;
+                }
                 let node = state
                     .file_deletions
                     .remove(file_id.as_str())

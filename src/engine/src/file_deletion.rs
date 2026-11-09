@@ -6,6 +6,7 @@ use storage_contract::history_window::{
 
 pub(crate) mod freeze;
 pub(crate) mod lifecycle;
+pub(crate) mod occurrence;
 pub(crate) mod publication;
 pub(crate) mod retained;
 pub use lifecycle::{DeleteFileRequest, UndoFileDeletionRequest};

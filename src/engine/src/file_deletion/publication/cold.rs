@@ -62,12 +62,18 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
             }
             continue;
         }
+        if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
+            for node in crate::business::admit_file_history_move_deletions(state, receipt)? {
+                if !created.insert(node.node_id.clone())
+                    || active.insert(node.file_id.clone(), node).is_some()
+                {
+                    return Err(invalid());
+                }
+            }
+            continue;
+        }
         let undo = receipt.kind == "file.delete.undo";
-        let node = if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
-            crate::business::admit_file_history_move_deletion(state, receipt)?
-        } else {
-            admit_receipt(state, receipt, undo)?
-        };
+        let node = admit_receipt(state, receipt, undo)?;
         if undo {
             if active.remove(&node.file_id).as_ref() != Some(&node) {
                 return Err(invalid());

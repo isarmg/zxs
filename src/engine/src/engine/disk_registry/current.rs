@@ -23,6 +23,7 @@ mod file_tags;
 mod history_copy;
 mod history_merges;
 mod history_move;
+mod file_restore;
 mod merge_links;
 mod new_scope;
 mod path_notes;
@@ -518,6 +519,9 @@ impl CurrentNamespaces {
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
         crate::node_retirement_engine::verify(previous, next)?;
         if let Some(view) = self.advance_history_move(previous, next)? {
+            return Ok(view);
+        }
+        if let Some(view) = self.advance_file_restore(previous, next)? {
             return Ok(view);
         }
         if let Some(view) = self.advance_history_copy(previous, next)? {

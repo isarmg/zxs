@@ -439,12 +439,12 @@ impl DefaultShare {
                 return Ok((Reply::Json(reply), None));
             }
             if kind == NamespaceOperation::Rename
-                && !replace
                 && let Some(reply) = self.resume_move(
                     &path,
                     destination
                         .as_deref()
                         .expect("invariant: rename destination was validated"),
+                    replace,
                     operation_id,
                 )?
             {
@@ -470,15 +470,13 @@ impl DefaultShare {
                     return Err(ApiError::unsupported());
                 };
                 if slot.slot_id != source.repository.primary_slot_id {
-                    if replace {
-                        return Err(ApiError::unsupported());
-                    }
                     // A missing disk-root namespace is initialized only through
                     // its durable, exact native-move request, never by Lookup.
                     let reply = match self.resolve(&path, SmbPathIntent::Lookup) {
-                        Ok(target) => self.move_file(source, target, admission)?,
+                        Ok(target) => self.move_file(source, target, admission, replace)?,
                         Err(error)
-                            if error.code == storage_contract::ErrorCode::DirectoryNotFound =>
+                            if error.code == storage_contract::ErrorCode::DirectoryNotFound
+                                && !replace =>
                         {
                             self.move_file_to_empty_disk(source, &path, admission)?
                         }

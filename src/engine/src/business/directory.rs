@@ -543,6 +543,44 @@ fn snapshot_source_with_ids(
     Ok(id)
 }
 
+/// Restore only already selected working scopes. This does not initialize a
+/// repository or file branch, and never changes any Git HEAD or index.
+pub(crate) fn record_restored_namespace_with_ids(
+    state: &mut State,
+    repository: &str,
+    file: &name_policy::PortablePath,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
+    let branches = state.branches.clone();
+    let selections = state.file_selections.clone();
+    let contexts = state.file_contexts.clone();
+    let mut paths = Vec::new();
+    let mut parent = file.parent();
+    while let Some(path) = parent {
+        parent = path.parent();
+        paths.push(path.as_str().to_owned());
+    }
+    paths.push(String::new());
+    for path in paths {
+        let view = scope_view(state, repository, &path)?;
+        if !state.directory_selections.contains_key(view.directory_id) {
+            continue;
+        }
+        let source = DirectorySnapshotSource::capture(state, view);
+        snapshot_source_with_ids(state, repository, source, ids)?;
+    }
+    if state.branches != branches
+        || state.file_selections != selections
+        || state.file_contexts != contexts
+    {
+        return Err(Error::new(
+            ErrorCode::UnsupportedOperation,
+            "restoration cannot initialize or retarget unrelated file branches or contexts",
+        ));
+    }
+    Ok(())
+}
+
 /// Preserve inherited file-write intent in a newly published namespace.
 pub(crate) fn snapshot_pending(state: &State, entries: &[Entry]) -> BTreeMap<String, String> {
     entries

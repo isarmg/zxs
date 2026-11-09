@@ -28,7 +28,27 @@ pub(crate) fn verify_current_move_transition(
     {
         return Err(invalid());
     }
-    let sources = history_copy::move_sources(previous, Some(view), request)?;
+    let replacement = body
+        .move_request
+        .replacement
+        .as_ref()
+        .map(|identity| {
+            replacement::capture(
+                previous,
+                Some(view),
+                request,
+                identity,
+                usize::MAX,
+                &HistoryWindowCancellation::default(),
+            )
+        })
+        .transpose()?;
+    let sources = history_copy::move_destination_sources(
+        previous,
+        Some(view),
+        request,
+        body.move_request.replacement.as_ref(),
+    )?;
     if sources.file != body.source_file_id {
         return Err(invalid());
     }
@@ -84,6 +104,7 @@ pub(crate) fn verify_current_move_transition(
                 branch_heads: &heads,
                 parents: captured.parent_node_ids(),
                 versions: &sources.versions,
+                replacement: replacement.as_ref(),
             },
             route: &body.move_route,
             principal,
@@ -97,6 +118,7 @@ pub(crate) fn verify_current_move_transition(
         || writes.branch_mapping != body.branch_mapping
         || writes.next.branches[&target.main_branch_id].generation != body.branch_generation
         || writes.lifecycle != body.retained_lifecycle
+        || writes.replacement != body.replacement
     {
         return Err(invalid());
     }

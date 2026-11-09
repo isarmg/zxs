@@ -27,7 +27,7 @@ fn file_scopes(
     frozen: &FrozenCandidate,
 ) -> BTreeSet<(String, String, String)> {
     let mut scopes = BTreeSet::new();
-    for id in projection.capture().version_ids() {
+    for id in projection.capture().retained_version_ids() {
         let version = &engine.state().versions[id];
         for slot in &engine.state().placements[id].route_slot_ids {
             scopes.insert((
