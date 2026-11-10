@@ -263,45 +263,29 @@ fn explicit_retained_occurrence_can_be_the_later_path_without_copying_history() 
 #[test]
 fn two_child_main_repositories_separate_without_rewriting_parent_pins_or_reviewed_index() {
     let (temp, mut engine, repo) = fixture();
-    save(&mut engine, &repo, "left/report.txt", b"child snapshot");
-    save(&mut engine, &repo, "right/keep", b"sibling");
-    initialize(&mut engine, &repo, "left");
-    let left_head = commit(&mut engine, &repo, "left");
-    let transfer = branch(&mut engine, &repo, "left", "transfer child");
-    initialize(&mut engine, &repo, "right");
-    let right_head = commit(&mut engine, &repo, "right");
-    initialize(&mut engine, &repo, "");
-    stage_child(&mut engine, &repo, "", "left");
-    stage_child(&mut engine, &repo, "", "right");
+    aliases(&mut engine, &repo);
+    initialize(&mut engine, &repo, "a");
+    let left_head = commit(&mut engine, &repo, "a");
+    initialize(&mut engine, &repo, "b");
+    let right_head = commit(&mut engine, &repo, "b");
+    stage_child(&mut engine, &repo, "", "a");
+    stage_child(&mut engine, &repo, "", "b");
     let parent_head = commit(&mut engine, &repo, "");
     let parent = engine.state().directory_trees[&parent_head].clone();
-    let left = main_id(&engine, &repo, "left");
-    let right = main_id(&engine, &repo, "right");
-    save(
-        &mut engine,
-        &repo,
-        "left/report.txt",
-        b"left uncommitted save",
-    );
-    let items = vec![mapping(
-        &engine,
-        &transfer,
-        "left/report.txt",
-        &right,
-        "right/report.txt",
-    )];
-    apply(&mut engine, &repo, DirectoryBatchKind::Move, items);
-    let original = entry(&engine, &left, "left/report.txt");
-    let secondary = entry(&engine, &right, "right/report.txt");
+    let left = main_id(&engine, &repo, "a");
+    let right = main_id(&engine, &repo, "b");
+    save(&mut engine, &repo, "a/report.txt", b"left uncommitted save");
+    let original = entry(&engine, &left, "a/report.txt");
+    let secondary = entry(&engine, &right, "b/report.txt");
     assert_eq!(original.file_id, secondary.file_id);
     let history = engine.file_history(&original.file_id).unwrap();
     let git = engine.state().directory_git_repositories.clone();
     let items = vec![mapping(
         &engine,
         &left,
-        "left/report.txt",
+        "a/report.txt",
         &right,
-        "right/report.txt",
+        "b/report.txt",
     )];
     let (request, operation, receipt) =
         apply(&mut engine, &repo, DirectoryBatchKind::Separate, items);
@@ -309,19 +293,19 @@ fn two_child_main_repositories_separate_without_rewriting_parent_pins_or_reviewe
         assert_fresh(
             &engine,
             &secondary,
-            &entry(&engine, &right, "right/report.txt"),
-            b"child snapshot",
+            &entry(&engine, &right, "b/report.txt"),
+            b"frozen secondary body",
         );
-        assert_eq!(entry(&engine, &left, "left/report.txt"), original);
+        assert_eq!(entry(&engine, &left, "a/report.txt"), original);
         assert_eq!(engine.file_history(&original.file_id).unwrap(), history);
         assert_eq!(engine.state().directory_git_repositories, git);
         assert_eq!(engine.state().directory_trees[&parent_head], parent);
         assert_eq!(
-            status(&engine, &repo, "left").head_tree_id.as_deref(),
+            status(&engine, &repo, "a").head_tree_id.as_deref(),
             Some(left_head.as_str())
         );
         assert_eq!(
-            status(&engine, &repo, "right").head_tree_id.as_deref(),
+            status(&engine, &repo, "b").head_tree_id.as_deref(),
             Some(right_head.as_str())
         );
         assert_eq!(

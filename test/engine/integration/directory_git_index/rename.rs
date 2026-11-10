@@ -405,14 +405,43 @@ fn directory_git_rename_new_file_at_old_committed_path_is_not_the_historical_fil
     initialize(&mut engine, &repo, "box");
     commit(&mut engine, &repo, "box");
     let original = entry(&engine, &repo, "box/file");
+    let historical_head = status(&engine, &repo, "box").head_tree_id.unwrap();
     engine
-        .file_namespace(
-            &repo.repository_id,
-            NamespaceOperation::parse(NamespaceOperationKind::Delete, "box/file", None).unwrap(),
+        .move_object(
+            &storage_contract::file_relocation::ObjectMoveRequest {
+                source_repository_id: HistoryRepositoryId::parse(&repo.repository_id).unwrap(),
+                source_entry_id: storage_contract::file_relocation::NamespaceEntryId::parse(
+                    &original.entry_id,
+                )
+                .unwrap(),
+                source_path: name_policy::LookupPath::parse("box/file").unwrap(),
+                target_slot_id: repo.primary_slot_id.clone(),
+                target_repository_id: Some(
+                    HistoryRepositoryId::parse(&repo.repository_id).unwrap(),
+                ),
+                target_path: name_policy::PortablePath::parse("retained").unwrap(),
+                replace: false,
+                target_entry_id: None,
+            },
             "admin",
             op(),
         )
         .unwrap();
+    assert!(
+        engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .get("box/file")
+            .is_none()
+    );
+    assert_eq!(bytes(&engine, &repo, "retained"), b"historical identity");
+    assert_eq!(
+        engine.state().directory_trees[&historical_head]
+            .entries
+            .iter()
+            .find(|entry| entry.path() == "box/file"),
+        Some(&original)
+    );
     save(&mut engine, &repo, "box/file", b"new identity");
     let fresh = entry(&engine, &repo, "box/file");
     assert_ne!(fresh.file_id, original.file_id);

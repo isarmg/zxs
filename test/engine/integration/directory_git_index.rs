@@ -8,9 +8,11 @@ mod object_move;
 #[path = "directory_git_index/rename.rs"]
 mod rename;
 use std::io::Read;
+use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 use storage_engine::{
-    CommitRequest, Config, DirectoryCommitRequest, Engine, ErrorCode, OperationId, OperationResult,
-    Repository, Result, directory_git::*,
+    CommitRequest, Config, DeleteFileRequest, DirectoryCommitRequest, Engine, ErrorCode,
+    FileDeletionTarget, OperationId, OperationResult, Repository, Result, UndoFileDeletionRequest,
+    directory_git::*,
 };
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository) {
@@ -152,20 +154,30 @@ fn version_bytes(engine: &Engine, version: &str) -> Vec<u8> {
     result
 }
 
-fn remove(
+fn delete_file(
     engine: &mut Engine,
     repo: &Repository,
     path: &str,
-    kind: storage_contract::NamespaceOperationKind,
-) {
+) -> storage_contract::FileDeletionNode {
+    let file = engine
+        .namespace_tree(&repo.main_branch_id)
+        .unwrap()
+        .get(path)
+        .unwrap()
+        .file_id
+        .clone();
     engine
-        .file_namespace(
-            &repo.repository_id,
-            storage_contract::NamespaceOperation::parse(kind, path, None).unwrap(),
-            "admin",
-            OperationId::generate().unwrap(),
-        )
+        .soft_delete_file(DeleteFileRequest {
+            target: FileDeletionTarget {
+                repository_id: &HistoryRepositoryId::parse(&repo.repository_id).unwrap(),
+                file_id: &HistoryFileId::parse(&file).unwrap(),
+                path: &name_policy::LookupPath::parse(path).unwrap(),
+            },
+            principal: "admin",
+            operation_id: OperationId::generate().unwrap(),
+        })
         .unwrap();
+    engine.file_deletion(&file).unwrap().clone()
 }
 
 #[test]
@@ -429,14 +441,9 @@ fn staged_file_is_committed_without_resurrecting_its_later_working_deletion() {
     let expected = engine.state().directory_trees[staged.working_tree_id.as_ref().unwrap()]
         .entries
         .clone();
-    remove(
-        &mut engine,
-        &repo,
-        "file",
-        storage_contract::NamespaceOperationKind::Delete,
-    );
+    let deletion = delete_file(&mut engine, &repo, "file");
     let ready = status(&engine, &repo, "");
-    assert!(ready.staged && ready.unstaged);
+    assert_eq!(ready, staged);
     assert_eq!((ready.added, ready.modified, ready.deleted), (0, 1, 0));
     let result =
         commit_reviewed(&mut engine, &repo, &ready, OperationId::generate().unwrap()).unwrap();
@@ -444,65 +451,140 @@ fn staged_file_is_committed_without_resurrecting_its_later_working_deletion() {
     assert_eq!(engine.state().directory_trees[head].entries, expected);
     assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
     let after = status(&engine, &repo, "");
-    assert!(!after.staged && after.unstaged);
+    assert!(!after.staged && !after.unstaged);
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
     assert_eq!(status(&engine, &repo, ""), after);
     assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
     assert_eq!(version_bytes(&engine, &expected[0].version_id), b"staged");
+    assert_eq!(engine.file_deletion(&deletion.file_id), Some(&deletion));
+    assert_eq!(
+        engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .entries(),
+        expected
+    );
     let next = commit(&mut engine, &repo, "");
-    assert!(engine.state().directory_trees[&next].entries.is_empty());
-    assert!(!status(&engine, &repo, "").unstaged);
+    assert_eq!(next, head);
+    let restaged = status(&engine, &repo, "");
+    assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
+    engine
+        .undo_file_deletion(UndoFileDeletionRequest {
+            file_id: &HistoryFileId::parse(&deletion.file_id).unwrap(),
+            deletion_node_id: &deletion.node_id,
+            principal: "admin",
+            operation_id: OperationId::generate().unwrap(),
+        })
+        .unwrap();
+    assert_eq!(bytes(&engine, &repo, "file"), b"staged");
+    assert_eq!(
+        engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .get("file"),
+        Some(&expected[0])
+    );
+    assert_eq!(status(&engine, &repo, ""), restaged);
 }
 
 #[test]
-fn staged_deletion_does_not_delete_a_recreated_working_file() {
+fn staged_soft_deletion_preserves_the_reserved_file_until_exact_undo() {
     let (temp, mut engine, repo) = fixture();
     save(&mut engine, &repo, "file", b"old identity");
     initialize(&mut engine, &repo, "");
-    let old = commit(&mut engine, &repo, "");
-    let old_file = engine.state().directory_trees[&old].entries[0]
-        .file_id
+    let head = commit(&mut engine, &repo, "");
+    let original = engine
+        .namespace_tree(&repo.main_branch_id)
+        .unwrap()
+        .get("file")
+        .unwrap()
         .clone();
-    remove(
-        &mut engine,
-        &repo,
-        "file",
-        storage_contract::NamespaceOperationKind::Delete,
-    );
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "file", b"replacement")
+        .unwrap();
+    let deletion = delete_file(&mut engine, &repo, "file");
     stage_owned(&mut engine, &repo, "");
-    save(&mut engine, &repo, "file", b"replacement");
     let ready = status(&engine, &repo, "");
-    assert!(ready.staged && ready.unstaged);
-    assert_eq!((ready.added, ready.modified, ready.deleted), (0, 0, 1));
+    assert!(!ready.staged && !ready.unstaged);
+    assert_eq!((ready.added, ready.modified, ready.deleted), (0, 0, 0));
+    let before = engine.state().clone();
+    assert_eq!(
+        engine
+            .commit_workspace(CommitRequest {
+                workspace_id: workspace.workspace_id.clone(),
+                operation_id: OperationId::generate().unwrap(),
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "cannot replace a soft-deleted file".into(),
+                request_digest: None,
+            })
+            .unwrap_err()
+            .code(),
+        ErrorCode::BranchNotActive
+    );
+    assert_eq!(engine.state(), &before);
+    engine
+        .abort_workspace(&workspace.workspace_id, "admin")
+        .unwrap();
     let result =
         commit_reviewed(&mut engine, &repo, &ready, OperationId::generate().unwrap()).unwrap();
-    let head = result.result["head_tree_id"].as_str().unwrap();
-    assert!(engine.state().directory_trees[head].entries.is_empty());
-    assert_eq!(bytes(&engine, &repo, "file"), b"replacement");
-    let after = status(&engine, &repo, "");
-    assert!(!after.staged && after.unstaged);
+    assert_eq!(result.result["no_change"], true);
+    assert_eq!(result.result["head_tree_id"], head);
+    assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
-    assert_eq!(status(&engine, &repo, ""), after);
-    assert_eq!(bytes(&engine, &repo, "file"), b"replacement");
+    assert_eq!(status(&engine, &repo, ""), ready);
+    assert_eq!(engine.file_deletion(&original.file_id), Some(&deletion));
     assert_eq!(
-        version_bytes(
-            &engine,
-            &engine.state().directory_trees[&old].entries[0].version_id
-        ),
+        engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .entries(),
+        [original.clone()]
+    );
+    assert_eq!(
+        version_bytes(&engine, &original.version_id),
         b"old identity"
     );
-    let next = commit(&mut engine, &repo, "");
-    assert_ne!(
-        engine.state().directory_trees[&next].entries[0].file_id,
-        old_file
+    engine
+        .undo_file_deletion(UndoFileDeletionRequest {
+            file_id: &HistoryFileId::parse(&original.file_id).unwrap(),
+            deletion_node_id: &deletion.node_id,
+            principal: "admin",
+            operation_id: OperationId::generate().unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .get("file"),
+        Some(&original)
     );
-    assert!(!status(&engine, &repo, "").unstaged);
+    save(&mut engine, &repo, "file", b"later content");
+    assert_eq!(
+        engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .get("file")
+            .unwrap()
+            .file_id,
+        original.file_id
+    );
+    assert_eq!(bytes(&engine, &repo, "file"), b"later content");
+    assert_eq!(
+        version_bytes(&engine, &original.version_id),
+        b"old identity"
+    );
 }
 
 #[test]
-fn deleted_child_boundary_is_not_reused_by_a_same_path_replacement() {
+fn moved_child_boundary_is_not_reused_by_a_same_path_replacement() {
     let (temp, mut engine, repo) = fixture();
     save(&mut engine, &repo, "child/file", b"old independent child");
     initialize(&mut engine, &repo, "child");
@@ -510,46 +592,72 @@ fn deleted_child_boundary_is_not_reused_by_a_same_path_replacement() {
     let child_id = status(&engine, &repo, "child").directory_id;
     initialize(&mut engine, &repo, "");
     stage_child(&mut engine, &repo, "", "child");
-    let old = commit(&mut engine, &repo, "");
-    remove(
-        &mut engine,
-        &repo,
-        "child",
-        storage_contract::NamespaceOperationKind::DeleteTree,
+    let parent_head = commit(&mut engine, &repo, "");
+    let before = engine.state().clone();
+    assert_eq!(
+        engine
+            .file_namespace(
+                &repo.repository_id,
+                storage_contract::NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::DeleteTree,
+                    "child",
+                    None
+                )
+                .unwrap(),
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::UnsupportedOperation
     );
+    assert_eq!(
+        engine
+            .prepare_current_directory_deletion(
+                &repo.repository_id,
+                &name_policy::LookupPath::parse("child").unwrap(),
+                &child_id,
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(engine.state(), &before);
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            storage_contract::NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "child",
+                Some("held"),
+            )
+            .unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
     save(&mut engine, &repo, "child/new", b"new ordinary child");
     let ready = status(&engine, &repo, "");
-    assert!(ready.needs_restage && ready.children.is_empty());
+    assert!(ready.needs_restage);
+    assert_eq!(ready.children.len(), 1);
+    assert_eq!(ready.children[0].path, "held");
     let replacement = status(&engine, &repo, "child");
     assert!(!replacement.initialized);
     assert_ne!(replacement.directory_id, child_id);
-    let before = engine.state().clone();
+    let moved = status(&engine, &repo, "held");
+    assert!(moved.initialized);
+    assert_eq!(moved.directory_id, child_id);
+    assert_eq!(moved.head_tree_id.as_deref(), Some(child_head.as_str()));
+    let unreviewed = engine.state().clone();
     assert_eq!(
         commit_reviewed(&mut engine, &repo, &ready, OperationId::generate().unwrap())
             .unwrap_err()
             .code(),
         ErrorCode::DirectoryBranchConflict
     );
-    assert_eq!(
-        engine
-            .stage_directory_git_child(
-                &repo.repository_id,
-                &DirectoryGitStageChildBody {
-                    directory_id: ready.directory_id,
-                    directory_branch_id: ready.directory_branch_id.unwrap(),
-                    expected_index_generation: ready.index_generation,
-                    child_directory_id: child_id.clone(),
-                    expected_child_head_tree_id: child_head.clone(),
-                    operation_id: OperationId::generate().unwrap(),
-                },
-                "admin",
-            )
-            .unwrap_err()
-            .code(),
-        ErrorCode::DirectoryBranchConflict
-    );
-    assert_eq!(engine.state(), &before);
+    assert_eq!(engine.state(), &unreviewed);
     stage_owned(&mut engine, &repo, "");
+    stage_child(&mut engine, &repo, "", "held");
     save(&mut engine, &repo, "child/later", b"not staged");
     let ready = status(&engine, &repo, "");
     assert!(ready.staged && ready.unstaged && !ready.needs_restage);
@@ -557,7 +665,8 @@ fn deleted_child_boundary_is_not_reused_by_a_same_path_replacement() {
         commit_reviewed(&mut engine, &repo, &ready, OperationId::generate().unwrap()).unwrap();
     let head = result.result["head_tree_id"].as_str().unwrap();
     let tree = &engine.state().directory_trees[head];
-    assert!(tree.directory_refs.is_empty());
+    assert_eq!(tree.directory_refs.len(), 1);
+    assert_eq!(tree.directory_refs[&child_id].tree_id, child_head);
     assert!(tree.entries.iter().any(|entry| entry.path() == "child/new"));
     assert!(
         !tree
@@ -566,13 +675,19 @@ fn deleted_child_boundary_is_not_reused_by_a_same_path_replacement() {
             .any(|entry| entry.path() == "child/later")
     );
     assert_eq!(
-        engine.state().directory_trees[&old].directory_refs[&child_id].tree_id,
-        child_head
+        engine.state().directory_trees[&parent_head],
+        before.directory_trees[&parent_head]
     );
     drop(engine);
     let engine = Engine::open(&temp.path().join("system")).unwrap();
     assert!(!status(&engine, &repo, "child").initialized);
+    assert_eq!(status(&engine, &repo, "held"), moved);
     assert!(status(&engine, &repo, "").unstaged);
+    assert_eq!(
+        engine.state().directory_trees[&parent_head],
+        before.directory_trees[&parent_head]
+    );
+    assert_eq!(bytes(&engine, &repo, "held/file"), b"old independent child");
     assert_eq!(bytes(&engine, &repo, "child/new"), b"new ordinary child");
     assert_eq!(bytes(&engine, &repo, "child/later"), b"not staged");
 }
