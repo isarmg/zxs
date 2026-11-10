@@ -2,6 +2,7 @@
 //! sources are not an executed result or physical power-loss / SMB certificate.
 use super::*;
 use std::fs;
+use storage_contract::file_relocation::OBJECT_MOVE_KIND;
 
 fn path_request(fixture: &Fixture) -> FileHistoryMovePathRequest {
     FileHistoryMovePathRequest {
@@ -30,7 +31,7 @@ fn assert_visible(
     let deletion = engine.file_deletion(&old.file_id).unwrap();
     assert_eq!(deletion.operation_id, operation);
     let receipt = &engine.state().operations[&operation];
-    assert_eq!(receipt.kind, "file.history.move");
+    assert_eq!(receipt.kind, OBJECT_MOVE_KIND);
     assert_eq!(receipt.commit_state, CommitState::Published);
     assert_eq!(
         receipt.protection_at_publish,
@@ -247,7 +248,7 @@ fn native_move_publishes_all_retained_bodies_labels_branches_and_three_scopes_to
 }
 
 #[test]
-fn completed_move_releases_only_its_singleton_names_and_a_later_move_keeps_both_receipts() {
+fn completed_move_retires_its_binding_and_a_later_move_keeps_both_receipts() {
     let mut fixture = Fixture::new(false);
     let request = path_request(&fixture);
     let first = op();
@@ -257,13 +258,7 @@ fn completed_move_releases_only_its_singleton_names_and_a_later_move_keeps_both_
         .unwrap();
     let third = fixture
         .engine
-        .create_repository(
-            &RepositoryName::parse("third").unwrap(),
-            "D05",
-            1,
-            "admin",
-            op(),
-        )
+        .create_disk_root("D05", "admin", op())
         .unwrap();
     let next = FileHistoryMovePathRequest {
         source_repository_id: fixture.target.repository_id.clone(),
@@ -295,25 +290,24 @@ fn completed_move_releases_only_its_singleton_names_and_a_later_move_keeps_both_
             fixture
                 .temp
                 .path()
-                .join("system/file-history-move-completed")
-                .join(operation.to_string())
-                .join("file-history-move-decision-inputs/joint-choice.json")
+                .join("system/move-completion")
+                .join(format!("{operation}.json"))
                 .is_file()
         );
         assert_eq!(
             fixture.engine.state().operations[&operation].kind,
-            "file.history.move"
+            OBJECT_MOVE_KIND
         );
     }
 }
 
 #[test]
-fn native_move_rejects_nonempty_target_without_a_new_intent_or_source_deletion() {
+fn native_move_rejects_a_name_collision_without_a_new_intent_or_source_deletion() {
     let mut fixture = Fixture::new(false);
     save(
         &mut fixture.engine,
         &fixture.target,
-        "existing.txt",
+        "moved.txt",
         b"keep target",
     );
     let request = path_request(&fixture);
@@ -324,9 +318,23 @@ fn native_move_rejects_nonempty_target_without_a_new_intent_or_source_deletion()
             .move_current_file(&request, "admin", op())
             .unwrap_err()
             .code(),
-        ErrorCode::UnsupportedOperation
+        ErrorCode::NameCollision
     );
     assert_eq!(fixture.engine.state(), &before);
+    assert_eq!(
+        bytes(
+            &fixture.engine,
+            &entry(&fixture.engine, &fixture.target, "moved.txt").version_id,
+        ),
+        b"keep target"
+    );
+    assert!(
+        !fixture
+            .temp
+            .path()
+            .join("system/move-completion.json")
+            .exists()
+    );
     assert!(
         fixture
             .engine
@@ -337,8 +345,61 @@ fn native_move_rejects_nonempty_target_without_a_new_intent_or_source_deletion()
 }
 
 #[test]
-fn native_move_refuses_membership_transition_instead_of_borrowing_its_authority() {
+fn native_move_keeps_noncolliding_target_files_in_an_activated_current_generation() {
     let mut fixture = Fixture::new(true);
+    save(
+        &mut fixture.engine,
+        &fixture.target,
+        "existing.txt",
+        b"keep target",
+    );
+    let existing = entry(&fixture.engine, &fixture.target, "existing.txt");
+    let old = entry(&fixture.engine, &fixture.source, "source.txt");
+    let request = path_request(&fixture);
+    let operation = op();
+    let receipt = fixture
+        .engine
+        .move_current_file(&request, "admin", operation)
+        .unwrap();
+    assert_visible(
+        &fixture.engine,
+        &fixture.source,
+        &fixture.target,
+        &old,
+        operation,
+    );
+    assert_eq!(
+        entry(&fixture.engine, &fixture.target, "existing.txt"),
+        existing
+    );
+    assert_eq!(bytes(&fixture.engine, &existing.version_id), b"keep target");
+    let Fixture {
+        temp,
+        engine,
+        source,
+        target,
+    } = fixture;
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_visible(&engine, &source, &target, &old, operation);
+    assert_eq!(entry(&engine, &target, "existing.txt"), existing);
+    assert_eq!(bytes(&engine, &existing.version_id), b"keep target");
+    assert_eq!(
+        engine
+            .move_current_file(&request, "admin", operation)
+            .unwrap(),
+        receipt
+    );
+}
+
+#[test]
+fn native_move_refuses_an_unfinished_membership_transition() {
+    let mut fixture = Fixture::new(false);
+    let retiring = fixture.engine.config().disks[4].disk_id.clone();
+    fixture
+        .engine
+        .begin_disk_exit(&retiring, MembershipExitAction::Deregister, "admin", op())
+        .unwrap();
     let request = path_request(&fixture);
     let before = fixture.engine.state().clone();
     assert_eq!(
@@ -347,33 +408,46 @@ fn native_move_refuses_membership_transition_instead_of_borrowing_its_authority(
             .move_current_file(&request, "admin", op())
             .unwrap_err()
             .code(),
-        ErrorCode::UnsupportedOperation
+        ErrorCode::RecoveryRequired
     );
     assert_eq!(fixture.engine.state(), &before);
+    assert!(
+        !fixture
+            .temp
+            .path()
+            .join("system/move-completion.json")
+            .exists()
+    );
 }
 
 #[cfg(feature = "fault-injection")]
 #[test]
-fn native_move_early_intent_keeps_source_frozen_and_explicit_retry_uses_original_clock() {
+fn native_move_early_selection_keeps_source_frozen_and_recovers_the_original_candidate() {
     let mut fixture = Fixture::new(false);
     let request = path_request(&fixture);
+    let old = entry(&fixture.engine, &fixture.source, "source.txt");
+    let before = fixture.engine.state().clone();
     let operation = op();
     fixture
         .engine
-        .inject_fault_once("move_after_original_intent");
-    assert!(
+        .inject_fault_once("move_after_completion_binding");
+    assert_eq!(
         fixture
             .engine
             .move_current_file(&request, "admin", operation)
-            .is_err()
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
     );
-    let retained = fs::read(
-        fixture
-            .temp
-            .path()
-            .join("system/file-history-move-recovery/preparation.json"),
-    )
-    .unwrap();
+    assert_eq!(fixture.engine.state(), &before);
+    assert_eq!(bytes(&fixture.engine, &old.version_id), b"new full body");
+    let retained = fs::read(fixture.temp.path().join("system/move-completion.json")).unwrap();
+    let binding: json_codec::Value = storage_contract::decode_strict(&retained).unwrap();
+    assert_eq!(binding["operation"], operation.to_string());
+    let candidate = selected_candidate(&fixture);
+    assert_eq!(candidate["operation_id"], operation.to_string());
+    assert_eq!(candidate["sequence"], (before.sequence + 1).to_string());
+    assert_eq!(candidate["request_digest"], binding["request_digest"]);
     assert_eq!(
         fixture
             .engine
@@ -382,19 +456,53 @@ fn native_move_early_intent_keeps_source_frozen_and_explicit_retry_uses_original
             .code(),
         ErrorCode::RecoveryRequired
     );
-    let Fixture { temp, engine, .. } = fixture;
+    let Fixture {
+        temp,
+        engine,
+        source,
+        target,
+    } = fixture;
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
-    assert!(!engine.state().operations.contains_key(&operation));
-    engine
+    assert_visible(&engine, &source, &target, &old, operation);
+    let receipt = engine
         .move_current_file(&request, "admin", operation)
         .unwrap();
+    assert_eq!(receipt.sequence, before.sequence + 1);
+    assert_eq!(candidate["request_digest"], receipt.request_digest);
     let archived = temp
         .path()
-        .join("system/file-history-move-completed")
-        .join(operation.to_string())
-        .join("file-history-move-recovery/preparation.json");
+        .join("system/move-completion")
+        .join(format!("{operation}.json"));
     assert_eq!(fs::read(archived).unwrap(), retained);
+    assert!(!temp.path().join("system/move-completion.json").exists());
+}
+
+#[cfg(feature = "fault-injection")]
+fn selected_candidate(fixture: &Fixture) -> json_codec::Value {
+    let binding: json_codec::Value = storage_contract::decode_strict(
+        &fs::read(fixture.temp.path().join("system/move-completion.json")).unwrap(),
+    )
+    .unwrap();
+    let hash = binding["candidate_hash"].as_str().unwrap();
+    let member = fixture
+        .engine
+        .config()
+        .disks
+        .iter()
+        .find(|disk| disk.metadata_member)
+        .unwrap();
+    storage_contract::decode_strict(
+        &fs::read(
+            member
+                .root
+                .join("metadata/objects/candidate")
+                .join(&hash[..2])
+                .join(format!("{hash}.json")),
+        )
+        .unwrap(),
+    )
+    .unwrap()
 }
 
 #[cfg(feature = "fault-injection")]
@@ -411,8 +519,6 @@ fn every_decided_boundary_recovers_the_same_receipt_and_keeps_old_source_until_a
         "after_local_publications",
         "move_after_disk_database_pair",
         "move_after_system_database",
-        "move_before_choice_retirement",
-        "move_after_choice_retirement_1",
     ] {
         let mut fixture = Fixture::new(false);
         let request = path_request(&fixture);
@@ -472,7 +578,7 @@ fn decided_move_with_corrupted_ordinary_full_does_not_hide_source_or_recreate_fr
     let request = path_request(&fixture);
     let operation = op();
     let old = entry(&fixture.engine, &fixture.source, "source.txt");
-    fixture.engine.inject_fault_once("after_accept_1");
+    fixture.engine.inject_fault_once("after_container_names");
     assert!(
         fixture
             .engine
@@ -486,34 +592,18 @@ fn decided_move_with_corrupted_ordinary_full_does_not_hide_source_or_recreate_fr
         .iter()
         .find(|disk| disk.slot_id == "D04")
         .unwrap();
-    let intent: json_codec::Value = storage_contract::decode_strict(
-        &fs::read(
-            disk.root
-                .join("file-history-move-ordinary/ordinary-inputs.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let version_id = intent["versions"][0]["version_id"].as_str().unwrap();
-    let version: FileVersion = storage_contract::decode_strict(
-        &fs::read(
-            disk.root
-                .join("histories")
-                .join(&fixture.target.history_tree_id)
-                .join("versions")
-                .join(version_id)
-                .join("version.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let candidate = selected_candidate(&fixture);
+    assert_eq!(candidate["operation_id"], operation.to_string());
+    let version: FileVersion =
+        json_codec::from_value(candidate["versions"][0]["version"].clone()).unwrap();
+    assert_eq!(version.history_tree_id, fixture.target.history_tree_id);
     let body = disk
         .root
         .join("histories")
-        .join(&fixture.target.history_tree_id)
+        .join(&version.history_tree_id)
         .join("file-containers")
-        .join(intent["file"].as_str().unwrap())
-        .join("moved.txt/versions")
+        .join(&version.file_id)
+        .join("namespace/moved.txt/versions")
         .join(&version.storage_name);
     let original = fs::read(&body).unwrap();
     fs::write(&body, b"incomplete").unwrap();

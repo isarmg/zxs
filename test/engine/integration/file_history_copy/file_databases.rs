@@ -9,7 +9,7 @@ use std::{
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 const NAME: &str = ".zxs-file.sqlite";
-fn database(
+pub(super) fn database(
     engine: &Engine,
     repository: &Repository,
     file: &str,
@@ -31,7 +31,7 @@ fn database(
         .join(path)
         .join(NAME)
 }
-fn records(path: &Path) -> BTreeMap<(String, String), json_codec::Value> {
+pub(super) fn records(path: &Path) -> BTreeMap<(String, String), json_codec::Value> {
     platform_io::sqlite::block_on_sqlite_connection(async {
         let mut connection = SqliteConnection::connect_with(
             &SqliteConnectOptions::new().filename(path).read_only(true),

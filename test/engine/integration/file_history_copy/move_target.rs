@@ -1,4 +1,5 @@
-//! Real staging on temporary target disks, never publication/SMB certification.
+//! Real target staging and the two-copy object-move route on temporary disks.
+//! These sources are not an executed result or SMB certification.
 use super::*;
 use sqlite_access::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::{fs, path::PathBuf};
@@ -33,6 +34,158 @@ fn two_targets() -> Fixture {
         engine,
         source,
         target,
+    }
+}
+
+#[test]
+fn two_copy_regular_repository_is_not_a_low_level_disk_root_capture() {
+    let fixture = two_targets();
+    let file = entry(&fixture.engine, &fixture.source, "source.txt");
+    let before = fixture.engine.state().clone();
+    assert!(!fixture.target.file_manager_root);
+    assert_eq!(fixture.target.target_copies, 2);
+    let capture = fixture.engine.capture_file_history_move(
+        FileHistoryMoveRequest {
+            namespace: &request(&fixture.engine, &fixture.source, &fixture.target),
+            source_file_id: &HistoryFileId::parse(&file.file_id).unwrap(),
+        },
+        &HistoryWindowCancellation::new(),
+    );
+    assert_eq!(
+        capture.err().unwrap().code(),
+        ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(fixture.engine.state(), &before);
+    assert!(fixture.engine.file_deletion(&file.file_id).is_none());
+    assert_eq!(bytes(&fixture.engine, &file.version_id), b"new full body");
+    for slot in ["D04", "D05"] {
+        assert!(!stage(&fixture.engine, slot).exists());
+    }
+}
+
+#[test]
+fn object_move_publishes_independent_fulls_and_equal_file_databases_on_both_targets() {
+    use super::file_databases::{database, records};
+    let mut fixture = two_targets();
+    let source = entry(&fixture.engine, &fixture.source, "source.txt");
+    let originals = fixture.engine.file_history(&source.file_id).unwrap();
+    let request = FileHistoryMovePathRequest {
+        source_repository_id: fixture.source.repository_id.clone(),
+        source_path: "source.txt".into(),
+        target_repository_id: fixture.target.repository_id.clone(),
+        target_name: "moved.txt".into(),
+    };
+    let operation = op();
+    let receipt = fixture
+        .engine
+        .move_current_file(&request, "admin", operation)
+        .unwrap();
+    assert_eq!(
+        receipt.kind,
+        storage_contract::file_relocation::OBJECT_MOVE_KIND
+    );
+    assert_eq!(receipt.commit_state, CommitState::Published);
+    assert_eq!(
+        receipt.protection_at_publish,
+        ProtectionAtPublish::TargetMet
+    );
+    let moved = entry(&fixture.engine, &fixture.target, "moved.txt");
+    assert_ne!(moved.file_id, source.file_id);
+    assert_eq!(
+        fixture.engine.file_deletion(&source.file_id).unwrap().operation_id,
+        operation
+    );
+    assert!(
+        fixture
+            .engine
+            .namespace_tree(&fixture.source.main_branch_id)
+            .unwrap()
+            .get("source.txt")
+            .is_none()
+    );
+    let paths = ["D04", "D05"].map(|slot| {
+        database(
+            &fixture.engine,
+            &fixture.target,
+            &moved.file_id,
+            slot,
+            "moved.txt",
+        )
+    });
+    let expected = records(&paths[0]);
+    assert_eq!(expected, records(&paths[1]));
+    assert_eq!(
+        expected.keys().filter(|(kind, _)| kind == "version").count(),
+        originals.len()
+    );
+    let source_database = database(
+        &fixture.engine,
+        &fixture.source,
+        &source.file_id,
+        "P01",
+        "source.txt",
+    );
+    let mut database_identities = BTreeSet::new();
+    let metadata = fs::metadata(source_database).unwrap();
+    database_identities.insert((metadata.dev(), metadata.ino()));
+    for path in &paths {
+        let metadata = fs::metadata(path).unwrap();
+        assert_eq!(metadata.nlink(), 1);
+        assert!(database_identities.insert((metadata.dev(), metadata.ino())));
+    }
+    let mut retained = Vec::new();
+    for original in originals {
+        let target = receipt.result["version_mapping"][&original.version_id]
+            .as_str()
+            .unwrap();
+        let version = &fixture.engine.state().versions[target];
+        let placement = &fixture.engine.state().placements[target];
+        assert_eq!(placement.route_slot_ids, ["D04", "D05"]);
+        assert_eq!(placement.target_copies, 2);
+        let old = fixture
+            .engine
+            .open_content(&original.version_id)
+            .unwrap()
+            .file
+            .metadata()
+            .unwrap();
+        let mut identities = BTreeSet::from([(old.dev(), old.ino())]);
+        for database in &paths {
+            let body = database
+                .parent()
+                .unwrap()
+                .join("versions")
+                .join(&version.storage_name);
+            let contents = fs::read(&body).unwrap();
+            assert_eq!(contents, bytes(&fixture.engine, &original.version_id));
+            let metadata = fs::metadata(&body).unwrap();
+            assert_eq!(metadata.nlink(), 1);
+            assert!(identities.insert((metadata.dev(), metadata.ino())));
+            retained.push((body, contents, (metadata.dev(), metadata.ino())));
+        }
+    }
+    let Fixture {
+        temp,
+        engine,
+        target,
+        ..
+    } = fixture;
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(
+        engine
+            .move_current_file(&request, "admin", operation)
+            .unwrap(),
+        receipt
+    );
+    assert_eq!(entry(&engine, &target, "moved.txt"), moved);
+    for path in paths {
+        assert_eq!(records(&path), expected);
+    }
+    for (path, contents, identity) in retained {
+        assert_eq!(fs::read(&path).unwrap(), contents);
+        let metadata = fs::metadata(path).unwrap();
+        assert_eq!((metadata.dev(), metadata.ino()), identity);
     }
 }
 
@@ -80,8 +233,8 @@ fn staged_body(engine: &Engine, projection: &FileHistoryMoveProjection, slot: &s
 }
 
 #[test]
-fn all_target_members_get_independent_full_history_files_and_exact_file_databases() {
-    let mut fixture = two_targets();
+fn disk_root_staging_keeps_independent_full_history_files_unpublished() {
+    let mut fixture = Fixture::new(false);
     let (projection, info) = plan(&mut fixture);
     let before = fixture.engine.state().clone();
     let report = fixture
@@ -92,7 +245,7 @@ fn all_target_members_get_independent_full_history_files_and_exact_file_database
             &HistoryWindowCancellation::new(),
         )
         .unwrap();
-    assert_eq!(report.target_slots(), ["D04", "D05"]);
+    assert_eq!(report.target_slots(), ["D04"]);
     assert_eq!(report.versions_per_slot(), 2);
     assert_eq!(report.body_bytes_per_slot(), 26);
     assert_eq!(
