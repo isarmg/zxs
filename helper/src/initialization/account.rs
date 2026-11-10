@@ -43,7 +43,7 @@ struct Binding {
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
-    CreateNonlogin { program: Snapshot },
+    CreateNonlogin { program: Box<Snapshot> },
     VerifyExisting { binding: Binding },
 }
 #[derive(Serialize, Deserialize)]
@@ -139,7 +139,9 @@ impl Prepared {
                             );
                         }
                         Action::CreateNonlogin {
-                            program: Executable::open(Program::SystemdSysusers)?.snapshot(),
+                            program: Box::new(
+                                Executable::open(Program::SystemdSysusers)?.snapshot(),
+                            ),
                         }
                     }
                 };
@@ -244,7 +246,7 @@ pub(crate) fn prepare(input: Prepare) -> Result<Outcome> {
             unreachable!("invariant: missing existing identities are rejected by observe")
         };
         let executable = Executable::open(Program::SystemdSysusers)?;
-        if executable.snapshot() != *program {
+        if executable.snapshot() != **program {
             return Err(
                 "the fixed systemd-sysusers executable differs from the original plan".into(),
             );
