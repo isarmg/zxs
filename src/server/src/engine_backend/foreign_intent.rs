@@ -33,8 +33,7 @@ impl EngineBackend {
         target: ForeignImportIntentTarget,
         request: ForeignImportIntentRequest,
     ) -> Result<PreparedForeignImportIntent, ApiError> {
-        let engine = crate::lock(&self.engine);
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         if request.principal != current.principal {
             return Err(ApiError::forbidden());
         }
@@ -48,8 +47,7 @@ impl EngineBackend {
         confirmed: ConfirmedForeignImportIntent,
         ensure_running: impl FnOnce() -> Result<(), ApiError>,
     ) -> Result<ForeignImportIntentInfo, ApiError> {
-        let mut engine = crate::lock(&self.engine);
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         ensure_running()?;
         engine
             .save_foreign_import_intent(confirmed, &current.principal)
@@ -63,8 +61,7 @@ impl EngineBackend {
         ensure_running: impl FnOnce() -> Result<(), ApiError>,
     ) -> Result<Option<ForeignImportIntentInfo>, ApiError> {
         let target = target_identity(&query.target)?;
-        let mut engine = crate::lock(&self.engine);
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         ensure_running()?;
         engine
             .reconcile_foreign_import_intent(
@@ -81,8 +78,7 @@ impl EngineBackend {
         query: &storage_contract::storage_foreign_intent::ForeignIntentQuery,
     ) -> Result<Option<ForeignImportIntentInfo>, ApiError> {
         let target = target_identity(&query.target)?;
-        let engine = crate::lock(&self.engine);
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         engine
             .foreign_import_intent(&target, query.operation_id, &current.principal)
             .map_err(error)

@@ -23,8 +23,7 @@ impl EngineBackend {
         &self,
         identity: &Identity,
     ) -> Result<storage_contract::Config, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         Ok(engine.config().clone())
     }
 
@@ -34,8 +33,7 @@ impl EngineBackend {
         &self,
         identity: &Identity,
     ) -> Result<(storage_contract::Config, Vec<std::path::PathBuf>), ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let stopped = stopped_roots(&engine);
         Ok((engine.config().clone(), stopped))
     }
@@ -46,8 +44,7 @@ impl EngineBackend {
         identity: &Identity,
         intent: &StoredAddition,
     ) -> Result<Option<OperationResult>, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         published_result(&engine, identity, intent)
     }
 
@@ -58,8 +55,7 @@ impl EngineBackend {
         held_directories: Option<Vec<storage_engine::PendingMemberDirectory>>,
         mut progress: impl FnMut(AdditionPhase, Option<ArchiveBinding>) -> Result<(), ApiError>,
     ) -> Result<OperationResult, ApiError> {
-        let mut engine = crate::lock(&self.engine);
-        let actor = current_protected_identity(&engine, identity)?;
+        let (mut engine, actor) = self.lock_current(identity)?;
         let operation = intent.status.operation_id;
         if let Some(result) = published_result(&engine, identity, intent)? {
             return Ok(result);

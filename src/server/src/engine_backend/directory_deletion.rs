@@ -11,11 +11,7 @@ impl EngineBackend {
         owner: &str,
         directory: &str,
     ) -> Result<Option<DirectoryDeletionNode>, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
@@ -30,11 +26,7 @@ impl EngineBackend {
         repository: &str,
         request: &UndoDirectoryDeletionBody,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
@@ -104,11 +96,7 @@ impl EngineBackend {
         identity: &Identity,
         command: crate::PrepareCurrentDirectoryDeletion,
     ) -> Result<Option<crate::CurrentDirectoryDeletion>, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         let repository = bound_repository(&engine, &current, &command.branch_id)?;
         require_empty(
             &engine,
@@ -137,11 +125,7 @@ impl EngineBackend {
         identity: &Identity,
         command: crate::DeleteCurrentDirectory,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let captured = command.captured;
         let repository = bound_repository(&engine, &current, &captured.branch_id)?;
         if repository != captured.repository_id
@@ -183,11 +167,7 @@ impl EngineBackend {
         request: crate::ReadDirectoryDeletions,
     ) -> Result<storage_contract::directory_git::DirectoryDeletionsPage, ApiError> {
         use storage_contract::directory_git::{DirectoryDeletionSummary, DirectoryDeletionsPage};
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }

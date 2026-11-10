@@ -17,11 +17,7 @@ impl EngineBackend {
         identity: &Identity,
         command: crate::MoveCurrentFileToEmptyDisk,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let mut current = current_protected_identity(&engine, identity)?;
+        let (mut engine, mut current) = self.lock_current(identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }

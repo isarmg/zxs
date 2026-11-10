@@ -9,8 +9,7 @@ impl EngineBackend {
         identity: &Identity,
         request: ForeignIdentityTargetRequest,
     ) -> Result<ForeignIdentityTarget, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         if identity.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
@@ -23,8 +22,7 @@ impl EngineBackend {
         identity: &Identity,
         target: &ForeignIdentityTarget,
     ) -> Result<(), ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         if identity.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }

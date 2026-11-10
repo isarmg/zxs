@@ -32,8 +32,7 @@ impl EngineBackend {
         identity: &Identity,
         request: &storage_engine::DirectoryImportStopRequest,
     ) -> Result<storage_engine::DirectoryImportStopOutcome, ApiError> {
-        let mut engine = crate::lock(&self.engine);
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         if request.principal != current.principal {
             return Err(ApiError::forbidden());
         }
@@ -45,8 +44,7 @@ impl EngineBackend {
         identity: &Identity,
         request: &storage_engine::DirectoryImportStopRequest,
     ) -> Result<Option<storage_engine::DirectoryImportStopOutcome>, ApiError> {
-        let engine = crate::lock(&self.engine);
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         if request.principal != current.principal {
             return Err(ApiError::forbidden());
         }
@@ -58,8 +56,7 @@ impl EngineBackend {
         identity: &Identity,
         request: &storage_engine::DirectoryImportStopRequest,
     ) -> Result<bool, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine
             .directory_import_stop_result(request)
             .map(|result| result.is_some())
@@ -73,8 +70,7 @@ impl EngineBackend {
         identity: &Identity,
         request: &CommitRequest,
     ) -> Result<bool, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         match engine.native_workspace_commit_completed(request) {
             Ok(completed) => Ok(completed),
             Err(source) if source.code() == storage_contract::ErrorCode::OperationNotFound => {
@@ -89,8 +85,7 @@ impl EngineBackend {
         identity: &Identity,
         request: &CommitRequest,
     ) -> Result<Option<OperationResult>, ApiError> {
-        let engine = crate::lock(&self.engine);
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         if request.principal != current.principal {
             return Err(ApiError::forbidden());
         }

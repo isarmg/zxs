@@ -9,11 +9,7 @@ impl EngineBackend {
         identity: &Identity,
         command: crate::MoveCurrentObject,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let mut current = current_protected_identity(&engine, identity)?;
+        let (mut engine, mut current) = self.lock_current(identity)?;
         // A named share retains exactly its original repository binding. Only
         // the default share may route between separately captured namespaces.
         if let Some(bound) = &current.smb_binding

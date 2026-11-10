@@ -83,8 +83,7 @@ impl EngineBackend {
         identity: &Identity,
         request: ExitRequest,
     ) -> Result<(ExitPreview, Config), ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         preview(&engine, request)
     }
 
@@ -93,8 +92,7 @@ impl EngineBackend {
         identity: &Identity,
         intent: &StoredExit,
     ) -> Result<Option<OperationResult>, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         published_result(&engine, identity, intent)
     }
 
@@ -104,8 +102,7 @@ impl EngineBackend {
         intent: &StoredExit,
         mut progress: impl FnMut(ExitPhase, Option<ArchiveBinding>) -> Result<(), ApiError>,
     ) -> Result<OperationResult, ApiError> {
-        let mut engine = crate::lock(&self.engine);
-        let actor = current_protected_identity(&engine, identity)?;
+        let (mut engine, actor) = self.lock_current(identity)?;
         if let Some(result) = published_result(&engine, identity, intent)? {
             return Ok(result);
         }

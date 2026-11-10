@@ -81,6 +81,20 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
+    /// Keep the current credential and SMB-binding proof inside the same engine
+    /// ownership interval as the caller's business checks and publication.
+    fn lock_current(
+        &self,
+        identity: &Identity,
+    ) -> Result<(std::sync::MutexGuard<'_, AdmissionEngine>, Identity), ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        Ok((engine, current))
+    }
+
     pub fn new(mut engine: Engine) -> Self {
         report_recovery_warnings(&mut engine);
         Self {
@@ -104,11 +118,7 @@ impl EngineBackend {
             &storage_engine::Engine,
         ) -> Result<T, ApiError>,
     ) -> Result<T, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let registration = engine
             .registered_disks()
             .find(|disk| disk.slot_id.eq_ignore_ascii_case(slot))
@@ -376,8 +386,7 @@ impl EngineBackend {
             .map(crate::operation_observation::CheckedOperationHealth::completed)
             .transpose()?;
         let record = observed.into_record();
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         operations::authorize_record(&engine, &current, &record)?;
         drop(engine);
         Ok(crate::OperationObservation {
@@ -393,8 +402,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         operation_id: storage_contract::OperationId,
     ) -> Result<crate::OperationObservation, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         let identity = &current;
         self.operation_admitted(engine, identity, operation_id)
     }
@@ -404,8 +412,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         operation_id: storage_contract::OperationId,
     ) -> Result<storage_contract::OperationOutcome, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         let record = operations::authorized_record(&engine, &current, operation_id)?;
         Ok(record.into_result().into())
     }
@@ -415,8 +422,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         command: crate::CommitWorkspace,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let identity = &current;
         let workspace_id = command.workspace_id.clone();
         let plan = Application::new(&mut engine, identity).prepare_commit_workspace(command)?;
@@ -426,8 +432,7 @@ impl Backend for EngineBackend {
             hook();
         }
         let prepared = plan.execute().map_err(error)?;
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let result = Application::new(&mut engine, &current)
             .finish_workspace_commit(&workspace_id, prepared)?;
         Ok(result)
@@ -439,8 +444,7 @@ impl Backend for EngineBackend {
         branch: &str,
         commit: &str,
     ) -> Result<Arc<storage_contract::Commit>, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let (commit, _) = read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
         Ok(engine
             .state()
@@ -454,8 +458,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         command: crate::CreateWorkspace,
     ) -> Result<storage_contract::Workspace, ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let crate::CreateWorkspace {
             branch_id,
             source_commit_id,
@@ -470,8 +473,7 @@ impl Backend for EngineBackend {
         .map_err(error)
     }
     fn abort_workspace(&self, identity: &Identity, workspace: &str) -> Result<(), ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         workspace_authorize(&engine, &current, workspace)?;
         engine
             .abort_workspace(workspace, &current.principal)
@@ -483,8 +485,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         workspace: &str,
     ) -> Result<storage_contract::Workspace, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         workspace_authorize(&engine, &current, workspace).map(std::borrow::Cow::into_owned)
     }
 
@@ -493,8 +494,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         command: crate::CommitWorkspace,
     ) -> Result<(), ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         workspace_authorize(&engine, &current, &command.workspace_id)?;
         let original = storage_contract::CommitRequest {
             workspace_id: command.workspace_id,
@@ -529,8 +529,7 @@ impl Backend for EngineBackend {
         workspace: &str,
         item: &str,
     ) -> Result<Option<crate::PublishedUploadStatus>, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         let workspace = workspace_authorize(&engine, &current, workspace)?;
         let Some(staged) = workspace.files.get(item) else {
             return Ok(None);
@@ -559,8 +558,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         workspace: &str,
     ) -> Result<storage_contract::SealedWorkspace, ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         workspace_authorize(&engine, &current, workspace)?;
         engine
             .seal_workspace(workspace, &current.principal)
@@ -571,8 +569,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         command: storage_contract::PublicCommitEnvelope,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let workspace_id = command.workspace_id().to_owned();
         let plan =
             Application::new(&mut engine, &current).prepare_commit_workspace_public(command)?;
@@ -582,8 +579,7 @@ impl Backend for EngineBackend {
             hook();
         }
         let prepared = plan.execute().map_err(error)?;
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         Application::new(&mut engine, &current).finish_workspace_commit(&workspace_id, prepared)
     }
 
@@ -592,8 +588,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         version: &str,
     ) -> Result<crate::VersionSnapshot, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let version = authorized_version(&engine, version)?.clone();
         let content_state = wire::stored_version_content_state(
             engine.state().content_states.get(&version.version_id),
@@ -608,8 +603,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         version: &str,
     ) -> Result<(), crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         let version = authorized_version(&engine, version)?;
         if current.smb_binding.is_some() && engine.file_deletion(&version.file_id).is_some() {
             return Err(ApiError::new(
@@ -625,8 +619,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<storage_contract::Repository, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         Ok(repository(&engine, id)?.clone())
     }
     fn authorize_repository(
@@ -634,8 +627,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<(), crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         repository(&engine, id)?;
         Ok(())
     }
@@ -682,8 +674,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         Ok(engine.workspace_capacity(&current.principal))
     }
     fn resolve_smb_path(
@@ -691,8 +682,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::ResolveSmbPath,
     ) -> Result<crate::SmbPathLocation, crate::ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         file_manager::resolve_smb_path(&mut engine, &current, request)
     }
     fn smb_binding_status(
@@ -700,8 +690,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let repo = repository(&engine, id)?;
         let history = engine
             .state()
@@ -726,8 +715,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::UpdateSmbBinding<'_>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, request.repository)?;
         engine
             .set_smb_binding(
@@ -745,8 +733,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let record = engine.state().protection_policies.get(id).ok_or_else(|| {
             ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -762,8 +749,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let record = engine.state().placement_rules.get(id).ok_or_else(|| {
             ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -779,8 +765,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::UpdateProtectionPolicy,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .update_protection_policy(storage_engine::ProtectionPolicyUpdate {
@@ -799,8 +784,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::UpdatePlacementRule,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .update_placement_rule(storage_engine::PlacementRuleUpdate {
@@ -819,8 +803,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::CompareCommits<'_>,
     ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let (left, right) = {
             let capture = |id: &str| {
                 let commit = engine.state().commits.get_shared(id).ok_or_else(|| {
@@ -842,8 +825,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let observation = engine.prepare_disk_observation();
         drop(engine);
         Ok(disk_monitor::diagnostics(observation))
@@ -852,8 +834,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<storage_contract::CheckReport, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine.check().map_err(error)
     }
     fn create_merge_link(
@@ -861,11 +842,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::CreateMergeLink,
     ) -> Result<storage_contract::MergeLink, crate::ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         Application::new(&mut engine, &current).merge_link(request)
     }
     fn create_repository(
@@ -873,11 +850,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::CreateRepository,
     ) -> Result<storage_contract::Repository, crate::ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         engine
             .create_repository(
                 &request.name,
@@ -893,11 +866,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::CreateBranch,
     ) -> Result<crate::BranchSnapshot, crate::ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let branch = Application::new(&mut engine, &current).create_branch(request)?;
         branch::capture_current(&engine, &branch)
     }
@@ -906,11 +875,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::CreateFileBranch,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         file_manager::file_repo(&engine, &request.file_id)?;
         match request.source_node_id.as_deref() {
             Some(node) => engine.create_file_branch_from_node(
@@ -936,11 +901,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::UpdateNote,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         match request.target {
             crate::NoteTarget::File(file) => {
                 file_manager::file_repo(&engine, &file)?;
@@ -993,11 +954,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::MergeFileBranches,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         application::Application::new(&mut engine, &current).merge_file_branches(request)
     }
     fn merge_file_history(
@@ -1005,11 +962,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::MergeFileHistory,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         application::Application::new(&mut engine, &current).merge_file_history(request)
     }
     fn update_file_node_tags(
@@ -1017,11 +970,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::UpdateFileNodeTags,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         application::Application::new(&mut engine, &current).authorize_file(&request.file_id)?;
         engine
             .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
@@ -1040,11 +989,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::CreateDiskDirectory,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         file_manager::mkdir(&mut engine, &current, request)
     }
     fn move_disk_file(
@@ -1052,11 +997,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::MoveDiskFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         file_manager::move_file(&mut engine, &current, request)
     }
     fn move_disk_object(
@@ -1064,11 +1005,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::MoveDiskObject,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         file_manager::move_object(&mut engine, &current, request)
     }
     fn create_disk_write_session(
@@ -1076,11 +1013,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::CreateDiskWriteSession,
     ) -> Result<crate::DiskWriteSession, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         file_manager::write_session(&mut engine, &current, request)
     }
     fn prepare_historical_save(
@@ -1088,11 +1021,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
     ) -> Result<storage_contract::Plan, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let request = request?;
         repo_for_history(&engine, &request.history_tree_id)?;
         engine
@@ -1108,11 +1037,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: Result<crate::PreparePurge, crate::ApiError>,
     ) -> Result<storage_contract::Plan, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let request = request?;
         repo_for_history(&engine, &request.history_tree_id)?;
         engine
@@ -1128,11 +1053,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: Result<crate::PrepareSplit, crate::ApiError>,
     ) -> Result<storage_contract::Plan, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let request = request?;
         repo_for_history(&engine, &request.history_tree_id)?;
         engine
@@ -1148,11 +1069,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ReadPlacementConfiguration,
     ) -> Result<storage_contract::PlacementConfigurationSnapshot, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine
             .placement_configuration(&request.repository_id, &request.path)
             .map_err(error)
@@ -1162,11 +1079,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ConfigurePlacement,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         engine
             .configure_placement(storage_engine::PlacementConfigurationRequest {
                 repository_id: &request.repository_id,
@@ -1191,11 +1104,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ReadBackupConfiguration,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .backup_configuration(&request.repository_id, &request.path)
@@ -1206,11 +1115,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ConfigureBackups,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .configure_backups_scoped(storage_engine::ScopedBackupConfigurationRequest {
@@ -1236,11 +1141,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ReadBackupConfiguration,
     ) -> Result<crate::RecursiveBackupConfiguration, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         let configuration = engine
             .backup_configuration(&request.repository_id, &request.path)
@@ -1256,11 +1157,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ConfigureRecursiveBackups,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .configure_recursive_backups(storage_engine::RecursiveBackupConfigurationRequest {
@@ -1286,11 +1183,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ConfigureRecursiveBackups,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .configure_recursive_backup_tree(storage_engine::RecursiveBackupConfigurationRequest {
@@ -1316,11 +1209,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::NamespaceBatch,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         application::Application::new(&mut engine, &current).namespace_batch(request)
     }
     fn select_file_branch(
@@ -1328,11 +1217,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::SelectFileBranch,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         let repository = file_manager::file_repo(&engine, &request.file_id)?;
         if let Some(baseline) = &request.default_baseline {
             let location = request.location.as_ref().ok_or_else(|| {
@@ -1383,11 +1268,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::RenameFileBranch,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         file_manager::file_repo(&engine, &request.file_id)?;
         engine
             .rename_file_branch(
@@ -1507,11 +1388,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         snapshot: &str,
     ) -> Result<(), ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         if engine.listing_snapshot() != snapshot {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::ListingChanged,
@@ -1526,21 +1403,13 @@ impl Backend for EngineBackend {
         request: crate::ReadListing,
     ) -> Result<crate::ListingSnapshot, ApiError> {
         let read = {
-            let engine = self
-                .engine
-                .lock()
-                .expect("invariant: service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             file_manager::listing::capture(&engine, request)?
         };
         match read {
             file_manager::listing::ListingRead::Backup(read) => {
                 let selected = read.select();
-                let engine = self
-                    .engine
-                    .lock()
-                    .expect("invariant: service state lock poisoned");
-                current_protected_identity(&engine, identity)?;
+                let (engine, _) = self.lock_current(identity)?;
                 let selected = selected?;
                 let page = selected.project(&engine);
                 drop(engine);
@@ -1548,11 +1417,7 @@ impl Backend for EngineBackend {
             }
             file_manager::listing::ListingRead::Primary(read) => {
                 let selected = read.select();
-                let engine = self
-                    .engine
-                    .lock()
-                    .expect("invariant: service state lock poisoned");
-                current_protected_identity(&engine, identity)?;
+                let (engine, _) = self.lock_current(identity)?;
                 let selected = selected?;
                 let page = selected.project(&engine);
                 drop(engine);
@@ -1565,11 +1430,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::MutateDiskDirectory,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         file_manager::mutate_directory(&mut engine, &current, request)
     }
     fn initialize_directory_scope(
@@ -1577,11 +1438,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::InitializeDirectoryScope,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .initialize_directory_scope(
@@ -1597,11 +1454,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::ArchiveBranch,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repo_for_branch(&engine, &request.branch_id)?;
         engine
             .archive_branch(&request.branch_id, &current.principal, request.operation_id)
@@ -1612,11 +1465,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::RenameDirectoryBranch,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .rename_directory_branch(
@@ -1633,11 +1482,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::SelectDefaultDirectoryBranch,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, &request.repository_id)?;
         engine
             .set_directory_default(storage_engine::DirectoryDefaultSelection {
@@ -1655,11 +1500,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::ReadDirectorySelection,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         directory_selection::read(&engine, &request)
     }
     fn directory_scopes(
@@ -1667,11 +1508,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::ReadDirectoryScopes<'_>,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         directory_scopes::capture(&engine, request)
     }
     fn default_directory_branch(
@@ -1679,11 +1516,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         repository_id: &str,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let repo = repository(&engine, repository_id)?;
         let state = engine.state();
         let git = state.directory_git_repositories.get(repository_id);
@@ -1753,21 +1586,13 @@ impl Backend for EngineBackend {
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::shared_history::SharedHistoryGraph, ApiError> {
         let read = {
-            let engine = self
-                .engine
-                .lock()
-                .expect("invariant: service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             engine
                 .capture_shared_history(request, cancellation)
                 .map_err(error)?
         };
         let page = read.graph().map_err(error);
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine.recheck_shared_history(&read).map_err(error)?;
         page
     }
@@ -1778,21 +1603,13 @@ impl Backend for EngineBackend {
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::content_matches::ContentMatchPage, ApiError> {
         let read = {
-            let engine = self
-                .engine
-                .lock()
-                .expect("invariant: service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             engine
                 .capture_content_matches(request, cancellation)
                 .map_err(error)?
         };
         let page = read.page().map_err(error);
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine.recheck_content_matches(&read).map_err(error)?;
         page
     }
@@ -1803,21 +1620,13 @@ impl Backend for EngineBackend {
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::file_history_merge::FileHistorySource, ApiError> {
         let read = {
-            let engine = self
-                .engine
-                .lock()
-                .expect("invariant: service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             engine
                 .capture_file_history_source(request, cancellation)
                 .map_err(error)?
         };
         let result = read.source().map_err(error);
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine.recheck_file_history_source(&read).map_err(error)?;
         result
     }
@@ -1829,22 +1638,14 @@ impl Backend for EngineBackend {
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::directory_git::DirectoryGitStatus, ApiError> {
         let read = {
-            let engine = self
-                .engine
-                .lock()
-                .expect("invariant: service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             repository(&engine, repository_id)?;
             engine
                 .capture_directory_git_status(repository_id, path, cancellation)
                 .map_err(error)?
         };
         let result = read.status().map_err(error);
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine.recheck_directory_git_status(&read).map_err(error)?;
         result
     }
@@ -1855,11 +1656,7 @@ impl Backend for EngineBackend {
         repository_id: &str,
         request: storage_contract::directory_git::DirectoryLayoutReconcileBody,
     ) -> Result<storage_contract::directory_git::DirectoryLayoutResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (mut engine, _) = self.lock_current(identity)?;
         let repository = repository(&engine, repository_id)?;
         let main = engine
             .state()
@@ -1893,11 +1690,7 @@ impl Backend for EngineBackend {
         repository_id: &str,
         request: storage_contract::directory_git::DirectoryGitInitializeBody,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, repository_id)?;
         engine
             .initialize_directory_git(repository_id, &request, &current.principal)
@@ -1909,11 +1702,7 @@ impl Backend for EngineBackend {
         repository_id: &str,
         request: storage_contract::directory_git::DirectoryGitStageChildBody,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, repository_id)?;
         engine
             .stage_directory_git_child(repository_id, &request, &current.principal)
@@ -1925,11 +1714,7 @@ impl Backend for EngineBackend {
         repository_id: &str,
         request: storage_contract::directory_git::DirectoryGitStageOwnedBody,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, repository_id)?;
         engine
             .stage_directory_git_owned(repository_id, &request, &current.principal)
@@ -1941,11 +1726,7 @@ impl Backend for EngineBackend {
         repository_id: &str,
         branch: &str,
     ) -> Result<storage_contract::directory_staging::DirectoryStagingStatus, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         repository(&engine, repository_id)?;
         engine
             .directory_staging_status(repository_id, branch)
@@ -1958,11 +1739,7 @@ impl Backend for EngineBackend {
         branch: &str,
         request: storage_contract::directory_staging::DirectoryCommitBody,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repository(&engine, repository_id)?;
         engine
             .commit_directory_changes(storage_engine::DirectoryCommitRequest {
@@ -1983,21 +1760,13 @@ impl Backend for EngineBackend {
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, ApiError> {
         let read = {
-            let engine = self
-                .engine
-                .lock()
-                .expect("invariant: service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             engine
                 .capture_directory_history(request, cancellation)
                 .map_err(error)?
         };
         let page = read.page().map_err(error);
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine.recheck_directory_history(&read).map_err(error)?;
         page
     }
@@ -2008,21 +1777,13 @@ impl Backend for EngineBackend {
         cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::history_window::HistoryWindowPage, ApiError> {
         let read = {
-            let engine = self
-                .engine
-                .lock()
-                .expect("invariant: service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             engine
                 .capture_history_window(request, cancellation)
                 .map_err(error)?
         };
         let page = read.page().map_err(error);
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         engine.recheck_history_window(&read).map_err(error)?;
         page
     }
@@ -2032,21 +1793,13 @@ impl Backend for EngineBackend {
         request: crate::ReadFileHistory,
     ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
         let read = {
-            let engine = self
-                .engine
-                .lock()
-                .expect("invariant: service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             file_manager::FileHistoryRead::capture(&engine, request)?
         };
         #[cfg(test)]
         graph::tests::after_capture(read.view.business_projection().sequence);
         let snapshot = read.project();
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         read.authorize_current(&engine)?;
         snapshot
     }
@@ -2055,8 +1808,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         file: &str,
     ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let versions = engine.file_history(file).map_err(error)?;
         if versions.is_empty() {
             return Err(ApiError::new(
@@ -2071,8 +1823,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<crate::TopologySnapshot, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let names = crate::backend_storage_metadata::disk_directory_names(&engine.config().disks)?;
         let slots = engine
             .config()
@@ -2111,8 +1862,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<storage_contract::Placement, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         authorized_version(&engine, id)?;
         engine.state().placements.get(id).cloned().ok_or_else(|| {
             ApiError::new(
@@ -2127,16 +1877,14 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         capture_event_page(engine.events_after(after), engine.state().sequence, after)
     }
     fn activity_history(
         &self,
         identity: &Identity,
     ) -> Result<crate::ActivityHistorySnapshot, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         file_manager::activity::read(&engine)
     }
     fn history_graph(
@@ -2145,8 +1893,7 @@ impl Backend for EngineBackend {
         id: &str,
     ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
         let view = {
-            let engine = self.engine.lock().expect("service state lock poisoned");
-            current_protected_identity(&engine, identity)?;
+            let (engine, _) = self.lock_current(identity)?;
             repo_for_history(&engine, id)?;
             graph::GraphMetadata::capture(engine.state())
         };
@@ -2154,8 +1901,7 @@ impl Backend for EngineBackend {
         graph::tests::after_capture(view.sequence);
         let mut snapshot = view.project(id);
         snapshot.commits.sort_by_key(|commit| commit.sequence);
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         graph::authorize_current(engine.state(), &snapshot.history)?;
         Ok(snapshot)
     }
@@ -2164,8 +1910,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let commit = engine.state().commits.get_shared(id).ok_or_else(|| {
             ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -2181,8 +1926,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::ResolveEntry<'_>,
     ) -> Result<crate::ResolvedEntry, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         read_projection::resolve_entry(&engine, request)
     }
     fn branch_snapshot(
@@ -2190,8 +1934,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<crate::BranchSnapshot, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         repo_for_branch(&engine, id)?;
         branch::capture_current(&engine, &engine.state().branches[id])
     }
@@ -2200,8 +1943,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let repo = repository(&engine, id)?;
         engine
             .state()
@@ -2215,8 +1957,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         Ok(engine.state().repositories.values().cloned().collect())
     }
     fn tree_snapshot(
@@ -2224,8 +1965,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         crate::TreeSnapshot::capture(&engine, request)
     }
     fn create_write_session(
@@ -2233,8 +1973,7 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         branch: &str,
     ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         repo_for_branch(&engine, branch)?;
         let workspace = engine
             .create_workspace(branch, &current.principal)
@@ -2256,8 +1995,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         command: crate::StageNamespace,
     ) -> Result<storage_contract::Workspace, ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         Application::new(&mut engine, &current).stage_namespace(command)
     }
 
@@ -2267,8 +2005,7 @@ impl Backend for EngineBackend {
         workspace: &str,
         access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         let file = match access {
             crate::WorkspaceWrite::Upload { .. } => None,
             crate::WorkspaceWrite::ActiveFile { branch, path }
@@ -2318,14 +2055,12 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ReadDirectory<'_>,
     ) -> Result<crate::DirectorySnapshot, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         crate::DirectorySnapshot::capture(&engine, request)
     }
 
     fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         read_projection::authorize_current(engine.state(), branch)
     }
 
@@ -2335,8 +2070,7 @@ impl Backend for EngineBackend {
         branch: &str,
         path: &name_policy::LookupPath,
     ) -> Result<Option<storage_contract::Entry>, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         read_projection::lookup_current(&engine, branch, path)
     }
 
@@ -2347,8 +2081,7 @@ impl Backend for EngineBackend {
         commit: &str,
         path: &name_policy::LookupPath,
     ) -> Result<Option<storage_contract::Entry>, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let (_, snapshot) = read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
         Ok(snapshot
             .entries
@@ -2358,8 +2091,7 @@ impl Backend for EngineBackend {
     }
 
     fn plan(&self, identity: &Identity, plan_id: &str) -> Result<storage_contract::Plan, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let identity = current_protected_identity(&engine, identity)?;
+        let (engine, identity) = self.lock_current(identity)?;
         let plan = engine.plan(plan_id).map_err(error)?;
         if plan.principal != identity.principal {
             return Err(ApiError::forbidden());
@@ -2372,8 +2104,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: Result<crate::CancelPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let identity = current_protected_identity(&engine, identity)?;
+        let (mut engine, identity) = self.lock_current(identity)?;
         let request = request?;
         let plan = engine.plan(&request.plan_id).map_err(error)?;
         if plan.principal != identity.principal {
@@ -2389,11 +2120,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<std::convert::Infallible, crate::ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         Err(ApiError::new(
             ::http::StatusCode::CONFLICT,
             storage_contract::ErrorCode::OfflineConfigurationRequired,
@@ -2405,11 +2132,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: Result<crate::CommitPlan, ApiError>,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let identity = current_protected_identity(&engine, identity)?;
+        let (mut engine, identity) = self.lock_current(identity)?;
         Application::new(&mut engine, &identity).commit_plan(request?)
     }
 
@@ -2421,8 +2144,7 @@ impl Backend for EngineBackend {
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<storage_contract::StagedFile, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         let workspace_record = workspace_authorize(&engine, &current, workspace)?;
         let generation = workspace_record
             .files
@@ -2459,8 +2181,7 @@ impl Backend for EngineBackend {
         source: &crate::UploadSource,
         generation: u64,
     ) -> Result<storage_contract::StagedFile, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         workspace_authorize(&engine, &current, workspace)?;
         let plan = engine
             .prepare_upload_file(
@@ -2517,6 +2238,10 @@ impl Backend for EngineBackend {
         Ok(disk_monitor::observe(observation))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/engine_backend/locked_admission_tests.rs"]
+mod locked_admission_tests;
 
 #[cfg(test)]
 #[path = "../../../test/server/unit/engine_backend/authorization_tests.rs"]

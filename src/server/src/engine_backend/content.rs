@@ -11,8 +11,7 @@ impl EngineBackend {
         identity: &Identity,
         request: crate::ReadContent<'_>,
     ) -> Result<Content, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let version = request.version;
         // Context checks and the content plan share this admission. The name is
         // a request-local snapshot, not permission to resolve the path later.
@@ -84,8 +83,7 @@ impl EngineBackend {
         workspace: &str,
         item: &str,
     ) -> Result<Content, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         let workspace_record = workspace_authorize(&engine, &current, workspace)?;
         let plan = engine
             .prepare_workspace_content(workspace, item, &workspace_record.principal)
@@ -107,8 +105,7 @@ impl EngineBackend {
         identity: &Identity,
         version: &str,
     ) -> Result<Vec<u8>, ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         let record = engine.state().versions.get(version).ok_or_else(|| {
             ApiError::new(
                 ::http::StatusCode::NOT_FOUND,

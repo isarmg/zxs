@@ -19,8 +19,7 @@ impl EngineBackend {
         &self,
         identity: &Identity,
     ) -> Result<RegistrationSnapshot, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         if engine.registered_disks().next().is_none() {
             return Ok(RegistrationSnapshot::Unadmitted);
         }
@@ -52,8 +51,7 @@ impl EngineBackend {
         identity: &Identity,
         request: ReadmissionRequest,
     ) -> Result<(ReadmissionPreview, Config), ApiError> {
-        let engine = crate::lock(&self.engine);
-        let actor = current_protected_identity(&engine, identity)?;
+        let (engine, actor) = self.lock_current(identity)?;
         preview(&engine, &actor.principal, request)
     }
 
@@ -62,8 +60,7 @@ impl EngineBackend {
         identity: &Identity,
         intent: &StoredReadmission,
     ) -> Result<Option<OperationResult>, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         published_result(&engine, identity, intent)
     }
 
@@ -79,8 +76,7 @@ impl EngineBackend {
                 "terminal readmission cannot be driven as an active membership operation",
             ));
         }
-        let mut engine = crate::lock(&self.engine);
-        let actor = current_protected_identity(&engine, identity)?;
+        let (mut engine, actor) = self.lock_current(identity)?;
         if let Some(result) = published_result(&engine, identity, intent)? {
             return Ok(result);
         }

@@ -33,8 +33,7 @@ impl EngineBackend {
         source: &storage_engine::ForeignImportPreview,
         target: &ForeignDestination,
     ) -> Result<storage_engine::ForeignImportMapping, ApiError> {
-        let engine = crate::lock(&self.engine);
-        current_protected_identity(&engine, identity)?;
+        let (engine, _) = self.lock_current(identity)?;
         source
             .map_to_primary(&engine, &target.slot, target.parent.as_ref(), &target.names)
             .map_err(error)

@@ -34,11 +34,7 @@ impl EngineBackend {
         identity: &Identity,
         command: crate::DeleteFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
@@ -78,11 +74,7 @@ impl EngineBackend {
         identity: &Identity,
         command: crate::DeleteCurrentFile,
     ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         if current
             .smb_binding
             .as_ref()
@@ -155,11 +147,7 @@ impl EngineBackend {
         identity: &Identity,
         file: &HistoryFileId,
     ) -> Result<Option<storage_contract::FileDeletionNode>, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
@@ -175,11 +163,7 @@ impl EngineBackend {
         identity: &Identity,
         request: crate::ReadFileDeletions,
     ) -> Result<crate::FileDeletionsPage, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (engine, current) = self.lock_current(identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
@@ -236,11 +220,7 @@ impl EngineBackend {
         identity: &Identity,
         command: crate::RestoreDeletedFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
+        let (mut engine, current) = self.lock_current(identity)?;
         if current.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
