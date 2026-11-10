@@ -3,6 +3,15 @@
 状态核对时间：2026-11-10。当前源码父基线：`a6d2d08c`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
+## 本轮辅助工具全生命周期离线
+
+- CI #1048（94154db7）真实首装在首管理员预览遇到 setup.lock 归属误判：文件已正确属于服务账户，但 payload 复验错按 root euid。共用 open_payload 现复用已准入行政 owner 的 UID/GID/0600 校验，仅独占新建时设置该 owner；已有文件不修权，名称/inode 复验保留，并补充根测试。此处修复同样覆盖管理标记与认证替换读回，真实首装继续等待新提交 CI。
+- 按用户确认，辅助工具整体只在 ZXS 停服时运行，所有初始化、磁盘、恢复、检查和配置共用进程生命周期租约。root 首次启动仅通过原 pending 发布流程准备缺失的 `/zxs` 互斥根并接管同一锁，不创建账户或存储。删除按命令绕过租约的旧分类。
+- 同一已准入进程和显式内部维护子进程共用持有的目录能力；最后一个 open-file-description 持有人关闭才释放，普通 ZXS 仍独立排他准入，普通外部程序不继承 FD。原请求/目录身份、权限和发布读回继续在各自边界核对，没有向全部业务 DTO 增加第二套状态协议。
+- 显式激活改为离线检查、可选 enable（不启动）、交接受理后关闭 HTTP 并回收全部任务，最后主线程 exec 固定 systemctl。CLOEXEC 在替换 helper 时释放租约，ZXS 随后启动。删除 helper 与 ZXS 并行的管理 ready 轮询；HTTP 202 与 UI 仅表示正在退出并交接，保留原 issued 请求而不标记已运行或已就绪，实际结果由终端/systemd 和 ZXS 查询。
+- 租约克隆/继承/外部 exec、根发布持续持锁、HTTP 准入和旧确认词拒绝补充根测试源码。首装及独立交接页面四组 Node/DOM/传输替身回归通过；未本地编译、未执行 Rust 或真实 systemd/磁盘动作。helper/ZXS 双向争用和真实首装运行结果以准确提交 CI 为准，完整外来盘接纳仍未完成。
+- 单 ELF 验收增加两个方向的原生 busy 拒绝，helper 正常退出后才要求普通服务 ready；10 项 startup 与 13 项独立权威 CLI 测试复用原私有 namespace 夹具，共享 Rust 重入入口并同步 14 条精确运行路径。相关 Python 替身通过只证明接线，真实交接与互斥仍待 CI。
+
 ## 本轮 Backup 观察入口精简
 
 - registration/recovery 的 11 处公开观察／共享观察入口改用同一 backup_inspection_task，统一读取原 SYSTEM Task、核原 actor／安装身份、处理 retained worker；一次返回持有的 SYSTEM 目录和原 Task，删除每处相同实现，src 实际净删 184 行。

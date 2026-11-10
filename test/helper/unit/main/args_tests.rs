@@ -350,30 +350,6 @@ fn deployment_requires_complete_smb_parameters_and_has_no_activation_flag() {
 }
 
 #[test]
-fn engine_routes_require_lifetime_exclusion_but_pure_confirmation_errors_do_not() {
-    for args in [
-        vec!["zxs-helper", "scrub"],
-        vec!["zxs-helper", "restore-system", "--disks", "/disk"],
-        vec!["zxs-helper", "package", "export", "history", "/destination"],
-    ] {
-        assert!(requires_service_exclusion(
-            &Args::try_parse_from(args).unwrap().command.unwrap()
-        ));
-    }
-    let args = Args::try_parse_from([
-        "zxs-helper",
-        "recovery-commit",
-        "receipt",
-        "--digest",
-        "digest",
-    ])
-    .unwrap();
-    assert!(!requires_service_exclusion(&args.command.unwrap()));
-    let host = Args::try_parse_from(["zxs-helper", "host", "preview"]).unwrap();
-    assert!(!requires_service_exclusion(&host.command.unwrap()));
-}
-
-#[test]
 fn private_layout_cli_is_named_as_preparation_not_system_initialization() {
     let args = Args::try_parse_from([
         "zxs-helper",

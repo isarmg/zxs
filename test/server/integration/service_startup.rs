@@ -1,21 +1,12 @@
 use std::process::{Command, Output};
 
-fn enter_host_namespace(name: &str) -> bool {
-    if std::env::var("ZXS_SERVICE_STARTUP_MOUNT_NAMESPACE").as_deref() == Ok(name) {
-        return true;
-    }
-    let status = Command::new("/usr/bin/python3")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test/server/service_namespace.py"
-        ))
-        .arg(std::env::current_exe().unwrap())
-        .arg(name)
-        .status()
-        .unwrap();
-    assert!(status.success(), "isolated service test failed: {status}");
-    false
-}
+#[path = "../service_namespace.rs"]
+mod service_namespace;
+const HOST_NAMESPACE_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../test/server/service_namespace.py"
+);
+
 fn daemon(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_zxs"))
         .args(args)
@@ -54,7 +45,10 @@ fn daemon_does_not_dispatch_management_or_rescue_subcommands() {
 }
 #[test]
 fn ordinary_entry_requires_preparation_before_starting_the_runtime() {
-    if !enter_host_namespace("ordinary_entry_requires_preparation_before_starting_the_runtime") {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "ordinary_entry_requires_preparation_before_starting_the_runtime",
+    ) {
         return;
     }
     let directory = tempfile::tempdir().unwrap();
@@ -92,7 +86,8 @@ fn existing_fault_roots(root: &std::path::Path, management: &std::path::Path) {
 
 #[test]
 fn absent_empty_and_valid_log_filters_reach_runtime_with_the_selected_level() {
-    if !enter_host_namespace(
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
         "absent_empty_and_valid_log_filters_reach_runtime_with_the_selected_level",
     ) {
         return;
@@ -202,7 +197,10 @@ fn help_and_version_ignore_invalid_log_configuration() {
 
 #[test]
 fn malformed_setup_identifiers_fail_before_creating_state() {
-    if !enter_host_namespace("malformed_setup_identifiers_fail_before_creating_state") {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "malformed_setup_identifiers_fail_before_creating_state",
+    ) {
         return;
     }
     for (flag, id) in [("--setup-disk", "P.01"), ("--setup-config", "layout.prod")] {
@@ -255,7 +253,10 @@ fn response(port: u16, path: &str) -> std::io::Result<String> {
 }
 #[test]
 fn daemon_preserves_web_and_liveness_for_existing_corrupt_pool() {
-    if !enter_host_namespace("daemon_preserves_web_and_liveness_for_existing_corrupt_pool") {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "daemon_preserves_web_and_liveness_for_existing_corrupt_pool",
+    ) {
         return;
     }
     use std::os::unix::fs::DirBuilderExt;
@@ -381,7 +382,10 @@ fn daemon_preserves_web_and_liveness_for_existing_corrupt_pool() {
 
 #[test]
 fn empty_default_state_is_not_created_for_online_first_setup() {
-    if !enter_host_namespace("empty_default_state_is_not_created_for_online_first_setup") {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "empty_default_state_is_not_created_for_online_first_setup",
+    ) {
         return;
     }
     let directory = tempfile::tempdir().unwrap();
@@ -436,7 +440,10 @@ fn invalid_retained_workspace_flags_do_not_create_state() {
 // systemd, physical disks, host reboots, or abrupt loss of power.
 #[test]
 fn repeated_normal_daemon_stops_release_same_address_and_socket() {
-    if !enter_host_namespace("repeated_normal_daemon_stops_release_same_address_and_socket") {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "repeated_normal_daemon_stops_release_same_address_and_socket",
+    ) {
         return;
     }
     use rustix::process::{Pid, Signal, kill_process};
@@ -556,8 +563,10 @@ fn repeated_normal_daemon_stops_release_same_address_and_socket() {
 
 #[test]
 fn incoherent_scrub_host_policy_fails_before_creating_management_state() {
-    if !enter_host_namespace("incoherent_scrub_host_policy_fails_before_creating_management_state")
-    {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "incoherent_scrub_host_policy_fails_before_creating_management_state",
+    ) {
         return;
     }
     let directory = tempfile::tempdir().unwrap();

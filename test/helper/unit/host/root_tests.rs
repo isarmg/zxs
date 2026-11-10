@@ -5,12 +5,21 @@ fn root_is_published_without_replacement_and_matching_retry_keeps_content() {
     let parent = tempfile::tempdir().unwrap();
     let root = HostRoot::open(parent.path(), OsStr::new("zxs")).unwrap();
     assert!(!root.present().unwrap());
-    let (created, identity) = root.prepare().unwrap();
+    let (created, lease) = root.prepare().unwrap();
+    let identity = lease.identity();
+    assert!(
+        platform_io::service_lease::ServiceLease::acquire(
+            &parent.path().join("zxs"),
+            rustix::process::geteuid().as_raw(),
+        )
+        .is_err()
+    );
     assert!(created);
     fs::write(parent.path().join("zxs/retain"), b"data").unwrap();
+    drop(lease);
     let (created, again) = root.prepare().unwrap();
     assert!(!created);
-    assert_eq!(again, identity);
+    assert_eq!(again.identity(), identity);
     assert_eq!(fs::read(parent.path().join("zxs/retain")).unwrap(), b"data");
     assert!(!parent.path().join(".zxs-helper-host.pending").exists());
 }

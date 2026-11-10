@@ -259,7 +259,7 @@ fn publish(prepared: &Prepared) -> Result<Outcome> {
         created_in_this_attempt: created,
         intent_directory: prepared.preview.intent_directory.clone(),
         completion_directory: prepared.preview.completion_directory.clone(),
-        current_daemon_exclusion: "held_during_this_operation_only",
+        current_daemon_exclusion: "held_for_helper_lifetime",
         all_external_writers_excluded: false,
         existing_permissions_changed: false,
         samba_passdb_changed: false,

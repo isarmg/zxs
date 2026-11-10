@@ -1,11 +1,11 @@
 "use strict";
 // UI sequencing for native installation operations. Plans, locks, recovery
-// and current service readiness come from the native responses.
+// and the offline service handoff come from the native responses.
 (() => {
   const key = "zxs-helper:first-install-tab";
   const maxBytes = 256 * 1024;
   const names = ["安装根", "内置程序", "私有数据布局", "运行目录", "固定服务配置",
-    "首次管理账户", "首批空目录存储", "启动与正常管理准入"];
+    "首次管理账户", "首批空目录存储", "退出辅助工具并交接启动"];
   const states = [
     ["new_host_root_prepared", "existing_host_root_durably_verified"],
     ["new_program_installed", "matching_program_durably_verified"],
@@ -18,7 +18,6 @@
   let inspected = false;
   let epoch = 0;
   let blocked = false;
-  let liveReady = false;
   let directoryOriginal = null;
   let directoryInspected = false;
   const directoryKey = key + ":directories";
@@ -144,7 +143,7 @@
         input:{service_user:input.service_user, request_digest}, plan:original.plan,
         confirmation:"initialize-first-storage-batch", external_writers_stopped:true}];
       case 7: return ["/api/deployment/activate", {input, request_digest,
-        confirmation:"activate-installed-zxs-services", external_administration_stopped:true}];
+        confirmation:"exit-helper-and-start-installed-zxs-services", external_administration_stopped:true}];
       default: throw new Error("无效的首装界面步骤。");
     }
   }
@@ -154,7 +153,7 @@
       && record.steps[6] === undefined && directoryInspected;
     for (const input of element("form").elements) input.disabled = locked || record !== null;
     element("import").disabled = locked || record !== null;
-    element("save").disabled = locked || record === null;
+    element("save").disabled = blocked || record === null;
     element("inspect").disabled = locked || record === null;
     element("refresh-preview").disabled = locked || record === null;
     element("refresh-preview").hidden = true;
@@ -197,30 +196,20 @@
     element("directories-actions").hidden = step !== 6 || original !== undefined;
     element("progress").textContent = "第 " + (step + 1) + "/" + names.length + " 步：" + names[step]
       + (original?.issued && !original.completed ? "。已发送或发送结果未知，只续同一请求。" : "")
-      + (original?.completed ? "。历史完成记录已保留，请查询当前服务状态。" : "");
+      + (original?.completed ? "。原步骤完成记录已保留。" : "");
     element("commit").hidden = !preparesDirectories
-      && (!original || (step === 7 ? liveReady : original.completed));
+      && (!original || stopping || (step !== 7 && original.completed));
     element("commit").textContent = preparesDirectories ? "确认创建原批次空目录"
       : original?.issued ? "再次确认并仅续作这个原步骤" : "确认执行当前原步骤";
     element("passwords").hidden = step !== 5 || original?.completed;
     element("samba-note").hidden = record.input.deployment.smb === null || step < 4;
     for (const input of element("passwords").querySelectorAll("input")) input.disabled = locked;
   }
-  function complete(step, value, original) {
-    const digest = step >= 3 && step <= 5 ? value.receipt?.request_digest : value.request_digest;
-    if (digest !== original.request_digest) throw new Error("响应不属于当前原步骤；结果仍未知。");
-    if (step < 6 && !states[step].includes(value.state)) throw new Error("未收到这个原步骤的完成回执。");
-    if (step === 6 && (value.format !== "zxs-helper-first-storage-batch-complete"
-      || value.storage_activation_completed !== true)) throw new Error("首批存储尚未完成。");
-    if (step === 7 && value.state !== "services_active_and_management_ready") return false;
-    return true;
-  }
   async function inspect() {
     if (busy || stopping || !csrf || blocked || !record) return;
     const token = ++epoch, step = index(), original = record.steps[step];
     inspected = false; directoryInspected = false;
     element("open").hidden = true;
-    liveReady = false;
     setBusy(true); error(""); render();
     try {
       if (step === 6 && !original) {
@@ -237,6 +226,9 @@
       if (original && step === 6 && !same(original.plan, value.plan)) {
         throw new Error("当前存储计划与保留的完整原计划不同。");
       }
+      if (step === 7 && value.state !== "offline_ready_for_handoff") {
+        throw new Error("尚未确认当前原步骤的离线交接条件。");
+      }
       if (!original) {
         const next = structuredClone(record);
         next.steps.push({request_digest:value.request_digest, plan:step === 6 ? value.plan : null,
@@ -245,32 +237,24 @@
       }
       show(value);
       inspected = true;
-      if (step === 7 && original?.issued) {
-        if (complete(step, value, original)) finish(step);
-      }
     } catch (failure) {
       // A lost first POST may have left no native record. A deliberate retry
       // uses only the saved original; the native same-request APIs decide.
-      inspected = original?.issued === true && (!original.completed || step === 7);
+      inspected = step !== 7 && original?.issued === true && !original.completed;
       error(failure.message + (inspected ? " 已保留完整原输入；只允许另行明确重试这个原步骤，不换新请求。" : ""));
     } finally { setBusy(false); render(); }
   }
-  function finish(step) {
+  function finish(step, value, original) {
+    const digest = step >= 3 && step <= 5 ? value.receipt?.request_digest : value.request_digest;
+    if (digest !== original.request_digest) throw new Error("响应不属于当前原步骤；结果仍未知。");
+    if (step < 6 && !states[step].includes(value.state)) throw new Error("未收到这个原步骤的完成回执。");
+    if (step === 6 && (value.format !== "zxs-helper-first-storage-batch-complete"
+      || value.storage_activation_completed !== true)) throw new Error("首批存储尚未完成。");
     const next = structuredClone(record);
     next.steps[step].completed = true;
     persist(next);
     inspected = false;
     element("ack").checked = false;
-    if (step === 7) {
-      liveReady = true;
-      const url = new URL(window.location.href);
-      const listen = record.input.deployment.listen;
-      const port = listen.slice(listen.lastIndexOf(":") + 1);
-      if (!/^[0-9]+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw new Error("原服务端口无效。");
-      url.protocol = "http:"; url.port = port; url.pathname = "/"; url.search = ""; url.hash = "";
-      element("web").href = url.toString();
-      element("open").hidden = false;
-    }
   }
   element("form").addEventListener("submit", event => {
     event.preventDefault();
@@ -333,7 +317,7 @@
       if (!window.confirm("修改尚未保留空目录请求的首批目录？\n" + next.input.roots.join("\n")
         + "\n保留此前全部安装步骤、账户与配置；下一次只读核对仍由原生接口决定能否接纳。")) return;
       persist(next);
-      ++epoch; inspected = false; directoryInspected = false; liveReady = false;
+      ++epoch; inspected = false; directoryInspected = false;
       element("ack").checked = false;
       show({original_input:record.input, next:"目录已更正，明确点击只读核对；尚未发送系统操作。"});
       error(""); render();
@@ -350,7 +334,7 @@
       const next = structuredClone(record);
       next.steps.pop();
       persist(next);
-      ++epoch; inspected = false; directoryInspected = false; liveReady = false;
+      ++epoch; inspected = false; directoryInspected = false;
       clearPasswords(); element("ack").checked = false; element("open").hidden = true;
       show({original_input:record.input, released_unissued_preview:original.request_digest,
         next:"明确点击只读核对当前原步骤；没有发出或重放任何系统动作。"});
@@ -372,8 +356,9 @@
       error("请输入两次相同的初始管理员密码；续作必须是原来的密码。"); return;
     }
     const detail = step === 6 ? "\n全部原目录：\n" + record.input.roots.join("\n")
-      : step === 7 ? "\n将启动 ZXS" + (record.input.deployment.smb ? " 和独立 Samba" : "")
-        + (record.input.enable_on_boot ? "，就绪后启用开机启动。" : "，不改变开机启动设置。")
+      : step === 7 ? "\n辅助工具退出后，交给 systemd 启动 ZXS" + (record.input.deployment.smb ? " 和独立 Samba" : "")
+        + (record.input.enable_on_boot ? "；退出前启用开机启动，不提前启动服务。" : "；不改变开机启动设置。")
+        + "此响应只确认交接受理，服务可用状态须在启动终端或 ZXS 页面核实。"
       : step === 5 ? "\n只创建原管理员，续作不替换原密码。" : "";
     if (!window.confirm("确认以 root 执行第 " + (step + 1) + " 步「" + names[step]
       + "」？\n原摘要：" + original.request_digest + detail
@@ -386,16 +371,21 @@
       persist(next); // Save and read back before any mutation or credential POST.
       const request = commitRequest(step, original);
       body = request[1];
-      clearPasswords(); inspected = false; liveReady = false;
+      clearPasswords(); inspected = false;
       element("open").hidden = true;
       error(""); setBusy(true); render();
       const value = await (await post(request[0], body)).json();
       if (token !== epoch) return;
       show(value);
-      if (complete(step, value, original)) finish(step);
-      else error("服务尚未通过正常管理准入；保留原启动请求，只查询后再明确续作。");
+      if (step === 7) {
+        acceptServiceHandoff(value, {input:requestInput(step), request_digest:original.request_digest}, "first-install");
+      } else {
+        finish(step, value, original);
+      }
     } catch (failure) {
-      error(failure.message + " 原步骤已保留；先查询，不换新输入或清理目录。");
+      error(failure.message + (step === 7
+        ? " 原交接请求已保留；先查看启动终端或 ZXS 页面。再次使用离线 helper 前须停止 ZXS，再查询原请求。"
+        : " 原步骤已保留；先查询，不换新输入或清理目录。"));
     } finally {
       if (body && step === 5) { body.password = ""; body.repeat_password = ""; }
       clearPasswords(); setBusy(false); render();
@@ -517,7 +507,7 @@
         ? {kind:original.kind, request_digest:original.request_digest} : null;
       // Return to the installation flow with a fresh native service observation.
       invalidateSambaPreview();
-      ++epoch; inspected = false; directoryInspected = false; liveReady = false;
+      ++epoch; inspected = false; directoryInspected = false;
       clearPasswords(); element("ack").checked = false; element("open").hidden = true;
       show({original_input:record.input, samba_original_reference:reference,
         next:"已返回同一首装请求。若 Samba 结果未知，仍须在原卡片查询；此处不会重放登记、改密或跳步。明确核对当前原步骤后再继续。"});
@@ -527,7 +517,7 @@
     } catch (failure) { error(failure.message); }
   });
   element("save").addEventListener("click", () => {
-    if (busy || stopping || !record || blocked) return;
+    if (!record || blocked) return;
     try { save(new Blob([encoded(record)], {type:"application/json"}), "zxs-first-install-original.json"); }
     catch (failure) { error(failure.message); }
   });
@@ -546,7 +536,7 @@
     } catch (failure) { error(failure.message); }
   });
   window.addEventListener("pagehide", () => {
-    ++epoch; inspected = false; directoryInspected = false; liveReady = false;
+    ++epoch; inspected = false; directoryInspected = false;
     element("open").hidden = true; clearPasswords();
   });
   window.addEventListener("pageshow", render);

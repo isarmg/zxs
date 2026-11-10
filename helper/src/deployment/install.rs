@@ -181,7 +181,7 @@ fn build_at(input: Input, host: BundleDestination) -> Result<Prepared> {
         exact_existing_files: present,
         activation_included: false,
         system_initialized: false,
-        current_daemon_exclusion: "held_during_this_operation_only",
+        current_daemon_exclusion: "held_for_helper_lifetime",
         all_external_writers_excluded: false,
         required_before_start: REQUIREMENTS,
     };
@@ -308,7 +308,7 @@ fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
         json!({"state":"configuration_files_durably_installed_not_activated", "receipt":receipt,
         "unit_created_in_this_attempt":unit_created,"samba_created_in_this_attempt":samba_created,
         "intent_directory":prepared.preview.intent_directory,"completion_directory":prepared.preview.completion_directory,
-        "current_daemon_exclusion":"held_during_this_operation_only","all_external_writers_excluded":false,
+        "current_daemon_exclusion":"held_for_helper_lifetime","all_external_writers_excluded":false,
         "required_before_start":REQUIREMENTS}),
     )
 }

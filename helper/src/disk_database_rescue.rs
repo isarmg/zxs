@@ -52,10 +52,6 @@ impl Source {
     }
 }
 
-pub(crate) fn requires_service_exclusion(command: &Command) -> bool {
-    matches!(command, Command::Export { .. })
-}
-
 fn require_suffix(path: &Path, suffix: &str) -> Result<()> {
     if !path
         .file_name()

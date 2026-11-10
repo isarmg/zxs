@@ -83,10 +83,6 @@ fn artifact_path(path: &Path, suffix: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn requires_service_exclusion(command: &Command) -> bool {
-    matches!(command, Command::Inspect { .. } | Command::Export { .. })
-}
-
 fn reconstruct(
     archive: &Path,
     scope: &Path,

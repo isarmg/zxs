@@ -911,6 +911,7 @@ pub(super) fn open_payload(
     name: &EntryName,
     mode: PayloadOpenMode,
 ) -> Result<(File, rustix::fs::Stat), Error> {
+    verify_administration(directory)?;
     let flags = OFlags::RDWR
         | OFlags::CLOEXEC
         | OFlags::NOFOLLOW
@@ -928,14 +929,25 @@ pub(super) fn open_payload(
         )
         .map_err(io::Error::from)?,
     );
+    if mode == PayloadOpenMode::CreateNew
+        && let Some((uid, gid)) = directory.administration_owner
+    {
+        rustix::fs::fchown(
+            &file,
+            Some(rustix::process::Uid::from_raw(uid)),
+            Some(rustix::process::Gid::from_raw(gid)),
+        )
+        .map_err(io::Error::from)?;
+    }
     let stat = fstat(&file).map_err(io::Error::from)?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1 {
         return Err(Error::UnsafeFileType(directory.path.join(name.as_path())));
     }
-    if stat.st_uid != geteuid().as_raw() || stat.st_mode & 0o7777 != 0o600 {
-        return Err(Error::UnsafePermissions(
-            directory.path.join(name.as_path()),
-        ));
+    let path = directory.path.join(name.as_path());
+    if directory.administration_owner.is_some() {
+        validate_administrative_file(directory, &stat, &path)?;
+    } else if stat.st_uid != geteuid().as_raw() || stat.st_mode & 0o7777 != 0o600 {
+        return Err(Error::UnsafePermissions(path));
     }
     Ok((file, stat))
 }

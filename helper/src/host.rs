@@ -3,12 +3,29 @@ use crate::{Result, print, private_io::HostRoot};
 use command_line::Subcommand;
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
-use platform_io::service_lease::HOST_ROOT;
+use platform_io::service_lease::{HOST_ROOT, ServiceLease};
 use sha2::{Digest, Sha256};
+
+/// Hold the offline owner outside all helper commands and runtime teardown.
+pub(crate) fn enter() -> Result<ServiceLease> {
+    let lease = match ServiceLease::host() {
+        Ok(lease) => lease,
+        Err(platform_io::service_lease::Error::Open {
+            source: platform_io::fs_safety::Error::Io(error),
+            ..
+        }) if error.kind() == std::io::ErrorKind::NotFound
+            && rustix::process::geteuid().as_raw() == 0 =>
+        {
+            HostRoot::fixed()?.prepare()?.1
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(lease.enter_host()?)
+}
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    /// Inspect only the fixed /zxs directory required for current-daemon exclusion.
+    /// Inspect the admitted /zxs exclusion root held for this helper lifetime.
     Preview,
     /// Prepare exactly that empty root if absent; no credentials/data/service changes.
     Prepare {
@@ -84,13 +101,14 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     if input.request_digest != preview.request_digest {
         return Err("host root parent or preparation contract differs from the exact preview; no host write was attempted".into());
     }
-    let (created, identity) = root.prepare()?;
+    let (created, lease) = root.prepare()?;
+    let identity = lease.identity();
     Ok(
         json!({"state":if created {"new_host_root_prepared"} else {"existing_host_root_durably_verified"},
         "path":HOST_ROOT,"device":identity.device.to_string(),"inode":identity.inode.to_string(),
         "request_digest":preview.request_digest,"system_initialized":false,"accounts_created":false,
         "disks_initialized":false,"service_stopped_or_started":false,"live_configuration_modified":false,
-        "service_exclusion_held_after_response":false}),
+        "service_exclusion_held_after_response":true}),
     )
 }
 pub(crate) fn run(command: Command) -> Result<()> {

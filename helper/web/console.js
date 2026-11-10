@@ -265,28 +265,36 @@ function refreshActivationRecords(selected = "") {
   byId("activation-retry").hidden = true;
   return records.length;
 }
-function showActivationResult(result, original) {
-  if (result.request_digest !== original.request_digest) throw new Error("响应不属于这个原启动请求，结果仍未知。");
+function acceptServiceHandoff(result, original, section) {
+  const port = original.input.deployment.listen.split(":").at(-1);
+  if (result.request_digest !== original.request_digest
+      || result.state !== "helper_exit_then_service_start"
+      || result.helper_shutdown_requested !== true || result.services_started !== false
+      || result.service_readiness_verified !== false
+      || !Number.isInteger(result.web_port) || result.web_port < 1 || result.web_port > 65535
+      || !/^[0-9]+$/.test(port) || Number(port) !== result.web_port) {
+    throw new Error("未收到这个原请求的交接受理结果；服务状态仍需核对。");
+  }
+  const url = new URL(window.location.href);
+  url.protocol = "http:"; url.port = String(result.web_port);
+  url.pathname = "/"; url.search = ""; url.hash = "";
+  byId(section + "-web").href = url.toString();
+  byId(section + "-open").hidden = false;
+  stopping = true;
+  byId("shutdown").disabled = true;
+  byId("connection").textContent = "交接已受理。辅助工具正在退出，退出后由 systemd 启动选定服务；此页面尚未确认服务可用。请查看启动终端，或打开 ZXS 核实。";
+  setBusy(busy);
+}
+function showActivationResult(result) {
   byId("activation-result").textContent = JSON.stringify(result,null,2);
   byId("activation-result").hidden = false;
-  const ready = result.state === "services_active_and_management_ready";
-  byId("activation-open").hidden = !ready;
-  if (ready) {
-    const url = new URL(window.location.href);
-    url.protocol = "http:";
-    const listen = original.input.deployment.listen;
-    const port = listen.slice(listen.lastIndexOf(":") + 1);
-    if (!/^[0-9]+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw new Error("原服务端口无效。");
-    url.port = port; url.pathname = "/"; url.search = ""; url.hash = "";
-    byId("activation-web").href = url.toString();
-  }
 }
 async function sendActivation(original) {
   if (!byId("activation-external-stopped").checked) {
     error("请先停止其他主机管理操作，并明确勾选服务动作确认。"); return;
   }
   const smb = original.input.deployment.smb ? "以及独立 zxs-smb.service" : "（不启动 Samba）";
-  if (!window.confirm(`以 root 执行原请求 ${original.request_digest} 的 daemon-reload 和启动 zxs.service ${smb}？${original.input.enable_on_boot ? "就绪后还将启用这些服务的开机启动。" : "不会更改开机启动设置。"} 不停止其他服务、不初始化数据或重置密码。`)) return;
+  if (!window.confirm(`以 root 交接原请求 ${original.request_digest}？辅助工具先完成安装核对与 daemon-reload，然后退出；退出后由 systemd 启动 zxs.service ${smb}。${original.input.enable_on_boot ? "退出前还将启用这些服务的开机启动，但不会提前启动。" : "不会更改开机启动设置。"} 此响应不确认服务已可用。`)) return;
   const text = JSON.stringify(activationRecord(original));
   try {
     const count = refreshActivationRecords(original.request_digest);
@@ -308,13 +316,14 @@ async function sendActivation(original) {
   setBusy(true); error("");
   try {
     const result = await (await post("/api/deployment/activate",{
-      ...original,confirmation:"activate-installed-zxs-services",external_administration_stopped:true
+      ...original,confirmation:"exit-helper-and-start-installed-zxs-services",external_administration_stopped:true
     })).json();
-    showActivationResult(result,original);
+    acceptServiceHandoff(result,original,"activation");
+    showActivationResult(result);
   } catch (failure) {
-    error(`${failure.message} 原请求 ${original.request_digest} 的结果可能已生效；只查询后再明确决定是否重试。`);
+    error(`${failure.message} 原请求 ${original.request_digest} 的结果可能已生效；请查看启动终端或 ZXS 页面；再次使用离线 helper 前须停止 ZXS，再查询原请求。`);
   } finally {
-    byId("activation-status").hidden = false;
+    byId("activation-status").hidden = stopping;
     byId("activation-retry").hidden = true;
     setBusy(false);
   }
@@ -327,6 +336,7 @@ byId("activation-preview").addEventListener("click",async () => {
   resetActivationPreview(); setBusy(true); error("");
   try {
     const preview = await (await post("/api/deployment/activation-preview",input)).json();
+    if (preview.state !== "offline_ready_for_handoff") throw new Error("尚未确认离线交接条件。");
     activationPreview = activationRecord({input,request_digest:preview.request_digest});
     byId("activation-plan").textContent = JSON.stringify(preview,null,2);
     byId("activation-plan").hidden = false;
@@ -359,9 +369,12 @@ byId("activation-status").addEventListener("click",async () => {
   byId("activation-open").hidden = true; setBusy(true); error("");
   try {
     const result = await (await post("/api/deployment/activation-status",original)).json();
-    showActivationResult(result,original);
+    if (result.request_digest !== original.request_digest || result.state !== "offline_ready_for_handoff") {
+      throw new Error("尚未确认这个原请求的离线交接条件。");
+    }
+    showActivationResult(result);
     activationObserved = true;
-    byId("activation-retry").hidden = result.state === "services_active_and_management_ready";
+    byId("activation-retry").hidden = false;
   } catch (failure) {
     error(`${failure.message} 未启动、停止或禁用任何服务；原结果仍需核对，不能直接按新设置重发。`);
   } finally { setBusy(false); }

@@ -199,3 +199,112 @@ for (const samba of [false, true]) {
   assert.equal(dependencies.calls.length, 0);
 }
 console.log("first-install selects only the dependencies requested by the frozen setup");
+
+// Service handoff acknowledges shutdown, not readiness, and never completes
+// the eighth installation stage while helper is still running.
+const activationSource = readFileSync("helper/web/console.js", "utf8");
+const handoffFunction = activationSource.slice(activationSource.indexOf("function acceptServiceHandoff("),
+  activationSource.indexOf("function showActivationResult("));
+const handoffRecord = () => {
+  const record = initial();
+  record.steps.push({request_digest:digest, plan:{roots:record.input.roots}, issued:true, completed:true});
+  return record;
+};
+const handoffResponse = () => ({state:"helper_exit_then_service_start", request_digest:digest,
+  web_port:7400, helper_shutdown_requested:true, services_started:false, service_readiness_verified:false});
+function handoffHarness(record = handoffRecord()) {
+  const flow = harness(record);
+  flow.context.URL = URL;
+  flow.context.Blob = Blob;
+  flow.context.window.location = {href:"http://host.example:7500/helper?view=install#step"};
+  flow.context.save = (blob, name) => { flow.exported = {blob, name}; };
+  vm.runInContext(handoffFunction, flow.context);
+  return flow;
+}
+const handoff = handoffHarness();
+handoff.respond((path, body) => {
+  if (path.endsWith("activation-preview")) return {state:"offline_ready_for_handoff", request_digest:digest};
+  assert.equal(path, "/api/deployment/activate");
+  assert.equal(body.confirmation, "exit-helper-and-start-installed-zxs-services");
+  assert.equal(body.external_administration_stopped, true);
+  assert.equal(handoff.record().steps[7].issued, true);
+  assert.equal(handoff.record().steps[7].completed, false);
+  return handoffResponse();
+});
+await handoff.click("inspect");
+handoff.element("first-install-ack").checked = true;
+await handoff.click("commit");
+assert.equal(handoff.context.stopping, true);
+assert.equal(handoff.record().steps[7].completed, false);
+assert.equal(handoff.element("first-install-web").href, "http://host.example:7400/");
+assert.equal(handoff.element("first-install-open").hidden, false);
+assert.equal(handoff.element("first-install-inspect").disabled, true);
+assert.equal(handoff.element("shutdown").disabled, true);
+assert.match(handoff.element("connection").textContent, /尚未确认服务可用/);
+const count = handoff.calls.length;
+await handoff.click("inspect");
+await handoff.click("commit");
+assert.equal(handoff.calls.length, count);
+assert.equal(handoff.element("first-install-save").disabled, false);
+await handoff.click("save");
+assert.deepEqual(JSON.parse(await handoff.exported.blob.text()), handoff.record());
+
+const unknownHandoff = handoffHarness();
+unknownHandoff.respond(path => {
+  if (path.endsWith("activation-preview")) return {state:"offline_ready_for_handoff", request_digest:digest};
+  throw new Error("response lost during exit");
+});
+await unknownHandoff.click("inspect");
+unknownHandoff.element("first-install-ack").checked = true;
+await unknownHandoff.click("commit");
+assert.equal(unknownHandoff.context.stopping, false);
+assert.equal(unknownHandoff.record().steps[7].issued, true);
+assert.equal(unknownHandoff.record().steps[7].completed, false);
+assert.equal(unknownHandoff.element("first-install-open").hidden, true);
+await unknownHandoff.click("commit");
+assert.equal(unknownHandoff.calls.length, 2);
+
+// A restarted offline helper rechecks the original; failed/old online states
+// cannot authorize another handoff from the retained request.
+for (const response of [null, {state:"services_active_and_management_ready", request_digest:digest},
+  {state:"offline_ready_for_handoff", request_digest:"b".repeat(64)}]) {
+  const restored = handoffHarness(unknownHandoff.record());
+  assert.equal(restored.calls.length, 0);
+  restored.respond(path => {
+    assert.equal(path, "/api/deployment/activation-status");
+    if (response === null) throw new Error("service still running");
+    return response;
+  });
+  await restored.click("inspect");
+  restored.element("first-install-ack").checked = true;
+  await restored.click("commit");
+  assert.equal(restored.calls.length, 1);
+  assert.equal(restored.context.stopping, false);
+}
+const resumedHandoff = handoffHarness(unknownHandoff.record());
+resumedHandoff.respond((path, body) => {
+  assert.equal(body.request_digest, digest);
+  assert.deepEqual(body.input, unknownHandoff.calls[1].body.input);
+  return path.endsWith("activation-status")
+    ? {state:"offline_ready_for_handoff", request_digest:digest} : handoffResponse();
+});
+await resumedHandoff.click("inspect");
+resumedHandoff.element("first-install-ack").checked = true;
+await resumedHandoff.click("commit");
+assert.equal(resumedHandoff.context.stopping, true);
+assert.equal(resumedHandoff.record().steps[7].completed, false);
+
+for (const patch of [{request_digest:"b".repeat(64)}, {state:"services_active_and_management_ready"},
+  {web_port:7500}, {web_port:"7400"}, {helper_shutdown_requested:false},
+  {services_started:true}, {service_readiness_verified:true}]) {
+  const invalid = handoffHarness();
+  invalid.respond(path => path.endsWith("activation-preview")
+    ? {state:"offline_ready_for_handoff", request_digest:digest} : {...handoffResponse(), ...patch});
+  await invalid.click("inspect");
+  invalid.element("first-install-ack").checked = true;
+  await invalid.click("commit");
+  assert.equal(invalid.context.stopping, false);
+  assert.equal(invalid.record().steps[7].completed, false);
+  assert.equal(invalid.element("first-install-open").hidden, true);
+}
+console.log("first-install hands off after helper shutdown without claiming service readiness or replaying");

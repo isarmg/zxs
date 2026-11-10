@@ -18,7 +18,7 @@ fn rescue_destinations_cannot_be_active_database_names() {
 }
 
 #[test]
-fn export_holds_service_exclusion_but_archive_rebuild_needs_no_host_state() {
+fn export_and_archive_rebuild_have_explicit_input_scopes() {
     let export = crate::Args::try_parse_from([
         "zxs-helper",
         "disk-database-rescue",
@@ -29,7 +29,12 @@ fn export_holds_service_exclusion_but_archive_rebuild_needs_no_host_state() {
     .unwrap()
     .command
     .unwrap();
-    assert!(crate::requires_service_exclusion(&export));
+    assert!(matches!(
+        export,
+        crate::Command::DiskDatabaseRescue {
+            command: Command::Export { .. }
+        }
+    ));
     let rebuild = crate::Args::try_parse_from([
         "zxs-helper",
         "disk-database-rescue",
@@ -43,7 +48,12 @@ fn export_holds_service_exclusion_but_archive_rebuild_needs_no_host_state() {
     .unwrap()
     .command
     .unwrap();
-    assert!(!crate::requires_service_exclusion(&rebuild));
+    assert!(matches!(
+        rebuild,
+        crate::Command::DiskDatabaseRescue {
+            command: Command::Rebuild { .. }
+        }
+    ));
     assert!(
         crate::Args::try_parse_from([
             "zxs-helper",
@@ -70,9 +80,6 @@ fn disk_rescue_verify_is_read_only_and_has_no_implicit_source_selection() {
         "copy.recovered.sqlite",
     ])
     .unwrap();
-    assert!(!crate::requires_service_exclusion(
-        args.command.as_ref().unwrap()
-    ));
     assert!(matches!(
         args.command,
         Some(crate::Command::DiskDatabaseRescue {

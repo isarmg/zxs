@@ -4,14 +4,17 @@ mod boundary;
 mod http;
 mod work;
 
-use crate::Result;
+use crate::{Result, deployment::activation::Handoff};
 use command_line::Args;
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 use tokio::sync::{Semaphore, watch};
 
 const DEFAULT_PORT: u16 = 9040;
 pub(super) const MAX_REQUEST_BYTES: usize = 64 * 1024;
-const WARNING: &str = "WARNING: unauthenticated root helper console over plain HTTP. Any reachable person can inspect/export selected disk data, install its embedded ZXS program, explicitly confirmed Debian Samba/systemd packages and same-source Samba VFS, prepare its host root, explicitly create a missing nonlogin local service account and same-name group, an empty service-owned private layout and inactive deployment files, install fixed configuration files under /etc, create the first ZXS administrator in the admitted empty layout, reset an existing administrator, enroll a missing supported local Samba account or reset an existing local Samba password, initialize a confirmed first empty storage batch, add and initialize an exact empty-directory batch in an existing pool, copy foreign source material into every selected lower-chain root without admitting membership, deregister a confirmed member while preserving its bytes (the final metadata voter ends active storage and enters terminal management) or stop this helper. Use only a trusted isolated network/firewall; exit after use. This program does not change your firewall or start/enable itself. Verified installed ZXS/Samba services require a separate explicit activation confirmation.";
+const WARNING: &str = "WARNING: unauthenticated root helper console over plain HTTP. Any reachable person can inspect/export selected disk data, install its embedded ZXS program, explicitly confirmed Debian Samba/systemd packages and same-source Samba VFS, prepare its host root, explicitly create a missing nonlogin local service account and same-name group, an empty service-owned private layout and inactive deployment files, install fixed configuration files under /etc, create the first ZXS administrator in the admitted empty layout, reset an existing administrator, enroll a missing supported local Samba account or reset an existing local Samba password, initialize a confirmed first empty storage batch, add and initialize an exact empty-directory batch in an existing pool, copy foreign source material into every selected lower-chain root without admitting membership, deregister a confirmed member while preserving its bytes (the final metadata voter ends active storage and enters terminal management) or stop this helper. Use only a trusted isolated network/firewall; exit after use. This program does not change your firewall or start/enable itself. Verified installed ZXS/Samba services can start only through an explicit exit-and-start handoff after this helper ends.";
 
 #[derive(Args, Clone, Debug)]
 pub(crate) struct Options {
@@ -33,6 +36,7 @@ struct State {
     csrf: Arc<str>,
     jobs: Arc<Semaphore>,
     stopping: watch::Sender<bool>,
+    handoff: Arc<Mutex<Option<Handoff>>>,
 }
 impl State {
     fn new(listen: SocketAddr, csrf: String, stopping: watch::Sender<bool>) -> Self {
@@ -41,7 +45,26 @@ impl State {
             csrf: csrf.into(),
             jobs: Arc::new(Semaphore::new(1)),
             stopping,
+            handoff: Arc::new(Mutex::new(None)),
         }
+    }
+    fn request_handoff(&self, handoff: Handoff) -> Result<()> {
+        if *self.stopping.borrow() {
+            return Err(
+                "helper shutdown was already requested; service startup was not queued".into(),
+            );
+        }
+        let mut pending = self
+            .handoff
+            .lock()
+            .expect("invariant: handoff owner does not panic");
+        assert!(
+            pending.is_none(),
+            "invariant: single admitted job queues one handoff"
+        );
+        *pending = Some(handoff);
+        self.stopping.send_replace(true);
+        Ok(())
     }
 }
 
@@ -54,7 +77,7 @@ fn require_root(uid: u32) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run(options: Options) -> Result<()> {
+pub(crate) fn run(options: Options) -> Result<Option<Handoff>> {
     require_root(rustix::process::geteuid().as_raw())?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -65,7 +88,7 @@ pub(crate) fn run(options: Options) -> Result<()> {
     runtime.block_on(serve(options))
 }
 
-async fn serve(options: Options) -> Result<()> {
+async fn serve(options: Options) -> Result<Option<Handoff>> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
@@ -76,9 +99,10 @@ async fn serve(options: Options) -> Result<()> {
     let state = State::new(listen, csrf, stopping.clone());
     eprintln!("zxs-helper: {WARNING}");
     eprintln!(
-        "zxs-helper: listening on {listen}; open http://<host-IP>:{} . Independent-disk checks/downloads are read-only; embedded program installation is fixed-path and never replaces different bytes. Stop all source writers first; this console holds no service lease between operations; current ZXS executables and Engine recovery commands coordinate through /zxs. Older binaries and external/Samba writers require separate exclusion.",
+        "zxs-helper: listening on {listen}; open http://<host-IP>:{} . Independent-disk checks/downloads are read-only; embedded program installation is fixed-path and never replaces different bytes. Stop all source writers first; this console retains the /zxs service lease until all requests and workers end. ZXS startup is handed off only after this helper exits. Older binaries and external/Samba writers require separate exclusion.",
         listen.port()
     );
+    let handoff = Arc::clone(&state.handoff);
     http_routing::serve(listener, http::router(state))
         .with_graceful_shutdown(async move {
             tokio::select! {
@@ -90,7 +114,11 @@ async fn serve(options: Options) -> Result<()> {
             eprintln!("zxs-helper: stopping admission; waiting for active requests and disk reads. Do not remove source media until the process exits.");
         })
         .await?;
-    Ok(())
+    let pending = handoff
+        .lock()
+        .expect("invariant: handoff owner does not panic")
+        .take();
+    Ok(pending)
 }
 
 #[cfg(test)]

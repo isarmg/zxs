@@ -73,19 +73,32 @@ impl AnchoredPath {
 /// External writers must remain stopped for the transaction.
 pub(crate) struct DraftTransaction {
     target: AnchoredPath,
-    _lock: AdvisoryLock,
+    _lock: DraftExclusion,
+}
+enum DraftExclusion {
+    Independent {
+        _lock: AdvisoryLock,
+    },
+    Admitted {
+        _lease: platform_io::service_lease::ServiceLease,
+    },
 }
 impl DraftTransaction {
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let target = AnchoredPath::open(path)?;
-        let lock = AdvisoryLock::directory(target.directory.directory()).map_err(|error| {
-            match error {
-                platform_io::fs_safety::Error::AlreadyLocked(_) => {
-                    "another configuration draft edit is active in this directory; retry after it finishes".into()
-                }
-                other => Box::new(other) as Box<dyn std::error::Error + Send + Sync>,
-            }
-        })?;
+        let lock = match platform_io::service_lease::ServiceLease::share_directory(&target.directory)? {
+            Some(lease) => DraftExclusion::Admitted { _lease: lease },
+            None => DraftExclusion::Independent {
+                _lock: AdvisoryLock::directory(target.directory.directory()).map_err(|error| {
+                    match error {
+                        platform_io::fs_safety::Error::AlreadyLocked(_) => {
+                            "another configuration draft edit is active in this directory; retry after it finishes".into()
+                        }
+                        other => Box::new(other) as Box<dyn std::error::Error + Send + Sync>,
+                    }
+                })?,
+            },
+        };
         Ok(Self {
             target,
             _lock: lock,

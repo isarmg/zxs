@@ -1,7 +1,7 @@
 //! Non-listening maintenance entry for the exact embedded helper payload.
 //! It is not daemon startup, a network API, or an alternate credential policy.
 use crate::Result;
-use command_line::Subcommand;
+use command_line::{Args, Subcommand};
 use data_serialization::{Serialize, de::DeserializeOwned};
 use platform_io::local_account as account;
 use platform_io::secret::SecretBytes;
@@ -22,41 +22,65 @@ mod managed_layout;
 mod managed_pool;
 mod service_worker;
 
+#[derive(Args)]
+pub(crate) struct InheritedLease {
+    #[arg(long)]
+    service_lease_fd: i32,
+}
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Pipe-only host coordinator. No listener, service activation or background runtime.
     #[command(name = "internal-maintenance", hide = true)]
-    Maintenance,
+    Maintenance(InheritedLease),
     #[command(name = "internal-storage-worker", hide = true)]
-    StorageWorker,
+    StorageWorker(InheritedLease),
     #[command(name = "internal-addition-worker", hide = true)]
-    AdditionWorker,
+    AdditionWorker(InheritedLease),
     #[command(name = "internal-foreign-chain-worker", hide = true)]
-    ForeignChainWorker,
+    ForeignChainWorker(InheritedLease),
     #[command(name = "internal-removal-worker", hide = true)]
-    RemovalWorker,
+    RemovalWorker(InheritedLease),
     #[command(name = "internal-readmission-worker", hide = true)]
-    ReadmissionWorker,
+    ReadmissionWorker(InheritedLease),
     #[command(name = "internal-terminal-chain-worker", hide = true)]
-    TerminalChainWorker,
+    TerminalChainWorker(InheritedLease),
     #[command(name = "internal-chain-readmission-worker", hide = true)]
-    ChainReadmissionWorker,
+    ChainReadmissionWorker(InheritedLease),
     #[command(name = "internal-chain-target-worker", hide = true)]
-    ChainTargetWorker,
+    ChainTargetWorker(InheritedLease),
 }
+#[allow(unsafe_code)]
 pub(crate) fn run(command: Command) -> Result<()> {
+    let inherited = match &command {
+        Command::Maintenance(lease)
+        | Command::StorageWorker(lease)
+        | Command::AdditionWorker(lease)
+        | Command::ForeignChainWorker(lease)
+        | Command::RemovalWorker(lease)
+        | Command::ReadmissionWorker(lease)
+        | Command::TerminalChainWorker(lease)
+        | Command::ChainReadmissionWorker(lease)
+        | Command::ChainTargetWorker(lease) => lease,
+    };
+    // SAFETY: this branch runs before logging/runtime creation. The explicit
+    // inherited descriptor has no Rust owner; receive_host validates and owns it.
+    let _lease = unsafe {
+        platform_io::service_lease::ServiceLease::receive_host(inherited.service_lease_fd)?
+    }
+    .enter_host()?;
     match command {
-        Command::Maintenance => entry(),
-        Command::StorageWorker => initialization::storage::process::entry(),
-        Command::AdditionWorker => disk_addition::worker_entry(),
-        Command::ForeignChainWorker => foreign_chain::worker_entry(),
-        Command::RemovalWorker => disk_removal::worker_entry(),
-        Command::ReadmissionWorker => disk_readmission::worker_entry(),
-        Command::TerminalChainWorker => disk_removal::chain_archive::worker_entry(),
-        Command::ChainReadmissionWorker => disk_removal::chain_readmission::worker_entry(),
-        Command::ChainTargetWorker => disk_removal::chain_target::worker_entry(),
+        Command::Maintenance(_) => entry(),
+        Command::StorageWorker(_) => initialization::storage::process::entry(),
+        Command::AdditionWorker(_) => disk_addition::worker_entry(),
+        Command::ForeignChainWorker(_) => foreign_chain::worker_entry(),
+        Command::RemovalWorker(_) => disk_removal::worker_entry(),
+        Command::ReadmissionWorker(_) => disk_readmission::worker_entry(),
+        Command::TerminalChainWorker(_) => disk_removal::chain_archive::worker_entry(),
+        Command::ChainReadmissionWorker(_) => disk_removal::chain_readmission::worker_entry(),
+        Command::ChainTargetWorker(_) => disk_removal::chain_target::worker_entry(),
     }
 }
+
 #[derive(Debug)]
 struct Failure {
     kind: FailureKind,

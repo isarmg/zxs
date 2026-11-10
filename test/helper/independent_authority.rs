@@ -1,3 +1,10 @@
+#[path = "../server/service_namespace.rs"]
+mod service_namespace;
+const HOST_NAMESPACE_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../test/server/service_namespace.py"
+);
+
 use json_codec::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -160,6 +167,12 @@ fn rejected_check(selection: &Path) -> Output {
 
 #[test]
 fn authority_requires_explicit_new_format_and_write_confirmation_before_opening_paths() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_requires_explicit_new_format_and_write_confirmation_before_opening_paths",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let disk = temp.path().join("disk");
     let identity = temp.path().join("missing");
@@ -190,6 +203,12 @@ fn authority_requires_explicit_new_format_and_write_confirmation_before_opening_
 
 #[test]
 fn real_cli_primary_backup_portability_projection_and_export_use_only_per_disk_decisions() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "real_cli_primary_backup_portability_projection_and_export_use_only_per_disk_decisions",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -299,6 +318,12 @@ fn real_cli_primary_backup_portability_projection_and_export_use_only_per_disk_d
 
 #[test]
 fn changed_input_cannot_reuse_the_review_digest_or_modify_target_bytes() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "changed_input_cannot_reuse_the_review_digest_or_modify_target_bytes",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let (disk, selection) = initialize(temp.path(), "primary", Role::Primary);
     let input = temp.path().join("input");
@@ -320,6 +345,12 @@ fn changed_input_cannot_reuse_the_review_digest_or_modify_target_bytes() {
 
 #[test]
 fn authority_initialization_does_not_upgrade_or_modify_current_format_contents() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_initialization_does_not_upgrade_or_modify_current_format_contents",
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
     let disk = temp.path().join("current");
@@ -352,6 +383,12 @@ fn authority_initialization_does_not_upgrade_or_modify_current_format_contents()
 
 #[test]
 fn authority_check_reports_empty_without_creating_system_state_or_modifying_disk() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_reports_empty_without_creating_system_state_or_modifying_disk",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let (disk, selection) = initialize(temp.path(), "empty", Role::Primary);
     let system = temp.path().join("absent-system");
@@ -369,6 +406,12 @@ fn authority_check_reports_empty_without_creating_system_state_or_modifying_disk
 
 #[test]
 fn authority_check_does_not_fall_back_to_the_current_pool_format() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_does_not_fall_back_to_the_current_pool_format",
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
     let disk = temp.path().join("current-pool-disk");
@@ -393,6 +436,12 @@ fn authority_check_does_not_fall_back_to_the_current_pool_format() {
 
 #[test]
 fn authority_check_keeps_good_versions_visible_beside_missing_and_corrupt_bodies() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_keeps_good_versions_visible_beside_missing_and_corrupt_bodies",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let (disk, selection) = initialize(temp.path(), "primary", Role::Primary);
     let corrupt = fixture_file(&selection, b"first");
@@ -436,6 +485,12 @@ fn authority_check_keeps_good_versions_visible_beside_missing_and_corrupt_bodies
 
 #[test]
 fn authority_check_preserves_original_owner_and_identical_versions_on_a_moved_backup() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_preserves_original_owner_and_identical_versions_on_a_moved_backup",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let (primary, source_selection) = initialize(temp.path(), "primary", Role::Primary);
     let first = fixture_file(&source_selection, b"same");
@@ -491,6 +546,12 @@ fn authority_check_preserves_original_owner_and_identical_versions_on_a_moved_ba
 
 #[test]
 fn authority_check_does_not_merge_matching_names_or_bodies_from_different_primaries() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_does_not_merge_matching_names_or_bodies_from_different_primaries",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let (left, left_selection) = initialize(temp.path(), "left", Role::Primary);
     let (right, right_selection) = initialize(temp.path(), "right", Role::Primary);
@@ -531,6 +592,12 @@ fn authority_check_does_not_merge_matching_names_or_bodies_from_different_primar
 
 #[test]
 fn authority_check_rejects_identity_pin_and_metadata_failures_without_a_report() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_rejects_identity_pin_and_metadata_failures_without_a_report",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let (disk, selection) = initialize(temp.path(), "primary", Role::Primary);
     let commit = fixture_file(&selection, b"body");
@@ -560,6 +627,12 @@ fn authority_check_rejects_identity_pin_and_metadata_failures_without_a_report()
 
 #[test]
 fn authority_check_refuses_unsafe_and_oversized_body_reads_without_a_report() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_refuses_unsafe_and_oversized_body_reads_without_a_report",
+    ) {
+        return;
+    }
     use std::os::unix::fs::{PermissionsExt, symlink};
     let temp = tempfile::tempdir().unwrap();
     let (disk, selection) = initialize(temp.path(), "primary", Role::Primary);
@@ -587,6 +660,12 @@ fn authority_check_refuses_unsafe_and_oversized_body_reads_without_a_report() {
 
 #[test]
 fn authority_check_enforces_the_total_metadata_and_content_read_budget() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_enforces_the_total_metadata_and_content_read_budget",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let (disk, selection) = initialize(temp.path(), "primary", Role::Primary);
     let first = fixture_file(&selection, b"one");
@@ -623,6 +702,12 @@ fn authority_check_enforces_the_total_metadata_and_content_read_budget() {
 
 #[test]
 fn authority_check_rejects_a_replaced_held_child_even_with_identical_bytes() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "authority_check_rejects_a_replaced_held_child_even_with_identical_bytes",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let (path, selection) = initialize(temp.path(), "primary", Role::Primary);
     let commit = fixture_file(&selection, b"body");

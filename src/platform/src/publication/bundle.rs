@@ -6,6 +6,7 @@ use crate::fs_safety::{
     AtomicCommitError, EntryName, Error,
     linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},
 };
+use crate::service_lease::ServiceLease;
 use rustix::fs::{AtFlags, Mode, RenameFlags, mkdirat, renameat_with, statat};
 use std::{
     fs::File,
@@ -29,7 +30,11 @@ pub enum BundleState {
 pub struct BundleDestination {
     path: PathBuf,
     parent: OpenAt2Root,
-    _lock: AdvisoryLock,
+    _lock: Exclusion,
+}
+enum Exclusion {
+    Independent { _lock: AdvisoryLock },
+    Admitted { _lease: ServiceLease },
 }
 #[derive(Debug)]
 struct PendingBundle {
@@ -56,7 +61,12 @@ impl BundleDestination {
     pub fn open(path: &Path) -> Result<Self> {
         let parent = OpenAt2Root::open(path, MountPolicy::AllowNestedMounts)?;
         trusted_parent(parent.directory())?;
-        let lock = AdvisoryLock::directory(parent.directory())?;
+        let lock = match ServiceLease::share_directory(&parent)? {
+            Some(lease) => Exclusion::Admitted { _lease: lease },
+            None => Exclusion::Independent {
+                _lock: AdvisoryLock::directory(parent.directory())?,
+            },
+        };
         let result = Self {
             path: path.to_owned(),
             parent,

@@ -5,7 +5,7 @@ use platform_io::{
         AtomicCommitError, EntryName, Error,
         linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root},
     },
-    service_lease::HOST_ROOT,
+    service_lease::{HOST_ROOT, ServiceLease},
 };
 use rustix::fs::{AtFlags, Mode, RenameFlags, mkdirat, renameat_with, statat};
 use std::{
@@ -93,7 +93,7 @@ impl HostRoot {
     pub(crate) fn present(&self) -> Result<bool> {
         Ok(self.open_named(&self.target)?.is_some())
     }
-    pub(crate) fn prepare(&self) -> Result<(bool, FileIdentity)> {
+    pub(crate) fn prepare(&self) -> Result<(bool, ServiceLease)> {
         self.recheck_parent()?;
         if let Some(root) = self.open_named(&self.target)? {
             if self.open_named(&self.pending)?.is_some() {
@@ -101,11 +101,18 @@ impl HostRoot {
                     "both host root and pending root exist; neither was removed or changed".into(),
                 );
             }
+            let lease = ServiceLease::acquire(
+                &self.parent_path.join(self.target.as_os_str()),
+                rustix::process::geteuid().as_raw(),
+            )?;
+            if root.identity() != lease.identity() {
+                return Err("host root differs from the held service lease".into());
+            }
             root.directory().sync_all()?;
             self.parent.directory().sync_all()?;
             self.check_named(&self.target, root.identity())?;
             self.recheck_parent()?;
-            return Ok((false, root.identity()));
+            return Ok((false, lease));
         }
         let root = match self.open_named(&self.pending)? {
             Some(root) => root,
@@ -127,7 +134,12 @@ impl HostRoot {
             .into());
         }
         // Lock the future daemon inode before publishing its public name.
-        let _root_lock = AdvisoryLock::directory(root.directory())?;
+        let lease = ServiceLease::acquire_directory(
+            &self.parent_path.join(self.pending.as_os_str()),
+            rustix::process::geteuid().as_raw(),
+            root,
+        )?;
+        let root = lease.root();
         self.check_named(&self.pending, root.identity())?;
         self.recheck_parent()?;
         // A retry after mkdir resumes this same empty, administrative-owned
@@ -161,7 +173,10 @@ impl HostRoot {
             ))
         })?;
         self.recheck_parent()?;
-        Ok((true, root.identity()))
+        Ok((
+            true,
+            lease.published_at(&self.parent_path.join(self.target.as_os_str()))?,
+        ))
     }
     fn check_named(
         &self,

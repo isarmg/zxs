@@ -131,7 +131,7 @@ class HelperPreparation(unittest.TestCase):
                     patch.object(GATE.Helper, 'request', return_value={'csrf': 'test-csrf'}), \
                     patch.object(GATE, 'initialize_storage', side_effect=RuntimeError('native failed')):
                 with self.assertRaisesRegex(RuntimeError, 'native failed'):
-                    GATE.prepare_installation(helper, root / 'receipt.json')
+                    GATE.prepare_installation(helper, root / 'receipt.json', root / 'daemon')
             child.terminate.assert_called_once()
             child.wait.assert_called_once_with(timeout=10)
             self.assertEqual(commands[0][1:], ['serve', '--listen', '127.0.0.1:12345'])
@@ -144,7 +144,7 @@ class HelperPreparation(unittest.TestCase):
             with self.subTest(uid=uid), patch.object(GATE.os, 'geteuid', return_value=uid), \
                     patch.dict(os.environ, {'ZXS_ISOLATED_RELEASE_TEST': isolated}):
                 with self.assertRaisesRegex(RuntimeError, 'isolated root'):
-                    GATE.prepare_installation(Path('not-read'), Path('not-written'))
+                    GATE.prepare_installation(Path('not-read'), Path('not-written'), Path('not-run'))
 
     def test_prepared_image_uses_exact_native_host_digest_then_removes_helper(self):
         text = (ROOT / '.github/containers/debian13-service-runtime.Dockerfile').read_text()
@@ -156,9 +156,9 @@ class HelperPreparation(unittest.TestCase):
             checksum = hashlib.sha256(helper.read_bytes()).hexdigest()
             receipt = root / 'host.json'
             def path(value):
-                return {'/tmp/zxs-helper': helper, '/opt/zxs-host-preparation.json': receipt}[value]
+                return {'/tmp/zxs-helper': helper, '/opt/zxs-host-preparation.json': receipt, '/zxs': root / 'zxs'}[value]
             with patch('pathlib.Path', side_effect=path), patch('subprocess.check_output', side_effect=[
-                    b'{"request_digest":"exact-digest"}', b'{"state":"new_host_root_prepared","path":"/zxs"}'
+                    b'{"request_digest":"exact-digest","already_present":true}', b'{"state":"existing_host_root_durably_verified","path":"/zxs","service_exclusion_held_after_response":true}'
             ]) as run:
                 exec(compile(script, '<host-preparation>', 'exec'), {})
             self.assertEqual([call.args[0] for call in run.call_args_list], [
@@ -187,6 +187,51 @@ class HelperPreparation(unittest.TestCase):
         child.terminate.assert_called_once()
         child.kill.assert_called_once()
         self.assertEqual(child.wait.call_count, 2)
+
+    def test_lease_probe_requires_exact_busy_failure_and_is_bounded(self):
+        for code, diagnostic, accepted in [(1, GATE.LEASE_BUSY, True),
+                                            (0, GATE.LEASE_BUSY, False),
+                                            (1, "configuration invalid", False),
+                                            (2, GATE.LEASE_BUSY, False)]:
+            with self.subTest(code=code, diagnostic=diagnostic), patch.object(
+                    GATE.subprocess, 'run', return_value=SimpleNamespace(
+                        returncode=code, stderr=diagnostic)) as run:
+                if accepted:
+                    receipt = GATE.require_lease_rejection(['test-only-probe'], user=21001)
+                    self.assertEqual(receipt, {'exit_code': 1, 'diagnostic': diagnostic})
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'expected lifetime lease rejection'):
+                        GATE.require_lease_rejection(['test-only-probe'], user=21001)
+                run.assert_called_once_with(['test-only-probe'], capture_output=True,
+                                            text=True, timeout=10, user=21001)
+
+    def test_probes_use_delivered_private_copies_and_real_service_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'delivered'
+            source.write_bytes(b'exact delivered bytes')
+            account = SimpleNamespace(pw_uid=21001, pw_gid=21001)
+            commands = []
+            def probe(command, **options):
+                copied = Path(command[0])
+                self.assertEqual(copied.read_bytes(), source.read_bytes())
+                self.assertEqual(copied.stat().st_mode & 0o777, 0o700)
+                commands.append((command, options))
+                return {'exit_code': 1, 'diagnostic': GATE.LEASE_BUSY}
+            with patch.object(GATE.os, 'chown') as chown, \
+                    patch.object(GATE, 'free_port', return_value=12345), \
+                    patch.object(GATE, 'require_lease_rejection', side_effect=probe):
+                GATE.reject_daemon_while_helper(source, account)
+                GATE.reject_helper_while_daemon(source)
+            self.assertEqual(chown.call_count, 2)
+            command, options = commands[0]
+            self.assertEqual(command[1:], ['--root', '/zxs/data/state', '--management-root',
+                '/zxs/data/management', '--storage-discovery-root', '/zxs/data/disks',
+                '--listen', '127.0.0.1:12345'])
+            self.assertEqual((options['user'], options['group'], options['extra_groups']),
+                             (21001, 21001, []))
+            self.assertEqual(commands[1][0][1:], ['serve', '--listen', '127.0.0.1:12345'])
+            self.assertNotIn('user', commands[1][1])
+            self.assertTrue(all(not Path(command[0]).exists() for command, _ in commands))
 
     def test_runtime_remains_offline_and_browser_uses_prepared_image(self):
         script = (ROOT / '.github/scripts/check-debian13-release.sh').read_text()

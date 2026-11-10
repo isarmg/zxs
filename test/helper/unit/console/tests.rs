@@ -103,7 +103,7 @@ fn console_defaults_to_all_ipv4_interfaces_and_requires_root_without_starting_an
 }
 
 #[tokio::test]
-async fn index_and_status_are_directly_openable_and_do_not_claim_a_service_lock() {
+async fn index_and_status_report_the_helper_lifetime_lock() {
     let app = http::router(state());
     for route in ["/", "/console.js", "/console.css", "/api/status"] {
         let request = Request::builder()
@@ -125,7 +125,7 @@ async fn index_and_status_are_directly_openable_and_do_not_claim_a_service_lock(
             let report = json_body(response).await;
             assert_eq!(report["authentication"], "none");
             assert_eq!(report["csrf"], "test-csrf");
-            assert_eq!(report["service_exclusion_established"], false);
+            assert_eq!(report["service_exclusion_established"], true);
             assert_eq!(report["source_writes_available"], false);
         }
     }
@@ -638,8 +638,11 @@ async fn chain_readmission_proposal_requires_origin_csrf_and_available_worker() 
 }
 
 #[tokio::test]
-async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown() {
+async fn chain_target_and_handoff_routes_reject_cross_origin_missing_csrf_busy_and_shutdown() {
     for path in [
+        "/api/deployment/activation-preview",
+        "/api/deployment/activate",
+        "/api/deployment/activation-status",
         "/api/disks/terminal-chain-target-status",
         "/api/disks/terminal-chain-target-synchronize",
         "/api/disks/terminal-chain-first-prepare",
@@ -695,4 +698,22 @@ async fn chain_target_routes_reject_cross_origin_missing_csrf_busy_and_shutdown(
             StatusCode::SERVICE_UNAVAILABLE
         );
     }
+}
+
+#[tokio::test]
+async fn former_online_activation_confirmation_cannot_start_a_handoff() {
+    let response = http::router(state()).oneshot(post(
+        "/api/deployment/activate",
+        json!({"input":{"deployment":{"service_user":"invalid user", "service_group":"invalid group", "listen":"127.0.0.1:9080", "smb":null},"enable_on_boot":false},
+            "request_digest":"unused", "confirmation":"activate-installed-zxs-services", "external_administration_stopped":true}),
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let report = json_body(response).await;
+    assert_eq!(report["error"]["code"], "service_activation");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("confirm helper exit")
+    );
 }

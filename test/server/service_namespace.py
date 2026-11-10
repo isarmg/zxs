@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one daemon integration test with a private administrative host root."""
+"""Run one daemon or helper integration test with a private administrative host root."""
 from pathlib import Path
 import os
 import subprocess

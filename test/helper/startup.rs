@@ -1,4 +1,11 @@
 use std::process::Command;
+#[path = "../server/service_namespace.rs"]
+mod service_namespace;
+const HOST_NAMESPACE_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../test/server/service_namespace.py"
+);
+
 #[test]
 fn helper_exposes_only_implemented_offline_operations() {
     let binary = env!("CARGO_BIN_EXE_zxs-helper");
@@ -73,6 +80,12 @@ fn helper_identity_is_consistent_without_creating_runtime_state() {
 }
 #[test]
 fn recovery_requires_explicit_loss_acknowledgement_before_opening_pool() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "recovery_requires_explicit_loss_acknowledgement_before_opening_pool",
+    ) {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
         .current_dir(directory.path())
@@ -86,6 +99,12 @@ fn recovery_requires_explicit_loss_acknowledgement_before_opening_pool() {
 
 #[test]
 fn recovery_commands_report_returned_engine_seal_failure_once_before_command_rejection() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "recovery_commands_report_returned_engine_seal_failure_once_before_command_rejection",
+    ) {
+        return;
+    }
     use storage_engine::{CommitState, Config, Engine, OperationId, RepositoryName};
 
     let directory = tempfile::tempdir().unwrap();
@@ -195,6 +214,12 @@ fn package_restore_rejects_zero_copies_before_opening_pool_or_package() {
 
 #[test]
 fn rescue_restores_from_two_old_members_without_management_commands() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "rescue_restores_from_two_old_members_without_management_commands",
+    ) {
+        return;
+    }
     use storage_server::{auth::AuthStore, engine_backend::EngineBackend};
     let directory = tempfile::tempdir().unwrap();
     let original = directory.path().join("original");
@@ -274,6 +299,12 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
 
 #[test]
 fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "history_package_round_trip_preserves_checks_and_refuses_overwrite",
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
     use storage_engine::{CommitRequest, Config, Engine};
     let directory = tempfile::tempdir().unwrap();
@@ -395,6 +426,12 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
 
 #[test]
 fn configuration_commands_edit_only_an_uninitialized_draft() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "configuration_commands_edit_only_an_uninitialized_draft",
+    ) {
+        return;
+    }
     let temporary = tempfile::tempdir().unwrap();
     let directory = temporary.path();
     let output = directory.join("custom.json");
@@ -454,6 +491,12 @@ fn configuration_commands_edit_only_an_uninitialized_draft() {
 
 #[test]
 fn template_cli_accepts_one_disk_and_rejects_no_disks() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "template_cli_accepts_one_disk_and_rejects_no_disks",
+    ) {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let disk = directory.path().join("only");
     let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
@@ -543,6 +586,12 @@ fn malformed_operation_id_is_rejected_before_opening_the_pool() {
 
 #[test]
 fn scrub_is_a_real_exclusive_offline_consumer_with_explicit_partial_failure() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "scrub_is_a_real_exclusive_offline_consumer_with_explicit_partial_failure",
+    ) {
+        return;
+    }
     use storage_engine::{Config, Engine, OperationId, RepositoryName};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("system");
@@ -591,6 +640,12 @@ fn scrub_is_a_real_exclusive_offline_consumer_with_explicit_partial_failure() {
 
 #[test]
 fn scrub_cannot_turn_a_failed_open_into_a_healthy_report() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "scrub_cannot_turn_a_failed_open_into_a_healthy_report",
+    ) {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("absent-system");
     let output = Command::new(env!("CARGO_BIN_EXE_zxs-helper"))
@@ -626,6 +681,12 @@ fn scrub_help_describes_offline_scan_without_opening_pool() {
 
 #[test]
 fn offline_export_rejects_non_utf8_receipt_paths_before_io() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "offline_export_rejects_non_utf8_receipt_paths_before_io",
+    ) {
+        return;
+    }
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
     let directory = tempfile::tempdir().unwrap();
@@ -649,6 +710,12 @@ fn offline_export_rejects_non_utf8_receipt_paths_before_io() {
 
 #[test]
 fn offline_export_receipt_paths_are_admitted_before_publishing_verified_bytes() {
+    if !service_namespace::enter(
+        HOST_NAMESPACE_SCRIPT,
+        "offline_export_receipt_paths_are_admitted_before_publishing_verified_bytes",
+    ) {
+        return;
+    }
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     use storage_engine::{CommitRequest, Config, Engine, OperationId, RepositoryName};
 

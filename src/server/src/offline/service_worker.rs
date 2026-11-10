@@ -55,7 +55,8 @@ pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
     let account = request.account();
     // Rust's Unix uid() clears supplementary groups before setuid; the child
     // independently rejects any remaining groups or incorrect real/effective IDs.
-    let child = Command::new("/proc/self/exe")
+    let mut command = Command::new("/proc/self/exe");
+    command
         .arg(T::COMMAND)
         .env_clear()
         .current_dir("/")
@@ -64,8 +65,10 @@ pub(crate) fn run<T: Request>(request: T) -> Result<T::Output> {
         .uid(account.uid)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    let fd = platform_io::service_lease::ServiceLease::host()?.inherit_to(&mut command)?;
+    command.arg("--service-lease-fd").arg(fd.to_string());
+    let child = command.spawn()?;
     let mut child = Joined {
         child,
         reaped: false,

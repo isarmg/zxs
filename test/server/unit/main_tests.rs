@@ -283,3 +283,36 @@ fn storage_discovery_is_supplied_as_one_immutable_service_argument() {
         assert!(Args::try_parse_from(["zxs", "--storage-discovery-root", path]).is_err());
     }
 }
+
+#[test]
+fn inherited_lease_argument_is_required_only_by_internal_commands() {
+    assert!(Args::try_parse_from(["zxs", "--service-lease-fd", "3"]).is_err());
+    for command in [
+        "internal-maintenance",
+        "internal-storage-worker",
+        "internal-addition-worker",
+        "internal-foreign-chain-worker",
+        "internal-removal-worker",
+        "internal-readmission-worker",
+        "internal-terminal-chain-worker",
+        "internal-chain-readmission-worker",
+        "internal-chain-target-worker",
+    ] {
+        assert!(Args::try_parse_from(["zxs", command]).is_err());
+        let args = Args::try_parse_from(["zxs", command, "--service-lease-fd", "3"]).unwrap();
+        assert!(args.command.is_some());
+    }
+}
+
+#[test]
+fn invalid_inherited_descriptor_fails_before_internal_work() {
+    let args = Args::try_parse_from([
+        "zxs",
+        "internal-maintenance",
+        "--service-lease-fd",
+        "2147483647",
+    ])
+    .unwrap();
+    let error = offline::run(args.command.unwrap()).unwrap_err();
+    assert!(error.to_string().contains("service lease descriptor"));
+}

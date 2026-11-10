@@ -1,5 +1,25 @@
 [
   {
+    "manifest": "helper/Cargo.toml",
+    "kind": "test",
+    "name": "helper_startup",
+    "source": "test/helper/startup.rs",
+    "form": "concat",
+    "literal": "/../test/server/service_namespace.py",
+    "destination": "test/server/service_namespace.py",
+    "destination_kind": "file"
+  },
+  {
+    "manifest": "helper/Cargo.toml",
+    "kind": "test",
+    "name": "independent_authority",
+    "source": "test/helper/independent_authority.rs",
+    "form": "concat",
+    "literal": "/../test/server/service_namespace.py",
+    "destination": "test/server/service_namespace.py",
+    "destination_kind": "file"
+  },
+  {
     "manifest": "src/foundation/data-storage/compression/Cargo.toml",
     "kind": "test",
     "name": "gunzip",

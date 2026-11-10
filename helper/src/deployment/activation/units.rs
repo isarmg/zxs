@@ -22,21 +22,16 @@ impl Unit {
     pub fn absent(&self) -> Result<bool> {
         Ok(self.value("LoadState")? == "not-found")
     }
-    pub fn active(&self) -> Result<bool> {
-        Ok(!self.absent()?
-            && self.value("ActiveState")? == "active"
-            && self.value("SubState")? == "running"
-            && self.value("MainPID")?.parse::<u32>()? > 0)
-    }
-    pub fn enabled(&self) -> Result<bool> {
-        Ok(!self.absent()? && self.value("UnitFileState")? == "enabled")
-    }
     pub fn may_start(&self) -> Result<bool> {
         Ok(self.absent()? || matches!(self.value("ActiveState")?, "inactive" | "failed"))
     }
-    pub fn require_stopped_for_vfs(&self) -> Result<()> {
+    pub fn require_stopped(&self) -> Result<()> {
         if !self.absent()? && (!self.may_start()? || self.value("MainPID")?.parse::<u32>()? != 0) {
-            return Err(format!("{} is active or changing; stop it explicitly before VFS installation, no service was stopped by this helper", self.name).into());
+            return Err(format!(
+                "{} is active or changing; stop it explicitly before using the offline helper",
+                self.name
+            )
+            .into());
         }
         Ok(())
     }

@@ -27,7 +27,7 @@ pub(crate) enum Command {
         #[arg(long)]
         enable_on_boot: bool,
     },
-    /// Start only the verified ZXS units; never initialize data or stop another service.
+    /// Exit the helper, then start the verified installed ZXS units.
     Activate {
         #[command(flatten)]
         options: Options,
@@ -40,7 +40,7 @@ pub(crate) enum Command {
         #[arg(long)]
         external_administration_stopped: bool,
     },
-    /// Observe the original requested services without starting or enabling them.
+    /// Check the original request while the installed services are stopped.
     ActivationStatus {
         #[command(flatten)]
         options: Options,
@@ -181,7 +181,7 @@ fn build(input: Input) -> Result<(BundleDestination, Preview)> {
     let (unit, samba) = render::files(&settings);
     let plan = Plan {
         format: "zxs-helper-deployment",
-        revision: 1,
+        revision: 2,
         state: "prepared_not_active",
         parent: PARENT,
         parent_device: identity.device.to_string(),
@@ -201,8 +201,8 @@ fn build(input: Input) -> Result<(BundleDestination, Preview)> {
             destination,
             live_configuration_modified: false,
             service_started_or_enabled: false,
-            service_exclusion_established: false,
-            participating_daemon_exclusion: "held_during_this_operation_only",
+            service_exclusion_established: true,
+            participating_daemon_exclusion: "held_for_helper_lifetime",
             required_before_activation: REQUIREMENTS,
         },
     ))
@@ -236,11 +236,11 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
     Ok(
         json!({"state":state,"destination":preview.destination,"request_digest":preview.request_digest,
         "live_configuration_modified":false,"service_started_or_enabled":false,
-        "service_exclusion_established":false,"participating_daemon_exclusion":"held_during_this_operation_only","system_initialized":false,"samba_credentials_changed":false,
+        "service_exclusion_established":true,"participating_daemon_exclusion":"held_for_helper_lifetime","system_initialized":false,"samba_credentials_changed":false,
         "required_before_activation":REQUIREMENTS}),
     )
 }
-pub(crate) fn run(command: Command) -> Result<()> {
+pub(crate) fn run(command: Command) -> Result<Option<activation::Handoff>> {
     match command {
         Command::ActivationPreview {
             options,
@@ -270,15 +270,17 @@ pub(crate) fn run(command: Command) -> Result<()> {
             if !confirm_activate_installed_services {
                 return Err("review exact activation and pass --confirm-activate-installed-services; no service action was attempted".into());
             }
-            print(activation::activate(activation::Commit {
+            let (response, handoff) = activation::activate(activation::Commit {
                 input: activation::Input {
                     deployment: options.input()?,
                     enable_on_boot,
                 },
                 request_digest,
-                confirmation: "activate-installed-zxs-services".into(),
+                confirmation: "exit-helper-and-start-installed-zxs-services".into(),
                 external_administration_stopped,
-            })?)
+            })?;
+            print(response)?;
+            return Ok(Some(handoff));
         }
         Command::Preview(options) => print(preview(options.input()?)?),
         Command::InstallPreview(options) => print(install::preview(options.input()?)?),
@@ -334,8 +336,10 @@ pub(crate) fn run(command: Command) -> Result<()> {
                 confirmation: "prepare-inactive-configuration".into(),
             })?)
         }
-    }
+    }?;
+    Ok(None)
 }
+
 #[cfg(test)]
 #[path = "../../test/helper/unit/deployment/tests.rs"]
 mod tests;

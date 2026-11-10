@@ -16,8 +16,10 @@ class ManifestRuntimePaths(unittest.TestCase):
     def test_declared_target_static_references_match_reviewed_inventory(self):
         expected = json.loads((ROOT / 'test/ci/fixtures/manifest-runtime-paths.json').read_text())
         self.assertEqual(PATHS['inventory'](ROOT), expected)
-        self.assertEqual(len(expected), 12)
+        self.assertEqual(len(expected), 14)
         self.assertEqual({row['source'] for row in expected}, {
+            'test/helper/startup.rs',
+            'test/helper/independent_authority.rs',
             'test/foundation/compression/streams/tests/gunzip.rs',
             'test/schema-validation/canonical.rs',
             'test/server/integration/service_startup.rs',

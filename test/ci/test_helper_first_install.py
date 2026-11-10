@@ -19,6 +19,10 @@ class HelperFirstInstallTests(unittest.TestCase):
         subprocess.run(["node", "test/helper/first_install_roots.mjs"],
                        cwd=ROOT, check=True, timeout=30)
 
+    def test_offline_activation_handoff(self):
+        subprocess.run(["node", "test/helper/activation_console.mjs"],
+                       cwd=ROOT, check=True, timeout=30)
+
 
 if __name__ == "__main__":
     unittest.main()

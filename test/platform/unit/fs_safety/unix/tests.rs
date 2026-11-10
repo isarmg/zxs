@@ -50,6 +50,7 @@ fn administrative_atomic_files_keep_service_owner_and_refuse_unsafe_targets() {
             .unwrap(),
         b"second"
     );
+    verify_administrative_payloads(&directory, &path, (uid, gid));
     let link = path.join("link");
     symlink(path.join("pending.json"), &link).unwrap();
     assert!(AtomicFile::replace(&directory, &RelativePath::new("link").unwrap(), b"bad").is_err());
@@ -61,6 +62,79 @@ fn administrative_atomic_files_keep_service_owner_and_refuse_unsafe_targets() {
         .remove_file(&EntryName::new("pending.json").unwrap())
         .unwrap();
     assert!(!path.join("pending.json").exists());
+}
+
+fn verify_administrative_payloads(directory: &PrivateDirectory, path: &Path, owner: (u32, u32)) {
+    use std::os::unix::fs::{MetadataExt, chown};
+    let (uid, gid) = owner;
+    // Exercise the same administrative lock/readback used by first-admin setup.
+    let setup = EntryName::new("setup.lock").unwrap();
+    let _lock =
+        AdvisoryLock::acquire(directory, &RelativePath::new("setup.lock").unwrap()).unwrap();
+    let held = directory
+        .open_payload(&setup, PayloadOpenMode::Existing)
+        .unwrap();
+    directory.verify_payload(&setup, &held).unwrap();
+    assert_eq!(
+        (
+            held.metadata().unwrap().uid(),
+            held.metadata().unwrap().gid()
+        ),
+        (uid, gid)
+    );
+    let entry = EntryName::new("created-payload").unwrap();
+    let created = directory
+        .open_payload(&entry, PayloadOpenMode::CreateNew)
+        .unwrap();
+    let metadata = created.metadata().unwrap();
+    assert_eq!(
+        (metadata.uid(), metadata.gid(), metadata.mode() & 0o7777),
+        (uid, gid, 0o600)
+    );
+    directory.verify_payload(&entry, &created).unwrap();
+    fs::set_permissions(
+        path.join(entry.as_path()),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    assert!(
+        directory
+            .open_payload(&entry, PayloadOpenMode::Existing)
+            .is_err()
+    );
+    assert!(directory.verify_payload(&entry, &created).is_err());
+    assert_eq!(
+        fs::metadata(path.join(entry.as_path())).unwrap().mode() & 0o7777,
+        0o640
+    );
+    fs::set_permissions(
+        path.join(entry.as_path()),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    if geteuid().as_raw() == 0 {
+        for (wrong_uid, wrong_gid) in [(0, gid), (uid, 0)] {
+            chown(path.join(entry.as_path()), Some(wrong_uid), Some(wrong_gid)).unwrap();
+            assert!(
+                directory
+                    .open_payload(&entry, PayloadOpenMode::Existing)
+                    .is_err()
+            );
+            assert!(directory.verify_payload(&entry, &created).is_err());
+            let metadata = created.metadata().unwrap();
+            assert_eq!((metadata.uid(), metadata.gid()), (wrong_uid, wrong_gid));
+        }
+        chown(path.join(entry.as_path()), Some(uid), Some(gid)).unwrap();
+    }
+    fs::rename(path.join(entry.as_path()), path.join("retained-payload")).unwrap();
+    let replacement = directory
+        .open_payload(&entry, PayloadOpenMode::CreateNew)
+        .unwrap();
+    assert!(matches!(
+        directory.verify_payload(&entry, &created),
+        Err(Error::IdentityChanged(_))
+    ));
+    directory.verify_payload(&entry, &replacement).unwrap();
 }
 
 #[test]

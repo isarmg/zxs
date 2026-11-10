@@ -137,7 +137,48 @@ def readiness_snapshot(port):
     return None
 
 
-def prepare_installation(source, output):
+LEASE_BUSY = 'service lease root "/zxs" is busy or cannot be locked'
+
+
+def daemon_command(binary, port):
+    return [str(binary), "--root", "/zxs/data/state",
+            "--management-root", "/zxs/data/management",
+            "--storage-discovery-root", "/zxs/data/disks",
+            "--listen", f"127.0.0.1:{port}"]
+
+
+def require_lease_rejection(command, **options):
+    result = subprocess.run(command, capture_output=True, text=True, timeout=10, **options)
+    if result.returncode != 1 or LEASE_BUSY not in result.stderr:
+        raise RuntimeError(f"expected lifetime lease rejection: {command!r}: {result!r}")
+    return {"exit_code": result.returncode, "diagnostic": result.stderr}
+
+
+def reject_daemon_while_helper(source, account):
+    with tempfile.TemporaryDirectory(prefix="zxs-blocked-daemon-") as directory:
+        root = Path(directory)
+        binary = root / "zxs"
+        shutil.copyfile(source, binary)
+        binary.chmod(0o700)
+        os.chown(root, account.pw_uid, account.pw_gid)
+        os.chown(binary, account.pw_uid, account.pw_gid)
+        return require_lease_rejection(
+            daemon_command(binary, free_port()), cwd=root,
+            env={"PATH": os.environ["PATH"], "HOME": directory, "LC_ALL": "C"},
+            user=account.pw_uid, group=account.pw_gid, extra_groups=[])
+
+
+def reject_helper_while_daemon(source):
+    with tempfile.TemporaryDirectory(prefix="zxs-blocked-helper-") as directory:
+        helper = Path(directory) / "zxs-helper"
+        shutil.copyfile(source, helper)
+        helper.chmod(0o700)
+        return require_lease_rejection(
+            [str(helper), "serve", "--listen", f"127.0.0.1:{free_port()}"], cwd=directory,
+            env={"PATH": os.environ["PATH"], "LC_ALL": "C"})
+
+
+def prepare_installation(source, output, daemon_source):
     if os.geteuid() != 0 or os.environ.get("ZXS_ISOLATED_RELEASE_TEST") != "1":
         raise RuntimeError("requires the isolated root release-test container")
     account = pwd.getpwnam(SERVICE_USER)
@@ -175,6 +216,12 @@ def prepare_installation(source, output):
                     helper.csrf = status["csrf"]
                     break
                 initialize_storage(helper, evidence, record)
+                if child.poll() is not None:
+                    raise RuntimeError("helper exited before lifetime exclusion probe")
+                evidence["daemon_rejected_while_helper"] = reject_daemon_while_helper(daemon_source, account)
+                if child.poll() is not None:
+                    raise RuntimeError("helper exited during lifetime exclusion probe")
+                record.write_text(json.dumps(evidence, indent=2) + "\n")
             finally:
                 clean_exit = stop(child)
             if not clean_exit:
@@ -197,7 +244,7 @@ def main():
     if shutil.which("cargo") or shutil.which("cc"):
         raise RuntimeError("runtime evidence must not depend on a compiler")
     manifest = json.loads((args.web / "build-manifest.json").read_text())
-    account, preparation = prepare_installation(args.helper, args.output)
+    account, preparation = prepare_installation(args.helper, args.output, args.binary)
     with tempfile.TemporaryDirectory(prefix="zxs-single-elf-") as directory:
         root = Path(directory)
         binary = root / "zxs"
@@ -206,10 +253,7 @@ def main():
         os.chown(root, account.pw_uid, account.pw_gid)
         os.chown(binary, account.pw_uid, account.pw_gid)
         port = free_port()
-        command = [str(binary), "--root", "/zxs/data/state",
-                   "--management-root", "/zxs/data/management",
-                   "--storage-discovery-root", "/zxs/data/disks",
-                   "--listen", f"127.0.0.1:{port}"]
+        command = daemon_command(binary, port)
         environment = {"PATH": os.environ["PATH"], "HOME": directory, "LC_ALL": "C"}
         with (root / "server.log").open("wb") as log:
             child = subprocess.Popen(command, cwd=root, env=environment, stdout=log, stderr=subprocess.STDOUT,
@@ -228,6 +272,9 @@ def main():
                     if time.monotonic() >= deadline:
                         raise TimeoutError("standalone ELF HTTP setup readiness")
                     time.sleep(0.1)
+                preparation["helper_rejected_while_daemon"] = reject_helper_while_daemon(args.helper)
+                if child.poll() is not None or readiness_snapshot(port) is None:
+                    raise RuntimeError("daemon changed readiness during helper exclusion probe")
                 checked = {}
                 for name, checksum in sorted(manifest["files"].items()):
                     reference = args.web / name

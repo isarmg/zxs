@@ -169,6 +169,16 @@ impl Executable {
             .stderr(Stdio::null());
         Ok(command)
     }
+    /// Replace the drained helper process; its CLOEXEC lease closes at exec.
+    pub(crate) fn replace_process(self, args: &[&str]) -> Result<()> {
+        let error = self
+            .command(args)?
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .exec();
+        Err(error.into())
+    }
     pub(crate) fn capture(&self, args: &[&str]) -> Result<Vec<u8>> {
         let (status, bytes) = self.capture_status(args)?;
         if !status.success() {

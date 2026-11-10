@@ -16,22 +16,6 @@ fn rescue_suffixes_cannot_name_managed_databases() {
 }
 
 #[test]
-fn only_live_entity_reads_require_the_service_lifetime_lease() {
-    assert!(requires_service_exclusion(&Command::Inspect {
-        selection: "selection.json".into()
-    }));
-    assert!(requires_service_exclusion(&Command::Export {
-        selection: "selection.json".into(),
-        output: "file.object-db.json".into(),
-    }));
-    assert!(!requires_service_exclusion(&Command::Rebuild {
-        archive: "file.object-db.json".into(),
-        scope: "scope.json".into(),
-        output: "file.recovered.sqlite".into(),
-    }));
-}
-
-#[test]
 fn object_rescue_verify_is_read_only_and_requires_explicit_scope_and_image() {
     use command_line::Parser;
     let args = crate::Args::try_parse_from([
@@ -43,9 +27,6 @@ fn object_rescue_verify_is_read_only_and_requires_explicit_scope_and_image() {
         "copy.recovered.sqlite",
     ])
     .unwrap();
-    assert!(!crate::requires_service_exclusion(
-        args.command.as_ref().unwrap()
-    ));
     assert!(matches!(
         args.command,
         Some(crate::Command::ObjectDatabase {

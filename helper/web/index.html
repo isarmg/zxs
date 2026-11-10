@@ -34,7 +34,7 @@
       <pre id="vfs-install-report"></pre>
     </section>
     <section class="card" id="first-install">
-      <h2>空目录首装：同一输入逐步完成并启动</h2>
+      <h2>空目录首装：逐步准备，退出后交接启动</h2>
       <p>只填一次服务身份、完整目录批次和配置。按顺序复用现有原生安装、初始化与启动接口，每步先核对准确计划，再单独确认；不复制核心事务、不自动重试或清空失败材料。</p>
       <p class="muted">先准备安装根；随后可按本次选择准备基础系统工具或 Samba 依赖，再安装内置程序。第 3 步若还没有非 root Unix 服务账户，可使用下方账户卡片明确创建，再回到同一首装步骤。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步的主按钮会先核对目录，缺失时明确确认创建，随后自动读取真实存储计划，再确认初始化；已有准确空目录则直接进入存储计划。账户创建是独立确认，不挂载或格式化。选择 SMB 时，第 3–5 步可带入同一独立 Unix 账户到对应卡片创建；支持的 Samba 依赖可在<a href="#packages">系统包卡片</a>明确安装，SMB 凭据仍须单独确认。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
       <form id="first-install-form">
@@ -50,7 +50,7 @@
           <label>独立 SMB Unix 账户 <input id="first-install-smb-account" value="zxs-smb" maxlength="32" autocomplete="off"></label>
           <label>受信 Samba worker UID <input id="first-install-peer-uid" type="number" value="0" min="0" max="4294967295"></label>
         </div>
-        <label class="ack"><input id="first-install-autostart" type="checkbox"> 仅在最终正常管理准入完成后启用选定服务的开机启动</label>
+        <label class="ack"><input id="first-install-autostart" type="checkbox"> 在最终交接前启用选定服务的开机启动，服务仍等 helper 退出后启动</label>
         <button type="submit">保留同一输入并开始逐步核对</button>
       </form>
       <p class="muted">本标签页会在每次写入前保留无密码原请求，刷新不自动重放。请导出原请求以便关闭标签页、换浏览器或 helper 地址改变后恢复。浏览器记录只用于定位原操作，不是当前磁盘或服务就绪证明；不能跳过服务器的重新准入。第 7 步尚未保留空目录请求时可更正目录，已保留的原操作不能清除或换输入重做。</p>
@@ -84,7 +84,7 @@
       </div>
       <label class="ack"><input id="first-install-ack" type="checkbox"> 已停止外部 ZXS/Samba、数据写者及其他主机配置／服务管理操作；只确认当前原步骤，此声明不是它们参与互斥的证明。</label>
       <button id="first-install-commit" type="button" hidden>确认执行当前原步骤</button>
-      <p id="first-install-open" hidden>当前服务已通过正常管理就绪检查。<a id="first-install-web" target="_blank" rel="noreferrer noopener">打开 ZXS Web 管理</a>。尚未执行真实文件读写、SMB 密码登录或 VFS 网络验收。</p>
+      <p id="first-install-open" hidden>交接已受理，helper 正在退出；退出后由 systemd 启动服务。<a id="first-install-web" target="_blank" rel="noreferrer noopener">打开 ZXS Web 核实可用状态</a>。启动失败请查看启动终端；此页面不确认服务就绪、真实文件读写或 SMB 验收。</p>
     </section>
     <section class="card" id="packages">
       <h2>安装 Debian 13 Samba 依赖</h2>
@@ -454,21 +454,21 @@
         <button type="submit">确认仅续作这个原配置安装</button>
       </form>
       <pre id="configuration-recovery-receipt" hidden></pre>
-      <h3>启动已安装的 ZXS 服务</h3>
-      <p>使用上方同一账户、监听与 SMB 设置，先核对已安装的程序、固定配置、私有目录和本机工具，再明确执行 <code>daemon-reload</code> 与 <code>start</code>。不会重新初始化数据、修改密码、安装系统包或停止其他服务。此操作需要手动 root helper；不要与其他主机管理操作并行。</p>
-      <p class="muted">可选 SMB 使用独立 <code>zxs-smb.service</code> 和 <code>/etc/samba/zxs.conf</code>，不接管默认 smbd 或其他共享。必须事先安装匹配的 Debian 13 amd64 Samba/VFS 和独立本地账户/passdb。就绪只观察正常管理服务、精确单元及受保护 socket，不冒充网络 SMB 密码登录、VFS 加载或实际文件读写验收。</p>
+      <h3>退出辅助工具并交接启动</h3>
+      <p>使用上方同一账户、监听与 SMB 设置，先核对已安装的程序、固定配置、私有目录和本机工具，再明确交接：helper 执行 <code>daemon-reload</code>、按选择配置开机启动并退出；所有 helper 工作结束后，由 systemd 启动服务。ZXS 与 helper 不同时运行。</p>
+      <p class="muted">可选 SMB 使用独立 <code>zxs-smb.service</code> 和 <code>/etc/samba/zxs.conf</code>，不接管默认 smbd 或其他共享。必须事先安装匹配的 Debian 13 amd64 Samba/VFS 和独立本地账户/passdb。交接受理不是服务就绪。退出后请在启动终端查看结果，或打开 ZXS 登录核实；SMB 密码登录、VFS 加载与实际文件读写分别验收。</p>
       <label class="ack"><input id="activation-enable-on-boot" type="checkbox"> 同时为本次选定的 ZXS / 独立 Samba 服务启用开机启动（不会给 helper 设置自启）</label>
-      <button id="activation-preview" type="button" class="secondary">核对已安装环境并预览启动</button>
+      <button id="activation-preview" type="button" class="secondary">核对离线安装环境并预览交接</button>
       <pre id="activation-plan" hidden></pre>
       <label class="ack"><input id="activation-external-stopped" type="checkbox"> 已停止其他配置、软件安装与服务管理操作，允许上述固定服务动作；此确认不是外部进程锁。</label>
-      <button id="activation-start" type="button" hidden>确认启动预览中的服务</button>
-      <h4>查询或继续原启动请求</h4>
-      <p class="muted">首次发送前保留完整原输入。中断、超时或失败不能说明服务未启动；刷新后只查询，不自动重发，不清理磁盘或停止服务。若已启动但尚未就绪，修复明确原因后再主动重试同一请求。</p>
+      <button id="activation-start" type="button" hidden>确认退出 helper 并交接启动</button>
+      <h4>核对或继续原交接请求</h4>
+      <p class="muted">发送前保留完整原输入。交接后不再向退出中的 helper 查询，结果在启动终端或 ZXS 页面核实。需要重新维护时，先停止 ZXS 再运行 helper，核对原请求的离线条件后另行确认交接；不自动重发。</p>
       <label>本浏览器保留的原请求 <select id="activation-retained"><option value="">没有已保留请求</option></select></label>
-      <button id="activation-status" type="button" class="secondary" hidden>只查询这个原请求</button>
-      <button id="activation-retry" type="button" hidden>再次确认并继续这个原请求</button>
+      <button id="activation-status" type="button" class="secondary" hidden>只读核对原请求的离线条件</button>
+      <button id="activation-retry" type="button" hidden>再次确认退出并交接原请求</button>
       <pre id="activation-result" hidden></pre>
-      <p id="activation-open" hidden><a id="activation-web" target="_blank" rel="noreferrer noopener">打开 ZXS Web 管理</a>（使用 ZXS 管理员登录；页面是否可从此客户端访问仍以实际网络为准）</p>
+      <p id="activation-open" hidden>交接已受理，helper 正在退出；服务可用状态尚未确认。<a id="activation-web" target="_blank" rel="noreferrer noopener">打开 ZXS Web 管理</a>（使用 ZXS 管理员登录；页面是否可从此客户端访问仍以实际网络为准）</p>
     </section>
     <section class="card">
       <h2>重置已存在的 ZXS 管理员密码</h2>

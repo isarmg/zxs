@@ -106,7 +106,8 @@ pub(crate) fn run(operation: Operation, body: SecretBytes) -> Result<Vec<u8>, Er
         ));
     }
     let executable = crate::installation::worker::open().map_err(Error::Payload)?;
-    let child = Command::new(format!("/proc/self/fd/{}", executable.as_raw_fd()))
+    let mut command = Command::new(format!("/proc/self/fd/{}", executable.as_raw_fd()));
+    command
         .arg0("zxs")
         .arg("internal-maintenance")
         .env_clear()
@@ -114,7 +115,12 @@ pub(crate) fn run(operation: Operation, body: SecretBytes) -> Result<Vec<u8>, Er
         .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    let fd = platform_io::service_lease::ServiceLease::host()
+        .and_then(|lease| lease.inherit_to(&mut command))
+        .map_err(|source| transport("service lease", source))?;
+    command.arg("--service-lease-fd").arg(fd.to_string());
+    let child = command
         .spawn()
         .map_err(|source| transport("spawn", source))?;
     let mut child = Joined {

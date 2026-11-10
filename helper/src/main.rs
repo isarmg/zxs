@@ -31,7 +31,7 @@ Disk-databases reads selected local SQLite inventories without SYSTEM; local con
 Object-database exports object-local metadata and reconstructs standalone rescue SQLite from that archive; it never installs an active database or grants authority.
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
 The matching release helper can install its embedded ZXS executable at /usr/local/bin/zxs and explicitly install its sealed same-source VFS at the fixed Debian Samba path, without overwriting different bytes or starting services.
-Engine recovery commands require the current-daemon /zxs lifetime lease; host preview/prepare can create that root without initializing the system.
+Every helper operation holds the /zxs lifetime lease until exit. A root launch prepares the missing lease directory without initializing accounts or storage.
 A missing nonlogin Unix service account and same-name primary group can be explicitly prepared through the fixed systemd-sysusers program. Existing accounts are never modified. A selected non-root local account can receive an empty private data layout; this creates no administrator, database or disk.
 Systemd/Samba configuration can be prepared as an inactive bundle or installed at fixed paths without overwriting different files, reloading, starting or enabling services.
 The independent Web console can create the first management-only administrator in the exact new empty private layout; no storage is initialized.
@@ -41,7 +41,7 @@ The independent Web console can add and initialize an exact empty directory batc
 The independent Web console can copy an exact foreign level 2/3 source into all explicitly selected lower roots as one recoverable material batch; it does not admit the source or any lower member.
 The Web console can explicitly enroll a missing local tdbsam Samba account for an existing independent non-root Unix user, including native creation of a missing passdb in its existing private directory. The independent Unix user can first be prepared through the same explicit nonlogin-account operation. Existing-account password resets remain separate; Debian 13 amd64 first-install systemd tools or selected Samba dependencies can be explicitly installed from configured signed APT sources, with temporary service-start suppression and original-request finish; existing Samba upgrades and other backends remain separate. VFS installation is a separate exact offline-payload confirmation, not package installation or SMB login validation.
 The independent Web console can explicitly deregister an exact non-final-voter member with original D3/receipt checks; disk bytes remain, but current pool visibility/content access may be lost.
-Complete installation readiness/all-path clean-start gating, final-voter terminal removal and foreign admission remain incomplete. Explicit activation starts only verified installed service units; it does not install dependencies or attest network SMB/file I/O. No planned-offline action is offered."
+Complete installation readiness/all-path clean-start gating, final-voter terminal removal and foreign admission remain incomplete. Explicit handoff exits this helper before starting verified installed service units; it does not install dependencies or attest network SMB/file I/O. No planned-offline action is offered."
 )]
 struct Args {
     /// Host retained-workspace record limit; supply all four limits or none.
@@ -222,7 +222,14 @@ fn main() {
         // Stderr is the final diagnostic sink; do not recursively report its write failures.
         .log_internal_errors(false)
         .init();
-    if let Err(error) = run(args) {
+    let result: Result<()> = (|| {
+        let _lifetime = host::enter()?;
+        if let Some(handoff) = run(args)? {
+            handoff.execute()?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
         eprintln!("zxs-helper: {}", diagnostic_chain(error.as_ref()));
         std::process::exit(1);
     }
@@ -251,23 +258,18 @@ fn report_recovery_warnings(engine: &mut Engine) {
     }
 }
 
-fn run(args: Args) -> Result<()> {
+fn run(args: Args) -> Result<Option<deployment::activation::Handoff>> {
     let retained_workspace_limits = args.workspace_limits()?;
     let root = args.root;
     let command = args
         .command
         .unwrap_or_else(|| Command::Serve(console::Options::default()));
-    let _lease = if requires_service_exclusion(&command) {
-        Some(platform_io::service_lease::ServiceLease::host()?)
-    } else {
-        None
-    };
     match command {
-        Command::Serve(options) => console::run(options),
+        Command::Serve(options) => return console::run(options),
         Command::Install { command } => installation::run(command),
         Command::Initialization { command } => initialization::run(command),
         Command::Host { command } => host::run(command),
-        Command::Deployment { command } => deployment::run(command),
+        Command::Deployment { command } => return deployment::run(command),
         Command::Configuration { command } => configuration::run(command),
         Command::Authority { command } => authority::run(command),
         Command::DiskDatabases(options) => disk_databases::run(options),
@@ -389,44 +391,8 @@ fn run(args: Args) -> Result<()> {
             storage_engine::offline_export(&disk, &version, &output)?;
             print(json!({"version_id":version,"exported":output_text,"mode":"offline-isolated"}))
         }
-    }
-}
-
-/// Engine open can replay durable work even for a command named preview or
-/// export. Keep its host lease until the synchronous command and all owners end.
-fn requires_service_exclusion(command: &Command) -> bool {
-    match command {
-        Command::ObjectDatabase { command } => {
-            object_databases::requires_service_exclusion(command)
-        }
-        Command::DiskDatabaseRescue { command } => {
-            disk_database_rescue::requires_service_exclusion(command)
-        }
-        Command::RestoreSystem { .. }
-        | Command::DiskDatabases(_)
-        | Command::RecoveryPreview { .. }
-        | Command::Scrub
-        | Command::Package {
-            command: PackageCommand::Export { .. } | PackageCommand::Restore { .. },
-        } => true,
-        Command::RecoveryCommit {
-            accept_permanent_loss,
-            ..
-        } => *accept_permanent_loss,
-        Command::Serve(_)
-        | Command::Install { .. }
-        | Command::Host { .. }
-        | Command::Initialization { .. }
-        | Command::Deployment { .. }
-        | Command::Authority { .. }
-        | Command::Configuration { .. }
-        | Command::Package {
-            command: PackageCommand::Check { .. },
-        }
-        | Command::WorkspaceInventory
-        | Command::OfflineCheck { .. }
-        | Command::OfflineExport { .. } => false,
-    }
+    }?;
+    Ok(None)
 }
 
 #[cfg(test)]

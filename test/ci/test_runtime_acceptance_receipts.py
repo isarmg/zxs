@@ -155,7 +155,7 @@ class RuntimeAcceptanceReceipts(unittest.TestCase):
         response = Mock(status=200)
         response.read.return_value = asset if asset_matches else b'wrong asset'
         client = Mock()
-        client.getresponse.side_effect = [ready, probe, response]
+        client.getresponse.side_effect = [ready, probe, ready, probe, response]
         reservation = Mock()
         reservation.__enter__ = Mock(return_value=reservation)
         reservation.__exit__ = Mock(return_value=False)
@@ -166,6 +166,7 @@ class RuntimeAcceptanceReceipts(unittest.TestCase):
                 patch.object(SINGLE.platform, 'machine', return_value='x86_64'), \
                 patch.object(SINGLE.shutil, 'which', return_value=None), \
                 patch.object(SINGLE, 'prepare_installation', return_value=(SimpleNamespace(pw_uid=21001, pw_gid=21001), {'test': 'prepared'})), \
+                patch.object(SINGLE, 'reject_helper_while_daemon', return_value={'exit_code': 1, 'diagnostic': SINGLE.LEASE_BUSY}), \
                 patch.object(SINGLE.os, 'chown'), \
                 patch.object(SINGLE.subprocess, 'Popen', side_effect=start_child), \
                 patch.object(SINGLE.http.client, 'HTTPConnection', return_value=client), \
